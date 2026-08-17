@@ -18,6 +18,7 @@ TODO (test plan, not yet implemented):
 """
 
 import io
+import time
 
 import fastavro
 import pytest
@@ -123,6 +124,22 @@ def test_assembled_alert_semantics(alert):
     assert alert["refGalaxyMatches"][0]["magAuto"] == pytest.approx(21.2)
 
 
+def test_time_processed_stamped_at_assembly():
+    """timeProcessedMjd is the assembly-time UTC MJD, bracket-checked.
+
+    The bracket converts the Unix clock to MJD independently of the
+    astropy path produce.py uses (Unix epoch 1970-01-01 = MJD 40587),
+    so a wrong epoch or time scale in the stamping would fail here."""
+    def unix_now_mjd():
+        return time.time() / 86400.0 + 40587.0
+
+    before = unix_now_mjd()
+    alert = assemble_alert(MinimalProvider(), 9999)
+    after = unix_now_mjd()
+
+    assert before <= alert["diaSource"]["timeProcessedMjd"] <= after
+
+
 def test_ref_match_not_run_stays_null():
     """refStarMatches/refGalaxyMatches = None must mean "not run"."""
     provider = MinimalProvider()
@@ -177,7 +194,7 @@ def test_non_nullable_implemented_param_with_none_raises():
 
 def test_stub_params_null_even_with_value_staged():
     fp = ForcedPhot(forced_id=1, aid=777, expid=42, sca=7, ra=150.1,
-                    dec=2.2, mjdobs=60500.5, time_processed=60500.6,
+                    dec=2.2, mjdobs=60500.5, time_proc=60500.6,
                     flux=123.4)
     assert all(v is None for v in build_dia_forced_source(fp).values())
 

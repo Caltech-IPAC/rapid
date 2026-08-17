@@ -166,7 +166,7 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.expid",  attr="expid"),
     Param("detector",      "int",              "Detector (SCA) number",
                     IMPLEMENTED, "sources.sca",    attr="sca"),
-    Param("diaObjectId",   ["null", "long"],   "Associated diaObject identifier",
+    Param("diaObjectId",   "long",   "Associated diaObject identifier",
                     IMPLEMENTED, "merges_<field>.aid", attr="aid"),
     Param("ssObjectId",    ["null", "long"],   "Associated solar system object identifier",
                     NOT_USED, "superseded by top-level ssMatches array (MPC designations are strings)"),
@@ -176,7 +176,7 @@ DIA_SOURCE_PARAMS = (
     Param("midpointMjd", "double",          "Effective mid-observation time (UTC scale) [MJD]",
                     IMPLEMENTED, "sources.mjdobs", attr="mjdobs"),
     Param("timeProcessedMjd",  ["null", "double"],  "Time alert was processed (UTC scale) [MJD]",
-                    NOT_USED, "set at assembly time"), #TODO: do we actually need this?
+                    IMPLEMENTED, "set at assembly time", attr="time_proc"),
     Param("exposureTime",  ["null", "float"],  "Exposure time [s]",
                     IMPLEMENTED, "exposures.exptime", attr="exptime"),
     Param("timeWithdrawnMjd",  ["null", "double"],  "Time alert was withdrawn (UTC scale) [MJD]",
@@ -403,7 +403,7 @@ DIA_FORCED_SOURCE_PARAMS = (
     Param("midpointMjd",    "double",          "Effective mid-observation time (UTC scale) [MJD]",
                         STUB, _FP, attr="mjdobs"),
     Param("timeProcessedMjd", "double",        "Time measurement was processed (UTC scale) [MJD]",
-                        STUB, _FP, attr="time_processed"),
+                        STUB, _FP, attr="time_proc"),
     Param("timeWithdrawnMjd", ["null", "double"], "Time measurement was withdrawn (UTC scale) [MJD]",
                         NOT_USED, "alert-withdrawal mechanism (not designed)"),
 )

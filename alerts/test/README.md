@@ -89,6 +89,15 @@ python3.11 -m pytest test/test_live_db.py -sv
 The `test_database_reachable` canary owns the "not run" warning, so the
 other live tests skip quietly and point to it.
 
+For CI or a deliberate integration run, require the live tests to execute:
+
+```bash
+python3.11 -m pytest test/test_live_db.py --require-live -sv
+```
+
+With `--require-live`, missing configuration or an unreachable database is a
+test failure instead of a skip, so a green run proves the DB/S3 path ran.
+
 ## Benchmarking (not a `pytest` target)
 
 `benchmark.py` runs batch production against the live database and writes

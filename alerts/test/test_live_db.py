@@ -98,7 +98,17 @@ def db_unavailable_reason():
     return _db_status["reason"]
 
 
-def test_database_reachable():
+def _skip_or_fail_unavailable(request, reason, warn=False):
+    """Apply the default optional-live policy or --require-live policy."""
+    message = "live DB/S3 tests NOT run: " + reason
+    if request.config.getoption("--require-live"):
+        pytest.fail(message)
+    if warn:
+        warnings.warn(message)
+    pytest.skip(reason)
+
+
+def test_database_reachable(request):
     """Connectivity canary. This is the test that WARNS when the live-DB
     suite cannot run, so the warning is attributed to the connection
     itself -- not to whichever invariant test happened to request the
@@ -106,17 +116,17 @@ def test_database_reachable():
     pointing here."""
     reason = db_unavailable_reason()
     if reason:
-        warnings.warn("live-DB tests NOT run: " + reason)
-        pytest.skip(reason)
+        _skip_or_fail_unavailable(request, reason, warn=True)
 
 
 @pytest.fixture(scope="module")
-def db_conn():
+def db_conn(request):
     """Skips (quietly -- test_database_reachable owns the warning) when
     the environment is incomplete or the database is down."""
     reason = db_unavailable_reason()
     if reason:
-        pytest.skip(f"{reason} (see test_database_reachable)")
+        _skip_or_fail_unavailable(
+            request, f"{reason} (see test_database_reachable)")
     conn = connect_db()
     yield conn
     conn.close()
@@ -166,7 +176,9 @@ class _DBShim:
 
 @pytest.fixture(scope="module")
 def live_provider(db_conn):
-    return AlertDataProvider(_DBShim(db_conn))
+    provider = AlertDataProvider(_DBShim(db_conn))
+    yield provider
+    provider.close()
 
 
 # Pinned round-trip source (Emily, Aug 2026): a well-populated detection
@@ -237,10 +249,10 @@ def test_live_kona_file_wiring(live_provider, roundtrip_sid, tmp_path):
         str(detection.expid): {"FAKE 1": [detection.ra + dra,
                                           detection.dec, 21.7]}}))
 
-    provider = AlertDataProvider(
-        _DBShim(live_provider.db.conn),
-        kona_lookup=load_kona_predictions(kona_file).get)
-    alert = assemble_alert(provider, roundtrip_sid)
+    with AlertDataProvider(
+            _DBShim(live_provider.db.conn),
+            kona_lookup=load_kona_predictions(kona_file).get) as provider:
+        alert = assemble_alert(provider, roundtrip_sid)
 
     assert alert["diaSource"]["isSSCandidate"] is True
     assert alert["ssMatches"][0]["designation"] == "FAKE 1"
