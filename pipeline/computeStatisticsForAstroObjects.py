@@ -42,6 +42,21 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
+# JOBPROCDATE of RAPID science-pipeline jobs that already ran.
+
+proc_date = os.getenv('JOBPROCDATE')
+
+if proc_date is None:
+
+    print("*** Error: Env. var. JOBPROCDATE not set; quitting...")
+    exit(64)
+
+
+# Print out basic information for log file.
+
+print("proc_date =",proc_date)
+
+
 # Other required environment variables.
 
 rapid_sw = os.getenv('RAPID_SW')
@@ -118,7 +133,7 @@ print(f"AstroObjectsMeta columns: {astroobjectsmeta_cols_comma_separated_string}
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(fields,source_child_tables,index_thread):
+def run_single_core_job(fields,sources_child_tables,index_thread):
 
     '''
     Update lightcurve statistics in AstroObjectsMeta_<field> database tables, omitting sources that
@@ -156,6 +171,7 @@ def run_single_core_job(fields,source_child_tables,index_thread):
     if dbh.exit_code >= 64:
         fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
         fh.flush()
+        fh.close()
         raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
@@ -360,7 +376,7 @@ def run_single_core_job(fields,source_child_tables,index_thread):
         # The vbest > 0 filter is folded into the JOIN to avoid N+1 pid lookups.
 
         union_parts = []
-        for sources_tablename in source_child_tables:
+        for sources_tablename in sources_child_tables:
             union_parts.append(
                 f"SELECT a.aid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a "
                 f"JOIN {sources_tablename} AS b ON a.sid = b.sid "
@@ -369,7 +385,7 @@ def run_single_core_job(fields,source_child_tables,index_thread):
             )
         query = " UNION ALL ".join(union_parts) + ";"
 
-        fh.write(f"Querying {len(source_child_tables)} source child tables for {merges_tablename} via UNION ALL\n")
+        fh.write(f"Querying {len(sources_child_tables)} source child tables for {merges_tablename} via UNION ALL\n")
         fh.flush()
 
         sql_queries = [query]
@@ -468,7 +484,7 @@ def run_single_core_job(fields,source_child_tables,index_thread):
                 fh.flush()
                 fh.close()
                 dbh.close()
-                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (sql_queries={sql_queries}); quitting...")
 
 
         # Loop over astroobjects for current field:
@@ -564,6 +580,7 @@ def run_single_core_job(fields,source_child_tables,index_thread):
     if dbh.exit_code >= 64:
         fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
         fh.flush()
+        fh.close()
         raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
@@ -576,13 +593,13 @@ def run_single_core_job(fields,source_child_tables,index_thread):
     return message
 
 
-def execute_parallel_processes(fields_list,source_child_tables,num_cores):
+def execute_parallel_processes(fields_list,sources_child_tables,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,fields_list,source_child_tables,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,fields_list,sources_child_tables,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -624,57 +641,33 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    sql_queries = []
-    query = f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects\\_%';"
-    sql_queries.append(query)
 
-    try:
-        records = dbh.execute_sql_queries(sql_queries,debug)
-    except Exception as e:
-        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                         f"(query={query},e={e});  quitting...")
+    # Look up for the given processing date the Sources child table names
+    # to cross-match and a distinct list of the fields covered by the sources.
+
+    source_tables_to_crossmatch_tuples_list,fields_list = \
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date)
+
+    sources_child_tables = []
+    for table_to_crossmatch_tuple in source_tables_to_crossmatch_tuples_list:
+
+        obs_date = table_to_crossmatch_tuple[0]
+        sca = table_to_crossmatch_tuple[1]
+
+        sources_tablename = f"sources_{obs_date}_{sca}"
+
+        sources_child_tables.append(sources_tablename)
+
+    if len(sources_child_tables) == 0:
+        print(f"*** Error: No Sources child tables found;  quitting...")
         dbh.close()
-        exit(64)
-
-    if dbh.exit_code >= 64:
-        print(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
-        dbh.close()
-        exit(dbh.exit_code)
-
-    fields_list = []
-    for record in records:
-        field = record[0].removeprefix("astroobjects_")
-        fields_list.append(field)
-
-
-    # Get all source child table names for querying directly
-    # (avoids expensive inheritance scan across all child tables).
-
-    sql_queries = []
-    query = "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename ~ '^sources_[0-9]+_[0-9]+$' ORDER BY tablename;"
-    sql_queries.append(query)
-
-    try:
-        records = dbh.execute_sql_queries(sql_queries,debug)
-    except Exception as e:
-        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                         f"(query={query},e={e});  quitting...")
-        dbh.close()
-        exit(64)
-
-    if dbh.exit_code >= 64:
-        print(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
-        dbh.close()
-        exit(dbh.exit_code)
-
-    source_child_tables = [record[0] for record in records]
-    print(f"Number of source child tables = {len(source_child_tables)}")
+        exit(7)
 
 
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to ascertain available fields =",
+    print("Elapsed time in seconds to ascertain available fields and Sources child tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -737,10 +730,10 @@ if __name__ == '__main__':
     ################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(fields_list,source_child_tables,num_cores)
+        execute_parallel_processes(fields_list,sources_child_tables,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(fields_list,source_child_tables,thread_index)
+        run_single_core_job(fields_list,sources_child_tables,thread_index)
 
 
     # Code-timing benchmark.
