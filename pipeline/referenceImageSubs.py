@@ -504,6 +504,9 @@ def generateSExtractorReferenceImageCatalog(s3_client,
                                             upload_to_s3_bucket):
 
 
+    start_time_benchmark = time.time()
+
+
     # Compute SExtractor catalog for reference image.
 
     filename_refimage_catalog = filename_refimage_image.replace("image.fits","refimsexcat.txt")
@@ -552,6 +555,14 @@ def generateSExtractorReferenceImageCatalog(s3_client,
 
     if checksum_refimage_catalog == 65 or checksum_refimage_catalog == 68 or checksum_refimage_catalog == 66:
         print("*** Error: Unexpected value for checksum =",checksum_refimage_catalog)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("=====> Elapsed time in seconds just to generate reference-image SExtractor catalog =",
+        round(end_time_benchmark - start_time_benchmark,3))
+    start_time_benchmark = end_time_benchmark
 
 
     # Return metadata about reference-image SExtractor catalog that was generated.
@@ -683,6 +694,9 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
                                            filename_refimage_psf,
                                            psfcat_refimage_dict,
                                            upload_to_s3_bucket):
+
+
+    start_time_benchmark = time.time()
 
 
     # Generate PSF-fit catalog for reference image using PhotUtils.
@@ -902,6 +916,14 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
         if checksum_psfcat_finder_filename == 65 or checksum_psfcat_finder_filename == 68 or checksum_psfcat_finder_filename == 66:
             print("*** Error: Unexpected value for checksum =",checksum_psfcat_finder_filename)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("=====> Elapsed time in seconds just to generate reference-image PhotUtils catalog =",
+        round(end_time_benchmark - start_time_benchmark,3))
+    start_time_benchmark = end_time_benchmark
 
 
     # Return metadata about reference-image PhotUtils catalog that was generated.
