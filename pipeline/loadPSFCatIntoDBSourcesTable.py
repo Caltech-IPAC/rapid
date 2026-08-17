@@ -781,7 +781,7 @@ if __name__ == '__main__':
 
         table_exists_flag = records[0][0]
 
-        if not table_exists_flag:
+        if (not table_exists_flag) or (not do_loading):
 
             table_create_key = (obs_date,sca)
             table_create_obs_date_sca_dict[table_create_key] = 1
@@ -911,7 +911,7 @@ if __name__ == '__main__':
             sql_queries_dict[table_create_key] = sql_queries
 
         if table_create_list:
-            with ThreadPoolExecutor(max_workers = len(table_create_list)) as executor:
+            with ThreadPoolExecutor(max_workers = min(num_cores,len(table_create_list))) as executor:
                 for table_create_tuple in table_create_list:
                     obs_date = table_create_tuple[0]
                     sca = table_create_tuple[1]
@@ -955,9 +955,12 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connection.
+    # Close database connections.
 
     dbh.close()
+
+    roman_tessellation_db.close()
+
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)

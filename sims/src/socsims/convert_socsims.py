@@ -66,7 +66,7 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 bucket_name_input = "socsims-fakesrc-asdf-20260807"
 bucket_name_output = "socsims-fakesrc-fits-20260807-lite"
 
-sip_distortion_degree = 4
+sip_distortion_degree = 5
 
 
 # Create S3-client and S3-resource objects.

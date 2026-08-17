@@ -502,3 +502,148 @@ Date              Software modification
 ===============   ===============================================================================================================================================================================================================================
 5/19/2026         Modified to feed ZOGY scaled std_ref_img by scalefacref (gain-matching correction).
 ===============   ===============================================================================================================================================================================================================================
+
+
+8/13/2026
+************************************
+
+Processed all images in the new set of rimtimsims delivered on 6/22/26.
+These simulated images have a greater variety of injected transients than
+earlier rimtimsim versions.  The dithering of images in this dataset is on the subpixel level.
+There are 263 images total, covering one SCA (2), one field (4682737), and two filters
+(K213 and Z087), broken down as follows::
+
+    rimtimsims3db=> select sca,a.fid,filter,count(*) from l2files a, filters b where a.fid = b.fid group by sca,a.fid,filter order by sca,a.fid;
+     sca | fid | filter | count
+    -----+-----+--------+-------
+       2 |   4 | K213   |   131
+       2 |   7 | Z087   |   132
+    (2 rows)
+
+Included the following improvement to how the rimtimsims are prepared for RAPID pipeline input, as well as the recent
+pipeline improvements documented on the :doc:`main page for testing </dev/tests>`.
+
+===============   ===============================================================================================================================================================================================================================
+Date              Software modification
+===============   ===============================================================================================================================================================================================================================
+8/12/2026         Modified ``sims/src/rimtimsim/convert_rimtimsim.py`` to recompute FITS-header ``CRVAL1,2`` at ``CRPIX1,2 = 2044.5`` (exact image center).
+===============   ===============================================================================================================================================================================================================================
+
+Database metadata for this test are stored in the RAPID-operations database ``rimtimsims3db``.
+
+Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
+
+.. code-block::
+
+    export DBNAME=rimtimsims3db
+    export STARTDATETIME="2027-02-14 06:00:00"
+    export ENDDATETIME="2027-04-25 00:00:00"
+    export STARTREFIMMJDOBS=0.0
+    export ENDREFIMMJDOBS=999999.9
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260813 >& virtualPipelineOperator_20260813.out &
+
+The following database query shows the RAPID pipelines ran normally for the portion that
+generates the file products in parallel via the AWS Batch service (capable of processing
+thousands of images in parallel).
+
+.. code-block::
+
+    rimtimsims3db=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260813' group by ppid, exitcode order by ppid, exitcode;
+
+     ppid | exitcode | count
+    ------+----------+-------
+       12 |        0 |     2
+       15 |        0 |   263
+       17 |        0 |   263
+    (3 rows)
+
+The above ``ppid`` values of 12, 15, and 17 (pipeline IDs) refer to the RAPID reference-image pipeline,
+the RAPID science pipeline, and the RAPID post-processing pipeline, respectively.
+
+The VPO took 3.2 hours to do the following:
+
+====================================================================================  =====================
+Pipeline stage                                                                        Execution time (sec)
+====================================================================================  =====================
+Generate final file products, register in database, and upload to S3 bucket                   10451.31
+Load all sources into PostgreSQL database                                                       461.73
+Cross-match all Sources and AstroObjects database records                                       227.41
+Compute statistics for AstroObjectsMeta database records                                        271.54
+Total elapsed time to execute VPO on above stages                                             11411.99
+====================================================================================  =====================
+
+Database-loading of sources, cross-matching, and computing lightcurve statistics were
+executed via 8 parallel processes on an 8-vCPU machine.
+
+The VPO code is still evolving, and is not quite in optimal form
+(the number in first row in the above table can be reduced significantly).
+
+The pipeline processing was done in parallel under AWS Batch.
+
+The two instances of the RAPID reference-image pipeline took
+~14 minutes for the ``K213`` filter and
+~33 minutes to run for the ``Z087`` filter.
+Both reference-image pipeline instances stacked 25 input frames, but the longer total execution
+time for the ``Z087`` filter was in the generation of the reference-image PhotUtils catalog.
+
+The RAPID science pipelines took ~1.3 hours per instance for the ``K213`` filter and
+~30 minutes per instance for the ``Z087`` filter.
+As shown in the table below for the longest running science-pipeline instance (``jid=143944``),
+generating PhotUtils catalogs is the dominant factor affecting pipeline performance.
+
+=================================================================  =====================
+Pipeline step                                                      Execution time (sec)
+=================================================================  =====================
+Downloading science image                                                  0.808
+Uploading science image to product S3 bucket                               0.401
+Downloading or generating reference image                                  2.451
+Generating science-image catalog                                          22.331
+Swarping images                                                            8.781
+Running bkgest on science image                                            3.864
+Running gainMatchScienceAndReferenceImages                                26.195
+Replacing NaNs, applying image offsets, etc.                               4.758
+Uploading intermediate FITS files to product S3 bucket                     2.312
+Running ZOGY                                                              39.775
+Masking ZOGY difference image                                              1.113
+Running SExtractor on positive ZOGY difference image                       4.835
+Running SExtractor on negative ZOGY difference image                      22.344
+Generating PSF-fit catalog on positive ZOGY difference image             889.471
+Generating PSF-fit catalog on negative ZOGY difference image              96.523
+Uploading main products to S3 bucket                                       5.033
+Running SFFT                                                             161.709
+Uploading SFFT difference image to S3 product bucket                       4.266
+Running SExtractor on positive SFFT difference images                     45.064
+Running SExtractor on negative SFFT difference images                     23.457
+Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket          1.06
+Generating PSF-fit catalog on positive SFFT difference image            1551.529
+Generating PSF-fit catalog on negative SFFT difference image             422.014
+Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket             1.994
+Computing naive difference images                                          0.681
+Uploading naive difference images to S3 product bucket                     0.789
+Running SExtractor on positive naive difference image                      4.14
+Running SExtractor on negative naive difference image                     21.563
+Uploading SExtractor catalogs for naive difference images                  0.729
+Generating PSF-fit catalog on positive naive difference image           1305.434
+Generating PSF-fit catalog on negative naive difference image            219.618
+Uploading PSF-fit catalogs for naive difference images                     1.408
+Uploading products at pipeline end to S3 product bucket                    0.032
+Total elapsed time to run one instance of science pipeline              4896.480
+=================================================================  =====================
+
+
+Here are numbers related to extraction of lightcurves from PSF-fit SFFT-difference-image catalogs:
+
+=========================================================================================  =====================
+Item                                                                                        Number
+=========================================================================================  =====================
+Number of sources loaded into Sources_<obsdate>_<sca> database tables                         25,245,610
+Number of merges inside AND outside field, loaded into Merges_<field> database tables         28,147,729
+Number of merges outside field, loaded into Merges_<field> database tables                         8,981
+Number of astroObjects loaded into AstroObjects_<field> database tables                        1,808,659
+Number of records loaded into AstroObjectsMeta_<field> database tables                         1,808,659
+Number of Sources_<obsdate>_<sca> database tables                                                     70
+Number of AstroObjects_<field> database tables                                                         7
+Number of Merges_<field> database tables                                                               7
+Number of AstroObjectsMeta_<field> database tables                                                     7
+=========================================================================================  =====================

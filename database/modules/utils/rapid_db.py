@@ -3250,6 +3250,9 @@ class RAPIDDB:
 
         self.exit_code = 0
 
+        if len(sql_queries) == 0:
+            print(f"*** Error:  sql_queries is empty; quitting...")
+            exit(64)
 
         for query in sql_queries:
 
@@ -3258,6 +3261,8 @@ class RAPIDDB:
 
 
             # Execute query.
+
+            records = []
 
             try:
                 self.cur.execute(query)
@@ -3290,7 +3295,11 @@ class RAPIDDB:
 
         # Return records for the last query executed.  This is done for convenience and code is not generalized.
 
-        return records
+        try:
+            return records
+        except Exception as error:
+            print(f"*** Error on return (query={query},self.exit_code={self.exit_code}): {error}; returning without argument...")
+            return
 
 
 ########################################################################################################
