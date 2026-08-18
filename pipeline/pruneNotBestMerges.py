@@ -1,6 +1,4 @@
-import boto3
 import os
-import numpy as np
 import configparser
 from datetime import datetime, timezone
 from dateutil import tz
@@ -33,13 +31,28 @@ start_time_benchmark_at_start = start_time_benchmark
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+datetime_pt_now = datetime_utc_now.astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
 print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
+
+
+# JOBPROCDATE of RAPID science-pipeline jobs that already ran.
+
+proc_date = os.getenv('JOBPROCDATE')
+
+if proc_date is None:
+
+    print("*** Error: Env. var. JOBPROCDATE not set; quitting...")
+    exit(64)
+
+
+# Print out basic information for log file.
+
+print("proc_date =",proc_date)
 
 
 # Other required environment variables.
@@ -90,28 +103,12 @@ num_cores = os.cpu_count()
 
 print("num_cores =",num_cores)
 
-dbh_list = []
-
-for i in range(num_cores):
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    dbh_list.append(dbh)
-
-
-# Get S3 client.
-
-s3_client = boto3.client('s3')
-
 
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(fields,index_thread):
+def run_single_core_job(fields,sources_child_tables,index_thread):
 
     '''
     Remove records from Merges_<field> database tables associated with sources that are no longer best
@@ -137,18 +134,22 @@ def run_single_core_job(fields,index_thread):
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
-    except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
+    except Exception as e:
+        print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
         exit(64)
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        fh.close()
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
-
-
-    # Requires all sources child tables be tied to parent sources table through inheritance.
-
-    sources_tablename = f"sources"
 
 
     # Loop over all fields associated with this thread and prune not-best merges:
@@ -166,83 +167,31 @@ def run_single_core_job(fields,index_thread):
 
         field = fields[index_field]
 
-
         fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
 
         merges_tablename = f"merges_{field}"
+        union_parts = []
+        for sources_tablename in sources_child_tables:
+            union_parts.append(
+                f"SELECT a.sid FROM {sources_tablename} AS a "
+                f"JOIN diffimages AS b ON a.pid = b.pid "
+                f"WHERE b.vbest = 0"
+            )
+        query_prefix = f"DELETE FROM {merges_tablename} WHERE sid IN ("
+        query = query_prefix + " UNION ALL ".join(union_parts) + ");"
 
+        fh.write(f"Querying {len(sources_child_tables)} source child tables for {merges_tablename} via UNION ALL\n")
+        fh.flush()
 
-        query = f"SELECT a.sid,b.pid FROM {merges_tablename} AS a, " +\
-            f"{sources_tablename} AS b " +\
-            f"WHERE a.sid = b.sid;"
-
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-        sids_list = []
-        pids_list = []
-        pids_dict = {}
-
-        for record in records:
-
-            sid = record[0]
-            pid = record[1]
-
-            sids_list.append(sid)
-            pids_list.append(pid)
-            pids_dict[pid] = 1
+        sql_queries = [query]
+        dbh.execute_sql_queries(sql_queries,thread_debug)
 
 
         # Code-timing benchmark.
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to select all records from {merges_tablename} and {sources_tablename} database tables = {diff_time_benchmark}\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
-
-
-        # Query for all DiffImages records associated with unique list of pids.
-
-        unique_pids_list = list(pids_dict.keys())
-
-        vbest_dict = {}
-
-        for pid in unique_pids_list:
-
-            query = f"SELECT vbest FROM diffimages WHERE pid = {pid};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-            vbest = records[0][0]
-
-            vbest_dict[pid] = vbest
-
-
-        # Check each source is associated with a not-best DiffImages record.
-
-        n_deleted = 0
-
-        for sid,pid in zip(sids_list,pids_list):
-
-            vbest = vbest_dict[pid]
-
-            if vbest == 0:
-
-
-                # Source is not best, so delete Merges_<field> record.
-
-                dbh.delete_merge_from_field(merges_tablename,sid,thread_debug)
-                n_deleted += 1
-
-
-        # Code-timing benchmark.
-
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to delete {n_deleted} not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\\n")
+        fh.write(f"Elapsed time in seconds to delete not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
@@ -256,6 +205,17 @@ def run_single_core_job(fields,index_thread):
         fh.flush()
 
 
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        fh.close()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
+
+
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
     fh.close()
@@ -265,28 +225,102 @@ def run_single_core_job(fields,index_thread):
     return message
 
 
-def execute_parallel_processes(fields_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes(fields_list,sources_child_tables,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,fields_list,sources_child_tables,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    failures = []
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
+            failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
+
+    if failures:
+        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
+        exit(64)
+
+
+def run_single_core_vacuum_job(fields,index_thread):
+
+    '''
+    Vacuum/analyze or drop empty merges_<field> database tables.
+    '''
+
+    thread_debug = 0
+    nfields = len(fields)
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...")
+
+    for index_field in range(nfields):
+
+        index_core = index_field % num_cores
+        if index_thread != index_core:
+            continue
+
+        field = fields[index_field]
+        tablename = f"merges_{field}"
+
+        query = f"SELECT EXISTS (SELECT 1 FROM {tablename} LIMIT 1);"
+        sql_queries = [query]
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        merges_child_table_has_rows = records[0][0]
+
+        if not merges_child_table_has_rows:
+            print(f"Dropping {tablename} database table...")
+            sql_queries = [f"DROP TABLE {tablename};"]
+            dbh.execute_sql_queries(sql_queries,thread_debug)
+        else:
+            print(f"Vacuuming and analyzing {tablename} database table...")
+            dbh.vacuum_analyze_table(tablename)
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
+
+    message = f"Vacuum finish normally for index_thread = {index_thread}"
+
+    return message
+
+
+def execute_parallel_vacuum_processes(fields_list,num_cores):
+
+    print("num_cores =",num_cores)
+
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        futures = [executor.submit(run_single_core_vacuum_job,fields_list,thread_index) for thread_index in range(num_cores)]
+
+        for i, future in enumerate(as_completed(futures)):
+            index = futures.index(future)
+            print(f"Vacuum completed: {i+1} processes, lastly for index={index}")
+
+    failures = []
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            failures.append(e)
+            print(f"*** Error in vacuum thread index {index} = {e}")
+
+    if failures:
+        print(f"*** Error(s) from {len(failures)} vacuum worker(s); quitting...")
+        exit(64)
 
 
 #################
@@ -309,20 +343,33 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'merges\\_%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
 
-    fields_list = []
-    for record in records:
-        field = record[0].replace("merges_","")
-        fields_list.append(field)
+    # Look up for the given processing date the Sources child table names
+    # that were cross-matched and a distinct list of the fields covered by the sources.
+
+    source_tables_to_crossmatch_tuples_list,fields_list,_ = \
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date)
+
+    sources_child_tables = []
+    for table_to_crossmatch_tuple in source_tables_to_crossmatch_tuples_list:
+
+        obs_date = table_to_crossmatch_tuple[0]
+        sca = table_to_crossmatch_tuple[1]
+
+        sources_tablename = f"sources_{obs_date}_{sca}"
+
+        sources_child_tables.append(sources_tablename)
+
+    if len(sources_child_tables) == 0:
+        print(f"*** Error: No Sources child tables found;  quitting...")
+        dbh.close()
+        exit(7)
 
 
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to ascertain available fields =",
+    print("Elapsed time in seconds to collect inputs =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -333,10 +380,10 @@ if __name__ == '__main__':
     ################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(fields_list,num_cores)
+        execute_parallel_processes(fields_list,sources_child_tables,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(fields_list,thread_index)
+        run_single_core_job(fields_list,sources_child_tables,thread_index)
 
 
     # Code-timing benchmark.
@@ -347,41 +394,23 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Close main database connection before parallel vacuum phase.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
     # Vacuum and analyze merges_<field> database tables for all fields.  Drop table if empty.
 
     print("Vacuuming and analyzing merges_<field> database tables for all fields...")
 
-    for field in fields_list:
-
-        tablename = f"merges_{field}"
-
-        query = f"SELECT count(*) FROM {tablename};"
-
-        print(f"query = {query}")
-
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
-
-        print(f"records = {records}")
-
-        merges_child_table_count = records[0][0]
-
-        if merges_child_table_count == 0:
-
-            print("Dropping {tablename} database table...")
-
-            query = f"DROP TABLE {tablename};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,debug)
-
-        else:
-
-            print("Vacuuming and analyzing {tablename} database table...")
-
-            dbh.vacuum_analyze_table(tablename)
+    if num_cores > 1:
+        execute_parallel_vacuum_processes(fields_list,num_cores)
+    else:
+        thread_index = 0
+        run_single_core_vacuum_job(fields_list,thread_index)
 
 
     # Code-timing benchmark.
@@ -397,20 +426,6 @@ if __name__ == '__main__':
     end_time_benchmark = time.time()
     print(f"Elapsed time in seconds to delete all not-best merges =",
         end_time_benchmark - start_time_benchmark_at_start)
-
-
-    # Close database connections.
-
-    dbh.close()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    for tdbh in dbh_list:
-        tdbh.close()
-
-        if tdbh.exit_code >= 64:
-            exit(tdbh.exit_code)
 
 
     # Termination.
