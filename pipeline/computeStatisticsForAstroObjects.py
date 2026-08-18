@@ -645,7 +645,7 @@ if __name__ == '__main__':
     # Look up for the given processing date the Sources child table names
     # that were cross-matched and a distinct list of the fields covered by the sources.
 
-    source_tables_to_crossmatch_tuples_list,fields_list = \
+    source_tables_to_crossmatch_tuples_list,fields_list,_ = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date)
 
     sources_child_tables = []
