@@ -101,6 +101,8 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
+ppid = int(config_input['SCI_IMAGE']['ppid'])
+
 match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
 
@@ -966,8 +968,8 @@ if __name__ == '__main__':
     # Look up for the given processing date the Sources child table names
     # to cross-match and a distinct list of the fields covered by the sources.
 
-    source_tables_to_crossmatch_tuples_list,fields_list,_ = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date)
+    source_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
 
 
     # Code-timing benchmark.
