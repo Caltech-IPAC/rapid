@@ -260,7 +260,7 @@ def execute_sql_queries_for_given_sca(sql_queries_dict,obs_date,sca):
                 conn.commit()           # Commit database transaction
 
     except Exception as e:
-        print(f"Error running {sql_query}: {e}")
+        print(f"Error running query for {sql_queries_key}: {e}")
         conn.rollback()                             # Rollback database transaction
         exitcode = 64
         return exitcode
@@ -316,7 +316,7 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
     np.savetxt(csv_fh, data, delimiter=',', fmt='%s')
 
 
-def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
+def run_single_core_job(jids,meta_list,index_thread):
 
     '''
     For efficiency, this method handles both positive and negative difference-image
@@ -357,10 +357,9 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         for index_job in my_jobs:
 
             jid = jids[index_job]
-            overlapping_fields = overlapping_fields_list[index_job]
             meta_dict = meta_list[index_job]
 
-            fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
+            fh.write(f"Loop start: index_job,jid = {index_job},{jid}\n")
 
             jid_from_dict = meta_dict["jid"]
 
@@ -438,11 +437,16 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
             # Perform parallel S3-bucket downloads:
 
+            s3_client_1 = boto3.client('s3')
+            s3_client_2 = boto3.client('s3')
+            s3_client_3 = boto3.client('s3')
+            s3_client_4 = boto3.client('s3')
+
             with ThreadPoolExecutor(max_workers=4) as dl_executor:
-                future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
-                future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
-                future_psfcat_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file_negative, output_psfcat_filename_negative_for_jid)
-                future_finder_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file_negative, output_psfcat_finder_filename_negative_for_jid)
+                future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client_1, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
+                future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client_2, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
+                future_psfcat_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client_3, s3_full_name_psfcat_file_negative, output_psfcat_filename_negative_for_jid)
+                future_finder_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client_4, s3_full_name_psfcat_finder_file_negative, output_psfcat_finder_filename_negative_for_jid)
 
             ret_psfcat = future_psfcat.result()
             ret_finder = future_finder.result()
@@ -611,13 +615,13 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
     return message
 
 
-def execute_parallel_processes(jids,rtids_list,meta_list,num_cores):
+def execute_parallel_processes(jids,meta_list,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,jids,meta_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -660,99 +664,16 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Query database for all normal RAPID science-pipeline Jobs records
-    # that are associated with the given processing date.
-    # Returns a list of job IDs.
+    # Look up for the given processing date the Sources child table names
+    # that were cross-matched and a distinct list of the fields covered by the sources.
 
-    recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+    sources_tables_to_create_tuples_list,fields_list,jid_list,meta_list = \
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
 
-    if dbh.exit_code >= 64:
-        print("*** Error from {}; quitting ".format(swname))
-        exit(dbh.exit_code)
-
-
-    # Set up to launch multi-processing for loading sources database tables.
-
-    jid_list = []
-    overlapping_fields_list = []
-    meta_list = []
-
-    for jid in recs:
-
-        job_dict = dbh.get_info_for_job(jid)
-
-        rid = job_dict["rid"]
-
-        l2file_dict = dbh.get_l2file_info_for_sources(rid)
-
-        crval1 = l2file_dict['crval1']
-        crval2 = l2file_dict['crval2']
-        crpix1 = l2file_dict['crpix1']
-        crpix2 = l2file_dict['crpix2']
-        cd11 = l2file_dict['cd11']
-        cd12 = l2file_dict['cd12']
-        cd21 = l2file_dict['cd21']
-        cd22 = l2file_dict['cd22']
-        expid = l2file_dict["expid"]
-        sca = l2file_dict["sca"]
-        fid = l2file_dict["fid"]
-        field = l2file_dict["field"]
-        hp6 = l2file_dict["hp6"]
-        hp9 = l2file_dict["hp9"]
-        mjdobs = l2file_dict["mjdobs"]
-        dateobs = l2file_dict["dateobs"]
-
-        diffimage_dict = dbh.get_best_difference_image(rid,ppid)
-
-        pid = diffimage_dict['pid']
-
-
-        # Load Sources record metadata into a dictionary that can be appended to a list,
-        # and then unpacked later.
-
-        meta_dict = {}
-
-        meta_dict["jid"] = jid
-        meta_dict["expid"] = expid
-        meta_dict["sca"] = sca
-        meta_dict["fid"] = fid
-        meta_dict["field"] = field
-        meta_dict["hp6"] = hp6
-        meta_dict["hp9"] = hp9
-        meta_dict["mjdobs"] = mjdobs
-        meta_dict["dateobs"] = dateobs
-        meta_dict["pid"] = pid
-
-
-        # Get field numbers (rtids) of all sky tiles containing sky positions
-        # in given science image associated with job ID.
-
-        rtid_dict = {}
-
-        x_list = [*range(0,naxis1,500)]
-        y_list = [*range(0,naxis2,500)]
-        x_list.append(naxis1)
-        y_list.append(naxis2)
-
-        for y in y_list:
-            for x in x_list:
-
-                # x,y,crpix1,crpix2 must be zero-based.
-                ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd11,cd12,cd21,cd22)
-
-                roman_tessellation_db.get_rtid(ra,dec)
-                rtid = str(roman_tessellation_db.rtid)
-
-                rtid_dict[rtid] = 1
-
-        keys_list = list(rtid_dict.keys())
-        print("fields overlapping image =",keys_list)
-
-        jid_list.append(jid)
-        overlapping_fields_list.append(keys_list)
-        meta_list.append(meta_dict)
-
-        print("jid =",jid)
+    if len(sources_tables_to_create_tuples_list) == 0:
+        print(f"*** Error: No Sources child tables found;  quitting...")
+        dbh.close()
+        exit(7)
 
 
     # Code-timing benchmark.
@@ -763,40 +684,13 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Figure out which Source child tables need to be created.
-
-    table_create_obs_date_sca_dict = {}            # Dictionary key is (obs_date,sca) tuple.
-
-    for jid,meta_dict in zip(jid_list,meta_list):
-
-        sca = meta_dict["sca"]
-        dateobs = meta_dict["dateobs"]
-        obs_date = str(dateobs).split()[0].replace("-","")
-
-        tablename = f"sources_{obs_date}_{sca}"
-
-        sql_queries = []
-        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-        records = dbh.execute_sql_queries(sql_queries)
-
-        table_exists_flag = records[0][0]
-
-        if (not table_exists_flag) or (not do_loading):
-
-            table_create_key = (obs_date,sca)
-            table_create_obs_date_sca_dict[table_create_key] = 1
-
-
-    table_create_list = list(table_create_obs_date_sca_dict.keys())
-
-
     # Optionally skip sources child database table creation and bulk loading of sources records,
     # and just do the indexing, clustering, and applying grants to sources database tables for
     # all SCAs associated with observing date...")
 
     if do_loading and jid_list:
 
-        for table_create_tuple in table_create_list:
+        for table_create_tuple in sources_tables_to_create_tuples_list:
 
             obs_date = table_create_tuple[0]
             sca = table_create_tuple[1]
@@ -848,10 +742,10 @@ if __name__ == '__main__':
         ################################################################################
 
         if num_cores > 1:
-            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
+            execute_parallel_processes(jid_list,meta_list,num_cores)
         else:
             thread_index = 0
-            run_single_core_job(jid_list,overlapping_fields_list,meta_list,thread_index)
+            run_single_core_job(jid_list,meta_list,thread_index)
 
 
         # Code-timing benchmark.
@@ -893,7 +787,7 @@ if __name__ == '__main__':
 
         sql_queries_dict = {}
 
-        for table_create_tuple in table_create_list:
+        for table_create_tuple in sources_tables_to_create_tuples_list:
 
             obs_date = table_create_tuple[0]
             sca = table_create_tuple[1]
@@ -911,12 +805,20 @@ if __name__ == '__main__':
             table_create_key = (obs_date,sca)
             sql_queries_dict[table_create_key] = sql_queries
 
-        if table_create_list:
-            with ThreadPoolExecutor(max_workers = min(num_cores,len(table_create_list))) as executor:
-                for table_create_tuple in table_create_list:
+        if sources_tables_to_create_tuples_list:
+            futures = []
+            with ThreadPoolExecutor(max_workers = min(num_cores,len(sources_tables_to_create_tuples_list))) as executor:
+                for table_create_tuple in sources_tables_to_create_tuples_list:
                     obs_date = table_create_tuple[0]
                     sca = table_create_tuple[1]
-                    executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, obs_date, sca)
+                    futures.append(executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, obs_date, sca))
+
+            for future in futures:
+                exitcode = future.result()
+                if exitcode >= 64:
+                    print(f"*** Error: Index creation failed (exitcode={exitcode}); quitting...")
+                    dbh.close()
+                    exit(exitcode)
 
 
         # Cluster, analyze, and apply grants to sources database tables for all SCAs associated with processing date.
@@ -924,7 +826,7 @@ if __name__ == '__main__':
         print("Clustering, analyzing, and applying grants to sources database tables for all SCAs associated with processing date...")
 
         sql_queries = []
-        for table_create_tuple in table_create_list:
+        for table_create_tuple in sources_tables_to_create_tuples_list:
             obs_date = table_create_tuple[0]
             sca = table_create_tuple[1]
 
