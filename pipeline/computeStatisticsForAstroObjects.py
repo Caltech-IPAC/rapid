@@ -692,7 +692,7 @@ if __name__ == '__main__':
 
         sql_queries.append(f"CREATE TABLE {tablename} (LIKE astroobjectsmeta INCLUDING " +
                            f"DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = {fillfactor});")
-
+        sql_queries.append(f"ALTER TABLE {tablename} OWNER TO rapidporole;")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidreadrole;")
         sql_queries.append(f"GRANT SELECT ON TABLE {tablename} TO GROUP rapidreadrole;")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidadminrole;")

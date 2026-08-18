@@ -1028,7 +1028,9 @@ if __name__ == '__main__':
         tablename2 = f"merges_{field}"
 
         sql_queries.append(f"CREATE TABLE {tablename1} (LIKE astroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+        sql_queries.append(f"ALTER TABLE {tablename1} OWNER TO rapidporole;")
         sql_queries.append(f"CREATE TABLE {tablename2} (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+        sql_queries.append(f"ALTER TABLE {tablename2} OWNER TO rapidporole;")
 
     try:
         records = dbh.execute_sql_queries(sql_queries,debug)

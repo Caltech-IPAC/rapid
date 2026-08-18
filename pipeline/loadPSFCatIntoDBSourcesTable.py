@@ -814,6 +814,7 @@ if __name__ == '__main__':
 
             sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources " +
                                f"INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+            sql_queries.append(f"ALTER TABLE {tablename} OWNER TO rapidporole;")
             sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
             sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
