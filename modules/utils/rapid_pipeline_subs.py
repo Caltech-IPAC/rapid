@@ -2811,4 +2811,4 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date):
 
     # Return source_tables_to_crossmatch_list and fields_list.
 
-    return source_tables_to_crossmatch_list,fields_list
+    return source_tables_to_crossmatch_list,fields_list,jid_list
