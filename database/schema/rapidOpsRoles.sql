@@ -21,6 +21,4 @@ GRANT rapidreadrole to apollo;
 -- Verified apollo inherits the following:
 ALTER ROLE rapidreadrole CONNECTION LIMIT -1;
 
--- Make it so apollo can run the master-files pipeline.
 ALTER ROLE rapidporole CONNECTION LIMIT -1;
-GRANT rapidporole to apollo;
