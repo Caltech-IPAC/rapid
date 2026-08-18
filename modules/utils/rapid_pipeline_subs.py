@@ -2628,7 +2628,7 @@ def index_to_radec(idx):
 # sources in those tables.
 ########################################
 
-def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date):
+def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
 
 
     # Query database for all normal RAPID science-pipeline Jobs records
@@ -2703,6 +2703,10 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date):
         mjdobs = l2file_dict["mjdobs"]
         dateobs = l2file_dict["dateobs"]
 
+        diffimage_dict = dbh.get_best_difference_image(rid,ppid)
+
+        pid = diffimage_dict['pid']
+
 
         # Load Sources record metadata into a dictionary that can be appended to a list,
         # and then unpacked later.
@@ -2718,6 +2722,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date):
         meta_dict["hp9"] = hp9
         meta_dict["mjdobs"] = mjdobs
         meta_dict["dateobs"] = dateobs
+        meta_dict["pid"] = pid
 
 
         # Append to lists.
@@ -2811,4 +2816,4 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date):
 
     # Return source_tables_to_crossmatch_list and fields_list.
 
-    return source_tables_to_crossmatch_list,fields_list,jid_list
+    return source_tables_to_crossmatch_list,fields_list,jid_list,meta_list
