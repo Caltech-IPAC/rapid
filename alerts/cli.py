@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import contextlib
+import json
 import logging
 import os
 import sys
@@ -34,7 +35,33 @@ else:
 from database.modules.utils.rapid_db import RAPIDDB
 
 
-def make_provider(diff_flavor: str = "sfft") -> AlertDataProvider:
+def load_kona_predictions(path: str | Path) -> dict[int, dict]:
+    """Load a nightly KONA predictions file for the alert provider.
+
+    The file is JSON of shape ``{expid: {designation: [ra, dec, vmag]}}``
+    (one entry per exposure KONA ran on; vmag may be null). Produced by a
+    local run of modules/solarsystem/rapid_kona.py for now -- KONA is not
+    running on the operational system yet.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The predictions JSON file.
+
+    Returns
+    -------
+    dict
+        expid (int) -> ``{designation: [ra, dec, vmag]}``.
+    """
+    with open(path) as f:
+        data = json.load(f)
+    # JSON object keys are strings; the provider looks up by integer expid
+    return {int(expid): predictions for expid, predictions in data.items()}
+
+
+def make_provider(diff_flavor: str = "sfft",
+                  kona_file: str | Path | None = None,
+                  refcat: bool = True) -> AlertDataProvider:
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
 
@@ -42,6 +69,14 @@ def make_provider(diff_flavor: str = "sfft") -> AlertDataProvider:
     ----------
     diff_flavor : {"sfft", "zogy"}, optional
         Which differencing algorithm's image feeds ``cutoutDifference``.
+    kona_file : str or pathlib.Path, optional
+        Nightly KONA predictions JSON (see load_kona_predictions). While
+        None -- the default until KONA runs operationally -- solar-system
+        association is off: ssMatches and isSSCandidate stay null.
+    refcat : bool, optional
+        Cross-match detections against the field's reference-image
+        catalog (on by default; see providers.get_ref_matches). When off,
+        refStarMatches and refGalaxyMatches stay null.
 
     Returns
     -------
@@ -54,6 +89,10 @@ def make_provider(diff_flavor: str = "sfft") -> AlertDataProvider:
         If the database connection cannot be established (missing DB
         environment variables, or the database is unreachable).
     """
+    kona_lookup = None
+    if kona_file is not None:
+        kona_lookup = load_kona_predictions(kona_file).get
+
     # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
@@ -66,7 +105,8 @@ def make_provider(diff_flavor: str = "sfft") -> AlertDataProvider:
             "DBPORT, DBNAME, DBUSER and DBPASS are set in this shell, and "
             "that this machine can reach the DB (VPN up / EC2 security "
             "group allows it)")
-    return AlertDataProvider(db, diff_flavor=diff_flavor)
+    return AlertDataProvider(db, diff_flavor=diff_flavor,
+                             kona_lookup=kona_lookup, refcat=refcat)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -112,6 +152,16 @@ def main(argv: list[str] | None = None) -> int:
                         default="sfft",
                         help="which differencing algorithm's image feeds "
                              "cutoutDifference (default: %(default)s)")
+    parser.add_argument("--kona-file", metavar="FILE", default=None,
+                        help="nightly KONA predictions JSON "
+                             "({expid: {designation: [ra, dec, vmag]}}); "
+                             "without it, solar-system association is off "
+                             "and ssMatches/isSSCandidate are null")
+    parser.add_argument("--no-refcat", action="store_true",
+                        help="skip the reference-catalog cross-match "
+                             "(refStarMatches/refGalaxyMatches stay null); "
+                             "on by default, staging one mosaic catalog "
+                             "per reference image from S3")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="diagnostic verbosity on stderr; quiet by "
@@ -132,7 +182,9 @@ def main(argv: list[str] | None = None) -> int:
                      "--exposure with --sca")
 
     # Make provider
-    provider = make_provider(diff_flavor=args.diff_flavor)
+    provider = make_provider(diff_flavor=args.diff_flavor,
+                             kona_file=args.kona_file,
+                             refcat=not args.no_refcat)
 
     # Make producer, if kafka arg is True
     producer = None
@@ -150,8 +202,8 @@ def main(argv: list[str] | None = None) -> int:
                        codec="null" if args.no_compress else "deflate")
                    if args.save else contextlib.nullcontext())
 
-    # Produce alert to archive
-    with archive_ctx as archive:
+    # Produce alerts, then remove any products staged from S3.
+    with provider, archive_ctx as archive:
         if args.sid is not None:
             alert_bytes = produce_alert(provider, args.sid,
                                         producer=producer, topic=args.topic,
