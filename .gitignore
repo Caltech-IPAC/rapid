@@ -1,7 +1,31 @@
+# Gitignore file for the RAPID repository
 
-# uv scratch: the test suite is sometimes run through `uv run --with pytest`,
-# which synthesises these for that ephemeral harness. They are not this
-# repo dependency resolution and must not be committed (the pre-push scan
-# also reads their hash fragments as AWS account ids).
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+
+# uv scratch
 uv.lock
 .venv/
+
+# C build outputs (built in-tree)
+c/builds/
+
+# Pipeline scratch / working area
+work/
+
+# Docs build output
+docs/build/
+docs/**/*.inc
+
+# Editor / local config
+.vscode/
+
+# Secrets — never commit
+*.env
+
+# Personal scratch notes
+alerts/scratch/
