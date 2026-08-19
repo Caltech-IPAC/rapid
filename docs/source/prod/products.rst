@@ -108,7 +108,7 @@ For a listing of the latest product files from the ``Open Universe sims``, downl
 
 For a listing of the latest product files from the ``rimtimsims``, download the following text file:
 
-:download:`rapid-product-files_20260519.txt <rapid-product-files_20260519.txt>`
+:download:`rapid-product-files_20260813.txt <rapid-product-files_20260813.txt>`
 
 For a listing of the latest product files from the ``SOC sims``, download the following text file:
 
