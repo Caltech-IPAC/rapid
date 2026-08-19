@@ -7,7 +7,7 @@
 __pycache__/
 *.py[cod]
 
-# uv scratch — identical to smdc's tracked rules, so an eventual merge agrees
+# uv scratch
 uv.lock
 .venv/
 
