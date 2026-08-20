@@ -48,6 +48,7 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import pipeline.referenceImageSubs as rfis
 import pipeline.differenceImageSubs as dfis
+import pipeline.sfftCommandSubs as sfftcmd
 
 start_time_benchmark = time.time()
 start_time_benchmark_at_start = start_time_benchmark
@@ -339,7 +340,13 @@ if __name__ == '__main__':
     print("s3_full_name_sciimage_psf = ",s3_full_name_sciimage_psf)
     print("filename_sciimage_psf = ",filename_sciimage_psf)
 
+    # Substitute the filter (FID) and, optionally, the detector (SCAID) tokens into the
+    # reference-PSF filename.  The SCAID substitution is a no-op for any configuration whose
+    # filename carries no SCAID token, so datasets that use a single reference PSF per filter
+    # are unaffected.  SCAID is used rather than SCA because real filenames contain "SCA".
+
     refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid_sciimage))
+    refimage_psf_filename = refimage_psf_filename.replace("SCAID","{:02d}".format(sca_sciimage))
     s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket + "/" + refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
     filename_refimage_psf,subdirs_refimage_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf)
 
@@ -1870,50 +1877,19 @@ if __name__ == '__main__':
         filename_cconvdiff = 'sfftdiffimage_cconv_masked.fits'               # Only generated if crossconv_flag = True
 
 
-        # A quirk in the SFFT software requires prepended "./" to the positional input filenames.
-
-        if "r" == science_image_filename[0]:
-
-            sfft_cmd = [python_cmd,
-                        sfft_code,
-                        "./" + filename_scifile,
-                        "./" + filename_reffile,
-                        "--bsmaskvalue",
-                        "20000.0",
-                        "--bsmaskradius",
-                        "30.0"]
-
-        else:
-
-            # Should be same as config-file setting for OpenUniverse sims:
-            # crossconv_flag = True
-
-            sfft_cmd = [python_cmd,
-                        sfft_code,
-                        "./" + filename_scifile,
-                        "./" + filename_reffile,
-                        "--scicat",
-                        filename_scigainmatchsexcat_catalog,
-                        "--refcat",
-                        filename_refgainmatchsexcat_catalog,
-                        "--bsmaskvalue",
-                        "50.0",
-                        "--bsmaskradius",
-                        "100.0"]
-
-        # If crossconv_flag = False, then the SFFT diffimage PSF is just the science-image PSF.
-
-        sfft_cmd.append("--scipsf")
-        sfft_cmd.append(filename_sciimage_psf_normalized)
-
-        if crossconv_flag:
-            sfft_cmd.append("--crossconv")
-            sfft_cmd.append("--refpsf")
-            sfft_cmd.append(filename_refimage_psf)
-            sfft_cmd.append("--scisegm")
-            sfft_cmd.append(filename_scisegm)
-            sfft_cmd.append("--refsegm")
-            sfft_cmd.append(filename_refsegm)
+        sfft_cmd = sfftcmd.build_sfft_command_args(python_cmd,
+                                                   sfft_code,
+                                                   filename_scifile,
+                                                   filename_reffile,
+                                                   filename_scigainmatchsexcat_catalog,
+                                                   filename_refgainmatchsexcat_catalog,
+                                                   filename_sciimage_psf_normalized,
+                                                   filename_refimage_psf,
+                                                   filename_scisegm,
+                                                   filename_refsegm,
+                                                   science_image_filename,
+                                                   crossconv_flag,
+                                                   sfft_dict)
 
 
         sfft_cmd_str = ' '.join(sfft_cmd)
