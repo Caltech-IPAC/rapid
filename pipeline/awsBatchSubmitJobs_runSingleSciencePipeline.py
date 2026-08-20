@@ -49,6 +49,7 @@ import database.modules.utils.rapid_db as db
 import pipeline.referenceImageSubs as rfis
 import pipeline.differenceImageSubs as dfis
 import pipeline.sfftCommandSubs as sfftcmd
+import pipeline.zogyNoiseSubs as zogynoise
 
 start_time_benchmark = time.time()
 start_time_benchmark_at_start = start_time_benchmark
@@ -280,6 +281,14 @@ if __name__ == '__main__':
     astrometric_uncert_x = float(zogy_dict['astrometric_uncert_x'])
     astrometric_uncert_y = float(zogy_dict['astrometric_uncert_y'])
     post_zogy_keep_diffimg_lower_cov_map_thresh = float(zogy_dict['post_zogy_keep_diffimg_lower_cov_map_thresh'])
+
+    # Source of the ZOGY SN and SR arguments.  Defaults to False, which reproduces the
+    # historical behaviour of using the clipped standard deviations of the images themselves.
+
+    if 'zogy_sn_sr_from_uncertainty_maps' in zogy_dict:
+        zogy_sn_sr_from_uncertainty_maps = ast.literal_eval(zogy_dict['zogy_sn_sr_from_uncertainty_maps'])
+    else:
+        zogy_sn_sr_from_uncertainty_maps = False
     s3_full_name_sciimage_psf = zogy_dict['s3_full_name_sciimage_psf']
 
     awaicgen_dict = config_input['AWAICGEN']
@@ -1230,6 +1239,20 @@ if __name__ == '__main__':
 
 
 
+    # ZOGY's SN and SR arguments are the background noise sigmas.  Only their ratio affects
+    # the difference image.  See pipeline/zogyNoiseSubs.py for why the uncertainty maps are
+    # the better source of these in a crowded field.
+
+    zogy_sn,zogy_sr = zogynoise.zogy_background_sigmas(zogy_sn_sr_from_uncertainty_maps,
+                                                       reformatted_science_uncert_image_filename,
+                                                       output_resampled_gainmatched_reference_uncert_image,
+                                                       std_sci_img,
+                                                       std_ref_img,
+                                                       scalefacref)
+
+    print("zogy_sn,zogy_sr,ratio =",zogy_sn,zogy_sr,zogy_sn / zogy_sr if zogy_sr else float('nan'))
+
+
     zogy_cmd = [python_cmd,
                 zogy_code,
                 filename_bkg_subbed_science_image,
@@ -1238,8 +1261,8 @@ if __name__ == '__main__':
                 filename_refimage_psf,
                 reformatted_science_uncert_image_filename,
                 output_resampled_gainmatched_reference_uncert_image,
-                str(std_sci_img),
-                str(std_ref_img * scalefacref),
+                str(zogy_sn),
+                str(zogy_sr),
                 str(dxrmsfin),
                 str(dyrmsfin),
                 filename_diffimage,
