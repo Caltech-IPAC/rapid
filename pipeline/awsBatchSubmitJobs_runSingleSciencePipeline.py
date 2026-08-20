@@ -50,6 +50,7 @@ import pipeline.referenceImageSubs as rfis
 import pipeline.differenceImageSubs as dfis
 import pipeline.sfftCommandSubs as sfftcmd
 import pipeline.zogyNoiseSubs as zogynoise
+import pipeline.artifactRepairSubs as artrepair
 
 start_time_benchmark = time.time()
 start_time_benchmark_at_start = start_time_benchmark
@@ -205,6 +206,16 @@ if __name__ == '__main__':
 
     ppid_sciimage = int(config_input['SCI_IMAGE']['ppid'])
     saturation_level_sciimage = float(config_input['SCI_IMAGE']['saturation_level'])
+
+    # Extreme-artifact repair.  Defaults to disabled, so behaviour is unchanged unless the
+    # data set is known to contain these artifacts and a suitable threshold has been set.
+
+    if 'repair_extreme_artifact_pixels' in config_input['SCI_IMAGE']:
+        repair_extreme_artifact_pixels = ast.literal_eval(config_input['SCI_IMAGE']['repair_extreme_artifact_pixels'])
+        extreme_artifact_threshold = float(config_input['SCI_IMAGE']['extreme_artifact_threshold'])
+    else:
+        repair_extreme_artifact_pixels = False
+        extreme_artifact_threshold = None
     rid_sciimage = int(config_input['SCI_IMAGE']['rid'])
     sca_sciimage = int(config_input['SCI_IMAGE']['sca'])
     fid_sciimage = int(config_input['SCI_IMAGE']['fid'])
@@ -1114,6 +1125,19 @@ if __name__ == '__main__':
     # Replace NaNs, if any, in ZOGY input images, with zeros.
 
     nan_indices_sciimage = util.replace_nans_with_value(filename_bkg_subbed_science_image,0.0)
+
+
+    # Repair extreme artifact pixels (cosmic rays, hot and dead pixels) in the science image
+    # used for difference imaging.  This is done on the input rather than by masking the
+    # output because a single bad pixel spreads over tens of pixels in the ZOGY difference;
+    # see pipeline/artifactRepairSubs.py.  Both ZOGY and SFFT consume this image.
+
+    if repair_extreme_artifact_pixels:
+
+        n_artifacts_repaired = artrepair.repair_extreme_artifact_pixels(filename_bkg_subbed_science_image,
+                                                                       extreme_artifact_threshold)
+
+        print("Number of extreme artifact pixels repaired in science image =",n_artifacts_repaired)
     nan_indices_refimage = util.replace_nans_with_value(output_resampled_gainmatched_reference_image,0.0)
 
 
