@@ -154,7 +154,9 @@ if __name__ == '__main__':
 
         # Insert records in PSFs database table.
 
-        dbh.add_psf(fid,sca,status,filename,checksum)
+        psf_filename = f"{s3_url}/{filename}"
+
+        dbh.add_psf(fid,sca,status,psf_filename,checksum)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
@@ -168,7 +170,7 @@ if __name__ == '__main__':
 
         # Finalize record in PSFs database table (in order to set vbest = 1 for current record).
 
-        dbh.update_psf(psfid,filename,checksum,status,version)
+        dbh.update_psf(psfid,psf_filename,checksum,status,version_psf)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
