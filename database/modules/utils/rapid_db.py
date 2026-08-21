@@ -3912,3 +3912,128 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def add_psf(self,fid,sca,status,filename,checksum):
+
+        '''
+        Add record in Psfs database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from addPSF(" +\
+            "cast(TEMPLATE_FID as smallint)," +\
+            "cast(TEMPLATE_SCA as smallint)," +\
+            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
+            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
+            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "(psfid integer," +\
+            " version smallint);"
+
+
+        # Query database.
+
+        print('----> ppid = {}'.format(fid))
+        print('----> field = {}'.format(sca))
+        print('----> filename = {}'.format(filename))
+
+        rep = {"TEMPLATE_SCA": str(sca),
+               "TEMPLATE_FID": str(fid)}
+
+        rep["TEMPLATE_FILENAME"] = filename
+        rep["TEMPLATE_CHECKSUM"] = checksum
+        rep["TEMPLATE_STATUS"] = str(status)
+
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            self.psfid = record[0]
+            self.version = record[1]
+        else:
+            self.psfid = None
+            self.version = None
+            print("*** Error: Could not insert Psfs record; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def update_psf(self,psfid,filename,checksum,status,version):
+
+        '''
+        Update record in Psfs database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from updatePSF(" +\
+            "cast(TEMPLATE_RFID as integer)," +\
+            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
+            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
+            "cast(TEMPLATE_STATUS as smallint)," +\
+            "cast(TEMPLATE_VERSION AS smallint));"
+
+
+        # Query database.
+
+        print('----> psfid = {}'.format(psfid))
+        print('----> filename = {}'.format(filename))
+        print('----> checksum = {}'.format(checksum))
+        print('----> status = {}'.format(status))
+        print('----> version = {}'.format(version))
+
+        rep = {"TEMPLATE_RFID": str(psfid),
+               "TEMPLATE_FILENAME": filename,
+               "TEMPLATE_CHECKSUM": checksum}
+
+        rep["TEMPLATE_STATUS"] = str(status)
+        rep["TEMPLATE_VERSION"] = str(version)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating Psfs record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
