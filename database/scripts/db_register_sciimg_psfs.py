@@ -136,8 +136,9 @@ if __name__ == '__main__':
         checksum = db.compute_checksum(filename)
 
 
-        # Set fid and parse filename to get SCA.
+        # Set status, fid, and parse filename to get SCA.
 
+        status = 1
         fid = 8
 
         string_match = re.match(r"sciimage_psf_f146_sca(.+?).fits", filename)
@@ -153,7 +154,7 @@ if __name__ == '__main__':
 
         # Insert records in PSFs database table.
 
-        add_psf(fid,sca,status,filename,checksum)
+        util.add_psf(fid,sca,status,filename,checksum)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
@@ -167,7 +168,7 @@ if __name__ == '__main__':
 
         # Finalize record in PSFs database table (in order to set vbest = 1 for current record).
 
-        update_psf(psfid,filename,checksum,status,version)
+        util.update_psf(psfid,filename,checksum,status,version)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
