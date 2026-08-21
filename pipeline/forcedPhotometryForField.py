@@ -970,8 +970,12 @@ if __name__ == '__main__':
 
             # Use the corresponding reference-image PSF for the forced photometry as a
             # fallback if the SFFT difference-image PSF is not available.
+            # Substitute SCAID as well as FID, for the data sets that carry one reference
+            # PSF per detector.  SCAID is used rather than SCA because real filenames
+            # contain "SCA".
 
             refimage_psf_filename_from_bucket = refimage_psf_filename.replace("FID",str(fid))
+            refimage_psf_filename_from_bucket = refimage_psf_filename_from_bucket.replace("SCAID","{:02d}".format(sca))
             s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket_base + "/" +\
                 refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename_from_bucket
 
