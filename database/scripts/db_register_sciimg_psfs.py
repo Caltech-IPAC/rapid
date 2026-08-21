@@ -121,7 +121,7 @@ if __name__ == '__main__':
 
         # Download PSF.
 
-        s3_bucket_object_name = s3_url + '/' + filename
+        s3_bucket_object_name = s3_subdir + '/' + filename
 
         print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_bucket_object_name,filename))
 
