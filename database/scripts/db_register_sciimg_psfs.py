@@ -113,7 +113,9 @@ if __name__ == '__main__':
     i = 0
     for line in lines:
 
-        filename = line[3]
+        cols = line.split()
+
+        filename = cols[3]
         print(filename)
 
 
@@ -123,7 +125,7 @@ if __name__ == '__main__':
 
         print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_subdir,filename))
 
-        response = s3_client.download_file(job_info_s3_bucket_base,s3_subdir,job_filename)
+        response = s3_client.download_file(job_info_s3_bucket_base,s3_subdir,filename)
 
         print("response =",response)
 
