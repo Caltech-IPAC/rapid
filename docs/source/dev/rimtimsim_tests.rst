@@ -5,7 +5,9 @@ Overview
 ************************************
 
 Robby Wilson's simulated-image data, hereby referred to as RimTimSim data, are describe here.
-These are images of dense stellar fields.
+These simulate the Galactic Bulge Time Domain Survey (GBTDS), the same survey as the SOC
+simulation set, so these are images of dense stellar fields.  Note that RimTimSim covers a
+single detector, unlike the SOC sims, which cover all 18.
 It is a small dataset with just 263 images total (details below).
 These images have small dithers and small image-angle variations.
 
