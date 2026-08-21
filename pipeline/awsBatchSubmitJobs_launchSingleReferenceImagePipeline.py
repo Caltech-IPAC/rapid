@@ -166,7 +166,6 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_dir']
-refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 
 sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
 sca_readout_noise = float(config_input['INSTRUMENT']['sca_readout_noise'])
@@ -181,6 +180,8 @@ naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
 cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1_refimage'])
 cdelt2_refimage = float(config_input['REF_IMAGE']['cdelt2_refimage'])
 crota2_refimage = float(config_input['REF_IMAGE']['crota2_refimage'])
+# North-up reference-image PSF used for reference-image PhotUtils catalog.
+refimage_psf_filename = config_input['REF_IMAGE']['refimage_psf_filename']
 
 print("min_n_images_to_coadd =",min_n_images_to_coadd)
 print("max_n_images_to_coadd =",max_n_images_to_coadd)
