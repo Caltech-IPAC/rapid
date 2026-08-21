@@ -96,7 +96,7 @@ if __name__ == '__main__':
 
     s3_subdir = 'psfs'
 
-    s3_url = f"s3://{job_info_s3_bucket_base}/{s3_subdir}/"
+    s3_url = f"s3://{job_info_s3_bucket_base}/{s3_subdir}"
 
 
     # Open database connection.
