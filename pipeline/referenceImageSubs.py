@@ -485,7 +485,7 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(jdend)
     generateReferenceImage_return_list.append(zprefimg)
     generateReferenceImage_return_list.append(total_exptime)
-    generateReferenceImage_return_list.append(f"s3://{job_info_s3_bucket}/{input_images_used_csv_file_s3_bucket_object_name}")
+    generateReferenceImage_return_list.append(input_images_used_csv_file_s3_bucket_object_name)
 
     return generateReferenceImage_return_list
 
