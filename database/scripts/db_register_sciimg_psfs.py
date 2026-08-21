@@ -1,7 +1,7 @@
 import os
 import boto3
 import configparser
-import ast
+import re
 from datetime import datetime, timezone
 from dateutil import tz
 import time
@@ -134,6 +134,21 @@ if __name__ == '__main__':
 
         print("Computing checksum of ",filename)
         checksum = db.compute_checksum(filename)
+
+
+        # Set fid and parse filename to get SCA.
+
+        fid = 8
+
+        string_match = re.match(r"sciimage_psf_f146_sca(.+?).fits", filename)
+
+        try:
+                sca = int(string_match.group(1))
+                print(f"sca = {sca}")
+
+            except:
+                print("*** Error: Could not parse filename; quitting...")
+                exit(64)
 
 
         # Insert records in PSFs database table.
