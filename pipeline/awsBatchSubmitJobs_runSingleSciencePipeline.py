@@ -48,6 +48,9 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import pipeline.referenceImageSubs as rfis
 import pipeline.differenceImageSubs as dfis
+import pipeline.sfftCommandSubs as sfftcmd
+import pipeline.zogyNoiseSubs as zogynoise
+import pipeline.artifactRepairSubs as artrepair
 
 start_time_benchmark = time.time()
 start_time_benchmark_at_start = start_time_benchmark
@@ -203,6 +206,16 @@ if __name__ == '__main__':
 
     ppid_sciimage = int(config_input['SCI_IMAGE']['ppid'])
     saturation_level_sciimage = float(config_input['SCI_IMAGE']['saturation_level'])
+
+    # Extreme-artifact repair.  Defaults to disabled, so behaviour is unchanged unless the
+    # data set is known to contain these artifacts and a suitable threshold has been set.
+
+    if 'repair_extreme_artifact_pixels' in config_input['SCI_IMAGE']:
+        repair_extreme_artifact_pixels = ast.literal_eval(config_input['SCI_IMAGE']['repair_extreme_artifact_pixels'])
+        extreme_artifact_threshold = float(config_input['SCI_IMAGE']['extreme_artifact_threshold'])
+    else:
+        repair_extreme_artifact_pixels = False
+        extreme_artifact_threshold = None
     rid_sciimage = int(config_input['SCI_IMAGE']['rid'])
     sca_sciimage = int(config_input['SCI_IMAGE']['sca'])
     fid_sciimage = int(config_input['SCI_IMAGE']['fid'])
@@ -279,6 +292,14 @@ if __name__ == '__main__':
     astrometric_uncert_x = float(zogy_dict['astrometric_uncert_x'])
     astrometric_uncert_y = float(zogy_dict['astrometric_uncert_y'])
     post_zogy_keep_diffimg_lower_cov_map_thresh = float(zogy_dict['post_zogy_keep_diffimg_lower_cov_map_thresh'])
+
+    # Source of the ZOGY SN and SR arguments.  Defaults to False, which reproduces the
+    # historical behaviour of using the clipped standard deviations of the images themselves.
+
+    if 'zogy_sn_sr_from_uncertainty_maps' in zogy_dict:
+        zogy_sn_sr_from_uncertainty_maps = ast.literal_eval(zogy_dict['zogy_sn_sr_from_uncertainty_maps'])
+    else:
+        zogy_sn_sr_from_uncertainty_maps = False
     s3_full_name_sciimage_psf = zogy_dict['s3_full_name_sciimage_psf']
 
     awaicgen_dict = config_input['AWAICGEN']
@@ -339,7 +360,13 @@ if __name__ == '__main__':
     print("s3_full_name_sciimage_psf = ",s3_full_name_sciimage_psf)
     print("filename_sciimage_psf = ",filename_sciimage_psf)
 
+    # Substitute the filter (FID) and, optionally, the detector (SCAID) tokens into the
+    # reference-PSF filename.  The SCAID substitution is a no-op for any configuration whose
+    # filename carries no SCAID token, so datasets that use a single reference PSF per filter
+    # are unaffected.  SCAID is used rather than SCA because real filenames contain "SCA".
+
     refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid_sciimage))
+    refimage_psf_filename = refimage_psf_filename.replace("SCAID","{:02d}".format(sca_sciimage))
     s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket + "/" + refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
     filename_refimage_psf,subdirs_refimage_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf)
 
@@ -1098,6 +1125,19 @@ if __name__ == '__main__':
     # Replace NaNs, if any, in ZOGY input images, with zeros.
 
     nan_indices_sciimage = util.replace_nans_with_value(filename_bkg_subbed_science_image,0.0)
+
+
+    # Repair extreme artifact pixels (cosmic rays, hot and dead pixels) in the science image
+    # used for difference imaging.  This is done on the input rather than by masking the
+    # output because a single bad pixel spreads over tens of pixels in the ZOGY difference;
+    # see pipeline/artifactRepairSubs.py.  Both ZOGY and SFFT consume this image.
+
+    if repair_extreme_artifact_pixels:
+
+        n_artifacts_repaired = artrepair.repair_extreme_artifact_pixels(filename_bkg_subbed_science_image,
+                                                                       extreme_artifact_threshold)
+
+        print("Number of extreme artifact pixels repaired in science image =",n_artifacts_repaired)
     nan_indices_refimage = util.replace_nans_with_value(output_resampled_gainmatched_reference_image,0.0)
 
 
@@ -1223,6 +1263,20 @@ if __name__ == '__main__':
 
 
 
+    # ZOGY's SN and SR arguments are the background noise sigmas.  Only their ratio affects
+    # the difference image.  See pipeline/zogyNoiseSubs.py for why the uncertainty maps are
+    # the better source of these in a crowded field.
+
+    zogy_sn,zogy_sr = zogynoise.zogy_background_sigmas(zogy_sn_sr_from_uncertainty_maps,
+                                                       reformatted_science_uncert_image_filename,
+                                                       output_resampled_gainmatched_reference_uncert_image,
+                                                       std_sci_img,
+                                                       std_ref_img,
+                                                       scalefacref)
+
+    print("zogy_sn,zogy_sr,ratio =",zogy_sn,zogy_sr,zogy_sn / zogy_sr if zogy_sr else float('nan'))
+
+
     zogy_cmd = [python_cmd,
                 zogy_code,
                 filename_bkg_subbed_science_image,
@@ -1231,8 +1285,8 @@ if __name__ == '__main__':
                 filename_refimage_psf,
                 reformatted_science_uncert_image_filename,
                 output_resampled_gainmatched_reference_uncert_image,
-                str(std_sci_img),
-                str(std_ref_img * scalefacref),
+                str(zogy_sn),
+                str(zogy_sr),
                 str(dxrmsfin),
                 str(dyrmsfin),
                 filename_diffimage,
@@ -1870,50 +1924,19 @@ if __name__ == '__main__':
         filename_cconvdiff = 'sfftdiffimage_cconv_masked.fits'               # Only generated if crossconv_flag = True
 
 
-        # A quirk in the SFFT software requires prepended "./" to the positional input filenames.
-
-        if "r" == science_image_filename[0]:
-
-            sfft_cmd = [python_cmd,
-                        sfft_code,
-                        "./" + filename_scifile,
-                        "./" + filename_reffile,
-                        "--bsmaskvalue",
-                        "20000.0",
-                        "--bsmaskradius",
-                        "30.0"]
-
-        else:
-
-            # Should be same as config-file setting for OpenUniverse sims:
-            # crossconv_flag = True
-
-            sfft_cmd = [python_cmd,
-                        sfft_code,
-                        "./" + filename_scifile,
-                        "./" + filename_reffile,
-                        "--scicat",
-                        filename_scigainmatchsexcat_catalog,
-                        "--refcat",
-                        filename_refgainmatchsexcat_catalog,
-                        "--bsmaskvalue",
-                        "50.0",
-                        "--bsmaskradius",
-                        "100.0"]
-
-        # If crossconv_flag = False, then the SFFT diffimage PSF is just the science-image PSF.
-
-        sfft_cmd.append("--scipsf")
-        sfft_cmd.append(filename_sciimage_psf_normalized)
-
-        if crossconv_flag:
-            sfft_cmd.append("--crossconv")
-            sfft_cmd.append("--refpsf")
-            sfft_cmd.append(filename_refimage_psf)
-            sfft_cmd.append("--scisegm")
-            sfft_cmd.append(filename_scisegm)
-            sfft_cmd.append("--refsegm")
-            sfft_cmd.append(filename_refsegm)
+        sfft_cmd = sfftcmd.build_sfft_command_args(python_cmd,
+                                                   sfft_code,
+                                                   filename_scifile,
+                                                   filename_reffile,
+                                                   filename_scigainmatchsexcat_catalog,
+                                                   filename_refgainmatchsexcat_catalog,
+                                                   filename_sciimage_psf_normalized,
+                                                   filename_refimage_psf,
+                                                   filename_scisegm,
+                                                   filename_refsegm,
+                                                   science_image_filename,
+                                                   crossconv_flag,
+                                                   sfft_dict)
 
 
         sfft_cmd_str = ' '.join(sfft_cmd)
