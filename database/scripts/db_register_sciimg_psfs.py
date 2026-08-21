@@ -154,7 +154,7 @@ if __name__ == '__main__':
 
         # Insert records in PSFs database table.
 
-        util.add_psf(fid,sca,status,filename,checksum)
+        dbh.add_psf(fid,sca,status,filename,checksum)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
@@ -168,7 +168,7 @@ if __name__ == '__main__':
 
         # Finalize record in PSFs database table (in order to set vbest = 1 for current record).
 
-        util.update_psf(psfid,filename,checksum,status,version)
+        dbh.update_psf(psfid,filename,checksum,status,version)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
