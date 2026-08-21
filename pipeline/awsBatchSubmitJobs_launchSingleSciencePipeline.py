@@ -793,6 +793,16 @@ if __name__ == '__main__':
 
     job_config['SCI_IMAGE']['ppid'] = str(ppid)
     job_config['SCI_IMAGE']['saturation_level'] = str(saturation_level_sciimage)
+
+    # Pass through the extreme-artifact-repair settings only when they are present in the
+    # master config file, so that data sets which omit them keep the repair disabled.
+
+    if 'repair_extreme_artifact_pixels' in config_input['SCI_IMAGE']:
+        job_config['SCI_IMAGE']['repair_extreme_artifact_pixels'] = \
+            config_input['SCI_IMAGE']['repair_extreme_artifact_pixels']
+        job_config['SCI_IMAGE']['extreme_artifact_threshold'] = \
+            config_input['SCI_IMAGE']['extreme_artifact_threshold']
+
     job_config['SCI_IMAGE']['rid'] = str(rid)
     job_config['SCI_IMAGE']['sca'] = str(sca)
     job_config['SCI_IMAGE']['fid'] = str(fid)
