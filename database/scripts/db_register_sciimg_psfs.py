@@ -123,9 +123,9 @@ if __name__ == '__main__':
 
         s3_bucket_object_name = s3_url + '/' + filename
 
-        print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_subdir,filename))
+        print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_bucket_object_name,filename))
 
-        response = s3_client.download_file(job_info_s3_bucket_base,s3_subdir,filename)
+        response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,filename)
 
         print("response =",response)
 
