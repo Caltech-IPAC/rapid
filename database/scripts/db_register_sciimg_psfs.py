@@ -143,12 +143,12 @@ if __name__ == '__main__':
         string_match = re.match(r"sciimage_psf_f146_sca(.+?).fits", filename)
 
         try:
-                sca = int(string_match.group(1))
-                print(f"sca = {sca}")
+            sca = int(string_match.group(1))
+            print(f"sca = {sca}")
 
-            except:
-                print("*** Error: Could not parse filename; quitting...")
-                exit(64)
+        except:
+            print("*** Error: Could not parse filename for SCA; quitting...")
+            exit(64)
 
 
         # Insert records in PSFs database table.
