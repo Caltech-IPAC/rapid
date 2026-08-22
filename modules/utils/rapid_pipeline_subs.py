@@ -2788,6 +2788,9 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
 
         obs_date = table_to_crossmatch_tuple[0]
         sca = table_to_crossmatch_tuple[1]
+        table_crossmatch_key = (obs_date,sca)
+
+        if table_crossmatch_obs_date_sca_dict[table_crossmatch_key] == 1:
 
         sources_tablename = f"sources_{obs_date}_{sca}"
 
