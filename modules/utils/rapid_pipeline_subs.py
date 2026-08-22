@@ -2763,7 +2763,6 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
 
         table_exists_flag = records[0][0]
 
-
         table_crossmatch_key = (obs_date,sca)
         if table_exists_flag:
             table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 1
@@ -2771,9 +2770,13 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
             table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 0
 
     source_tables_to_crossmatch_list = list(table_crossmatch_obs_date_sca_dict.keys())
-
     n_source_tables_to_crossmatch_list = len(source_tables_to_crossmatch_list)
     print("n_source_tables_to_crossmatch_list =",n_source_tables_to_crossmatch_list)
+
+    source_tables_to_create_list = [key for key, value in table_crossmatch_obs_date_sca_dict.items() if value == 0]
+    n_source_tables_to_create_list = len(source_tables_to_create_list)
+    print("n_source_tables_to_create_list =",n_source_tables_to_create_list)
+    print(f"source_tables_to_create_list = {source_tables_to_create_list}")
 
 
     # Find all distinct fields covered by the Sources child tables,
