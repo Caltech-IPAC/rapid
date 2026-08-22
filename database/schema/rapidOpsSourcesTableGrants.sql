@@ -15,6 +15,10 @@ GRANT CREATE ON SCHEMA public TO rapidporuss;
 GRANT CREATE ON TABLESPACE pipeline_data_01 TO rapidporuss;
 GRANT CREATE ON TABLESPACE pipeline_indx_01 TO rapidporuss;
 
+GRANT USAGE, CREATE ON SCHEMA public TO rapidporole;
+GRANT CREATE ON TABLESPACE pipeline_data_01 TO rapidporole;
+GRANT CREATE ON TABLESPACE pipeline_indx_01 TO rapidporole;
+
 
 -------------------
 -- Sources table
