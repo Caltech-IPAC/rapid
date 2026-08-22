@@ -2792,27 +2792,27 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
 
         if table_crossmatch_obs_date_sca_dict[table_crossmatch_key] == 1:
 
-        sources_tablename = f"sources_{obs_date}_{sca}"
+            sources_tablename = f"sources_{obs_date}_{sca}"
 
-        sql_queries = []
-        sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
+            sql_queries = []
+            sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
 
-        try:
-            records = dbh.execute_sql_queries(sql_queries,debug)
-        except Exception as e:
-            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                  f"(e={e});  quitting...")
-            dbh.close()
-            exit(64)
+            try:
+                records = dbh.execute_sql_queries(sql_queries,debug)
+            except Exception as e:
+                print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                      f"(e={e});  quitting...")
+                dbh.close()
+                exit(64)
 
-        if dbh.exit_code >= 64:
-            print("*** Error from {}; quitting ".format(swname))
-            dbh.close()
-            exit(dbh.exit_code)
+            if dbh.exit_code >= 64:
+                print("*** Error from {}; quitting ".format(swname))
+                dbh.close()
+                exit(dbh.exit_code)
 
-        for record in records:
-            field = record[0]
-            fields_dict[field] = 1
+            for record in records:
+                field = record[0]
+                fields_dict[field] = 1
 
 
     fields_list = list(fields_dict.keys())
