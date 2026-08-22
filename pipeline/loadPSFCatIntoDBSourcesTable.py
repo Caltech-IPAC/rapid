@@ -665,10 +665,9 @@ if __name__ == '__main__':
 
 
     # Look up for the given processing date the Sources child table names
-    # that need to be loaded, need to be created, and a distinct list of the fields
-    # covered by the sources.
+    # that need to be loaded (some or all of such tables may need to be created).
 
-    sources_tables_to_load_tuples_list,fields_list,jid_list,meta_list = \
+    sources_tables_to_load_tuples_list,_,jid_list,meta_list = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
 
     if len(sources_tables_to_load_tuples_list) == 0:
