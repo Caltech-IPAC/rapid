@@ -665,13 +665,14 @@ if __name__ == '__main__':
 
 
     # Look up for the given processing date the Sources child table names
-    # that were cross-matched and a distinct list of the fields covered by the sources.
+    # that need to be loaded, need to be created, and a distinct list of the fields
+    # covered by the sources.
 
-    sources_tables_to_create_tuples_list,fields_list,jid_list,meta_list = \
+    sources_tables_to_load_tuples_list,fields_list,jid_list,meta_list = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
 
-    if len(sources_tables_to_create_tuples_list) == 0:
-        print(f"*** Error: No Sources child tables found;  quitting...")
+    if len(sources_tables_to_load_tuples_list) == 0:
+        print(f"*** Error: No Sources child tables to be loaded;  quitting...")
         dbh.close()
         exit(7)
 
@@ -690,10 +691,10 @@ if __name__ == '__main__':
 
     if do_loading and jid_list:
 
-        for table_create_tuple in sources_tables_to_create_tuples_list:
+        for table_load_tuple in sources_tables_to_load_tuples_list:
 
-            obs_date = table_create_tuple[0]
-            sca = table_create_tuple[1]
+            obs_date = table_load_tuple[0]
+            sca = table_load_tuple[1]
 
 
             # Create sources database tables for all SCAs associated with observing dates
@@ -706,7 +707,7 @@ if __name__ == '__main__':
 
             tablename = f"sources_{obs_date}_{sca}"
 
-            sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources " +
+            sql_queries.append(f"CREATE TABLE IF NOT EXISTS {tablename} (LIKE sources " +
                                f"INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
             sql_queries.append(f"ALTER TABLE {tablename} OWNER TO rapidporole;")
             sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
@@ -787,10 +788,10 @@ if __name__ == '__main__':
 
         sql_queries_dict = {}
 
-        for table_create_tuple in sources_tables_to_create_tuples_list:
+        for table_load_tuple in sources_tables_to_load_tuples_list:
 
-            obs_date = table_create_tuple[0]
-            sca = table_create_tuple[1]
+            obs_date = table_load_tuple[0]
+            sca = table_load_tuple[1]
 
             sql_queries = []
             sql_queries.append("SET default_tablespace = pipeline_indx_01;")
@@ -805,12 +806,12 @@ if __name__ == '__main__':
             table_create_key = (obs_date,sca)
             sql_queries_dict[table_create_key] = sql_queries
 
-        if sources_tables_to_create_tuples_list:
+        if sources_tables_to_load_tuples_list:
             futures = []
-            with ThreadPoolExecutor(max_workers = min(num_cores,len(sources_tables_to_create_tuples_list))) as executor:
-                for table_create_tuple in sources_tables_to_create_tuples_list:
-                    obs_date = table_create_tuple[0]
-                    sca = table_create_tuple[1]
+            with ThreadPoolExecutor(max_workers = min(num_cores,len(sources_tables_to_load_tuples_list))) as executor:
+                for table_load_tuple in sources_tables_to_load_tuples_list:
+                    obs_date = table_load_tuple[0]
+                    sca = table_load_tuple[1]
                     futures.append(executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, obs_date, sca))
 
             for future in futures:
@@ -826,9 +827,9 @@ if __name__ == '__main__':
         print("Clustering, analyzing, and applying grants to sources database tables for all SCAs associated with processing date...")
 
         sql_queries = []
-        for table_create_tuple in sources_tables_to_create_tuples_list:
-            obs_date = table_create_tuple[0]
-            sca = table_create_tuple[1]
+        for table_load_tuple in sources_tables_to_load_tuples_list:
+            obs_date = table_load_tuple[0]
+            sca = table_load_tuple[1]
 
             sql_queries.append(f"CLUSTER sources_{obs_date}_{sca} USING sources_{obs_date}_{sca}_radec_idx;")
             sql_queries.append(f"ANALYZE sources_{obs_date}_{sca};")
