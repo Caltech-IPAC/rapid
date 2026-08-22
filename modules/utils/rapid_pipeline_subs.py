@@ -2763,11 +2763,12 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
 
         table_exists_flag = records[0][0]
 
+
+        table_crossmatch_key = (obs_date,sca)
         if table_exists_flag:
-
-            table_crossmatch_key = (obs_date,sca)
             table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 1
-
+        else:
+            table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 0
 
     source_tables_to_crossmatch_list = list(table_crossmatch_obs_date_sca_dict.keys())
 
