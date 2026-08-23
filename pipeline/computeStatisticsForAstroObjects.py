@@ -690,7 +690,7 @@ if __name__ == '__main__':
 
         tablename = f"astroobjectsmeta_{field}"
 
-        sql_queries.append(f"CREATE TABLE {tablename} (LIKE astroobjectsmeta INCLUDING " +
+        sql_queries.append(f"CREATE TABLE IF NOT EXISTS {tablename} (LIKE astroobjectsmeta INCLUDING " +
                            f"DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = {fillfactor});")
         sql_queries.append(f"ALTER TABLE {tablename} OWNER TO rapidporole;")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidreadrole;")
