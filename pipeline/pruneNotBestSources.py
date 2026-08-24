@@ -299,9 +299,8 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to delete all not-best Sources_{obs_date}_* database records,
-    for all scas for which Sources_{obs_date}_* tables exist and are associated with
-    the given processing date.
+    Launch parallel tasks to delete all not-best Sources_<obs_date>_<sca> database records
+    for observation dates that are associated with the given processing date.
     '''
 
 
