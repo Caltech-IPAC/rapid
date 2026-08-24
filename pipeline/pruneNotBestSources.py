@@ -368,13 +368,13 @@ if __name__ == '__main__':
 
         query = f"SELECT EXISTS (SELECT 1 FROM {tablename} LIMIT 1);"
         sql_queries = [query]
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        records = dbh.execute_sql_queries(sql_queries,debug)
         merges_child_table_has_rows = records[0][0]
 
         if not merges_child_table_has_rows:
             print(f"Dropping {tablename} database table...")
             sql_queries = [f"DROP TABLE {tablename};"]
-            dbh.execute_sql_queries(sql_queries,thread_debug)
+            dbh.execute_sql_queries(sql_queries,debug)
         else:
             print(f"Vacuuming and analyzing {tablename} database table...")
             dbh.vacuum_analyze_table(tablename)
