@@ -1023,6 +1023,8 @@ if __name__ == '__main__':
         table_exists_flag = already_made_dict[field]
 
         if table_exists_flag:
+            print(f"AstroObjects_<field> and Merges_<field> database tables have " +
+                  f"already been made for field={field}; continuing...")
             continue
 
         tablename1 = f"astroobjects_{field}"
@@ -1080,6 +1082,10 @@ if __name__ == '__main__':
             sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename1} TO rapidporole;")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidporole;")
             sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename2} TO rapidporole;")
+
+        else:
+            print(f"AstroObjects_<field> and Merges_<field> database tables have " +
+                  f"already been indexed for field={field}; continuing...")
 
         sql_queries.append(f"ALTER TABLE {tablename1} SET UNLOGGED;")
         sql_queries.append(f"ALTER TABLE {tablename2} SET UNLOGGED;")
