@@ -331,8 +331,8 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to delete not-best Merges database records for all fields
-    (for which merges tables exist).
+    Launch parallel tasks to delete all not-best Merges_<field> database records
+    for fields that are associated with the given processing date.
     '''
 
 
