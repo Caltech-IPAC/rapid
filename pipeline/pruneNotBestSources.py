@@ -128,7 +128,7 @@ s3_client = boto3.client('s3')
 def run_single_core_job(sources_table_names,index_thread):
 
     '''
-    Remove records from Sources_<proc_date>_<sca> database tables associated with sources
+    Remove records from Sources_<obs_date>_<sca> database tables associated with sources
     that are no longer best (vbest=0 in associated Diffimages table).
     '''
 
@@ -160,12 +160,12 @@ def run_single_core_job(sources_table_names,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
-    # Loop over all sources_<proc_date>_* database tables associated with this thread and prune not-best sources:
-    # 1. Query for all records in each sources_{proc_date}_* database table.
+    # Loop over all sources_<obs_date>_* database tables associated with this thread and prune not-best sources:
+    # 1. Query for all records in each sources_{obs_date}_* database table.
     # 2. Determine unique pids (primary key of DiffImages table).
     # 3. Check associated DiffImages records are not best (vbest=0).
     # 4. Populate vbest dictionary keyed by unique pid.
-    # 5. Delete all Sources_<proc_date> records having not-best sources.
+    # 5. Delete all Sources_<obs_date> records having not-best sources.
 
     for index_sources_table_names in range(n_sources_table_names):
 
@@ -235,7 +235,7 @@ def run_single_core_job(sources_table_names,index_thread):
             if vbest == 0:
 
 
-                # Source is not best, so delete sources_<proc_date>_<sca> record.
+                # Source is not best, so delete sources_<obs_date>_<sca> record.
 
                 dbh.delete_source(sources_tablename,sid,thread_debug)
 
@@ -299,8 +299,9 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to delete all not-best Sources_{proc_date}_* database records
-    (for all scas for which Sources_{proc_date}_* tables exist).
+    Launch parallel tasks to delete all not-best Sources_{obs_date}_* database records,
+    for all scas for which Sources_{obs_date}_* tables exist and are associated with
+    the given processing date.
     '''
 
 
@@ -311,34 +312,47 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'sources\\_{proc_date}%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
 
-    sources_table_names = []
-    for record in records:
-        tablename = record[0]
-        sources_table_names.append(tablename)
+    # Look up for the given processing date the Sources child table names
+    # that were cross-matched.
+
+    source_tables_to_crossmatch_tuples_list,_,_,_ = \
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
+
+    sources_child_tables = []
+    for table_to_crossmatch_tuple in source_tables_to_crossmatch_tuples_list:
+
+        obs_date = table_to_crossmatch_tuple[0]
+        sca = table_to_crossmatch_tuple[1]
+
+        sources_tablename = f"sources_{obs_date}_{sca}"
+
+        sources_child_tables.append(sources_tablename)
+
+    if len(sources_child_tables) == 0:
+        print(f"*** Error: No Sources child tables found;  quitting...")
+        dbh.close()
+        exit(7)
 
 
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print(f"Elapsed time in seconds to ascertain available sources_{proc_date}_* =",
+    print("Elapsed time in seconds to collect inputs =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
 
     ################################################################################
-    # Execute tasks for sources_table_names in parallel, with the number of parallel threads
+    # Execute tasks for sources_child_tables in parallel, with the number of parallel threads
     # equal to the number of cores on the job-launcher machine.
     ################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(sources_table_names,num_cores)
+        execute_parallel_processes(sources_child_tables,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(sources_table_names,thread_index)
+        run_single_core_job(sources_child_tables,thread_index)
 
 
     # Code-timing benchmark.
@@ -351,34 +365,19 @@ if __name__ == '__main__':
 
     # Vacuum and analyze sources database tables for given proc_date.  Drop table if empty.
 
-    for tablename in sources_table_names:
+    for tablename in sources_child_tables:
 
-        query = f"SELECT count(*) FROM {tablename};"
+        query = f"SELECT EXISTS (SELECT 1 FROM {tablename} LIMIT 1);"
+        sql_queries = [query]
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        merges_child_table_has_rows = records[0][0]
 
-        print(f"query = {query}")
-
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
-
-        print(f"records = {records}")
-
-        sources_child_table_count = records[0][0]
-
-        if sources_child_table_count == 0:
-
-            print("Dropping {tablename} database table...")
-
-            query = f"DROP TABLE {tablename};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,debug)
-
+        if not merges_child_table_has_rows:
+            print(f"Dropping {tablename} database table...")
+            sql_queries = [f"DROP TABLE {tablename};"]
+            dbh.execute_sql_queries(sql_queries,thread_debug)
         else:
-
-            print("Vacuuming and analyzing {tablename} database table...")
-
+            print(f"Vacuuming and analyzing {tablename} database table...")
             dbh.vacuum_analyze_table(tablename)
 
 
