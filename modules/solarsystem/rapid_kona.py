@@ -17,8 +17,9 @@ import asdf
 #IAU HG model default slope parameter, used when the orbit table has no G
 DEFAULT_G_PARAM = 0.15
 
-#kete 3.x removed kete.cache.Cached_Directory; the download cache (SPICE
-#kernels + orbit catalog) location is now passed to kona() as cache_dir
+#the download cache (SPICE kernels + orbit catalog) location is passed to
+#kona() as cache_dir and applied via the KETE_CACHE_DIR env var, which kete
+#reads on each cache access (verified on kete 1.1.0; default ~/.kete)
 
 
 def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cache_dir=None):
@@ -28,7 +29,7 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         logger=init_log()
 
     if cache_dir is not None:
-        #point kete's download cache at cache_dir for this process; kete 3.x
+        #point kete's download cache at cache_dir for this process; kete
         #reads KETE_CACHE_DIR on each cache access (default ~/.kete)
         os.makedirs(cache_dir,exist_ok=True)
         os.environ["KETE_CACHE_DIR"]=cache_dir
@@ -42,8 +43,8 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         logger.info("Fetching orbits from MPC")
         orbits = kete.horizons.fetch_known_orbit_data()
         #comet_orbits = kete.mpc.fetch_known_comet_orbit_data()
-        #table_to_states moved from kete.mpc to kete.conversion in kete 3.x
-        mpc_states = kete.conversion.table_to_states(orbits)# + kete.conversion.table_to_states(comet_orbits) 
+        #on kete 1.x table_to_states lives in kete.mpc (3.x moved it to kete.conversion)
+        mpc_states = kete.mpc.table_to_states(orbits)# + kete.mpc.table_to_states(comet_orbits)
 
     #H/G photometric parameters by designation, for predicted V magnitudes.
     #The orbit table is disk-cached by kete, so this is cheap after the first
