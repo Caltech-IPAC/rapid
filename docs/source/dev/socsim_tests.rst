@@ -455,8 +455,6 @@ Here is a summary of the pipeline exit codes after the test:
 
 .. code-block::
 
-    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260706' group by ppid, exitcode order by ppid, exitcode;
-
     socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260722' group by ppid, exitcode order by ppid, exitcode;
      ppid | exitcode | count
     ------+----------+-------
@@ -482,3 +480,80 @@ with null exitcodes).
 More work on the VPO and pipeline infrastructure are needed to identify and rerun failed pipelines.
 
 
+8/21/2026
+************************************
+
+This test is different from the 7/22/2026 in several ways, as documented below.
+Notably, the observation-date range is shifted to 6 days later, resulting in a
+slightly higher number of science images processed.
+
+* The SOC-sim ASDF images now have variable sources injected with variability on a
+  shorter time scale more suitable for the available one week of simulated observations
+  (with Jacob's recent script modification and a new set of injection catalogs),
+  as well as corrected WCS.  These are located in:
+
+  .. code-block::
+
+      s3://socsims-fakesrc-asdf-20260807/
+
+* The SOC-sim ASDF images were converted to FITS files for input to the RAPID pipeline,
+  with 5th-order TAN-SIP distortion (4th-order was compared in a spot test, which showed
+  a maximum deviation of 0.0533 pixels between ASDF vs. FITS computed sky positions).
+
+  .. code-block::
+
+      s3://socsims-fakesrc-fits-20260807-lite/
+
+* A new set of reference images was generated (109 in all for ``fid = 8``),
+  before the RAPID science pipelines were run.  These reference image are registered in
+  the RAPID operations database under ``ppid = 12`` (i.e., socsimsdb).
+
+Here are details about how the reference images were configured:
+
+.. code-block::
+
+    [REF_IMAGE]
+    # Pipeline number of reference-image pipeline.
+    ppid = 12
+    # Size of reference image, if it is to be generated.
+    naxis1_refimage = 7000
+    naxis2_refimage = 7000
+    # SCA is 0.11 arcsec per pixel or 0.000030555555556 degrees
+    cdelt1_refimage = -0.000030555555556
+    cdelt2_refimage = 0.000030555555556
+    # Reference image is NOT rotated (CROTA2 = 0.0 degrees)
+    crota2_refimage = 0.0
+    # Need to limit number of reference-image input frames; otherwise AWS Batch job may time out.
+    min_n_images_to_coadd = 2
+    max_n_images_to_coadd = 25
+
+Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
+
+.. code-block::
+
+    export DBNAME=socsimsdb
+    export STARTDATETIME="2027-10-07 07:12:00"  
+    export ENDDATETIME="2027-10-08 00:00:00"
+    export STARTREFIMMJDOBS=0.0
+    export ENDREFIMMJDOBS=999999.9
+    export RUNFID=8
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260821 >& virtualPipelineOperator_20260821.out &
+
+The pipeline product files are located in the usual place:
+
+.. code-block::
+
+    s3://rapid-product-files/20260821/
+
+Here is a summary of the pipeline exit codes after the test:
+
+.. code-block::
+
+    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260821' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       12 |        0 |   109
+       15 |        0 |  7380
+       17 |        0 |  7380
+    (3 rows)
