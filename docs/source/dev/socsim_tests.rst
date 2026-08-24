@@ -483,7 +483,7 @@ More work on the VPO and pipeline infrastructure are needed to identify and reru
 8/21/2026
 ************************************
 
-This test is different from the 7/22/2026 in several ways, as documented below.
+This test is different from the 7/22/2026 test in several ways, as documented below.
 Notably, the observation-date range is shifted to 6 days later, resulting in a
 slightly higher number of science images processed.
 
@@ -503,6 +503,22 @@ slightly higher number of science images processed.
   .. code-block::
 
       s3://socsims-fakesrc-fits-20260807-lite/
+
+* Jacob compiled F146 PSF models (both sci and ref) for the SOC sims based on the CRDS
+  reference-file ePSFs (``fid=8`` only). Because the GBTDS strategy keeps the orientation
+  and SCA fixed, Jacob modeled the ref PSFs to mimic, and there is only one per SCA.
+  Records for the science-image PSFs had to be inserted into the PSFs database table
+  (with ``vbest = 1``).
+  He made three pipeline changes, all off by default: SFFT masking settings become explicitly
+  configured, ZOGY's SN/SR can come from the uncertainty maps rather than the
+  source-dominated image scatter, and extreme artifact pixels get repaired before differencing.
+  To turn it on for this run:
+
+  .. code-block::
+
+      zogy_sn_sr_from_uncertainty_maps = True
+      refimage_psf_filename = refimage_psf_f146_scaSCAID.fits
+      repair_extreme_artifact_pixels = True
 
 * A new set of reference images was generated (109 in all for ``fid = 8``),
   before the RAPID science pipelines were run.  These reference image are registered in
