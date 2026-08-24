@@ -672,6 +672,35 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Check whether astroobjectsmeta_<field> database tables exist.
+
+    already_made_dict = {}
+
+    for field in fields_list:
+
+        tablename1 = f"astroobjectsmeta_{field}"
+
+        sql_queries = []
+        sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        table_exists_flag = records[0][0]
+
+        already_made_dict[field] = table_exists_flag
+
+
     # Create astroobjectsmeta database tables for all fields.
     # Defer creating indexes on all astroobjectsmeta_<field> database tables until
     # after the tables have been populated.
@@ -687,6 +716,11 @@ if __name__ == '__main__':
     for field in fields_list:
 
         print(f"field = {field}")
+
+        table_exists_flag = already_made_dict[field]
+
+        if table_exists_flag:
+            continue
 
         tablename = f"astroobjectsmeta_{field}"
 
@@ -755,6 +789,11 @@ if __name__ == '__main__':
     for field in fields_list:
 
         print(f"field = {field}")
+
+        table_exists_flag = already_made_dict[field]
+
+        if table_exists_flag:
+            continue
 
         tablename = f"astroobjectsmeta_{field}"
         sql_queries.append(f"CREATE INDEX {tablename}_nsources_idx ON {tablename} (nsources);")
