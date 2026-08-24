@@ -684,6 +684,39 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Assume astroobjects_<field> and merges_<field> database tables are created in tandem,
+    # so we only need to test for the existence of the former table.
+
+    already_made_dict = {}
+
+    for table_load_tuple in sources_tables_to_load_tuples_list:
+
+        obs_date = table_load_tuple[0]
+        sca = table_load_tuple[1]
+
+        tablename1 = f"sources_{obs_date}_{sca}"
+
+        sql_queries = []
+        sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        table_exists_flag = records[0][0]
+
+        already_made_dict[table_load_tuple] = table_exists_flag
+
+
     # Optionally skip sources child database table creation and bulk loading of sources records,
     # and just do the indexing, clustering, and applying grants to sources database tables for
     # all SCAs associated with observing date...")
@@ -694,6 +727,13 @@ if __name__ == '__main__':
 
             obs_date = table_load_tuple[0]
             sca = table_load_tuple[1]
+
+            table_exists_flag = already_made_dict[table_load_tuple]
+
+            if table_exists_flag:
+                print(f"Sources_<obs_date>_<sca> database table has already been made " +
+                      f" for obs_date={obs_date} and sca={sca}; continuing...")
+                continue
 
 
             # Create sources database tables for all SCAs associated with observing dates
@@ -706,7 +746,7 @@ if __name__ == '__main__':
 
             tablename = f"sources_{obs_date}_{sca}"
 
-            sql_queries.append(f"CREATE TABLE IF NOT EXISTS {tablename} (LIKE sources " +
+            sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources " +
                                f"INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
             sql_queries.append(f"ALTER TABLE {tablename} OWNER TO rapidporole;")
             sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
@@ -787,10 +827,21 @@ if __name__ == '__main__':
 
         sql_queries_dict = {}
 
+        sources_tables_to_index_tuples_list = []
+
         for table_load_tuple in sources_tables_to_load_tuples_list:
 
             obs_date = table_load_tuple[0]
             sca = table_load_tuple[1]
+
+            table_exists_flag = already_made_dict[table_load_tuple]
+
+            if table_exists_flag:
+                print(f"Sources_<obs_date>_<sca> database table has already been indexed " +
+                      f" for obs_date={obs_date} and sca={sca}; continuing...")
+                continue
+
+            sources_tables_to_index_tuples_list.append(table_load_tuple)
 
             sql_queries = []
             sql_queries.append("SET default_tablespace = pipeline_indx_01;")
@@ -805,12 +856,12 @@ if __name__ == '__main__':
             table_create_key = (obs_date,sca)
             sql_queries_dict[table_create_key] = sql_queries
 
-        if sources_tables_to_load_tuples_list:
+        if sources_tables_to_index_tuples_list:
             futures = []
-            with ThreadPoolExecutor(max_workers = min(num_cores,len(sources_tables_to_load_tuples_list))) as executor:
-                for table_load_tuple in sources_tables_to_load_tuples_list:
-                    obs_date = table_load_tuple[0]
-                    sca = table_load_tuple[1]
+            with ThreadPoolExecutor(max_workers = min(num_cores,len(sources_tables_to_index_tuples_list))) as executor:
+                for table_index_tuple in sources_tables_to_index_tuples_list:
+                    obs_date = table_index_tuple[0]
+                    sca = table_index_tuple[1]
                     futures.append(executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, obs_date, sca))
 
             for future in futures:
