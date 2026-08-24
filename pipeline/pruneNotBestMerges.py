@@ -98,8 +98,9 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 
 # Open database connections for parallel access.
+# os.cpu_count() returns None when the number of cores cannot be determined.
 
-num_cores = os.cpu_count()
+num_cores = os.cpu_count() or 1
 
 print("num_cores =",num_cores)
 
@@ -107,6 +108,33 @@ print("num_cores =",num_cores)
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
+
+def execute_or_raise(dbh,sql_queries,thread_debug,fh,context):
+
+    '''
+    Execute a list of SQL queries and raise RuntimeError if the database reports an error.
+
+    dbh.execute_sql_queries does not raise on failure: it prints, rolls back, sets
+    dbh.exit_code and returns None.  It also resets dbh.exit_code to zero at the start of
+    every call, so a failure that is not checked immediately is erased by the next
+    successful query.  Every call must therefore be checked right away.
+    '''
+
+    records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+    if dbh.exit_code >= 64 or records is None:
+
+        message = f"*** Error executing SQL for {context} (dbh.exit_code={dbh.exit_code}); quitting..."
+
+        if fh is not None:
+            fh.write(message + "\n")
+            fh.flush()
+            fh.close()
+
+        raise RuntimeError(message)
+
+    return records
+
 
 def run_single_core_job(fields,sources_child_tables,index_thread):
 
@@ -152,24 +180,23 @@ def run_single_core_job(fields,sources_child_tables,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
-    # Loop over all fields associated with this thread and prune not-best merges:
-    # 1. Query for all records in each Merges_<field> table.
-    # 2. Determine unique pids (primary key of DiffImages table).
-    # 3. Check associated DiffImages records are not best (vbest=0).
-    # 4. Populate vbest dictionary keyed by unique pid.
-    # 5. Delete all Merges_<field> records having not-best sources.
+    # Prune not-best merges for all fields associated with this thread:
+    # 1. Collect, once per thread, the sids of all sources that are no longer best
+    #    (vbest=0 in the associated DiffImages record) into a temporary table.
+    # 2. Delete from each Merges_<field> table the records having those sids.
+    #
+    # The set of not-best sids does not depend on field, so it is computed once instead
+    # of being re-derived inside the per-field DELETE, which would rescan every Sources
+    # child table and rejoin DiffImages nfields times.
 
-    for index_field in range(nfields):
+    my_fields = list(range(index_thread, nfields, num_cores))
 
-        index_core = index_field % num_cores
-        if index_thread != index_core:
-            continue
+    if len(my_fields) == 0:
 
-        field = fields[index_field]
+        fh.write(f"No fields assigned to index_thread={index_thread}; nothing to do.\n")
 
-        fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
+    else:
 
-        merges_tablename = f"merges_{field}"
         union_parts = []
         for sources_tablename in sources_child_tables:
             union_parts.append(
@@ -177,32 +204,78 @@ def run_single_core_job(fields,sources_child_tables,index_thread):
                 f"JOIN diffimages AS b ON a.pid = b.pid "
                 f"WHERE b.vbest = 0"
             )
-        query_prefix = f"DELETE FROM {merges_tablename} WHERE sid IN ("
-        query = query_prefix + " UNION ALL ".join(union_parts) + ");"
 
-        fh.write(f"Querying {len(sources_child_tables)} source child tables for {merges_tablename} via UNION ALL\n")
+
+        # UNION, not UNION ALL, so that a sid occurring in more than one Sources child
+        # table does not violate the primary key of the temporary table.
+
+        sql_queries = [
+            "CREATE TEMP TABLE notbest_sids (sid bigint PRIMARY KEY);",
+            "INSERT INTO notbest_sids (sid) " + " UNION ".join(union_parts) + ";",
+            "ANALYZE notbest_sids;",
+        ]
+
+        fh.write(f"Collecting not-best sids from {len(sources_child_tables)} Sources child table(s)...\n")
         fh.flush()
 
-        sql_queries = [query]
-        dbh.execute_sql_queries(sql_queries,thread_debug)
+        execute_or_raise(dbh,sql_queries,thread_debug,fh,"building notbest_sids temporary table")
 
 
         # Code-timing benchmark.
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to delete not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\n")
+        fh.write(f"Elapsed time in seconds to build notbest_sids temporary table = {diff_time_benchmark}\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
+        for index_field in my_fields:
 
-        # End of loop over fields.
+            field = fields[index_field]
 
-        fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
+            fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
+
+            merges_tablename = f"merges_{field}"
 
 
-        # Flush write buffer.
+            # An empty Merges_<field> table is dropped by the vacuum phase of this script,
+            # so it may be absent when this script is rerun for the same processing date.
 
-        fh.flush()
+            sql_queries = [f"SELECT to_regclass('public.{merges_tablename}') IS NOT NULL;"]
+            records = execute_or_raise(dbh,sql_queries,thread_debug,fh,
+                                       f"existence check for {merges_tablename}")
+
+            if not records or not records[0][0]:
+
+                fh.write(f"{merges_tablename} database table does not exist; skipping...\n")
+                fh.flush()
+
+                continue
+
+            query = f"DELETE FROM {merges_tablename} WHERE sid IN (SELECT sid FROM notbest_sids);"
+
+            fh.write(f"Deleting not-best records in {merges_tablename} database table...\n")
+            fh.flush()
+
+            execute_or_raise(dbh,[query],thread_debug,fh,
+                             f"delete of not-best records from {merges_tablename}")
+
+
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to delete not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\n")
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+
+            # End of loop over fields.
+
+            fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
+
+
+            # Flush write buffer.
+
+            fh.flush()
 
 
     # Close database connection.
@@ -266,24 +339,31 @@ def run_single_core_vacuum_job(fields,index_thread):
     if dbh.exit_code >= 64:
         raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
-    for index_field in range(nfields):
-
-        index_core = index_field % num_cores
-        if index_thread != index_core:
-            continue
+    for index_field in range(index_thread, nfields, num_cores):
 
         field = fields[index_field]
         tablename = f"merges_{field}"
 
+
+        # The table may already have been dropped by an earlier run of this script.
+
+        sql_queries = [f"SELECT to_regclass('public.{tablename}') IS NOT NULL;"]
+        records = execute_or_raise(dbh,sql_queries,thread_debug,None,
+                                   f"existence check for {tablename}")
+
+        if not records or not records[0][0]:
+            print(f"{tablename} database table does not exist; skipping...")
+            continue
+
         query = f"SELECT EXISTS (SELECT 1 FROM {tablename} LIMIT 1);"
-        sql_queries = [query]
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        records = execute_or_raise(dbh,[query],thread_debug,None,
+                                   f"row-existence check for {tablename}")
         merges_child_table_has_rows = records[0][0]
 
         if not merges_child_table_has_rows:
             print(f"Dropping {tablename} database table...")
-            sql_queries = [f"DROP TABLE {tablename};"]
-            dbh.execute_sql_queries(sql_queries,thread_debug)
+            execute_or_raise(dbh,[f"DROP TABLE {tablename};"],thread_debug,None,
+                             f"drop of {tablename}")
         else:
             print(f"Vacuuming and analyzing {tablename} database table...")
             dbh.vacuum_analyze_table(tablename)
@@ -361,9 +441,18 @@ if __name__ == '__main__':
         sources_child_tables.append(sources_tablename)
 
     if len(sources_child_tables) == 0:
-        print(f"*** Error: No Sources child tables found;  quitting...")
+        print("*** Error: No Sources child tables found;  quitting...")
         dbh.close()
         exit(7)
+
+
+    # Close the main database connection before the parallel phases, rather than leaving
+    # it idle for their duration.  The worker processes open their own connections.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
     # Code-timing benchmark.
@@ -394,14 +483,6 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Close main database connection before parallel vacuum phase.
-
-    dbh.close()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-
     # Vacuum and analyze merges_<field> database tables for all fields.  Drop table if empty.
 
     print("Vacuuming and analyzing merges_<field> database tables for all fields...")
@@ -424,7 +505,7 @@ if __name__ == '__main__':
     # Code-timing benchmark overall.
 
     end_time_benchmark = time.time()
-    print(f"Elapsed time in seconds to delete all not-best merges =",
+    print("Elapsed time in seconds to delete all not-best merges =",
         end_time_benchmark - start_time_benchmark_at_start)
 
 
