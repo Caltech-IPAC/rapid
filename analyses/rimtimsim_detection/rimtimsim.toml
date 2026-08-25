@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# RimTimSim detection-downselect configuration.
+#
+# This file is the ONLY thing a user needs to edit to re-run, re-scope, or
+# re-target the analysis.  Every stage reads it; nothing else hard-codes a
+# path, a job id, or a matrix entry.
+# ---------------------------------------------------------------------------
+
+[run]
+# The pipeline run being analysed.  `proc_date` selects the S3 product prefix.
+proc_date       = "20260813"
+database        = "rimtimsims3db"
+product_bucket  = "rapid-product-files"
+log_bucket      = "rapid-pipeline-logs"
+# Science jobs are every job carrying the full product set; reference jobs carry
+# only the mosaic products.  Discovered automatically, but pinned here so a
+# re-run is reproducible even if the bucket changes.
+science_jids    = [143919, 144181]     # inclusive range
+reference_jids  = [143917, 143918]
+
+[survey]
+# RimTimSim covers ONE field and ONE detector, in two filters.  Unlike the SOC
+# sims this means many epochs of the same sky, not many independent pointings.
+field           = 4682737
+sca             = 2
+filters         = ["Z087", "K213"]
+# TRExS names its catalogue columns and light-curve files with F-prefixed
+# filter names; RAPID uses the Roman names.  This maps between them.
+[survey.filter_alias]
+Z087 = "F087"
+K213 = "F213"
+
+[catalogs]
+# The variable catalogue and light curves delivered to Robby Wilson on
+# 2026-06-05 and injected into the 6/22 RimTimSim render.
+archive         = "ForRobby_2026Jun5-selected.zip"
+catalog         = "catalog_RAPID.txt"           # TAB separated
+lightcurves     = "lightcurves_RAPID_{trexs_filter}.pqt"
+# Light-curve parquet layout is WIDE: rows are epochs (OBS_TIME_BJD, in JD),
+# columns are one per source named by sicbro_id.  Values are FLUX IN DN/s on
+# the same zeropoint as the difference images (verified: implied ZP 26.2982 vs
+# header ZPTMAG 26.29818 for Z087, 25.8573 vs 25.85727 for K213).
+time_column     = "OBS_TIME_BJD"
+jd_to_mjd       = 2400000.5
+# RAPID-added variables occupy a dedicated sicbro_id block; everything below it
+# is TRExS-native (eclipsing binaries, transiting planets, red-noise variables).
+rapid_id_min    = 5000000
+# Sentinel used in the catalogue for "no magnitude in this band".
+mag_sentinel    = 99.99
+
+[truth]
+# dflux = f(t_sci) - <f(t_ref,j)> over the reference constituents, in DN/s.
+# Sources whose |dflux| falls below this are the static control population used
+# to measure the chance-match floor.
+static_max_dflux = 0.5
+# Cross-match radius, in pixels.  0.5 px is the inherited `injmatchrad` from the
+# OpenUniverse evaluation tooling; loosening it inflates the chance floor faster
+# than it recovers real detections (measured on SOC).
+match_px         = 0.5
+# Detections are scored against both the positive and the negative difference
+# image.  TRExS variables are eclipsing binaries and transits, i.e. DIPS, which
+# appear as negative residuals; the RAPID-added variables are brightenings.
+branches         = ["positive", "negative"]
+
+[sweep]
+diffs            = ["sfft", "zogy", "naive"]
+thresholds       = [3.0, 3.5, 4.0, 5.0]
+aperture_r       = 3.0
+# Matched-filter kernels are PSF-width dependent.  The SOC matrix used W146
+# widths; K213 and Z087 sit at opposite ends of the Roman range, so the FWHM is
+# measured per filter by `cli.py kernels` and written back here.
+[sweep.fwhm_px]
+Z087 = 0.0     # 0.0 => measure from the data
+K213 = 0.0
+
+[paths]
+# Working directory (large intermediate products).  Everything under here is
+# reproducible from the catalogues plus the S3 products.
+work    = "/data/jj/work/rts_downselect"
+cache   = "cache/img"
+truth   = "truth"
+sweep   = "sweep_out"
