@@ -88,16 +88,27 @@ def duplicate_variants(R):
     silently reported the same numbers under two names.  Aggregation reports this
     rather than leaving it to be noticed.
     """
-    groups, seen = [], {}
+    buckets = {}
     for v in R["labels"]:
         m = R["M"].get(v)
         if m is None:
             continue
-        key = (int(m.sum()), hash(m.tobytes()))
-        seen.setdefault(key, []).append(v)
-    for vs in seen.values():
-        if len(vs) > 1:
-            groups.append(sorted(vs))
+        # Bucket cheaply, then confirm with an exact comparison.  A hash collision
+        # would otherwise raise a false alarm, and a warning that can cry wolf is
+        # worse than no warning at all.
+        buckets.setdefault((m.shape, int(m.sum())), []).append(v)
+    groups = []
+    for vs in buckets.values():
+        if len(vs) < 2:
+            continue
+        remaining = list(vs)
+        while remaining:
+            head, rest = remaining[0], remaining[1:]
+            same = [head] + [v for v in rest
+                             if np.array_equal(R["M"][v], R["M"][head])]
+            remaining = [v for v in rest if v not in same]
+            if len(same) > 1:
+                groups.append(sorted(same))
     return sorted(groups)
 
 

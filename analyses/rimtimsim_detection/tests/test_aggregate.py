@@ -223,3 +223,22 @@ class DuplicateDetection(unittest.TestCase):
     def test_equal_counts_but_different_sources_are_not_duplicates(self):
         self.assertEqual(aggregate.duplicate_variants(
             self._R([1, 1, 0, 0], [0, 0, 1, 1])), [])
+
+    def test_three_way_duplicate_is_one_group(self):
+        R = dict(labels=["a", "b", "c"],
+                 M={"a": np.array([1, 0, 1], bool), "b": np.array([1, 0, 1], bool),
+                    "c": np.array([1, 0, 1], bool)})
+        self.assertEqual(aggregate.duplicate_variants(R), [["a", "b", "c"]])
+
+    def test_two_separate_pairs_are_two_groups(self):
+        R = dict(labels=["a", "b", "c", "d"],
+                 M={"a": np.array([1, 1, 0, 0], bool), "b": np.array([1, 1, 0, 0], bool),
+                    "c": np.array([0, 0, 1, 1], bool), "d": np.array([0, 0, 1, 1], bool)})
+        self.assertEqual(aggregate.duplicate_variants(R), [["a", "b"], ["c", "d"]])
+
+    def test_same_count_different_pattern_is_not_grouped(self):
+        # These land in the same cheap bucket (equal shape and sum) and must be
+        # separated by the exact comparison, not merged by it.
+        R = dict(labels=["a", "b"],
+                 M={"a": np.array([1, 1, 0, 0], bool), "b": np.array([0, 0, 1, 1], bool)})
+        self.assertEqual(aggregate.duplicate_variants(R), [])
