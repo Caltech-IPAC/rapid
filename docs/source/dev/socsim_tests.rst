@@ -573,3 +573,23 @@ Here is a summary of the pipeline exit codes after the test (``exitcode = 0`` is
        15 |        0 |  7380
        17 |        0 |  7380
     (3 rows)
+
+
+
+Below are numbers for this test related to extraction of lightcurves from PSF-fit SFFT-difference-image catalogs.
+The number of records in the AstroObjects_<field>, AstroObjectsMeta_<field>, and Merges_<field> database tables
+include contributions from the 7/22/26 socsims test, which processed SOC-sim science images observed 6 days earlier.
+
+=========================================================================================  =====================
+Item                                                                                        Number
+=========================================================================================  =====================
+Number of sources loaded into Sources_<obsdate>_<sca> database tables                        224,033,253
+Number of sources loaded into Sources_<obsdate>_<sca> database tables with flags = 0         159,059,007
+Number of merges inside AND outside field, loaded into Merges_<field> database tables        391,835,197
+Number of astroObjects loaded into AstroObjects_<field> database tables                       83,494,595
+Number of records loaded into AstroObjectsMeta_<field> database tables                        83,494,595
+Number of Sources_<obsdate>_<sca> database tables                                                     18
+Number of Merges_<field> database tables                                                             359
+Number of AstroObjects_<field> database tables                                                       359
+Number of AstroObjectsMeta_<field> database tables                                                   359
+=========================================================================================  =====================
