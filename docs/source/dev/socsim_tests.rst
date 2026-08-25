@@ -562,7 +562,7 @@ The pipeline product files are located in the usual place:
 
     s3://rapid-product-files/20260821/
 
-Here is a summary of the pipeline exit codes after the test:
+Here is a summary of the pipeline exit codes after the test (``exitcode = 0`` is normal):
 
 .. code-block::
 
