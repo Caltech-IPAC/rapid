@@ -183,98 +183,6 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Determine whether astroobjects_<field> database tables exist.
-
-    already_made_dict = {}
-
-    for field in fields_list:
-
-        tablename = f"astroobjects_{field}"
-
-        sql_queries = []
-        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-
-        try:
-            records = dbh.execute_sql_queries(sql_queries,debug)
-        except Exception as e:
-            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                  f"(e={e});  quitting...")
-            dbh.close()
-            exit(64)
-
-        if dbh.exit_code >= 64:
-            print("*** Error from {}; quitting ".format(swname))
-            dbh.close()
-            exit(dbh.exit_code)
-
-        table_exists_flag = records[0][0]
-
-        already_made_dict[field] = table_exists_flag
-
-
-    # Count records in astroobjects_<field> database tables for all fields associated with processing date.
-
-    print("Counting astroobjects_<field> database tables for all fields associated with processing date...")
-
-    nfields = 0
-    n_astroobjects = 0
-
-    for field in fields_list:
-
-        table_exists_flag = already_made_dict[field]
-
-        if not table_exists_flag:
-            print(f"AstroObjects_<field> and Merges_<field> database tables " +
-                  f"does not exist for field={field}; continuing...")
-            continue
-
-        nfields += 1
-
-        tablename = f"astroobjects_{field}"
-
-        query = f"SELECT count(*) FROM {tablename};"
-
-        sql_queries = []
-        sql_queries.append(query)
-
-        try:
-            records = dbh.execute_sql_queries(sql_queries,debug)
-        except Exception as e:
-            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                  f"(e={e});  quitting...")
-            dbh.close()
-            exit(64)
-
-        if dbh.exit_code >= 64:
-            print("*** Error from {}; quitting ".format(swname))
-            dbh.close()
-            exit(dbh.exit_code)
-
-        count = records[0][0]
-        print(f"field,count = {field},{count}")
-
-        n_astroobjects += count
-
-    print(f"Totals: nfields,n_astroobjects = {nfields},{n_astroobjects}")
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to count records in astroobjects database tables =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
-
-
-
-
-
-
-
-
-
-
-
     # Determine whether merges_<field> database tables exist.
 
     already_made_dict = {}
@@ -308,7 +216,7 @@ if __name__ == '__main__':
 
     print("Counting merges_<field> database tables for all fields associated with processing date...")
 
-    nfields = 0
+    nfields_merges = 0
     n_merges = 0
 
     for field in fields_list:
@@ -320,7 +228,7 @@ if __name__ == '__main__':
                   f"does not exist for field={field}; continuing...")
             continue
 
-        nfields += 1
+        nfields_merges += 1
 
         tablename = f"merges_{field}"
 
@@ -347,7 +255,183 @@ if __name__ == '__main__':
 
         n_merges += count
 
-    print(f"Totals: nfields,n_merges = {nfields},{n_merges}")
+
+    # Determine whether astroobjects_<field> database tables exist.
+
+    already_made_dict = {}
+
+    for field in fields_list:
+
+        tablename = f"astroobjects_{field}"
+
+        sql_queries = []
+        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        table_exists_flag = records[0][0]
+
+        already_made_dict[field] = table_exists_flag
+
+
+    # Count records in astroobjects_<field> database tables for all fields associated with processing date.
+
+    print("Counting astroobjects_<field> database tables for all fields associated with processing date...")
+
+    nfields_astroobjects = 0
+    n_astroobjects = 0
+
+    for field in fields_list:
+
+        table_exists_flag = already_made_dict[field]
+
+        if not table_exists_flag:
+            print(f"AstroObjects_<field> and Merges_<field> database tables " +
+                  f"does not exist for field={field}; continuing...")
+            continue
+
+        nfields_astroobjects += 1
+
+        tablename = f"astroobjects_{field}"
+
+        query = f"SELECT count(*) FROM {tablename};"
+
+        sql_queries = []
+        sql_queries.append(query)
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        count = records[0][0]
+        print(f"field,count = {field},{count}")
+
+        n_astroobjects += count
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to count records in astroobjects database tables =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+
+
+
+
+
+
+
+
+
+    # Determine whether astroobjectsmeta_<field> database tables exist.
+
+    already_made_dict = {}
+
+    for field in fields_list:
+
+        tablename = f"astroobjectsmeta_{field}"
+
+        sql_queries = []
+        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        table_exists_flag = records[0][0]
+
+        already_made_dict[field] = table_exists_flag
+
+
+    # Count records in astroobjectsmeta_<field> database tables for all fields associated with processing date.
+
+    print("Counting astroobjectsmeta_<field> database tables for all fields associated with processing date...")
+
+    nfields_astroobjectsmeta = 0
+    n_astroobjectsmeta = 0
+
+    for field in fields_list:
+
+        table_exists_flag = already_made_dict[field]
+
+        if not table_exists_flag:
+            print(f"AstroObjectsMeta_<field> and Merges_<field> database tables " +
+                  f"does not exist for field={field}; continuing...")
+            continue
+
+        nfields_astroobjectsmeta += 1
+
+        tablename = f"astroobjectsmeta_{field}"
+
+        query = f"SELECT count(*) FROM {tablename};"
+
+        sql_queries = []
+        sql_queries.append(query)
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        count = records[0][0]
+        print(f"field,count = {field},{count}")
+
+        n_astroobjectsmeta += count
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to count records in astroobjectsmeta database tables =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Print out the totals.
+
+    print(f"Totals for Merges: nfields_merges,n_merges = {nfields_merges},{n_merges}")
+    print(f"Totals for AstroObjects: nfields_astroobjects,n_astroobjects = {nfields_astroobjects},{n_astroobjects}")
+    print(f"Totals for AstroObjectsMeta: nfields_astroobjectsmeta,n_astroobjectsmeta = {nfields_astroobjectsmeta},{n_astroobjectsmeta}")
 
 
     # Code-timing benchmark.
