@@ -44,13 +44,24 @@ def _sh(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True)
 
 
+def fetch_status(uri, dest):
+    """Download `uri` to `dest` unless already cached; report which happened.
+
+    Callers that clean up after themselves need to know the difference: a file
+    that was already there belongs to whoever put it there -- possibly a cache
+    shared with other people -- and must not be deleted.
+    """
+    if os.path.exists(dest):
+        return dest, False
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    if _sh("aws s3 cp %s %s --quiet" % (uri, dest)).returncode != 0:
+        raise IOError("download failed: %s" % uri)
+    return dest, True
+
+
 def fetch(uri, dest):
     """Download `uri` to `dest` unless it is already cached."""
-    if not os.path.exists(dest):
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        if _sh("aws s3 cp %s %s --quiet" % (uri, dest)).returncode != 0:
-            raise IOError("download failed: %s" % uri)
-    return dest
+    return fetch_status(uri, dest)[0]
 
 
 def reference_constituents(cfg, ref_jid, cachedir):
@@ -139,7 +150,7 @@ def diff_header(cfg, jid, cachedir, diff="sfft"):
 
 def build(cfg, jid, refmap, cachedir=None, force=False):
     """Build (or reuse) the truth table for one science job."""
-    cachedir = cachedir or os.path.join(cfg.work, cfg.paths["cache"])
+    cachedir = cachedir or cfg.cache
     dest = os.path.join(cfg.work, cfg.paths["truth"], "%d.npz" % jid)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     if os.path.exists(dest) and not force:

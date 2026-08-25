@@ -74,7 +74,7 @@ def read_catalog(cfg, workdir, wanted_ids):
 def build(cfg, filt, workdir=None, force=False):
     """Build (or reuse) the per-filter catalogue table."""
     pq = _require_pyarrow()
-    workdir = workdir or os.path.join(cfg.work, "catalogs")
+    workdir = workdir or cfg.catalog_dir
     dest = os.path.join(cfg.work, "catalog_%s.npz" % filt)
     if os.path.exists(dest) and not force:
         return dest

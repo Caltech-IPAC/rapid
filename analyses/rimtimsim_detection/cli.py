@@ -66,7 +66,7 @@ def cmd_catalogs(cfg, args):
 
 def cmd_kernels(cfg, args):
     """Measure the PSF FWHM per filter and build the matched-filter kernels."""
-    cachedir = os.path.join(cfg.work, cfg.paths["cache"])
+    cachedir = cfg.cache
     fwhm = {}
     for filt in cfg.filters:
         conf = cfg.sweep["fwhm_px"].get(filt, 0.0)
@@ -112,7 +112,7 @@ def _first_jid_for_filter(cfg, filt, cachedir):
 
 
 def cmd_truth(cfg, args):
-    cachedir = os.path.join(cfg.work, cfg.paths["cache"])
+    cachedir = cfg.cache
     refmap = truth.reference_map(cfg, cachedir)
     for filt, r in refmap.items():
         print("reference %s: jid%d, %d constituents, MJD %.4f .. %.4f"
@@ -131,7 +131,7 @@ def cmd_truth(cfg, args):
 
 
 def cmd_sweep(cfg, args):
-    cachedir = os.path.join(cfg.work, cfg.paths["cache"])
+    cachedir = cfg.cache
     side = _kernel_sidecar(cfg)
     if not os.path.exists(side):
         raise SystemExit("run the `kernels` stage first (%s is missing)" % side)
@@ -143,26 +143,74 @@ def cmd_sweep(cfg, args):
     diffs = [args.diff] if args.diff else cfg.sweep["diffs"]
     branches = [args.branch] if args.branch else cfg.truth["branches"]
     jids = args.jid_list or cfg.science_jids
+    keep = cfg.keep_images
+    if args.discard_images:
+        keep = False
+    elif args.keep_images:
+        keep = True
+    print("cache %s (%s difference images after use)"
+          % (cachedir, "keeping" if keep else "discarding"), flush=True)
+    ok = fail = 0
     for diff in diffs:
         for branch in branches:
             outdir = os.path.join(cfg.work, cfg.paths["sweep"], "%s_%s" % (diff, branch))
             for jid in jids:
                 try:
                     info = sweep.process(cfg, jid, diff, branch, ks, sexbin, cdf,
-                                         cachedir, outdir)
+                                         cachedir, outdir, keep=keep)
+                    ok += 1
                 except Exception as e:
                     info = "FAILED %s: %s" % (type(e).__name__, e)
+                    fail += 1
                 print("%d %s %s %s" % (jid, diff, branch, info), flush=True)
+    print("sweep: %d units done, %d failed" % (ok, fail))
+    provenance.write(cfg, "sweep", inputs=[side],
+                     extra={"n_ok": ok, "n_fail": fail, "diffs": diffs,
+                            "branches": branches, "n_jids": len(jids),
+                            "keep_images": keep, "cache": cachedir,
+                            "fwhm_px": meta.get("fwhm_px", {})})
+
+
+def _filter_selection(cfg, args):
+    """Expand --filter into report() arguments.  None means pooled over filters."""
+    out = []
+    for f in (args.filter or ["all"]):
+        if f == "all":
+            out.append(None)
+        elif f == "each":
+            out.extend(cfg.filters)
+        elif f in cfg.filters:
+            out.append(f)
+        else:
+            raise SystemExit("unknown filter %r (configured: %s)"
+                             % (f, ", ".join(cfg.filters)))
+    seen, uniq = set(), []
+    for f in out:                                   # preserve order, drop repeats
+        if f not in seen:
+            seen.add(f)
+            uniq.append(f)
+    return uniq
 
 
 def cmd_aggregate(cfg, args):
-    for diff in (([args.diff] if args.diff else cfg.sweep["diffs"])):
-        for branch in (([args.branch] if args.branch else cfg.truth["branches"])):
-            for pop in (args.population or ["all", "rapid", "trexs"]):
-                try:
-                    aggregate.report(cfg, diff, branch, pop)
-                except SystemExit as e:
-                    print(e)
+    filters = _filter_selection(cfg, args)
+    diffs = [args.diff] if args.diff else cfg.sweep["diffs"]
+    branches = [args.branch] if args.branch else cfg.truth["branches"]
+    pops = args.population or ["all", "rapid", "trexs"]
+    for diff in diffs:
+        for branch in branches:
+            for pop in pops:
+                for filt in filters:
+                    try:
+                        aggregate.report(cfg, diff, branch, pop, filt)
+                    except SystemExit as e:
+                        print(e)
+    provenance.write(cfg, "aggregate", inputs=[],
+                     extra={"diffs": diffs, "branches": branches,
+                            "populations": pops,
+                            "filters": ["pooled" if f is None else f for f in filters],
+                            "static_max_dflux": cfg.truth["static_max_dflux"],
+                            "match_px": cfg.truth["match_px"]})
 
 
 def main(argv=None):
@@ -176,6 +224,18 @@ def main(argv=None):
     ap.add_argument("--branch", default=None, choices=["positive", "negative"])
     ap.add_argument("--population", action="append",
                     choices=["all", "rapid", "trexs"], default=None)
+    retain = ap.add_mutually_exclusive_group()
+    retain.add_argument("--keep-images", action="store_true",
+                        help="sweep: keep fetched difference images (overrides config)")
+    retain.add_argument("--discard-images", action="store_true",
+                        help="sweep: delete each difference image this run downloaded "
+                             "once its result is written -- bounds disk use at a few "
+                             "GB instead of ~100.  Never deletes an already-cached "
+                             "image, so it is safe against a shared cache.")
+    ap.add_argument("--filter", action="append", default=None,
+                    help="aggregate: a configured filter name, 'all' for pooled, "
+                         "or 'each' to expand to every filter separately. "
+                         "Repeatable; defaults to 'all'.")
     args = ap.parse_args(argv)
     args.jid_list = ([int(x) for x in args.jids.split(",")] if args.jids else None)
 

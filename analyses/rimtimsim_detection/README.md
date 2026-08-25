@@ -63,16 +63,82 @@ Stages are idempotent — finished work is skipped unless `--force`, so a run ca
 interrupted and resumed, or one stage re-run after a config change without
 regenerating the earlier ones.
 
+Nothing is tied to one person's paths. Three environment variables cover every
+difference between machines, and none of them requires editing the config:
+
+| variable | meaning |
+|---|---|
+| `RTS_WORK` | working directory for everything the analysis derives |
+| `RTS_CACHE` | where fetched pipeline products are cached — point several people at one copy |
+| `RTS_CATALOGS` | where the variable delivery archive lives — likewise shared, not copied |
+| `RTS_CACHE_POLICY` | `keep` (default) or `discard`, see [Disk](#disk) |
+
+### On rapid, in the container
+
+`rts_docker.sh` runs any stage in `rapid_science_pipeline:1.0` as the calling user,
+so nothing comes out root-owned. It takes the working directory from
+`RTS_HOST_WORK`, so you can work anywhere:
+
 ```bash
-./dock.sh "python3.11 -m analyses.rimtimsim_detection.cli catalogs"
-./dock.sh "python3.11 -m analyses.rimtimsim_detection.cli kernels"
-./dock.sh "python3.11 -m analyses.rimtimsim_detection.cli truth"
-DOCK_NAME=rtssweep ./dock_bg.sh \
-  "python3.11 -m analyses.rimtimsim_detection.cli sweep"
-./dock.sh "python3.11 -m analyses.rimtimsim_detection.cli aggregate"
+export RTS_HOST_WORK=/data/$USER/rts
+# reuse the existing product cache and delivery archive rather than copying either
+export RTS_HOST_CACHE=/data/jj/work/rts_downselect/cache/img
+export RTS_HOST_CATALOGS=/data/jj/work/rts_downselect/catalogs
+
+./rts_docker.sh "python3.11 -m analyses.rimtimsim_detection.cli catalogs"
+./rts_docker.sh "python3.11 -m analyses.rimtimsim_detection.cli kernels"
+./rts_docker.sh "python3.11 -m analyses.rimtimsim_detection.cli truth"
+DOCK_NAME=rtssweep ./rts_docker.sh \
+  "python3.11 -m analyses.rimtimsim_detection.cli sweep > sweep.log 2>&1"
+./rts_docker.sh "python3.11 -m analyses.rimtimsim_detection.cli aggregate"
 ```
 
-Useful variations:
+`DOCK_NAME` makes the run detached and named, so the sweep survives a dropped ssh
+session; watch it with `docker logs -f <name>` or by tailing the log you redirect
+to. The full matrix is 263 jobs × 3 difference images × 2 branches = 1578 units at
+roughly 6 minutes each, so parallelise it — one process per job id:
+
+```bash
+seq 143919 144181 > jids.txt
+DOCK_NAME=rtssweep ./rts_docker.sh "xargs -a jids.txt -P 16 -I{} \
+  python3.11 -m analyses.rimtimsim_detection.cli sweep --jids {} > sweep.log 2>&1"
+```
+
+### On a laptop, without the container
+
+The stages need Python ≥ 3.11 with numpy, astropy, photutils and pyarrow ≥ 20,
+plus a SExtractor binary and its config directory for the `SE_*` variants. Point
+the last two at your own install:
+
+```bash
+export RTS_WORK=~/rts_work
+export RTS_SEX=/opt/homebrew/bin/sex RTS_CDF=/path/to/rapid/c/cdf
+export RTS_CACHE_POLICY=discard          # see Disk, below
+
+python -m analyses.rimtimsim_detection.cli catalogs
+python -m analyses.rimtimsim_detection.cli truth --jids 143919,143920
+python -m analyses.rimtimsim_detection.cli sweep --jids 143919 --diff sfft
+python -m analyses.rimtimsim_detection.cli aggregate --diff sfft --branch positive
+```
+
+### Disk
+
+A full matrix caches about **100 GB** of difference images — 99 GB of the 105 GB a
+completed run occupies. Two knobs control that:
+
+* **`cache_policy = "discard"`** (or `RTS_CACHE_POLICY=discard`, or `--discard-images`)
+  deletes each difference image *that the run downloaded* as soon as its sweep
+  result is written. Peak usage drops to a few GB and a re-run re-downloads. This
+  is the laptop setting. An image that was **already** in the cache is never
+  deleted, so `discard` is safe to use against a shared cache.
+* **A shared `cache`** — an absolute `[paths] cache`, or `RTS_CACHE` — lets everyone
+  on rapid read and write one copy of the products. Fetches land in the shared
+  cache, so nobody downloads the same image twice. Use this instead of `discard`
+  on rapid, where disk is plentiful and bandwidth is not.
+
+The derived outputs are small by comparison: truth 1.1 GB, sweep results 2.2 GB.
+
+### Useful variations
 
 ```bash
 # one job, for a smoke test
@@ -81,26 +147,47 @@ Useful variations:
 ... cli sweep --diff sfft --branch negative
 # score only the RAPID-added population
 ... cli aggregate --population rapid
+# report each filter separately as well as pooled
+... cli aggregate --filter all --filter each
+# just K213
+... cli aggregate --filter K213
 ```
 
+Z087 and K213 are worth looking at separately: the measured PSF FWHM is 1.32 vs
+1.73 px and the zeropoints are 26.298 vs 25.857, so they are two different
+sensitivity regimes. `--filter` re-normalises FP/img over that filter's images
+alone and re-measures the chance-match floor within it, both of which are
+per-filter quantities.
+
 To **start clean and regenerate everything**, delete the working directory named
-in `[paths] work` (keeping `catalogs/`, which holds the delivery archive) and run
-the stages in order.
+in `[paths] work` (keeping `catalogs/`, which holds the delivery archive, and the
+product cache if it lives elsewhere) and run the stages in order.
 
 ## Inputs that must be present
 
-* `<work>/catalogs/ForRobby_2026Jun5-selected.zip` — the variable delivery
-  (`catalog_RAPID.txt`, `lightcurves_RAPID_F087.pqt`, `lightcurves_RAPID_F213.pqt`).
-  Members are extracted on demand.
-* AWS credentials able to read `rapid-product-files` and `rapid-pipeline-logs`.
+* **The variable delivery** — `ForRobby_2026Jun5-selected.zip`, holding
+  `catalog_RAPID.txt` and `lightcurves_RAPID_{F087,F213}.pqt`. Members are
+  extracted on demand. It is looked for in `RTS_CATALOGS`, else `[catalogs] dir`,
+  else `<work>/catalogs`. On rapid a copy already sits at
+  `/data/jj/work/rts_downselect/catalogs` — point at it rather than copying 1.17 GB.
+* **AWS credentials** able to read `rapid-product-files` and `rapid-pipeline-logs`.
+  `rts_docker.sh` mounts `$HOME/.aws` read-only by default; override with
+  `RTS_HOST_AWS`.
+
+Nothing else. Everything the analysis reports is derived from those two inputs
+plus the config, which is what makes a re-run cheap and a re-scope a one-file edit.
 
 ## Provenance
 
-Each stage appends to `<work>/provenance.jsonl`: git SHA, config path, processing
-date, database, and input checksums. This is not decoration — two RimTimSim
-deliveries exist with near-identical catalogue files, and without a recorded
-checksum it is not possible to tell after the fact which one a result was scored
-against.
+Every stage appends an entry to `<work>/provenance.jsonl`: git SHA, config path,
+processing date, database, input checksums, and the stage's own parameters — for
+`sweep`, the measured PSF widths, the cache policy and the unit counts; for
+`aggregate`, the match radius, the control cut, and which populations and filters
+were reported.
+
+This is not decoration. Two RimTimSim deliveries exist with near-identical
+catalogue files, and without a recorded checksum it is not possible to tell after
+the fact which one a result was scored against.
 
 ## Gotchas
 

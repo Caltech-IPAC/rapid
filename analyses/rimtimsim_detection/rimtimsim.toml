@@ -33,6 +33,10 @@ K213 = "F213"
 [catalogs]
 # The variable catalogue and light curves delivered to Robby Wilson on
 # 2026-06-05 and injected into the 6/22 RimTimSim render.
+# Directory holding the archive.  Relative stays inside `[paths] work`; an
+# absolute path -- or `RTS_CATALOGS` -- shares one 1.17 GB delivery between users
+# instead of copying it.  On rapid: "/data/jj/work/rts_downselect/catalogs".
+dir             = "catalogs"
 archive         = "ForRobby_2026Jun5-selected.zip"
 catalog         = "catalog_RAPID.txt"           # TAB separated
 lightcurves     = "lightcurves_RAPID_{trexs_filter}.pqt"
@@ -74,9 +78,23 @@ Z087 = 0.0     # 0.0 => measure from the data
 K213 = 0.0
 
 [paths]
-# Working directory (large intermediate products).  Everything under here is
-# reproducible from the catalogues plus the S3 products.
-work    = "/data/jj/work/rts_downselect"
+# Working directory for everything this analysis DERIVES (catalogues, truth,
+# sweep results).  A relative path resolves against the current directory, so a
+# fresh clone runs anywhere.  `RTS_WORK` overrides it without editing this file,
+# which is how the container (where the directory is bind-mounted elsewhere) and
+# a second person working at their own path are both handled.
+work    = "rts_work"
+# Where pipeline products fetched from S3 are cached.  A RELATIVE path lives
+# inside `work`; an ABSOLUTE path -- or `RTS_CACHE` -- points several people at
+# ONE copy instead of each downloading their own.  The full matrix caches ~100 GB
+# of difference images, so on rapid use the existing cache rather than a new one:
+#   cache = "/data/jj/work/rts_downselect/cache/img"
 cache   = "cache/img"
+# "keep" leaves each fetched difference image on disk, so a re-run costs nothing
+# but the matrix occupies ~100 GB.  "discard" deletes each image as soon as its
+# sweep result is written, bounding disk use at a few GB at the cost of
+# re-downloading on a re-run -- which is what a laptop wants.  Overridden by
+# `RTS_CACHE_POLICY`, or per-invocation by `--keep-images` / `--discard-images`.
+cache_policy = "keep"
 truth   = "truth"
 sweep   = "sweep_out"

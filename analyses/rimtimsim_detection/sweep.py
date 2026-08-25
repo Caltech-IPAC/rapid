@@ -179,9 +179,9 @@ def process(cfg, jid, diff, branch, kernels, sexbin, cdf, cachedir, outdir, keep
     tx, ty, dflux = tx[ok], ty[ok], dflux[ok]
 
     files = DIFF_FILES if branch == "positive" else DIFF_FILES_NEG
-    from .truth import fetch
-    path = fetch(cfg.product_uri(jid, files[diff]),
-                 os.path.join(cachedir, "%d_%s" % (jid, files[diff])))
+    from .truth import fetch_status
+    path, fetched = fetch_status(cfg.product_uri(jid, files[diff]),
+                                 os.path.join(cachedir, "%d_%s" % (jid, files[diff])))
 
     with fits.open(path) as hdul:
         data = hdul[0].data.astype(np.float32)
@@ -214,7 +214,11 @@ def process(cfg, jid, diff, branch, kernels, sexbin, cdf, cachedir, outdir, keep
             labels.append(label)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-        if not keep and os.path.exists(path):
+        # Only clean up an image THIS call downloaded.  One that was already
+        # cached may belong to a cache shared with other people, and deleting it
+        # would silently cost them a re-download -- or pull it out from under a
+        # concurrent reader.
+        if not keep and fetched and os.path.exists(path):
             os.remove(path)
 
     out["variants"] = np.array(labels)
