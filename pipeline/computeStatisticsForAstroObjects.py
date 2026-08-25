@@ -678,10 +678,10 @@ if __name__ == '__main__':
 
     for field in fields_list:
 
-        tablename1 = f"astroobjectsmeta_{field}"
+        tablename = f"astroobjectsmeta_{field}"
 
         sql_queries = []
-        sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
+        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
 
         try:
             records = dbh.execute_sql_queries(sql_queries,debug)
@@ -700,6 +700,28 @@ if __name__ == '__main__':
 
         already_made_dict[field] = table_exists_flag
 
+        if table_exists_flag:
+
+            print(f"Dropping {tablename} database table...")
+
+            query = f"DROP TABLE {tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+
+            try:
+                records = dbh.execute_sql_queries(sql_queries,debug)
+            except Exception as e:
+                print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                      f"(e={e});  quitting...")
+                dbh.close()
+                exit(64)
+
+            if dbh.exit_code >= 64:
+                print(f"*** Error: Exception raised in dbh.execute_sql_queries;  quitting...")
+                dbh.close()
+                exit(dbh.exit_code)
+
 
     # Create astroobjectsmeta database tables for all fields.
     # Defer creating indexes on all astroobjectsmeta_<field> database tables until
@@ -717,14 +739,9 @@ if __name__ == '__main__':
 
         print(f"field = {field}")
 
-        table_exists_flag = already_made_dict[field]
-
-        if table_exists_flag:
-            continue
-
         tablename = f"astroobjectsmeta_{field}"
 
-        sql_queries.append(f"CREATE TABLE IF NOT EXISTS {tablename} (LIKE astroobjectsmeta INCLUDING " +
+        sql_queries.append(f"CREATE TABLE {tablename} (LIKE astroobjectsmeta INCLUDING " +
                            f"DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = {fillfactor});")
         sql_queries.append(f"ALTER TABLE {tablename} OWNER TO rapidporole;")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidreadrole;")
@@ -790,12 +807,8 @@ if __name__ == '__main__':
 
         print(f"field = {field}")
 
-        table_exists_flag = already_made_dict[field]
-
-        if table_exists_flag:
-            continue
-
         tablename = f"astroobjectsmeta_{field}"
+
         sql_queries.append(f"CREATE INDEX {tablename}_nsources_idx ON {tablename} (nsources);")
         sql_queries.append(f"CREATE INDEX {tablename}_meanradec_idx ON {tablename} (q3c_ang2ipix(meanra, meandec));")
 
@@ -831,7 +844,7 @@ if __name__ == '__main__':
 
         tablename = f"astroobjectsmeta_{field}"
 
-        query = f"SELECT count(*) FROM {tablename};"
+        query = f"SELECT EXISTS (SELECT 1 FROM {tablename} LIMIT 1);"
 
         print(f"query = {query}")
 
@@ -853,9 +866,9 @@ if __name__ == '__main__':
 
         print(f"records = {records}")
 
-        astroobjectsmeta_child_table_count = records[0][0]
+        astroobjectsmeta_child_table_has_rows = records[0][0]
 
-        if astroobjectsmeta_child_table_count == 0:
+        if not astroobjectsmeta_child_table_has_rows:
 
             print(f"Dropping {tablename} database table...")
 
