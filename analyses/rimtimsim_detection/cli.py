@@ -82,16 +82,18 @@ def cmd_kernels(cfg, args):
         print("%s: FWHM %.3f px (measured from %s, jid%d)" % (filt, fwhm[filt], name, jid))
     kdir = os.path.join(cfg.work, "kernels")
     ks = sweep.build_kernels(kdir, min(fwhm.values()), max(fwhm.values()))
-    for tag, (path, w) in ks.items():
-        print("  kernel %s -> FWHM %.3f px  %s" % (tag, w, path))
+    for tag, (g, d, w) in ks.items():
+        print("  kernel %s -> FWHM %.3f px  %s  %s" % (tag, w, g, d))
     # Persist what was measured so `sweep` uses the real widths.  Writing a
     # sidecar rather than editing the TOML keeps the config a human-owned file
     # and keeps a measured value from silently masquerading as a chosen one.
     with open(_kernel_sidecar(cfg), "w") as fh:
         json.dump({"fwhm_px": fwhm,
-                   "kernels": {t: {"path": p, "fwhm_px": w} for t, (p, w) in ks.items()}},
+                   "kernels": {t: {"gauss": g, "dao": d, "fwhm_px": w}
+                               for t, (g, d, w) in ks.items()}},
                   fh, indent=2)
-    provenance.write(cfg, "kernels", inputs=[p for p, _ in ks.values()],
+    provenance.write(cfg, "kernels",
+                     inputs=[p for g, d, _ in ks.values() for p in (g, d)],
                      extra={"fwhm_px": fwhm})
 
 
@@ -137,7 +139,11 @@ def cmd_sweep(cfg, args):
         raise SystemExit("run the `kernels` stage first (%s is missing)" % side)
     with open(side) as fh:
         meta = json.load(fh)
-    ks = {t: (d["path"], float(d["fwhm_px"])) for t, d in meta["kernels"].items()}
+    try:
+        ks = {t: (d["gauss"], d["dao"], float(d["fwhm_px"]))
+              for t, d in meta["kernels"].items()}
+    except KeyError:
+        raise SystemExit("%s predates the separate DAO kernel; re-run `kernels`" % side)
     sexbin = os.environ.get("RTS_SEX", "/code/c/bin/sex")
     cdf = os.environ.get("RTS_CDF", "/code/cdf")
     diffs = [args.diff] if args.diff else cfg.sweep["diffs"]
@@ -150,6 +156,9 @@ def cmd_sweep(cfg, args):
         keep = True
     print("cache %s (%s difference images after use)"
           % (cachedir, "keeping" if keep else "discarding"), flush=True)
+    if args.variants:
+        print("variants matching %r%s" % (args.variants,
+              " (recomputing)" if args.refresh_variants else ""), flush=True)
     ok = fail = 0
     for diff in diffs:
         for branch in branches:
@@ -157,7 +166,9 @@ def cmd_sweep(cfg, args):
             for jid in jids:
                 try:
                     info = sweep.process(cfg, jid, diff, branch, ks, sexbin, cdf,
-                                         cachedir, outdir, keep=keep)
+                                         cachedir, outdir, keep=keep,
+                                         select=args.variants,
+                                         refresh=args.refresh_variants)
                     ok += 1
                 except Exception as e:
                     info = "FAILED %s: %s" % (type(e).__name__, e)
@@ -168,6 +179,8 @@ def cmd_sweep(cfg, args):
                      extra={"n_ok": ok, "n_fail": fail, "diffs": diffs,
                             "branches": branches, "n_jids": len(jids),
                             "keep_images": keep, "cache": cachedir,
+                            "variants": args.variants or "all",
+                            "refresh": bool(args.refresh_variants),
                             "fwhm_px": meta.get("fwhm_px", {})})
 
 
@@ -224,6 +237,15 @@ def main(argv=None):
     ap.add_argument("--branch", default=None, choices=["positive", "negative"])
     ap.add_argument("--population", action="append",
                     choices=["all", "rapid", "trexs"], default=None)
+    ap.add_argument("--variants", default=None, metavar="REGEX",
+                    help="sweep: only variants whose label matches this regex. "
+                         "Results merge into any existing output, so adding or "
+                         "correcting one variant costs that variant alone.")
+    ap.add_argument("--refresh-variants", action="store_true",
+                    help="sweep: recompute the selected variants even if their "
+                         "stored results look current.  Needed for results written "
+                         "before variant signatures existed, which are otherwise "
+                         "trusted rather than silently recomputed.")
     retain = ap.add_mutually_exclusive_group()
     retain.add_argument("--keep-images", action="store_true",
                         help="sweep: keep fetched difference images (overrides config)")

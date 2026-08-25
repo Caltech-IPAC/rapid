@@ -80,6 +80,27 @@ def load(cfg, diff, branch):
     return R
 
 
+def duplicate_variants(R):
+    """Variant labels whose match vectors are bitwise identical.
+
+    Two variants agreeing on every one of millions of sources is not a result, it
+    is a configuration error -- `SE-dao` and `SE-gauss` once shared a kernel and
+    silently reported the same numbers under two names.  Aggregation reports this
+    rather than leaving it to be noticed.
+    """
+    groups, seen = [], {}
+    for v in R["labels"]:
+        m = R["M"].get(v)
+        if m is None:
+            continue
+        key = (int(m.sum()), hash(m.tobytes()))
+        seen.setdefault(key, []).append(v)
+    for vs in seen.values():
+        if len(vs) > 1:
+            groups.append(sorted(vs))
+    return sorted(groups)
+
+
 def _rows(d, m, ctrl, signed):
     """Floor-corrected completeness per signed dflux bin."""
     floor = m[ctrl].mean() if ctrl.sum() else 0.0
@@ -128,6 +149,9 @@ def report(cfg, diff, branch, population="all", filt=None):
              filt or "pooled(%s)" % ",".join(R["filters"]), nimg))
     print("%d sources scored (recoverable sign), %d static controls"
           % (scored.sum(), ctrl.sum()))
+    for g in duplicate_variants(R):
+        print("WARNING: identical detections from %s -- these are not "
+              "independent variants" % ", ".join(g))
     hdr = "%-22s %10s |" % ("variant", "FP/img")
     for lo, hi in zip(FLUX_EDGES[:-1], FLUX_EDGES[1:]):
         hdr += "%9s" % ("%g-%g" % (lo, hi) if np.isfinite(hi) else ">%g" % lo)

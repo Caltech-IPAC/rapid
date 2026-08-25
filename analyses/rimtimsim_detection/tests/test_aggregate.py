@@ -204,3 +204,22 @@ class FilterAwareAggregation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DuplicateDetection(unittest.TestCase):
+    """A variant pair that agrees on every source is a config error, not a result."""
+
+    def _R(self, ma, mb):
+        return dict(labels=["a", "b"], M={"a": np.array(ma, bool), "b": np.array(mb, bool)})
+
+    def test_identical_variants_are_reported(self):
+        self.assertEqual(aggregate.duplicate_variants(
+            self._R([1, 0, 1, 1], [1, 0, 1, 1])), [["a", "b"]])
+
+    def test_variants_differing_anywhere_are_not(self):
+        self.assertEqual(aggregate.duplicate_variants(
+            self._R([1, 0, 1, 1], [1, 0, 1, 0])), [])
+
+    def test_equal_counts_but_different_sources_are_not_duplicates(self):
+        self.assertEqual(aggregate.duplicate_variants(
+            self._R([1, 1, 0, 0], [0, 0, 1, 1])), [])

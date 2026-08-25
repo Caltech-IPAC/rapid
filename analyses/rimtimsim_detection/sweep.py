@@ -16,7 +16,9 @@ Two things differ from the SOC run, both forced by the data:
   W146; Z087 and K213 sit at opposite ends of the Roman wavelength range and have
   substantially different PSF widths.
 """
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -70,22 +72,77 @@ def gauss_kernel(fwhm):
     return k / k.sum()
 
 
-def write_conv(path, kernel, comment):
-    """Write a SExtractor .conv filter file."""
+def dao_kernel(fwhm):
+    """The ZERO-SUM kernel DAOStarFinder builds internally, as a filter array.
+
+    This is the other half of the {gaussian, dao} axis.  DAOStarFinder does not
+    correlate with a unit-sum PSF but with a mean-subtracted one, which suppresses
+    a flat background instead of passing it through.  Handing SExtractor the same
+    kernel is what makes `SE-dao` a real comparison against `SE-gauss` rather than
+    a second name for it.
+
+    photutils keeps this class private, so it is imported defensively and the
+    profile is reconstructed if the private name ever moves.  It is deliberately
+    photutils' own kernel and not an independent implementation, so that the
+    `DAO-*` and `SE-dao-*` families are filtering with literally the same thing.
+    """
+    try:
+        from photutils.detection.core import _StarFinderKernel
+    except ImportError:                              # moved or removed upstream
+        try:
+            from photutils.detection.daofinder import _StarFinderKernel
+        except ImportError:
+            return _dao_kernel_fallback(fwhm)
+    return _StarFinderKernel(fwhm, ratio=1.0, theta=0.0, sigma_radius=1.5).data
+
+
+def _dao_kernel_fallback(fwhm):
+    """DAOStarFinder's kernel, reimplemented -- used only if photutils moves it.
+
+    A circular gaussian truncated at `sigma_radius` sigma, mean-subtracted over
+    the pixels inside that radius so the kernel sums to zero, with the pixels
+    outside it set to zero.  This mirrors `_StarFinderKernel`; it is a fallback,
+    not the primary path, because matching photutils exactly is the point.
+    """
+    sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    r = max(2, int(np.ceil(1.5 * sigma)))
+    yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+    g = np.exp(-0.5 * (xx ** 2 + yy ** 2) / sigma ** 2)
+    inside = (xx ** 2 + yy ** 2) <= r ** 2
+    g = np.where(inside, g, 0.0)
+    g[inside] -= g[inside].mean()
+    return np.where(inside, g, 0.0)
+
+
+def write_conv(path, kernel, comment, norm=True):
+    """Write a SExtractor .conv filter file.
+
+    A zero-sum kernel must be declared NONORM: SExtractor normalises a NORM
+    filter by its sum, which for a mean-subtracted kernel is ~0 and blows the
+    coefficients up.
+    """
     with open(path, "w") as fh:
-        fh.write("CONV NORM\n# %s\n" % comment)
+        fh.write("CONV %s\n# %s\n" % ("NORM" if norm else "NONORM", comment))
         for row in kernel:
             fh.write(" ".join("%.6f" % v for v in row) + "\n")
 
 
 def build_kernels(kdir, fwhm_narrow, fwhm_wide):
-    """Create the per-filter matched-filter kernels and return their paths."""
+    """Create the per-filter matched-filter kernels and return their paths.
+
+    Two profiles per filter width: a unit-sum gaussian and the zero-sum DAO
+    kernel.  Returns {tag: (gauss_path, dao_path, fwhm)}.
+    """
     os.makedirs(kdir, exist_ok=True)
     out = {}
     for tag, fwhm in (("fN", fwhm_narrow), ("fW", fwhm_wide)):
-        p = os.path.join(kdir, "gauss_%s.conv" % tag)
-        write_conv(p, gauss_kernel(fwhm), "gaussian, FWHM %.3f px" % fwhm)
-        out[tag] = (p, fwhm)
+        g = os.path.join(kdir, "gauss_%s.conv" % tag)
+        write_conv(g, gauss_kernel(fwhm), "gaussian, FWHM %.3f px" % fwhm)
+        d = os.path.join(kdir, "dao_%s.conv" % tag)
+        write_conv(d, dao_kernel(fwhm),
+                   "photutils StarFinderKernel (zero-sum), FWHM %.3f px" % fwhm,
+                   norm=False)
+        out[tag] = (g, d, fwhm)
     return out
 
 
@@ -144,34 +201,102 @@ def measure(det, tx, ty, match_px):
                 n_fp=int((d_det > match_px).sum()))
 
 
+def signature(kind, params):
+    """A short hash identifying exactly what a variant computes.
+
+    Stored alongside each variant's results so a later run can tell which entries
+    are still current.  For SExtractor variants the kernel FILE CONTENT is hashed,
+    not its path -- that is what caught `SE-dao` and `SE-gauss` silently sharing
+    one kernel, and it means editing a kernel invalidates precisely the variants
+    that used it instead of the whole matrix.
+    """
+    h = hashlib.sha256()
+    h.update(kind.encode())
+    for k in sorted(params):
+        if k == "kernel" and params[k]:
+            h.update(b"kernel=")
+            with open(params[k], "rb") as fh:
+                h.update(fh.read())
+        else:
+            h.update(("%s=%r;" % (k, params[k])).encode())
+    return h.hexdigest()[:16]
+
+
 def variants(kernels, thresholds):
     """Enumerate (label, kind, params) for the whole matrix."""
     out = []
     for fam, pars in DAO_FAMS.items():
         tag = "fN" if fam.endswith("fN") else ("fW" if fam.endswith("fW") else "fW")
-        fwhm = kernels[tag][1]
+        fwhm = kernels[tag][2]
         for t in thresholds:
             out.append(("%s@%g" % (fam, t), "dao", dict(nsig=t, fwhm=fwhm, pars=pars)))
     for tag in ("fN", "fW"):
         for t in thresholds:
             out.append(("PU-gauss-%s@%g" % (tag, t), "pu",
-                        dict(nsig=t, fwhm=kernels[tag][1])))
+                        dict(nsig=t, fwhm=kernels[tag][2])))
     for tag in ("fN", "fW"):
         for t in thresholds:
+            # gauss = unit-sum PSF filter; dao = the zero-sum StarFinderKernel.
+            # These MUST be different files -- handing both the same kernel makes
+            # the two families bitwise duplicates of each other.
             out.append(("SE-gauss-%s@%g" % (tag, t), "sex",
                         dict(thresh=t, minarea=1, filt="Y", kernel=kernels[tag][0])))
             out.append(("SE-dao-%s@%g" % (tag, t), "sex",
-                        dict(thresh=t, minarea=1, filt="Y", kernel=kernels[tag][0])))
+                        dict(thresh=t, minarea=1, filt="Y", kernel=kernels[tag][1])))
     out.append(("SE-production@2.5", "sex", dict(**SE_PRODUCTION)))
     return out
 
 
-def process(cfg, jid, diff, branch, kernels, sexbin, cdf, cachedir, outdir, keep=True):
-    """Run the full matrix for one (job, difference image, sign branch)."""
+def process(cfg, jid, diff, branch, kernels, sexbin, cdf, cachedir, outdir,
+            keep=True, select=None, refresh=False):
+    """Run the detection matrix for one (job, difference image, sign branch).
+
+    Resumable AT VARIANT GRANULARITY.  An existing result file is not all-or-
+    nothing: each variant carries a signature, and only variants that are absent,
+    stale (their parameters or kernel changed), or explicitly selected for refresh
+    are recomputed.  Everything else is carried over untouched and merged into the
+    output.  Adding one variant to the matrix, or correcting one, therefore costs
+    that variant -- not a rerun of the other thirty-six.
+
+    `select` is a regex matched against variant labels; `refresh` recomputes the
+    selected ones even when their signature already matches.
+    """
     os.makedirs(outdir, exist_ok=True)
     dest = os.path.join(outdir, "%d.npz" % jid)
+
+    want = variants(kernels, cfg.sweep["thresholds"])
+    if select:
+        rx = re.compile(select)
+        want = [v for v in want if rx.search(v[0])]
+        if not want:
+            return "no variant matches %r" % select
+
+    prev, prev_labels = {}, []
     if os.path.exists(dest):
-        return "cached"
+        try:
+            with np.load(dest, allow_pickle=True) as Z:
+                prev = {k: Z[k] for k in Z.files}
+            prev_labels = [str(v) for v in prev.get("variants", [])]
+        except Exception:
+            prev, prev_labels = {}, []          # unreadable: rebuild from scratch
+
+    todo = []
+    for label, kind, p in want:
+        sig = signature(kind, p)
+        have_sig = str(prev[label + "|sig"]) if label + "|sig" in prev else None
+        if label + "|matched" not in prev:
+            todo.append((label, kind, p, sig))          # never computed
+        elif refresh:
+            todo.append((label, kind, p, sig))          # asked for explicitly
+        elif have_sig is not None and have_sig != sig:
+            todo.append((label, kind, p, sig))          # parameters or kernel changed
+        # A result predating signatures carries none.  It is GRANDFATHERED rather
+        # than assumed stale: treating it as stale would make the first run under
+        # the new format silently recompute the entire matrix, which is precisely
+        # the all-or-nothing behaviour this resume logic exists to remove.  Use
+        # --refresh-variants to force such a variant to be recomputed.
+    if not todo and prev:
+        return "cached (%d variants)" % len(prev_labels)
 
     T = np.load(os.path.join(cfg.work, cfg.paths["truth"], "%d.npz" % jid), allow_pickle=True)
     tx, ty, dflux = T["x"], T["y"], T["dflux"]
@@ -191,14 +316,19 @@ def process(cfg, jid, diff, branch, kernels, sexbin, cdf, cachedir, outdir, keep
     tmproot = os.path.join(cfg.work, "tmp")
     os.makedirs(tmproot, exist_ok=True)
     tmp = tempfile.mkdtemp(dir=tmproot)
-    out = dict(jid=jid, diff=diff, branch=branch, dflux=dflux, clipped_std=std,
+
+    # Carry over every key already on disk, then overwrite what we recompute.  The
+    # per-source arrays come from truth, which is unchanged, so they are simply
+    # rewritten; anything belonging to a variant we are not touching survives.
+    out = dict(prev)
+    out.update(jid=jid, diff=diff, branch=branch, dflux=dflux, clipped_std=std,
                zp=float(T["zp"]), filt=str(T["filt"]), sicbro_id=T["sicbro_id"][ok],
                is_rapid=T["is_rapid"][ok], mag=T["mag"][ok])
-    labels = []
+    done = []
     try:
         cimg = os.path.join(tmp, "clean.fits")
         fits.PrimaryHDU(clean).writeto(cimg, overwrite=True)
-        for label, kind, p in variants(kernels, cfg.sweep["thresholds"]):
+        for label, kind, p, sig in todo:
             if kind == "dao":
                 det = run_dao(clean, std, p["nsig"], p["fwhm"], p["pars"])
             elif kind == "pu":
@@ -211,7 +341,8 @@ def process(cfg, jid, diff, branch, kernels, sexbin, cdf, cachedir, outdir, keep
             r = measure(det, tx, ty, float(cfg.truth["match_px"]))
             out[label + "|matched"] = r["matched"]
             out[label + "|scalars"] = np.array([r["n_det"], r["n_fp"]], np.int64)
-            labels.append(label)
+            out[label + "|sig"] = sig
+            done.append(label)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         # Only clean up an image THIS call downloaded.  One that was already
@@ -221,10 +352,13 @@ def process(cfg, jid, diff, branch, kernels, sexbin, cdf, cachedir, outdir, keep
         if not keep and fetched and os.path.exists(path):
             os.remove(path)
 
+    labels = prev_labels + [l for l in done if l not in prev_labels]
     out["variants"] = np.array(labels)
     # savez_compressed would append ".npz" to a path lacking it; use a handle.
     tmp_dest = dest + ".partial"
     with open(tmp_dest, "wb") as fh:
         np.savez_compressed(fh, **out)
     os.replace(tmp_dest, dest)
-    return "std=%.3f n_src=%d n_var=%d" % (std, len(tx), len(labels))
+    verb = "merged" if prev_labels else "wrote"
+    return "std=%.3f n_src=%d %s %d/%d variants" % (std, len(tx), verb,
+                                                    len(done), len(labels))

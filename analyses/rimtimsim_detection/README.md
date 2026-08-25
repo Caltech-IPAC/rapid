@@ -121,6 +121,33 @@ python -m analyses.rimtimsim_detection.cli sweep --jids 143919 --diff sfft
 python -m analyses.rimtimsim_detection.cli aggregate --diff sfft --branch positive
 ```
 
+### Re-running one variant
+
+The sweep resumes at **variant granularity**, not per job. Each variant's results
+carry a signature covering its parameters and, for the SExtractor families, the
+*content* of its convolution kernel. On a re-run each variant is recomputed only
+if it is absent, if its signature no longer matches, or if you ask for it — and
+whatever is recomputed is merged back into the existing results rather than
+replacing them.
+
+So adding a variant to the matrix, or correcting one, costs that variant alone:
+
+```bash
+# add or correct one family everywhere, merging into the existing results
+... cli sweep --variants 'SE-dao' --refresh-variants
+# a quick look at what one new threshold does, on a handful of jobs
+... cli sweep --jids 143919,143920 --variants 'SE-gauss-fN@4'
+```
+
+`--variants` takes a regex matched against variant labels. Results written before
+signatures existed carry none; those are trusted rather than assumed stale, so a
+plain `cli sweep` over an existing run does not silently recompute everything.
+`--refresh-variants` is what forces them.
+
+Aggregation warns if two variants produce bitwise identical detections, which is
+a configuration error rather than a result — `SE-gauss` and `SE-dao` once shared a
+kernel and reported the same numbers under two names.
+
 ### Disk
 
 A full matrix caches about **100 GB** of difference images — 99 GB of the 105 GB a
