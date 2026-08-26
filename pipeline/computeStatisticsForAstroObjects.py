@@ -264,7 +264,7 @@ def run_single_core_job(fields,index_thread):
         # record(s) in the merges_<field> database table.
 
         #query = f"SELECT aid FROM {astroobjects_tablename} WHERE aid NOT IN " +\
-        #    f"(SELECT aid FROM {merges_tablename});"
+        #        f"(SELECT aid FROM {merges_tablename});"
 
         # This query is much more efficient than the above.
         query = f"SELECT a.aid " +\
@@ -370,7 +370,8 @@ def run_single_core_job(fields,index_thread):
 
         query = f"SELECT DISTINCT cast(dateobs as date),sca " +\
                 f"FROM l2files " +\
-                f"WHERE vbest >0 " +\
+                f"WHERE vbest > 0 " +\
+                f"AND status > 0 " +\
                 f"AND field IN ({sciimg_overlapping_rtids_comma_separated_string});"
 
         sql_queries = [query]
