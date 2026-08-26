@@ -268,6 +268,8 @@ across a field boundary), which is an increase of 0.0157% in terms of number of 
 
 The lightcurve statistics are stored in the AstroObjectsMeta_<fields> database tables, and are inserted after the
 cross-matching.  This is done as a separate process, after the source cross-matching.
+The script that computes the lightcurve statistics drops all
+AstroObjectsMeta_<fields> database tables and then recreates them, before the statistical computations.
 The AstroObjectsMeta_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
 For the 7/22/2026 test with SOC sims, it took 1.6 hours with 8 parallel processes to compute
 statistics for ~90 million AstroObjects.
