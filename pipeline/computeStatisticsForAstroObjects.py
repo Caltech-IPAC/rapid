@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
+import database.modules.utils.roman_tessellation_db as sqlite
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "computeStatisticsForAstroObjects.py"
@@ -40,6 +41,16 @@ proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
 print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
+
+
+# Ensure sqlite database that defines the Roman sky tessellation is available.
+
+roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
+
+if roman_tessellation_dbname is None:
+
+    print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
+    exit(64)
 
 
 # JOBPROCDATE of RAPID science-pipeline jobs that already ran.
@@ -149,7 +160,7 @@ def run_single_core_job(fields,index_thread):
     # Set thread_debug = 0 here to severly limit the amount of information logged for runs
     # that are anything but short tests.
 
-    thread_debug = 0
+    thread_debug = 1
 
     nfields = len(fields)
 
@@ -164,7 +175,9 @@ def run_single_core_job(fields,index_thread):
         raise
 
 
-    # Open database connection.
+    # Open database connections.
+
+    roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
     dbh = db.RAPIDDB()
 
@@ -182,20 +195,17 @@ def run_single_core_job(fields,index_thread):
     #    This is an artifact of bulk-copying records into the PostgreSQL database for the case
     #    that there is more than one source near by in the same difference image that is
     #    assigned the same aid because of close proximity (this would not happen if
-    #    row-by-row inserts were used, which, of course, would be too slow; with
-    #    row-by-row inserts, the astroobject would already exist and therefore would be
-    #    cross-matched to the nearby source).  This may be worked around for PhotUtils catalogs
-    #    computed with min_separation = 1.0 pixels.
-    # 2. Query the Merges_<field> database table joined with the Sources and DiffImages
-    #    tables, keeping only sources of best difference images (vbest>0), and keeping only
-    #    one source per (aid, pid, isdiffpos) so that the redundant-aid artifact described
-    #    in step 1 does not contribute duplicate lightcurve data points.
-    # 3. Compute statistics for all Merges_<field> records with best sources.
-    # 4. Populate AstroObjectsMeta_<field> database records by bulk copy.
-    # 5. Delete AstroObjects_<field> database records that yielded no AstroObjectsMeta_<field>
-    #    record, i.e., those with no Merges_<field> record(s) and those whose merges have no
-    #    best sources.  AstroObjectsMeta_<field> itself needs no such pruning because the
-    #    main program drops and recreates it empty before this method runs.
+    #    row-by-row inserts were used, which, of course, would be too slow).  This may be
+    #    worked around for PhotUtils catalogs computed with min_separation = 1.0 pixels.
+    # 2. Delete AstroObjects_<field>  database records that do not have corresponding
+    #    Merges_<field> record(s).
+    # 3. Query for records in each Merges_<field> database table joined with sources table.
+    # 4. Determine unique pids (primary key of DiffImages table).
+    # 5. Determine unique aids (primary key of AstroObjects_<field> table).
+    # 6. Check associated DiffImages records for those that are best (vbest>0).
+    # 7. Populate vbest dictionary keyed by unique pid.
+    # 8. Compute statistics for all Merges_<field> records with best sources.
+    # 9. Populate AstroObjectsMeta_<field> database records
 
     my_fields = list(range(index_thread, nfields, num_cores))
     for index_field in my_fields:
@@ -235,6 +245,7 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
+            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -242,31 +253,232 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
+            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         for record in records:
             fh.write(f"record = {record}\n")
 
 
+        # Delete astroobjects records that do not have corresponding
+        # record(s) in the merges_<field> database table.
+
+        #query = f"SELECT aid FROM {astroobjects_tablename} WHERE aid NOT IN " +\
+        #    f"(SELECT aid FROM {merges_tablename});"
+
+        # This query is much more efficient than the above.
+        query = f"SELECT a.aid " +\
+                f"FROM {astroobjects_tablename} a " +\
+                f"LEFT JOIN {merges_tablename} b ON a.aid = b.aid " +\
+                f"WHERE b.aid IS NULL;"
+
+        fh.write(f"query = {query}\n")
+        fh.flush()
+
+        sql_queries = []
+        sql_queries.append(query)
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+        aids_list = []
+        for record in records:
+
+            aid = record[0]
+            aids_list.append(aid)
+
+        n_aids_list = len(aids_list)
+
+        if n_aids_list > 0:
+
+            aids_comma_separated_string = ",".join(str(a) for a in aids_list)
+
+            fh.write(f"Deleting records for aids = {aids_comma_separated_string} in " +
+                     f"{astroobjects_tablename} database table...\n")
+            fh.flush()
+
+            query = f"DELETE FROM {astroobjects_tablename} " +\
+                    f"WHERE aid IN ({aids_comma_separated_string});"
+
+            fh.write(f"query = {query}\n")
+            fh.flush()
+
+            sql_queries = []
+            sql_queries.append(query)
+
+            try:
+                records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            except Exception as e:
+                fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(query={query},e={e});  quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                roman_tessellation_db.close()
+                raise
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                roman_tessellation_db.close()
+                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+            for record in records:
+                fh.write(f"record = {record}\n")
+
+
+        # Code-timing benchmark.
+
+        thread_end_time_benchmark = time.time()
+        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        fh.write(f"Elapsed time in seconds to delete astroobjects records " +
+                 f"that do not have merges records = {diff_time_benchmark}\n")
+        fh.flush()
+        thread_start_time_benchmark = thread_end_time_benchmark
+
+
+        # For the current field, query for adjacent fields, and then query
+        # the L2Files table for all records that overlap these fields to get
+        # <obs_date> and <sca>, in order to generate a finite list of Sources child
+        # database table to join (and avoid joining with the Sources parent table).
+
+        neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
+
+        sciimg_overlapping_rtids = [str(field)]
+        for neighboring_rtid in neighboring_rtids:
+            sciimg_overlapping_rtids.append(str(neighboring_rtid))
+
+        sciimg_overlapping_rtids_comma_separated_string = ", ".join(sciimg_overlapping_rtids)
+
+        query = f"SELECT DISTINCT cast(dateobs as date),sca " +\
+                f"FROM l2files " +\
+                f"WHERE vbest >0 " +\
+                f"AND field IN ({sciimg_overlapping_rtids_comma_separated_string});"
+
+        sql_queries = [query]
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+        sources_child_tables_to_check_existence = []
+
+        for record in records:
+
+            obs_date = str(record[0]).replace("-","")
+            sca = str(record[1])
+            sources_tablename = f"sources_{obs_date}_{sca}"
+            sources_child_tables_to_check_existence.append(sources_tablename)
+
+        sources_child_tables_comma_separated_string = "', '".join(sources_child_tables_to_check_existence)
+
+        # This query returns a list of sources_<date_obs>_<sca> database table names
+        # that actually exist.
+        query = f"SELECT c.relname FROM pg_class c " +\
+                f"JOIN pg_namespace n ON n.oid = c.relnamespace " +\
+                f"WHERE n.nspname = 'public' " +\
+                f"AND c.relkind IN ('r','p') " +\
+                f"AND c.relname IN ('{sources_child_tables_comma_separated_string}');"
+
+        sql_queries = [query]
+
+        try:
+            table_exists_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+        sources_child_tables = []
+        for table_exists_record in table_exists_records:
+            sources_tablename = table_exists_record[0]
+            sources_child_tables.append(sources_tablename)
+
+
+        # Skip the current field if no Sources child tables were found, since an empty
+        # list would otherwise yield the degenerate UNION ALL query ";", which the
+        # database rejects with a syntax error.  Leave the astroobjects_<field> and
+        # astroobjectsmeta_<field> database records alone in this case, rather than
+        # treating every aid as having no best source and deleting it.
+
+        if len(sources_child_tables) == 0:
+            fh.write(f"*** Warning: No Sources child tables found for field {field}; " +
+                     f"skipping to next field...\n")
+            fh.flush()
+            continue
+
+
+        # Code-timing benchmark.
+
+        thread_end_time_benchmark = time.time()
+        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        fh.write(f"Elapsed time in seconds to determine relevant sources child tables = {diff_time_benchmark}\n")
+        fh.flush()
+        thread_start_time_benchmark = thread_end_time_benchmark
+
+
         # Process astroobjects/astroobjectsmeta records that do indeed have corresponding
         # record(s) in the merges_<field> database table and Sources database table.
+        # Query all source child tables in a single UNION ALL query instead of one
+        # round trip per child table.
+        # The vbest > 0 filter is folded into the JOIN to avoid N+1 pid lookups.
 
-        # DISTINCT ON keeps a single source per (aid, difference image, isdiffpos), which
-        # discards the duplicate lightcurve data points that arise when two sources close
-        # together in the same difference image were assigned the same aid (see step 1).
-        # The best-quality PSF fit (lowest qfit) is the one kept, with sid breaking ties so
-        # that the choice is deterministic.  isdiffpos is part of the key so that a positive
-        # and a negative detection of the same object are never collapsed into one another.
+        union_parts = []
+        for sources_tablename in sources_child_tables:
+            union_parts.append(
+                f"SELECT a.aid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a "
+                f"JOIN {sources_tablename} AS b ON a.sid = b.sid "
+                f"JOIN diffimages AS d ON b.pid = d.pid "
+                f"WHERE d.vbest > 0"
+            )
+        query = " UNION ALL ".join(union_parts) + ";"
 
-        query = f"SELECT DISTINCT ON (a.aid,b.pid,b.isdiffpos) " +\
-                f"a.aid,b.ra,b.dec,b.fluxfit " +\
-                f"FROM {merges_tablename} AS a " +\
-                f"JOIN sources AS b ON a.sid = b.sid " +\
-                f"JOIN diffimages AS d ON b.pid = d.pid " +\
-                f"WHERE d.vbest > 0 " +\
-                f"ORDER BY a.aid,b.pid,b.isdiffpos,b.qfit ASC,b.sid ASC;"
-
-        fh.write(f"Querying Source tables for {merges_tablename} using query = {query}\n")
+        fh.write(f"Querying {len(sources_child_tables)} source child tables for {merges_tablename} via UNION ALL\n")
         fh.flush()
 
         sql_queries = [query]
@@ -279,6 +491,7 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
+            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -286,9 +499,10 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
+            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
-        fh.write(f"Total records from query = {len(all_records)}\n")
+        fh.write(f"Total records from UNION ALL query = {len(all_records)}\n")
 
         ras_for_aid_dict = defaultdict(list)
         decs_for_aid_dict = defaultdict(list)
@@ -310,13 +524,65 @@ def run_single_core_job(fields,index_thread):
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # The aids with at least one best source are exactly the keys accumulated above.
-        # Pruning AstroObjects_<field> of everything else is deferred until after
-        # AstroObjectsMeta_<field> has been populated, so that the prune can be expressed
-        # as a cheap anti-join against that table instead of re-running the expensive
-        # merges/sources/diffimages join or inlining a huge list of aids into a DELETE.
+        # Delete astroobjects/astroobjectsmeta records for aids that have merges
+        # but no best sources (all associated diffimages have vbest=0).
+        # Uses a single batched DELETE instead of one DELETE per aid.
 
         best_aids = set(ras_for_aid_dict.keys())
+
+        query = f"SELECT DISTINCT aid FROM {merges_tablename};"
+
+        sql_queries = [query]
+
+        try:
+            all_aids_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+        not_best_aids = [str(record[0]) for record in all_aids_records if record[0] not in best_aids]
+
+        if not_best_aids:
+            not_best_aids_str = ",".join(not_best_aids)
+            fh.write(f"Deleting {len(not_best_aids)} not-best-source aids from " +
+                     f"{astroobjects_tablename} database tables...\n")
+            fh.flush()
+
+            sql_queries = [
+                f"DELETE FROM {astroobjects_tablename} WHERE aid IN ({not_best_aids_str});"
+            ]
+
+            try:
+                dbh.execute_sql_queries(sql_queries,thread_debug)
+            except Exception as e:
+                fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(e={e});  quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                roman_tessellation_db.close()
+                raise
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error from dbh.execute_sql_queries; quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                roman_tessellation_db.close()
+                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (sql_queries={sql_queries}); quitting...")
 
 
         # Loop over astroobjects for current field:
@@ -329,6 +595,7 @@ def run_single_core_job(fields,index_thread):
 
         with open(astroobjectsmeta_table_file, "w") as csv_fh:
 
+            i = 0
             for aid in aids_list:
 
                 ras_list = ras_for_aid_dict[aid]
@@ -341,16 +608,15 @@ def run_single_core_job(fields,index_thread):
                 meanflux = np.mean(fluxes_list)
                 stdflux = np.std(fluxes_list)
 
-
-                if thread_debug == 1:
+                if thread_debug == 1 and i < 5:
                     fh.write(f"sky_position_spread = {sky_position_spread} degrees\n")
                     fh.write(f"Inserting AstroObjectsMeta record: astroobjectsmeta_tablename,aid," +
                              f"meanra,meandec,nsources={astroobjectsmeta_tablename},{aid},{meanra},{meandec},{nsources}\n")
                     fh.flush()
 
-
                 csv_fh.write(",".join(str(v) for v in (aid, meanra, stdra, meandec, stddec, meanflux, stdflux, nsources)) + "\n")
 
+                i += 1
 
         # Load records into AstroObjectsMeta_<field> database tables.
 
@@ -363,6 +629,7 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
+            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -371,6 +638,7 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
+            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
                                f"into specified database table ({astroobjectsmeta_tablename}); quitting...")
 
@@ -381,59 +649,6 @@ def run_single_core_job(fields,index_thread):
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
         fh.write(f"Elapsed time in seconds to bulk copy records into " +
                  f"{astroobjectsmeta_tablename} database table = {diff_time_benchmark}\n")
-        fh.flush()
-        thread_start_time_benchmark = thread_end_time_benchmark
-
-
-        # Delete AstroObjects_<field> records that yielded no AstroObjectsMeta_<field>
-        # record.  Such an aid either has no Merges_<field> record at all, or has merges
-        # whose sources all belong to not-best difference images (vbest=0).  Anti-joining
-        # against the just-populated astroobjectsmeta_<field> table covers both cases in a
-        # single pass over a small local table.  Note that this deletes every record for a
-        # field having no best sources at all, which is the intended outcome.
-        # The DELETE is wrapped in a CTE so that the number of deleted records is returned
-        # without having to return the deleted aids themselves.
-
-        query = f"WITH deleted AS (" +\
-                f"DELETE FROM {astroobjects_tablename} a " +\
-                f"WHERE NOT EXISTS (" +\
-                f"SELECT 1 FROM {astroobjectsmeta_tablename} m WHERE m.aid = a.aid" +\
-                f") RETURNING 1) " +\
-                f"SELECT count(*) FROM deleted;"
-
-        fh.write(f"Deleting {astroobjects_tablename} records with no " +
-                 f"{astroobjectsmeta_tablename} record using query = {query}\n")
-        fh.flush()
-
-        sql_queries = [query]
-
-        try:
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-        except Exception as e:
-            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                     f"(query={query},e={e});  quitting...\n")
-            fh.flush()
-            fh.close()
-            dbh.close()
-            raise
-
-        if dbh.exit_code >= 64:
-            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
-            fh.flush()
-            fh.close()
-            dbh.close()
-            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
-
-        fh.write(f"Number of {astroobjects_tablename} records deleted = {records[0][0]}\n")
-        fh.flush()
-
-
-        # Code-timing benchmark.
-
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to delete {astroobjects_tablename} records " +
-                 f"with no {astroobjectsmeta_tablename} record = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
@@ -458,7 +673,9 @@ def run_single_core_job(fields,index_thread):
                 fh.flush()
 
 
-    # Close database connection.
+    # Close database connections.
+
+    roman_tessellation_db.close()
 
     dbh.close()
 
@@ -558,6 +775,8 @@ if __name__ == '__main__':
 
 
     # Check whether astroobjectsmeta_<field> database tables exist.
+    # Drop all astroobjectsmeta_<field> database tables that exist for fields
+    # that are associated with the processing date.
 
     already_made_dict = {}
 
