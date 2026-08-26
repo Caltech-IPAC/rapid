@@ -389,7 +389,7 @@ def run_single_core_job(fields,index_thread):
 
         sciimg_overlapping_rtids = [str(field)]
         for neighboring_rtid in neighboring_rtids:
-            sciimg_overlapping_rtids.append(str(neighboring_rtid))
+            sciimg_overlapping_rtids.append(neighboring_rtid)
         '''
 
         # This method may be slower, but it does a better job of finding all overlapping fields.
@@ -402,8 +402,8 @@ def run_single_core_job(fields,index_thread):
                 f"FROM l2files " +\
                 f"WHERE vbest > 0 " +\
                 f"AND status > 0 " +\
-                f"AND dateobs >= {startdatetime} " +\
-                f"AND dateobs < {enddatetime} " +\
+                f"AND dateobs >= '{startdatetime}' " +\
+                f"AND dateobs < '{enddatetime}' " +\
                 f"AND field = {field};"
 
         sql_queries = [query]
@@ -457,9 +457,17 @@ def run_single_core_job(fields,index_thread):
 
         sciimg_overlapping_rtids = list(rtid_dict.keys())
 
+        if not sciimg_overlapping_rtids:
+            sciimg_overlapping_rtids = [field]
 
-        sciimg_overlapping_rtids_comma_separated_string = ", ".join(sciimg_overlapping_rtids)
+        fh.write(f"sciimg_overlapping_rtids = {sciimg_overlapping_rtids}\n")       # For debug purposes only.  TODO remove later.
 
+
+        # Now find the relevant Sources child tables.
+
+        sciimg_overlapping_rtids_comma_separated_string = ", ".join(str(r) for r in sciimg_overlapping_rtids)
+
+        # We want all time history here.
         query = f"SELECT DISTINCT cast(dateobs as date),sca " +\
                 f"FROM l2files " +\
                 f"WHERE vbest > 0 " +\
