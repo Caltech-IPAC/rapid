@@ -63,6 +63,28 @@ if proc_date is None:
     exit(64)
 
 
+# To process OpenUniverse simulation images, environment variables STARTDATETIME and ENDDATETIME
+# specify observation datetimes.  Later, this will be augmented with code to query the
+# SOCProcs database table for controlling the processing the Roman Space Telescope WFI data.
+#
+# Inputs are observation start and end datetimes of exposures to be processed.
+# E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
+
+startdatetime = os.getenv('STARTDATETIME')
+
+if startdatetime is None:
+
+    print("*** Error: Env. var. STARTDATETIME not set; quitting...")
+    exit(64)
+
+enddatetime = os.getenv('ENDDATETIME')
+
+if enddatetime is None:
+
+    print("*** Error: Env. var. ENDDATETIME not set; quitting...")
+    exit(64)
+
+
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
@@ -360,11 +382,81 @@ def run_single_core_job(fields,index_thread):
         # <obs_date> and <sca>, in order to generate a finite list of Sources child
         # database table to join (and avoid joining with the Sources parent table).
 
+
+        # This method does not get all overlapping fields for corners that stick out.
+        '''
         neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
 
         sciimg_overlapping_rtids = [str(field)]
         for neighboring_rtid in neighboring_rtids:
             sciimg_overlapping_rtids.append(str(neighboring_rtid))
+        '''
+
+        # This method may be slower, but it does a better job of finding all overlapping fields.
+        # Distortion is ignored as a simplification.
+
+        neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)    # For debug purposes only.  TODO remove later.
+        fh.write(f"neighboring_rtids = {neighboring_rtids}\n")                        # For debug purposes only.  TODO remove later.
+
+        query = f"SELECT crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22 " +\
+                f"FROM l2files " +\
+                f"WHERE vbest > 0 " +\
+                f"AND status > 0 " +\
+                f"AND dateobs >= {startdatetime} " +\
+                f"AND dateobs < {enddatetime} " +\
+                f"AND field = {field};"
+
+        sql_queries = [query]
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+        rtid_dict = {}
+        x_list = [*range(0,naxis1,500)]
+        y_list = [*range(0,naxis2,500)]
+        x_list.append(naxis1 - 1)
+        y_list.append(naxis2 - 1)
+
+        for record in records:
+
+            crval1 = record[0]
+            crval2 = record[1]
+            crpix1 = record[2]
+            crpix2 = record[3]
+            cd11 = record[4]
+            cd12 = record[5]
+            cd21 = record[6]
+            cd22 = record[7]
+
+            for y in y_list:
+                for x in x_list:
+
+                    # x,y,crpix1,crpix2 must be zero-based.
+                    ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd11,cd12,cd21,cd22)
+
+                    roman_tessellation_db.get_rtid(ra,dec)
+                    rtid = roman_tessellation_db.rtid
+
+                    rtid_dict[rtid] = 1
+
+        sciimg_overlapping_rtids = list(rtid_dict.keys())
+
 
         sciimg_overlapping_rtids_comma_separated_string = ", ".join(sciimg_overlapping_rtids)
 
