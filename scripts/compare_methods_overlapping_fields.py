@@ -457,7 +457,7 @@ if __name__ == '__main__':
 
         # Plot fields and L2File footprint.
 
-        make_plot(dbh,ra0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field,sciimg_overlapping_rtids)
+        make_plot(dbh,ra0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field,keys_list)
 
         iteration_number += 1
 
