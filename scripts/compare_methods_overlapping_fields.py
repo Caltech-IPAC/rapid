@@ -197,6 +197,9 @@ def query_for_field_corners(dbh, field):
 
 def make_plot(dbh,ra0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,sciimage_field,fields):
 
+    print(f"Making plot for field = {sciimage_field}")
+
+
     # All sky positions are wrapped about a common pivot, which is computed
     # from the science-image center.
 
@@ -285,6 +288,7 @@ if __name__ == '__main__':
     # For the fields associated with L2Files records, find all fields that the
     # L2 file overlaps.
 
+    iteration_number = 0
     for record in records:
 
         field = record[0]
@@ -455,7 +459,10 @@ if __name__ == '__main__':
 
         make_plot(dbh,ra0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field,sciimg_overlapping_rtids)
 
-        break
+        iteration_number += 1
+
+        if iteration_number >= 20:
+            break
 
 
     # Code-timing benchmark.
