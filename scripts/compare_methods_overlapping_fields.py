@@ -243,7 +243,8 @@ def make_plot(dbh,ra0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,sciimage_field,fields)
 
     plt.title(f"Roman Neighboring Sky Tiles (field = {sciimage_field})")
 
-    plt.show()
+    plt.savefig(f'neighboring_sky_tiles_{sciimage_field}.png')
+    #plt.show()
 
 
 
