@@ -7,12 +7,21 @@
 __pycache__/
 *.py[cod]
 
-# uv scratch
+# uv scratch: the test suite is sometimes run through `uv run --with pytest`,
+# which synthesises these for that ephemeral harness. They are not this
+# repo's dependency resolution and must not be committed (the pre-push scan
+# also reads their hash fragments as AWS account ids).
 uv.lock
 .venv/
 
-# C build outputs (built in-tree)
-c/builds/
+# C build outputs (c/builds/build*.csh build in-tree into these; the
+# scripts themselves under c/builds/ are tracked)
+c/bin/
+c/lib/
+c/include/
+*.o
+*.a
+*.so
 
 # Pipeline scratch / working area
 work/
