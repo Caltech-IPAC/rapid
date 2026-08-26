@@ -552,8 +552,7 @@ class RomanTessellationNSIDE512:
         '''
         Query SQLite database for all sky tiles that overlap the sky area defined
         by the given center (ra0, dec0) and four corner positions (ra1,dec1) through
-        (ra4,dec4).  Assumes the image is square with N up (aligned to the RA/Dec grid),
-        so the bounding box of the five input points exactly defines the image footprint.
+        (ra4,dec4).  The bounding box of the five input points defines the image footprint.
         Returns a list of (rtid, ramin, ramax, decmin, decmax) records.
 
         The south pole tile (rtid=6291458) is stored with ramin=ramax=0 in vskytiles
