@@ -130,7 +130,7 @@ if aws_secret_access_key is None:
 # specify observation datetimes.  Later, this will be augmented with code to query the
 # SOCProcs database table for controlling the processing the Roman Space Telescope WFI data.
 #
-# Inputs are observaton start and end datetimes of exposures to be processed.
+# Inputs are observation start and end datetimes of exposures to be processed.
 # E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
 
 startdatetime = os.getenv('STARTDATETIME')
