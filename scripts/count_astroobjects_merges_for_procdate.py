@@ -251,7 +251,7 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
         count = records[0][0]
-        print(f"field,count = {field},{count}")
+        print(f"Merges: field,count = {field},{count}")
 
         n_merges += count
 
@@ -324,7 +324,7 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
         count = records[0][0]
-        print(f"field,count = {field},{count}")
+        print(f"AstroObjects: field,count = {field},{count}")
 
         n_astroobjects += count
 
@@ -335,15 +335,6 @@ if __name__ == '__main__':
     print("Elapsed time in seconds to count records in astroobjects database tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
-
-
-
-
-
-
-
-
-
 
 
     # Determine whether astroobjectsmeta_<field> database tables exist.
@@ -414,7 +405,7 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
         count = records[0][0]
-        print(f"field,count = {field},{count}")
+        print(f"AstroObjectsMeta: field,count = {field},{count}")
 
         n_astroobjectsmeta += count
 
