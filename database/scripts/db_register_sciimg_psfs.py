@@ -92,6 +92,9 @@ job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 
 if __name__ == '__main__':
 
+
+    # Set up.
+
     s3_client = boto3.client('s3')
 
     s3_subdir = 'psfs'
