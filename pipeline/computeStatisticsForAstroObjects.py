@@ -63,28 +63,6 @@ if proc_date is None:
     exit(64)
 
 
-# To process OpenUniverse simulation images, environment variables STARTDATETIME and ENDDATETIME
-# specify observation datetimes.  Later, this will be augmented with code to query the
-# SOCProcs database table for controlling the processing the Roman Space Telescope WFI data.
-#
-# Inputs are observation start and end datetimes of exposures to be processed.
-# E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
-
-startdatetime = os.getenv('STARTDATETIME')
-
-if startdatetime is None:
-
-    print("*** Error: Env. var. STARTDATETIME not set; quitting...")
-    exit(64)
-
-enddatetime = os.getenv('ENDDATETIME')
-
-if enddatetime is None:
-
-    print("*** Error: Env. var. ENDDATETIME not set; quitting...")
-    exit(64)
-
-
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
@@ -383,7 +361,8 @@ def run_single_core_job(fields,index_thread):
         # database table to join (and avoid joining with the Sources parent table).
 
 
-        # This method does not get all overlapping fields for corners that stick out.
+        # This method does not get all overlapping fields for corners that stick out
+        # on a science image with field associated with ra0,dec0 of science image.
         '''
         neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
 
@@ -395,16 +374,32 @@ def run_single_core_job(fields,index_thread):
         # This method may be slower, but it does a better job of finding all overlapping fields.
         # Distortion is ignored as a simplification.
 
-        neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)    # For debug purposes only.  TODO remove later.
-        fh.write(f"neighboring_rtids = {neighboring_rtids}\n")                        # For debug purposes only.  TODO remove later.
+        neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
 
-        query = f"SELECT crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22 " +\
+        single_ring_rtids = [field]
+        double_ring_rtids_dict = {}
+        double_ring_rtids_dict[field] = 1
+        for neighboring_rtid in neighboring_rtids:
+            single_ring_rtids.append(neighboring_rtid)
+            double_ring_rtids_dict[neighboring_rtid] = 1
+            nested_neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(neighboring_rtid)
+            for nested_neighboring_rtid in nested_neighboring_rtids:
+                double_ring_rtids_dict[nested_neighboring_rtid] = 1
+
+        double_ring_rtids = list(double_ring_rtids_dict.keys())
+
+        fh.write(f"field = {field}\n")
+        fh.write(f"neighboring_rtids = {neighboring_rtids}\n")
+        fh.write(f"single_ring_rtids = {single_ring_rtids}\n")
+        fh.write(f"double_ring_rtids = {double_ring_rtids}\n")
+
+        double_ring_rtids_comma_separated_string = ",".join(str(r) for r in double_ring_rtids)
+
+        query = f"SELECT crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,cast(dateobs as date),sca " +\
                 f"FROM l2files " +\
                 f"WHERE vbest > 0 " +\
                 f"AND status > 0 " +\
-                f"AND dateobs >= '{startdatetime}' " +\
-                f"AND dateobs < '{enddatetime}' " +\
-                f"AND field = {field};"
+                f"AND field IN ({double_ring_rtids_comma_separated_string});"
 
         sql_queries = [query]
 
@@ -427,7 +422,8 @@ def run_single_core_job(fields,index_thread):
             roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
-        rtid_dict = {}
+        sources_child_tables_to_check_existence_dict = {}
+
         x_list = [*range(0,naxis1,500)]
         y_list = [*range(0,naxis2,500)]
         x_list.append(naxis1 - 1)
@@ -444,6 +440,8 @@ def run_single_core_job(fields,index_thread):
             cd21 = record[6]
             cd22 = record[7]
 
+            rtid_dict = {}
+
             for y in y_list:
                 for x in x_list:
 
@@ -453,58 +451,23 @@ def run_single_core_job(fields,index_thread):
                     roman_tessellation_db.get_rtid(ra,dec)
                     rtid = roman_tessellation_db.rtid
 
-                    rtid_dict[rtid] = 1
+                    if rtid:
+                        rtid_dict[rtid] = 1
 
-        sciimg_overlapping_rtids = list(rtid_dict.keys())
+            sciimg_overlapping_rtids = list(rtid_dict.keys())
+            intersection_result = list(set(single_ring_rtids) & set(sciimg_overlapping_rtids))
 
-        if not sciimg_overlapping_rtids:
-            sciimg_overlapping_rtids = [field]
+            if intersection_result:
+                obs_date = str(record[8]).replace("-","")
+                sca = str(record[9])
+                sources_tablename = f"sources_{obs_date}_{sca}"
+                sources_child_tables_to_check_existence_dict[sources_tablename] = 1
 
-        fh.write(f"sciimg_overlapping_rtids = {sciimg_overlapping_rtids}\n")       # For debug purposes only.  TODO remove later.
+        sources_child_tables_to_check_existence = list(sources_child_tables_to_check_existence_dict.keys())
 
+        fh.write(f"sources_child_tables_to_check_existence = {sources_child_tables_to_check_existence}\n")
 
-        # Now find the relevant Sources child tables.
-
-        sciimg_overlapping_rtids_comma_separated_string = ", ".join(str(r) for r in sciimg_overlapping_rtids)
-
-        # We want all time history here.
-        query = f"SELECT DISTINCT cast(dateobs as date),sca " +\
-                f"FROM l2files " +\
-                f"WHERE vbest > 0 " +\
-                f"AND status > 0 " +\
-                f"AND field IN ({sciimg_overlapping_rtids_comma_separated_string});"
-
-        sql_queries = [query]
-
-        try:
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-        except Exception as e:
-            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                     f"(query={query},e={e});  quitting...\n")
-            fh.flush()
-            fh.close()
-            dbh.close()
-            roman_tessellation_db.close()
-            raise
-
-        if dbh.exit_code >= 64:
-            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
-            fh.flush()
-            fh.close()
-            dbh.close()
-            roman_tessellation_db.close()
-            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
-
-        sources_child_tables_to_check_existence = []
-
-        for record in records:
-
-            obs_date = str(record[0]).replace("-","")
-            sca = str(record[1])
-            sources_tablename = f"sources_{obs_date}_{sca}"
-            sources_child_tables_to_check_existence.append(sources_tablename)
-
-        sources_child_tables_comma_separated_string = "', '".join(sources_child_tables_to_check_existence)
+        sources_child_tables_comma_separated_string = "','".join(sources_child_tables_to_check_existence)
 
         # This query returns a list of sources_<date_obs>_<sca> database table names
         # that actually exist.
@@ -539,6 +502,8 @@ def run_single_core_job(fields,index_thread):
         for table_exists_record in table_exists_records:
             sources_tablename = table_exists_record[0]
             sources_child_tables.append(sources_tablename)
+
+        fh.write(f"sources_child_tables = {sources_child_tables}\n")
 
 
         # Skip the current field if no Sources child tables were found, since an empty
@@ -718,6 +683,7 @@ def run_single_core_job(fields,index_thread):
                 csv_fh.write(",".join(str(v) for v in (aid, meanra, stdra, meandec, stddec, meanflux, stdflux, nsources)) + "\n")
 
                 i += 1
+
 
         # Load records into AstroObjectsMeta_<field> database tables.
 
