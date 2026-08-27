@@ -195,6 +195,8 @@ def query_for_field_corners(dbh, field):
     return ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4
 
 
+# dec0 is missing from make_plot argument list; only ra0 is needed for pivot_ra.
+
 def make_plot(dbh,ra0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,sciimage_field,fields):
 
     print(f"Making plot for field = {sciimage_field}")
@@ -456,6 +458,7 @@ if __name__ == '__main__':
 
 
         # Plot fields and L2File footprint.
+        # dec0 is missing from make_plot argument list; only ra0 is needed for pivot_ra.
 
         make_plot(dbh,ra0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field,keys_list)
 
