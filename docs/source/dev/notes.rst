@@ -446,6 +446,51 @@ Tag the Docker image with "latest" and push to ECR with these two commands:
 Running an Instance of the RAPID Science Pipeline under AWS Batch
 *****************************************************************
 
+.. warning::
+
+   **The single-pipeline launcher described in this section has been
+   removed.** ``pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py``
+   does not exist on this branch, and neither does the ``RID``-keyed
+   submission it performed: work is now selected by *window* rather than by
+   record id, and is submitted by the Virtual Pipeline Operator. See
+   :doc:`RAPID Pipeline Execution </ops/bulk_run>` for the current
+   procedure.
+
+   The material below is kept as a record of the retired flow and of the
+   product layout it produced. The S3 buckets it names —
+   ``rapid-pipeline-files``, ``rapid-pipeline-logs`` and
+   ``rapid-product-files`` — are the pre-SMDC ones; they are not in the
+   pipeline parameter tree, and the SMDC account does not carry all of
+   them. Current bucket names are parameter-tree values
+   (``s3/records-bucket``, ``s3/diagnostics-bucket``, and the manifest
+   bucket), never literals in code or documentation.
+
+The nearest current equivalent
+==============================
+
+There is no "run one pipeline" entry point any more. To submit a single
+unit, run a **bounded operator pass** over a window narrow enough to gather
+one, stating the ceiling explicitly:
+
+.. code-block::
+
+   rapid-operator \
+       --start <ISO-8601> --end <ISO-8601> \
+       --prompt-processing run \
+       --reference-construction hold \
+       --test hold \
+       --historical-backfill declared-not-implemented \
+       --release-reprocessing declared-not-implemented \
+       --once --force-cut --width 1 --max-width 1
+
+``--width`` requires ``--max-width``, and a width above the stated ceiling
+is refused rather than clamped. Rehearse first with ``--rehearse``, which
+holds no submitting capability at all. Run it on ``rapid-admin``, not a
+laptop.
+
+The retired flow, as a record
+=============================
+
 The following shows commands to launch an instance of the RAPID science pipeline as AWS Batch job.
 The to-be-run-under-AWS-Batch Docker container rapid_science_pipeline:1.0 has /code built in,
 so there is no need to mount an external volume for /code.
@@ -493,7 +538,9 @@ or an active ``aws sso login`` session — never export
 
 Python 3.11 is required and it is installed inside the Docker image (/usr/bin/python3.11).
 
-After the AWS Batch job finishes, there are files written to S3 buckets that can be examined:
+After the AWS Batch job finished, files were written to S3 buckets that could be
+examined as follows. The listings below are a record of one 2025-03-14 run under
+the retired flow, kept for the product layout they illustrate:
 
 .. code-block::
 

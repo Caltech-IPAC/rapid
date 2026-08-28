@@ -14,40 +14,59 @@ Pipeline, under development at IPAC/Caltech.
    Development of source code and documentation is currently ongoing.
 
 
-Running the Latest RAPID Pipeline
+Running the RAPID Pipeline
 *************************************
 
-A Docker image has been pre-built from a recent git-clone of the RAPID Github
-repository (7/22/26).
-This Docker image offers the convenience of having the RAPID
-pipeline already installed and ready to run.  It is publicly available from
+The pipeline is run by a supervised service — the Virtual Pipeline Operator —
+which polls the operations database for ready work and submits AWS Batch
+array jobs. It is not launched by running a script per phase. The full
+procedure is :doc:`RAPID Pipeline Execution </ops/bulk_run>`; the design
+record for the operator is :doc:`/dev/vpo_service`.
+
+The operational container image is built and deployed from the RAPID
+**infrastructure repository**, not from this one: a unified application
+image, a base layer plus a filtered source layer, which the AWS Batch job
+definitions and the service units are pinned to by digest. The legacy
+single-pipeline container recipe that used to live at
+``docker/Dockerfile_ubuntu_runSingleSciencePipeline`` was removed from this
+repository when that image superseded it.
+
+The public science-stack image
+=============================================
+
+A separate, publicly readable image carries the RAPID science stack — the
+C-code build, the Python dependencies and a git-clone of the repository at
+``/code`` — for interactive use: running image differencing, ``awaicgen``,
+catalog generation and similar by hand.
 
 .. code-block::
 
    public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
-It is currently approximately 8.4 GB in size, and requires sufficient disk space on the target machine.
-It can be used to ``docker-run`` a container and from within execute
-code for image-differencing, etc., using a ``docker-run`` command like the
-following (note that an entry point to bash is required for interactive use
-and to inhibit running the automated pipeline):
+.. note::
+
+   This image is built from the ``dev`` branch — see
+   ``docker/Dockerfile_ubuntu_runSingleSciencePipeline.sh``, which passes
+   ``--build-arg RAPID_BRANCH=dev``. It therefore does **not** carry the
+   operator, reconciler, publisher or ``rapidctl`` entry points, and it is
+   not the image the deployed pipeline runs. Use it to exercise the science
+   code interactively, not to run or reproduce an operational pipeline.
+
+   That build script cannot be run from this branch as it stands: the
+   Dockerfile it names was removed here along with the rest of the legacy
+   container recipe, so rebuilding the public image is done from ``dev``.
+
+It is approximately 8.4 GB and requires sufficient disk space on the target
+machine. The image sets an ``ENTRYPOINT``, so an interactive shell must
+override it with ``--entrypoint bash`` (and ``bash`` must not be appended at
+the end of the command):
 
 .. code-block::
 
    docker run -it --entrypoint bash --name my_test -v /home/ubuntu/work/test_20241206:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
-
-The Docker file used to generate this Docker image is
-
-.. code-block::
-
-   rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline
-
-in the RAPID git repo.  The Docker image self-contains a
-RAPID git-clone in the /code directory (no volume binding to an
-external filesystem containing the RAPID git repo is necessary).  The
-Docker image also contains a
-C-code build of the RAPID software stack with the following run-time environment:
+No volume binding is needed to supply the source: the clone at ``/code`` is
+self-contained. The run-time environment for the C-code build is
 
 .. code-block::
 
