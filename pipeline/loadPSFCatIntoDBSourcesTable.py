@@ -29,6 +29,13 @@ level9 = 9
 nside9 = 2**level9
 
 
+# Sources with PSF-fit positions outside [xy_fit_min, naxis - xy_fit_max_offset]
+# are rejected (in pixel units, for x against naxis1 and y against naxis2).
+
+xy_fit_min = -0.5
+xy_fit_max_offset = 0.5
+
+
 swname = "loadPSFCatIntoDBSourcesTable.py"
 swvers = "1.1"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
@@ -285,6 +292,32 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
     nrows = len(joined_table_inner)
     if nrows == 0:
         return
+
+
+    # Reject sources with PSF-fit positions outside the acceptable pixel range.
+    # NaN fit positions compare False here, and so are rejected as well.
+    # The healpix arrays are row-aligned with the table, so mask them too.
+
+    x_fit_arr = np.array(joined_table_inner['x_fit'], dtype=np.float64)
+    y_fit_arr = np.array(joined_table_inner['y_fit'], dtype=np.float64)
+
+    keep = ((x_fit_arr >= xy_fit_min) & (x_fit_arr <= naxis1 - xy_fit_max_offset) &
+            (y_fit_arr >= xy_fit_min) & (y_fit_arr <= naxis2 - xy_fit_max_offset))
+
+    nkeep = int(np.count_nonzero(keep))
+
+    print(f"write_joined_table_inner_to_csv_file: isdiffpos={isdiffpos}, "
+          f"rejected {nrows - nkeep} of {nrows} sources with out-of-range xfit,yfit")
+
+    if nkeep == 0:
+        return
+
+    if nkeep < nrows:
+        joined_table_inner = joined_table_inner[keep]
+        hp6_arr = hp6_arr[keep]
+        hp9_arr = hp9_arr[keep]
+        nrows = nkeep
+
 
     # Column mapping (catalog name -> db name) applied once
     t = joined_table_inner
