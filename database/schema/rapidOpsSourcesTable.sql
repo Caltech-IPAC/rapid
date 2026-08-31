@@ -12,7 +12,7 @@
 ----------------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------------
--- Parent sources table for creating child tables, one for each combination of processing date and sca.
+-- Parent sources table for creating child tables, one for each combination of observation date and sca.
 -- Inheritance, for sources child tables only, is needed because a given source ID looked up in the
 -- merges table (see below) cannot be easily traced to the child table in which it is stored.
 -- No records are directly inserted into the parent table.
@@ -59,7 +59,6 @@ CREATE TABLE sources (
     mjdobs double precision NOT NULL           -- MJD OBS of exposure
 );
 
-
 # Sources table must be owned by rapidporole for inheritance.
 #ALTER TABLE sources OWNER TO rapidadminrole;
 ALTER TABLE sources OWNER TO rapidporole;
@@ -95,8 +94,8 @@ ALTER TABLE sources SET UNLOGGED;
 
 ------------------------------------------------------------
 -- A python script will create child tables like the parent sources table.
--- Child-table names will be sources_<processing date: yyyymmdd>_<sca>.
--- The processing date is in Pacific time.
+-- Child-table names will be sources_<observing date: yyyymmdd>_<sca>.
+-- The observation date is in UT.
 -- Thus the partitioning scheme for sources is by time and chip number.
 
 -- Below are all the steps to be executed by the Python script for each new child table:
@@ -292,3 +291,82 @@ ALTER TABLE ONLY astroobjectsmeta ADD CONSTRAINT astroobjectsmeta_pkey PRIMARY K
 
 CREATE INDEX astroobjectsmeta_nsources_idx ON astroobjectsmeta (nsources);
 
+
+-----------------------------
+-- TABLE: XSources for storing select columns from SExtractor catalogs with other metadata for lightcurve formation.
+--
+-- Parent sources table for creating child tables, one for each combination of observation date and sca.
+--
+-- If Scorr or SFFT cconv are used as the detection image, then all the shape parameters
+-- are computed from that match-filtered detection image, not the direct diff image.
+-- This applies to A/BWIN_IMAGE and FWHM_IMAGE.
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE xsources (
+    xsid bigint NOT NULL,                      -- Database unique primary key
+    num integer NOT NULL,                      -- Non-unique number column in SExtractor catalog file in S3 bucket
+    pid integer NOT NULL,                      -- DiffImages primary key
+    isdiffpos boolean NOT NULL DEFAULT TRUE,   -- t = positive difference, f = negative difference
+    ra double precision NOT NULL,              -- ALPHAWIN_J2000
+    dec double precision NOT NULL,             -- DELTAWIN_J2000
+    x real NOT NULL,                           -- XWIN_IMAGE (one-based image-pixel coordinate)
+    y real NOT NULL,                           -- YWIN_IMAGE (one-based image-pixel coordinate)
+    fluxap1 real NOT NULL,                     -- FLUX_APER_1
+    fluxap2 real NOT NULL,                     -- FLUX_APER_2
+    fluxap3 real NOT NULL,                     -- FLUX_APER_3
+    fluxap4 real NOT NULL,                     -- FLUX_APER_4
+    fluxap5 real NOT NULL,                     -- FLUX_APER_5
+    fluxerrap1 real NOT NULL,                  -- FLUXERR_APER_1
+    fluxerrap2 real NOT NULL,                  -- FLUXERR_APER_2
+    fluxerrap3 real NOT NULL,                  -- FLUXERR_APER_3
+    fluxerrap4 real NOT NULL,                  -- FLUXERR_APER_4
+    fluxerrap5 real NOT NULL,                  -- FLUXERR_APER_5
+    awinworld real NOT NULL,                   -- AWIN_WORLD
+    bwinworld real NOT NULL,                   -- BWIN_WORLD
+    awinimage real NOT NULL,                   -- AWIN_IMAGE
+    bwinimage real NOT NULL,                   -- BWIN_IMAGE
+    fwhmimage real NOT NULL,                   -- FWHM_IMAGE
+    classstar real NOT NULL,                   -- CLASS_STAR
+    flags smallint NOT NULL,                   -- SExtractor bitwise flags
+    field integer NOT NULL,                    -- Roman tessellation index for (ra,dec)
+    hp6 integer NOT NULL,                      -- Level-6 healpix index (NESTED) for (ra,dec)
+    hp9 integer NOT NULL,                      -- Level-9 healpix index (NESTED) for (ra,dec)
+    expid integer NOT NULL,                    -- Exposures primary key
+    fid smallint NOT NULL,                     -- Filter ID
+    sca smallint NOT NULL,                     -- SCA number (1...18)
+    mjdobs double precision NOT NULL           -- MJD OBS of exposure
+);
+
+# XSources table must be owned by rapidporole for inheritance.
+#ALTER TABLE xsources OWNER TO rapidadminrole;
+ALTER TABLE xsources OWNER TO rapidporole;
+
+CREATE SEQUENCE xsources_xsid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER SEQUENCE xsources_xsid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE xsources ALTER COLUMN xsid SET DEFAULT nextval('xsources_xsid_seq'::regclass);
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY xsources ADD CONSTRAINT xsources_pkey PRIMARY KEY (xsid);
+
+ALTER TABLE ONLY xsources ADD CONSTRAINT xsourcespk UNIQUE (pid, id, isdiffpos);
+
+ALTER TABLE ONLY xsources ADD CONSTRAINT xsources_pid_fk FOREIGN KEY (pid) REFERENCES diffimages(pid);
+
+CREATE INDEX xsources_pid_idx ON xsources (pid);
+CREATE INDEX xsources_expid_idx ON xsources (expid);
+CREATE INDEX xsources_sca_idx ON xsources (sca);
+CREATE INDEX xsources_field_idx ON xsources (field);
+CREATE INDEX xsources_flags_idx ON xsources (flags);
+CREATE INDEX xsources_mjdobs_idx ON xsources (mjdobs);
+
+ALTER TABLE xsources SET UNLOGGED;
