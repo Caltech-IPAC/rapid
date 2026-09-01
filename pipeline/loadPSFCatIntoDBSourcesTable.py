@@ -108,8 +108,6 @@ if roman_tessellation_dbname is None:
     print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
     exit(64)
 
-roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
-
 
 # Other required environment variables.
 
@@ -151,6 +149,11 @@ naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+
+
+# Set debug = 1 here to get debug messages in main program.
+
+debug = 1
 
 
 # Get number of cores for parallel processing.
@@ -287,7 +290,8 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
                                          csv_fh,
                                          joined_table_inner,
                                          hp6_arr,
-                                         hp9_arr):
+                                         hp9_arr,
+                                         roman_tessellation_db):
 
     nrows = len(joined_table_inner)
     if nrows == 0:
@@ -374,7 +378,9 @@ def run_single_core_job(jids,meta_list,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
 
 
-        # Open database connection.
+        # Open database connections.
+
+        roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
         dbh = db.RAPIDDB()
 
@@ -571,10 +577,10 @@ def run_single_core_job(jids,meta_list,index_thread):
             with open(sources_table_file, "w") as csv_fh:
 
                 isdiffpos = "true"
-                write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner,hp6_arr,hp9_arr)
+                write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner,hp6_arr,hp9_arr,roman_tessellation_db)
 
                 isdiffpos = "false"
-                write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner_negative,hp6_arr_negative,hp9_arr_negative)
+                write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner_negative,hp6_arr_negative,hp9_arr_negative,roman_tessellation_db)
 
 
             # Load records into sources database tables.
@@ -628,7 +634,9 @@ def run_single_core_job(jids,meta_list,index_thread):
 
         if dbh is not None:
 
-            # Close database connection.
+            # Close database connections.
+
+            roman_tessellation_db.close()
 
             dbh.close()
 
@@ -942,11 +950,9 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connections.
+    # Close database connection.
 
     dbh.close()
-
-    roman_tessellation_db.close()
 
 
     if dbh.exit_code >= 64:
