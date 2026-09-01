@@ -59,8 +59,8 @@ CREATE TABLE sources (
     mjdobs double precision NOT NULL           -- MJD OBS of exposure
 );
 
-# Sources table must be owned by rapidporole for inheritance.
-#ALTER TABLE sources OWNER TO rapidadminrole;
+-- Sources table must be owned by rapidporole for inheritance.
+-- ALTER TABLE sources OWNER TO rapidadminrole;
 ALTER TABLE sources OWNER TO rapidporole;
 
 CREATE SEQUENCE sources_sid_seq
@@ -341,8 +341,8 @@ CREATE TABLE xsources (
     mjdobs double precision NOT NULL           -- MJD OBS of exposure
 );
 
-# XSources table must be owned by rapidporole for inheritance.
-#ALTER TABLE xsources OWNER TO rapidadminrole;
+-- XSources table must be owned by rapidporole for inheritance.
+-- ALTER TABLE xsources OWNER TO rapidadminrole;
 ALTER TABLE xsources OWNER TO rapidporole;
 
 CREATE SEQUENCE xsources_xsid_seq
