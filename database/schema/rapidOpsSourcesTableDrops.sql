@@ -34,3 +34,11 @@ DROP TABLE astroobjectsmeta;
 -------------------
 
 DROP TABLE merges;
+
+
+-------------------
+-- XSources table
+-------------------
+
+DROP TABLE xsources;
+DROP SEQUENCE xsources_xsid_seq;
