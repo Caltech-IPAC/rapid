@@ -1033,3 +1033,49 @@ CREATE INDEX fields_radec_idx ON fields (q3c_ang2ipix(ra0, dec0));
 CLUSTER fields_radec_idx ON fields;
 ANALYZE fields;
 
+
+-----------------------------
+-- TABLE: ProcReqs
+--
+-- Keeps track of processing requests.  The request ID is combined with the  processing
+-- date to form a unique S3-bucket subdirectory (e.g., 20260831_req12314).  Columns
+-- obsstarttime and obsendtime correspond to the following environment variables:
+-- export STARTDATETIME="2027-10-07 07:12:00"
+-- export ENDDATETIME="2027-10-08 00:00:00"
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE procreqs (
+    reqid integer NOT NULL,
+    obsstarttime timestamp,
+    obsendtime timestamp,
+    started timestamp,
+    ended timestamp,
+    elapsed interval,
+    status smallint DEFAULT 0,
+    CONSTRAINT procreqs_status_check CHECK (((status >= -1) AND (status <= 1)))
+);
+
+ALTER TABLE procreqs OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+CREATE SEQUENCE procreqs_reqid_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE procreqs_reqid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE procreqs ALTER COLUMN reqid SET DEFAULT nextval('procreqs_reqid_seq'::regclass);
+
+ALTER TABLE ONLY procreqs ADD CONSTRAINT procreqs_pkey PRIMARY KEY (reqid);
+
+CREATE INDEX procreqs_obsstarttime_idx ON procreqs (obsstarttime);
+CREATE INDEX procreqs_obsendtime_idx ON procreqs (obsendtime);
+CREATE INDEX procreqs_status_idx ON procreqs (status);
+CREATE INDEX procreqs_machine_idx ON procreqs (machine);
+CREATE INDEX procreqs_started_idx ON procreqs (started);
+CREATE INDEX procreqs_ended_idx ON procreqs (ended);
