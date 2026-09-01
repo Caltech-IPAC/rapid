@@ -1076,6 +1076,5 @@ ALTER TABLE ONLY procreqs ADD CONSTRAINT procreqs_pkey PRIMARY KEY (reqid);
 CREATE INDEX procreqs_obsstarttime_idx ON procreqs (obsstarttime);
 CREATE INDEX procreqs_obsendtime_idx ON procreqs (obsendtime);
 CREATE INDEX procreqs_status_idx ON procreqs (status);
-CREATE INDEX procreqs_machine_idx ON procreqs (machine);
 CREATE INDEX procreqs_started_idx ON procreqs (started);
 CREATE INDEX procreqs_ended_idx ON procreqs (ended);
