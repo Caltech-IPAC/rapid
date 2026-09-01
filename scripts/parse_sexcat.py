@@ -21,12 +21,14 @@ params_to_get = ["NUMBER",
                  "FLUX_APER_3",
                  "FLUX_APER_4",
                  "FLUX_APER_5",
+                 "FLUX_APER_6",
                  "FLUXERR_APER_1",
                  "FLUXERR_APER_2",
                  "FLUXERR_APER_3",
                  "FLUXERR_APER_4",
                  "FLUXERR_APER_5",
-                 ]
+                 "FLUXERR_APER_6",
+                ]
 
 vals = util.parse_ascii_text_sextractor_catalog(datafile,paramsfile,params_to_get)
 
@@ -60,11 +62,12 @@ with open('test_parse2.txt', 'w') as csvfile:
         flux_aper_3 = vals[i][14]
         flux_aper_4 = vals[i][15]
         flux_aper_5 = vals[i][16]
-        fluxerr_aper_1 = vals[i][17]
-        fluxerr_aper_2 = vals[i][18]
-        fluxerr_aper_3 = vals[i][19]
-        fluxerr_aper_4 = vals[i][20]
-        fluxerr_aper_5 = vals[i][21]
+        flux_aper_6 = vals[i][17]
+        fluxerr_aper_1 = vals[i][18]
+        fluxerr_aper_2 = vals[i][19]
+        fluxerr_aper_3 = vals[i][20]
+        fluxerr_aper_4 = vals[i][21]
+        fluxerr_aper_5 = vals[i][22]
 
         ratio = str(float(awin_world) / float(bwin_world))
 
@@ -77,6 +80,8 @@ with open('test_parse2.txt', 'w') as csvfile:
 
         line = (", ").join(my_list)
         csvfile.write(f"{line}\n")
+
+print("num_rows =",num_rows)
 
 
 exit(0)
