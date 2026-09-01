@@ -313,11 +313,13 @@ CREATE TABLE xsources (
     dec double precision NOT NULL,             -- DELTAWIN_J2000
     x real NOT NULL,                           -- XWIN_IMAGE (one-based image-pixel coordinate)
     y real NOT NULL,                           -- YWIN_IMAGE (one-based image-pixel coordinate)
+    fluxap real NOT NULL,                      -- FLUX_APER_0 (or simply FLUX_APER)
     fluxap1 real NOT NULL,                     -- FLUX_APER_1
     fluxap2 real NOT NULL,                     -- FLUX_APER_2
     fluxap3 real NOT NULL,                     -- FLUX_APER_3
     fluxap4 real NOT NULL,                     -- FLUX_APER_4
     fluxap5 real NOT NULL,                     -- FLUX_APER_5
+    fluxerrap real NOT NULL,                   -- FLUXERR_APER_0 (or simply FLUXERR_APER)
     fluxerrap1 real NOT NULL,                  -- FLUXERR_APER_1
     fluxerrap2 real NOT NULL,                  -- FLUXERR_APER_2
     fluxerrap3 real NOT NULL,                  -- FLUXERR_APER_3
@@ -358,7 +360,7 @@ SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY xsources ADD CONSTRAINT xsources_pkey PRIMARY KEY (xsid);
 
-ALTER TABLE ONLY xsources ADD CONSTRAINT xsourcespk UNIQUE (pid, id, isdiffpos);
+ALTER TABLE ONLY xsources ADD CONSTRAINT xsourcespk UNIQUE (pid, num, isdiffpos);
 
 ALTER TABLE ONLY xsources ADD CONSTRAINT xsources_pid_fk FOREIGN KEY (pid) REFERENCES diffimages(pid);
 
