@@ -106,3 +106,31 @@ GRANT ALL ON TABLE merges TO GROUP rapidadminrole;
 
 REVOKE ALL ON TABLE merges FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE merges TO rapidporole;
+
+
+-------------------
+-- XSources table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE xsources FROM rapidreadrole;
+GRANT SELECT ON TABLE xsources TO GROUP rapidreadrole;
+
+REVOKE ALL ON SEQUENCE xsources_xsid_seq FROM rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE xsources FROM rapidadminrole;
+GRANT ALL ON TABLE xsources TO GROUP rapidadminrole;
+
+REVOKE ALL ON SEQUENCE xsources_xsid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE xsources_xsid_seq TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE xsources FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xsources TO rapidporole;
+
+REVOKE ALL ON SEQUENCE xsources_xsid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE xsources_xsid_seq TO rapidporole;
