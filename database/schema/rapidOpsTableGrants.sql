@@ -525,3 +525,31 @@ GRANT ALL ON TABLE fields TO GROUP rapidadminrole;
 
 REVOKE ALL ON TABLE fields FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE fields TO rapidporole;
+
+
+-------------------
+-- ProcReqs table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE procreqs FROM rapidreadrole;
+GRANT SELECT ON TABLE procreqs TO GROUP rapidreadrole;
+
+REVOKE ALL ON SEQUENCE procreqs_reqid_seq FROM rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE procreqs FROM rapidadminrole;
+GRANT ALL ON TABLE procreqs TO GROUP rapidadminrole;
+
+REVOKE ALL ON SEQUENCE procreqs_reqid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE procreqs_reqid_seq TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE procreqs FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE procreqs TO rapidporole;
+
+REVOKE ALL ON SEQUENCE procreqs_reqid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE procreqs_reqid_seq TO rapidporole;
