@@ -79,22 +79,6 @@ if end_refimage_mjdobs is None:
     exit(64)
 
 
-# Set flag to determine whether pipeline instances may generate reference images.
-
-make_refimages_flag_str = os.getenv('MAKEREFIMAGESFLAG')
-
-if make_refimages_flag_str is None:
-
-    print("*** Error: Env. var. MAKEREFIMAGESFLAG not set; quitting...")
-    exit(64)
-
-try:
-    make_refimages_flag = ast.literal_eval(make_refimages_flag_str)
-except (ValueError, SyntaxError):
-    print(f"*** Error: make_refimages_flag_str is neither True nor False ({make_refimages_flag_str}); quitting...")
-    exit(64)
-
-
 # If RUNFID is set, then process just the specified filter.
 
 run_fid_str = os.getenv('RUNFID')
@@ -147,7 +131,6 @@ print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 print("start_refimage_mjdobs =",start_refimage_mjdobs)
 print("end_refimage_mjdobs =",end_refimage_mjdobs)
-print("make_refimages_flag =",make_refimages_flag)
 print("run_fid =",run_fid)
 print("dry_run =",dry_run)
 print("num_cores =",num_cores)
@@ -369,32 +352,11 @@ if __name__ == '__main__':
             print("*** Message: No records returned dbh.get_l2files_records_for_datetime_range_field_fid; continuing...")
             continue
 
-
-        # For the remaining records (which are not reserved for reference-image generation),
-        # aggregate pipeline instances to be run under AWS Batch.
-        # When the flag to make reference images is set to True, then only one
-        # representative L2 science image for the field and filter is processed
-        # to initially make the needed reference image for the other L2 science images
-        # with the same field and filter;  when it is set to False then
-        # all other L2 science images, except for the representative L2 science images,
-        # are processed.  The representative L2 science image is the first in
-        # a time-ordered, SCA-ordered list for a given field and filter.
-
-        if make_refimages_flag:
-            # Process only first record in ordered list of records.
-            rec = recs[0]
+        for rec in recs:
             rid = rec[0]
             sca = rec[1]
             rid_list.append(rid)
             print("rid, sca =",rid,sca)
-        else:
-            # Process all records except first record in ordered list of records.
-            recs.pop(0)
-            for rec in recs:
-                rid = rec[0]
-                sca = rec[1]
-                rid_list.append(rid)
-                print("rid, sca =",rid,sca)
 
 
     # Close database connection.
