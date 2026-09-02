@@ -159,3 +159,10 @@ DROP SEQUENCE psfs_psfid_seq;
 -------------------
 
 DROP TABLE fields;
+
+
+-------------------
+-- ProcReqs table
+-------------------
+
+DROP TABLE procreqs;
