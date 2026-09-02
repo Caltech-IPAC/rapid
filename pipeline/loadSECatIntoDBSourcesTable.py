@@ -3,6 +3,7 @@ Load into database XSources table the SExtractor catalogs made from SFFT differe
 '''
 
 import boto3
+import io
 import os
 import numpy as np
 import healpy as hp
@@ -371,8 +372,7 @@ def write_secat_qtable_to_csv_file(isdiffpos,
     dec_arr = np.array(t['DELTAWIN_J2000'], dtype=np.float64)
 
     # Vectorize the rtid lookup instead of one SQLite query per row
-    field_arr = np.array([roman_tessellation_db.get_rtid(ra, dec)
-                          for ra, dec in zip(ra_arr, dec_arr)])
+    field_arr = roman_tessellation_db.get_rtids(ra_arr, dec_arr)
 
     # Build entire CSV block at once using numpy column stacking
     data = np.column_stack([
@@ -543,7 +543,8 @@ def run_single_core_job(jids,meta_list,index_thread):
 
             # Parse positive difference-image catalog and extract columns for xsources database tables.
 
-            secat_qtable = QTable.read(output_secat_filename_for_jid,format='ascii.sextractor', fast_reader=True)
+            secat_qtable = QTable.read(output_secat_filename_for_jid,format='ascii.sextractor',
+                                       fast_reader=True, include_names=params_to_get)
 
             nrows = len(secat_qtable)
             fh.write(f"nrows in positive difference-image PSF-fit catalog = {nrows}\n")
@@ -560,7 +561,8 @@ def run_single_core_job(jids,meta_list,index_thread):
 
             # Parse negative difference-image catalog and extract columns for xsources database tables.
 
-            secat_qtable_negative = QTable.read(output_secat_filename_negative_for_jid,format='ascii.sextractor', fast_reader=True)
+            secat_qtable_negative = QTable.read(output_secat_filename_negative_for_jid,format='ascii.sextractor',
+                                                fast_reader=True, include_names=params_to_get)
 
             nrows = len(secat_qtable_negative)
             fh.write(f"nrows in negative difference-image PSF-fit catalog = {nrows}\n")
@@ -582,25 +584,26 @@ def run_single_core_job(jids,meta_list,index_thread):
             # Prepare records for loading into xsources database tables.
 
             xsources_table = f"xsources_{obs_date}_{sca}"
-            xsources_table_file = f"xsources_{proc_date}_sca{sca}_jid{jid}" + ".csv"
 
-            with open(xsources_table_file, "w") as csv_fh:
+            csv_fh = io.StringIO()
 
-                isdiffpos = "true"
-                write_secat_qtable_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,secat_qtable,hp6_arr,hp9_arr,roman_tessellation_db)
+            isdiffpos = "true"
+            write_secat_qtable_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,secat_qtable,hp6_arr,hp9_arr,roman_tessellation_db)
 
-                isdiffpos = "false"
-                write_secat_qtable_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,secat_qtable_negative,hp6_arr_negative,hp9_arr_negative,roman_tessellation_db)
+            isdiffpos = "false"
+            write_secat_qtable_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,secat_qtable_negative,hp6_arr_negative,hp9_arr_negative,roman_tessellation_db)
 
 
             # Load records into xsources database tables.
 
-            dbh.copy_data_from_file_into_database(xsources_table_file,xsources_table,columns)
+            dbh.copy_data_from_buffer_into_database(csv_fh,xsources_table,columns)
+
+            csv_fh.close()
 
             if dbh.exit_code >= 64:
-                fh.write(f"*** Error bulk-loading data from file ({xsources_table_file}) into specified database table ({xsources_table}); quitting...\n")
+                fh.write(f"*** Error bulk-loading data into specified database table ({xsources_table}); quitting...\n")
                 fh.flush()
-                raise RuntimeError(f"*** Error bulk-loading data from file ({xsources_table_file}) into specified database table ({xsources_table}); quitting...\n")
+                raise RuntimeError(f"*** Error bulk-loading data into specified database table ({xsources_table}); quitting...\n")
 
 
             # Touch done file.  Upload done file to S3 bucket.
@@ -618,8 +621,7 @@ def run_single_core_job(jids,meta_list,index_thread):
             # Remove no-longer-needed intermediate files.
 
             file_paths = [output_secat_filename_for_jid,
-                          output_secat_filename_negative_for_jid,
-                          xsources_table_file]
+                          output_secat_filename_negative_for_jid]
             for file_path in file_paths:
 
                 if os.path.exists(file_path):
