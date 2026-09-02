@@ -3340,6 +3340,42 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def copy_data_from_buffer_into_database(self,csv_buffer,table_name,columns):
+
+        '''
+        Copy data from an in-memory file-like buffer into specified database table.
+        Same as copy_data_from_file_into_database, minus the round trip through disk.
+        '''
+
+        self.exit_code = 0
+
+        separator = ","
+        null_string = "\\N" # Default for PostgreSQL COPY
+
+        print('table_name = {}'.format(table_name))
+
+
+        # Bulk-load specified database table from the buffer.
+
+        try:
+
+            csv_buffer.seek(0)
+
+            self.cur.copy_from(csv_buffer, table_name, sep=separator, null=null_string, columns=columns)
+
+            self.conn.commit()           # Commit database transaction
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error bulk-loading data from buffer into specified database table ({table_name}); skipping...')
+            print(f'*** Exception: {error}')
+            self.conn.rollback()         # Rollback database transaction
+            self.exit_code = 67
+
+        return None
+
+
+########################################################################################################
+
     def add_astro_object_to_field(self,tablename,ra0,dec0,flux0,field,hp6,hp9,debug=0):
 
         self.exit_code = 0
