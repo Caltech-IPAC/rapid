@@ -150,8 +150,11 @@ if crossconv_flag:
 else:
     output_secat_filename = 'sfftdiffimage_masked.txt'
 
-naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
-naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
+
+# An extra row and column has been added to SFFT input images.
+
+naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage']) + 1
+naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage']) + 1
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
@@ -777,7 +780,7 @@ if __name__ == '__main__':
             table_exists_flag = already_made_dict[table_load_tuple]
 
             if table_exists_flag:
-                print(f"Sources_<obs_date>_<sca> database table has already been made " +
+                print(f"XSources_<obs_date>_<sca> database table has already been made " +
                       f" for obs_date={obs_date} and sca={sca}; continuing...")
                 continue
 
