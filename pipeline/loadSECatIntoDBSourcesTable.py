@@ -34,8 +34,9 @@ nside9 = 2**level9
 # are rejected (in pixel units, for x against naxis1 and y against naxis2).
 # Remember, SExtractor pixels are one-based.
 
-xy_fit_min = 0.5
-xy_fit_max_offset = 0.5
+tol = 0.0001                    # Fractional pixels
+xy_fit_min = 0.5 - tol
+xy_fit_max_offset = 0.5 + tol
 
 
 swname = "loadSECatIntoDBSourcesTable.py"
