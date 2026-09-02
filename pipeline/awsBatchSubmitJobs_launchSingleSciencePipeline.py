@@ -7,6 +7,7 @@ exit_code            Definition
      0               Normal termination
     32               Warning
     33               n_images_to_coadd < min_n_images_to_coadd: pipeline not launched
+    34               Reference-image query did not return rfid.
     64               Error
 =============       =========================================
 '''
@@ -628,6 +629,17 @@ if __name__ == '__main__':
     else:
 
 
+        # Since the standalone reference-image pipeline is now handling reference-image
+        # generation, we no longer allow the science pipeline to a generate reference image.
+        # For now keep the deprecated code as comment block for future reference (in case
+        # we later want to optionally reenable this logic branch).
+
+        print(f"*** Message: Reference image not found in database for field,fid = {field},{fid}; quitting...")
+        exit(34)
+
+
+        '''
+        #---------------------------------------------------------------------------------------------------------
         # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field
         # and distance from tile center (degrees) for all best science images in the
         # L2Files database table that overlap the sky tile associated with the input science image
@@ -760,6 +772,9 @@ if __name__ == '__main__':
         for csv_record in csv_records:
             f.write(csv_record + "\n")
         f.close()
+
+        #---------------------------------------------------------------------------------------------------------
+        ''''
 
 
     # Populate config-file dictionary for job.
