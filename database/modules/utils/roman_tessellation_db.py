@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+import numpy as np
 
 
 class RomanTessellationNSIDE512:
@@ -149,6 +150,145 @@ class RomanTessellationNSIDE512:
             return
 
         return self.rtid
+
+
+    def get_rtids(self,ra_arr,dec_arr):
+
+        '''
+        Vectorized counterpart of get_rtid for a batch of sky positions that are
+        clustered on the sky (e.g., all sources in a single SCA catalog).
+
+        Rather than issuing one r-tree query per position, query vskytiles once for
+        the handful of tiles overlapping the bounding box of the positions, then
+        resolve each position against those candidates with numpy.  The candidate
+        tile bounds are taken from skytiles, which stores them in double precision;
+        vskytiles is an r-tree of 32-bit floats whose bounds are rounded outward, so
+        it is a reliable superset for pruning but its tiles overlap slightly at their
+        edges.  Any position left unmatched (e.g., NaN) falls back to get_rtid.
+
+        This is only a win when the positions share a small patch of sky.  A bounding
+        box wide enough to pull in more than max_candidate_tiles tiles costs more to
+        sift through with numpy than it saves, so in that case fall straight back to
+        the per-position queries.
+
+        Returns a numpy array of rtids, row-aligned with the inputs.
+        '''
+
+        ra_arr = np.asarray(ra_arr,dtype=np.float64)
+        dec_arr = np.asarray(dec_arr,dtype=np.float64)
+
+        n = ra_arr.size
+
+        if n == 0:
+            return np.empty(0,dtype=np.int64)
+
+        max_candidate_tiles = 512
+
+
+        # Tiles run from ramin to ramax within a dec band, where the band's wrap-around
+        # tile has ramin < 0 (get_rtid handles that tile by retrying with ra - 360).
+        # Positions straddling the 360-0 boundary therefore have a bounding box spanning
+        # nearly all RA, which would pull in every tile in the dec range.  Re-express such
+        # positions as negative RA first so that the bounding box stays tight.
+
+        finite = np.isfinite(ra_arr) & np.isfinite(dec_arr)
+
+        rtid_arr = np.full(n,-1,dtype=np.int64)
+        todo = np.ones(n,dtype=bool)
+
+        if finite.any():
+
+            ra_finite = ra_arr[finite]
+
+            ra_alt = np.where(ra_arr >= 180.0, ra_arr - 360.0, ra_arr)
+            ra_alt_finite = ra_alt[finite]
+
+            if ra_alt_finite.max() - ra_alt_finite.min() < ra_finite.max() - ra_finite.min():
+                ra_use = ra_alt
+            else:
+                ra_use = ra_arr
+
+            ra_use_finite = ra_use[finite]
+
+            ra_lo = ra_use_finite.min()
+            ra_hi = ra_use_finite.max()
+            dec_lo = dec_arr[finite].min()
+            dec_hi = dec_arr[finite].max()
+
+
+            # Query vskytiles for candidate tiles and pull their double-precision bounds
+            # from skytiles.  Re-expressing RA above can put positions in either of the
+            # frames adjacent to the tessellation's own, so query all three.
+
+            query = "select s.rtid,s.ramin,s.ramax,s.decmin,s.decmax from skytiles s " +\
+                    "where s.rtid in (select rtid from vskytiles " +\
+                    "where decmin <= ? and decmax >= ? and ramin <= ? and ramax >= ? " +\
+                    "limit ?);"
+
+            pad = 1.0e-6
+
+            candidates = []
+
+            try:
+                for ra_shift in (0.0,-360.0,360.0):
+
+                    self.cur.execute(query,(dec_hi + pad,
+                                            dec_lo - pad,
+                                            ra_hi + pad + ra_shift,
+                                            ra_lo - pad + ra_shift,
+                                            max_candidate_tiles + 1))
+
+                    records = self.cur.fetchall()
+
+                    if len(records) > max_candidate_tiles:
+                        raise ValueError(f"bounding box spans more than {max_candidate_tiles} tiles")
+
+                    candidates.extend((record,ra_shift) for record in records)
+
+            except ValueError as error:
+                if self.debug > 0:
+                    print(f"get_rtids: {error}; falling back to get_rtid for all {n} positions...")
+                candidates = []
+
+            except (Exception, sqlite3.DatabaseError) as error:
+                print("*** Error executing sub roman_tessellation_db.get_rtids; falling back to get_rtid...")
+                candidates = []
+
+            if self.debug > 0:
+                print(f"get_rtids: n={n}, candidate tiles={len(candidates)}")
+
+            for (rtid,ramin,ramax,decmin,decmax),ra_shift in candidates:
+
+                ra_shifted = ra_use + ra_shift
+
+                in_tile = (todo &
+                           (dec_arr >= decmin) & (dec_arr < decmax) &
+                           (ra_shifted >= ramin) & (ra_shifted < ramax))
+
+                if not in_tile.any():
+                    continue
+
+                rtid_arr[in_tile] = rtid
+                todo &= ~in_tile
+
+                if not todo.any():
+                    break
+
+
+        # Resolve stragglers one at a time.  get_rtid returns None when it cannot place a
+        # position, so widen the array to object dtype to preserve that, as before.
+
+        if todo.any():
+
+            if self.debug > 0:
+                print(f"get_rtids: falling back to get_rtid for {int(todo.sum())} of {n} positions...")
+
+            rtid_arr = rtid_arr.astype(object)
+
+            for index in np.nonzero(todo)[0]:
+                rtid_arr[index] = self.get_rtid(float(ra_arr[index]),float(dec_arr[index]))
+
+        return rtid_arr
 
 
     def get_center_sky_position(self,rtid):
