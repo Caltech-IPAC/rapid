@@ -145,8 +145,11 @@ product_config_filename_base = config_input['JOB_PARAMS']['product_config_filena
 output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_sfft_psfcat_filename'])
 output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_sfft_psfcat_finder_filename'])
 
-naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
-naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
+
+# An extra row and column has been added to SFFT input images.
+
+naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage']) + 1
+naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage']) + 1
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
