@@ -68,6 +68,11 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.path.name.startswith("test_live_"):
             item.add_marker(pytest.mark.live)
+def pytest_addoption(parser):
+    parser.addoption(
+        "--require-live", action="store_true", default=False,
+        help=("fail instead of skip when the alerts live DB/S3 integration "
+              "tests cannot run"))
 
 # per-product DC offsets added to chip_image, so a stamp's values identify
 # its source file (see job_dir)
@@ -80,6 +85,52 @@ PRODUCT_OFFSETS = {
 
 CHIP_PID = 99          # the fake chip's diffimages.pid
 CHIP_FIELD = 3         # all fake sources live in Roman field 3
+CHIP_RFID = 555        # the chip's reference image (diffimages.rfid)
+
+
+def write_sextractor_refcat(path, entries):
+    """Write a minimal SExtractor ASCII_HEAD catalog for load_refcat().
+
+    Only the columns REFCAT_COLUMNS needs are written. The header skips
+    column index 11 on purpose: FLUX_RADIUS is a vector column in the
+    real catalogs (one element per PHOT_FLUXFRAC entry) and SExtractor
+    declares only its first element, so astropy names the undeclared
+    column FLUX_RADIUS_1 -- the half-light radius the provider reads.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        File to write.
+    entries : list of dict
+        One catalog row each: requires "ra", "dec", "class_star";
+        "flags", "mag", "mag_err", "elong", "fwhm_pix",
+        "flux_radius_pix", "kron_radius" have defaults. NUMBER is
+        assigned 1..N in list order.
+    """
+    header = "\n".join((
+        "#   1 NUMBER          Running object number",
+        "#   2 ALPHAWIN_J2000  Windowed right ascension (J2000) [deg]",
+        "#   3 DELTAWIN_J2000  Windowed declination (J2000) [deg]",
+        "#   4 FLAGS           Extraction flags",
+        "#   5 CLASS_STAR      S/G classifier output",
+        "#   6 MAG_AUTO        Kron-like elliptical aperture magnitude [mag]",
+        "#   7 MAGERR_AUTO     RMS error for AUTO magnitude [mag]",
+        "#   8 ELONGATION      A_IMAGE/B_IMAGE",
+        "#   9 FWHM_IMAGE      FWHM assuming a gaussian core [pixel]",
+        "#  10 FLUX_RADIUS     Fraction-of-light radii [pixel]",
+        "#  12 KRON_RADIUS     Kron apertures in units of A or B",
+    ))
+    lines = [header]
+    for num, e in enumerate(entries, start=1):
+        lines.append(" ".join(str(v) for v in (
+            num, e["ra"], e["dec"], e.get("flags", 0), e["class_star"],
+            e.get("mag", 20.0), e.get("mag_err", 0.1),
+            e.get("elong", 1.1), e.get("fwhm_pix", 3.0),
+            2.0 * e.get("flux_radius_pix", 2.0),   # 0.25-fraction radius
+            e.get("flux_radius_pix", 2.0),         # 0.5 -> FLUX_RADIUS_1
+            e.get("kron_radius", 3.5))))
+    Path(path).write_text("\n".join(lines) + "\n")
+    return str(path)
 
 
 @pytest.fixture(scope="session")
@@ -160,6 +211,15 @@ class ChipData:
         self.job_dir = job_dir
         self.diff_filename = str(job_dir / "sfftdiffimage_masked.fits")
 
+        # Reference-catalog cross-match: diffimages.rfid locates the
+        # refimcatalogs row, whose filename the provider stages (a plain
+        # path passes _stage() untouched). None = no catalog registered,
+        # so matching degrades to "not run" -- the default keeps tests
+        # that don't care about cross-matching catalog-free; tests that
+        # do set this to a write_sextractor_refcat() file.
+        self.rfid = CHIP_RFID
+        self.refcat_filename = None
+
         # diffimages rows for resolve_pid(expid, sca): reprocessing
         # campaigns leave several rows per (expid, sca), more than one
         # of them with vbest=1 -- mirroring the real database. The
@@ -171,17 +231,18 @@ class ChipData:
             {"pid": 100, "expid": 42, "sca": 7, "vbest": 0},
         ]
 
-        # Three on-chip detections: two associated with objects (one shared
-        # object would also be legal; kept distinct for clarity), one
-        # unassociated. Positions include a fractional part so rounding is
-        # always exercised.
+        # Three on-chip detections, every one associated with an object:
+        # source cross-matching creates an object for every source, so an
+        # all-associated chip is the only valid batch input (an sid with
+        # no merges row raises AssociationError). Positions include a
+        # fractional part so rounding is always exercised.
         self.sources = [
             make_source_row(9001, 150.3, 200.6, 60500.5, tpv_header),
             make_source_row(9002, 40.9, 60.2, 60500.5, tpv_header),
             make_source_row(9003, 260.1, 111.7, 60500.5, tpv_header),
         ]
-        # merges_<field>: sid -> aid (9003 stays unassociated)
-        self.merges = {9001: 777, 9002: 888}
+        # merges_<field>: sid -> aid
+        self.merges = {9001: 777, 9002: 888, 9003: 999}
         # astroobjects_<field>: aid -> object row (the full storage row;
         # the SELECT-list projection in FakeCursor trims it per query)
         self.objects = {
@@ -191,10 +252,13 @@ class ChipData:
             888: {"aid": 888, "ra0": 268.10, "dec0": -29.87,
                   "stdevra": 2.5e-05, "stdevdec": 2.1e-05, "nsources": 1,
                   "meanra": 268.10, "meandec": -29.87, "flux0": 800.0},
+            999: {"aid": 999, "ra0": 268.11, "dec0": -29.89,
+                  "stdevra": 3.0e-05, "stdevdec": 2.8e-05, "nsources": 1,
+                  "meanra": 268.11, "meandec": -29.89, "flux0": 500.0},
         }
         # Per-field merges/astroobjects partition tables exist unless a
         # test flips this (the real DB can lack a field's partitions;
-        # the provider must then treat its sources as unassociated).
+        # the provider must then abort with AssociationError).
         self.partitions_exist = True
 
         # Prior detections (other sids of the same objects, earlier mjd,
@@ -288,8 +352,13 @@ class FakeCursor:
                            and c["vbest"] > 0),
                           key=lambda c: -c["pid"])
             self._rows = [{"pid": c["pid"]} for c in best]
+        elif "FROM refimcatalogs" in sql:             # _load_refcat(rfid)
+            rfid, cattype = params
+            self._rows = ([{"filename": d.refcat_filename}]
+                          if d.refcat_filename and rfid == d.rfid
+                          and cattype == 1 else [])
         elif "FROM diffimages" in sql:
-            self._rows = ([{"filename": d.diff_filename}]
+            self._rows = ([{"filename": d.diff_filename, "rfid": d.rfid}]
                           if d.diff_filename else [])
         elif "WHERE s.sid" in sql:                    # get_detection(sid)
             self._rows = [dict(r) for r in d._all_detections()
@@ -361,10 +430,24 @@ def chip_data(tpv_header, job_dir):
 
 @pytest.fixture()
 def make_provider(chip_data):
-    """Factory for independent AlertDataProviders over the same fake chip."""
+    """Factory for independent AlertDataProviders over the same fake chip.
+
+    kona_lookup is passed through to the provider (see providers.py), so
+    tests can inject solar-system predictions for the fake chip's
+    exposure (expid 42) without any KONA machinery.
+    """
     from alerts.providers import AlertDataProvider
 
-    def _make():
-        return AlertDataProvider(FakeDB(chip_data))
+    providers = []
 
-    return _make
+    def _make(kona_lookup=None, refcat=True):
+        provider = AlertDataProvider(
+            FakeDB(chip_data), kona_lookup=kona_lookup,
+            refcat=refcat)
+        providers.append(provider)
+        return provider
+
+    yield _make
+
+    for provider in providers:
+        provider.close()

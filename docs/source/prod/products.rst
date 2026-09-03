@@ -244,3 +244,153 @@ for scoring purposes, relative to 5 times the total number of pixels in the imag
 Here is a histogram of cov5percent for our current set of 1696 reference images:
 
 .. image:: rapid_refimmeta_cov5percent_1dhist.png
+
+
+Alerts
+************************************
+
+.. warning::
+
+   **The RAPID alert schema are under initial development**
+
+   The records, parameter names, types, and semantics documented below are a
+   work in progress and may change -- including in backward-incompatible
+   ways -- without notice. Many parameters are currently stubs that are
+   always serialized as null. Do not build production consumers against
+   this schema yet.
+
+Summary
+==================================
+
+RAPID produces alerts for source detections on difference images. Each alert
+is a single Apache Avro packet, assembled and serialized by the ``alerts``
+package, and consists of the following records:
+
+- ``alert`` -- the top-level record: provenance, the triggering source
+  detection, object history, and image cutouts.
+- ``diaSource`` -- the triggering source detection on a difference image,
+  including astrometry, PSF-fit photometry, and fit-quality parameters.
+- ``diaForcedSource`` -- forced photometry at the object position
+- ``diaObject`` -- the associated astronomical object, aggregated from all
+  of its constituent detections.
+- ``ssMatch`` -- an associated solar system source: will contain MPC designation,
+  info about the position, and the predicted V-band magnitude.
+
+Current State of the Alert Schema
+==================================
+
+The schema is currently produced end-to-end for sources detected on
+difference images. (see the tables in :ref:`alert-packet-contents`
+for per-parameter implementation status)
+
+``alert``
+
+- The alert schema currently contains schema version information, the
+  triggering source detection, previous source detections, persistent
+  object metadata, including aggregate photometry, and cutouts at the
+  source position of the difference, science, and reference images.
+- Cutouts are currently 129x129 pixels (~14"), but we may increase the
+  size if memory constraints allow.
+
+- Before releasing version 1.0, we plan to include:
+
+  - Forced photometry history (see ``diaForcedSource``)
+  - solar-system cross-matching
+  - cross-matching to the reference image SExtractor catalog
+  - cross-matches to other surveys (NED, Gaia).
+
+``diaSource``
+
+- The source schema currently contain:
+
+  - A source ID from our pipeline
+  - Exposure metadata (MJD, exposure ID, SCA, exposure time, band, ...)
+  - The associated object ID
+  - Source centroid position and uncertainties
+  - PSF Photometry on the difference, science, and reference images
+    (at the difference image source centroid)
+  - PSF Fit quality parameters
+
+- We plan to include:
+
+  - Reference image ID, including co-add information
+  - Aperture photometry
+  - Shape measurements from SExtractor (currently migrating from
+    photutils)
+  - Flags, including whether the source is a likely solar-system
+    object
+
+``diaForcedSource``
+
+- The Forced Photometry schema is currently a stub, but will be
+  populated in version 1.0
+- We are benchmarking Forced Photometry routines to determine the best
+  algorithm. If we can successfully optimize this, we will be able to
+  deliver FP at alert time, but if not, data will be stored using the
+  first detected object position as the FP anchor.
+
+- Each Forced Source object will contain:
+
+  - The forced photometry ID and object ID
+  - MJD, Exposure ID,  SCA number, and band
+  - Measurement position
+  - PSF photometry on difference and science image
+
+``diaObject``
+
+- The object schema is half-populated so far, and is awaiting the
+  implementation of automatic photometry aggregation in the database.
+- The object schema currently contains:
+
+  - Object ID
+  - Position and position uncertainty (standard deviation on detected
+    positions)
+
+- We plan to include:
+
+  - Coverage history
+  - Aggregate photometric statistics on each band (mean, min, max, slopes,
+    and number of measurements)
+
+``ssMatch``
+
+- Awaits solar-system processing (KONA per-visit output). Will contain
+  the MPC designation, the predicted position of the object at the
+  triggering epoch, and the predicted V-band magnitude.
+
+Other cross-matches:
+
+- We plan to design a cross-match schema for both internal references
+  and other surveys, to be included in the top-level alert schema. Our
+  current plan is to include the top 3 closest matches for each catalog,
+  potentially taking into account the half-light radius for extended sources.
+
+Sample Alert Packet
+==================================
+
+.. warning::
+
+   **This sample file is for exploratory purposes only.**
+
+   Production-level avro files will be schema-less and will require
+   versioning with Confluent schema in order to use. This file's schema
+   may become out of date from the current alert code.
+
+:download:`sample_alert.avro <sample_alert.avro>` (schema version ``00.02``).
+
+This is a standard Avro object container file with the schema embedded, so
+it can be read without any RAPID code, e.g.::
+
+    import fastavro
+    with open("sample_alert.avro", "rb") as f:
+        alert = next(fastavro.reader(f))
+
+The ``cutoutDifference``, ``cutoutScience``, and ``cutoutReference`` values
+are FITS files as raw bytes (e.g. ``astropy.io.fits.open(io.BytesIO(...))``).
+
+.. _alert-packet-contents:
+
+Alert Packet Contents
+==================================
+
+.. include:: alert_params.inc

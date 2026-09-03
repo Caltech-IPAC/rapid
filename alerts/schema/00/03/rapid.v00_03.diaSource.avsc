@@ -1,0 +1,570 @@
+{
+    "namespace": "rapid.v00_03",
+    "name": "diaSource",
+    "doc": "Individual source detection on a difference image",
+    "version": "00.03",
+    "type": "record",
+    "fields": [
+        {
+            "name": "diaSourceId",
+            "type": "long",
+            "doc": "Unique identifier for this source detection"
+        },
+        {
+            "name": "expId",
+            "type": "long",
+            "doc": "RAPID-assigned exposure identifier (pipeline database serial, not a Roman SOC identifier; see observation_id)"
+        },
+        {
+            "name": "detector",
+            "type": "int",
+            "doc": "Detector (SCA) number"
+        },
+        {
+            "name": "diaObjectId",
+            "type": "long",
+            "doc": "Associated diaObject identifier"
+        },
+        {
+            "name": "midpointMjd",
+            "type": "double",
+            "doc": "Effective mid-observation time (UTC scale) [MJD]"
+        },
+        {
+            "name": "timeProcessedMjd",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "Time alert was processed (UTC scale) [MJD]"
+        },
+        {
+            "name": "exposureTime",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Exposure time [s]"
+        },
+        {
+            "name": "ra",
+            "type": "double",
+            "doc": "Right ascension; ICRS [deg]"
+        },
+        {
+            "name": "dec",
+            "type": "double",
+            "doc": "Declination; ICRS [deg]"
+        },
+        {
+            "name": "x",
+            "type": "float",
+            "doc": "x-pixel position on detector [pixels]"
+        },
+        {
+            "name": "y",
+            "type": "float",
+            "doc": "y-pixel position on detector [pixels]"
+        },
+        {
+            "name": "xErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in x [pixels]"
+        },
+        {
+            "name": "yErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in y [pixels]"
+        },
+        {
+            "name": "raErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in ra [deg]"
+        },
+        {
+            "name": "decErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in dec [deg]"
+        },
+        {
+            "name": "band",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Filter band name (F062, F087, F106, F129, F146, F158, F184, F213)"
+        },
+        {
+            "name": "psfFlux",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Flux from PSF-fit on difference image [nJy]"
+        },
+        {
+            "name": "psfFluxErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in psfFlux [nJy]"
+        },
+        {
+            "name": "snr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Signal-to-noise ratio (psfFlux / psfFluxErr)"
+        },
+        {
+            "name": "isNegative",
+            "type": "boolean",
+            "doc": "true if source is from negative (ref minus sci) subtraction"
+        },
+        {
+            "name": "apFlux",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Aperture flux on difference image (stub) [nJy]"
+        },
+        {
+            "name": "apFluxErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in apFlux (stub) [nJy]"
+        },
+        {
+            "name": "scienceFlux",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Forced PSF flux on science image (stub) [nJy]"
+        },
+        {
+            "name": "scienceFluxErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in scienceFlux (stub) [nJy]"
+        },
+        {
+            "name": "refFlux",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Forced PSF flux on reference image (stub) [nJy]"
+        },
+        {
+            "name": "refFluxErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in reference Flux (stub) [nJy]"
+        },
+        {
+            "name": "diffimglimmag",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Expected 5-sigma limiting magnitude of difference image (stub) [mag]"
+        },
+        {
+            "name": "psfQfit",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "PSF-fit quality parameter"
+        },
+        {
+            "name": "psfCfit",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "PSF-fit chi parameter"
+        },
+        {
+            "name": "psfRChi2",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Reduced chi-square of PSF fit"
+        },
+        {
+            "name": "psfNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of pixels used in  PSF fit"
+        },
+        {
+            "name": "sharpness",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "PSF-fit sharpness parameter"
+        },
+        {
+            "name": "roundness1",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "PSF-fit roundness parameter 1"
+        },
+        {
+            "name": "roundness2",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "PSF-fit roundness parameter 2"
+        },
+        {
+            "name": "peak",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Peak pixel value in source stamp [DN]"
+        },
+        {
+            "name": "extendedness",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Probability of being extended (stub)"
+        },
+        {
+            "name": "reliability",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Reliability score from ML classifier"
+        },
+        {
+            "name": "reliabilityVersion",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Reliability code version"
+        },
+        {
+            "name": "ixx",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Adaptive second moment Ixx (stub) [arcsec^2]"
+        },
+        {
+            "name": "iyy",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Adaptive second moment Iyy (stub) [arcsec^2]"
+        },
+        {
+            "name": "ixy",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Adaptive second moment Ixy (stub) [arcsec^2]"
+        },
+        {
+            "name": "ixxErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in ixx (stub) [arcsec^2]"
+        },
+        {
+            "name": "iyyErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in iyy (stub) [arcsec^2]"
+        },
+        {
+            "name": "ixyErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in ixy (stub) [arcsec^2]"
+        },
+        {
+            "name": "elong",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Elongation of source: ratio of major to minor axis (stub)"
+        },
+        {
+            "name": "psfFitFlags",
+            "type": "long",
+            "doc": "Bitmask of PhotUtils PSFPhotometry fit-condition flags; bit definitions follow the photutils version used by the pipeline"
+        },
+        {
+            "name": "pixelFlags_saturated",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Source has saturated pixels (stub)"
+        },
+        {
+            "name": "pixelFlags_bad",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Source has bad pixels (stub)"
+        },
+        {
+            "name": "pixelFlags_edge",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Source is near detector edge (stub)"
+        },
+        {
+            "name": "pixelFlags_cr",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Source has cosmic ray pixels (stub)"
+        },
+        {
+            "name": "centroid_flag",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Centroid measurement failed (position outside image, at a fit bound, or non-finite)"
+        },
+        {
+            "name": "apFlux_flag",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Aperture flux measurement failed (stub)"
+        },
+        {
+            "name": "psfFlux_flag",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "PSF flux measurement failed (non-positive or non-finite flux, non-convergence, or missing covariance)"
+        },
+        {
+            "name": "scienceFlux_flag",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Science flux measurement failed (stub)"
+        },
+        {
+            "name": "refFlux_flag",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Reference flux measurement failed (stub)"
+        },
+        {
+            "name": "isSSCandidate",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Suspected solar system object: a known SS object is predicted within SS_CANDIDATE_SEP_ARCSEC of this source (see ssMatches); null if association was not run for this detection"
+        },
+        {
+            "name": "field",
+            "type": "int",
+            "doc": "Roman field identifier"
+        },
+        {
+            "name": "hp6",
+            "type": "int",
+            "doc": "HEALPix index at nside=64 (order 6)"
+        },
+        {
+            "name": "hp9",
+            "type": "int",
+            "doc": "HEALPix index at nside=512 (order 9)"
+        },
+        {
+            "name": "pid",
+            "type": "long",
+            "doc": "Processing ID for science image"
+        },
+        {
+            "name": "observation_id",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Roman observation ID: concatenated observation hierarchy including the exposure counter; uniquely identifies the Roman exposure (stub)"
+        },
+        {
+            "name": "program",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman program number (stub)"
+        },
+        {
+            "name": "plan",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman execution plan number (stub)"
+        },
+        {
+            "name": "pass",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman pass number (stub)"
+        },
+        {
+            "name": "segment",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman segment number (stub)"
+        },
+        {
+            "name": "observation",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman observation number within the segment (stub)"
+        },
+        {
+            "name": "visit",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman visit number; a visit groups multiple exposures, so this is NOT a per-image identifier -- use expId or observation_id for that (stub)"
+        },
+        {
+            "name": "exposure",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman exposure counter within the visit (stub)"
+        },
+        {
+            "name": "survey",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Survey name (stub)"
+        }
+    ]
+}

@@ -43,6 +43,7 @@ MemoryMonitor for the process-pool extension point.
 import argparse
 import contextlib
 import datetime
+import io
 import json
 import logging
 import os
@@ -68,6 +69,30 @@ logger = logging.getLogger(__name__)
 
 VERSIONED_PACKAGES = ("numpy", "fitsio", "astropy", "fastavro",
                       "psycopg2-binary", "boto3", "psutil")
+
+# environment the live benchmarks need; reported set/MISSING only -- values
+# (server, database name, user, credentials) never reach consoles or logs
+DB_AWS_ENV_VARS = ("DBSERVER", "DBPORT", "DBNAME", "DBUSER", "DBPASS",
+                   "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+
+
+def quiet_make_provider(**kwargs):
+    """alerts.cli.make_provider() without the DB layer's stdout chatter.
+
+    RAPIDDB prints its connection parameters (server, database name,
+    port, user) to stdout when it connects; that identifying detail does
+    not belong in benchmark consoles or captured logs. This swallows the
+    connect chatter and prints a value-free summary of whether each
+    required environment variable is set instead. On a connection
+    failure, make_provider's own SystemExit message (which names no
+    values) still propagates.
+    """
+    print("environment: " + "  ".join(
+        f"{var}={'set' if os.getenv(var) else 'MISSING'}"
+        for var in DB_AWS_ENV_VARS))
+    from alerts.cli import make_provider
+    with contextlib.redirect_stdout(io.StringIO()):
+        return make_provider(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +277,16 @@ class TimedProvider:
         return self._timed("get_forced_photometry", detection.sid,
                            lambda: self.inner.get_forced_photometry(
                                detection, obj))
+
+    def get_ss_matches(self, detection):
+        return self._timed("get_ss_matches", detection.sid,
+                           lambda: self.inner.get_ss_matches(detection))
+
+    def get_ref_matches(self, detection):
+        # near-zero per source in the batch flow (answers from the chip's
+        # one vectorized pass, which is timed inside iter_sources_prefetch)
+        return self._timed("get_ref_matches", detection.sid,
+                           lambda: self.inner.get_ref_matches(detection))
 
     def get_cutouts(self, detection):
         return self._timed("get_cutouts", detection.sid,
@@ -485,8 +520,7 @@ def main(argv=None):
     if (args.pid is not None) == (args.exposure is not None):
         parser.error("give exactly one of --pid or --exposure/--sca")
 
-    from alerts.cli import make_provider
-    provider = make_provider()
+    provider = quiet_make_provider()
     pid = (args.pid if args.pid is not None
            else provider.resolve_pid(args.exposure, args.sca))
 

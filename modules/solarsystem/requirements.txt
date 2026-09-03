@@ -1,6 +1,3 @@
-kete
+kete>=1.1.0,<2
 click
-sys
-logging
-os
 asdf
