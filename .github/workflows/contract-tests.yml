@@ -83,10 +83,13 @@ on:
     branches: [smdc]
   workflow_dispatch:
 
-# Least privilege: the job reads this repo's code and nothing else. The
-# cross-org read is the App installation token's, not this token's.
+# Least privilege: the job reads this repo's code and writes issues — the
+# two red/green steps at the end open and close the `ci-red` issue with
+# the job's own token. The cross-org read is the App installation token's,
+# not this token's.
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: contract-tests-${{ github.ref }}
@@ -318,4 +321,62 @@ jobs:
       - name: run the contract suite against the applied stream
         run: |
           scripts/run-contract-tests.sh rapid_systems/cloudformation/db-migrations
+
+      # ---------------------------------------------------------------------
+      # RED/GREEN INTO THE PLACE THE TEAM LOOKS (2026-09-04). GitHub's own
+      # failure notification goes to the account that triggered the run,
+      # by that person's notification settings, and to nobody else — which
+      # is how this workflow ran red for 16 days (2026-08-19 → 09-04)
+      # unseen by anyone who acted. On failure, open (or update) ONE issue
+      # labelled `ci-red`; on success, close it. Repo-scoped GITHUB_TOKEN,
+      # no new secret; `failure()` excludes cancelled runs, so the
+      # cancel-in-progress concurrency above never files an issue for a
+      # superseded run. Deliberately one issue, updated, not one per red
+      # run: the issue is the conversation, the comments are the history.
+      # The ops ledger's `ci-actions-rapid` check (rapid_systems
+      # verify-live.sh) watches this workflow daily as the complement —
+      # this step is the fast path, that one is the escalating one.
+      - name: red → open or update the ci-red issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh label create ci-red --color B60205 \
+            --description "A CI workflow is red on the working branch; opened and closed by the workflow itself" \
+            2>/dev/null || true
+          existing=$(gh issue list --label ci-red --state open --json number --jq '.[0].number // empty')
+          body="contract-tests is red on \`${BRANCH}\` at ${HEAD_SHA:0:8}: ${RUN_URL}"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still red — ${body}"
+            echo "CI-RED: updated issue #$existing"
+          else
+            gh issue create --label ci-red \
+              --title "contract-tests red on ${BRANCH}" \
+              --body "$(printf '%s\n\n%s\n\n%s' \
+                "$body" \
+                "The contract tier (rapid_systems migration stream applied to PostgreSQL 18 + Q3C, then the rule-23 suite) failed. Open the run, read the first red step; if it is the credential gate or the token mint, see the header of .github/workflows/contract-tests.yml." \
+                "This issue is opened and closed by the workflow itself: the next green run on ${BRANCH} closes it.")"
+            echo "CI-RED: opened a new issue"
+          fi
+
+      - name: green → close any open ci-red issue
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for n in $(gh issue list --label ci-red --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Green again on \`${BRANCH}\` at ${HEAD_SHA:0:8}: ${RUN_URL}"
+            echo "CI-RED: closed issue #$n"
+          done
+          echo "CI-RED: none open" 
 
