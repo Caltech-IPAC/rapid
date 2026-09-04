@@ -83,6 +83,7 @@ class RAPIDDB:
 
         self.exit_code = 0
         self.conn = None
+        self.cur = None
 
 
         # Get database connection parameters from environment.
@@ -158,7 +159,8 @@ class RAPIDDB:
         '''
 
         try:
-            self.cur.close()
+            if self.cur is not None:
+                self.cur.close()
         except (Exception, psycopg2.DatabaseError) as error:
             print(error)
             self.exit_code = 2
