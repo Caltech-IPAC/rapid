@@ -210,10 +210,32 @@ def look_up_ppid_of_job_type(job_type):
 
 
 #-------------------------------------------------------------------------------------------------------------
+# Method to close out the ProcReqs record and then terminate.
+#-------------------------------------------------------------------------------------------------------------
+
+def finalize_procreqs_and_exit(dbh,reqid,status,exitcode):
+
+    """
+    Close out the ProcReqs record for the current processing request, close the database
+    connection, and then terminate with the given exit code.  Set status=1 if the processing
+    request finished normally, or status=-1 if it terminated early because of an error.
+    """
+
+    dbh.finalize_procreqs_record(reqid,status)
+
+    if dbh.exit_code >= 64:
+        print(f"*** Error: Could not finalize ProcReqs record (reqid={reqid},status={status}); continuing...")
+
+    dbh.close()
+
+    exit(exitcode)
+
+
+#-------------------------------------------------------------------------------------------------------------
 # Method to wait until common set of AWS Batch jobs have finished.
 #-------------------------------------------------------------------------------------------------------------
 
-def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
+def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh,reqid):
 
     """
     Wait until AWS Batch jobs of a given job type and processing date have finished.
@@ -233,8 +255,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
     jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date)
 
     if dbh.exit_code >= 64:
-        dbh.close()
-        exit(dbh.exit_code)
+        finalize_procreqs_and_exit(dbh,reqid,-1,dbh.exit_code)
 
 
     # Count only Jobs records where awsbatchjobid is not None.
@@ -271,8 +292,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
         job_definition = config_input['AWS_BATCH']['refimage_job_definition']
     else:
         print(f"*** Error: job_type not recognized (job_type={job_type}); quitting...")
-        dbh.close()
-        exit(64)
+        finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
     # Define job queue.  Use AWS Batch Console to set this up once.
@@ -290,7 +310,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
         job_name_base = config_input['AWS_BATCH']['refimage_job_name_base']
     else:
         print(f"*** Error: job_type not recognized (job_type={job_type}); quitting...")
-        exit(64)
+        finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
     # Print more parameters.
@@ -337,8 +357,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
                 except IndexError as error:
                     print(f'*** Error: IndexError raised because of empty jobs list (e.g., job ID not found or expired) ' +
                           f'running client.describe_jobs (error={error},awsbatchjobid={awsbatchjobid}); quitting...')
-                    dbh.close()
-                    exit(64)
+                    finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
                 if njobs_total < 3000 or n_checked % 100 == 0:
                     print("job_status =",job_status)
@@ -359,8 +378,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
                     pass
                 else:
                     print(f"*** Error: Unexpected job_status ({job_status}); quitting...")
-                    dbh.close()
-                    exit(64)
+                    finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
             except Exception as error:
                 print('*** Error running client.describe_jobs ({}); continuing...'.format(error))
@@ -424,7 +442,21 @@ if __name__ == '__main__':
         dbh = db.RAPIDDB()
 
         if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
+            print(f"*** Error: Could not open DB connection (dbh.exit_code = {dbh.exit_code}); quitting...")
+            exitcode_from_dbh = dbh.exit_code      # Preserve the code, since dbh.close() overwrites it.
+            dbh.close()
+            exit(exitcode_from_dbh)
+
+
+        # Create record in ProcReqs database table.
+
+        reqid = dbh.insert_procreqs_record(startdatetime,enddatetime)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Could not insert ProcReqs record (dbh.exit_code = {dbh.exit_code}); quitting...")
+            exitcode_from_dbh = dbh.exit_code      # Preserve the code, since dbh.close() overwrites it.
+            dbh.close()
+            exit(exitcode_from_dbh)
 
 
         # Launch reference-image pipelines.
@@ -437,8 +469,7 @@ if __name__ == '__main__':
 
         if exitcode_from_launch_reference_image_pipelines_cmd >= 64:
             print(f"*** Error: {launch_reference_image_pipelines_cmd} returned exit code = {exitcode_from_launch_reference_image_pipelines_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -455,7 +486,7 @@ if __name__ == '__main__':
 
         print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
-        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
+        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh,reqid)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
@@ -487,8 +518,7 @@ if __name__ == '__main__':
 
         if exitcode_from_register_reference_image_pipeline_jobs_cmd >= 64:
             print(f"*** Error: {register_reference_image_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_reference_image_pipeline_jobs_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -520,8 +550,7 @@ if __name__ == '__main__':
 
         if exitcode_from_launch_science_pipelines_cmd >= 64:
             print(f"*** Error: {launch_science_pipelines_cmd} returned exit code = {exitcode_from_launch_science_pipelines_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -538,7 +567,7 @@ if __name__ == '__main__':
 
         print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
-        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
+        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh,reqid)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
@@ -566,8 +595,7 @@ if __name__ == '__main__':
 
         if exitcode_from_register_science_pipeline_jobs_cmd >= 64:
             print(f"*** Error: {register_science_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_science_pipeline_jobs_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -590,8 +618,7 @@ if __name__ == '__main__':
 
         if exitcode_from_launch_postproc_pipelines_cmd >= 64:
             print(f"*** Error: {launch_postproc_pipelines_cmd} returned exit code = {exitcode_from_launch_postproc_pipelines_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -608,7 +635,7 @@ if __name__ == '__main__':
 
         print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
-        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
+        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh,reqid)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
@@ -632,8 +659,7 @@ if __name__ == '__main__':
 
         if exitcode_from_register_postproc_pipeline_jobs_cmd >= 64:
             print(f"*** Error: {register_postproc_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_postproc_pipeline_jobs_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -656,8 +682,7 @@ if __name__ == '__main__':
 
         if exitcode_from_load_psfcat_into_db_sources_cmd >= 64:
             print(f"*** Error: {load_psfcat_into_db_sources_cmd} returned exit code = {exitcode_from_load_psfcat_into_db_sources_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -680,8 +705,7 @@ if __name__ == '__main__':
 
         if exitcode_from_crossmatch_sources_cmd >= 64:
             print(f"*** Error: {crossmatch_sources_cmd} returned exit code = {exitcode_from_crossmatch_sources_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -704,8 +728,7 @@ if __name__ == '__main__':
 
         if exitcode_from_compute_statistics_for_astroobjects_cmd >= 64:
             print(f"*** Error: {compute_statistics_for_astroobjects_cmd} returned exit code = {exitcode_from_compute_statistics_for_astroobjects_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -726,8 +749,7 @@ if __name__ == '__main__':
 
         if exitcode_from_prune_notbest_merges_cmd >= 64:
             print(f"*** Error: {prune_notbest_merges_cmd} returned exit code = {exitcode_from_prune_notbest_merges_cmd}; quitting...")
-            dbh.close()
-            exit(64)
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
         # Code-timing benchmark.
@@ -736,6 +758,17 @@ if __name__ == '__main__':
         print("VPO Elapsed time in seconds after deleting not-best Merges database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
+
+
+        # Close out record in ProcReqs database table with status = 1.
+
+        dbh.finalize_procreqs_record(reqid,1)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Could not finalize ProcReqs record (reqid={reqid}); continuing...")
+            dbh.exit_code = 0            # The pipelines themselves all succeeded, so a failure to
+                                         # close out the bookkeeping record is not fatal here.  Clear
+                                         # the code so it is not mistaken for a dbh.close() failure below.
 
 
         # Close database connection.
