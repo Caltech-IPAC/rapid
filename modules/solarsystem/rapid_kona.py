@@ -1,12 +1,13 @@
 #Known Object Name Association (KONA) for labeling Solar system objects in
-#the RAPID processing pipeline 
+#the RAPID processing pipeline
 
 #2024-10-01 - Joseph Masiero, based on prototype by Manaswi Kondapally
 #2025-01-15 - Revised to hook better into RAPID pipeline
 #2026-04-29 - slight adjustement to s/c pos, vel, and time based on simulated headers
+#2026-08-?? - revised to calculate predicted V-band magnitude
 
 
-import kete
+import kete # Fixed to version 1.x.x as that is IPAC-maintained and guaranteed stable
 import click
 import sys
 import logging
@@ -61,7 +62,7 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         mpc_states_local = mpc_states
 
     if mpc_save is not None:
-        #if an MPC save parameter is included, save a new local state file        
+        #if an MPC save parameter is included, save a new local state file
         logger.info(f"Saving MPC state file: {mpc_save:s}")
         if os.path.exists(mpc_save):
             logger.warn(f"{mpc_save:s} path exists: overwriting")
@@ -75,7 +76,7 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
     for input_file in input_files:
         in_tree=asdf.open(input_file)
         trees.append(in_tree)
-        
+
         image_time=kete.Time.from_iso(in_tree["roman"]["meta"]["exposure"]["mid_time"]+'Z')  #trailing Z required to indicate UTC
 
         #read in, convert from km to AU
@@ -87,29 +88,29 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         scvx=in_tree["roman"]["meta"]["ephemeris"]["velocity_x"]/kete.constants.AU_KM*3600*24.
         scvy=in_tree["roman"]["meta"]["ephemeris"]["velocity_y"]/kete.constants.AU_KM*3600*24.
         scvz=in_tree["roman"]["meta"]["ephemeris"]["velocity_z"]/kete.constants.AU_KM*3600*24.
-    
+
         headerframe=in_tree["roman"]["meta"]["ephemeris"]["ephemeris_reference_frame"]
         if headerframe=="Ecliptic":
             frame=kete.Frames.Ecliptic
         else:
             frame=kete.Frames.Equatorial
-            
+
         pos = kete.Vector([scx, scy, scz], frame=frame)
         vel = kete.Vector([scvx, scvy, scvz], frame=frame)
         sc_state = kete.State("Roman-earth", image_time, pos, vel)
         earth = kete.spice.get_state("Earth", image_time.jd).as_equatorial
-        
-        obs_pos=earth.pos+sc_state.pos        
+
+        obs_pos=earth.pos+sc_state.pos
         obs_vel=earth.vel+sc_state.vel
         obs_loc=kete.State("Roman-helio",image_time,obs_pos,obs_vel)
-    
+
         ra0=in_tree["roman"]["meta"]["pointng"]["ra_v1"] #deg
         dec0=in_tree["roman"]["meta"]["pointng"]["dec_v1"] #deg
         pointing_vec=kete.Vector.from_ra_dec(ra0, dec0)
-        
+
         fov = kete.fov.ConeFOV(pointing_vec,0.5,obs_loc)
         fovs.append(fov)
-        
+
     curr_states  = kete.propagate_n_body(mpc_states_local, image_time.jd)
 
     #this should be a bulk query grouping all FoV into the below list for sig speed up
@@ -119,7 +120,7 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
     results={}
     for visible_obj, in_tree, input_file in zip(visible_objs,trees,input_files):
         logger.info(f"Found {len(visible_obj.states):d} visible objects near the FoV")
-    
+
         obj_in_fov={}
         if len(visible_obj.states)>0:
             logger.info(f"{'Name':<15} {'RA':<10} {'DEC':<10} {'Vmag':<5}")
@@ -172,13 +173,13 @@ def init_log(logfile=None):
     logger.addHandler(ch)
     return(logger)
 
-        
+
 class helpExit(click.Command):
     def get_help(self, ctx):
         helpstr=super().get_help(ctx)
         click.echo(helpstr)
         sys.exit(1)
- 
+
 @click.command(no_args_is_help=True,cls=helpExit)
 @click.option("--input_file",help="<input image ASDF file to run KONA on>",required=True)
 @click.option("--mpc_local",help="[full path to parquet file holding the MPC orbit file propagated to a median JD]",required=False,default=None)
@@ -197,4 +198,4 @@ def bespoke_kona(input_file,mpc_local,median_jd,mpc_save,cache_dir):
 if __name__ == "__main__":
     # execute only if run as a script
     bespoke_kona()
-        
+
