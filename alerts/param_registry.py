@@ -177,7 +177,7 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.mjdobs", attr="mjdobs"),
     Param("timeProcessedMjd",  ["null", "double"],  "Time alert was processed (UTC scale) [MJD]",
                     IMPLEMENTED, "set at assembly time", attr="time_proc"),
-    Param("exposureTime",  ["null", "float"],  "Exposure time [s]",
+    Param("exposureTime",  ["null", "float"],  "Exposure time [s]", #TODO: eventually move to alert params
                     IMPLEMENTED, "exposures.exptime", attr="exptime"),
     Param("timeWithdrawnMjd",  ["null", "double"],  "Time alert was withdrawn (UTC scale) [MJD]",
                     NOT_USED, "alert-withdrawal mechanism (not designed)"),
