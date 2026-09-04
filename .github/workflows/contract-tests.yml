@@ -10,21 +10,36 @@
 # THE OWNER PROVISIONING STEP (brief B: "provisioning the repo secret is an
 # owner step outside this brief").
 #
-#   Secret name:  RAPID_SYSTEMS_READ_TOKEN
-#   Scope needed: read-only `contents` on IPAC-SW/rapid_systems
-#   Set with:     gh secret set RAPID_SYSTEMS_READ_TOKEN --repo Caltech-IPAC/rapid
+#   Secrets:      RAPID_SYSTEMS_APP_ID          (GitHub App ID; not secret, kept
+#                                                beside the key for one gate)
+#                 RAPID_SYSTEMS_APP_PRIVATE_KEY (the App's RS256 private key, PEM)
+#   The App:      `rapid-ci-promoter`, owned by IPAC-SW, installed on
+#                 IPAC-SW/rapid_systems only, repository permissions read-only
+#                 Actions / Attestations / Contents (ISG-185028, 2026-08-10).
+#                 The same App and key serve the AWS-side promoter
+#                 (rapid_systems/cloudformation/rapid-ci-promoter.yaml, key in
+#                 Secrets Manager `rapid/ci/github-app-fetch`); the master copy
+#                 is the .pem in the shared 1Password vault "IPAC RAPID".
+#   Set with:     gh secret set RAPID_SYSTEMS_APP_ID --repo Caltech-IPAC/rapid --body <id>
+#                 op read 'op://<vault>/<item>/<file>.pem' \
+#                   | gh secret set RAPID_SYSTEMS_APP_PRIVATE_KEY --repo Caltech-IPAC/rapid
+#   History:      2026-08-11 → 2026-08-19 a fine-grained PAT
+#                 (RAPID_SYSTEMS_READ_TOKEN) did this job; it died with the
+#                 owner's PAT clean-up after the App migration and the tier ran
+#                 red for 16 days. The App token replaced it 2026-09-04.
 #
 # WHY A SECRET IS NEEDED AT ALL: Caltech-IPAC/rapid is PUBLIC and
 # IPAC-SW/rapid_systems is PRIVATE, in a different organization. The
 # workflow's own GITHUB_TOKEN is scoped to this repository and cannot read
 # across that boundary, so the authoritative migration stream is unreachable
-# without a credential the owner provisions. A fine-grained PAT works today; a
-# GitHub App installation token is the better long-term answer and drops in at
-# the same name (brief B: "PAT now and GitHub App token when it lands").
+# without a credential the owner provisions. That credential is a GitHub App
+# installation token: minted per run from the App's private key, scoped to one
+# repository and one permission, valid for one hour, revoked at job end.
 #
-# THE WORKFLOW NEVER EMBEDS OR CHOOSES THE CREDENTIAL. It reads one named
-# secret and passes it to `actions/checkout`. Nothing here mints, copies or
-# defaults a token, and a run without the secret FAILS CLOSED at a named step
+# THE WORKFLOW NEVER EMBEDS OR CHOOSES THE CREDENTIAL. It reads two named
+# secrets, mints the narrowest token they allow, and passes that to
+# `actions/checkout`. Nothing here defaults a token, and a run without the
+# secrets FAILS CLOSED at a named step
 # rather than silently testing against a schema it built some other way — a
 # green run against a vendored copy of the migrations would be exactly the
 # false substrate this whole tier exists to eliminate.
@@ -40,7 +55,7 @@
 #
 #   * Caltech-IPAC/rapid is PUBLIC (verified live: `gh repo view` reports
 #     visibility PUBLIC). A `pull_request`-triggered run from a FORK gets no
-#     access to repository secrets by default — RAPID_SYSTEMS_READ_TOKEN
+#     access to repository secrets by default — the App secrets
 #     would be absent, and this workflow's own "fail closed if the cross-org
 #     read secret is not provisioned" step would then fail EVERY fork PR,
 #     always, for a reason that has nothing to do with the PR's own change.
@@ -69,7 +84,7 @@ on:
   workflow_dispatch:
 
 # Least privilege: the job reads this repo's code and nothing else. The
-# cross-org read is the PAT's, not this token's.
+# cross-org read is the App installation token's, not this token's.
 permissions:
   contents: read
 
@@ -237,18 +252,33 @@ jobs:
         # unparseable workflow produces a run with no jobs and no annotation
         # (verified live on this branch, run 31443363996).
         env:
-          RAPID_SYSTEMS_READ_TOKEN: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
+          RAPID_SYSTEMS_APP_ID: ${{ secrets.RAPID_SYSTEMS_APP_ID }}
+          RAPID_SYSTEMS_APP_PRIVATE_KEY: ${{ secrets.RAPID_SYSTEMS_APP_PRIVATE_KEY }}
         run: |
-          if [ -n "${RAPID_SYSTEMS_READ_TOKEN:-}" ]; then
-            echo "BRIEF-B-SECRET: PASS exit=0 (RAPID_SYSTEMS_READ_TOKEN is set)"
+          if [ -n "${RAPID_SYSTEMS_APP_ID:-}" ] && [ -n "${RAPID_SYSTEMS_APP_PRIVATE_KEY:-}" ]; then
+            echo "BRIEF-B-SECRET: PASS exit=0 (RAPID_SYSTEMS_APP_ID and RAPID_SYSTEMS_APP_PRIVATE_KEY are set)"
             exit 0
           fi
-          echo "BRIEF-B-SECRET: FAIL exit=1 (RAPID_SYSTEMS_READ_TOKEN is not set)"
+          echo "BRIEF-B-SECRET: FAIL exit=1 (RAPID_SYSTEMS_APP_ID and/or RAPID_SYSTEMS_APP_PRIVATE_KEY is not set)"
           echo "The migration stream lives in the PRIVATE repo IPAC-SW/rapid_systems."
-          echo "Provision with:"
-          echo "  gh secret set RAPID_SYSTEMS_READ_TOKEN --repo Caltech-IPAC/rapid"
-          echo "The token needs read-only contents access to IPAC-SW/rapid_systems."
+          echo "Provision both secrets from the GitHub App rapid-ci-promoter (see the"
+          echo "header of this workflow):"
+          echo "  gh secret set RAPID_SYSTEMS_APP_ID --repo Caltech-IPAC/rapid --body <id>"
+          echo "  gh secret set RAPID_SYSTEMS_APP_PRIVATE_KEY --repo Caltech-IPAC/rapid < key.pem"
           exit 1
+
+      - name: mint a read-only installation token for the migration stream
+        # Scoped as narrowly as the App allows: one repository, contents:read,
+        # one hour. The action revokes the token in a post step; nothing below
+        # persists it (checkout runs with persist-credentials: false).
+        id: rapid-systems-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.RAPID_SYSTEMS_APP_ID }}
+          private-key: ${{ secrets.RAPID_SYSTEMS_APP_PRIVATE_KEY }}
+          owner: IPAC-SW
+          repositories: rapid_systems
+          permission-contents: read
 
       - name: check out the authoritative migration stream (pinned)
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
@@ -262,7 +292,7 @@ jobs:
           # to empty would check out the default branch — testing against an
           # unpinned schema while claiming a pinned one.
           ref: 165692b3b0bf955807b59b525013b5419cd79b99
-          token: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
+          token: ${{ steps.rapid-systems-token.outputs.token }}
           path: rapid_systems
           persist-credentials: false
 
