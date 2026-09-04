@@ -4073,3 +4073,112 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def insert_procreqs_record(self,obsstarttime,obsendtime,debug=1):
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = f"INSERT INTO procreqs (obsstarttime,obsendtime,started) " +\
+                f"VALUES ('{obsstarttime}','{obsendtime}',localtimestamp) " +\
+                f"RETURNING reqid;"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+            record = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error: Could not insert ProcReqs record for obsstarttime,obsendtime = ' +\
+                  f'{obsstarttime},{obsendtime} (error={error}); returning...')
+            self.conn.rollback()         # Rollback database transaction
+            self.exit_code = 67
+            return
+
+        if record is not None:
+            reqid = record[0]
+            print(f"*** Message: Successfully inserted record into ProcReqs database table " +\
+                  f"and returned reqid = {reqid}; returning...")
+        else:
+            reqid = None
+            print(f'*** Error: Could not insert ProcReqs records for obsstarttime,obsendtime = ' +\
+                  f'{obsstarttime},{obsendtime} (returned record is None); returning...')
+            self.conn.rollback()         # Rollback database transaction
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+        return reqid
+
+
+########################################################################################################
+
+    def finalize_procreqs_record(self,reqid,status,debug=1):
+
+        self.exit_code = 0
+
+
+        # Validate status against the CHECK constraint on the procreqs table.
+
+        try:
+            status = int(status)
+        except (TypeError, ValueError):
+            status = None
+
+        if status not in (-1,0,1):
+            print(f'*** Error: Invalid ProcReqs status (reqid={reqid},status={status}); skipping...')
+            self.exit_code = 67
+            return
+
+
+        # Define query.  Compute elapsed from localtimestamp, not from the ended column, since
+        # all assignments in an UPDATE see the pre-update row values (ended is still null here).
+        # Use localtimestamp rather than now() so that no timestamptz-to-timestamp conversion is
+        # involved, which would make elapsed sensitive to daylight-saving-time transitions.
+
+        query = f"update procreqs " +\
+            f"set ended = localtimestamp, " +\
+            f"elapsed = localtimestamp - started, " +\
+            f"status = {status} " +\
+            f"where reqid = {reqid};"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            rows_affected = self.cur.rowcount
+
+            if debug == 1:
+                print(f"Updated: {rows_affected} row")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error finalizing ProcReqs record (reqid={reqid},error={error}); skipping...')
+            self.conn.rollback()         # Rollback database transaction
+            self.exit_code = 67
+            return
+
+        if rows_affected == 0:
+            print(f'*** Error: No ProcReqs record found to finalize (reqid={reqid}); skipping...')
+            self.conn.rollback()         # Rollback database transaction
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
