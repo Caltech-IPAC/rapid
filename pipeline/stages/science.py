@@ -49,6 +49,7 @@ import sys
 import numpy as np
 
 import modules.utils.rapid_pipeline_subs as util
+import pipeline.artifactRepairSubs as artrepair
 import pipeline.differenceImageSubs as dfis
 import pipeline.referenceImageSubs as rfis
 from pipeline.mosaic_geometry import resolve_awaicgen_geometry
@@ -857,6 +858,29 @@ def prepare_zogy_inputs(context) -> None:
     gainmatched = context.product("gainmatched_reference_image")
 
     nan_indices_sciimage = util.replace_nans_with_value(bkg_subbed, 0.0)
+
+    # Extreme-artifact repair (Jacob Jencson, dev 625b8dcf). Cosmic rays and
+    # hot/dead pixels are repaired in the INPUT rather than masked in the
+    # output, because one bad pixel spreads over tens of pixels in the ZOGY
+    # difference; see pipeline/artifactRepairSubs.py. It runs on the
+    # background-subtracted science image AFTER its NaNs were zeroed above
+    # (so NaNs are never candidates, and the indices captured above still
+    # restore them) and BEFORE the reference image is touched. Both ZOGY and
+    # SFFT consume this image. The repair rewrites the file in place as a
+    # float32 primary HDU and stamps NARTRPR / ARTRPRTH into its header,
+    # which then ride into every product built from it. Gate and threshold
+    # are release content ([sci_image]), so the configuration digest records
+    # both; the monolith read them as optional .ini keys defaulting to off.
+    n_artifacts_repaired = 0
+    if context.science_value("sci_image", "repair_extreme_artifact_pixels"):
+        n_artifacts_repaired = artrepair.repair_extreme_artifact_pixels(
+            bkg_subbed,
+            float(context.science_value("sci_image",
+                                        "extreme_artifact_threshold")))
+        context.logger.info(
+            "extreme artifact pixels repaired in science image: %d",
+            n_artifacts_repaired)
+
     nan_indices_refimage = util.replace_nans_with_value(gainmatched, 0.0)
 
     n_sigma = 3.0
@@ -902,7 +926,8 @@ def prepare_zogy_inputs(context) -> None:
     context.record(zogy_input_avg_sci=stats_sci_img["clippedavg"],
                    zogy_input_std_sci=std_sci_img,
                    zogy_input_avg_ref=stats_ref_img["clippedavg"],
-                   zogy_input_std_ref=std_ref_img)
+                   zogy_input_std_ref=std_ref_img,
+                   n_artifacts_repaired=n_artifacts_repaired)
 
 
 # ---------------------------------------------------------------------------
