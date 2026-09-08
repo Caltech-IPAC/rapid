@@ -1004,9 +1004,14 @@ def postprocess_zogy(context) -> None:
     # The uncertainty image doubles as SExtractor's WEIGHT_IMAGE.
     unc_masked = masked.replace("masked.fits", "uncert_masked.fits")
     instrument = context.science_section("instrument")
+    # The background-SUBTRACTED science image, not the reformatted one (dev
+    # 42b0e1ee): compute_diffimage_uncertainty clips the science term at zero,
+    # which is only correct once the sky has been removed; on the image with
+    # background the sky Poisson noise already carried by std_dif_img was
+    # counted a second time.
     dfis.compute_diffimage_uncertainty(
         float(instrument["sca_gain"]) * context.fact("exptime"),
-        context.product("science_image_reformatted"),
+        context.product("science_image_bkg_subbed"),
         context.product("gainmatched_reference_image"),
         cov_map,
         threshold,
@@ -1432,9 +1437,10 @@ def catalog_sfft(context) -> None:
     # difference.
     sfft_unc_masked = context.scratch("sfftdiffimage_uncert_masked.fits")
     instrument = context.science_section("instrument")
+    # Background-subtracted science image, as for ZOGY above (dev 42b0e1ee).
     dfis.compute_diffimage_uncertainty(
         float(instrument["sca_gain"]) * context.fact("exptime"),
-        context.product("science_image_reformatted"),
+        context.product("science_image_bkg_subbed"),
         context.product("gainmatched_reference_image"),
         context.product("resampled_reference_cov_map"),
         context.science_value("zogy",
@@ -1517,9 +1523,10 @@ def naive_difference(context) -> None:
     # The naive difference's own uncertainty image, and its weight image.
     naive_unc_masked = naive.replace("masked.fits", "uncert_masked.fits")
     instrument = context.science_section("instrument")
+    # Background-subtracted science image, as for ZOGY above (dev 42b0e1ee).
     dfis.compute_diffimage_uncertainty(
         float(instrument["sca_gain"]) * context.fact("exptime"),
-        context.product("science_image_reformatted"),
+        context.product("science_image_bkg_subbed"),
         context.product("gainmatched_reference_image"),
         cov_map,
         threshold,
