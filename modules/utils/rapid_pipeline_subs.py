@@ -14,7 +14,7 @@ import boto3
 from botocore.exceptions import ClientError
 from scipy.ndimage import zoom
 
-from pipeline.runtime.errors import StorageError
+from pipeline.runtime.errors import StorageError, DBError
 from pipeline.runtime.process import run_tool
 
 plot_flag = False
@@ -2512,7 +2512,7 @@ def compute_radec_statistics(ra_deg, dec_deg):
 ########################################
 # Compute primary key aid for database AstroObjects records outside of the database with
 # a deterministic method based on (ra0,dec0).  Convert both coordinates to integer units
-# of 1/1000th arcsecond, then pack into a single 64-bit integer.
+# that have exactly 1/3300 arcsecond precision, then pack into a single 64-bit integer.
 # Works with scalars, lists, and numpy arrays. np.asarray is a no-op on existing arrays,
 # and np.rint + .astype(np.int64) replaces round() for vectorized rounding.
 #
@@ -2521,15 +2521,15 @@ def compute_radec_statistics(ra_deg, dec_deg):
 ########################################
 
 def radec_index(ra_deg, dec_deg):
-    ra_mas  = np.rint(np.asarray(ra_deg) * 3_600_000).astype(np.int64)
-    dec_mas = np.rint((np.asarray(dec_deg) + 90.0) * 3_600_000).astype(np.int64)
-    return ra_mas * 648_000_001 + dec_mas
+    ra_units  = np.rint(np.asarray(ra_deg) * 11_880_000).astype(np.int64)
+    dec_units = np.rint((np.asarray(dec_deg) + 90.0) * 11_880_000).astype(np.int64)
+    return ra_units * 2_138_400_001 + dec_units
 
 def index_to_radec(idx):
     idx = np.asarray(idx, dtype=np.int64)
-    dec_mas = idx % 648_000_001
-    ra_mas  = idx // 648_000_001
-    return ra_mas / 3_600_000, dec_mas / 3_600_000 - 90.0
+    dec_units = idx % 2_138_400_001
+    ra_units  = idx // 2_138_400_001
+    return ra_units / 11_880_000, dec_units / 11_880_000 - 90.0
 
 
 # ---------------------------------------------------------------------------
@@ -2630,3 +2630,116 @@ def _finder_path_for(path):
         return "{}_finder_negative{}".format(stem[:-len("_negative")],
                                              extension)
     return "{}_finder{}".format(stem, extension)
+
+
+########################################
+# Look up for the given processing date the Sources child table names
+# to cross-match and a distinct list of the fields covered by the
+# sources in those tables.
+#
+# Ported from the IMSS branch and re-sourced onto smdc's records. `Jobs`
+# holds no rows on smdc (work is recorded in `Attempts`), so the science
+# work done on a processing date is read from the registered difference
+# images, the same way the catalog-load and crossmatch gatherers read it
+# (`submission/gathering.py`), through the `rapid_db` queries written for
+# them. Differences from the IMSS version:
+#   * table names follow the catalog-load job type,
+#     `sources_<proc_date>_<sca>` (processing date, not observation date);
+#   * attempt ids stand in for jids, as the third return value and as
+#     `attempt_id` in each meta dict;
+#   * hp6/hp9/dateobs are not carried: they are not in the registered-product
+#     rows, and their only consumer was the SE catalogue loader;
+#   * the tables returned are the ones a successful catalog-load attempt is
+#     RECORDED for, replacing the `to_regclass` probe of what happens to exist;
+#   * `ppid` is accepted for call compatibility only; the queries pin the
+#     science ppid themselves via `submission.routes.ppid_for`;
+#   * database failures raise DBError instead of exiting the process.
+#
+# Returns (source_tables_to_crossmatch_list, fields_list, attempt_id_list,
+# meta_list), where the first is a list of (proc_date, sca) tuples.
+########################################
+
+def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh, proc_date, ppid=None):
+
+    proc_date = str(proc_date)
+
+    def _checked(records, what):
+        if records is None or dbh.exit_code >= 64:
+            raise DBError(f"{what} failed for processing date {proc_date} "
+                          f"(rapid_db exit_code={dbh.exit_code})")
+        return records
+
+
+    # SCAs on which a successful science attempt registered a current
+    # difference image on this processing date.
+
+    scas = _checked(dbh.get_scas_with_science_jobs_for_processing_date(proc_date),
+                    "science SCA enumeration")
+
+    attempt_id_list = []
+    meta_list = []
+
+    for sca in scas:
+
+        sca = int(sca)
+
+        rows = _checked(
+            dbh.get_registered_diffimages_for_processing_date_sca(proc_date, sca),
+            f"registered difference-image enumeration for SCA {sca}")
+
+        # Column order is the query's:
+        # (pid, expid, sca, attempt_id, filename, field, fid, mjdobs).
+
+        for pid, expid, row_sca, attempt_id, filename, field, fid, mjdobs in rows:
+
+            meta_dict = {}
+
+            meta_dict["attempt_id"] = attempt_id
+            meta_dict["pid"] = pid
+            meta_dict["expid"] = expid
+            meta_dict["sca"] = row_sca
+            meta_dict["fid"] = fid
+            meta_dict["field"] = field
+            meta_dict["mjdobs"] = mjdobs
+            meta_dict["difference_image_uri"] = filename
+
+            attempt_id_list.append(attempt_id)
+            meta_list.append(meta_dict)
+
+
+    # Sources child tables to cross-match: one per SCA with a recorded
+    # successful catalog-load attempt for this processing date.
+
+    loaded_scas = _checked(
+        dbh.get_scas_with_completed_catalog_load_for_processing_date(proc_date),
+        "completed catalog-load enumeration")
+
+    source_tables_to_crossmatch_list = [(proc_date, sca)
+                                        for sca in sorted(int(s) for s in loaded_scas)]
+
+
+    # Distinct fields covered by the sources in those tables,
+    # only for records with flags = 0.
+
+    fields_dict = {}
+
+    for table_date, sca in source_tables_to_crossmatch_list:
+
+        sources_tablename = f"sources_{table_date}_{sca}"
+
+        sql_queries = []
+        sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
+
+        records = _checked(dbh.execute_sql_queries(sql_queries, debug),
+                           f"distinct-field query on {sources_tablename}")
+
+        for record in records:
+            field = record[0]
+            fields_dict[field] = 1
+
+    fields_list = list(fields_dict.keys())
+
+
+    # Return source_tables_to_crossmatch_list and fields_list.
+
+    return source_tables_to_crossmatch_list, fields_list, attempt_id_list, meta_list
