@@ -53,6 +53,7 @@
 # should be visible as a distinct configuration, independently of the
 # image digest that identifies the file byte-for-byte.
 schema_version = 1
+#TODO: see what this is in the pipeline and possibly remove
 
 [product_roles]
 # ROLE → PRODUCT. A role is a stable contract name; the value is the
@@ -145,11 +146,15 @@ mag_max = 28.0
 [instrument]
 naxis1_sciimage = 4088
 naxis2_sciimage = 4088
-sca_gain = 1.0
-sca_readout_noise = 8.5
+sca_gain = 2.0
+sca_readout_noise = 9.4
+#TODO: Different for different sims, may need to get from header in ops
+# Maybe need a toml file for each sim or SCA in the future
 
 [sci_image]
 saturation_level = 2500000
+repair_extreme_artifact_pixels = true
+extreme_artifact_threshold = 10000.0
 
 [ref_image]
 naxis1_refimage = 7000
@@ -195,10 +200,15 @@ post_zogy_keep_diffimg_lower_cov_map_thresh = 0.5
 zogy_output_diffimage_file = "zogy_diffimage.fits"
 zogy_output_diffpsf_file = "diffpsf.fits"
 zogy_output_scorrimage_file = "scorrimage.fits"
+zogy_sn_sr_from_uncertainty_maps = true
 
 [sfft]
 run_sfft = true
 crossconv_flag = false
+sfft_bsmask_value = 20000.0
+sfft_bsmask_radius = 30.0
+sfft_use_gainmatch_catalogs = false
+sfft_use_segmentation = false
 
 [awaicgen]
 awaicgen_mosaic_rotation = 0.0
