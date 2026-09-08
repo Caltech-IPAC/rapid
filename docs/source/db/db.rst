@@ -63,7 +63,7 @@ database (these could be removed at will).
 
 
 Sky-Position Queries Using Q3C Library Functions
-************************************
+**************************************************
 
 The L2FileMeta and DiffImages database tables store the image centers
 (ra0, dec0) and their four corners (rai, deci, i=1,...,4).
@@ -183,14 +183,15 @@ The DiffImMeta database table stores various QA measures for difference images.
 Source Matching
 ************************************
 
-Three basic PostgreSQL tables are used for source matching PSF-fit catalogs
-made by the Python photutils package from the SFFT difference images (until
-a final decision on which image-differencing method is best):
+Four basic PostgreSQL database tables are used for source cross-matching PSF-fit catalogs
+made by the Python photutils package from the SFFT difference images and curating
+source-extracted lightcurves (until a final decision on which image-differencing and
+source-extraction methods are best):
 
 * Sources (extracted/selected from catalogs)
 * AstroObjects (astronomical objects for which time-dependent sources form light curves)
-* Merges (associations between Sources and AstroObjects via source-matching)
-* AstroObjectsMeta (statistics on astronomical-object lightcurves that can be added after source-matching)
+* Merges (associations between Sources and AstroObjects via source cross-matching)
+* AstroObjectsMeta (statistics on astronomical-object lightcurves added after source matching)
 
 A diagram of the source-matching database-table schema is given as follows:
 
@@ -222,12 +223,17 @@ PhotUtils-catalog source extractions are loaded into the Sources tables via
 parallel processes in observation-date-time order.
 This includes all sources, regardless of their bit-wise ``flags`` attribute.
 
-AstroObjects and AstroObjectsMeta tables are created for each Roman-tessellation sky tile or field.
+AstroObjects and AstroObjectsMeta database tables are created for each Roman-tessellation sky tile or field.
 Merges tables are also created for each Roman-tessellation sky tile or field.
 Thus the partitioning scheme for astronomical objects and associated cross-matching with
 sources (via Merges tables) are by sky position.
 
-Sources and AstroObjects tables are cross-matched for the appropriate partitions,
+A unique index, called ``aid``, for each AstroObjects_<field> database record is computed,
+not via a database sequence, but by a deterministic method that scales (ra, dec) to have
+1/3300-arcsecond precision and then concatenates these scaled sky coordinates together.
+This index fits within an ``int64`` data type.
+
+Sources and AstroObjects database tables are cross-matched for the appropriate partitions,
 in observing-time order, using the join function from the Q3C-library PostgreSQL extension,
 and records in the associated Merges tables are then populated.
 Only sources with ``flags = 0`` are considered.
@@ -249,21 +255,25 @@ minus reference image") and negative difference image (i,e, "reference image min
 The Sources database table has the boolean ``isdiffpos`` column to indicate for a given source
 from which type of source extraction it originated.
 
-For the 2026-07-22 test with SOC sims, ~250 million sources were loaded into
-Sources_20260722_<sca> child tables in 1.3 hours with 8 parallel processes
+For the 7/22/2026 test with SOC sims, ~250 million sources were loaded into
+Sources_<yyyymmdd>_<sca> child database tables in 1.3 hours with 8 parallel processes
 (regardless of ``flags`` value).
-Source cross-matching took 37 minutes with 8 parallel processes
-for ~90 million sources (with ``flags = 0``).  The test covered 360 different fields.
-A match radius of 0.55 arcsec or half a Roman WFI pixel was used.
-There were ~99 million AstroObjects records and 211,394,526 Merges records loaded
+Source cross-matching took 35 minutes with 8 parallel processes
+for ~198 million sources (with ``flags = 0``).  The test covered 360 different fields.
+A match radius of 0.055 arcsec or half a Roman WFI pixel was used.
+There were ~90 million AstroObjects records and 211,394,526 Merges records loaded
 into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 33,223 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
 across a field boundary), which is an increase of 0.0157% in terms of number of merges.
 
 The lightcurve statistics are stored in the AstroObjectsMeta_<fields> database tables, and are inserted after the
 cross-matching.  This is done as a separate process, after the source cross-matching.
+The script that computes the lightcurve statistics drops all
+AstroObjectsMeta_<fields> database tables and then recreates them, before the statistical computations.
 The AstroObjectsMeta_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
+For the 7/22/2026 test with SOC sims, it took 1.6 hours with 8 parallel processes to compute
+statistics for ~90 million AstroObjects.
 
-Because reprocessing results in new product versions (usually latest is best), there are
-separate process that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
+Because reprocessing generates new product versions (usually latest is best), there are
+separate processes that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
 and then explicitly clusters, vacuums, and analyzes these database tables.

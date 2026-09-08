@@ -4,6 +4,10 @@ Testing with OpenUniverse Simulated Data
 Overview
 ************************************
 
+The OpenUniverse simulated data approximate the High Latitude Time Domain Survey (HLTDS),
+and so cover sparse extragalactic fields.  This is the only HLTDS simulation set RAPID has
+processed; the RimTimSim and SOC simulation sets are both GBTDS.
+
 The tests described below are organized by processing date.
 
 OpenUniverse simulated data are used, which cover the following observation range::
