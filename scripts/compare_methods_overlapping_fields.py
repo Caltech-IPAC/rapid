@@ -161,8 +161,8 @@ def plot_sca_outlines(ra,dec,symbol="-"):
 
 def query_for_field_corners(dbh, field):
 
-    query = f"SELECT ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 " +\
-            f"FROM fields " +\
+    query = "SELECT ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 " +\
+            "FROM fields " +\
             f"WHERE field = {field};"
 
     sql_queries = [query]
@@ -170,13 +170,13 @@ def query_for_field_corners(dbh, field):
     try:
         records = dbh.execute_sql_queries(sql_queries,debug)
     except Exception as e:
-        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+        print("*** Error: Exception raised in dbh.execute_sql_queries " +
               f"(e={e});  quitting...")
         dbh.close()
         exit(64)
 
     if dbh.exit_code >= 64:
-        print(f"*** Error: Exception raised in dbh.execute_sql_queries;  quitting...")
+        print("*** Error: Exception raised in dbh.execute_sql_queries;  quitting...")
         dbh.close()
         exit(dbh.exit_code)
 
@@ -284,7 +284,7 @@ if __name__ == '__main__':
 
     # Query RAPID operations database for the relevant fields.
 
-    query = f"SELECT DISTINCT field FROM l2files WHERE vbest > 0 AND status > 0;"
+    query = "SELECT DISTINCT field FROM l2files WHERE vbest > 0 AND status > 0;"
 
     sql_queries = []
     sql_queries.append(query)
