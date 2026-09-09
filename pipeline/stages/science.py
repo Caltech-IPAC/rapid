@@ -1380,9 +1380,21 @@ def psf_catalog_for_difference_image(context, variant: str, image: str,
     output_psfcat_finder_filename = context.scratch(finder_name)
     output_psfcat_residual_filename = context.scratch(residual_name)
 
+    # The DAOStarFinder shape cuts and minimum separation are release content
+    # ([psfcat_diffimage]) and are passed through (Russ Laher, dev 8f641045).
+    # Only min_separation changes behaviour — the helper's default is 0.0 and
+    # release content says 1.0 pixel, which suppresses the duplicate detections
+    # that hashed two nearby sources in one image to the same aid; the four
+    # shape cuts equal the helper's defaults. Passed explicitly anyway so the
+    # configuration digest, not a Python default, states what ran.
     psfcat_flag, phot, psfphot = util.compute_psf_catalog(
         n_clip_sigma, n_thresh_sigma, fwhm, fit_shape, aperture_radius,
-        image, uncert_image, psf, output_psfcat_residual_filename)
+        image, uncert_image, psf, output_psfcat_residual_filename,
+        sharplo=float(psfcat["sharplo"]),
+        sharphi=float(psfcat["sharphi"]),
+        roundlo=float(psfcat["roundlo"]),
+        roundhi=float(psfcat["roundhi"]),
+        min_separation=float(psfcat["min_separation"]))
 
     if not psfcat_flag:
         _set_psfcat_infobit(context, variant)

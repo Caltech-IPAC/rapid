@@ -570,6 +570,16 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
     output_psfcat_finder_filename = psfcat_refimage_dict["output_psfcat_finder_filename"]
     output_psfcat_residual_filename = psfcat_refimage_dict["output_psfcat_residual_filename"]
 
+    # DAOStarFinder shape cuts and minimum separation from [psfcat_refimage]
+    # (Russ Laher, dev 4896bee9). Only min_separation (1.0 pixel vs the
+    # helper's 0.0 default) changes behaviour; see the science-stage twin in
+    # pipeline/stages/science.py.
+    sharplo = float(psfcat_refimage_dict["sharplo"])
+    sharphi = float(psfcat_refimage_dict["sharphi"])
+    roundlo = float(psfcat_refimage_dict["roundlo"])
+    roundhi = float(psfcat_refimage_dict["roundhi"])
+    min_separation = float(psfcat_refimage_dict["min_separation"])
+
     psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
                                                         n_thresh_sigma,
                                                         fwhm,
@@ -578,7 +588,12 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
                                                         input_img_filename,
                                                         input_unc_filename,
                                                         input_psf_filename,
-                                                        output_psfcat_residual_filename)
+                                                        output_psfcat_residual_filename,
+                                                        sharplo=sharplo,
+                                                        sharphi=sharphi,
+                                                        roundlo=roundlo,
+                                                        roundhi=roundhi,
+                                                        min_separation=min_separation)
 
     print("psfcat_flag =",psfcat_flag)
 
