@@ -350,6 +350,21 @@ class SfftArgvParsesTests(unittest.TestCase):
                                       sfft_use_gainmatch_catalogs=False)
         self.parser.parse_args(tail)
 
+    def test_a_missing_masking_key_fails_loudly(self):
+        """Release content has no defaults: a release missing one of the four
+        [sfft] masking keys fails naming it, never reaching the builder's
+        .ini-era fallbacks (science_config, "no overrides, no defaults")."""
+        from pipeline.runtime.errors import ConfigError
+        for key in ("sfft_bsmask_value", "sfft_bsmask_radius",
+                    "sfft_use_gainmatch_catalogs", "sfft_use_segmentation"):
+            science = copy.deepcopy(self.release)
+            del science["sfft"][key]
+            context = _context(products=self.products, science=science)
+            with self.assertRaises(ConfigError, msg=key):
+                self.science._sfft_argv(
+                    context, "/code/modules/sfft/sfft_rapid_rimtimsim.py",
+                    "/scratch/x.fits", False)
+
     def test_crossconv_argv_parses(self):
         """`--crossconv` is a store_true and brings `--refpsf`."""
         argv, tail = self._argv_tail("/scratch/openuniverse_image.fits", True)
@@ -1598,8 +1613,8 @@ class ReferencePsfComesFromReleaseContent(unittest.TestCase):
     """
 
     FACTS = {
-        "science_image_uri": "s3://inputs/g0004-psf-f146/fits/sci.fits.gz",
-        "psf_uri": ("s3://inputs/g0004-psf-f146/psfs/"
+        "science_image_uri": "s3://inputs/g0006-psf-f146/fits/sci.fits.gz",
+        "psf_uri": ("s3://inputs/g0006-psf-f146/psfs/"
                     "sciimage_psf_f146_sca07.fits"),
         "reference_image_uri": "s3://products/ref/awaicgen_output_mosaic_image.fits",
         "fid": 8,
@@ -1643,7 +1658,7 @@ class ReferencePsfComesFromReleaseContent(unittest.TestCase):
 
         self.assertEqual(
             self.downloads[-1],
-            "s3://inputs/g0004-psf-f146/refimage_psfs/refimage_psf_f146_sca07.fits")
+            "s3://inputs/g0006-psf-f146/refimage_psfs/refimage_psf_f146_sca07.fits")
         self.assertNotEqual(self.downloads[-1], self.FACTS["psf_uri"])
         self.assertTrue(context.has_product("reference_psf"))
         # The science PSF is still fetched, as its own product.
@@ -1657,7 +1672,7 @@ class ReferencePsfComesFromReleaseContent(unittest.TestCase):
         self.science.download_inputs(context)
         self.assertEqual(
             self.downloads[-1],
-            "s3://inputs/g0004-psf-f146/refimage_psfs/refimage_psf_fid8.fits")
+            "s3://inputs/g0006-psf-f146/refimage_psfs/refimage_psf_fid8.fits")
 
     def test_no_reference_means_no_reference_psf_download(self):
         facts = dict(self.FACTS)
@@ -1676,7 +1691,7 @@ class ReferencePsfComesFromReleaseContent(unittest.TestCase):
         self.reference_image.download_reference_psf(context)
         self.assertEqual(
             self.downloads,
-            ["s3://inputs/g0004-psf-f146/refimage_psfs/refimage_psf_fid8.fits"])
+            ["s3://inputs/g0006-psf-f146/refimage_psfs/refimage_psf_fid8.fits"])
         self.assertTrue(context.has_product("reference_psf"))
 
     def test_the_two_templates_are_read_from_their_own_sections(self):

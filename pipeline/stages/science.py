@@ -1181,11 +1181,17 @@ def _sfft_argv(context, sfft_code, science_image, crossconv_flag) -> list:
     and assembled by `pipeline.sfftCommandSubs.build_sfft_command_args` — the
     same builder the monolith uses, so the two job types emit one command
     shape. Segmentation is its own key rather than a side effect of
-    cross-convolution. The `science_image` argument is kept for the builder's
-    legacy fallback, which release content never reaches because the keys
-    are required to be present.
+    cross-convolution. The builder keeps the monolith's fallbacks for an
+    .ini that lacks the keys; release content is not allowed such defaults
+    (`pipeline/runtime/science_config.py`, "no overrides, no defaults"), so
+    the four keys are read here through the fail-loud accessor and handed
+    over as exactly that set — a release missing one fails naming the key,
+    and the fallbacks are unreachable from this site. `science_image` is
+    the builder's legacy-branch argument and is inert with the keys present.
     """
-    sfft = context.science_section("sfft")
+    sfft = {key: context.science_value("sfft", key)
+            for key in ("sfft_bsmask_value", "sfft_bsmask_radius",
+                        "sfft_use_gainmatch_catalogs", "sfft_use_segmentation")}
 
     filename_scifile = context.product("science_image_bkg_subbed")
     filename_reffile = context.product("gainmatched_reference_image")
