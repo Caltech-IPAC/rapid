@@ -32,6 +32,8 @@ not be one of those silences.
 import base64
 import os
 
+import numpy as np
+
 from pipeline.repositories.admission import (AdmissionConflict,
                                              AdmissionRepository,
                                              AdmissionSchemaAbsent,
@@ -247,10 +249,33 @@ def record_l2file_admission(dbh, exposure, sca, source_checksum, rid, facts,
 
 
 def _clean(facts):
-    """Drop None-valued facts so an absent value is not recorded as a fact.
+    """Drop None-valued facts, and coerce numpy scalars to plain Python types.
 
     A recorded `None` would compare unequal to a later real value and turn a
     newly-parsed header into a spurious admission conflict.
+
+    Observed live 2026-09-09 20:53 UTC (D6 attempt 9, 1,368 files):
+    `db_register_socsim_files.py:854 register_l2file` builds `facts` from
+    FITS header values and WCS arithmetic (`crval1`, `crval2`, `ra`, `dec`,
+    `equinox`, `zptmag`, `skymean`, ...), which come back as numpy scalar
+    types, not plain `float`/`int`. `admission.py` serializes `facts` to a
+    JSON column, and `json.dumps` does not know how to encode a numpy
+    scalar: `TypeError: Object of type int64 is not JSON serializable`. The
+    round-3 psycopg2 adapters in `rapid_db.py` cover query parameters, not
+    this JSON-encoding path, so the coercion belongs here instead.
     """
-    return {key: value for key, value in (facts or {}).items()
+    return {key: _to_json_safe(value) for key, value in (facts or {}).items()
             if value is not None}
+
+
+def _to_json_safe(value):
+    """A numpy scalar's plain-Python equivalent, or `value` unchanged.
+
+    `numpy.generic` (the base of every numpy scalar type: `int64`,
+    `float32`, `bool_`, ...) always provides `.item()`, which is exactly
+    the plain-Python value `json.dumps` can encode. Anything else — str,
+    plain int/float/bool, dict, list — is returned as-is.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
