@@ -121,3 +121,27 @@ def test_bright_source_masking_no_longer_depends_on_the_filename():
     a = build(SOCSIMS, False, SOCSIMS_CFG)
     b = build(OPENUNIVERSE, False, SOCSIMS_CFG)
     assert a == b
+
+
+def test_typed_booleans_from_release_content_are_accepted():
+
+    """The TOML loader hands native booleans; the builder must not literal_eval them."""
+
+    cfg = dict(SOCSIMS_CFG, sfft_use_gainmatch_catalogs=False, sfft_use_segmentation=True)
+    cmd = build(SOCSIMS, False, cfg)
+    assert "--scicat" not in cmd and "--scisegm" in cmd
+
+    cfg = dict(OPENUNIVERSE_CFG, sfft_use_gainmatch_catalogs=True, sfft_use_segmentation=False)
+    cmd = build(OPENUNIVERSE, False, cfg)
+    assert "--scicat" in cmd and "--scisegm" not in cmd
+
+
+def test_absolute_positionals_are_passed_unchanged():
+
+    """The "./" quirk is for bare filenames; an absolute path must not be made relative."""
+
+    cmd = build_sfft_command_args(PY, CODE, '/scratch/' + SCI, '/scratch/' + REF,
+                                  SCICAT, REFCAT, SCIPSF, REFPSF, SCISEGM, REFSEGM,
+                                  SOCSIMS, False, SOCSIMS_CFG)
+    assert cmd[2:4] == ['/scratch/' + SCI, '/scratch/' + REF]
+    assert build(SOCSIMS, False, SOCSIMS_CFG)[2:4] == ["./" + SCI, "./" + REF]

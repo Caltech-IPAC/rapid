@@ -52,6 +52,8 @@ import modules.utils.rapid_pipeline_subs as util
 import pipeline.artifactRepairSubs as artrepair
 import pipeline.differenceImageSubs as dfis
 import pipeline.referenceImageSubs as rfis
+import pipeline.sfftCommandSubs as sfftcmd
+import pipeline.zogyNoiseSubs as zogynoise
 from pipeline.mosaic_geometry import resolve_awaicgen_geometry
 from pipeline.runtime import science_config
 from pipeline.runtime.errors import InputError
@@ -959,6 +961,26 @@ def run_zogy(context) -> None:
     scalefacref = context.product("scalefacref")
     std_ref_img = context.product("std_ref_img")
 
+    # ZOGY's SN and SR arguments are the background noise sigmas, and only
+    # their ratio affects the difference image. The monolith passed the
+    # clipped standard deviations of the images themselves; in a crowded
+    # field that scatter is dominated by sources, not noise, and the
+    # uncertainty maps are the better source (Jacob Jencson, dev PR #15;
+    # see pipeline/zogyNoiseSubs.py for the measurement). The release-content
+    # toggle selects the source; with it off the historical pair is returned
+    # unchanged, so enabling the key is the only thing that can change a
+    # difference image. Both values are recorded so provenance shows which
+    # source fed ZOGY.
+    zogy_sn, zogy_sr = zogynoise.zogy_background_sigmas(
+        bool(context.science_value("zogy", "zogy_sn_sr_from_uncertainty_maps")),
+        context.product("science_uncert_image"),
+        context.product("gainmatched_reference_uncert_image"),
+        context.product("std_sci_img"),
+        std_ref_img,
+        scalefacref)
+    context.logger.info("zogy sn=%s sr=%s ratio=%s", zogy_sn, zogy_sr,
+                        zogy_sn / zogy_sr if zogy_sr else float("nan"))
+
     run_tool([PYTHON, zogy_code,
               context.product("science_image_bkg_subbed"),
               context.product("gainmatched_reference_image"),
@@ -966,8 +988,8 @@ def run_zogy(context) -> None:
               context.product("reference_psf"),
               context.product("science_uncert_image"),
               context.product("gainmatched_reference_uncert_image"),
-              str(context.product("std_sci_img")),
-              str(std_ref_img * scalefacref),
+              str(zogy_sn),
+              str(zogy_sr),
               str(dxrmsfin),
               str(dyrmsfin),
               filename_diffimage,
@@ -980,7 +1002,8 @@ def run_zogy(context) -> None:
     context.produce("zogy_diffpsf", filename_diffpsf)
     context.produce("zogy_scorrimage", filename_scorrimage)
     context.produce("diffimage_infobits", 0)
-    context.record(zogy_dxrms_used=dxrmsfin, zogy_dyrms_used=dyrmsfin)
+    context.record(zogy_dxrms_used=dxrmsfin, zogy_dyrms_used=dyrmsfin,
+                   zogy_sn_used=zogy_sn, zogy_sr_used=zogy_sr)
 
 
 def postprocess_zogy(context) -> None:
@@ -1142,38 +1165,52 @@ def _sfft_argv(context, sfft_code, science_image, crossconv_flag) -> list:
     extraction had this branch inverted as well as misnamed.
 
     `--crossconv` is `action="store_true"`, so it is present or absent — never
-    given a value — and it brings `--refpsf`, `--scisegm` and `--refsegm` with
-    it. `--scipsf` is passed unconditionally.
+    given a value. `--scipsf` is passed unconditionally.
+
+    **The filename branch is gone** (Jacob Jencson, dev e3c15953). Selecting
+    the masking settings by whether the science image's name began with "r"
+    handed the rimtimsim settings to the socsims, and a lower-case "roman_*"
+    data set would silently inherit them too. The bright-source mask value and
+    radius, whether the gain-match catalogues are passed, and whether
+    segmentation masking is applied are release content ([sfft]), read here
+    and assembled by `pipeline.sfftCommandSubs.build_sfft_command_args` — the
+    same builder the monolith uses, so the two job types emit one command
+    shape. Segmentation is its own key rather than a side effect of
+    cross-convolution. The `science_image` argument is kept for the builder's
+    legacy fallback, which release content never reaches because the keys
+    are required to be present.
     """
+    sfft = context.science_section("sfft")
+
     filename_scifile = context.product("science_image_bkg_subbed")
     filename_reffile = context.product("gainmatched_reference_image")
 
-    if os.path.basename(science_image).startswith("r"):
-        argv = [PYTHON, sfft_code,
-                filename_scifile,
-                filename_reffile,
-                "--bsmaskvalue", "20000.0",
-                "--bsmaskradius", "30.0"]
-    else:
-        argv = [PYTHON, sfft_code,
-                filename_scifile,
-                filename_reffile,
-                "--scicat", context.product("science_gainmatch_sexcat"),
-                "--refcat", context.product("reference_gainmatch_sexcat"),
-                "--bsmaskvalue", "50.0",
-                "--bsmaskradius", "100.0"]
+    # The gain-match catalogues are products only when that stage produced
+    # them, and the builder receives them only when release content says to
+    # pass them; a configuration that asks for absent catalogues fails here,
+    # naming the product, rather than in SFFT's own parser.
+    filename_scicat = None
+    filename_refcat = None
+    if sfftcmd.config_bool(sfft["sfft_use_gainmatch_catalogs"]):
+        filename_scicat = context.product("science_gainmatch_sexcat")
+        filename_refcat = context.product("reference_gainmatch_sexcat")
 
-    # If crossconv is off, the SFFT difference-image PSF is just the science
-    # image's PSF — which is why --scipsf is unconditional (monolith 1880-1883).
-    argv += ["--scipsf", context.product("science_psf_normalized")]
+    # The reference PSF is a product only where a reference exists or was
+    # built; the builder names it only under --crossconv.
+    filename_refpsf = (context.product("reference_psf")
+                       if crossconv_flag else None)
 
-    if crossconv_flag:
-        argv += ["--crossconv",
-                 "--refpsf", context.product("reference_psf"),
-                 "--scisegm", context.scratch("sfftscisegm.fits"),
-                 "--refsegm", context.scratch("sfftrefsegm.fits")]
-
-    return argv
+    return sfftcmd.build_sfft_command_args(
+        PYTHON, sfft_code,
+        filename_scifile, filename_reffile,
+        filename_scicat, filename_refcat,
+        context.product("science_psf_normalized"),
+        filename_refpsf,
+        context.scratch("sfftscisegm.fits"),
+        context.scratch("sfftrefsegm.fits"),
+        os.path.basename(science_image),
+        bool(crossconv_flag),
+        sfft)
 
 
 # ---------------------------------------------------------------------------

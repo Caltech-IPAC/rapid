@@ -6,6 +6,41 @@ Kept free of module-level side effects so that the logic can be imported and tes
 """
 
 import ast
+import os
+
+
+def config_bool(value):
+
+    """
+    A configuration boolean, whichever reader supplied it.
+
+    The master .ini hands configparser strings ("True"/"False"), which ast.literal_eval
+    turns into booleans; the release-content TOML loader hands native booleans, which
+    ast.literal_eval refuses.  Both are accepted here so the same builder serves both
+    configuration homes.
+    """
+
+    if isinstance(value, bool):
+        return value
+
+    return ast.literal_eval(value)
+
+
+def _positional(filename):
+
+    """
+    A positional input filename as the SFFT script wants it.
+
+    A quirk in the SFFT software requires "./" prepended to a bare filename (it names its
+    output files beside its science-image argument, and a bare name has no directory).  A
+    filename that already carries a directory -- an absolute scratch path, for instance --
+    is passed unchanged: "./" in front of an absolute path would make it relative.
+    """
+
+    if os.path.dirname(filename):
+        return filename
+
+    return "./" + filename
 
 
 def build_sfft_command_args(python_cmd,
@@ -41,7 +76,7 @@ def build_sfft_command_args(python_cmd,
 
         sfft_bsmask_value = sfft_dict['sfft_bsmask_value']
         sfft_bsmask_radius = sfft_dict['sfft_bsmask_radius']
-        sfft_use_gainmatch_catalogs = ast.literal_eval(sfft_dict['sfft_use_gainmatch_catalogs'])
+        sfft_use_gainmatch_catalogs = config_bool(sfft_dict['sfft_use_gainmatch_catalogs'])
 
     else:
 
@@ -63,12 +98,13 @@ def build_sfft_command_args(python_cmd,
             sfft_use_gainmatch_catalogs = True
 
 
-    # A quirk in the SFFT software requires prepended "./" to the positional input filenames.
+    # A quirk in the SFFT software requires prepended "./" to bare positional input filenames;
+    # see _positional.
 
     sfft_cmd = [python_cmd,
                 sfft_code,
-                "./" + filename_scifile,
-                "./" + filename_reffile]
+                _positional(filename_scifile),
+                _positional(filename_reffile)]
 
     if sfft_use_gainmatch_catalogs:
 
@@ -100,7 +136,7 @@ def build_sfft_command_args(python_cmd,
     # segm == 0 selects very little and the mask is close to inert.
 
     if 'sfft_use_segmentation' in sfft_dict:
-        sfft_use_segmentation = ast.literal_eval(sfft_dict['sfft_use_segmentation'])
+        sfft_use_segmentation = config_bool(sfft_dict['sfft_use_segmentation'])
     else:
         sfft_use_segmentation = crossconv_flag
 

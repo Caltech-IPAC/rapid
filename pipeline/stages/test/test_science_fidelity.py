@@ -28,6 +28,7 @@ the suite must stay discoverable there. The stub helper is the one
 
 import argparse
 import ast
+import copy
 import re
 import inspect
 import os
@@ -236,13 +237,18 @@ def _context(products=None, science=None, facts=None, parameters=None):
 class SfftArgvParsesTests(unittest.TestCase):
     """Finding 7. The first extraction's argv died in argparse with status 2.
 
-    Monolith authority: `5664024^:pipeline/...SciencePipeline.py:1849-1892`.
+    Monolith authority: `5664024^:pipeline/...SciencePipeline.py:1849-1892`,
+    superseded for the masking settings by dev e3c15953 (Jacob Jencson): the
+    bright-source mask, the gain-match catalogues and segmentation masking
+    are release content ([sfft]), not a branch on the science image's
+    filename. Every vector is still fed to the tool's own parser.
     """
 
     def setUp(self):
         from pipeline.stages import science
         self.science = science
         self.parser = _real_sfft_parser()
+        self.release = _load_release_toml()
         self.products = {
             "science_image_bkg_subbed": "/scratch/sci_bkgsub.fits",
             "gainmatched_reference_image": "/scratch/ref_gainmatched.fits",
@@ -254,8 +260,16 @@ class SfftArgvParsesTests(unittest.TestCase):
             "reference_gainmatch_sexcat": "/scratch/refgainmatch.txt",
         }
 
-    def _argv_tail(self, science_image, crossconv):
-        context = _context(products=self.products)
+    def _science(self, **sfft):
+        """The real release content with [sfft] keys overridden."""
+        science = copy.deepcopy(self.release)
+        science["sfft"].update(sfft)
+        return science
+
+    def _argv_tail(self, science_image, crossconv, products=None, **sfft):
+        context = _context(
+            products=self.products if products is None else products,
+            science=self._science(**sfft))
         argv = self.science._sfft_argv(
             context, "/code/modules/sfft/sfft_rapid_rimtimsim.py",
             science_image, crossconv)
@@ -263,45 +277,90 @@ class SfftArgvParsesTests(unittest.TestCase):
         # everything after them.
         return argv, argv[2:]
 
-    def test_rimtimsim_argv_parses(self):
-        """The "r"-prefixed branch: no catalogues, hard bright-source mask."""
+    def test_release_masking_keys_are_typed_and_present(self):
+        """The TOML hands native booleans and floats, not .ini strings."""
+        sfft = self.release["sfft"]
+        self.assertIsInstance(sfft["sfft_use_gainmatch_catalogs"], bool)
+        self.assertIsInstance(sfft["sfft_use_segmentation"], bool)
+        self.assertIsInstance(float(sfft["sfft_bsmask_value"]), float)
+        self.assertIsInstance(float(sfft["sfft_bsmask_radius"]), float)
+
+    def test_argv_parses_and_carries_the_release_masking_keys(self):
+        """The mask value and radius come from [sfft], and the vector parses."""
         argv, tail = self._argv_tail("/scratch/rimtimsim_image.fits", False)
         args = self.parser.parse_args(tail)
+        sfft = self.release["sfft"]
 
         self.assertEqual(args.scifile, self.products["science_image_bkg_subbed"])
         self.assertEqual(args.reffile,
                          self.products["gainmatched_reference_image"])
-        # The monolith's constants, lines 1857-1860.
-        self.assertEqual(args.bsmaskvalue, 20000.0)
-        self.assertEqual(args.bsmaskradius, 30.0)
-        # This branch passes no catalogues (lines 1853-1860).
-        self.assertIsNone(args.scicat)
-        self.assertIsNone(args.refcat)
-        # --scipsf is unconditional (lines 1882-1883).
+        self.assertEqual(args.bsmaskvalue, float(sfft["sfft_bsmask_value"]))
+        self.assertEqual(args.bsmaskradius, float(sfft["sfft_bsmask_radius"]))
+        # --scipsf is unconditional (monolith lines 1882-1883).
         self.assertEqual(args.scipsf,
                          self.products["science_psf_normalized"])
         self.assertFalse(args.crossconv)
 
-    def test_openuniverse_argv_parses_and_carries_catalogues(self):
-        """The non-"r" branch: gain-match catalogues, gentle mask."""
-        argv, tail = self._argv_tail("/scratch/openuniverse_image.fits", False)
-        args = self.parser.parse_args(tail)
+    def test_masking_does_not_depend_on_the_filename(self):
+        """The same release content gives the same mask for every data set.
 
-        # The monolith's constants, lines 1867-1878.
-        self.assertEqual(args.scicat,
-                         self.products["science_gainmatch_sexcat"])
+        The monolith branched on a leading lower-case "r" (rimtimsim), which
+        handed the rimtimsim settings to the socsims (dev e3c15953).
+        """
+        for name in ("/scratch/rimtimsim_image.fits",
+                     "/scratch/openuniverse_image.fits",
+                     "/scratch/Roman_TDS_simple_model_H158_26041_8.fits"):
+            _argv, tail = self._argv_tail(name, False,
+                                          sfft_bsmask_value=123.0,
+                                          sfft_bsmask_radius=4.0)
+            args = self.parser.parse_args(tail)
+            self.assertEqual((args.bsmaskvalue, args.bsmaskradius),
+                             (123.0, 4.0), name)
+
+    def test_gainmatch_catalogues_follow_their_key(self):
+        """`--scicat`/`--refcat` are passed exactly when release content says."""
+        _argv, tail = self._argv_tail("/scratch/openuniverse_image.fits",
+                                      False, sfft_use_gainmatch_catalogs=False)
+        args = self.parser.parse_args(tail)
+        self.assertIsNone(args.scicat)
+        self.assertIsNone(args.refcat)
+
+        _argv, tail = self._argv_tail("/scratch/openuniverse_image.fits",
+                                      False, sfft_use_gainmatch_catalogs=True)
+        args = self.parser.parse_args(tail)
+        self.assertEqual(args.scicat, self.products["science_gainmatch_sexcat"])
         self.assertEqual(args.refcat,
                          self.products["reference_gainmatch_sexcat"])
-        self.assertEqual(args.bsmaskvalue, 50.0)
-        self.assertEqual(args.bsmaskradius, 100.0)
+
+    def test_catalogues_are_not_required_unless_asked_for(self):
+        """With the key off, absent catalogue products are not an error."""
+        products = {name: value for name, value in self.products.items()
+                    if "gainmatch_sexcat" not in name}
+        _argv, tail = self._argv_tail("/scratch/openuniverse_image.fits",
+                                      False, products=products,
+                                      sfft_use_gainmatch_catalogs=False)
+        self.parser.parse_args(tail)
 
     def test_crossconv_argv_parses(self):
-        """`--crossconv` is a store_true and brings three companions."""
+        """`--crossconv` is a store_true and brings `--refpsf`."""
         argv, tail = self._argv_tail("/scratch/openuniverse_image.fits", True)
         args = self.parser.parse_args(tail)
 
         self.assertTrue(args.crossconv)
         self.assertEqual(args.refpsf, self.products["reference_psf"])
+
+    def test_segmentation_follows_its_own_key(self):
+        """Segmentation is release content, not a side effect of --crossconv."""
+        _argv, tail = self._argv_tail("/scratch/openuniverse_image.fits",
+                                      True, sfft_use_segmentation=False)
+        self.parser.parse_args(tail)
+        self.assertNotIn("--scisegm", tail)
+        self.assertNotIn("--refsegm", tail)
+
+        _argv, tail = self._argv_tail("/scratch/openuniverse_image.fits",
+                                      False, sfft_use_segmentation=True)
+        args = self.parser.parse_args(tail)
+        self.assertFalse(args.crossconv)
         self.assertTrue(args.scisegm.endswith("sfftscisegm.fits"))
         self.assertTrue(args.refsegm.endswith("sfftrefsegm.fits"))
 
@@ -329,19 +388,87 @@ class SfftArgvParsesTests(unittest.TestCase):
                                  f"retired SFFT flag in argv for {image}")
 
     def test_exactly_two_positionals(self):
-        """Six positionals is what the first extraction passed; two is legal."""
+        """Six positionals is what the first extraction passed; two is legal.
+
+        The scratch paths are absolute and must reach the parser unchanged:
+        the builder's "./" quirk applies to bare filenames only.
+        """
         for image in ("/scratch/rimtimsim_image.fits",
                       "/scratch/openuniverse_image.fits"):
             for crossconv in (True, False):
                 _argv, tail = self._argv_tail(image, crossconv)
-                positionals = [token for i, token in enumerate(tail)
-                               if not token.startswith("--")
-                               and (i == 0 or not tail[i - 1].startswith("--")
-                                    or tail[i - 1] in ("--crossconv",))]
-                # Simpler and stricter: the real parser accepts it, and
-                # argparse raises SystemExit on a third positional.
-                self.parser.parse_args(tail)
-                self.assertGreaterEqual(len(positionals), 2)
+                args = self.parser.parse_args(tail)
+                self.assertEqual(
+                    (args.scifile, args.reffile),
+                    (self.products["science_image_bkg_subbed"],
+                     self.products["gainmatched_reference_image"]))
+
+
+# ---------------------------------------------------------------------------
+# ZOGY's SN/SR source (dev PR #15, Jacob Jencson)
+# ---------------------------------------------------------------------------
+
+class ZogySigmaSourceTests(unittest.TestCase):
+    """ZOGY's SN and SR come from the uncertainty maps when
+    `[zogy] zogy_sn_sr_from_uncertainty_maps` is on, and are the monolith's
+    clipped standard deviations when it is off. The key was declared in
+    release content before anything read it; this pins the reader.
+    """
+
+    PRODUCTS = {
+        "science_image_bkg_subbed": "/scratch/sci_bkgsub.fits",
+        "gainmatched_reference_image": "/scratch/ref_gainmatched.fits",
+        "science_psf_normalized": "/scratch/scipsf_normalized.fits",
+        "reference_psf": "/scratch/refpsf.fits",
+        "science_uncert_image": "/scratch/sci_unc.fits",
+        "gainmatched_reference_uncert_image": "/scratch/ref_unc.fits",
+        "std_sci_img": 4.4321,
+        "std_ref_img": 0.31287,
+        "scalefacref": 17968.4,
+    }
+    SIGMAS = {"/scratch/sci_unc.fits": 1.5, "/scratch/ref_unc.fits": 0.25}
+
+    def setUp(self):
+        from pipeline.stages import science
+        self.science = science
+        self.release = _load_release_toml()
+        self.calls = []
+        self._saved = (science.run_tool, science.SOFTWARE_ROOT,
+                       science.zogynoise.background_sigma_from_uncertainty_map)
+        science.run_tool = lambda argv, **kwargs: self.calls.append(list(argv))
+        science.SOFTWARE_ROOT = lambda: "/code"
+        science.zogynoise.background_sigma_from_uncertainty_map = (
+            lambda filename, *args, **kwargs: self.SIGMAS[filename])
+
+    def tearDown(self):
+        (self.science.run_tool, self.science.SOFTWARE_ROOT,
+         self.science.zogynoise.background_sigma_from_uncertainty_map
+         ) = self._saved
+
+    def _run(self, flag):
+        science = copy.deepcopy(self.release)
+        science["zogy"]["zogy_sn_sr_from_uncertainty_maps"] = flag
+        context = _context(products=dict(self.PRODUCTS), science=science)
+        self.science.run_zogy(context)
+        return context, self.calls[-1]
+
+    def test_the_release_key_is_a_boolean(self):
+        self.assertIsInstance(
+            self.release["zogy"]["zogy_sn_sr_from_uncertainty_maps"], bool)
+
+    def test_flag_on_takes_the_sigmas_from_the_uncertainty_maps(self):
+        context, argv = self._run(True)
+        # py_zogy's positionals: sci, ref, scipsf, refpsf, sciunc, refunc,
+        # SN, SR, ... (monolith lines 1223-1237).
+        self.assertEqual(argv[8:10], ["1.5", "0.25"])
+        self.assertEqual(context.provenance["zogy_sn_used"], 1.5)
+        self.assertEqual(context.provenance["zogy_sr_used"], 0.25)
+
+    def test_flag_off_reproduces_the_monolith_pair(self):
+        context, argv = self._run(False)
+        self.assertEqual(argv[8:10],
+                         [str(4.4321), str(0.31287 * 17968.4)])
+        self.assertEqual(context.provenance["zogy_sn_used"], 4.4321)
 
 
 # ---------------------------------------------------------------------------
