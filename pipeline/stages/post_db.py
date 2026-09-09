@@ -557,7 +557,7 @@ def _write_sources_csv(context, catalogs, csv_path: str) -> int:
 
     # PhotUtils occasionally fits a source's centroid off the edge of the
     # image it was fit on — including NaN, when the fit fails to converge.
-    # `x_fit`/`y_fit` outside [-0.5, naxis+0.5] per axis are rejected before
+    # `x_fit`/`y_fit` outside [-0.5, naxis-0.5] per axis are rejected before
     # loading, the same range check the legacy loader applied
     # (`loadPSFCatIntoDBSourcesTable.py`, xy_fit_min/xy_fit_max_offset). The
     # `+1` on each axis accounts for the extra row and column appended to
@@ -588,7 +588,8 @@ def _write_sources_csv(context, catalogs, csv_path: str) -> int:
 def _xy_fit_in_range(row, naxis1, naxis2) -> bool:
     """True if `row`'s PSF-fit position is inside the image footprint.
 
-    A fit position outside `[-0.5, naxis + 0.5]` on either axis is rejected,
+    A fit position outside `[-0.5, naxis - 0.5]` on either axis is rejected
+    (`naxis` here is the padded size, one more than the configured image),
     NaN included — `math.isnan` makes the NaN case explicit rather than
     relying on a NaN comparison already being False.
     """
@@ -600,7 +601,7 @@ def _xy_fit_in_range(row, naxis1, naxis2) -> bool:
     y_fit = float(y_fit)
     if math.isnan(x_fit) or math.isnan(y_fit):
         return False
-    return (-0.5 <= x_fit <= naxis1 + 0.5) and (-0.5 <= y_fit <= naxis2 + 0.5)
+    return (-0.5 <= x_fit <= naxis1 - 0.5) and (-0.5 <= y_fit <= naxis2 - 0.5)
 
 
 def _copy_nulls(values):

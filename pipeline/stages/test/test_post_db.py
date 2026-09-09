@@ -1029,8 +1029,9 @@ class XyFitRangeTests(unittest.TestCase):
     `_xy_fit_in_range`. `naxis1`/`naxis2` here are already `+1`'d by the
     caller for SFFT's extra row and column, the same way
     `loadPSFCatIntoDBSourcesTable.py` was patched to do in the follow-up
-    commit (248d3897) — this test exercises the boundary the helper itself
-    enforces, not that addition.
+    commit (248d3897), and the upper bound is that padded size MINUS a
+    half pixel, exactly dev's `naxis - xy_fit_max_offset` — the last
+    pixel's far edge, not one pixel beyond it.
     """
 
     NAXIS1 = 4089  # naxis1_sciimage (4088) + 1, as the caller passes it.
@@ -1051,15 +1052,15 @@ class XyFitRangeTests(unittest.TestCase):
     def test_upper_boundary_is_inclusive(self):
         from pipeline.stages import post_db
 
-        row = {"x_fit": self.NAXIS1 + 0.5, "y_fit": self.NAXIS2 + 0.5}
+        row = {"x_fit": self.NAXIS1 - 0.5, "y_fit": self.NAXIS2 - 0.5}
         self.assertTrue(post_db._xy_fit_in_range(row, self.NAXIS1, self.NAXIS2))
 
     def test_just_outside_either_boundary_is_rejected(self):
         from pipeline.stages import post_db
 
         for x_fit, y_fit in ((-0.51, 2000.0), (2000.0, -0.51),
-                             (self.NAXIS1 + 0.51, 2000.0),
-                             (2000.0, self.NAXIS2 + 0.51)):
+                             (self.NAXIS1 - 0.49, 2000.0),
+                             (2000.0, self.NAXIS2 - 0.49)):
             with self.subTest(x_fit=x_fit, y_fit=y_fit):
                 row = {"x_fit": x_fit, "y_fit": y_fit}
                 self.assertFalse(
