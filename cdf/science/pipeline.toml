@@ -125,6 +125,24 @@ nrows = 6291458
 # min_n_images_to_coadd below agrees.
 min_images_to_coadd = 2
 
+# The reference PSF the science job differences with (ZOGY, SFFT) and fits
+# its own inline reference catalogue with: the master .ini's
+# [JOB_PARAMS] refimage_psf_filename. A filename template, resolved by
+# `pipeline.stages.reference_psf` in the `refimage_psfs/` directory beside
+# the manifest's science PSF, with FID replaced by the filter id and SCAID
+# by the two-digit detector. Release content because it is a reference-data
+# version (design/security.md, job configuration's three homes); the
+# generation it is read from is the manifest's.
+#
+# One reference PSF per filter, derived from the science PSFs
+# (`scripts/generate_refim_psfs.py`; the g0002-psf carry): the OpenUniverse,
+# rimtimsim and pre-2026-08-21 socsim form.
+refimage_psf_filename = "refimage_psf_fidFID.fits"
+# One coadd-aware reference PSF per detector, rotated into the science-image
+# frame — the 2026-08-21 socsim run (dev dba29433). Set with the matching
+# PSF generation:
+#refimage_psf_filename = "refimage_psf_f146_scaSCAID.fits"
+
 # diff_flavor MOVED to [product_roles] difference_image (2026-08-08). It
 # named which differencing algorithm's image feeds the alert cutout, which
 # is the same question the difference-image role answers for registration
@@ -164,6 +182,13 @@ cdelt2_refimage = 0.000030555555556
 crota2_refimage = 0.0
 min_n_images_to_coadd = 2
 max_n_images_to_coadd = 25
+# The north-up reference-image PSF the dedicated reference-image job fits
+# its PhotUtils catalogue with (dev d11c87d4): the master .ini's
+# [REF_IMAGE] refimage_psf_filename, resolved the same way as
+# science.refimage_psf_filename above. Distinct from that key on purpose —
+# the science job's reference PSF may be per-detector and rotated into the
+# science frame; this one is not.
+refimage_psf_filename = "refimage_psf_fidFID.fits"
 # The reference image's observation window, as MJD of observation: which
 # frames are eligible to be coadded into it. Release content, because it
 # selects the science inputs — the environment carried it as

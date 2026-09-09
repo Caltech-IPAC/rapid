@@ -58,6 +58,7 @@ from pipeline.mosaic_geometry import resolve_awaicgen_geometry
 from pipeline.runtime import science_config
 from pipeline.runtime.errors import InputError
 from pipeline.runtime.process import run_shell, run_tool
+from pipeline.stages import reference_psf as refpsf
 from pipeline.stages.publishing import (publish_products, split_s3_uri,
                                         verify_downloaded_input)
 
@@ -220,31 +221,28 @@ def download_inputs(context) -> None:
     #
     # The reference PSF belongs to a reference image, so where there is no
     # reference image there is no reference PSF to fetch. `_build_reference_image`
-    # produces the reference; the PSF for it is derived there, alongside it.
+    # produces the reference; the PSF for it is fetched there, alongside it.
     reference_uri = context.optional_fact("reference_image_uri")
     ref_psf = None
     if reference_uri is not None:
-        # THE MANIFEST NAMES IT; THIS USED TO DERIVE IT. The line here was
-        # `reference_uri.replace("image.fits", "psf.fits")`, which turns
-        # `awaicgen_output_mosaic_image.fits` into
-        # `awaicgen_output_mosaic_psf.fits` — an object the reference-image
-        # job has never written. Its attempt directory holds the mosaic, its
-        # coverage map, its uncertainty image, two catalogues and
-        # `WFI_SCA07_F146_PSF_DET_DIST.fits`, and no `*_mosaic_psf.fits`;
-        # the stage therefore failed `run_zogy` with FileNotFoundError on a
-        # path nothing had ever produced.
-        #
-        # `reference_image.download_reference_psf` — the dedicated
-        # reference-image job's own stage — resolves this from
-        # `psf_uri`, and that fact is the per-SCA detector PSF the
-        # coadd was built against. Reading the same fact here makes the two
-        # job types use one source for one thing, which is what the comment
-        # above already claimed ("the manifest now names the object
-        # outright") and what the code did not do. `science_image_catalog`
-        # further down already falls back to `psf_uri` for exactly this
-        # product, so this also stops the two paths disagreeing about which
-        # PSF a difference was made with.
-        ref_psf_uri = context.fact("psf_uri")
+        # THE REFERENCE PSF IS ITS OWN FILE, NOT THE SCIENCE PSF. The first
+        # extraction derived it from the reference-image URI by string
+        # surgery (`*_mosaic_image.fits` -> `*_mosaic_psf.fits`, an object
+        # nothing ever wrote) and was then repaired to `psf_uri` — the
+        # science image's own detector PSF — which made the two job types
+        # agree but differenced every unit with the wrong PSF. The monolith
+        # fetched `[JOB_PARAMS] refimage_psf_filename` from the
+        # `refimage_psfs/` directory beside the registered science PSFs,
+        # with the filter and (for the socsims' coadd-aware, per-detector
+        # PSFs) the detector substituted; that is the PSF the 2026-08-21
+        # run differenced with and the one the carried reference PSFs are
+        # for. `pipeline.stages.reference_psf` (`refpsf` here) does the same from the
+        # manifest's science PSF and the release-content template: same
+        # generation, named file.
+        ref_psf_uri = refpsf.reference_psf_uri(
+            context.fact("psf_uri"),
+            context.science_value("science", "refimage_psf_filename"),
+            context.fact("fid"), context.fact("sca"))
         ref_psf, _subdirs, downloaded = util.download_file_from_s3_bucket(
             context.s3, ref_psf_uri,
             outputfile=context.scratch(
@@ -435,27 +433,34 @@ def _build_reference_image(context, awaicgen) -> None:
     # branch there is no prebuilt reference to have downloaded one from — that
     # absence is what selected this branch. `download_inputs` therefore leaves
     # `reference_psf` unproduced here, and requiring it was the ordering defect
-    # that made the no-reference path unreachable. The dedicated
-    # reference-image job type resolves the same need from `psf_uri`
-    # (`reference_image.download_reference_psf`), and this uses the same
-    # source, so a reference built here and one built there are built from the
-    # same PSF.
+    # that made the no-reference path unreachable. The monolith fitted this
+    # catalogue with the same reference PSF it then differenced with
+    # (`awsBatchSubmitJobs_runSingleSciencePipeline.py:539-547`,
+    # `filename_refimage_psf`), and so does this: the `[science]` template,
+    # resolved beside the manifest's science PSF exactly as `download_inputs`
+    # resolves it on the other branch. The dedicated reference-image job fits
+    # its catalogue with the north-up `[ref_image]` PSF instead (dev
+    # d11c87d4, `reference_image.download_reference_psf`).
     psfcat_refimage = context.science_section("psfcat_refimage")
     if context.has_product("reference_psf"):
-        reference_psf = context.product("reference_psf")
+        reference_psf_file = context.product("reference_psf")
     else:
-        reference_psf_uri = context.fact("psf_uri")
-        reference_psf, _subdirs, downloaded = util.download_file_from_s3_bucket(
-            context.s3, reference_psf_uri,
-            outputfile=context.scratch(
-                "refpsf_" + os.path.basename(reference_psf_uri)))
+        reference_psf_uri = refpsf.reference_psf_uri(
+            context.fact("psf_uri"),
+            context.science_value("science", "refimage_psf_filename"),
+            context.fact("fid"), context.fact("sca"))
+        reference_psf_file, _subdirs, downloaded = \
+            util.download_file_from_s3_bucket(
+                context.s3, reference_psf_uri,
+                outputfile=context.scratch(
+                    "refpsf_" + os.path.basename(reference_psf_uri)))
         if not downloaded:
             raise InputError(
                 f"the reference PSF at {reference_psf_uri} could not be "
                 f"downloaded", uri=reference_psf_uri)
-        context.produce("reference_psf", reference_psf)
+        context.produce("reference_psf", reference_psf_file)
     refimage_psfcat = rfis.generatePhotUtilsReferenceImageCatalog(
-        mosaic_image_file, mosaic_uncert_image_file, reference_psf,
+        mosaic_image_file, mosaic_uncert_image_file, reference_psf_file,
         psfcat_refimage)
 
     (flag_psf_refimage_catalog, checksum_psf_refimage_catalog,

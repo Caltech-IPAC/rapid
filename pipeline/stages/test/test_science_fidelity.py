@@ -181,8 +181,17 @@ def _real_sfft_parser() -> argparse.ArgumentParser:
 
 
 class _Facts:
+    """A payload stand-in: every fact given is declared, as a real
+    payload declares its components and invocation facts."""
+    COMPONENTS = ()
+    INVOCATION_FACTS = ()
+
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+        self.INVOCATION_FACTS = tuple(kwargs)
+
+    def declares(self, name):
+        return name in self.__dict__
 
 
 class _Unit:
@@ -1533,3 +1542,115 @@ class LegacyUploadExcisionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# The reference PSF is its own file (dev d11c87d4, e3c15953 lineage)
+# ---------------------------------------------------------------------------
+
+class ReferencePsfComesFromReleaseContent(unittest.TestCase):
+    """The reference PSF is fetched from the `refimage_psfs/` directory beside
+    the manifest's science PSF, named by a release-content template with the
+    filter and detector substituted — not the science PSF itself, which is
+    what the first extraction differenced with.
+    """
+
+    FACTS = {
+        "science_image_uri": "s3://inputs/g0004-psf-f146/fits/sci.fits.gz",
+        "psf_uri": ("s3://inputs/g0004-psf-f146/psfs/"
+                    "sciimage_psf_f146_sca07.fits"),
+        "reference_image_uri": "s3://products/ref/awaicgen_output_mosaic_image.fits",
+        "fid": 8,
+        "sca": 7,
+    }
+
+    def setUp(self):
+        from pipeline.stages import reference_image, science
+        self.science = science
+        self.reference_image = reference_image
+        self.release = _load_release_toml()
+        self.downloads = []
+        self._saved = science.util.download_file_from_s3_bucket
+
+        def fake_download(_s3, uri, outputfile=None):
+            self.downloads.append(uri)
+            return outputfile or os.path.basename(uri), None, True
+
+        # One helper module serves both stage modules.
+        science.util.download_file_from_s3_bucket = fake_download
+
+    def tearDown(self):
+        self.science.util.download_file_from_s3_bucket = self._saved
+
+    def _science(self, section, template):
+        science = copy.deepcopy(self.release)
+        science[section]["refimage_psf_filename"] = template
+        return science
+
+    def test_both_templates_are_declared_in_release_content(self):
+        self.assertIsInstance(self.release["science"]["refimage_psf_filename"], str)
+        self.assertIsInstance(self.release["ref_image"]["refimage_psf_filename"], str)
+        self.assertTrue(self.release["science"]["refimage_psf_filename"])
+        self.assertTrue(self.release["ref_image"]["refimage_psf_filename"])
+
+    def test_science_download_inputs_fetches_the_templated_reference_psf(self):
+        context = _context(
+            facts=dict(self.FACTS),
+            science=self._science("science", "refimage_psf_f146_scaSCAID.fits"))
+        self.science.download_inputs(context)
+
+        self.assertEqual(
+            self.downloads[-1],
+            "s3://inputs/g0004-psf-f146/refimage_psfs/refimage_psf_f146_sca07.fits")
+        self.assertNotEqual(self.downloads[-1], self.FACTS["psf_uri"])
+        self.assertTrue(context.has_product("reference_psf"))
+        # The science PSF is still fetched, as its own product.
+        self.assertIn(self.FACTS["psf_uri"], self.downloads)
+        self.assertTrue(context.has_product("science_psf"))
+
+    def test_science_download_inputs_per_filter_template(self):
+        context = _context(
+            facts=dict(self.FACTS),
+            science=self._science("science", "refimage_psf_fidFID.fits"))
+        self.science.download_inputs(context)
+        self.assertEqual(
+            self.downloads[-1],
+            "s3://inputs/g0004-psf-f146/refimage_psfs/refimage_psf_fid8.fits")
+
+    def test_no_reference_means_no_reference_psf_download(self):
+        facts = dict(self.FACTS)
+        del facts["reference_image_uri"]
+        context = _context(facts=facts, science=self.release)
+        self.science.download_inputs(context)
+        self.assertFalse(context.has_product("reference_psf"))
+        self.assertEqual(len(self.downloads), 2)
+
+    def test_reference_image_job_fetches_the_north_up_psf(self):
+        """The dedicated job's catalogue PSF is the [ref_image] template."""
+        context = _context(
+            facts=dict(self.FACTS),
+            science=self._science("ref_image", "refimage_psf_fidFID.fits"))
+        context.job_type = "reference_image"
+        self.reference_image.download_reference_psf(context)
+        self.assertEqual(
+            self.downloads,
+            ["s3://inputs/g0004-psf-f146/refimage_psfs/refimage_psf_fid8.fits"])
+        self.assertTrue(context.has_product("reference_psf"))
+
+    def test_the_two_templates_are_read_from_their_own_sections(self):
+        """A science-job change to its reference PSF must not move the
+        reference-image job's catalogue PSF, and vice versa."""
+        science_source = inspect.getsource(self.science.download_inputs)
+        build_source = inspect.getsource(self.science._build_reference_image)
+        refimg_source = inspect.getsource(
+            self.reference_image.download_reference_psf)
+        self.assertIn('science_value("science", "refimage_psf_filename")',
+                      science_source)
+        self.assertIn('science_value("science", "refimage_psf_filename")',
+                      build_source)
+        self.assertIn('science_value("ref_image", "refimage_psf_filename")',
+                      refimg_source)
+        for source in (science_source, build_source, refimg_source):
+            self.assertNotIn('ref_psf_uri = context.fact("psf_uri")', source)
+            self.assertNotIn('reference_psf_uri = context.fact("psf_uri")',
+                             source)

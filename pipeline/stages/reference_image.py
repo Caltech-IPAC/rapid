@@ -29,6 +29,7 @@ import pipeline.referenceImageSubs as rfis
 from pipeline.mosaic_geometry import resolve_awaicgen_geometry
 from pipeline.runtime import science_config
 from pipeline.runtime.errors import InputError
+from pipeline.stages import reference_psf as refpsf
 from pipeline.stages.publishing import (publish_products, split_s3_uri,
                                         verify_downloaded_input)
 
@@ -39,8 +40,18 @@ CFG_PATH = science_config.config_directory
 
 
 def download_reference_psf(context) -> None:
-    """Fetch the reference-image PSF. (Monolith stage S4, lines 235-247.)"""
-    psf_uri = context.fact("psf_uri")
+    """Fetch the reference-image PSF. (Monolith stage S4, lines 235-247.)
+
+    The north-up PSF the PhotUtils reference catalogue is fitted with: the
+    monolith's `[REF_IMAGE] refimage_psf_filename` (dev d11c87d4), fetched
+    from the `refimage_psfs/` directory beside the manifest's science PSF
+    with the filter substituted. The first extraction downloaded `psf_uri`
+    — the science image's detector PSF — here instead.
+    """
+    psf_uri = refpsf.reference_psf_uri(
+        context.fact("psf_uri"),
+        context.science_value("ref_image", "refimage_psf_filename"),
+        context.fact("fid"), context.fact("sca"))
     psf, _subdirs, downloaded = util.download_file_from_s3_bucket(
         context.s3, psf_uri,
         outputfile=context.scratch(os.path.basename(psf_uri)))
