@@ -55,14 +55,18 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
 # Input S3 bucket, and optional key prefix within it (e.g. "g0001/" for a
-# single generation staged alongside others in a shared bucket).  Both are
-# env-var overridable so a new staging area does not require a code change;
-# the defaults preserve the original SOC-sims behavior.
+# single generation staged alongside others in a shared bucket).  There is
+# no safe default bucket: a forgotten -e INPUTBUCKET=... must not fall back
+# to silently admitting from some other, unrelated dataset, so this is
+# required.  The prefix stays optional -- a bucket-wide scan (no prefix) is
+# a legitimate scope.
 
 bucket_name_input = os.getenv('INPUTBUCKET')
 
-if bucket_name_input is None:
-    bucket_name_input = "socsims-fakesrc-fits-20260709-lite"
+if not bucket_name_input:
+
+    print("*** Error: Env. var. INPUTBUCKET not set; quitting...")
+    exit(64)
 
 prefix_input = os.getenv('INPUTPREFIX')
 
