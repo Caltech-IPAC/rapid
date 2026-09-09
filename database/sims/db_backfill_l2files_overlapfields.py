@@ -3,7 +3,7 @@
 """
 db_backfill_l2files_overlapfields.py — populate `l2files.overlapfields`,
 the per-image sky-tile footprint added by rapid_systems migration
-`100-l2files-overlapfields.sql`.
+`101-l2files-overlapfields.sql`.
 
 WHAT IT COMPUTES.  The EXACT set of sky tiles the science image overlaps,
 via `database.modules.utils.overlapping_fields.overlapping_fields` — see
@@ -55,8 +55,8 @@ and committed one batch at a time: an interruption loses at most one
 batch, never leaves a partial array, and holds no long transaction
 against a table the pipeline is writing to.
 
-ORDERING.  Run AFTER `100-l2files-overlapfields.sql` and BEFORE
-`102-l2files-overlapfields-index.sql` — 102 creates the GIN index and
+ORDERING.  Run AFTER `101-l2files-overlapfields.sql` and BEFORE
+`103-l2files-overlapfields-index.sql` — 103 creates the GIN index and
 refuses to apply while any row is still empty, and an unindexed
 `overlapfields` is what lets these UPDATEs take PostgreSQL's HOT path
 (HOT requires that no INDEXED column change).
@@ -88,7 +88,7 @@ swvers = "2.0"
 #: script can do anything.  Same floor-not-equality reading as
 #: `pipeline/intent/schema_contract.py`: a database carrying migrations this
 #: script has never heard of is fine, a database missing this one is not.
-REQUIRED_MIGRATION = "100-l2files-overlapfields.sql"
+REQUIRED_MIGRATION = "101-l2files-overlapfields.sql"
 
 #: Columns the computation needs.  `field` is read both to union into the
 #: result and to cross-check the geometry — see `preflight_centre_tile`.
@@ -107,7 +107,7 @@ def _footprint(row, naxis1, naxis2, min_overlap_pixels, union_field=True):
     can in principle disagree about which tile the exact centre falls in
     when the centre sits on a tile boundary.  Unioning costs nothing and
     makes `field = ANY(overlapfields)` true by construction, which is what
-    103's check asserts.  `union_field=False` is the preflight's handle on
+    104's check asserts.  `union_field=False` is the preflight's handle on
     the un-unioned geometry.
     """
 
@@ -560,7 +560,7 @@ def main(argv=None):
                     and args.rid_min is None and args.rid_max is None:
                 print("*** Warning: rows remain unpopulated after an "
                       "unrestricted run — re-run to converge before "
-                      "applying 102")
+                      "applying 103")
 
     finally:
         closed_form.close()

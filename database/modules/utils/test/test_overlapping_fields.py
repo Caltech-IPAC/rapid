@@ -166,7 +166,7 @@ class Shape(unittest.TestCase):
                             "every entry must be a valid rtid")
 
     def test_never_empty(self):
-        # 103's `cardinality(overlapfields) >= 1` check depends on this:
+        # 104's `cardinality(overlapfields) >= 1` check depends on this:
         # an image always covers at least the tile holding its centre,
         # and the inset shrinks the rectangle about that same centre, so
         # no threshold below half the detector can empty the result.
