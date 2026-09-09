@@ -18,9 +18,9 @@ for name in ("psycopg2", "boto3"):
             sys.modules[name] = stub
 
 from database.scripts.db_register_sciimg_psfs import (  # noqa: E402
-    PSF_OBJECT_PATTERN, select_psf_objects, split_s3_prefix)
+    PSF_OBJECT_PATTERN, generation_manifest_key, select_psf_objects, split_s3_prefix)
 
-PREFIX = "g0004-psf-f146/psfs/"
+PREFIX = "g0006-psf-f146/psfs/"
 
 
 class SplitPrefixTests(unittest.TestCase):
@@ -30,12 +30,23 @@ class SplitPrefixTests(unittest.TestCase):
                          ("roman-rapid-inputs-gbtds-sim", PREFIX))
 
     def test_trailing_slash_is_added(self):
-        self.assertEqual(split_s3_prefix("s3://b/g0004-psf-f146/psfs"),
+        self.assertEqual(split_s3_prefix("s3://b/g0006-psf-f146/psfs"),
                          ("b", PREFIX))
 
     def test_not_an_s3_uri_is_refused(self):
         with self.assertRaises(ValueError):
             split_s3_prefix("/local/psfs/")
+
+
+class GenerationManifestTests(unittest.TestCase):
+
+    def test_the_marker_sits_beside_psfs_in_the_generation(self):
+        self.assertEqual(generation_manifest_key(PREFIX), "g0006-psf-f146/_manifest.json")
+
+    def test_a_prefix_that_is_not_a_psfs_directory_is_refused(self):
+        for prefix in ("g0006-psf-f146/", "g0006-psf-f146/refimage_psfs/", "psfs/"):
+            with self.assertRaises(ValueError, msg=prefix):
+                generation_manifest_key(prefix)
 
 
 class SelectPsfObjectsTests(unittest.TestCase):
@@ -52,7 +63,7 @@ class SelectPsfObjectsTests(unittest.TestCase):
             PREFIX + "sciimage_psf_f146_sca01.fits",
             PREFIX + "manifest.json",
             PREFIX + "deeper/sciimage_psf_f146_sca02.fits",
-            "g0004-psf-f146/refimage_psfs/refimage_psf_f146_sca07.fits",
+            "g0006-psf-f146/refimage_psfs/refimage_psf_f146_sca07.fits",
             "g0002-psf/psfs/sciimage_psf_f146_sca03.fits",
         ]
         self.assertEqual(select_psf_objects(keys, PREFIX),
@@ -67,6 +78,17 @@ class SelectPsfObjectsTests(unittest.TestCase):
 
     def test_empty_when_nothing_matches(self):
         self.assertEqual(select_psf_objects([PREFIX + "notes.txt"], PREFIX), [])
+
+    def test_another_filters_psf_is_refused_not_registered(self):
+        # PSFs is keyed by (fid, sca): an F158 object under an F146 registration
+        # would become a version of the wrong identity, promotable over the right one.
+        keys = [PREFIX + "sciimage_psf_f146_sca07.fits",
+                PREFIX + "sciimage_psf_f158_sca07.fits"]
+        with self.assertRaises(ValueError) as caught:
+            select_psf_objects(keys, PREFIX, filter_name="f146")
+        self.assertIn("f158", str(caught.exception))
+        self.assertEqual(select_psf_objects(keys[:1], PREFIX, filter_name="F146"),
+                         [(keys[0], 7)])
 
 
 if __name__ == "__main__":

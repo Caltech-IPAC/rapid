@@ -11,7 +11,7 @@ import unittest
 from pipeline.runtime.errors import InputError
 from pipeline.stages.reference_psf import reference_psf_uri, substitute_tokens
 
-SCIENCE_PSF = ("s3://roman-rapid-inputs-gbtds-sim/g0004-psf-f146/psfs/"
+SCIENCE_PSF = ("s3://roman-rapid-inputs-gbtds-sim/g0006-psf-f146/psfs/"
                "sciimage_psf_f146_sca07.fits")
 
 
@@ -41,7 +41,7 @@ class ReferencePsfUriTests(unittest.TestCase):
         self.assertEqual(
             reference_psf_uri(SCIENCE_PSF, "refimage_psf_f146_scaSCAID.fits",
                               8, 7),
-            "s3://roman-rapid-inputs-gbtds-sim/g0004-psf-f146/refimage_psfs/"
+            "s3://roman-rapid-inputs-gbtds-sim/g0006-psf-f146/refimage_psfs/"
             "refimage_psf_f146_sca07.fits")
 
     def test_per_filter_template(self):
