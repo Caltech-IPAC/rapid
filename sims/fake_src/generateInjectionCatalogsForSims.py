@@ -92,7 +92,17 @@ config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
-debug = config_input['JOB_PARAMS']['debug']
+# int, not the raw string (dev 1e3e02da): configparser returns "0", which is
+# truthy, so SQL debug logging could never be turned off from the .ini.
+debug = int(config_input['JOB_PARAMS']['debug'])
+
+# Bucket subdirectory holding the per-field injection catalogues (dev 1e3e02da);
+# a new catalogue set is a new subdirectory, so it is configuration, not code.
+fake_sources_dict = config_input['FAKE_SOURCES']
+injection_catalogs_subdir = fake_sources_dict['injection_catalogs_subdir']
+
+# Set False to generate catalogues locally without publishing them (dev 7766b3bf).
+upload_to_bucket = True
 
 
 
@@ -105,7 +115,8 @@ if __name__ == '__main__':
 
     '''
     Generate all fake-source injection catalogs with fixed sky positions for the fields covered
-    by the simulations and upload them to s3://rapid-pipeline-files/injection_catalogs.
+    by the simulations and upload them to s3://<job_info_s3_bucket_base>/<injection_catalogs_subdir>,
+    both from the .ini ([JOB_PARAMS] and [FAKE_SOURCES]).
     Field number is also known as rtid (Roman tessellation ID).
     '''
 
@@ -160,26 +171,57 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
 
-        # Compute all fields that overlap the science image.
+        # Compute all fields that overlap the science image, two ways, and
+        # generate catalogues for the UNION (Russ Laher, dev b0124922 through
+        # 84c95a6c; only the chain's end state is carried, the intermediate
+        # commits each shipped a bug the next one fixed).
+        #
+        # get_overlapping_rtids returns one tuple per tile that the bounding
+        # box of the five input points touches: (rtid, ramin, ramax, decmin,
+        # decmax), e.g. (4649964, 268.02243, 268.11035, -28.58850, -28.50357).
+        # get_all_neighboring_rtids returns the ring of tiles around the
+        # image's own field, which should be a superset of the true overlap.
+        # Neither is exact for a rotated footprint, hence the union and the
+        # two set-difference diagnostics; compare_methods_overlapping_fields.py
+        # is the study of which method to keep.
 
         rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
+
+        print(f"Fields returned for science-image field = {field}")
+
+        rtids_list = [rtid_record[0] for rtid_record in rtid_records_list]
+        print(f"Fields returned by method get_overlapping_rtids = {rtids_list}")
+
+        neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
+        sciimg_overlapping_rtids = [field] + list(neighboring_rtids)
+        print(f"Fields returned by method get_all_neighboring_rtids = {sciimg_overlapping_rtids}")
+
+        union_list = sorted(set(rtids_list).union(sciimg_overlapping_rtids))
+
+        set_a = set(rtids_list)
+        set_b = set(sciimg_overlapping_rtids)
+        print("Fields returned by method get_overlapping_rtids that are not returned by method get_all_neighboring_rtids = " +
+              f"{[item for item in rtids_list if item not in set_b]}")
+        print("Fields returned by method get_all_neighboring_rtids that are not returned by method get_overlapping_rtids = " +
+              f"{[item for item in sciimg_overlapping_rtids if item not in set_a]}")
 
 
         # Skip injection-catalog generation for given rtid in list if it
         # already exists in the S3 bucket.
 
-        for rtid_record in rtid_records_list:
+        for rtid in union_list:
 
-            rtid = rtid_record[0]
+            # Dev 1e3e02da wrote the literal text "injection_catalogs_subdir/" into
+            # this URL (no braces), so the existence check never hit and every
+            # catalogue was regenerated on every run; never fixed on dev.
+            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket_base}/{injection_catalogs_subdir}/injection_catalog_rtid{rtid}.json"
 
-            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket_base}/injection_catalogs/injection_catalog_rtid{rtid}.json"
-
-            print("Try downloading {s3_full_name_injection_catalog}...")
+            print(f"Try downloading {s3_full_name_injection_catalog}...")
 
             injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
 
             if downloaded_from_bucket:
-                print("Injection catalog file {s3_full_name_injection_catalog} already exists; skipping...")
+                print(f"Injection catalog file {s3_full_name_injection_catalog} already exists; skipping...")
                 continue
 
 
@@ -192,11 +234,13 @@ if __name__ == '__main__':
             run_tool(generate_injection_catalog_cmd)
 
 
-            # Upload fake-source injection catalog to product S3 bucket.
+            # Optionally upload fake-source injection catalog to product S3 bucket.
 
-            s3_object_name_injection_catalog = "injection_catalogs/" + injection_catalog_filename
+            if upload_to_bucket:
 
-            util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket_base,[injection_catalog_filename],[s3_object_name_injection_catalog])
+                s3_object_name_injection_catalog = f"{injection_catalogs_subdir}/" + injection_catalog_filename
+
+                util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket_base,[injection_catalog_filename],[s3_object_name_injection_catalog])
 
 
         # Code-timing benchmark.
