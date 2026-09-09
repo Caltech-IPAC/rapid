@@ -22,6 +22,7 @@ from astropy.io import fits
 import numpy as np
 import boto3
 import re
+from astropy.wcs import WCS
 
 import modules.utils.rapid_pipeline_subs as util
 from pipeline.runtime.process import run_tool
@@ -53,6 +54,9 @@ for my_bucket_input_object in my_bucket_input.objects.all():
 
     input_fits_files.append(only_fname_input)
 
+n_input_fits_files = len(input_fits_files)
+print(f"n_input_fits_files = {n_input_fits_files}")
+
 
 # Loop over input FITS files.
 
@@ -76,6 +80,8 @@ for input_fits_file in input_fits_files:
     output_fits_file = input_fits_file.replace("_lvl02_RAPIDSIMS","")\
         .replace("_field03_rampfitted_exposureno","").replace("sim.fits","_lite.fits")
 
+    print("output_fits_file =",output_fits_file)
+
 
     # Read input FITS file.
 
@@ -89,10 +95,41 @@ for input_fits_file in input_fits_files:
     transpose_data = np.transpose(data)
 
 
-    # Modify CRPIX1,2 to image center.
+    # Print original values in FITS header.
 
-    hdr["CRPIX1"] = 2044.5
-    hdr["CRPIX2"] = 2044.5
+    crpix1_orig = hdr["CRPIX1"]
+    crpix2_orig = hdr["CRPIX2"]
+    crval1_orig = hdr['CRVAL1']
+    crval2_orig = hdr['CRVAL2']
+
+    print("crpix1_orig,crpix2_orig,crval1_orig,crval2_orig = " +
+          f"{crpix1_orig}, {crpix2_orig}, {crval1_orig}, {crval2_orig}")
+
+
+    # Awaicgen requires CRPIX keywords at image center, so we must recompute the CRVAL keywords.
+
+    crpix1 = 2044.5
+    crpix2 = 2044.5
+
+    wcs = WCS(hdr) # Initialize WCS object from FITS header
+
+    print(wcs)
+
+    pixel_x, pixel_y = crpix1 - 1, crpix2 - 1
+    celestial_coords = wcs.pixel_to_world(pixel_x, pixel_y)
+    print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to " +
+          f"{celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+
+    crval1 = celestial_coords.ra.deg
+    crval2 = celestial_coords.dec.deg
+
+    hdr["CRPIX1"] = crpix1
+    hdr["CRPIX2"] = crpix2
+
+    hdr["CRVAL1"] = crval1
+    hdr["CRVAL2"] = crval2
+
+    print(f"crpix1,crpix2,crval1,crval2 = {crpix1}, {crpix2}, {crval1}, {crval2}")
 
 
     # Remove CDELT1 and CDELT2 keywords.
@@ -122,12 +159,6 @@ for input_fits_file in input_fits_files:
     hdr["EXPTIME"] = exptime
 
 
-    # Add ZPTMAG keyword.
-
-    zptmag = 25.85726796291789           # From Ryan for F213.
-    hdr["ZPTMAG"] = zptmag
-
-
     # Add SCA_NUM keyword.
 
     detector = hdr["DETECTOR"]
@@ -151,8 +182,12 @@ for input_fits_file in input_fits_files:
     # (8 rows)
 
     filter = hdr["FILTER"]
+
+    zptmag = 0.0                                                     # Placeholder.
+
     if "213" in filter:
         translated_filter = filter.replace("F213","K213").strip()
+        zptmag = 25.85726796291789                                   # From Ryan for F213.
     elif "184" in filter:
         translated_filter = filter.replace("F184","F184").strip()
     elif "158" in filter:
@@ -165,19 +200,19 @@ for input_fits_file in input_fits_files:
         translated_filter = filter.replace("F106","Y106").strip()
     elif "087" in filter:
         translated_filter = filter.replace("F087","Z087").strip()
+        zptmag = 26.29818407774948                                   # From Ryan for F087.
     elif "146" in filter:
         translated_filter = filter.replace("F146","W146").strip()
     else:
-        print(f"*** Error: Unexpected filter = {filter}")
+        print(f"*** Error: Unexpected filter = {filter}; quitting...")
         exit(64)
 
     hdr["FILTER"] = translated_filter
 
 
-    # print input and output FITS filenames.
+    # Add ZPTMAG keyword.
 
-    print("input_fits_file =",input_fits_file)
-    print("output_fits_file =",output_fits_file)
+    hdr["ZPTMAG"] = zptmag
 
 
     # Modify CTYPE1 and CTYPE2 keyword values from TAN to TAN-SIP.
@@ -266,11 +301,21 @@ for input_fits_file in input_fits_files:
 
     # Clean up work directory.
 
+    # run_tool raises ToolError on a nonzero exit, so a failed removal here
+    # cannot fall through silently; no separate exit-code check is needed.
+
     rm_cmd = ['rm','-f',input_fits_file]
     run_tool(rm_cmd)
 
     rm_cmd = ['rm','-f',output_fits_file]
     run_tool(rm_cmd)
+
+    rm_cmd = ['rm','-f',gzipped_output_fits_file]
+    exitcode_from_rm = util.execute_command(rm_cmd)
+
+    if exitcode_from_rm > 0:
+        print(f"*** Error from rm -f {gzipped_output_fits_file}; quitting...")
+        exit(64)
 
 
 # Termination.
