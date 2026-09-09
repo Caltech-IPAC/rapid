@@ -225,7 +225,16 @@ post_zogy_keep_diffimg_lower_cov_map_thresh = 0.5
 zogy_output_diffimage_file = "zogy_diffimage.fits"
 zogy_output_diffpsf_file = "diffpsf.fits"
 zogy_output_scorrimage_file = "scorrimage.fits"
-zogy_sn_sr_from_uncertainty_maps = true
+# ZOGY's SN/SR from the uncertainty maps rather than the clipped image
+# scatter (dev PR #15, pipeline/zogyNoiseSubs.py). Dev's own note: "this
+# must be enabled together with the coadd-aware PSF set. The two are not
+# separable — measured on four frames, the ratio alone buys almost nothing
+# and the PSFs alone made the subtraction WORSE on three of the four.
+# Enable both or neither." The generation this release runs against carries
+# per-filter reference PSFs (science.refimage_psf_filename above), so this
+# stays off; the 8/21 socsim rerun sets both — the per-detector template
+# and this key — together.
+zogy_sn_sr_from_uncertainty_maps = false
 
 [sfft]
 run_sfft = true
