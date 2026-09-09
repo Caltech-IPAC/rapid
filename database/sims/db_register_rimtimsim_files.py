@@ -20,7 +20,17 @@ from database.sims.admission_bridge import (begin_admission_run,
                                             seal_admission_run)
 
 
-bucket_name_input = "rimtimsim-20260401-lite"
+# Input S3 bucket, env-var overridable as in db_register_socsim_files.py so a
+# new staging area does not require a code change. Default is the 2026-06-22
+# rimtimsim set (dev f2ce484c), written by sims/src/rimtimsim/convert_rimtimsim.py.
+
+bucket_name_input = os.getenv('INPUTBUCKET')
+
+if bucket_name_input is None:
+    bucket_name_input = "rimtimsim-260622-lite"
+
+print("bucket_name_input =",bucket_name_input)
+
 subdir_work = "/work"
 
 # Global variables.

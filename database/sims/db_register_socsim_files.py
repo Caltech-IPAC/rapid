@@ -62,7 +62,8 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 bucket_name_input = os.getenv('INPUTBUCKET')
 
 if bucket_name_input is None:
-    bucket_name_input = "socsims-fakesrc-fits-20260709-lite"
+    # The 2026-08-07 SOC-sim set (dev 2893531d), written by convert_socsims.py.
+    bucket_name_input = "socsims-fakesrc-fits-20260807-lite"
 
 prefix_input = os.getenv('INPUTPREFIX')
 
