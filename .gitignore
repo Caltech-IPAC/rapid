@@ -6,6 +6,7 @@
 # Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
 
 # uv scratch: the test suite is sometimes run through `uv run --with pytest`,
 # which synthesises these for that ephemeral harness. They are not this
