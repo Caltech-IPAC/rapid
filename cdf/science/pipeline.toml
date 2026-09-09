@@ -137,11 +137,11 @@ min_images_to_coadd = 2
 # One reference PSF per filter, derived from the science PSFs
 # (`scripts/generate_refim_psfs.py`; the g0002-psf carry): the OpenUniverse,
 # rimtimsim and pre-2026-08-21 socsim form.
-refimage_psf_filename = "refimage_psf_fidFID.fits"
+#refimage_psf_filename = "refimage_psf_fidFID.fits"
 # One coadd-aware reference PSF per detector, rotated into the science-image
 # frame — the 2026-08-21 socsim run (dev dba29433). Set with the matching
 # PSF generation:
-#refimage_psf_filename = "refimage_psf_f146_scaSCAID.fits"
+refimage_psf_filename = "refimage_psf_f146_scaSCAID.fits"
 
 # diff_flavor MOVED to [product_roles] difference_image (2026-08-08). It
 # named which differencing algorithm's image feeds the alert cutout, which
@@ -188,7 +188,14 @@ max_n_images_to_coadd = 25
 # science.refimage_psf_filename above. Distinct from that key on purpose —
 # the science job's reference PSF may be per-detector and rotated into the
 # science frame; this one is not.
-refimage_psf_filename = "refimage_psf_fidFID.fits"
+#refimage_psf_filename = "refimage_psf_fidFID.fits"
+# The 8/21 socsim rerun points this at the per-detector file too: g0006-psf-f146
+# stages no north-up per-filter reference PSF and the generation is sealed, so
+# the per-detector file is the only one that resolves. `pipeline.stages.
+# reference_psf` substitutes SCAID for either job. Whether the reference job's
+# PhotUtils step accepts a per-detector PSF semantically is what the run's
+# reference pipecleaner tests (reconciliation-manifest Residuals).
+refimage_psf_filename = "refimage_psf_f146_scaSCAID.fits"
 # The reference image's observation window, as MJD of observation: which
 # frames are eligible to be coadded into it. Release content, because it
 # selects the science inputs — the environment carried it as
@@ -233,8 +240,8 @@ zogy_output_scorrimage_file = "scorrimage.fits"
 # Enable both or neither." The generation this release runs against carries
 # per-filter reference PSFs (science.refimage_psf_filename above), so this
 # stays off; the 8/21 socsim rerun sets both — the per-detector template
-# and this key — together.
-zogy_sn_sr_from_uncertainty_maps = false
+# and this key — together. This is that rerun: both are set.
+zogy_sn_sr_from_uncertainty_maps = true
 
 [sfft]
 run_sfft = true
