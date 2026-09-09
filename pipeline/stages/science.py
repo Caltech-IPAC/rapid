@@ -1167,26 +1167,59 @@ def _sfft_argv(context, sfft_code, science_image, crossconv_flag) -> list:
     extraction had this branch inverted as well as misnamed.
 
     `--crossconv` is `action="store_true"`, so it is present or absent — never
-    given a value — and it brings `--refpsf`, `--scisegm` and `--refsegm` with
-    it. `--scipsf` is passed unconditionally.
-    """
-    filename_scifile = context.product("science_image_bkg_subbed")
-    filename_reffile = context.product("gainmatched_reference_image")
+    given a value — and it brings `--refpsf` with it. `--scipsf` is passed
+    unconditionally.
 
-    if os.path.basename(science_image).startswith("r"):
-        argv = [PYTHON, sfft_code,
-                filename_scifile,
-                filename_reffile,
-                "--bsmaskvalue", "20000.0",
-                "--bsmaskradius", "30.0"]
-    else:
-        argv = [PYTHON, sfft_code,
-                filename_scifile,
-                filename_reffile,
-                "--scicat", context.product("science_gainmatch_sexcat"),
-                "--refcat", context.product("reference_gainmatch_sexcat"),
-                "--bsmaskvalue", "50.0",
-                "--bsmaskradius", "100.0"]
+    **MASKING IS RELEASE CONTENT, NOT A FILENAME TEST** (Jacob Jencson, dev
+    e3c15953, `pipeline/sfftCommandSubs.py`). The monolith chose the
+    bright-source mask and whether to pass the gain-match catalogues by
+    testing whether the science-image filename began with "r". That conflated
+    the socsims with the rimtimsims and would silently hand a future
+    lower-case "roman_*" data set the socsims settings. The four `[sfft]`
+    keys below decide it instead, so the configuration digest records the
+    choice. Segmentation masking used to be appended only inside the
+    cross-convolution branch — an accidental side effect of `crossconv_flag`
+    — and is now its own key; the tool generates the segmentation images on
+    the fly when the named files do not exist (`sfft_rapid_rimtimsim.py:314`),
+    so passing them with cross-convolution off is safe.
+
+    Dev's builder prepends "./" to the two positionals, a workaround for the
+    monolith's bare filenames. NOT carried: SFFT derives its output directory
+    from `os.path.dirname(scifile)` (`sfft_rapid_rimtimsim.py:206-217`), and
+    "./" in front of an absolute scratch path would send every output to the
+    working directory instead of scratch. `science_image` is kept in the
+    signature for the callers and tests; it no longer selects anything.
+    """
+    del science_image  # retired as a selector; see the docstring
+    sfft = context.science_section("sfft")
+    bsmask_value = float(sfft["sfft_bsmask_value"])
+    bsmask_radius = float(sfft["sfft_bsmask_radius"])
+    use_gainmatch_catalogs = bool(sfft["sfft_use_gainmatch_catalogs"])
+    use_segmentation = bool(sfft["sfft_use_segmentation"])
+
+    if crossconv_flag and not use_segmentation:
+        # Dev 7d852692: SFFT derives its decorrelation background sigmas from
+        # the mask's background pixels and raises only when that set is
+        # EMPTY, not when it is wrong. Without segmentation the "background"
+        # is ~5000 dilation-disc pixels, so cross-convolution runs on
+        # source-dominated sigmas and silently loses ~20% of depth. Loud
+        # rather than fatal: the release chose both keys, and the digest
+        # records them.
+        context.logger.warning(
+            "sfft: crossconv_flag is on but sfft_use_segmentation is off; "
+            "decorrelation sigmas will come from the dilation mask, not the "
+            "background (see [sfft] in cdf/science/pipeline.toml)")
+
+    argv = [PYTHON, sfft_code,
+            context.product("science_image_bkg_subbed"),
+            context.product("gainmatched_reference_image")]
+
+    if use_gainmatch_catalogs:
+        argv += ["--scicat", context.product("science_gainmatch_sexcat"),
+                 "--refcat", context.product("reference_gainmatch_sexcat")]
+
+    argv += ["--bsmaskvalue", str(bsmask_value),
+             "--bsmaskradius", str(bsmask_radius)]
 
     # If crossconv is off, the SFFT difference-image PSF is just the science
     # image's PSF — which is why --scipsf is unconditional (monolith 1880-1883).
@@ -1194,8 +1227,10 @@ def _sfft_argv(context, sfft_code, science_image, crossconv_flag) -> list:
 
     if crossconv_flag:
         argv += ["--crossconv",
-                 "--refpsf", context.product("reference_psf"),
-                 "--scisegm", context.scratch("sfftscisegm.fits"),
+                 "--refpsf", context.product("reference_psf")]
+
+    if use_segmentation:
+        argv += ["--scisegm", context.scratch("sfftscisegm.fits"),
                  "--refsegm", context.scratch("sfftrefsegm.fits")]
 
     return argv

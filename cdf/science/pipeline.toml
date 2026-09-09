@@ -204,10 +204,25 @@ zogy_sn_sr_from_uncertainty_maps = true
 
 [sfft]
 run_sfft = true
+# crossconv_flag = true REQUIRES sfft_use_segmentation = true (Jacob Jencson,
+# dev 7d852692). SFFT derives its decorrelation background sigmas from the
+# mask's background pixels and raises only when that set is EMPTY, not when
+# it is wrong; without segmentation the "background" is ~5000 dilation-disc
+# pixels, so the sigmas are source-dominated (measured: Nyquist noise boosted
+# ~169x, difference-PSF n_eff 15.5 vs 11.4, ~20% depth lost instead of ~4%).
+# `_sfft_argv` logs a warning for that combination.
 crossconv_flag = false
+# Bright-source masking and catalogue use, per data set (dev e3c15953; these
+# replaced a test on the science-image filename's first letter):
+#   socsims / rimtimsims: 20000.0 / 30.0 / no catalogues
+#   OpenUniverse:          50.0 / 100.0 / catalogues (and segmentation on)
 sfft_bsmask_value = 20000.0
 sfft_bsmask_radius = 30.0
 sfft_use_gainmatch_catalogs = false
+# Segmentation masking suits sparse extragalactic fields; in the bulge the
+# SExtractor footprints merge and cover nearly the whole frame, so the mask is
+# close to inert. Independent of crossconv_flag since dev e3c15953. The tool
+# generates the segmentation images itself when the named files are absent.
 sfft_use_segmentation = false
 
 [awaicgen]

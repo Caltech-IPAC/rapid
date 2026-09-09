@@ -254,8 +254,24 @@ class SfftArgvParsesTests(unittest.TestCase):
             "reference_gainmatch_sexcat": "/scratch/refgainmatch.txt",
         }
 
-    def _argv_tail(self, science_image, crossconv):
-        context = _context(products=self.products)
+    # The socsims masking block as release content ships it, and the two
+    # alternates dev's .ini documents (dev e3c15953): rimtimsims share the
+    # socsims mask; OpenUniverse masks gently and passes the catalogues.
+    SOCSIMS = {"sfft_bsmask_value": 20000.0, "sfft_bsmask_radius": 30.0,
+               "sfft_use_gainmatch_catalogs": False,
+               "sfft_use_segmentation": False}
+    OPENUNIVERSE = {"sfft_bsmask_value": 50.0, "sfft_bsmask_radius": 100.0,
+                    "sfft_use_gainmatch_catalogs": True,
+                    "sfft_use_segmentation": True}
+
+    def _science(self, sfft_overrides=None):
+        import copy
+        science = copy.deepcopy(_load_release_toml())
+        science["sfft"].update(sfft_overrides or {})
+        return science
+
+    def _argv_tail(self, science_image, crossconv, sfft=None):
+        context = _context(products=self.products, science=self._science(sfft))
         argv = self.science._sfft_argv(
             context, "/code/modules/sfft/sfft_rapid_rimtimsim.py",
             science_image, crossconv)
@@ -263,28 +279,30 @@ class SfftArgvParsesTests(unittest.TestCase):
         # everything after them.
         return argv, argv[2:]
 
-    def test_rimtimsim_argv_parses(self):
-        """The "r"-prefixed branch: no catalogues, hard bright-source mask."""
+    def test_release_content_argv_parses(self):
+        """The release's own [sfft] block: no catalogues, hard mask."""
         argv, tail = self._argv_tail("/scratch/rimtimsim_image.fits", False)
         args = self.parser.parse_args(tail)
 
         self.assertEqual(args.scifile, self.products["science_image_bkg_subbed"])
         self.assertEqual(args.reffile,
                          self.products["gainmatched_reference_image"])
-        # The monolith's constants, lines 1857-1860.
+        # The socsims/rimtimsims constants (monolith lines 1857-1860, now
+        # cdf/science/pipeline.toml [sfft]).
         self.assertEqual(args.bsmaskvalue, 20000.0)
         self.assertEqual(args.bsmaskradius, 30.0)
-        # This branch passes no catalogues (lines 1853-1860).
         self.assertIsNone(args.scicat)
         self.assertIsNone(args.refcat)
         # --scipsf is unconditional (lines 1882-1883).
         self.assertEqual(args.scipsf,
                          self.products["science_psf_normalized"])
         self.assertFalse(args.crossconv)
+        self.assertIsNone(args.scisegm)
 
-    def test_openuniverse_argv_parses_and_carries_catalogues(self):
-        """The non-"r" branch: gain-match catalogues, gentle mask."""
-        argv, tail = self._argv_tail("/scratch/openuniverse_image.fits", False)
+    def test_openuniverse_settings_carry_catalogues(self):
+        """The OpenUniverse block: gain-match catalogues, gentle mask."""
+        argv, tail = self._argv_tail("/scratch/openuniverse_image.fits", False,
+                                     sfft=self.OPENUNIVERSE)
         args = self.parser.parse_args(tail)
 
         # The monolith's constants, lines 1867-1878.
@@ -295,15 +313,63 @@ class SfftArgvParsesTests(unittest.TestCase):
         self.assertEqual(args.bsmaskvalue, 50.0)
         self.assertEqual(args.bsmaskradius, 100.0)
 
+    def test_filename_no_longer_selects_the_mask(self):
+        """Dev e3c15953: the "r"-prefix test conflated socsims and rimtimsims.
+
+        Under one release the argv is identical whatever the science image is
+        called; only release content chooses the mask.
+        """
+        for sfft in (self.SOCSIMS, self.OPENUNIVERSE):
+            argv_r, _ = self._argv_tail("/scratch/rimtimsim_image.fits",
+                                        False, sfft=sfft)
+            argv_o, _ = self._argv_tail("/scratch/openuniverse_image.fits",
+                                        False, sfft=sfft)
+            self.assertEqual(argv_r, argv_o)
+
     def test_crossconv_argv_parses(self):
-        """`--crossconv` is a store_true and brings three companions."""
-        argv, tail = self._argv_tail("/scratch/openuniverse_image.fits", True)
+        """`--crossconv` is a store_true and brings `--refpsf` with it."""
+        argv, tail = self._argv_tail("/scratch/openuniverse_image.fits", True,
+                                     sfft=self.OPENUNIVERSE)
         args = self.parser.parse_args(tail)
 
         self.assertTrue(args.crossconv)
         self.assertEqual(args.refpsf, self.products["reference_psf"])
         self.assertTrue(args.scisegm.endswith("sfftscisegm.fits"))
         self.assertTrue(args.refsegm.endswith("sfftrefsegm.fits"))
+
+    def test_segmentation_is_independent_of_crossconv(self):
+        """Dev e3c15953: segmentation was an accident of the crossconv branch.
+
+        It is its own key now, in both directions. The tool generates the
+        segmentation images itself when the named files do not exist
+        (`sfft_rapid_rimtimsim.py:314-315`), so on-without-crossconv is safe.
+        """
+        _argv, tail = self._argv_tail(
+            "/scratch/x.fits", False,
+            sfft=dict(self.SOCSIMS, sfft_use_segmentation=True))
+        args = self.parser.parse_args(tail)
+        self.assertFalse(args.crossconv)
+        self.assertTrue(args.scisegm.endswith("sfftscisegm.fits"))
+
+        _argv, tail = self._argv_tail(
+            "/scratch/x.fits", True,
+            sfft=dict(self.SOCSIMS, sfft_use_segmentation=False))
+        args = self.parser.parse_args(tail)
+        self.assertTrue(args.crossconv)
+        self.assertIsNone(args.scisegm)
+        self.assertIsNone(args.refsegm)
+
+    def test_positionals_are_not_dot_slash_prefixed(self):
+        """Dev's builder prepends "./" to the positionals; smdc must not.
+
+        SFFT writes its outputs beside `os.path.dirname(scifile)`
+        (`sfft_rapid_rimtimsim.py:206-217`); "./" in front of an absolute
+        scratch path would move every output into the working directory.
+        """
+        _argv, tail = self._argv_tail("/scratch/x.fits", False)
+        self.assertEqual(tail[0], self.products["science_image_bkg_subbed"])
+        self.assertEqual(tail[1], self.products["gainmatched_reference_image"])
+        self.assertFalse(tail[0].startswith("./"))
 
     def test_crossconv_is_never_given_a_value(self):
         """The first extraction emitted `--crossconv_flag False`.
