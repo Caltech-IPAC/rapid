@@ -556,9 +556,11 @@ def register_files():
     # (rule 20's durability clause), and the release pointer read ONCE.
     #
     # This script's inputs are enumerated per subdirectory rather than per
-    # object, so the manifest entries are the 18-file sets it copies. The
-    # ordering is unchanged: created UNSEALED, everything enumerated,
-    # admissions made, SEALED LAST.
+    # object, so the manifest entries are the 18-file sets it copies. THE
+    # ORDER IS ENUMERATE, SEAL, THEN ADMIT: 051's BEFORE INSERT triggers
+    # refuse any admission that cites a manifest whose `sealed_at IS NULL`,
+    # so sealing cannot wait until every subdirectory is processed. See
+    # `backfill_g0001_admission.py`'s docstring for the same reasoning.
 
     manifest_key = "troxel-%s" % datetime.now(timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ")
@@ -590,6 +592,22 @@ def register_files():
             n_enumerated += 1
     dbh.conn.commit()
     print(f"enumerated {n_enumerated} source object(s) into the manifest")
+
+    # SEAL RIGHT AFTER ENUMERATION, NOT AT THE END OF THE RUN. 051's
+    # BEFORE INSERT triggers (`admission_l2files_manifest_sealed` /
+    # `admission_exposures_manifest_sealed`) refuse any admission that
+    # cites a manifest whose `sealed_at IS NULL` -- so the manifest must
+    # already be sealed before the per-subdirectory loop below makes its
+    # first admission, not after it. Sealing here records that the
+    # ENUMERATION is complete and durable (051's meaning), not that
+    # every subdirectory was processed -- a shorter run still leaves a
+    # sealed manifest, but one whose admissions are incomplete, visible
+    # afterward as the gap between the manifest's `entry_count` and the
+    # number of rows actually joined in `admission_l2files`. The
+    # nfiles-vs-len(files_input) summary below still reports the
+    # shortfall directly.
+
+    print("manifest sealed:", seal_admission_run(dbh))
 
     # Loop over subdirs and copy 18 files from S3 bucket with one copy command.
 
@@ -642,14 +660,10 @@ def register_files():
 
     print("nfiles =",nfiles)
 
-
-    # SEAL LAST, and only when every enumerated subdirectory was processed.
-
-    if nfiles == len(files_input) and nfiles > 0:
-        print("manifest sealed:", seal_admission_run(dbh))
-    else:
-        print(f"manifest left UNSEALED ({nfiles} of {len(files_input)} "
-              f"subdirectories processed)")
+    if nfiles != len(files_input):
+        print(f"*** {nfiles} of {len(files_input)} subdirectories "
+              f"processed: manifest is sealed but its admissions are "
+              f"incomplete")
 
 
     # Close database connection.

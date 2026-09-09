@@ -570,11 +570,11 @@ def register_files():
     # (rule 20's durability clause), and the release pointer read ONCE so a
     # switch mid-run cannot split this manifest across two releases.
     #
-    # The ordering is the guarantee: created UNSEALED, every source object
-    # enumerated, admissions made, SEALED LAST — so a crash leaves either a
-    # complete replayable record or an explicitly unsealed one. 051's trigger
-    # enforces the other half by refusing an admission that cites an unsealed
-    # manifest.
+    # THE ORDER IS ENUMERATE, SEAL, THEN ADMIT. 051's BEFORE INSERT triggers
+    # refuse any admission that cites a manifest whose `sealed_at IS NULL`,
+    # so the manifest must already be sealed before the first admission
+    # cites it — sealing cannot wait until every file is admitted. See
+    # `backfill_g0001_admission.py`'s docstring for the same reasoning.
 
     manifest_key = "rimtimsim-%s" % datetime.now(timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ")
@@ -596,6 +596,21 @@ def register_files():
                          size=head.get("ContentLength"), algorithm=algorithm)
     dbh.conn.commit()
 
+    # SEAL RIGHT AFTER ENUMERATION, NOT AT THE END OF THE RUN. 051's
+    # BEFORE INSERT triggers (`admission_l2files_manifest_sealed` /
+    # `admission_exposures_manifest_sealed`) refuse any admission that
+    # cites a manifest whose `sealed_at IS NULL` -- so the manifest must
+    # already be sealed before the per-file loop below makes its first
+    # admission, not after it. Sealing here records that the
+    # ENUMERATION is complete and durable (051's meaning), not that
+    # every file was admitted -- a shorter run still leaves a sealed
+    # manifest, but one whose admissions are incomplete, visible
+    # afterward as the gap between the manifest's `entry_count` and the
+    # number of rows actually joined in `admission_l2files`. The
+    # nfiles-vs-len(input_fits_files) summary below still reports the
+    # shortfall directly.
+
+    print("manifest sealed:", seal_admission_run(dbh))
 
     # Loop over files from S3 bucket with one copy command.
 
@@ -642,16 +657,9 @@ def register_files():
         nfiles += 1
 
 
-    # SEAL LAST, and only when every enumerated file was admitted. A shorter
-    # run leaves the manifest explicitly UNSEALED, which is the honest record
-    # of a partial ingest: some of what it enumerated was never admitted, and
-    # 051 refuses to let a later admission cite it.
-
-    if nfiles == len(input_fits_files) and nfiles > 0:
-        print("manifest sealed:", seal_admission_run(dbh))
-    else:
-        print(f"manifest left UNSEALED ({nfiles} of "
-              f"{len(input_fits_files)} admitted)")
+    if nfiles != len(input_fits_files):
+        print(f"*** {nfiles} of {len(input_fits_files)} admitted: "
+              f"manifest is sealed but its admissions are incomplete")
 
 
     # Close database connection.

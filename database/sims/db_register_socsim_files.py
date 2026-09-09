@@ -1105,27 +1105,33 @@ if __name__ == '__main__':
     admission_dbh.conn.commit()
     print(f"enumerated {n_to_register} source object(s) into the manifest")
 
+    # SEAL RIGHT AFTER ENUMERATION, NOT AT THE END OF THE RUN. 051's
+    # BEFORE INSERT triggers (`admission_l2files_manifest_sealed` /
+    # `admission_exposures_manifest_sealed`) refuse any admission that
+    # cites a manifest whose `sealed_at IS NULL` -- so the manifest must
+    # already be sealed before the per-file phase below makes its first
+    # admission, not after it. Sealing here records that the ENUMERATION
+    # is complete and durable (051's meaning: every entry this manifest
+    # will ever have is already written), not that every file was
+    # admitted -- a run with per-file failures still leaves a sealed
+    # manifest, but one whose admissions are incomplete. That is visible
+    # afterward as the gap between the manifest's `entry_count` and the
+    # number of rows actually joined in `admission_l2files`, which is
+    # exactly what the acceptance query for this table checks, and the
+    # `n_failed`/`n_registered` summary below still reports it directly.
+
+    sealed = seal_admission_run(admission_dbh)
+    print(f"manifest sealed: {sealed}")
+
     if num_cores > 1:
         n_registered,n_failed = execute_parallel_processes(sorted_input_fits_files,num_cores)
     else:
         thread_index = 0
         n_registered,n_failed = run_single_core_job(sorted_input_fits_files,thread_index)
 
-
-    # SEAL LAST, AND ONLY ON A CLEAN RUN. A run with failures leaves the
-    # manifest explicitly UNSEALED, which is the honest state: some of what it
-    # enumerated was never admitted, and 051 refuses to let a later admission
-    # cite it. Sealing a manifest whose admissions are partial is the one
-    # outcome the crash ordering exists to prevent, so a failed run must not
-    # do it as a tidy-up.
-
-    if n_failed == 0 and n_registered > 0:
-        sealed = seal_admission_run(admission_dbh)
-        print(f"manifest sealed: {sealed}")
-    else:
-        print(f"manifest left UNSEALED ({n_failed} failure(s), "
-              f"{n_registered} registered): an unsealed manifest is the "
-              f"honest record of a partial run")
+    if n_failed > 0:
+        print(f"*** {n_failed} failure(s), {n_registered} registered: "
+              f"manifest is sealed but its admissions are incomplete")
     admission_dbh.close()
 
 
