@@ -311,11 +311,7 @@ for input_fits_file in input_fits_files:
     run_tool(rm_cmd)
 
     rm_cmd = ['rm','-f',gzipped_output_fits_file]
-    exitcode_from_rm = util.execute_command(rm_cmd)
-
-    if exitcode_from_rm > 0:
-        print(f"*** Error from rm -f {gzipped_output_fits_file}; quitting...")
-        exit(64)
+    run_tool(rm_cmd)    # raises ToolError on failure; no exit code to check
 
 
 # Termination.
