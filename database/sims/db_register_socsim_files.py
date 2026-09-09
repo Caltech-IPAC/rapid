@@ -1,6 +1,7 @@
 import boto3
 import os
 import time
+import traceback
 import numpy as np
 import re
 import healpy as hp
@@ -285,6 +286,7 @@ def run_single_core_job(fits_files,index_thread):
             fh.write(f"*** Error: Registration failed for {input_fits_file}: {e}\n")
             fh.flush()
             print(f"*** Error: Registration failed for {input_fits_file}: {e}")
+            traceback.print_exc()
 
 
         # Clean up work directory.  Best-effort: a leftover file in the work
