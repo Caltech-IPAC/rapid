@@ -1495,9 +1495,9 @@ class RAPIDDB:
 
         if exclude_rid:
             query += "and a.rid != %s " +\
-                              "order by dist; "
+                              "order by a.mjdobs, dist; "
         else:
-            query += "order by dist; "
+            query += "order by a.mjdobs, dist; "
 
 
         # The observation window the reference image's inputs are drawn from.
@@ -4788,7 +4788,7 @@ class RAPIDDB:
             record_dict["hp6"] = record[12]
             record_dict["hp9"] = record[13]
             record_dict["mjdobs"] = record[14]
-            record_dict["dateobs"] = record[14]
+            record_dict["dateobs"] = record[15]
 
         else:
             print("*** Error from get_l2file_recs_for_sources: " +
