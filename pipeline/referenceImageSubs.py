@@ -396,6 +396,11 @@ def generateSExtractorReferenceImageCatalog(filename_refimage_image,
                                             sextractor_refimage_dict):
 
 
+    # Code-timing benchmark (dev f07e1ce5): reference-catalogue generation is
+    # the dominant cost of the reference-image pipeline (8/13/26 rimtimsim test).
+    start_time_benchmark = time.time()
+
+
     # Compute SExtractor catalog for reference image.
 
     filename_refimage_catalog = filename_refimage_image.replace("image.fits","refimsexcat.txt")
@@ -433,6 +438,13 @@ def generateSExtractorReferenceImageCatalog(filename_refimage_image,
     generateReferenceImageCatalog_return_list = []
     generateReferenceImageCatalog_return_list.append(checksum_refimage_catalog)
     generateReferenceImageCatalog_return_list.append(filename_refimage_catalog)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("=====> Elapsed time in seconds just to generate reference-image SExtractor catalog =",
+        round(end_time_benchmark - start_time_benchmark,3))
 
     return generateReferenceImageCatalog_return_list
 
@@ -551,6 +563,10 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
                                            filename_refimage_uncert,
                                            filename_refimage_psf,
                                            psfcat_refimage_dict):
+
+
+    # Code-timing benchmark (dev f07e1ce5).
+    start_time_benchmark = time.time()
 
 
     # Generate PSF-fit catalog for reference image using PhotUtils.
@@ -706,5 +722,12 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
     generateReferenceImageCatalog_return_list.append(checksum_psfcat_finder_filename)
     generateReferenceImageCatalog_return_list.append(output_psfcat_filename)
     generateReferenceImageCatalog_return_list.append(output_psfcat_finder_filename)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("=====> Elapsed time in seconds just to generate reference-image PhotUtils catalog =",
+        round(end_time_benchmark - start_time_benchmark,3))
 
     return generateReferenceImageCatalog_return_list
