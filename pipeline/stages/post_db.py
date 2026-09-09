@@ -58,6 +58,7 @@ bulk-queue job types").
 import contextlib
 import csv
 import logging
+import math
 import os
 
 from psycopg2 import sql
@@ -552,18 +553,54 @@ def _write_sources_csv(context, catalogs, csv_path: str) -> int:
     # declared unit field, which is where it actually lives.
     sca = int(_unit_field(context, "sca"))
     written = 0
+    rejected = 0
+
+    # PhotUtils occasionally fits a source's centroid off the edge of the
+    # image it was fit on — including NaN, when the fit fails to converge.
+    # `x_fit`/`y_fit` outside [-0.5, naxis+0.5] per axis are rejected before
+    # loading, the same range check the legacy loader applied
+    # (`loadPSFCatIntoDBSourcesTable.py`, xy_fit_min/xy_fit_max_offset). The
+    # `+1` on each axis accounts for the extra row and column appended to
+    # the science image ahead of SFFT differencing
+    # (`differenceImageSubs.py:44-49`, "Resize images to 4089x4089"), which
+    # is also true on this branch.
+    naxis1 = int(context.science_value("instrument", "naxis1_sciimage")) + 1
+    naxis2 = int(context.science_value("instrument", "naxis2_sciimage")) + 1
 
     with open(csv_path, "w", newline="") as handle:
         writer = csv.writer(handle)
         for path, product in catalogs:
             positive = "_negative" not in os.path.basename(path)
             for row in util.read_psfcat_rows(path):
+                if not _xy_fit_in_range(row, naxis1, naxis2):
+                    rejected += 1
+                    continue
                 writer.writerow(_copy_nulls(
                     _sources_row(row, product, positive, sca)))
                 written += 1
 
-    context.logger.info("wrote %d source row(s) to %s", written, csv_path)
+    context.logger.info(
+        "wrote %d source row(s) to %s (rejected %d with out-of-range "
+        "x_fit/y_fit)", written, csv_path, rejected)
     return written
+
+
+def _xy_fit_in_range(row, naxis1, naxis2) -> bool:
+    """True if `row`'s PSF-fit position is inside the image footprint.
+
+    A fit position outside `[-0.5, naxis + 0.5]` on either axis is rejected,
+    NaN included — `math.isnan` makes the NaN case explicit rather than
+    relying on a NaN comparison already being False.
+    """
+    x_fit = row.get("x_fit")
+    y_fit = row.get("y_fit")
+    if x_fit is None or y_fit is None:
+        return False
+    x_fit = float(x_fit)
+    y_fit = float(y_fit)
+    if math.isnan(x_fit) or math.isnan(y_fit):
+        return False
+    return (-0.5 <= x_fit <= naxis1 + 0.5) and (-0.5 <= y_fit <= naxis2 + 0.5)
 
 
 def _copy_nulls(values):
