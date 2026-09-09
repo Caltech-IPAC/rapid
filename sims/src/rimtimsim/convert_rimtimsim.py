@@ -18,7 +18,9 @@ rimtimsim_lite/rimtimsim_WFI_F087_SCA02_000017675_lite.fits
 13. Add more FITS keywords: SCA_NUM, BUNIT = "DN", ZPTMAG for consistency with Open Universe sims.
 """
 
+import os
 from astropy.io import fits
+from astropy.wcs import WCS
 import numpy as np
 import boto3
 import re
@@ -27,8 +29,11 @@ import modules.utils.rapid_pipeline_subs as util
 from pipeline.runtime.process import run_tool
 
 
-bucket_name_input = "rimtimsim-251210"
-bucket_name_output = "rimtimsim-20260401-lite"
+# The 2026-06-22 rimtimsim set (dev d3c23177, f2ce484c). Overridable from the
+# environment, following database/sims/db_register_socsim_files.py, so that
+# pointing a run at another set is a parameter and not a code edit.
+bucket_name_input = os.getenv('INPUTBUCKET') or "rimtimsim-260622"
+bucket_name_output = os.getenv('OUTPUTBUCKET') or "rimtimsim-260622-lite"
 
 
 # Create S3 resource and client objects.
@@ -52,6 +57,9 @@ for my_bucket_input_object in my_bucket_input.objects.all():
     only_fname_input = str(fname_input)
 
     input_fits_files.append(only_fname_input)
+
+n_input_fits_files = len(input_fits_files)
+print(f"n_input_fits_files = {n_input_fits_files}")
 
 
 # Loop over input FITS files.
@@ -89,10 +97,39 @@ for input_fits_file in input_fits_files:
     transpose_data = np.transpose(data)
 
 
-    # Modify CRPIX1,2 to image center.
+    # Awaicgen requires CRPIX1,2 at the image center, so the CRVAL1,2 keywords
+    # must be recomputed for the new reference pixel (Russ Laher, dev afdf551e +
+    # 954c56c1). Moving CRPIX without moving CRVAL shifts the whole WCS by the
+    # difference. The WCS is built from the ORIGINAL header, before the CDELT
+    # removal and the PC -> CD rename below, and the lookup is zero-based.
 
-    hdr["CRPIX1"] = 2044.5
-    hdr["CRPIX2"] = 2044.5
+    crpix1_orig = hdr["CRPIX1"]
+    crpix2_orig = hdr["CRPIX2"]
+    crval1_orig = hdr['CRVAL1']
+    crval2_orig = hdr['CRVAL2']
+
+    print("crpix1_orig,crpix2_orig,crval1_orig,crval2_orig = " +
+          f"{crpix1_orig}, {crpix2_orig}, {crval1_orig}, {crval2_orig}")
+
+    crpix1 = 2044.5
+    crpix2 = 2044.5
+
+    wcs = WCS(hdr)
+
+    pixel_x, pixel_y = crpix1 - 1, crpix2 - 1
+    celestial_coords = wcs.pixel_to_world(pixel_x, pixel_y)
+    print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to " +
+          f"RA = {celestial_coords.ra.deg:.12f}, Dec = {celestial_coords.dec.deg:.12f}")
+
+    crval1 = celestial_coords.ra.deg
+    crval2 = celestial_coords.dec.deg
+
+    hdr["CRPIX1"] = crpix1
+    hdr["CRPIX2"] = crpix2
+    hdr["CRVAL1"] = crval1
+    hdr["CRVAL2"] = crval2
+
+    print(f"crpix1,crpix2,crval1,crval2 = {crpix1}, {crpix2}, {crval1}, {crval2}")
 
 
     # Remove CDELT1 and CDELT2 keywords.
@@ -122,12 +159,6 @@ for input_fits_file in input_fits_files:
     hdr["EXPTIME"] = exptime
 
 
-    # Add ZPTMAG keyword.
-
-    zptmag = 25.85726796291789           # From Ryan for F213.
-    hdr["ZPTMAG"] = zptmag
-
-
     # Add SCA_NUM keyword.
 
     detector = hdr["DETECTOR"]
@@ -150,9 +181,18 @@ for input_fits_file in input_fits_files:
     #    8 | W146
     # (8 rows)
 
+    # The zeropoint is per filter (Russ Laher, dev 2c891391). Before that
+    # commit every frame carried the F213 value regardless of filter. Only
+    # F213 and F087 have known values; dev leaves the other six at a silent
+    # 0.0 placeholder, which is kept here but no longer silent.
+
     filter = hdr["FILTER"]
+
+    zptmag = 0.0                                                     # Placeholder.
+
     if "213" in filter:
         translated_filter = filter.replace("F213","K213").strip()
+        zptmag = 25.85726796291789                                   # From Ryan for F213.
     elif "184" in filter:
         translated_filter = filter.replace("F184","F184").strip()
     elif "158" in filter:
@@ -165,13 +205,23 @@ for input_fits_file in input_fits_files:
         translated_filter = filter.replace("F106","Y106").strip()
     elif "087" in filter:
         translated_filter = filter.replace("F087","Z087").strip()
+        zptmag = 26.29818407774948                                   # From Ryan for F087.
     elif "146" in filter:
         translated_filter = filter.replace("F146","W146").strip()
     else:
-        print(f"*** Error: Unexpected filter = {filter}")
+        print(f"*** Error: Unexpected filter = {filter}; quitting...")
         exit(64)
 
+    if zptmag == 0.0:
+        print(f"*** Warning: no zeropoint is known for filter {filter}; " +
+              "writing the ZPTMAG = 0.0 placeholder, which downstream flux calibration cannot use")
+
     hdr["FILTER"] = translated_filter
+
+
+    # Add ZPTMAG keyword.
+
+    hdr["ZPTMAG"] = zptmag
 
 
     # print input and output FITS filenames.
@@ -264,12 +314,19 @@ for input_fits_file in input_fits_files:
     util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
 
 
-    # Clean up work directory.
+    # Clean up work directory, including the gzipped copy once it is uploaded
+    # (dev 31b3d470). run_tool raises on failure, which is the exit-code check
+    # dev added explicitly after each rm (dev 8c06bd4d). Note the two socsims
+    # scripts chose the opposite policy and demote cleanup failures to
+    # warnings; which policy applies to all three is an open team decision.
 
     rm_cmd = ['rm','-f',input_fits_file]
     run_tool(rm_cmd)
 
     rm_cmd = ['rm','-f',output_fits_file]
+    run_tool(rm_cmd)
+
+    rm_cmd = ['rm','-f',gzipped_output_fits_file]
     run_tool(rm_cmd)
 
 
