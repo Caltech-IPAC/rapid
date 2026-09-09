@@ -85,3 +85,54 @@ class SummaryFieldNamesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhaseTableTests(unittest.TestCase):
+    """The phase table's two halves must move together.
+
+    **THE DEFECT THIS REFUSES.** Phase resolution used to be an if/elif on the
+    phase name for the job type and a SECOND if/else, further down, for the
+    gatherer — whose `else:` branch fell through to `gather_science_units`.
+    Widening only the job-type half (which is all "accept any implemented job
+    type" literally requires) would have left that fallback in place, so a
+    post-chain phase would have gathered SCIENCE units and submitted them under
+    a post-chain job type: a wrong-work submission that looks like a successful
+    ramp pass. Pairing the two in one table is what makes that unrepresentable,
+    and this test is what keeps them paired.
+    """
+
+    def test_every_phase_names_a_gatherer_and_an_implemented_job_type(self):
+        from pipeline.test import live_w9_ramp
+        from submission import routes
+
+        for phase, (job_type, gatherer, date_arg) in live_w9_ramp.PHASES.items():
+            with self.subTest(phase=phase):
+                self.assertIn(
+                    job_type, routes.IMPLEMENTED_JOB_TYPES,
+                    f"phase {phase!r} names job type {job_type!r}, which the "
+                    f"route matrix does not implement in this image")
+                self.assertIsNotNone(
+                    gatherer,
+                    f"phase {phase!r} has no gatherer, so it would fall "
+                    f"through to whatever the last branch happens to be")
+                self.assertIn(date_arg, (None, "proc_date"))
+
+    def test_the_currency_sweeps_are_not_reachable_from_this_harness(self):
+        """The two defective F40 deletes must not be submittable by typo.
+
+        They are implemented, and the operator daemon's POST_DB_CHAIN carries
+        them, so `IMPLEMENTED_JOB_TYPES` alone does not exclude them. The
+        exclusion is this table's, and it is deliberate: `delete_superseded_rows`
+        joins `merges.sid` to image ids and "should not run on data anyone wants
+        to keep".
+        """
+        from pipeline.test import live_w9_ramp
+        from submission import routes
+
+        submittable = {job_type for job_type, _, _ in live_w9_ramp.PHASES.values()}
+        for reserved in (routes.JOB_TYPE_MERGE_CURRENCY,
+                         routes.JOB_TYPE_SOURCE_CURRENCY):
+            self.assertNotIn(
+                reserved, submittable,
+                f"{reserved!r} is reachable from the ramp harness; it is a "
+                f"reserved action and has to be added back deliberately")
