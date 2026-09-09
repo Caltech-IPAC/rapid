@@ -4812,6 +4812,13 @@ class RAPIDDB:
 
         self.exit_code = 0
 
+        # An empty list is a caller error, reported through the exit-code
+        # contract rather than exit(64) as dev 9759c170 wrote it: library code
+        # does not terminate the process here (see __init__).
+        if len(sql_queries) == 0:
+            print("*** Error:  sql_queries is empty; returning...")
+            self.exit_code = 64
+            return []
 
         for i,query in enumerate(sql_queries):
 
@@ -4822,6 +4829,8 @@ class RAPIDDB:
 
 
             # Execute query.
+
+            records = []
 
             try:
                 self.cur.execute(query, params)
