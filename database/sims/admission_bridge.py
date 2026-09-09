@@ -221,13 +221,18 @@ def record_exposure_admission(dbh, dateobs, expid, facts):
 
 
 def record_l2file_admission(dbh, exposure, sca, source_checksum, rid, facts,
-                            checksum_algorithm="sha256"):
+                            *, checksum_algorithm):
     """Admit one L2 detector file, or return its existing admission.
 
     Identity is a content key over `(expid, sca)` plus the source checksum —
     the grain where a file, and therefore a checksum, exists. A repeat returns;
     a DIFFERENT checksum for the same `(expid, sca)` is refused rather than
     re-versioned, which is what `addl2file`'s `max(version) + 1` does today.
+
+    `checksum_algorithm` has no default: a default here previously mislabelled
+    every `md5` digest from `compute_checksum` as `sha256` (a sha256-shaped
+    default silently accepted a 32-character digest as if it were 64), so the
+    caller must always say what algorithm it actually computed.
     """
     repo = AdmissionRepository(dbh.conn)
     if not repo.schema_present():

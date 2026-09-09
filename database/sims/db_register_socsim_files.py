@@ -848,12 +848,16 @@ def register_l2file(dbh,header,wcs,file,expid,fid,local_file=None):
             "add_l2file_fifth_order did not return a rid (exit_code=%s); the "
             "L2 file was not registered." % getattr(dbh, "exit_code", "?"))
 
+    # checksum_algorithm="md5": checksum comes from db.compute_checksum
+    # above, which hashes with md5 (see rapid_db.py); l2files.checksum is
+    # varchar(32), matching an md5 hex digest, not sha256's 64 characters.
     admission = record_l2file_admission(
         dbh, exposure=expid, sca=sca, source_checksum=checksum, rid=rid,
         facts={"field": field, "hp6": hp6, "hp9": hp9, "fid": fid,
                "mjdobs": mjdobs, "exptime": exptime, "infobits": infobits,
                "crval1": crval1, "crval2": crval2, "ra": ra0, "dec": dec0,
-               "equinox": equinox, "zptmag": zptmag, "skymean": skymean})
+               "equinox": equinox, "zptmag": zptmag, "skymean": skymean},
+        checksum_algorithm="md5")
     print("l2 admission identity =", admission.admission_identity,
           "created =", admission.created)
 
