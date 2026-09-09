@@ -52,6 +52,7 @@ import modules.utils.rapid_pipeline_subs as util
 import pipeline.artifactRepairSubs as artrepair
 import pipeline.differenceImageSubs as dfis
 import pipeline.referenceImageSubs as rfis
+import pipeline.zogyNoiseSubs as zogynoise
 from pipeline.mosaic_geometry import resolve_awaicgen_geometry
 from pipeline.runtime import science_config
 from pipeline.runtime.errors import InputError
@@ -957,7 +958,30 @@ def run_zogy(context) -> None:
     dyrmsfin = 0.0
 
     scalefacref = context.product("scalefacref")
+    std_sci_img = context.product("std_sci_img")
     std_ref_img = context.product("std_ref_img")
+
+    # ZOGY's SN and SR arguments are the background noise sigmas; only their
+    # ratio affects the difference image. With [zogy]
+    # zogy_sn_sr_from_uncertainty_maps off this is exactly the historical
+    # pair (std_sci_img, std_ref_img * scalefacref). With it on, the sigmas
+    # are a low percentile of the two uncertainty maps instead of the clipped
+    # scatter of the images, which in a crowded field is source-dominated;
+    # see pipeline/zogyNoiseSubs.py (Jacob Jencson, dev df5117c3). The
+    # reference map passed is the GAIN-MATCHED one, so scalefacref is
+    # deliberately not applied on that path. Two caveats carried from dev
+    # unchanged: (1) the maps were NaN-filled with those same clipped
+    # scatters in prepare_zogy_inputs, so a map with many NaNs partly
+    # re-imports the bias; (2) Jacob's measurement enabled this together with
+    # per-detector reference PSFs (the ratio alone bought little), and how
+    # smdc selects per-detector PSFs is an open team decision.
+    zogy_sn, zogy_sr = zogynoise.zogy_background_sigmas(
+        bool(context.science_value("zogy", "zogy_sn_sr_from_uncertainty_maps")),
+        context.product("science_uncert_image"),
+        context.product("gainmatched_reference_uncert_image"),
+        std_sci_img, std_ref_img, scalefacref)
+    context.logger.info("zogy sn=%s sr=%s ratio=%s", zogy_sn, zogy_sr,
+                        zogy_sn / zogy_sr if zogy_sr else float("nan"))
 
     run_tool([PYTHON, zogy_code,
               context.product("science_image_bkg_subbed"),
@@ -966,8 +990,8 @@ def run_zogy(context) -> None:
               context.product("reference_psf"),
               context.product("science_uncert_image"),
               context.product("gainmatched_reference_uncert_image"),
-              str(context.product("std_sci_img")),
-              str(std_ref_img * scalefacref),
+              str(zogy_sn),
+              str(zogy_sr),
               str(dxrmsfin),
               str(dyrmsfin),
               filename_diffimage,
@@ -980,7 +1004,8 @@ def run_zogy(context) -> None:
     context.produce("zogy_diffpsf", filename_diffpsf)
     context.produce("zogy_scorrimage", filename_scorrimage)
     context.produce("diffimage_infobits", 0)
-    context.record(zogy_dxrms_used=dxrmsfin, zogy_dyrms_used=dyrmsfin)
+    context.record(zogy_dxrms_used=dxrmsfin, zogy_dyrms_used=dyrmsfin,
+                   zogy_sn_used=zogy_sn, zogy_sr_used=zogy_sr)
 
 
 def postprocess_zogy(context) -> None:
