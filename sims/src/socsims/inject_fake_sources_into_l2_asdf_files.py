@@ -55,9 +55,9 @@ start_time_benchmark = time.time()
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)          # utcnow() is deprecated (dev 399d4ed3)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+datetime_pt_now = datetime_utc_now.astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
 print("proc_utc_datetime =",proc_utc_datetime)
@@ -66,8 +66,11 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 # Define input and output S3 buckets.
 
-bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
-bucket_name_output = "socsims-fakesrc-asdf-20260709"
+# Output is the 2026-08-07 SOC-sim set (dev c3cd5464), which convert_socsims.py
+# then reads. Both overridable from the environment, following
+# database/sims/db_register_socsim_files.py.
+bucket_name_input = os.getenv('INPUTBUCKET') or "stpubdata/roman/nexus/soc_simulations/r00340/l2"
+bucket_name_output = os.getenv('OUTPUTBUCKET') or "socsims-fakesrc-asdf-20260807"
 
 
 # Create S3-client and S3-resource objects.
@@ -147,6 +150,10 @@ job_info_s3_bucket = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 
 fake_sources_dict = config_input['FAKE_SOURCES']
 
+# Bucket subdirectory holding the per-field injection catalogues (dev 1e3e02da);
+# a new catalogue set is a new subdirectory, so it is configuration, not code.
+injection_catalogs_subdir = fake_sources_dict['injection_catalogs_subdir']
+
 
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
@@ -180,9 +187,11 @@ def run_single_core_job(asdf_files,index_thread):
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
-    except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+    except Exception as e:
+        # Raise rather than exit(64): the parent counts a dead worker as a
+        # failure, and the traceback survives (dev 399d4ed3).
+        print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
+        raise
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
 
@@ -196,11 +205,12 @@ def run_single_core_job(asdf_files,index_thread):
 
     # Loop over input ASDF files.
 
-    for index_asdf_file in range(n_asdf_files):
+    # This thread's share: every num_cores-th file starting at index_thread
+    # (dev 399d4ed3; the same partition as the old modulo test, without
+    # iterating the whole list in every thread).
 
-        index_core = index_asdf_file % num_cores
-        if index_thread != index_core:
-            continue
+    my_asdf_files = list(range(index_thread, n_asdf_files, num_cores))
+    for index_asdf_file in my_asdf_files:
 
         input_asdf_file = asdf_files[index_asdf_file]
 
@@ -385,6 +395,16 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
         fh.write(f"x,y,ra,dec = {x},{y},{ra},{dec}\n")
 
 
+    # Release the datamodels now that the science array and the WCS have been
+    # read (dev 399d4ed3 added dm.close()). Placed AFTER the last use of the
+    # WCS object rather than immediately after reading it, as dev did, so
+    # nothing below can touch a closed model; original_dm is the file-backed
+    # one and was never closed on either branch.
+
+    dm.close()
+    original_dm.close()
+
+
     # Compute field.
 
     roman_tessellation_db.get_rtid(ra,dec)
@@ -405,9 +425,15 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
     file_content = ""
     for overlapping_field in sciimg_overlapping_rtids:
         injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
-        s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
-        injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
-        fh.write(f"s3_full_name_injection_catalog = {s3_full_name_injection_catalog}\n")
+
+        # Skip the download when a previous file in this process already fetched
+        # the catalogue for this field (dev 399d4ed3); neighbouring images share
+        # most of their overlapping fields.
+        downloaded_from_bucket = True
+        if not os.path.exists(injection_catalog_filename):
+            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/{injection_catalogs_subdir}/{injection_catalog_filename}"
+            injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
+            fh.write(f"s3_full_name_injection_catalog = {s3_full_name_injection_catalog}\n")
         fh.write(f"injection_catalog_filename = {injection_catalog_filename}\n")
         if downloaded_from_bucket:
             file_content += f"{injection_catalog_filename}\n"
@@ -432,7 +458,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
 
             # Upload fake-source injection catalog to product S3 bucket.
 
-            s3_object_name_injection_catalog = "injection_catalogs/" + injection_catalog_filename
+            s3_object_name_injection_catalog = f"{injection_catalogs_subdir}/" + injection_catalog_filename
 
             util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket,[injection_catalog_filename],[s3_object_name_injection_catalog])
 
@@ -539,6 +565,9 @@ if __name__ == '__main__':
         #    break
 
     print(f"Total number of socsims = {i}")
+    # Dev 399d4ed3 added a counter here labelled "skipped" that in fact counted
+    # the files kept; this is that count, labelled for what it is.
+    print(f"Total number of socsims to process = {len(input_asdf_files)}")
 
 
     #########################################################################################
