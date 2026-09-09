@@ -168,7 +168,7 @@ def query_for_field_corners(dbh, field):
     sql_queries = [query]
 
     try:
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        records = dbh.execute_sql_queries(sql_queries,debug=debug)
     except Exception as e:
         print("*** Error: Exception raised in dbh.execute_sql_queries " +
               f"(e={e});  quitting...")
@@ -288,7 +288,7 @@ if __name__ == '__main__':
 
     sql_queries = []
     sql_queries.append(query)
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    records = dbh.execute_sql_queries(sql_queries,debug=debug)
 
 
     # For the fields associated with L2Files records, find all fields that the
@@ -309,7 +309,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(query)
-        l2files_record = dbh.execute_sql_queries(sql_queries,debug)
+        l2files_record = dbh.execute_sql_queries(sql_queries,debug=debug)
 
         rid = l2files_record[0][0]
         filename = l2files_record[0][1]

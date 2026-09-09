@@ -116,7 +116,7 @@ if __name__ == '__main__':
 
     sql_queries = []
     sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    records = dbh.execute_sql_queries(sql_queries,debug=debug)
 
     fields_list = []
     for record in records:
@@ -140,7 +140,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(query)
-        astroobjects_records = dbh.execute_sql_queries(sql_queries,debug)
+        astroobjects_records = dbh.execute_sql_queries(sql_queries,debug=debug)
 
         num_astroobjects_records = len(astroobjects_records)
 
@@ -164,7 +164,7 @@ if __name__ == '__main__':
 
             sql_queries = []
             sql_queries.append(query)
-            merges_records = dbh.execute_sql_queries(sql_queries,debug)
+            merges_records = dbh.execute_sql_queries(sql_queries,debug=debug)
 
 
             mjd_data = []

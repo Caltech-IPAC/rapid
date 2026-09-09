@@ -2730,7 +2730,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh, proc_date, ppid=
         sql_queries = []
         sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
 
-        records = _checked(dbh.execute_sql_queries(sql_queries, debug),
+        records = _checked(dbh.execute_sql_queries(sql_queries, debug=debug),
                            f"distinct-field query on {sources_tablename}")
 
         for record in records:

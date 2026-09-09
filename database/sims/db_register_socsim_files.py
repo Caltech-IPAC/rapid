@@ -929,7 +929,7 @@ if __name__ == '__main__':
 
     sql_queries = []
     sql_queries.append(query)
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    records = dbh.execute_sql_queries(sql_queries,debug=debug)
 
     for record in records:
         already_ingested_fits_file = record[0]

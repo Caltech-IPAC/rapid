@@ -87,7 +87,7 @@ if __name__ == '__main__':
 
     sql_queries = []
     sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    records = dbh.execute_sql_queries(sql_queries,debug=debug)
 
     fields_list = []
     for record in records:
@@ -110,7 +110,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        records = dbh.execute_sql_queries(sql_queries,debug=debug)
 
         for record in records:
 
