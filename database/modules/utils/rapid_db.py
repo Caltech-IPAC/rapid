@@ -8,6 +8,61 @@ import hashlib
 debug = 1
 
 ########################################################################################################
+# Adapt numpy scalar types for psycopg2.
+#
+# Every parameterised query in this class can receive a header/WCS/healpy
+# value straight through (e.g. `register_l2filemeta`'s `hp6`/`hp9` come from
+# `healpy.ang2pix`), and those come back as numpy scalar types, not the
+# builtin `int`/`float`/`bool` psycopg2 knows how to adapt. `numpy.float64`
+# happens to subclass `float` and adapts by accident; `numpy.int64` and the
+# other numpy integer/bool types do not subclass their Python equivalents and
+# fail with "can't adapt type 'numpy.intNN'" the moment one reaches
+# `cursor.execute` as a parameter. Registering adapters here, once, at import,
+# fixes every call site in this module at once -- fixing them one by one as
+# each is discovered is the whack-a-mole that the "parameterize all SQL"
+# sweep (364aef1d) inadvertently created by turning f-string SQL (which
+# stringified numpy scalars just fine) into parameterized `execute(sql,
+# params)` calls.
+########################################################################################################
+
+
+def _register_numpy_adapters():
+    try:
+        import numpy as np
+    except ImportError:
+        return
+
+    try:
+        from psycopg2.extensions import AsIs, Boolean, register_adapter
+    except (ImportError, AttributeError):
+        # The stub tier (tests) installs a bare `psycopg2.extensions` module
+        # without `register_adapter`/`AsIs`/`Boolean`. Nothing to register
+        # against; do nothing rather than fail import.
+        return
+
+    integer_types = (
+        np.int8, np.int16, np.int32, np.int64,
+        np.uint8, np.uint16, np.uint32, np.uint64,
+    )
+    float_types = (np.float16, np.float32, np.float64)
+
+    for np_type in integer_types:
+        register_adapter(np_type, lambda value: AsIs(int(value)))
+
+    for np_type in float_types:
+        register_adapter(np_type, lambda value: AsIs(repr(float(value))))
+
+    # `AsIs(bool(value))` would stringify as Python's "True"/"False", not
+    # the SQL boolean literal psycopg2's own bool adapter produces
+    # ("true"/"false"); use that adapter directly so numpy.bool_ round-trips
+    # the same way a plain bool does.
+    register_adapter(np.bool_, lambda value: Boolean(bool(value)))
+
+
+_register_numpy_adapters()
+
+
+########################################################################################################
 # Common methods.
 ########################################################################################################
 
