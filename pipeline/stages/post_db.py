@@ -1089,6 +1089,14 @@ def compute_statistics(context) -> None:
                 "       avg(s.fluxfit), coalesce(stddev_pop(s.fluxfit), 0), "
                 "       count(*) "
                 "FROM {merges} AS m JOIN sources AS s ON s.sid = m.sid "
+                # Only detections on CURRENT difference images enter the
+                # statistics: a superseded image's sources stay in their
+                # child table until swept, and without this join they were
+                # averaged in with the current ones (dev 0feead1b,
+                # computeStatisticsForAstroObjects.py:540, the one term of
+                # the lightcurve-statistics rework this branch needed).
+                "JOIN diffimages AS d ON d.pid = s.pid "
+                "WHERE d.vbest > 0 "
                 "GROUP BY m.aid").format(
                     target=sql.Identifier(target),
                     merges=sql.Identifier(f"merges_{field}")))

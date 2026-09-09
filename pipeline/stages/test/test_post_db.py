@@ -1084,5 +1084,21 @@ class XyFitRangeTests(unittest.TestCase):
             {"y_fit": 2000.0}, self.NAXIS1, self.NAXIS2))
 
 
+class StatisticsCurrencyTests(unittest.TestCase):
+    """AstroObjectsMeta is built from detections on CURRENT difference
+    images only (dev 0feead1b: `JOIN diffimages ... WHERE d.vbest > 0`).
+    Without the join a superseded image's sources, still in their child
+    table until swept, were averaged in with the current ones."""
+
+    def test_statistics_join_requires_a_current_difference_image(self):
+        import inspect
+        from pipeline.stages import post_db
+
+        source = inspect.getsource(post_db.compute_statistics)
+        self.assertIn("JOIN diffimages AS d ON d.pid = s.pid", source)
+        self.assertIn("WHERE d.vbest > 0", source)
+        self.assertLess(source.index("JOIN diffimages"), source.index("GROUP BY m.aid"))
+
+
 if __name__ == "__main__":
     unittest.main()
