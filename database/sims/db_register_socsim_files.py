@@ -14,6 +14,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
+from database.modules.utils.overlapping_fields import overlapping_fields
 
 # The carved admission repository (rule 20). `RAPIDDB` is frozen, so the
 # admission record — content identity, release stamp, recorded facts — is
@@ -801,7 +802,24 @@ def register_l2file(dbh,header,wcs,file,expid,fid,local_file=None):
 
     # Insert record in L2Files database table.
 
-    dbh.add_l2file_fifth_order(expid,sca,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
+    # Compute the sky tiles the image OVERLAPS, not just the one holding its
+    # centre.  `field` above is one tile chosen by one point; an SCA covers
+    # several (median 7), and rapid_systems migration 100 gives l2files a
+    # column for the whole footprint.  Computed here from the same WCS values
+    # about to be written to the row, so the footprint and the WCS it derives
+    # from are always consistent — and from the header's own NAXIS1/NAXIS2
+    # rather than a configured detector size, which is the truest extent for
+    # this particular file.  `min_overlap_pixels` defaults to 25 px; see
+    # overlapping_fields.DEFAULT_MIN_OVERLAP_PIXELS for why that number and
+    # why it lives in exactly one place.
+
+    overlapfields = overlapping_fields(crval1,crval2,crpix1,crpix2,
+                                       cd11,cd12,cd21,cd22,
+                                       get_keyword_value(header,"NAXIS1"),
+                                       get_keyword_value(header,"NAXIS2"),
+                                       field=field)
+
+    dbh.add_l2file_fifth_order(expid,sca,field,overlapfields,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,
         a_order,a_0_1,a_0_2,a_0_3,a_0_4,a_0_5,a_1_0,a_1_1,a_1_2,a_1_3,a_1_4,
