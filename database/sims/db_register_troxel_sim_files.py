@@ -18,7 +18,8 @@ from database.sims.admission_bridge import (begin_admission_run,
                                             enumerate_source,
                                             record_exposure_admission,
                                             record_l2file_admission,
-                                            seal_admission_run)
+                                            seal_admission_run,
+                                            source_checksum_from_head)
 from pipeline.runtime.process import run_tool, run_shell
 from pipeline.runtime.errors import ToolError
 
@@ -570,15 +571,18 @@ def register_files():
             key = subdir_only + "/" + file
             try:
                 head = admission_s3_client.head_object(
-                    Bucket=bucket_name_input, Key=key)
+                    Bucket=bucket_name_input, Key=key,
+                    ChecksumMode="ENABLED")
             except Exception as e:
                 print(f"*** Error: could not enumerate {key}: {e}; "
                       f"quitting rather than sealing a partial manifest...")
                 exit(65)
+            checksum, algorithm = source_checksum_from_head(head)
             enumerate_source(dbh, bucket_name_input, key,
-                             head["ETag"].strip('"'),
+                             checksum,
                              version_id=head.get("VersionId"),
-                             size=head.get("ContentLength"), algorithm="md5")
+                             size=head.get("ContentLength"),
+                             algorithm=algorithm)
             n_enumerated += 1
     dbh.conn.commit()
     print(f"enumerated {n_enumerated} source object(s) into the manifest")

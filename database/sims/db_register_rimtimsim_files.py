@@ -17,7 +17,8 @@ from database.sims.admission_bridge import (begin_admission_run,
                                             enumerate_source,
                                             record_exposure_admission,
                                             record_l2file_admission,
-                                            seal_admission_run)
+                                            seal_admission_run,
+                                            source_checksum_from_head)
 
 
 bucket_name_input = "rimtimsim-20260401-lite"
@@ -581,12 +582,14 @@ def register_files():
 
     admission_s3_client = boto3.client('s3')
     for input_fits_file in input_fits_files:
-        head = admission_s3_client.head_object(Bucket=bucket_name_input,
-                                               Key=input_fits_file)
+        head = admission_s3_client.head_object(
+            Bucket=bucket_name_input, Key=input_fits_file,
+            ChecksumMode="ENABLED")
+        checksum, algorithm = source_checksum_from_head(head)
         enumerate_source(dbh, bucket_name_input, input_fits_file,
-                         head["ETag"].strip('"'),
+                         checksum,
                          version_id=head.get("VersionId"),
-                         size=head.get("ContentLength"), algorithm="md5")
+                         size=head.get("ContentLength"), algorithm=algorithm)
     dbh.conn.commit()
 
 

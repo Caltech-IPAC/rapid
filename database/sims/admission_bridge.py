@@ -29,12 +29,14 @@ proposal P-H2, not fixed here). An admission that could not be written must
 not be one of those silences.
 """
 
+import base64
 import os
 
 from pipeline.repositories.admission import (AdmissionConflict,
                                              AdmissionRepository,
                                              AdmissionSchemaAbsent,
                                              ReleasePointerUnset)
+from pipeline.repositories.admission_identity import AdmissionIdentityError
 
 #: Set by the ingest driver once per run, from the pointer, so every admission
 #: in one sealed manifest carries the SAME release even if an operator
@@ -135,6 +137,47 @@ def seal_admission_run(dbh):
     sealed = repo.seal_manifest(manifest_id)
     dbh.conn.commit()
     return sealed
+
+
+def source_checksum_from_head(head):
+    """The content checksum an S3 `head_object` response actually offers.
+
+    THREE CASES, in order, because a multipart object's ETag is never a
+    content digest. Observed live 2026-09-09: every g0005 object is an
+    8-part multipart upload, so its ETag is `<md5-of-part-md5s>-<parts>` —
+    e.g. `53bd3f188e51a029312b60eeab18b7d8-8` — and `normalized_checksum`
+    rightly refused it as a 34-character "md5".
+
+      1. A FULL-OBJECT checksum is present (`ChecksumType == "FULL_OBJECT"`
+         and `ChecksumCRC64NVME` set). This is a true content digest
+         independent of part layout — the only algorithm S3 attaches to a
+         multipart upload by default — decoded from its base64 wire form to
+         16 lowercase hex characters.
+      2. No full-object checksum, but the ETag is a bare 32-lowercase-hex
+         value: the single-part case, where the ETag IS the object's md5.
+         This is what the g0001 backfill relied on and what every
+         non-multipart source still is.
+      3. Neither: the object carries a multipart ETag and no full-object
+         checksum, so nothing here is a content digest. Refused by name
+         rather than silently hashing the ETag anyway, which is exactly the
+         defect this function exists to fix.
+
+    Requires the caller's `head_object` to have passed
+    `ChecksumMode="ENABLED"` — S3 omits every `Checksum*` field without it.
+    """
+    etag = str(head.get("ETag", "")).strip('"')
+    if (head.get("ChecksumType") == "FULL_OBJECT"
+            and head.get("ChecksumCRC64NVME")):
+        checksum = base64.b64decode(head["ChecksumCRC64NVME"]).hex()
+        return checksum, "crc64nvme"
+    if len(etag) == 32 and all(c in "0123456789abcdef"
+                               for c in etag.lower()):
+        return etag.lower(), "md5"
+    raise AdmissionIdentityError(
+        f"object with ETag {etag!r} carries neither a full-object checksum "
+        f"nor a single-part ETag; a multipart ETag "
+        f"(<md5-of-part-md5s>-<parts>) is not a content digest and cannot "
+        f"be recorded as one")
 
 
 def enumerate_source(dbh, bucket, key, checksum, version_id=None,

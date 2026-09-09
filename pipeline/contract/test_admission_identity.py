@@ -413,6 +413,29 @@ def test_an_unsupported_algorithm_is_refused_by_name():
     assert "algorithm" in str(caught.value)
 
 
+def test_a_crc64nvme_checksum_is_accepted_and_lower_cased():
+    """S3's full-object checksum for a multipart upload, in one spelling.
+
+    A multipart object's ETag is `<md5-of-part-md5s>-<parts>` — not a content
+    digest at all — so a multipart source is enumerated under its S3
+    full-object CRC-64/NVME instead (observed live 2026-09-09: every g0005
+    object is an 8-part multipart upload). The value is the 8-byte checksum
+    as 16 hex characters, and case is normalized the same way sha256/md5 are.
+    """
+    assert normalized_checksum("A1B2" * 4, "crc64nvme") == (
+        "a1b2" * 4, "crc64nvme")
+
+
+def test_a_wrong_length_crc64nvme_checksum_is_refused():
+    """16 hex characters names an 8-byte CRC; anything else is not one."""
+    with pytest.raises(AdmissionIdentityError) as caught:
+        normalized_checksum("a1b2" * 3, "crc64nvme")
+    assert "16 hex characters" in str(caught.value)
+
+    with pytest.raises(AdmissionIdentityError):
+        normalized_checksum("a1b2" * 5, "crc64nvme")
+
+
 def test_the_algorithm_is_part_of_the_identity():
     """Two algorithms over one file are two content keys, not a change.
 

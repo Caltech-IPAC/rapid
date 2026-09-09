@@ -23,7 +23,8 @@ from database.sims.admission_bridge import (begin_admission_run,
                                             enumerate_source,
                                             record_exposure_admission,
                                             record_l2file_admission,
-                                            seal_admission_run)
+                                            seal_admission_run,
+                                            source_checksum_from_head)
 import database.modules.utils.roman_tessellation_db as sqlite
 
 
@@ -1047,11 +1048,16 @@ if __name__ == '__main__':
     #
     # `enumerate_source` records each object's checksum and, where the input
     # bucket is versioned, its immutable version id. The checksum recorded at
-    # enumeration is the S3 object's ETag rather than the SHA-256 the L2
-    # admission uses: the bytes are not local yet, and downloading every file
-    # twice to avoid a second digest would cost a full extra pass over the
-    # input set. The manifest's `byte_custody` says which guarantee is in
-    # force, which is exactly what that column is for.
+    # enumeration is not the SHA-256 the L2 admission uses: the bytes are not
+    # local yet, and downloading every file twice to avoid a second digest
+    # would cost a full extra pass over the input set. Instead it is
+    # whichever of the S3 object's own checksums is actually a content
+    # digest — `source_checksum_from_head` picks the full-object CRC64NVME
+    # for a multipart upload (the common case here: every g0005 object is an
+    # 8-part upload, and a multipart ETag is `<md5-of-part-md5s>-<parts>`,
+    # not a digest of the content) and falls back to the ETag as md5 for a
+    # single-part object. The manifest's `byte_custody` says which guarantee
+    # is in force, which is exactly what that column is for.
 
     admission_dbh = db.RAPIDDB()
     if admission_dbh.exit_code >= 64:
@@ -1076,17 +1082,19 @@ if __name__ == '__main__':
 
     for input_fits_file in sorted_input_fits_files:
         try:
-            head = admission_s3_client.head_object(Bucket=bucket_name_input,
-                                                   Key=input_fits_file)
+            head = admission_s3_client.head_object(
+                Bucket=bucket_name_input, Key=input_fits_file,
+                ChecksumMode="ENABLED")
         except Exception as e:
             print(f"*** Error: could not enumerate {input_fits_file}: {e}; "
                   f"quitting rather than sealing a partial manifest...")
             exit(65)
+        checksum, algorithm = source_checksum_from_head(head)
         enumerate_source(
             admission_dbh, bucket_name_input, input_fits_file,
-            head["ETag"].strip('"'),
+            checksum,
             version_id=head.get("VersionId"),
-            size=head.get("ContentLength"), algorithm="md5")
+            size=head.get("ContentLength"), algorithm=algorithm)
 
     admission_dbh.conn.commit()
     print(f"enumerated {n_to_register} source object(s) into the manifest")

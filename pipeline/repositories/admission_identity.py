@@ -216,6 +216,14 @@ def normalized_checksum(checksum, algorithm="sha256"):
     digests of the same bytes are different values that would otherwise look
     like a content change.
 
+    `crc64nvme` is S3's full-object checksum for a multipart upload (16 hex
+    characters — the 8-byte CRC as lowercase hex). A multipart object's ETag
+    is `<md5-of-part-md5s>-<parts>`, not a digest of the content at all, so a
+    multipart source is enumerated under this checksum instead of the ETag
+    (observed live 2026-09-09: every g0005 object is an 8-part multipart
+    upload, and `enumerate_source` with the ETag as "md5" raised on all
+    9,911 of them).
+
     NOT VALIDATED AGAINST `l2files.checksum`'s WIDTH ON PURPOSE. That column
     is `character varying(32)` (`006-core-tables.sql:259`) and therefore
     truncates every SHA-256 it is given — the CR-8 defect, still unlanded.
@@ -224,12 +232,12 @@ def normalized_checksum(checksum, algorithm="sha256"):
     """
     value = str(_require(checksum, "source_checksum")).strip().lower()
     algo = str(_require(algorithm, "checksum_algorithm")).strip().lower()
-    if algo not in ("sha256", "md5"):
+    if algo not in ("sha256", "md5", "crc64nvme"):
         raise AdmissionIdentityError(
             f"unsupported checksum algorithm {algorithm!r}; admission "
             f"identity records the algorithm alongside the digest so two "
             f"algorithms' values cannot be mistaken for a content change")
-    expected = {"sha256": 64, "md5": 32}[algo]
+    expected = {"sha256": 64, "md5": 32, "crc64nvme": 16}[algo]
     if len(value) != expected:
         raise AdmissionIdentityError(
             f"a {algo} checksum is {expected} hex characters; got "
