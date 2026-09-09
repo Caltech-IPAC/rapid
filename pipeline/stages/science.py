@@ -1349,6 +1349,11 @@ def psf_catalog_for_difference_image(context, variant: str, image: str,
                       .replace("(", "").replace(")", "")
                       .replace(" ", "").split(","))
     aperture_radius = float(psfcat["aperture_radius"])
+    sharplo = float(psfcat["sharplo"])
+    sharphi = float(psfcat["sharphi"])
+    roundlo = float(psfcat["roundlo"])
+    roundhi = float(psfcat["roundhi"])
+    min_separation = float(psfcat["min_separation"])
 
     catalog_name = psfcat[f"output_{output_prefix}_psfcat_filename"]
     finder_name = psfcat[f"output_{output_prefix}_psfcat_finder_filename"]
@@ -1364,7 +1369,9 @@ def psf_catalog_for_difference_image(context, variant: str, image: str,
 
     psfcat_flag, phot, psfphot = util.compute_psf_catalog(
         n_clip_sigma, n_thresh_sigma, fwhm, fit_shape, aperture_radius,
-        image, uncert_image, psf, output_psfcat_residual_filename)
+        image, uncert_image, psf, output_psfcat_residual_filename,
+        sharplo=sharplo, sharphi=sharphi, roundlo=roundlo, roundhi=roundhi,
+        min_separation=min_separation)
 
     if not psfcat_flag:
         _set_psfcat_infobit(context, variant)

@@ -760,6 +760,48 @@ class PsfCatalogSchemaTests(unittest.TestCase):
         self.assertNotIn("phot.to_pandas().to_parquet", self.source)
 
 
+class PhotUtilsTuningParameterTests(unittest.TestCase):
+    """Feature F19 (dev 4896bee9, 8f641045). `compute_psf_catalog` was called
+
+    with only its five positional arguments, so DAOStarFinder's sharpness,
+    roundness and minimum-separation cuts always fell back to the function's
+    own defaults regardless of what `[psfcat_refimage]`/`[psfcat_diffimage]`
+    declared. Both call sites now pass the five keywords from the section
+    dict each already reads, and both release-content sections declare them.
+    """
+
+    def setUp(self):
+        self.release = _load_release_toml()
+
+    def test_release_content_declares_the_tuning_keys(self):
+        for section in ("psfcat_refimage", "psfcat_diffimage"):
+            for key in ("sharplo", "sharphi", "roundlo", "roundhi",
+                       "min_separation"):
+                with self.subTest(section=section, key=key):
+                    self.assertIn(key, self.release[section])
+
+    def test_reference_image_call_site_passes_the_tuning_keywords(self):
+        from pipeline import referenceImageSubs
+
+        source = inspect.getsource(
+            referenceImageSubs.generatePhotUtilsReferenceImageCatalog)
+        for keyword in ("sharplo=sharplo", "sharphi=sharphi",
+                       "roundlo=roundlo", "roundhi=roundhi",
+                       "min_separation=min_separation"):
+            with self.subTest(keyword=keyword):
+                self.assertIn(keyword, source)
+
+    def test_difference_image_call_site_passes_the_tuning_keywords(self):
+        from pipeline.stages import science
+
+        source = inspect.getsource(science.psf_catalog_for_difference_image)
+        for keyword in ("sharplo=sharplo", "sharphi=sharphi",
+                       "roundlo=roundlo", "roundhi=roundhi",
+                       "min_separation=min_separation"):
+            with self.subTest(keyword=keyword):
+                self.assertIn(keyword, source)
+
+
 class VariantSpecificInputTests(unittest.TestCase):
     """Finding 19. SFFT and naive silently used ZOGY's model.
 

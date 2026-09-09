@@ -563,6 +563,12 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
     fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
     aperture_radius = float(psfcat_refimage_dict["aperture_radius"])
 
+    sharplo = float(psfcat_refimage_dict["sharplo"])
+    sharphi = float(psfcat_refimage_dict["sharphi"])
+    roundlo = float(psfcat_refimage_dict["roundlo"])
+    roundhi = float(psfcat_refimage_dict["roundhi"])
+    min_separation = float(psfcat_refimage_dict["min_separation"])
+
     input_img_filename = filename_refimage_image
     input_unc_filename = filename_refimage_uncert
     input_psf_filename = filename_refimage_psf
@@ -578,7 +584,12 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
                                                         input_img_filename,
                                                         input_unc_filename,
                                                         input_psf_filename,
-                                                        output_psfcat_residual_filename)
+                                                        output_psfcat_residual_filename,
+                                                        sharplo=sharplo,
+                                                        sharphi=sharphi,
+                                                        roundlo=roundlo,
+                                                        roundhi=roundhi,
+                                                        min_separation=min_separation)
 
     print("psfcat_flag =",psfcat_flag)
 
