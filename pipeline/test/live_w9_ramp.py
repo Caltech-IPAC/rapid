@@ -110,6 +110,36 @@ def _capped(units, cap):
     return out
 
 
+def _dead_lettered_pairs(dbh, run_id_prefix):
+    """(exposure, sca) pairs whose latest attempt under `run_id_prefix`
+    dead-lettered.
+
+    `run_id LIKE '<prefix>%'`, not `=`, for the same reason every other
+    script in this chain uses LIKE: a split pass's batches carry
+    `<run_id>-<n>` (`pipeline.seams`:469). `missing_or_contradictory` is
+    the reconciler's dead-letter verdict — the one state
+    `get_blocking_exposure_scas_for_job_type` does NOT treat as blocking,
+    which is what lets these units come back out of `gather_science_units`
+    on a rerun rather than being silently excluded as still-in-flight.
+    """
+    query = ("select distinct exposure_id, sca from attempts"
+             " where run_id like %s and lifecycle_state = 'missing_or_contradictory'")
+    rows = dbh.execute_sql_queries([query], params_list=[(f"{run_id_prefix}%",)])
+    return {(row[0], row[1]) for row in (rows or [])}
+
+
+def _restrict_to_dead_lettered(units, pairs):
+    """Keep only units whose (exposure, sca) is in `pairs`.
+
+    `gather_science_units` interleaves the dead-lettered units with
+    ~1,400 never-attempted ones in (field, filter, mjdobs) order; this is
+    the post-gather, pre-cap narrowing that turns that mixed stream into
+    exactly the dead-letter set a recovery pass needs to resubmit.
+    """
+    return [unit for unit in units
+            if (unit.payload.exposure, unit.payload.sca) in pairs]
+
+
 def main():
     if len(sys.argv) < 3:
         print(f"usage: live_w9_ramp.py <{'|'.join(PHASES)}> <cap> [run-tag]",
@@ -189,6 +219,27 @@ def main():
     else:
         units = gatherer(dbh)
 
+    # Recovery restriction: when set, narrow the just-gathered stream to
+    # exactly the (exposure, sca) pairs a prior run under this prefix
+    # dead-lettered, before the cap sees it -- a recovery pass's cap is
+    # sized to the dead-letter count, not to whatever a wider window
+    # happens to gather this time. `gatherer` yields an Iterator, so it is
+    # materialized to a list here (once) rather than in `_capped`, which
+    # otherwise stops pulling from it the moment the cap is reached.
+    units = list(units)
+    restricted_to_run = None
+    restricted_pairs = 0
+    dead_letter_prefix = os.environ.get("W9_ONLY_DEAD_LETTERED_FROM_RUN", "")
+    if dead_letter_prefix and phase in ("reference", "science"):
+        pairs = _dead_lettered_pairs(dbh, dead_letter_prefix)
+        gathered_count = len(units)
+        units = _restrict_to_dead_lettered(units, pairs)
+        restricted_to_run = dead_letter_prefix
+        restricted_pairs = len(pairs)
+        print(f"    restricted  {len(units)} of {gathered_count} unit(s) to "
+              f"dead-lettered (exposure, sca) pairs of {dead_letter_prefix} "
+              f"({restricted_pairs} pairs)")
+
     capped = _capped(units, cap)
     print(f"    gathered   {len(capped)} unit(s) (cap {cap})")
     if not capped:
@@ -243,6 +294,8 @@ def main():
         "job_definition_arn": context["binding"].job_definition_arn,
         "job_definition_rev": context["binding"].job_definition_rev,
         "image_digest": context["binding"].image_digest,
+        "restricted_to_run": restricted_to_run,
+        "restricted_pairs": restricted_pairs,
     }
     print("W9-RAMP-SUMMARY " + json.dumps(summary))
     return 0
