@@ -10,7 +10,7 @@ from pipeline.intent.errors import (FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION,
 from pipeline.reconciler.test.stubs import FakeConnection, attempt_row, utc
 from submission import submit
 from submission.manifest import ProcessingUnit
-from submission.routes import JOB_TYPE_SCIENCE
+from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
 from submission.test import payload_fixtures as fixtures
 
 
@@ -693,6 +693,64 @@ class SubmitUnitsTests(unittest.TestCase):
         # over an incomplete backfill.
         self.assertEqual(1, len(self.commits),
                          "only the pre-Batch commit may have fired")
+
+
+class SubmitGatheredJobTypeTests(unittest.TestCase):
+    """`submit_gathered` must batch units under THEIR OWN job type.
+
+    Observed live 2026-09-10, first reference-image ramp submission:
+    `submit_gathered` received `job_type` but built `batch_units`'s kwargs
+    from `max_batch_size` alone, so `batch_units` (defaulting to science)
+    batched every phase as science — `unit.dedup_key("science")` on a
+    reference-image unit raised `SubjectError`. Fixed by forwarding
+    `job_type` from `submit_gathered` into `batch_units`.
+    """
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _submit_gathered(self, gathered_units, job_type, queue,
+                         job_definition):
+        return seams.submit_gathered(
+            gathered_units, job_type=job_type, queue=queue,
+            job_definition=job_definition, binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="run-1",
+            now=utc(2026, 8, 6, 12, 0, 0))
+
+    def test_reference_image_units_batch_as_reference_image_not_science(self):
+        # Before the fix this raised SubjectError: "asked for a 'science'
+        # dedup key from a 'reference-image' unit".
+        reference_units = [
+            ProcessingUnit(payload=fixtures.reference_payload(
+                exposure=90000 + i, sca=(i % 18) + 1))
+            for i in range(5)]
+
+        results = self._submit_gathered(
+            reference_units, job_type=JOB_TYPE_REFERENCE_IMAGE,
+            queue="rapid-queue-bulk", job_definition="rapid-pipeline-bulk")
+
+        self.assertEqual(1, len(results))
+        submission, attempt_ids = results[0]
+        self.assertEqual(5, len(attempt_ids))
+
+    def test_science_units_still_batch_as_science(self):
+        # The mirror case: the fix must not disturb the pre-existing,
+        # previously-only-working path.
+        science_units = units(count=5)
+
+        results = self._submit_gathered(
+            science_units, job_type=JOB_TYPE_SCIENCE,
+            queue="rapid-queue-prompt",
+            job_definition="rapid-pipeline-science")
+
+        self.assertEqual(1, len(results))
+        submission, attempt_ids = results[0]
+        self.assertEqual(5, len(attempt_ids))
 
 
 class FoundRecoveryTests(unittest.TestCase):

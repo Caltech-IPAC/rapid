@@ -242,15 +242,22 @@ class ReadyWorkAccumulator:
 
 def batch_units(units: Iterable[ProcessingUnit],
                 max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
-                batch_id_factory: Callable[[], str] | None = None
+                batch_id_factory: Callable[[], str] | None = None,
+                job_type: str = JOB_TYPE_SCIENCE
                 ) -> list[Batch]:
     """Cut a known, finite work list into batches in one pass.
 
     The bulk/backfill counterpart to the accumulator's streaming path:
     when all the work is already known there is no cadence question, only
     the array ceiling.
+
+    `job_type` must match the job type the units themselves declare
+    (`ProcessingUnit.dedup_key`'s check) — it defaults to science only
+    because that was, historically, the only caller; a caller batching any
+    other job type must pass its own.
     """
     accumulator = ReadyWorkAccumulator(max_batch_size=max_batch_size,
-                                       batch_id_factory=batch_id_factory)
+                                       batch_id_factory=batch_id_factory,
+                                       job_type=job_type)
     accumulator.extend(units)
     return list(accumulator.drain())

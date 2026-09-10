@@ -460,7 +460,7 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
         return []
 
     kwargs = {} if max_batch_size is None else {"max_batch_size": max_batch_size}
-    batches = batch_units(units, **kwargs)
+    batches = batch_units(units, job_type=job_type, **kwargs)
     logger.info("submitting %d %s unit(s) in %d batch(es)",
                 len(units), job_type, len(batches))
 
