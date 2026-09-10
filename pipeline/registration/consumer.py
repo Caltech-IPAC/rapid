@@ -1184,10 +1184,24 @@ def _bind_fence_keys(record, attempt_id=None):
         # rather than duplicating that raise here.
         return []
     keys = []
+    seen = set()
     for entry in products.values():
         parsed = _parse_s3_uri(entry.get("uri"))
-        if parsed is not None:
-            keys.append(parsed)
+        if parsed is None or parsed in seen:
+            # DEDUPLICATED BY KEY, not by product name. `published()` indexes
+            # entries by name, and two differently-named entries may carry the
+            # SAME `(bucket, object_key)`. Fencing such a key twice makes the
+            # second `acquire_fence` collide with the fence this same bind took
+            # microseconds earlier and still holds: the `ON CONFLICT ... WHERE
+            # expires_at < now()` clause sees a live, unexpired row, returns no
+            # row, and `_bind_fence` raises `BindFenced` against its own lease.
+            # The attempt then fails closed forever — every retry re-collides
+            # the same way. A key is fenced once per bind; the fence is over
+            # the KEY, so holding it once is holding it for every entry that
+            # names it.
+            continue
+        seen.add(parsed)
+        keys.append(parsed)
     return keys
 
 

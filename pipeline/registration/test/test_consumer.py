@@ -1176,5 +1176,41 @@ class NoLegacyMechanismTests(unittest.TestCase):
                              f"the consumer references {banned!r}")
 
 
+class BindFenceKeysTests(unittest.TestCase):
+    """`_bind_fence_keys` returns each `(bucket, object_key)` at most once."""
+
+    def test_one_key_named_by_two_products_is_fenced_once(self):
+        """Two entries over ONE object fence it once, not twice.
+
+        `published()` indexes entries by NAME, so a record may carry two
+        differently-named entries whose `uri` is the same object. Before this
+        was deduplicated, `_bind_fence` acquired that key, then acquired it
+        again for the second entry — colliding with the live, unexpired lease
+        it was itself still holding. `acquire_fence`'s `ON CONFLICT ... WHERE
+        expires_at < now()` found its own row, returned nothing, and
+        `BindFenced` was raised against the bind's own fence: the attempt
+        failed closed on every retry, reporting "GC holds it live" while
+        `gc_fences` held nothing but that row.
+        """
+        shared = "s3://b/science/r/u/attempt-1/shared.fits"
+        record = {
+            "attempt_id": 1,
+            "products": [
+                {"name": "zogy_uncert", "uri": shared, "checksum": "c1"},
+                {"name": "zogy_weight", "uri": shared, "checksum": "c1"},
+                {"name": "other",
+                 "uri": "s3://b/science/r/u/attempt-1/other.fits",
+                 "checksum": "c2"},
+            ],
+        }
+
+        keys = consumer._bind_fence_keys(record, attempt_id=1)
+
+        self.assertEqual(len(keys), len(set(keys)),
+                         "a key was fenced more than once")
+        self.assertEqual(len(keys), 2)
+        self.assertIn(("b", "science/r/u/attempt-1/shared.fits"), keys)
+
+
 if __name__ == "__main__":
     unittest.main()

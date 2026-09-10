@@ -42,7 +42,8 @@ from pipeline.contract.test_gc_execution import (
     BUCKET, StubS3, approved_plan, item_statuses, require_gc_schema)
 from pipeline.gc import fence as gc_fence
 from pipeline.gc.execute import Executor
-from pipeline.registration.consumer import BindFenced, _bind_fence
+from pipeline.registration.consumer import (BindFenced, _bind_fence,
+                                            _bind_fence_keys)
 
 pytestmark = pytest.mark.contract
 
@@ -501,3 +502,34 @@ def test_crash_recovery_a_registration_fence_left_behind_expires(
     assert held[0] == "gc-recovery"
     gc_fence.release_fence(execute_b, bucket=BUCKET, object_key=key,
                            holder="gc-recovery")
+
+
+def test_bind_fence_keys_deduplicates_one_key_named_twice():
+    """Two product entries over ONE `(bucket, object_key)` fence it once.
+
+    `published()` indexes entries by NAME, so a record may legitimately carry
+    two differently-named entries whose `uri` is the same object. Before this
+    was deduplicated, `_bind_fence` acquired that key, then acquired it again
+    for the second entry — colliding with the live, unexpired lease it was
+    itself still holding — and raised `BindFenced` against its own fence. Every
+    such attempt failed closed on every retry, reporting "GC holds it live"
+    when the fence table held nothing but this bind's own row.
+
+    No database: `_bind_fence_keys` reads the record and nothing else.
+    """
+    shared = "s3://%s/science/r/u/attempt-dedup-1/shared.fits" % BUCKET
+    record = {
+        "attempt_id": 1,
+        "products": [
+            {"name": "zogy_uncert", "uri": shared, "checksum": "c1"},
+            {"name": "zogy_weight", "uri": shared, "checksum": "c1"},
+            {"name": "other", "uri": "s3://%s/science/r/u/attempt-dedup-1/"
+                                     "other.fits" % BUCKET, "checksum": "c2"},
+        ],
+    }
+
+    keys = _bind_fence_keys(record, attempt_id=1)
+
+    assert len(keys) == len(set(keys)), "a key was fenced more than once"
+    assert len(keys) == 2, "expected the shared key once plus the other key"
+    assert (BUCKET, "science/r/u/attempt-dedup-1/shared.fits") in keys
