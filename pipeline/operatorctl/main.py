@@ -744,6 +744,7 @@ def _cmd_run_status(conn, args, out):
     tally = _actions.run_attempt_tally(conn, args.name)
     breakdown = _actions.run_state_breakdown(conn, args.name)
     walltime = _actions.run_stage_walltime(conn, args.name)
+    resource_usage = _actions.run_resource_usage(conn, args.name)
 
     print("RUN %s  (run_id=%s, kind=%s, state=%s)" % (
         run["name"], run["run_id"], run["kind"], run["state"]), file=out)
@@ -766,6 +767,18 @@ def _cmd_run_status(conn, args, out):
             print("    %-20s %8s %8s %8s %8s  (n=%s)" % (
                 row["stage_name"], row["min_ms"], row["p50_ms"],
                 row["p90_ms"], row["max_ms"], row["n"]), file=out)
+        # D7: per-job resource usage joins the walltime panel rather than
+        # growing a second one. Rows only print for a metric with at least
+        # one non-NULL attempt (n=0 means every attempt in this run predates
+        # the columns, or every rusage read failed — nothing to show either
+        # way).
+        for row in resource_usage:
+            if not row["n"]:
+                continue
+            unit = "KB" if row["metric"] == "peak_rss_kb" else "s"
+            print("    %-20s %8s %8s %8s %8s  (n=%s) %s" % (
+                row["metric"], row["min_v"], row["p50_v"],
+                row["p90_v"], row["max_v"], row["n"], unit), file=out)
 
     if args.placement:
         if not args.queue:

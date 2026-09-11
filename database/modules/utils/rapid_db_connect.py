@@ -51,6 +51,7 @@ import collections
 import contextlib
 import logging
 import os
+import random
 import time
 
 import psycopg2
@@ -73,6 +74,22 @@ DEFAULT_CONNECT_ATTEMPTS = 4
 DEFAULT_BACKOFF_INITIAL_S = 0.5
 DEFAULT_BACKOFF_MULTIPLIER = 2.0
 DEFAULT_BACKOFF_CAP_S = 8.0
+
+# D9 (throughput sitting): a 1,000-job start burst measured live 2026-09-10
+# had 218 jobs die at start-up when every container's first database
+# connection landed on the pooler in the same few seconds. The general
+# defaults above (4 attempts, ~15s worst-case elapsed, no jitter) are sized
+# for an ordinary caller reconnecting after an isolated blip, not for a
+# synchronized fleet-wide retry storm — 1,000 containers retrying on the
+# SAME fixed backoff schedule re-collide at every retry, which is exactly
+# why jitter, not just backoff, is required. These are the sizing a job
+# entrypoint's FIRST connection should opt into: at least 10 attempts, a
+# few minutes of total possible elapsed time (0.5 * 2^9 capped at 30s per
+# step, ~10 retries -> comfortably multi-minute worst case), full jitter on.
+STARTUP_CONNECT_ATTEMPTS = 10
+STARTUP_BACKOFF_INITIAL_S = 0.5
+STARTUP_BACKOFF_MULTIPLIER = 2.0
+STARTUP_BACKOFF_CAP_S = 30.0
 
 # The two lanes at the one pooler door (design/database.md, and the route
 # matrix in the Batch payload contract). The lane is part of each job
@@ -265,8 +282,10 @@ def connect(application_name,
             backoff_initial=DEFAULT_BACKOFF_INITIAL_S,
             backoff_multiplier=DEFAULT_BACKOFF_MULTIPLIER,
             backoff_cap=DEFAULT_BACKOFF_CAP_S,
+            jitter=False,
             sleep=time.sleep,
-            connect_fn=None):
+            connect_fn=None,
+            random_func=random.uniform):
     """Open one connection, with bounded retry and backoff. Raises on failure.
 
     ``application_name`` is required, not defaulted: it is what makes
@@ -293,8 +312,19 @@ def connect(application_name,
     Passing a credential explicitly is the only way to reach the database
     without the password existing in the process environment.
 
-    ``sleep`` and ``connect_fn`` are injection points for tests; nothing
-    in production passes them.
+    ``jitter`` (D9) applies FULL JITTER (``random_func(0, delay)``, the
+    AWS architecture-blog algorithm) to each computed backoff before
+    sleeping — the default backoff schedule is deterministic, so every
+    caller retrying after the same event (a fleet-wide start burst, not
+    just this one connection) sleeps for exactly the same durations and
+    re-collides at every retry. Off by default: this parameter changes
+    what ``sleep`` is called with, which the existing pinned-sequence
+    tests below assert exactly, and a caller with no reason to avoid
+    synchronized retries (an isolated reconnect after one blip) has no
+    reason to pay for a wider possible spread either.
+
+    ``sleep``, ``connect_fn`` and ``random_func`` are injection points for
+    tests; nothing in production passes them.
 
     Retry covers ``OperationalError`` only — the class that means "could
     not reach or authenticate to the server". A ``ProgrammingError`` or a
@@ -362,10 +392,17 @@ def connect(application_name,
             last_exc = exc
             if attempt == attempts:
                 break
+            # Full jitter (D9): sleep a RANDOM duration in [0, delay], not
+            # the deterministic `delay` itself, so 1,000 containers retrying
+            # off one throttling event do not all wake on the same clock
+            # tick and re-collide on the next attempt.
+            wait = random_func(0, delay) if jitter else delay
             logger.warning(
-                "database connect attempt %d/%d failed (%s); retrying in %.1fs",
-                attempt, attempts, exc, delay)
-            sleep(delay)
+                "database connect attempt %d/%d failed (%s); retrying in "
+                "%.1fs%s",
+                attempt, attempts, exc, wait,
+                " (jittered from %.1fs)" % delay if jitter else "")
+            sleep(wait)
             delay = min(delay * backoff_multiplier, backoff_cap)
             continue
 

@@ -57,6 +57,7 @@ import decimal
 import json
 import os
 import re
+import resource
 import tarfile
 import tempfile
 from typing import Any
@@ -389,6 +390,54 @@ def upload_bundle(store: Any, key: str, body: bytes) -> dict:
                  result.size, result.checksum[:12])
     return {"key": key, "checksum": result.checksum,
             "created": result.created, "size": result.size}
+
+
+# ---------------------------------------------------------------------------
+# Resource usage (D7: per-job peak RSS and CPU seconds)
+# ---------------------------------------------------------------------------
+
+def capture_resource_usage(getrusage: Any = resource.getrusage) -> dict:
+    """Peak resident memory and CPU seconds for the job process tree, at
+    terminal.
+
+    Combines `RUSAGE_SELF` (this process) with `RUSAGE_CHILDREN` (every
+    child this process has waited on — the science tools stages invoke as
+    subprocesses) so the number reflects the whole job process tree, not
+    just the Python interpreter running it.
+
+    **`ru_maxrss` units are PLATFORM-DEPENDENT** (`man getrusage`): on LINUX
+    — where every job container actually runs — it is KILOBYTES; on macOS
+    it is BYTES. This function assumes Linux and returns kilobytes
+    unconverted. Do NOT "fix" a mismatch seen while testing on a Mac laptop
+    by dividing by 1024 here — that would be correct on macOS and silently
+    wrong (1024x too small) on the Linux containers this actually runs on.
+    A laptop-run unit test that wants an exact value must inject a fake
+    `getrusage`, as this function's own tests do, rather than asserting
+    against the real platform's rusage.
+
+    CPU seconds is `ru_utime + ru_stime`, self plus children — the total
+    processor time the job process tree consumed, wall-clock elapsed being
+    tracked separately by `started_at`/`ended_at`.
+
+    Returns `{"peak_rss_kb": int, "cpu_seconds": float}`. **Never raises** —
+    a failure to read rusage must not fail the job or lose the terminal
+    record (D7 requirement); on any exception this logs a warning and
+    returns `{"peak_rss_kb": None, "cpu_seconds": None}`, which
+    `mark_application_closed` writes as NULL. `getrusage` is injectable so
+    tests can supply a fake rather than depending on a real subprocess tree.
+    """
+    try:
+        self_usage = getrusage(resource.RUSAGE_SELF)
+        children_usage = getrusage(resource.RUSAGE_CHILDREN)
+        peak_rss_kb = max(self_usage.ru_maxrss, 0) + max(children_usage.ru_maxrss, 0)
+        cpu_seconds = (self_usage.ru_utime + self_usage.ru_stime
+                       + children_usage.ru_utime + children_usage.ru_stime)
+        return {"peak_rss_kb": int(peak_rss_kb), "cpu_seconds": float(cpu_seconds)}
+    except Exception:  # noqa: BLE001 - measurement is best-effort, never fatal
+        _logger.warning(
+            "could not read rusage for this attempt's resource-usage "
+            "columns; leaving peak_rss_kb/cpu_seconds NULL", exc_info=True)
+        return {"peak_rss_kb": None, "cpu_seconds": None}
 
 
 # ---------------------------------------------------------------------------
@@ -787,6 +836,12 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
     _step(on_step, "mark_application_closed")
     from observability.attempts import ProductDisposition, RapidOutcome
 
+    # D7: rusage of the job process tree, read here — at terminal, after
+    # every stage and subprocess has run and been waited on, and before the
+    # row closes. Best-effort: `capture_resource_usage` never raises, so a
+    # measurement failure cannot cost the job its terminal record.
+    usage = capture_resource_usage()
+
     try:
         writer.mark_application_closed(
             ownership.attempt_id,
@@ -798,6 +853,8 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
             terminal_record_sequence=APPLICATION_RECORD_SEQUENCE,
             terminal_record_checksum=written["checksum"],
             error_category=(serialized.error_category if serialized else None),
+            peak_rss_kb=usage["peak_rss_kb"],
+            cpu_seconds=usage["cpu_seconds"],
         )
     except Exception as exc:  # noqa: BLE001 - translated
         # The record is already durable and valid; only the row transition

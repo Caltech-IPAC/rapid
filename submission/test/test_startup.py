@@ -111,6 +111,41 @@ def test_a_failed_read_is_an_error():
 
 
 # ---------------------------------------------------------------------------
+# D9: the default SSM client carries adaptive retry, >= 10 attempts.
+#
+# THE REGRESSION GUARD for the 2026-09-10 measurement: a 1,000-job start
+# burst had 218 jobs die because this call built its client with no retry
+# Config at all and SSM throttled the herd. Proven by reverting the
+# `config=` kwarg below and watching this test fail -- see
+# LEDGER-rusage-backoff.md for the revert demonstration.
+# ---------------------------------------------------------------------------
+
+def test_the_default_ssm_client_carries_adaptive_retry_with_at_least_10_attempts():
+    from unittest import mock
+
+    captured = {}
+
+    class _RecordingBoto3:
+        @staticmethod
+        def client(service, **kwargs):
+            captured["service"] = service
+            captured["kwargs"] = kwargs
+            return FakeSsm(TREE)
+
+    with mock.patch.dict(sys.modules, {"boto3": _RecordingBoto3}):
+        fetch_parameters()
+
+    assert captured["service"] == "ssm"
+    config = captured["kwargs"].get("config")
+    assert config is not None, (
+        "fetch_parameters() must construct its default SSM client with a "
+        "botocore retries Config -- none was passed")
+    retries = config.retries
+    assert retries.get("mode") == "adaptive"
+    assert retries.get("max_attempts", 0) >= 10
+
+
+# ---------------------------------------------------------------------------
 # Digest
 # ---------------------------------------------------------------------------
 
