@@ -25,6 +25,7 @@ by equality was the defect ``runs`` (migration 108) was written to end.
 import sys
 
 from pipeline.operatorctl.actions import record_external_action
+from pipeline.operatorctl.session import submission_role
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +228,21 @@ def submit_run(conn, name, job_type, units, reason, context=None):
     nothing (observed live 2026-09-11, campaign run
     `awaicgen54-proof-20260911`: GATHER returned 109 run-scoped units,
     submission created zero work_units rows).
+
+    **RUNS UNDER `submission_role()`, NOT THE BARE OPERATOR SESSION
+    (identity-fix ruling, 2026-09-11).** `rapid_operator` (and the agent
+    tier) hold only SELECT — creating a work unit needs INSERT/UPDATE on
+    `work_units`, which the operate tier deliberately does not have (see
+    `submission_role()`'s own docstring for why the widening happens here
+    and not on `rapid_operator` itself). Only THIS INSERT runs under the
+    widened role: `start_run_audited` calls this function and then
+    `record_external_action` outside of it, so the audited ledger row is
+    written back under the operate tier the session actually assumed —
+    `session_user`, what lands in `derived.write_mutation_audit`, is
+    never affected by the role switch either way, but keeping the switch
+    scoped to only this call is what keeps every OTHER submission-adjacent
+    statement running under the narrow tier this module otherwise
+    insists on.
     """
     from pipeline import seams
     from database.modules.utils.rapid_db_connect import ConnectionExecutor
@@ -237,14 +253,17 @@ def submit_run(conn, name, job_type, units, reason, context=None):
     if not units:
         return []
 
-    return seams.submit_gathered(
-        units, job_type=job_type, queue=context["queue"],
-        job_definition=context["job_definition"], binding=context["binding"],
-        manifest_bucket=context["manifest_bucket"],
-        manifest_prefix=context["manifest_prefix"],
-        s3_client=context["s3_client"], batch_client=context["batch_client"],
-        execute=ConnectionExecutor(conn).execute, run_id=name, reason=reason,
-        work_unit_run_id=name)
+    with submission_role(conn):
+        return seams.submit_gathered(
+            units, job_type=job_type, queue=context["queue"],
+            job_definition=context["job_definition"],
+            binding=context["binding"],
+            manifest_bucket=context["manifest_bucket"],
+            manifest_prefix=context["manifest_prefix"],
+            s3_client=context["s3_client"],
+            batch_client=context["batch_client"],
+            execute=ConnectionExecutor(conn).execute, run_id=name,
+            reason=reason, work_unit_run_id=name)
 
 
 def start_run_audited(conn, idempotency_key, name, phase, reason,
