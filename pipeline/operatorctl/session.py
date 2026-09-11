@@ -404,9 +404,26 @@ def submission_role(conn):
             "cannot assume a submission-capable role: tried %s — grant "
             "this login membership in one of %r to fix"
             % ("; ".join(tried), SUBMISSION_ROLES))
+    # EVERY TRANSACTION BOUNDARY RE-APPLIES THE WIDENING, because `SET ROLE`
+    # does not survive one: `COMMIT` and `ROLLBACK` both revert it, and to
+    # the LOGIN role rather than to whatever was current before. A body that
+    # widens once and then commits or rolls back per item silently loses the
+    # widening on its first boundary. Registered here and cleared below, so
+    # the widening lasts exactly as long as this block claims it does.
+    try:
+        from database.modules.utils.rapid_db_connect import (
+            forget_widened_role, remember_widened_role)
+    except ImportError:  # pragma: no cover - driver-less stub tier
+        forget_widened_role = remember_widened_role = None
+
+    if remember_widened_role is not None:
+        remember_widened_role(conn, candidate)
+
     try:
         yield conn
     finally:
+        if forget_widened_role is not None:
+            forget_widened_role(conn)
         # THE RESTORE MUST NOT MASK THE BODY'S OWN FAILURE, and a bare
         # `SET ROLE` here does exactly that. If the body raised something
         # that aborted the transaction — any database error, the ordinary

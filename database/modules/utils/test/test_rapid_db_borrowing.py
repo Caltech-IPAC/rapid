@@ -285,3 +285,84 @@ class BorrowingHandleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WidenedRoleSurvivesTransactionBoundariesTests(unittest.TestCase):
+    """`transaction()` re-applies a recorded role widening.
+
+    `SET ROLE` does not survive `COMMIT` or `ROLLBACK` — it reverts to the
+    LOGIN role, not to whatever was current before. Verified against the
+    live database: inside `submission_role` the session read `rapid_admin`,
+    and one `conn.rollback()` later it read `rusholme`. A loop that widens
+    once and then commits or rolls back per item therefore loses the
+    widening on its first boundary, silently, and every write after it is
+    denied.
+    """
+
+    def setUp(self):
+        from database.modules.utils import rapid_db_connect as mod
+        self.mod = mod
+        mod._WIDENED_ROLES.clear()
+
+    def tearDown(self):
+        self.mod._WIDENED_ROLES.clear()
+
+    def _conn(self):
+        executed = []
+
+        class _Cur:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *a):
+                return False
+
+            def execute(self_inner, sql, params=None):
+                executed.append(sql)
+
+            def close(self_inner):
+                pass
+
+        class _Conn:
+            def cursor(self_inner):
+                return _Cur()
+
+            def commit(self_inner):
+                executed.append("COMMIT")
+
+            def rollback(self_inner):
+                executed.append("ROLLBACK")
+
+        return _Conn(), executed
+
+    def test_a_commit_re_applies_the_widening(self):
+        conn, executed = self._conn()
+        self.mod.remember_widened_role(conn, "rapid_admin")
+        with self.mod.transaction(conn) as cur:
+            cur.execute("SELECT 1")
+        self.assertIn("COMMIT", executed)
+        self.assertEqual("SET ROLE rapid_admin", executed[-1])
+
+    def test_a_rollback_re_applies_the_widening(self):
+        conn, executed = self._conn()
+        self.mod.remember_widened_role(conn, "rapid_admin")
+        with self.assertRaises(ValueError):
+            with self.mod.transaction(conn) as cur:
+                cur.execute("SELECT 1")
+                raise ValueError("boom")
+        self.assertIn("ROLLBACK", executed)
+        self.assertEqual("SET ROLE rapid_admin", executed[-1])
+
+    def test_no_widening_recorded_means_no_set_role(self):
+        conn, executed = self._conn()
+        with self.mod.transaction(conn) as cur:
+            cur.execute("SELECT 1")
+        self.assertNotIn("SET ROLE rapid_admin", executed)
+
+    def test_forgetting_stops_the_re_application(self):
+        conn, executed = self._conn()
+        self.mod.remember_widened_role(conn, "rapid_admin")
+        self.mod.forget_widened_role(conn)
+        with self.mod.transaction(conn) as cur:
+            cur.execute("SELECT 1")
+        self.assertNotIn("SET ROLE rapid_admin", executed)

@@ -420,6 +420,60 @@ def connect(application_name,
         f"{attempts} attempt(s): {last_exc}") from last_exc
 
 
+#: Connections whose caller has widened the session role and needs that
+#: widening re-applied after every transaction boundary. Keyed by
+#: `id(conn)`, matching `pipeline.operatorctl.session._ASSUMED_ROLES`'s own
+#: keying, and for the same reason: a psycopg2 connection is a C extension
+#: type that refuses attribute assignment, so the state cannot live on the
+#: object.
+#:
+#: WHY THIS EXISTS. `SET ROLE` does not survive `COMMIT` or `ROLLBACK` — it
+#: reverts to the LOGIN role, not to whatever role was current before. That
+#: is silent and it is fatal to any loop that widens once and then commits
+#: or rolls back per item. Measured against the live database rather than
+#: reasoned:
+#:
+#:     operator tier           -> rapid_operator
+#:     inside submission_role  -> rapid_admin
+#:     after a rollback        -> rusholme        <- the defect
+#:
+#: `run register --apply` is exactly that shape: one attempt's failure rolls
+#: back, the widened role evaporates, and every write after it is denied.
+#: 229 consecutive `permission denied` failures from one early error, found
+#: live on 2026-09-11 registering the acceptance run.
+_WIDENED_ROLES: dict = {}
+
+
+def remember_widened_role(conn, role):
+    """Record that `conn`'s session role has been widened to `role`, so
+    every transaction boundary re-applies it. `pipeline.operatorctl.
+    session.submission_role` calls this; nothing else should."""
+    _WIDENED_ROLES[id(conn)] = role
+
+
+def forget_widened_role(conn):
+    """Stop re-applying a widening, when its block exits."""
+    _WIDENED_ROLES.pop(id(conn), None)
+
+
+def _reassert_role(conn):
+    """Re-apply `conn`'s recorded widening after a transaction boundary.
+
+    Best-effort and never raises: this runs on the error path too, where an
+    exception raised here would REPLACE the caller's real error — the same
+    masking `submission_role`'s own restore is careful to avoid.
+    """
+    role = _WIDENED_ROLES.get(id(conn))
+    if role is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET ROLE " + role)
+    except Exception:  # noqa: BLE001 - never mask the caller's error
+        logger.debug("could not re-apply the widened role %s", role,
+                     exc_info=True)
+
+
 @contextlib.contextmanager
 def transaction(conn):
     """Run a unit of work in one transaction: commit on success, rollback on error.
@@ -437,9 +491,11 @@ def transaction(conn):
             conn.rollback()
         except Exception:  # noqa: BLE001
             logger.exception("rollback failed; the original error follows")
+        _reassert_role(conn)
         raise
     else:
         conn.commit()
+        _reassert_role(conn)
     finally:
         cur.close()
 
