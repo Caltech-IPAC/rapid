@@ -407,5 +407,32 @@ def submission_role(conn):
     try:
         yield conn
     finally:
-        with conn.cursor() as cur:
-            cur.execute("SET ROLE " + assumed_role)
+        # THE RESTORE MUST NOT MASK THE BODY'S OWN FAILURE, and a bare
+        # `SET ROLE` here does exactly that. If the body raised something
+        # that aborted the transaction — any database error, the ordinary
+        # case — PostgreSQL refuses every subsequent statement on that
+        # connection with `InFailedSqlTransaction: current transaction is
+        # aborted, commands ignored until end of transaction block`. That
+        # exception is raised from inside `finally`, so it REPLACES the
+        # real error the caller needs to see. Measured against the live
+        # database rather than reasoned: a divide-by-zero in the body
+        # followed by this restore produced exactly that substitution
+        # (2026-09-11, found by a diff-scoped defect review).
+        #
+        # Swallowing it is right here, and only here. This block's whole
+        # job is to leave the session no wider than it found it, and an
+        # aborted transaction already guarantees that: the abort discards
+        # the `SET ROLE` that widened us, so `current_user` falls back to
+        # the bare login — narrower than either the submission role or the
+        # operate tier. Verified the same way: `current_user` reads as the
+        # login itself after the rollback. So the failure mode is
+        # fail-closed, the restore is redundant in precisely the case it
+        # cannot run, and the caller's own exception survives.
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET ROLE " + assumed_role)
+        except Exception:                          # noqa: BLE001
+            # Deliberately not re-raised: on this path the caller is
+            # already carrying the real exception, and privilege has
+            # already narrowed.
+            pass
