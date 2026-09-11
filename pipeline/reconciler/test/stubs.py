@@ -571,6 +571,16 @@ def _columns_of(text):
         part = part.strip().strip('"')
         if " AS " in part:
             part = part.rsplit(" AS ", 1)[1].strip()
+        # A TABLE QUALIFIER IS STRIPPED, because psycopg2 strips it too:
+        # `cursor.description` reports the plain column name, never
+        # `table.column`, so a caller that builds its row dicts from
+        # `description` (`consumer.candidates` does) gets `attempt_id`
+        # whether the query said `attempt_id` or `attempts.attempt_id`.
+        # A stub that kept the qualifier would fail a query the real
+        # database accepts — and it did, once the candidate SELECT had to
+        # qualify its columns to disambiguate the work_units join.
+        if "." in part:
+            part = part.rsplit(".", 1)[1].strip()
         names.append(part)
     return names
 

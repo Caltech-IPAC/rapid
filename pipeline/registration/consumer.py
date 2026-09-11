@@ -237,7 +237,15 @@ _WORK_UNIT_RUN_ID_SELECT_SQL = (
 #: unit-less attempt must register as (production's own convention: no
 #: work unit means no campaign scope, i.e. `None`, not "not a candidate").
 _CANDIDATE_WHERE_SQL = (
-    "SELECT " + ", ".join(_COLUMNS) + ", " + _WORK_UNIT_RUN_ID_SELECT_SQL +
+    # EVERY `_COLUMNS` NAME IS QUALIFIED `attempts.`, because the LEFT JOIN
+    # below puts `work_units` in scope and the two tables share column
+    # names — `run_id` and `work_unit_id` both exist on both, so a bare
+    # `run_id` in this SELECT list is an `AmbiguousColumn` error at the
+    # database, not at import. The tuple itself stays unqualified: it is
+    # also the ROW KEY list every reader indexes by, so qualifying it there
+    # would rename the keys. Qualify in the SQL text, never in the tuple.
+    "SELECT " + ", ".join("attempts." + c for c in _COLUMNS)
+    + ", " + _WORK_UNIT_RUN_ID_SELECT_SQL +
     " FROM attempts"
     " LEFT JOIN work_units"
     "   ON work_units.work_unit_id = attempts.work_unit_id"
