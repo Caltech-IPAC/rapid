@@ -100,6 +100,7 @@ Date              Software modification
 6/2/2026          Updated L2Files database table for 5th-order SIP distortion.
 6/23/2026         Upgraded awaicgen version from 5.2 to 5.4 (fixed bug in handling SIP distortion).
 7/8/2026          Modified to replace NaNs in difference-image inputs with zeros.
+9/10/2026         SMDC adopts awaicgen 5.4 = awaicgeneric_russ_tested.tar, 2026-09-10, reference misregistration, see rapid_plan COMPARISON.md.
 ===============   ===============================================================================================================================================================================================================================
 
 
