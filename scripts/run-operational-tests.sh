@@ -30,8 +30,23 @@ set -u
 PY="${1:-python3}"
 cd "$(dirname "$0")/.." || exit 2
 
+# Collection's own exit code is captured DIRECTLY, before the output is
+# ever piped anywhere -- a `cmd | grep | sed | ...` pipeline discards
+# `cmd`'s rc (this repo's own shell-reliability rule; `producer exit
+# codes`, AGENTS.md). Without this, a module that fails to COLLECT (a
+# syntax error, a bad import) is silently dropped from MODULES rather than
+# failing the run: the old `[ -z "${MODULES}" ]` check below only catches
+# TOTAL emptiness, not one broken module among many good ones.
+COLLECT_OUT="$("${PY}" -m pytest --collect-only -q --import-mode=importlib 2>&1)"
+collect_status=$?
+if [ ${collect_status} -ne 0 ]; then
+    echo "!! pytest collection exited nonzero (${collect_status})" >&2
+    printf '%s\n' "${COLLECT_OUT}" >&2
+    exit 2
+fi
+
 MODULES="$(
-    "${PY}" -m pytest --collect-only -q --import-mode=importlib 2>/dev/null \
+    printf '%s\n' "${COLLECT_OUT}" \
         | grep '::' \
         | sed 's/::.*//' \
         | sort -u \
@@ -39,7 +54,7 @@ MODULES="$(
 )"
 if [ -z "${MODULES}" ]; then
     echo "!! discovery found no stub-tier modules -- pytest collection failed" >&2
-    "${PY}" -m pytest --collect-only -q --import-mode=importlib >&2
+    printf '%s\n' "${COLLECT_OUT}" >&2
     exit 2
 fi
 
