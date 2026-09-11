@@ -1176,6 +1176,35 @@ class NoLegacyMechanismTests(unittest.TestCase):
                              f"the consumer references {banned!r}")
 
 
+class BindFencedMessageTests(unittest.TestCase):
+    """`BindFenced`'s message names the actual possible holders.
+
+    `acquire_fence`'s `False` return carries no holder identity (see
+    `pipeline.gc.fence.acquire_fence`'s docstring: the conflicting
+    `ON CONFLICT ... WHERE expires_at < now()` returns nothing from
+    `RETURNING`), so `_bind_fence` cannot know at the raise site whether
+    GC or another registration attempt holds the key. The message used to
+    hardcode "GC holds it live" regardless — wrong for the commoner case,
+    a registration self-collision (two passes racing the same key; see
+    `BindFenceKeysTests` above), which involves no GC fence at all. This
+    pins the fixed wording: it must name registration-on-registration
+    collision as the likelier cause, still mention GC as the other
+    possibility, and must NOT assert GC unconditionally.
+    """
+
+    def test_the_message_names_both_possible_holders(self):
+        error = consumer.BindFenced(
+            "rapid-science", "science/r/u/attempt-9/a.fits", attempt_id=9)
+        message = str(error)
+
+        self.assertIn("registration", message)
+        self.assertIn("gc", message.lower())
+        self.assertNotIn(
+            "GC holds it live", message,
+            "the message still asserts a specific holder acquire_fence's "
+            "False return cannot actually tell it")
+
+
 class BindFenceKeysTests(unittest.TestCase):
     """`_bind_fence_keys` returns each `(bucket, object_key)` at most once."""
 
