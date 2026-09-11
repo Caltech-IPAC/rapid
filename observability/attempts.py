@@ -781,7 +781,9 @@ class AttemptWriter:
                                 terminal_record_sequence: int = 0,
                                 terminal_record_checksum: str | None = None,
                                 error_category: str | None = None,
-                                reconciler_materialized: bool = False) -> None:
+                                reconciler_materialized: bool = False,
+                                peak_rss_kb: int | None = None,
+                                cpu_seconds: float | None = None) -> None:
         """Close the application-authored half of an attempt.
 
         The termination protocol's final database step
@@ -809,6 +811,18 @@ class AttemptWriter:
         still be `started` — the only state an application-close may leave —
         so a second closer gets `AttemptNotFound` instead of silently
         rewriting the first one's account.
+
+        `peak_rss_kb`/`cpu_seconds` (D7) are `rusage` of the job process
+        tree, read once at terminal by `pipeline.runtime.termination.
+        capture_resource_usage` and passed through here — this is the one
+        writer that runs inside the job process while it still has a
+        process tree to measure; the reconciler's terminal transitions
+        (`mark_terminal_after_start`, `mark_terminal_without_start`,
+        `mark_abrupt_loss`) close attempts from Batch/CloudWatch state after
+        the process is gone and have no rusage to report. Both are NULLable
+        and default to None: a measurement failure (caught inside
+        `capture_resource_usage`, which never raises) must not block the
+        close it rides alongside.
         """
         if terminal_record_sequence < 0:
             raise ValueError(
@@ -831,7 +845,8 @@ class AttemptWriter:
             "  application_intended_exit = %s, rapid_outcome = %s,"
             "  product_disposition = %s, error_category = %s,"
             "  terminal_record_key = %s, terminal_record_sequence = %s,"
-            "  terminal_record_checksum = %s, reconciler_materialized = %s"
+            "  terminal_record_checksum = %s, reconciler_materialized = %s,"
+            "  peak_rss_kb = %s, cpu_seconds = %s"
             " WHERE attempt_id = %s AND lifecycle_state = %s"
         )
         result = self._execute(sql, [
@@ -839,7 +854,8 @@ class AttemptWriter:
             application_intended_exit, _value(rapid_outcome),
             _value(product_disposition), error_category,
             terminal_record_key, terminal_record_sequence,
-            terminal_record_checksum, reconciler_materialized, attempt_id,
+            terminal_record_checksum, reconciler_materialized,
+            peak_rss_kb, cpu_seconds, attempt_id,
             LifecycleState.STARTED.value,
         ])
         _require_one_row(result, "mark_application_closed", attempt_id,

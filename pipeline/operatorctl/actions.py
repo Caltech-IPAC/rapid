@@ -598,6 +598,49 @@ def run_stage_walltime(conn, name):
     return _rows(conn, _RUN_STAGE_WALLTIME, (_run_prefix_pattern(name),))
 
 
+# D7: per-job resource usage (peak RSS, CPU seconds), joining the walltime
+# panel rather than growing a second one — same one-query-per-run-reader
+# shape as `_RUN_STAGE_WALLTIME`, and the same min/p50/p90/max/n columns, so
+# `run status` prints it as one more row beside the per-stage timings rather
+# than a differently-shaped block. Not joined to `attempt_stages` (unlike
+# walltime, which is a per-stage measurement): peak_rss_kb/cpu_seconds are
+# per-ATTEMPT — the whole job process tree's rusage at terminal — so this
+# reads `attempts` alone. `WHERE ... IS NOT NULL` on each column
+# independently rather than on the row, since a rusage read failure
+# (`capture_resource_usage`, best-effort) can leave one column populated
+# and the other NULL on the same row (unlikely in practice — both come from
+# the same rusage calls — but the two never gate each other in the writer,
+# so the read here does not assume they always arrive together).
+_RUN_RESOURCE_USAGE = """
+SELECT 'peak_rss_kb' AS metric,
+       count(*) FILTER (WHERE peak_rss_kb IS NOT NULL) AS n,
+       min(peak_rss_kb) AS min_v,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY peak_rss_kb) AS p50_v,
+       percentile_cont(0.9) WITHIN GROUP (ORDER BY peak_rss_kb) AS p90_v,
+       max(peak_rss_kb) AS max_v
+  FROM attempts
+ WHERE run_id LIKE %s
+UNION ALL
+SELECT 'cpu_seconds',
+       count(*) FILTER (WHERE cpu_seconds IS NOT NULL),
+       min(cpu_seconds),
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY cpu_seconds),
+       percentile_cont(0.9) WITHIN GROUP (ORDER BY cpu_seconds),
+       max(cpu_seconds)
+  FROM attempts
+ WHERE run_id LIKE %s
+"""
+
+
+def run_resource_usage(conn, name):
+    """Peak-RSS (KB) and CPU-seconds distribution (min/p50/p90/max, n) for
+    every attempt matching `name` by prefix — the D7 measurement, read
+    beside `run_stage_walltime` in the same panel.
+    """
+    pattern = _run_prefix_pattern(name)
+    return _rows(conn, _RUN_RESOURCE_USAGE, (pattern, pattern))
+
+
 def run_product_counts(conn, name):
     """`{"refimages": n, "diffimages": n, "psfs": n}` for a run."""
     pattern = _run_prefix_pattern(name)

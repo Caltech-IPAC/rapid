@@ -761,6 +761,28 @@ class ApplicationClosedTests(unittest.TestCase):
         _, params = self.execute.only()
         self.assertIs(params[9], False)
 
+    def test_resource_usage_columns_default_to_none(self):
+        # D7: a caller that supplies neither (e.g. an older writer, or a
+        # test not exercising the feature) must not force NOT NULL on
+        # peak_rss_kb/cpu_seconds -- both nullable, per the migration.
+        self.close()
+        sql, params = self.execute.only()
+        self.assertIn("peak_rss_kb = %s", sql)
+        self.assertIn("cpu_seconds = %s", sql)
+        self.assertIsNone(params[10])
+        self.assertIsNone(params[11])
+
+    def test_resource_usage_columns_flow_through_when_supplied(self):
+        # D7: `pipeline.runtime.termination.terminate` passes the rusage
+        # capture through as these two kwargs; this pins that the writer
+        # actually places them in the UPDATE rather than dropping them.
+        self.close(peak_rss_kb=123_456, cpu_seconds=7.5)
+        _, params = self.execute.only()
+        self.assertIn(123_456, params)
+        self.assertIn(7.5, params)
+        self.assertEqual(params[10], 123_456)
+        self.assertEqual(params[11], 7.5)
+
 
 class TerminalTests(unittest.TestCase):
     def setUp(self):

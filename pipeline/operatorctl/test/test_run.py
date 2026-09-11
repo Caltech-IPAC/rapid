@@ -238,6 +238,97 @@ class PrefixMatchingTests(unittest.TestCase):
         self.assertIn("run_id LIKE %s", _RELEASE_CANDIDATES_SQL)
         self.assertNotIn("run_id = %s", _RELEASE_CANDIDATES_SQL)
 
+    def test_run_resource_usage_sql_also_matches_by_like_not_equality(self):
+        # D7: the two run_id predicates (peak_rss_kb half, cpu_seconds half
+        # of the UNION ALL) must both be LIKE, not equality.
+        self.assertEqual(
+            actions._RUN_RESOURCE_USAGE.count("run_id LIKE %s"), 2)
+        self.assertNotIn("run_id = %s", actions._RUN_RESOURCE_USAGE)
+
+
+# ---------------------------------------------------------------------------
+# D7: per-job resource usage (peak RSS, CPU seconds) joins the walltime
+# panel, read from `attempts` alone (a per-attempt measurement, unlike
+# per-stage walltime).
+# ---------------------------------------------------------------------------
+class _RowsFakeCursor:
+    """Matches `actions._rows`'s real contract: columns come from
+    `description`, rows from `fetchall()` as plain tuples zipped against
+    them -- the shape `_FakeCursor` above (built for single jsonb-result
+    keyed calls) does not support.
+    """
+
+    def __init__(self, columns, rows):
+        self._columns = columns
+        self._rows = rows
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, sql, params=None):
+        self.calls.append((" ".join(sql.split()), params))
+
+    @property
+    def description(self):
+        return [(c,) for c in self._columns]
+
+    def fetchall(self):
+        return self._rows
+
+
+class _RowsFakeConn:
+    def __init__(self, columns, rows):
+        self._cursor = _RowsFakeCursor(columns, rows)
+
+    def cursor(self):
+        return self._cursor
+
+    @property
+    def calls(self):
+        return self._cursor.calls
+
+
+class ResourceUsageTests(unittest.TestCase):
+    """`run_resource_usage` reads the D7 columns' distribution, keyed by
+    metric name so the caller can print `peak_rss_kb` and `cpu_seconds`
+    each as one row of the same shape `run_stage_walltime` already uses.
+    """
+
+    def test_reads_both_metrics_with_prefix_matching(self):
+        conn = _RowsFakeConn(
+            columns=["metric", "n", "min_v", "p50_v", "p90_v", "max_v"],
+            rows=[
+                ("peak_rss_kb", 3, 100_000, 150_000, 190_000, 200_000),
+                ("cpu_seconds", 3, 10.0, 15.0, 19.0, 20.0),
+            ])
+        rows = actions.run_resource_usage(conn, "w9-ramp-science-18-x")
+        sql, params = conn.calls[0]
+        self.assertIn("run_id LIKE %s", sql)
+        self.assertEqual(params, ("w9-ramp-science-18-x%",
+                                  "w9-ramp-science-18-x%"))
+        self.assertEqual([row["metric"] for row in rows],
+                         ["peak_rss_kb", "cpu_seconds"])
+        self.assertEqual(rows[0]["max_v"], 200_000)
+        self.assertEqual(rows[1]["max_v"], 20.0)
+
+    def test_a_run_with_no_measured_attempts_reports_zero_n(self):
+        # Every attempt in the run predates the columns, or every rusage
+        # read failed -- n=0 for both metrics, not an empty result set (the
+        # UNION ALL of two aggregates always returns exactly two rows).
+        conn = _RowsFakeConn(
+            columns=["metric", "n", "min_v", "p50_v", "p90_v", "max_v"],
+            rows=[
+                ("peak_rss_kb", 0, None, None, None, None),
+                ("cpu_seconds", 0, None, None, None, None),
+            ])
+        rows = actions.run_resource_usage(conn, "some-run")
+        self.assertEqual(rows[0]["n"], 0)
+        self.assertEqual(rows[1]["n"], 0)
+
 
 # ---------------------------------------------------------------------------
 # `run archive` without --apply: no write, and render_plan's own wording.

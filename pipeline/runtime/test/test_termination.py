@@ -924,3 +924,148 @@ class _Int64(int):
 
     def item(self):
         return int(self)
+
+
+class _FakeRusage:
+    """Stands in for `resource.struct_rusage` — only the four fields
+    `capture_resource_usage` reads."""
+
+    def __init__(self, ru_maxrss, ru_utime, ru_stime):
+        self.ru_maxrss = ru_maxrss
+        self.ru_utime = ru_utime
+        self.ru_stime = ru_stime
+
+
+class ResourceUsageCaptureTests(unittest.TestCase):
+    """D7: `capture_resource_usage` combines RUSAGE_SELF + RUSAGE_CHILDREN
+    and is never allowed to fail the job it measures. Entirely against a
+    fake `getrusage` -- no real subprocess tree needed or wanted here.
+    """
+
+    def test_combines_self_and_children_maxrss_and_cpu_time(self):
+        import resource as resource_module
+
+        responses = {
+            resource_module.RUSAGE_SELF: _FakeRusage(
+                ru_maxrss=100_000, ru_utime=1.5, ru_stime=0.5),
+            resource_module.RUSAGE_CHILDREN: _FakeRusage(
+                ru_maxrss=50_000, ru_utime=2.0, ru_stime=1.0),
+        }
+        usage = termination.capture_resource_usage(
+            getrusage=lambda who: responses[who])
+        self.assertEqual(usage["peak_rss_kb"], 150_000)
+        self.assertAlmostEqual(usage["cpu_seconds"], 5.0)
+
+    def test_a_process_with_no_children_still_reports_self(self):
+        import resource as resource_module
+
+        responses = {
+            resource_module.RUSAGE_SELF: _FakeRusage(
+                ru_maxrss=42_000, ru_utime=0.1, ru_stime=0.2),
+            resource_module.RUSAGE_CHILDREN: _FakeRusage(
+                ru_maxrss=0, ru_utime=0.0, ru_stime=0.0),
+        }
+        usage = termination.capture_resource_usage(
+            getrusage=lambda who: responses[who])
+        self.assertEqual(usage["peak_rss_kb"], 42_000)
+        self.assertAlmostEqual(usage["cpu_seconds"], 0.3)
+
+    def test_a_getrusage_failure_is_caught_and_returns_none_for_both(self):
+        # THE REGRESSION GUARD: a failure to read rusage must never fail the
+        # job or lose the terminal record (D7 requirement) -- proven here by
+        # reverting the try/except in capture_resource_usage and watching
+        # this test fail with the injected exception propagating instead of
+        # being caught. See LEDGER-rusage-backoff.md for the revert
+        # demonstration.
+        def broken_getrusage(who):
+            raise OSError("rusage unavailable")
+
+        usage = termination.capture_resource_usage(getrusage=broken_getrusage)
+        self.assertIsNone(usage["peak_rss_kb"])
+        self.assertIsNone(usage["cpu_seconds"])
+
+    def test_default_getrusage_is_the_real_resource_module_function(self):
+        # Called with no argument, it must read the REAL process's rusage
+        # (self only, since this test spawns no children) rather than
+        # silently returning the all-None failure shape.
+        usage = termination.capture_resource_usage()
+        self.assertIsNotNone(usage["peak_rss_kb"])
+        self.assertIsNotNone(usage["cpu_seconds"])
+        self.assertGreater(usage["peak_rss_kb"], 0)
+        self.assertGreaterEqual(usage["cpu_seconds"], 0.0)
+
+
+class TerminateWritesResourceUsageTests(unittest.TestCase):
+    """`terminate()` captures rusage once and passes it through to
+    `mark_application_closed` -- the wiring `capture_resource_usage`'s own
+    unit tests cannot see, since they call it directly.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.harness = _Harness(self._tmp.name)
+
+    def test_captured_usage_reaches_the_application_closed_update(self):
+        # `capture_resource_usage`'s own logic (self+children combination,
+        # never-raises) is proven directly by `ResourceUsageCaptureTests`
+        # above, against an injected `getrusage`. What THIS test proves is
+        # the wiring `terminate()` adds: that whatever it returns actually
+        # reaches `mark_application_closed`'s SQL parameters. Patching
+        # `termination.capture_resource_usage` itself (rather than
+        # `resource.getrusage`) is deliberate: the real function's
+        # `getrusage` default is bound at def-time to `resource.getrusage`,
+        # so patching the module attribute afterward would not reach an
+        # already-bound default -- exactly the kind of thing that makes a
+        # monkeypatch-based test lie about what it covers.
+        original = termination.capture_resource_usage
+        termination.capture_resource_usage = (
+            lambda: {"peak_rss_kb": 154_000, "cpu_seconds": 8.0})
+        self.addCleanup(
+            setattr, termination, "capture_resource_usage", original)
+
+        self.harness.terminate()
+
+        sql, params = self.harness.executor.calls[-1]
+        self.assertIn("peak_rss_kb = %s", sql)
+        self.assertIn("cpu_seconds = %s", sql)
+        self.assertIn(154_000, params)
+        self.assertIn(8.0, params)
+
+    def test_a_measurement_failure_does_not_block_the_close(self):
+        # The regression this whole feature exists to avoid: a broken
+        # rusage read must not cost the attempt its terminal record. Proven
+        # here through the REAL `capture_resource_usage` (not patched away)
+        # with a broken `getrusage` passed straight through -- this is the
+        # one test in this class that exercises the real catch-and-return-
+        # None path inside terminate()'s own call, not a stand-in.
+        original = termination.capture_resource_usage
+
+        def _capture_with_broken_rusage():
+            def broken(who):
+                raise RuntimeError("simulated rusage failure")
+            return original(getrusage=broken)
+
+        termination.capture_resource_usage = _capture_with_broken_rusage
+        self.addCleanup(
+            setattr, termination, "capture_resource_usage", original)
+
+        result = self.harness.terminate()
+        self.assertEqual(result.intended_exit, 0)
+
+        sql, params = self.harness.executor.calls[-1]
+        self.assertIn("peak_rss_kb = %s", sql)
+        peak_rss_index = _column_param_index(sql, params, "peak_rss_kb")
+        cpu_seconds_index = _column_param_index(sql, params, "cpu_seconds")
+        self.assertIsNone(params[peak_rss_index])
+        self.assertIsNone(params[cpu_seconds_index])
+
+
+def _column_param_index(sql, params, column):
+    """The positional index of `column`'s `%s` placeholder in an UPDATE's
+    `SET a = %s, b = %s, ...` clause -- counts `%s` occurrences before the
+    named column's own, matching the writer's fixed parameter ordering.
+    """
+    set_clause = sql.split(" WHERE ", 1)[0]
+    before = set_clause.split(column + " = %s", 1)[0]
+    return before.count("%s")
