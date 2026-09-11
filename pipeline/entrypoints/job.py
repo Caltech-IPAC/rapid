@@ -598,6 +598,31 @@ def main(argv=None) -> int:
         return EXIT_UNRECORDABLE
 
 
+def _identity_extra(unit) -> dict:
+    """The attempt identity's optional scope columns, per the unit's grain.
+
+    `AttemptIdentity` has three nullable scope columns — exposure, SCA and sky
+    tile — and only the exposure/SCA grain can fill the first. Asking a
+    date/SCA, date/field or field-grained unit for an exposure raises
+    `SubjectError` by design (`submission.manifest.ProcessingUnit._component`),
+    which is how a month of post-chain jobs died 1.8 s after start, before any
+    attempt row existed to record why.
+
+    So each component is read only when the payload declares it. An undeclared
+    component is omitted, not defaulted: the resolver reads this mapping with
+    `.get` and the columns are nullable, so absence is recorded as absence.
+
+    The sky tile is a per-invocation fact rather than a component and stays a
+    guarded read, unchanged.
+    """
+    extra = {"sky_tile": getattr(unit.facts, "rtid", None)}
+    if unit.payload.declares("exposure"):
+        extra["exposure_id"] = unit.exposure
+    if unit.payload.declares("sca"):
+        extra["sca"] = unit.sca
+    return extra
+
+
 def _run(workload_class: str) -> int:
     """Startup, dispatch, termination."""
     import boto3
@@ -652,18 +677,24 @@ def _run(workload_class: str) -> int:
         # subject rather than the exposure/SCA-shaped carrier every job type
         # shares — see `ProcessingUnit.logical_job_key`'s docstring.
         #
-        # `identity_extra` stays exposure/SCA-shaped: it is read only on the
-        # reconciler-first branch of `resolve_attempt` (migration 013), which
-        # the normal pre-created-row claim never reaches, and that SQL
-        # function does not yet accept `field`/`processing_date` — migration
-        # 039 adds the parameters this call site will then pass.
+        # `identity_extra` carries only what THIS unit's grain declares.
+        # Reading `unit.exposure` unconditionally was the sentinel-carrier
+        # defect rule 11 prohibits: the typed payloads raise rather than
+        # invent one, so every date- or field-grained job type — catalog
+        # load, crossmatch, statistics, merge-dedup and both sweeps — died
+        # here before `start_attempt` could write a row (latent since
+        # 848a18c2, 2026-08-11; see `_identity_extra`).
+        #
+        # The reconciler-first branch of `resolve_attempt` (migration 013) is
+        # the only reader, and the normal pre-created-row claim never reaches
+        # it; that SQL function still does not accept `field`/`processing_date`
+        # — migration 039 adds the parameters this call site will then pass.
         ownership = resolve_ownership(
             writer, job_env,
             run_id=manifest.batch_id,
             logical_job_id=unit.logical_job_key(manifest.batch_id,
                                                 manifest.job_type),
-            identity_extra={"exposure_id": unit.exposure, "sca": unit.sca,
-                            "sky_tile": getattr(unit.facts, "rtid", None)},
+            identity_extra=_identity_extra(unit),
             lifecycle_reader=lifecycle_reader_for(execute))
 
         records_store = S3ObjectStore(records_bucket, client=s3_client)

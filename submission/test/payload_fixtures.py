@@ -106,3 +106,26 @@ def reference_unit(exposure=90002, sca=4, **overrides):
 
     return ProcessingUnit(
         payload=reference_payload(exposure, sca, **overrides))
+
+
+def catalog_load_unit(proc_date="20260812", sca=6, **overrides):
+    """A whole `ProcessingUnit` around a catalog-load payload (date/SCA)."""
+    from submission.manifest import ProcessingUnit
+
+    return ProcessingUnit(
+        payload=catalog_load_payload(proc_date, sca, **overrides))
+
+
+def crossmatch_unit(proc_date="20260812", field=4242, **overrides):
+    """A whole `ProcessingUnit` around a crossmatch payload (date/field)."""
+    from submission.manifest import ProcessingUnit
+
+    return ProcessingUnit(
+        payload=crossmatch_payload(proc_date, field, **overrides))
+
+
+def field_unit(job_type, field=4242, **overrides):
+    """A whole `ProcessingUnit` around a field-grained payload."""
+    from submission.manifest import ProcessingUnit
+
+    return ProcessingUnit(payload=field_payload(job_type, field, **overrides))

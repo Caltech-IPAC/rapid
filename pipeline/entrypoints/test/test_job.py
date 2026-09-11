@@ -143,6 +143,7 @@ from submission.routes import (  # noqa: E402
     CLASS_BULK,
     CLASS_PROMPT,
     JOB_TYPE_SCIENCE,
+    JOB_TYPE_STATISTICS,
     RouteError,
 )
 from submission.test import payload_fixtures as fixtures  # noqa: E402
@@ -660,6 +661,70 @@ class ExecuteOutcomeTests(unittest.TestCase):
                 context, "science", recorder, mock.Mock())
 
         self.assertEqual("partial", outcome)
+
+
+# ---------------------------------------------------------------------------
+# _identity_extra
+# ---------------------------------------------------------------------------
+
+class IdentityExtraTests(unittest.TestCase):
+    """The attempt identity's optional scope columns, one grain at a time.
+
+    This is the test the defect's own history says was missing: every unit
+    here is a REAL `ProcessingUnit` around a REAL payload instance built
+    through `payloads.build` (via `payload_fixtures`), so `_identity_extra`
+    is exercised against the same `declares()`/`_component` machinery the
+    entrypoint runs against in production, not a mock that would have
+    returned happily before the fix too. Before the fix, the three
+    non-exposure grains below raised `SubjectError` out of
+    `ProcessingUnit._component` — that is the regression each of them now
+    guards.
+    """
+
+    def test_exposure_sca_grain_carries_exposure_and_sca(self):
+        # The unchanged control: the one grain for which exposure and SCA
+        # are real identity, not sentinel-carried.
+        unit = fixtures.science_unit(exposure=90001, sca=3)
+        extra = job._identity_extra(unit)
+        self.assertEqual(extra["exposure_id"], 90001)
+        self.assertEqual(extra["sca"], 3)
+        self.assertIn("sky_tile", extra)
+
+    def test_date_sca_grain_omits_exposure_but_carries_sca(self):
+        # catalog-load: a (proc_date, sca) unit. Before the fix this raised
+        # SubjectError reading unit.exposure before an attempt row existed.
+        unit = fixtures.catalog_load_unit(proc_date="20260812", sca=6)
+        extra = job._identity_extra(unit)
+        self.assertNotIn("exposure_id", extra)
+        self.assertEqual(extra["sca"], 6)
+        self.assertIn("sky_tile", extra)
+
+    def test_date_field_grain_omits_exposure_and_sca(self):
+        # crossmatch: a (proc_date, field) unit — one of the six post-chain
+        # job types that died here for a month.
+        unit = fixtures.crossmatch_unit(proc_date="20260812", field=4242)
+        extra = job._identity_extra(unit)
+        self.assertNotIn("exposure_id", extra)
+        self.assertNotIn("sca", extra)
+        self.assertIn("sky_tile", extra)
+
+    def test_field_grain_omits_exposure_and_sca(self):
+        # statistics (and the merge/currency sweeps that share its grain):
+        # a bare field unit, no exposure, no SCA.
+        unit = fixtures.field_unit(JOB_TYPE_STATISTICS, field=4242)
+        extra = job._identity_extra(unit)
+        self.assertNotIn("exposure_id", extra)
+        self.assertNotIn("sca", extra)
+        self.assertIn("sky_tile", extra)
+
+    def test_absence_is_absence_not_a_none_default(self):
+        # The helper's docstring's own contract: an undeclared component is
+        # OMITTED, not defaulted to None. `.get()` would hide the distinction
+        # this asserts directly.
+        unit = fixtures.crossmatch_unit()
+        extra = job._identity_extra(unit)
+        self.assertFalse("exposure_id" in extra and extra["exposure_id"] is None)
+        self.assertNotIn("exposure_id", extra)
 
 
 # ---------------------------------------------------------------------------
