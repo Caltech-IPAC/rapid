@@ -858,29 +858,31 @@ class RegistrarDispatchTests(unittest.TestCase):
         self.assertEqual(dbh.calls[0][0], "add_diffimage")
 
     def test_run_id_is_read_off_the_row_not_defaulted(self):
-        # run_id comes off the candidate ROW, the same place record_sequence
-        # comes from and for the same reason: the row is the one source of
-        # truth, so the product row and the attempt agree by construction.
+        # run_id comes off the candidate ROW's `work_unit_run_id` — the
+        # `consumer._CANDIDATE_WHERE_SQL` LEFT JOIN column — not `run_id`
+        # (which is the attempt's own submission-batch identity, a
+        # different fact; see `register`'s own comment on this read).
         dbh = FakeDB()
         register = products.registrar(dbh, InMemoryObjectStore())
 
-        register({"attempt_id": 1, "run_id": "accept-20260911"}, None,
-                 record=reference_record())
+        register({"attempt_id": 1, "work_unit_run_id": "accept-20260911"},
+                 None, record=reference_record())
         add_kwargs = dict(dbh.kwargs[0][1])
         self.assertEqual("add_refimage", dbh.calls[0][0])
         self.assertEqual("accept-20260911", add_kwargs["run_id"])
 
         dbh.calls.clear()
         dbh.kwargs.clear()
-        register({"attempt_id": 2, "run_id": "accept-20260911"}, None,
-                 record=difference_record())
+        register({"attempt_id": 2, "work_unit_run_id": "accept-20260911"},
+                 None, record=difference_record())
         add_kwargs = dict(dbh.kwargs[0][1])
         self.assertEqual("add_diffimage", dbh.calls[0][0])
         self.assertEqual("accept-20260911", add_kwargs["run_id"])
 
-    def test_a_row_with_no_run_id_registers_the_production_lane(self):
-        # A row without run_id (the production candidate query's shape today)
-        # must still register — as the production lane, run_id=None — rather
+    def test_a_row_with_no_work_unit_run_id_registers_the_production_lane(self):
+        # A row without work_unit_run_id (a unit-less attempt, or the
+        # production candidate query's shape before the LEFT JOIN) must
+        # still register — as the production lane, run_id=None — rather
         # than raising for want of a keyword the caller never had to supply.
         dbh = FakeDB()
         register = products.registrar(dbh, InMemoryObjectStore())
@@ -889,6 +891,51 @@ class RegistrarDispatchTests(unittest.TestCase):
 
         add_kwargs = dict(dbh.kwargs[0][1])
         self.assertIsNone(add_kwargs["run_id"])
+
+    def test_the_attempts_run_id_is_never_read_for_product_scoping(self):
+        # THE REGRESSION GUARD (throughput-sitting ruling, 2026-09-11).
+        # `attempts.run_id` is the SUBMISSION-BATCH identity — synthesized
+        # by `pipeline.operator.operator.Operator._run_id_for` — and is
+        # NEVER NULL on the production path (e.g.
+        # "vpo-2026-08-07-science-StageTwo-163453-4"). `work_units.run_id`
+        # is the CAMPAIGN scope migration 108's partial unique indexes are
+        # built on, and is NULL for production. This row models exactly
+        # that production shape: a non-NULL submission-batch `run_id`
+        # alongside a NULL `work_unit_run_id` (production's work unit,
+        # unscoped). Reading `row["run_id"]` here — the defect this test
+        # pins — would have written production's products with a non-NULL
+        # run_id, moving them out of the `run_id IS NULL` partition their
+        # currency index depends on.
+        dbh = FakeDB()
+        register = products.registrar(dbh, InMemoryObjectStore())
+
+        register({"attempt_id": 1,
+                  "run_id": "vpo-2026-08-07-science-StageTwo-163453-4",
+                  "work_unit_run_id": None},
+                 None, record=reference_record())
+
+        add_kwargs = dict(dbh.kwargs[0][1])
+        self.assertIsNone(add_kwargs["run_id"])
+
+    def test_the_campaign_run_wins_over_the_submission_batch_run(self):
+        # THE SPLIT-ACROSS-BATCHES HALF OF THE SAME DEFECT. A campaign run
+        # large enough to need several array jobs gets one `work_units.
+        # run_id` (e.g. "accept-20260911") shared by every attempt in the
+        # campaign, but each attempt's OWN `attempts.run_id` carries its
+        # per-array submission-batch suffix (e.g. "accept-20260911-13" —
+        # `pipeline.seams.submit_gathered`'s `-<index>` convention).
+        # Registering under the batch-suffixed value would split one
+        # campaign's products across as many partitions as it had
+        # submission batches instead of sharing one campaign currency.
+        dbh = FakeDB()
+        register = products.registrar(dbh, InMemoryObjectStore())
+
+        register({"attempt_id": 1, "run_id": "accept-20260911-13",
+                  "work_unit_run_id": "accept-20260911"},
+                 None, record=reference_record())
+
+        add_kwargs = dict(dbh.kwargs[0][1])
+        self.assertEqual("accept-20260911", add_kwargs["run_id"])
 
     def test_a_record_with_no_job_type_at_all_is_a_missing_fact(self):
         register = products.registrar(FakeDB(), InMemoryObjectStore())

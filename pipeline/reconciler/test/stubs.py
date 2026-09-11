@@ -548,13 +548,31 @@ def _render_composed(statement):
 
 
 def _columns_of(text):
-    """The column list of a rendered SELECT, or the known set for `*`."""
+    """The column list of a rendered SELECT, or the known set for `*`.
+
+    **`AS`-ALIASED EXPRESSIONS** (throughput-sitting ruling, 2026-09-11):
+    `pipeline.registration.consumer._CANDIDATE_WHERE_SQL` joins `work_units`
+    and selects `work_units.run_id AS work_unit_run_id` alongside the plain
+    `attempts` columns. This stub models no second table — `self.rows` is
+    one flat dict per attempt — so the alias is read back as a plain field
+    name on that same row (`row["work_unit_run_id"]`, set directly by
+    `attempt_row`/`reconciled`, exactly as `run_id` and `work_unit_id`
+    already are), and a trailing ` AS <alias>` on any select-list item is
+    stripped down to that alias name before the `row.get(name)` lookup in
+    `_select_attempts` ever sees it.
+    """
     head = text.split(" FROM ")[0]
     head = head[len("SELECT "):].strip()
     if head == "*":
         from pipeline.reconciler.service import _OPEN_COLUMNS
         return list(_OPEN_COLUMNS)
-    return [part.strip().strip('"') for part in head.split(",")]
+    names = []
+    for part in head.split(","):
+        part = part.strip().strip('"')
+        if " AS " in part:
+            part = part.rsplit(" AS ", 1)[1].strip()
+        names.append(part)
+    return names
 
 
 def utc(*args):

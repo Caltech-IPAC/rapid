@@ -533,10 +533,17 @@ def registrar(dbh, store, fallback_roles=None, identity_repository=None):
         # construction rather than by two call sites agreeing.
         record_sequence = row.get("terminal_record_sequence")
 
-        # The run comes off the attempt ROW, the same place record_sequence
-        # comes from and for the same reason: one source of truth so the
-        # product row and the attempt agree by construction.
-        run_id = row.get("run_id")
+        # THE RUN COMES OFF THE WORK UNIT, NOT THE ATTEMPT (throughput-
+        # sitting ruling, 2026-09-11). `work_units.run_id` is the campaign
+        # scope migration 108's partial unique indexes are built on — NULL
+        # for production. `attempts.run_id` is the submission-batch
+        # identity (never NULL on the production path); reading it here
+        # would move every production product row out of the `run_id IS
+        # NULL` partition its currency index depends on, and split a
+        # campaign's products across as many partitions as it had
+        # submission batches. `row["work_unit_run_id"]` is
+        # `consumer._CANDIDATE_WHERE_SQL`'s `LEFT JOIN work_units` column.
+        run_id = row.get("work_unit_run_id")
 
         if job_type == JOB_TYPE_REFERENCE_IMAGE:
             return register_reference_image(

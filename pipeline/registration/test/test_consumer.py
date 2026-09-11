@@ -67,6 +67,46 @@ class CandidateQueryTests(unittest.TestCase):
             "consumed_record_sequence < terminal_record_sequence",
             " ".join(consumer._CANDIDATE_SQL.split()))
 
+    def test_the_query_left_joins_work_units_for_the_campaign_run(self):
+        # THROUGHPUT-SITTING RULING, 2026-09-11: the candidate query must
+        # join `work_units` under an unambiguous alias — `attempts.run_id`
+        # (the submission batch) and `work_units.run_id` (the campaign
+        # scope) are different facts, and `products.register` now reads
+        # the latter under this exact alias. A LEFT JOIN, not an INNER
+        # JOIN: `attempts.work_unit_id` can be NULL and such a row must
+        # still be a candidate (see the next test).
+        sql = " ".join(consumer._CANDIDATE_SQL.split())
+        self.assertIn("LEFT JOIN work_units", sql)
+        self.assertIn("work_units.run_id AS work_unit_run_id", sql)
+
+    def test_a_null_work_unit_id_row_is_still_a_candidate(self):
+        # A unit-less attempt (pre-intent-layer, or the definition-FK guard
+        # held it back at submission — see `_COLUMNS`'s own comment on
+        # `work_unit_id`) must not vanish from the query behind an INNER
+        # JOIN: it registers with `work_unit_run_id=None`, the production
+        # lane, not be silently dropped.
+        conn = FakeConnection(rows=[reconciled(1, work_unit_id=None)])
+
+        rows = consumer.candidates(conn)
+
+        self.assertEqual([1], [r["attempt_id"] for r in rows])
+        self.assertIsNone(rows[0]["work_unit_run_id"])
+
+    def test_the_campaign_run_id_reaches_the_row_under_its_own_name(self):
+        # The positive case alongside the NULL case above: a row whose work
+        # unit carries a campaign run surfaces it as `work_unit_run_id`,
+        # distinct from and alongside the row's own `run_id` (the
+        # submission-batch identity).
+        conn = FakeConnection(rows=[
+            reconciled(1, run_id="accept-20260911-13", work_unit_id=42,
+                      work_unit_run_id="accept-20260911"),
+        ])
+
+        rows = consumer.candidates(conn)
+
+        self.assertEqual("accept-20260911-13", rows[0]["run_id"])
+        self.assertEqual("accept-20260911", rows[0]["work_unit_run_id"])
+
 
 class CandidateScopingTests(unittest.TestCase):
     """`candidates()`'s optional `run_id_prefix`/`attempt_ids` scoping

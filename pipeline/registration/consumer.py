@@ -196,6 +196,21 @@ _COLUMNS = (
     "work_unit_id",
 )
 
+#: THE CAMPAIGN RUN (throughput-sitting ruling, 2026-09-11), joined off
+#: `work_units.run_id` and read under the UNAMBIGUOUS alias
+#: `work_unit_run_id` — never plain `run_id`, which stays `attempts.run_id`
+#: everywhere in this module (the submission-batch identity; see
+#: `_CANDIDATE_WHERE_SQL`'s own comment on the join for why the two must
+#: never be conflated). `pipeline.registration.products.registrar` reads
+#: `work_unit_run_id` to scope a product row to its campaign; `attempts.
+#: run_id` is the wrong source (see that module's `register` docstring).
+#: Not folded into `_COLUMNS` above: that tuple is the plain `attempts`
+#: columns `", ".join`ed verbatim into the SELECT list, and a joined,
+#: aliased expression does not fit that shape.
+_WORK_UNIT_RUN_ID_SELECT_SQL = (
+    "work_units.run_id AS work_unit_run_id"
+)
+
 # THE CONSUMED WATERMARK (review finding #5; split from the registered
 # watermark by ruling R1 / migration 075 — see the module docstring's "THE
 # WATERMARK SPLIT").
@@ -213,9 +228,19 @@ _COLUMNS = (
 #: stays the exact, single concatenation every existing test asserts
 #: against (`_CANDIDATE_SQL` is also the literal string `candidates()`
 #: issues verbatim for an unscoped call — see that function's docstring).
+#: THE JOIN IS A LEFT JOIN, DELIBERATELY (throughput-sitting ruling,
+#: 2026-09-11). `attempts.work_unit_id` is NULL on every pre-intent-layer
+#: row and on any attempt whose definition-FK guard held it back at
+#: submission time (`_COLUMNS`'s own comment on `work_unit_id`, above) — an
+#: INNER JOIN would drop those rows from the candidate set entirely rather
+#: than surfacing them with `work_unit_run_id IS NULL`, which is what a
+#: unit-less attempt must register as (production's own convention: no
+#: work unit means no campaign scope, i.e. `None`, not "not a candidate").
 _CANDIDATE_WHERE_SQL = (
-    "SELECT " + ", ".join(_COLUMNS) +
+    "SELECT " + ", ".join(_COLUMNS) + ", " + _WORK_UNIT_RUN_ID_SELECT_SQL +
     " FROM attempts"
+    " LEFT JOIN work_units"
+    "   ON work_units.work_unit_id = attempts.work_unit_id"
     " WHERE lifecycle_state = ANY(%s)"
     "   AND terminal_record_sequence >= 1"
     "   AND (consumed_record_sequence IS NULL"
@@ -235,8 +260,15 @@ _CANDIDATE_SQL = _CANDIDATE_WHERE_SQL + _CANDIDATE_ORDER_SQL
 #: exact run_id that may never appear alone. `attempt_ids` is the other,
 #: orthogonal way to bound a scope — an explicit list rather than a run's
 #: prefix — for a caller that already knows exactly which attempts it means.
-_RUN_ID_PREFIX_SQL = "run_id LIKE %s"
-_ATTEMPT_IDS_SQL = "attempt_id = ANY(%s)"
+#: Qualified `attempts.` (throughput-sitting ruling, 2026-09-11): the new
+#: `LEFT JOIN work_units` above makes a bare `run_id`/`attempt_id` reference
+#: ambiguous (`work_units` carries both column names too), and this scoping
+#: predicate is specifically the SUBMISSION-BATCH `attempts.run_id` — see
+#: `candidates()`'s own docstring on `run_id_prefix` matching
+#: `submit_gathered`'s `-0`/`-1`/... suffixed child run_ids, which is that
+#: column's convention, not the campaign `work_units.run_id` the join adds.
+_RUN_ID_PREFIX_SQL = "attempts.run_id LIKE %s"
+_ATTEMPT_IDS_SQL = "attempts.attempt_id = ANY(%s)"
 
 
 def _escape_like(prefix):
