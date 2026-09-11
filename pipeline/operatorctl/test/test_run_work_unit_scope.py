@@ -255,5 +255,33 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         self.assertNotIn("work_unit_run_id", self.audit_calls[0])
 
 
+class RunStartClaimWorkUnitsOfFlagTests(unittest.TestCase):
+    """`--claim-work-units-of` reaches `start_run_audited`.
+
+    The library gained the parameter and the CLI did not expose it, which
+    made the one case it exists for -- resubmitting a prior run's released
+    units under a new name -- unreachable from `rapidctl`. This asserts the
+    flag parses and lands on the namespace the handler reads, so the two
+    cannot drift apart again.
+    """
+
+    def _parse(self, argv):
+        from pipeline.operatorctl.main import build_parser
+        return build_parser().parse_args(argv)
+
+    def test_the_flag_parses_onto_work_unit_run_id(self):
+        args = self._parse([
+            "run", "start", "--name", "release-accept-20260911",
+            "--phase", "science", "--reason", "r",
+            "--claim-work-units-of", "accept-20260911"])
+        self.assertEqual(args.work_unit_run_id, "accept-20260911")
+
+    def test_it_defaults_to_none_so_an_ordinary_run_claims_its_own(self):
+        args = self._parse([
+            "run", "start", "--name", "accept-20260911",
+            "--phase", "science", "--reason", "r"])
+        self.assertIsNone(args.work_unit_run_id)
+
+
 if __name__ == "__main__":
     unittest.main()

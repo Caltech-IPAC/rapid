@@ -293,6 +293,17 @@ def build_parser():
     run_start.add_argument("--cap", type=int, default=None,
                            help="bound on units submitted; default is "
                                 "everything the gatherer returns")
+    run_start.add_argument(
+        "--claim-work-units-of", dest="work_unit_run_id", default=None,
+        metavar="RUN",
+        help="claim ANOTHER run's work units instead of this run's own. "
+             "For the one case that needs it: resubmitting a prior run's "
+             "released units under a new, separately-queryable name. The "
+             "units are looked up by (job_type, input_scope, run_id), so "
+             "without this a new run finds none of the older run's units "
+             "and creates fresh ones, leaving the released ones orphaned "
+             "in ready. This run still authors its own attempts and "
+             "artifacts under its own --name")
     _mutation_arguments(run_start, "a run's gather-and-submit step")
     run_start.set_defaults(func=_cmd_run_start)
 
@@ -770,7 +781,7 @@ def _cmd_run_start(conn, args, out):
             proc_date=args.proc_date, cap=args.cap, dry_run=not args.apply,
             policy_citation=args.policy_citation, out=out,
             window_start=args.window_start, window_end=args.window_end,
-            fids=args.fids)
+            fids=args.fids, work_unit_run_id=args.work_unit_run_id)
     except RunStartEnvironmentError as exc:
         print("rapidctl: REFUSED — %s" % exc, file=sys.stderr)
         return EXIT_USAGE
