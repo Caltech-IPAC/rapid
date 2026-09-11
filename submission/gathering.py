@@ -193,7 +193,8 @@ class UnitSource(Protocol):
     # asks the LEGACY handle for, and that set does not grow.
 
     def get_blocking_exposure_scas_for_job_type(
-            self, job_type: str, expids: Sequence[int]) -> Sequence[Any]: ...
+            self, job_type: str, expids: Sequence[int],
+            run_id: str | None = ...) -> Sequence[Any]: ...
 
     # The alert-production trigger (step-4 co-design).
     def get_attempts_awaiting_alert_emission(
@@ -521,7 +522,8 @@ def gather_science_units(handle: UnitSource, start, end,
                          start_mjdobs: float, end_mjdobs: float,
                          min_images_to_coadd: int,
                          fids: Iterable[int] | None = None,
-                         make_references: bool = False
+                         make_references: bool = False,
+                         run_scope: str | None = None
                          ) -> Iterator[ProcessingUnit]:
     """Yield the science (or reference-image) units ready in a window.
 
@@ -536,6 +538,26 @@ def gather_science_units(handle: UnitSource, start, end,
     takes all the others to difference against it. The representative
     choice is the launcher's, kept identical so a reference built here is
     the reference the old chain would have built.
+
+    `run_scope`, NOT `run_id` (throughput-sitting ruling, 2026-09-11):
+    named differently from `gather_reference_units`' own `run_id` parameter
+    on purpose, because the two are different facts that happen to share a
+    natural name. `gather_reference_units`' `run_id` is a storage-key
+    prefix (`submissions/<run_id>/coadd-inputs/...`) for the coadd-input
+    list THIS gather publishes; `run_scope` is which run's work units and
+    attempts the RESUBMISSION GATE below should read as blocking. They are
+    usually the same string in practice (a run's own gather is scoped to
+    itself), but conflating them under one parameter would make a future
+    caller that legitimately wants them different — republishing under one
+    run while gating on another — inexpressible without a signature
+    change. `None` (the default) preserves today's behaviour exactly: the
+    gate call below passes no run scope, so `get_blocking_exposure_scas_
+    for_job_type` runs its production-lane query, unscoped, blocking on
+    ANY pending/succeeded attempt or non-ready work unit for the exposure
+    regardless of run. A non-None value scopes the gate to that run only —
+    see that method's own docstring for the exact semantics and why the
+    work-unit branch is equality-matched while the Attempts branch is
+    prefix-matched.
     """
     fids = range(1, N_FILTERS + 1) if fids is None else fids
     pairs: list[tuple[int, int]] = []
@@ -590,7 +612,8 @@ def gather_science_units(handle: UnitSource, start, end,
                     else JOB_TYPE_SCIENCE)
         try:
             blocked_rows = handle.get_blocking_exposure_scas_for_job_type(
-                job_type, sorted({u.exposure for u in candidates}))
+                job_type, sorted({u.exposure for u in candidates}),
+                run_id=run_scope)
         except RapidDBCallFailed as exc:
             raise GatheringError(
                 f"blocking-attempt check failed for job type {job_type}: "
@@ -1154,9 +1177,26 @@ def gather_reference_units(handle: UnitSource, start, end,
                            radius: float | None = None,
                            reference_window: tuple[float, float] | None = None,
                            on_blocked: Any = None,
-                           on_unblocked: Any = None
+                           on_unblocked: Any = None,
+                           run_scope: str | None = None
                            ) -> Iterator[ProcessingUnit]:
     """Yield reference-image units, each with its coadd inputs published.
+
+    `run_id` HERE IS NOT THE GATE'S RUN SCOPE — read this before passing
+    the same value to both. This function's `run_id` names the storage key
+    the coadd-input list for each unit is published under
+    (`submissions/<run_id>/coadd-inputs/...`, see the comment at that
+    construction below); it is who is AUTHORING this submission's
+    artifacts, and it is REQUIRED because every reference gather publishes
+    something. `run_scope` (new, throughput-sitting ruling 2026-09-11) is
+    passed straight through to the inner `gather_science_units` call as
+    ITS `run_scope` — which run's work units and attempts the resubmission
+    gate reads as blocking. `None` (the default) keeps gating unscoped,
+    exactly as before this parameter existed. A campaign run's `run start
+    --phase reference` passes the SAME string to both, because a campaign
+    both authors its own artifacts under its own name and wants to be
+    gated only on its own prior work — but the two remain independently
+    settable because they answer different questions.
 
     `gather_science_units(make_references=True)` yields the representative
     image per (field, filter) but NOT `coadd_inputs_uri` — which
@@ -1209,7 +1249,8 @@ def gather_reference_units(handle: UnitSource, start, end,
         reference_window = reference_observation_window()
     for unit in gather_science_units(handle, start, end, start_mjdobs,
                                      end_mjdobs, min_images_to_coadd,
-                                     fids=fids, make_references=True):
+                                     fids=fids, make_references=True,
+                                     run_scope=run_scope):
         facts = unit.facts
         rid = facts.rid
         # All three are dereferenced below, and `UnitFacts` documents every

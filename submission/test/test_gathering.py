@@ -150,6 +150,7 @@ class StubSource:
     def __init__(self, **overrides):
         self.exit_code = 0
         self.reference_calls = []
+        self.blocking_calls = []
         # (rid, sca, fid, ra0, dec0, ra1..ra4, dec1..dec4)
         self.meta = overrides.get("meta", {
             101: (7, 8, 10.0, -43.0, 10.1, -43.1, 10.2, -43.2,
@@ -186,10 +187,16 @@ class StubSource:
             self, start, end, min_nframes, fid=None):
         return self.pairs.get(fid, [])
 
-    def get_blocking_exposure_scas_for_job_type(self, job_type, expids):
+    def get_blocking_exposure_scas_for_job_type(self, job_type, expids,
+                                                run_id=None):
         # The EXPOSURE_SCA resubmission gate (final convergence round):
         # default empty — nothing blocks — so existing tests keep their
         # semantics; gate tests override `blocking_exposure_scas`.
+        # `run_id` (the gate's run SCOPE, not `gather_reference_units`' own
+        # storage-key `run_id`) is recorded so a test can assert what scope
+        # `gather_science_units`/`gather_reference_units` actually passed
+        # down, the same way `reference_calls` records ppid calls above.
+        self.blocking_calls.append(run_id)
         return getattr(self, "blocking_exposure_scas", [])
 
     def get_l2files_records_for_datetime_range_field_fid(
@@ -513,6 +520,52 @@ class GatherScienceUnitsTests(unittest.TestCase):
                 start_mjdobs=61600.0, end_mjdobs=61700.0,
                 min_images_to_coadd=10, fids=[8], make_references=True))
         self.assertIn("exposure", str(ctx.exception))
+
+    # -------------------------------------------------------------------
+    # `run_scope`: the resubmission gate's run scope (throughput-sitting
+    # ruling, 2026-09-11) — NOT `gather_reference_units`' own `run_id`
+    # (the coadd-input publish-key prefix, a different parameter tested
+    # separately below).
+    # -------------------------------------------------------------------
+
+    def test_run_scope_defaults_to_none_the_unscoped_production_gate(self):
+        # No `run_scope` passed at all -- the call every existing caller
+        # (the VPO, live_w9_ramp's production path) makes today, and must
+        # keep making unchanged.
+        source = StubSource()
+        list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8]))
+        self.assertEqual(source.blocking_calls, [None])
+
+    def test_run_scope_is_passed_through_to_the_blocking_gate(self):
+        source = StubSource()
+        list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8], run_scope="w9-campaign-1"))
+        self.assertEqual(source.blocking_calls, ["w9-campaign-1"])
+
+    def test_a_campaign_scoped_gather_is_not_blocked_by_a_production_unit(
+            self):
+        # The end-to-end shape of the defect this fixes: the stub's gate
+        # would (in the real database) see a production work unit in a
+        # non-ready state and block it when called unscoped, but a
+        # `run_scope`-passing caller must reach the SAME gate call with its
+        # own scope -- proven here by asserting the scope value reaches the
+        # stub, which is what a live `run_id`-parameterized query would key
+        # its WHERE clause on (see `RunScopedBlockingGateSemanticsTests` in
+        # `database.modules.utils.test.test_rapid_db` for the database-level
+        # proof that scoping actually excludes production's row).
+        source = StubSource()
+        source.blocking_exposure_scas = []   # the campaign's OWN scope: clear
+        units = list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8], run_scope="w9-campaign-1"))
+        self.assertTrue(units)
+        self.assertEqual(source.blocking_calls, ["w9-campaign-1"])
 
 
 class FakeConditionalS3:
@@ -1038,6 +1091,68 @@ class GatherReferenceUnitsTests(unittest.TestCase):
     def _overlap_row(self, rid):
         return [rid, 10.0, -43.0, 10.1, -43.1, 10.2, -43.2, 10.3, -43.3,
                 10.4, -43.4, 4678622, 0.01]
+
+    # -------------------------------------------------------------------
+    # `run_id` (the coadd-input publish-key prefix) vs `run_scope` (the
+    # resubmission gate's run scope) — the two-parameter question the task
+    # ruling asked to be answered explicitly. `_gather` above always passes
+    # `run_id="run-1"` and no `run_scope`, so every OTHER test in this class
+    # already proves `run_scope=None` (the default) does not disturb
+    # existing behavior; these three are the ones that exercise `run_scope`
+    # directly.
+    # -------------------------------------------------------------------
+
+    def test_run_id_and_run_scope_are_independently_settable(self):
+        # `run_id` (the publish-key prefix) and `run_scope` (the gate scope)
+        # are DIFFERENT parameters answering different questions, even
+        # though a real `run start --phase reference` call passes the same
+        # string to both (see `pipeline.operatorctl.run.gather_for_run`).
+        # Proven here by passing them DIFFERENT values and checking each
+        # reaches its own destination: `run_id` into the published S3 key,
+        # `run_scope` into the gate call.
+        source = self.Source(
+            overlapping=[self._overlap_row(101), self._overlap_row(102)])
+        units = list(gathering.gather_reference_units(
+            source, "2026-01-01", "2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0, min_images_to_coadd=2,
+            s3_client=FakeConditionalS3(), job_bucket="job-info",
+            run_id="publish-under-this-name", fids=[8],
+            run_scope="gate-scoped-to-this-name"))
+
+        self.assertTrue(units)
+        self.assertIn("submissions/publish-under-this-name/coadd-inputs/",
+                      units[0].facts.coadd_inputs_uri)
+        self.assertNotIn("gate-scoped-to-this-name",
+                         units[0].facts.coadd_inputs_uri)
+        self.assertEqual(source.blocking_calls, ["gate-scoped-to-this-name"])
+
+    def test_run_scope_defaults_to_none_leaving_run_id_unaffected(self):
+        # `_gather`'s own call (used by every other test in this class)
+        # passes `run_id="run-1"` and no `run_scope` -- confirming here,
+        # directly, that the gate sees None (unscoped) while the publish
+        # key still carries `run_id`.
+        source = self.Source(
+            overlapping=[self._overlap_row(101), self._overlap_row(102)])
+        units = self._gather(source)
+
+        self.assertTrue(units)
+        self.assertIn("submissions/run-1/coadd-inputs/",
+                      units[0].facts.coadd_inputs_uri)
+        self.assertEqual(source.blocking_calls, [None])
+
+    def test_run_scope_reaches_the_gate_through_the_inner_science_call(self):
+        # `gather_reference_units` gathers via `gather_science_units(
+        # make_references=True)` internally -- this proves `run_scope`
+        # survives that inner call rather than being dropped at the
+        # boundary between the two functions.
+        source = self.Source(
+            overlapping=[self._overlap_row(101), self._overlap_row(102)])
+        list(gathering.gather_reference_units(
+            source, "2026-01-01", "2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0, min_images_to_coadd=2,
+            s3_client=FakeConditionalS3(), job_bucket="job-info",
+            run_id="run-1", fids=[8], run_scope="w9-campaign-1"))
+        self.assertEqual(source.blocking_calls, ["w9-campaign-1"])
 
     def test_a_field_with_exactly_enough_frames_yields_a_unit(self):
         # min_n_images_to_coadd is 2 in the release content. The

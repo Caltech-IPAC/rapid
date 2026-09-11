@@ -46,15 +46,17 @@ class RunStartEnvironmentError(Exception):
     """
 
 
-#: The phases `run start` knows how to gather for, and their (job_type,
-#: gatherer) pair — the SAME table `pipeline.test.live_w9_ramp.PHASES` keeps,
-#: reproduced here rather than imported because that module's `PHASES` also
-#: carries the two MJD-windowed gatherers (`reference`/`science`) bound to
-#: environment-derived globals (`START`/`END`) at import time, which would
-#: make importing it for the table alone reach into that harness's own
-#: environment-parsing. `run start` is deliberately scoped to the phases
-#: that need no processing-date-window argument beyond what its own CLI
-#: flags supply — see `_cmd_run_start`'s `--proc-date` handling below.
+#: The four post-DB-chain phases `run start` has always known how to gather
+#: for, and their (job_type, gatherer) pair — the SAME table
+#: `pipeline.test.live_w9_ramp.PHASES` keeps, reproduced here rather than
+#: imported because that module's `PHASES` also carries the two MJD-windowed
+#: gatherers (`reference`/`science`) bound to environment-derived globals
+#: (`START`/`END`) at import time, which would make importing it for the
+#: table alone reach into that harness's own environment-parsing. These four
+#: need no processing-date-window argument beyond `--proc-date` — see
+#: `_cmd_run_start`'s handling of it below. `reference`/`science` are handled
+#: separately in `gather_for_run`, below, because they need the MJD window
+#: and submission-environment arguments this table's callers do not carry.
 def _phase_table():
     from submission import gathering, routes
     return {
@@ -67,6 +69,17 @@ def _phase_table():
         "merge-dedup": (routes.JOB_TYPE_MERGE_DEDUP,
                        gathering.gather_merge_dedup_units),
     }
+
+
+#: The two MJD-windowed phases, added to `run start` (throughput-sitting
+#: ruling, 2026-09-11) alongside the run-scoped resubmission-gate fix that
+#: makes gathering for them under a CAMPAIGN run actually yield units. Kept
+#: as a separate set rather than folded into `_phase_table` above because
+#: their gatherers take a materially different argument shape (an MJD
+#: window, an S3 client/bucket, a run id) that the four post-DB-chain
+#: gatherers do not, and `gather_for_run` branches on membership here before
+#: ever calling `_phase_table()`.
+_WINDOWED_PHASES = ("reference", "science")
 
 
 def _capped(units, cap):
@@ -84,14 +97,65 @@ def _capped(units, cap):
     return out
 
 
-def gather_for_run(dbh, phase, proc_date=None, cap=None):
+def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
+                   run_name=None, s3_client=None, job_bucket=None,
+                   fids=None):
     """Gather units for `phase`, capped, via the SAME `submission.gathering`
     functions the VPO and `live_w9_ramp` call. Returns `(job_type, units)`.
 
     Raises `KeyError` for an unknown phase — `_cmd_run_start` turns that
     into the same operator-legible refusal every other bad-argument path in
     this package uses.
+
+    `window`, `run_name`, `s3_client`, `job_bucket` and `fids` serve ONLY
+    `phase in ("reference", "science")` — the four post-DB-chain phases
+    ignore them entirely, matching `live_w9_ramp`'s own PHASES table where
+    the two MJD-windowed gatherers are called with a different argument
+    shape than the other four (see that module's `main()`).
+
+    THE RUN SCOPE PASSED TO THE RESUBMISSION GATE IS `run_name` ITSELF. For
+    `reference`, `run_name` is passed to `gathering.gather_reference_units`
+    as BOTH `run_id` (the coadd-input publish-key prefix, required) and
+    `run_scope` (the gate's run scope, new) — the two are different facts
+    that happen to share a natural value here: a run gathering its own
+    phase authors its own artifacts under its own name AND wants to be
+    gated only on its own prior work, never on a different run's or
+    production's. See `gathering.gather_reference_units`'s own docstring
+    for why they remain two parameters rather than one.
     """
+    if phase in _WINDOWED_PHASES:
+        from submission import gathering, routes
+
+        if window is None:
+            raise ValueError(
+                "phase %r requires --window-start/--window-end" % phase)
+        if run_name is None:
+            raise ValueError("phase %r requires a run name" % phase)
+        start, end, start_mjd, end_mjd, min_coadd = window
+
+        if phase == "reference":
+            if s3_client is None or job_bucket is None:
+                raise ValueError(
+                    "phase 'reference' requires the submission "
+                    "environment's s3_client and manifest bucket")
+            units = gathering.gather_reference_units(
+                dbh, start, end, start_mjdobs=start_mjd, end_mjdobs=end_mjd,
+                min_images_to_coadd=min_coadd, s3_client=s3_client,
+                job_bucket=job_bucket, run_id=run_name, fids=fids,
+                run_scope=run_name)
+            job_type = routes.JOB_TYPE_REFERENCE_IMAGE
+        else:
+            units = gathering.gather_science_units(
+                dbh, start, end, start_mjdobs=start_mjd, end_mjdobs=end_mjd,
+                min_images_to_coadd=min_coadd, fids=fids,
+                run_scope=run_name)
+            job_type = routes.JOB_TYPE_SCIENCE
+
+        units = list(units)
+        if cap is not None:
+            units = _capped(units, cap)
+        return job_type, units
+
     job_type, gatherer = _phase_table()[phase]
     if proc_date is not None:
         units = list(gatherer(dbh, proc_date))
@@ -102,29 +166,21 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None):
     return job_type, units
 
 
-def submit_run(conn, name, job_type, units, reason):
-    """Submit `units` under `name`, through the SAME production path
-    `live_w9_ramp` uses: `submission_env` for the binding, `pipeline.seams.
-    submit_gathered` for the submission itself. Nothing here reimplements
-    either — this is the in-process replacement the task ruling calls for,
-    run under whatever role `rapidctl` itself already holds (`operator_
-    session`'s `SET ROLE`), not a re-derived STS/podman launch.
-
-    Raises `RunStartEnvironmentError` if `submission_env` cannot resolve a
-    binding — translating that function's own `exit(64)` calls is NOT
-    possible (they terminate the process before this function gets a
-    chance), so this wraps ONLY the failure mode `submission_env` raises
-    rather than exits: a parameter tree fetch failure. The exit()-based
-    refusals are a pre-existing gap in `submission_env` itself, out of
-    scope for this command — see the ledger for why reworking that function
-    was not attempted tonight.
+def _resolve_submission_env(job_type):
+    """`submission_env(job_type)`, with its `exit(64)` refusals translated
+    to `RunStartEnvironmentError` — the one place that translation happens
+    (see `RunStartEnvironmentError`'s own docstring for why it cannot
+    happen inside `submission_env` itself). Shared by `submit_run` and, as
+    of the two MJD-windowed phases, `_cmd_run_start` — `reference`
+    gathering needs this SAME context's `s3_client`/`manifest_bucket`
+    before it ever gathers a single unit (its coadd-input publish step, not
+    only its eventual submission), so a dry run for that phase must resolve
+    it too, never only the eventual `--apply`.
     """
     from pipeline.operator.submission import submission_env
-    from pipeline import seams
-    from database.modules.utils.rapid_db_connect import ConnectionExecutor
 
     try:
-        context = submission_env(job_type)
+        return submission_env(job_type)
     except SystemExit as exc:
         # `submission_env` calls `exit(64)` on missing environment/tree keys
         # rather than raising — see the class docstring. A `SystemExit`
@@ -135,6 +191,32 @@ def submit_run(conn, name, job_type, units, reason):
             "the submission environment required for run start is "
             "incomplete (see the printed *** Error above); run start "
             "cannot gather a binding without it") from exc
+
+
+def submit_run(conn, name, job_type, units, reason, context=None):
+    """Submit `units` under `name`, through the SAME production path
+    `live_w9_ramp` uses: `submission_env` for the binding, `pipeline.seams.
+    submit_gathered` for the submission itself. Nothing here reimplements
+    either — this is the in-process replacement the task ruling calls for,
+    run under whatever role `rapidctl` itself already holds (`operator_
+    session`'s `SET ROLE`), not a re-derived STS/podman launch.
+
+    `context`, when given, is a `submission_env(job_type)` result the
+    caller already resolved — `_cmd_run_start` passes the SAME context a
+    windowed phase's dry-run gather already resolved, rather than this
+    function resolving a second one (`active_definition`'s own AWS Batch
+    call is not free to repeat). `None` (the default, and what every
+    non-windowed phase passes) resolves it here, exactly as before this
+    parameter existed.
+
+    Raises `RunStartEnvironmentError` if `submission_env` cannot resolve a
+    binding — see `_resolve_submission_env`.
+    """
+    from pipeline import seams
+    from database.modules.utils.rapid_db_connect import ConnectionExecutor
+
+    if context is None:
+        context = _resolve_submission_env(job_type)
 
     if not units:
         return []
@@ -150,7 +232,8 @@ def submit_run(conn, name, job_type, units, reason):
 
 def start_run_audited(conn, idempotency_key, name, phase, reason,
                       proc_date=None, cap=None, dry_run=True,
-                      policy_citation=None, out=None):
+                      policy_citation=None, out=None,
+                      window_start=None, window_end=None, fids=None):
     """Gather, (maybe) submit, and audit `run start`. Returns `(result,
     scope)` — the same shape `terminate_jobs_audited` returns, for the same
     reason: the CLI renders both through the identical `render_plan` call.
@@ -162,6 +245,18 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     False. `RunStartEnvironmentError` is deliberately allowed to propagate
     on a dry run too — a caller whose environment cannot submit should see
     that in the rehearsal, not discover it for the first time on `--apply`.
+
+    `window_start`/`window_end` are REQUIRED for `phase in ("reference",
+    "science")` and ignored otherwise — the four post-DB-chain phases take
+    no window argument, matching `live_w9_ramp.PHASES`'s own split. Given
+    as the same "YYYY-MM-DD HH:MM:SS" strings `W9_START`/`W9_END` take;
+    converted through `pipeline.operator.gathering.mjd_window` and
+    `min_images_to_coadd` — the SAME two helpers `live_w9_ramp` calls, not
+    reimplemented here.
+
+    `fids` selects FILTERS, not fields — see `_cmd_run_start`'s own
+    argument help text for why a gather cannot be narrowed to a handful of
+    fields at all.
     """
     out = out or sys.stdout
     scope = "run:%s:phase=%s" % (name, phase)
@@ -176,18 +271,47 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
         raise RunStartEnvironmentError(
             "database handle unusable: exit_code=%s" % dbh.exit_code)
 
-    try:
-        job_type, units = gather_for_run(dbh, phase, proc_date=proc_date,
-                                         cap=cap)
-    except KeyError:
+    windowed = phase in _WINDOWED_PHASES
+    window = None
+    context = None
+    if windowed:
+        if window_start is None or window_end is None:
+            raise ValueError(
+                "phase %r requires --window-start and --window-end" % phase)
+        from pipeline.operator.gathering import mjd_window, min_images_to_coadd
+        start_mjd, end_mjd = mjd_window(window_start, window_end)
+        window = (window_start, window_end, start_mjd, end_mjd,
+                  min_images_to_coadd())
+
+        # The submission environment is resolved HERE, before gathering —
+        # not only before the eventual `--apply` submit — because
+        # `reference` gathering itself needs `s3_client`/`manifest_bucket`
+        # to publish each unit's coadd-input list (see `gather_for_run`'s
+        # docstring). Resolved ONCE and reused by `submit_run` below on
+        # `--apply`, rather than a second `active_definition` Batch call.
         from submission import routes
-        table = ("catalog-load", "crossmatch", "statistics", "merge-dedup")
+        job_type_for_env = (routes.JOB_TYPE_REFERENCE_IMAGE
+                            if phase == "reference"
+                            else routes.JOB_TYPE_SCIENCE)
+        context = _resolve_submission_env(job_type_for_env)
+
+    try:
+        job_type, units = gather_for_run(
+            dbh, phase, proc_date=proc_date, cap=cap, window=window,
+            run_name=name,
+            s3_client=context["s3_client"] if context else None,
+            job_bucket=context["manifest_bucket"] if context else None,
+            fids=fids)
+    except KeyError:
+        table = ("catalog-load", "crossmatch", "statistics", "merge-dedup",
+                 "reference", "science")
         raise ValueError(
             "unknown phase %r; run start knows %s" % (phase, ", ".join(table))
         ) from None
 
     detail = {"phase": phase, "job_type": job_type, "gathered": len(units),
-              "cap": cap, "proc_date": proc_date}
+              "cap": cap, "proc_date": proc_date,
+              "window_start": window_start, "window_end": window_end}
 
     if dry_run:
         print("[dry-run] would gather %d unit(s) for phase=%s (job_type=%s)"
@@ -198,7 +322,7 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
             policy_citation=policy_citation)
         return result, scope
 
-    results = submit_run(conn, name, job_type, units, reason)
+    results = submit_run(conn, name, job_type, units, reason, context=context)
     total_children = sum(len(attempt_ids) for _sub, attempt_ids in results)
     detail["batches"] = len(results)
     detail["children"] = total_children
