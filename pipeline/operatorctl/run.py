@@ -448,13 +448,36 @@ def _release_one(conn, candidate, reason):
     """BLOCKED -> READY for one candidate, through `WorkUnitWriter` — never
     a handwritten UPDATE, so the CAS guard, the transition-graph check and
     the `unit_events` row all happen inside the one call that owns them.
+
+    **UNDER `submission_role`, for the same reason `submit_run` is.** The
+    transition goes through `derived.transition_work_unit`, and the
+    operate tier does not hold EXECUTE on it:
+
+        has_function_privilege('rapid_operator',    …) = false
+        has_function_privilege('rapid_admin',       …) = true
+        has_function_privilege('rapid_orchestrator',…) = true
+
+    So every release failed with `permission denied for function
+    transition_work_unit` — found live on 2026-09-11 trying to release the
+    units a pooler outage had dead-lettered, and the same defect shape as
+    the one that stopped `run start --apply`: a command that records an
+    operator's decision while performing the pipeline's own work, running
+    all of it under the read-mostly identity that exists for the recording
+    half.
+
+    The audit row is still written by `release_dead_letters_audited` after
+    this returns, outside the switch, so the ledger keeps naming the human.
     """
     from pipeline.intent.writer import (BLOCKED, READY, WRITER_MUTATION_API,
                                         WorkUnitWriter)
     from database.modules.utils.rapid_db_connect import ConnectionExecutor
+    # `submission_role` is imported at module scope (see the top of this
+    # file), deliberately: a function-local import here would bypass the
+    # module attribute the tests patch to spy on the switch.
     writer = WorkUnitWriter(ConnectionExecutor(conn).execute)
-    writer.transition_unit(candidate["work_unit_id"], BLOCKED, READY,
-                           writer=WRITER_MUTATION_API, reason=reason)
+    with submission_role(conn):
+        writer.transition_unit(candidate["work_unit_id"], BLOCKED, READY,
+                               writer=WRITER_MUTATION_API, reason=reason)
 
 
 def release_dead_letters_audited(conn, idempotency_key, name, reason,

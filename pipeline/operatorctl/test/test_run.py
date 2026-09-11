@@ -1072,3 +1072,60 @@ class StartRunAuditedOrderingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleaseOneSubmissionRoleTests(unittest.TestCase):
+    """`_release_one` must widen for its transition, exactly as
+    `submit_run` does for its submission.
+
+    FOUND LIVE, 2026-09-11. `run release-dead-letters --apply` failed on
+    every candidate with `permission denied for function
+    transition_work_unit`: the release goes through
+    `derived.transition_work_unit`, and the operate tier does not hold
+    EXECUTE on it, while `rapid_admin` and `rapid_orchestrator` do. Same
+    defect shape as the one that stopped `run start --apply` — a command
+    that records an operator's decision while performing the pipeline's
+    own work, running both halves under the identity that exists for the
+    recording half.
+    """
+
+    def test_the_transition_runs_inside_the_submission_role_block(self):
+        import contextlib
+
+        from pipeline.operatorctl import run as run_mod
+
+        events = []
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            events.append("enter")
+            try:
+                yield conn
+            finally:
+                events.append("exit")
+
+        seen = {}
+
+        class _FakeWriter:
+            def __init__(self, execute):
+                pass
+
+            def transition_unit(self, unit_id, frm, to, writer=None,
+                                reason=None):
+                # Recording the role events AT THE MOMENT of the call is
+                # the whole point: the transition must be inside them.
+                seen["at_call"] = list(events)
+                seen["unit_id"] = unit_id
+
+        import pipeline.intent.writer as writer_mod
+        with mock.patch.object(run_mod, "submission_role",
+                               fake_submission_role), \
+             mock.patch.object(writer_mod, "WorkUnitWriter", _FakeWriter):
+            run_mod._release_one(
+                object(), {"work_unit_id": 4242}, "because")
+
+        self.assertEqual(seen["unit_id"], 4242)
+        self.assertEqual(seen["at_call"], ["enter"],
+                         "the transition must run INSIDE the widened role")
+        self.assertEqual(events, ["enter", "exit"],
+                         "and the role must be restored afterwards")
