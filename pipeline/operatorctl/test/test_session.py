@@ -562,6 +562,41 @@ class SubmissionRoleTests(unittest.TestCase):
         # to clear — each attempt is its own SAVEPOINT.
         self.assertEqual(conn.rolled_back, 0)
 
+    def test_a_failing_body_keeps_its_own_exception_when_the_restore_cannot_run(
+            self):
+        """The restore must never replace the caller's real failure.
+
+        FOUND BY A DEFECT REVIEW AND CONFIRMED AGAINST THE LIVE DATABASE
+        (2026-09-11). If the body raises something that aborts the
+        transaction — any database error — PostgreSQL then refuses every
+        statement on that connection with `InFailedSqlTransaction`. The
+        restore in `finally` is such a statement, so a bare `SET ROLE`
+        there raises from inside `finally` and REPLACES the exception the
+        caller actually needs to see. Measured: a divide-by-zero in the
+        body followed by the restore produced exactly that substitution.
+
+        Swallowing the restore's own failure is safe because an aborted
+        transaction has already discarded the widening `SET ROLE` —
+        `current_user` falls back to the bare login, narrower than either
+        role — so the session cannot be left wide in the one case the
+        restore cannot run.
+        """
+        body_error = RuntimeError("the failure the caller must see")
+        restore_error = Exception(
+            "current transaction is aborted, commands ignored until end "
+            "of transaction block")
+        conn = _FakeConn(failing_statements=[
+            ("SET ROLE " + OPERATOR_ROLE, restore_error)])
+        _ASSUMED_ROLES[id(conn)] = OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            with submission_role(conn):
+                raise body_error
+
+        # The BODY's exception, not the restore's — this is the whole point.
+        self.assertIs(ctx.exception, body_error)
+
     def test_does_not_widen_the_operate_tier_itself(self):
         """Regression guard for the ruling's central constraint: the fix
         must not be a wider grant on `rapid_operator`/`rapid_agent_
