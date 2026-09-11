@@ -172,7 +172,7 @@ class BorrowingHandleTests(unittest.TestCase):
         dbh = RAPIDDB.borrowing(real)
 
         dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "s3://b/ref.fits", "cksum",
-                         42, 1)
+                         42, 1, run_id=None)
 
         self.assertEqual(0, dbh.exit_code)
         self.assertEqual(1, len(real.statements),
@@ -185,27 +185,32 @@ class BorrowingHandleTests(unittest.TestCase):
 
     def test_the_attempt_identity_is_the_last_two_parameters(self):
         # The stored function declares them last and defaulted (migration 018),
-        # so they must arrive last. Anywhere else and every legacy argument
+        # so they must arrive last -- ahead of run_id, which migration 115
+        # appended trailing them. Anywhere else and every legacy argument
         # after them shifts by two.
         real = FakeConnection()
         dbh = RAPIDDB.borrowing(real)
 
         dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "s3://b/ref.fits", "cksum",
-                         42, 7)
+                         42, 7, run_id=None)
 
         _statement, params = real.statements[0]
-        self.assertEqual((42, 7), params[-2:])
+        self.assertEqual((42, 7), params[-3:-1])
 
     def test_omitting_the_identity_sends_nulls_and_nothing_else_changes(self):
         # Optional means optional. The stored function defaults them, so a
         # legacy caller behaves exactly as before: mint a version, insert.
+        # run_id is required (not optional) and keyword-only, so it is passed
+        # explicitly here even though it carries the same NULL/production-lane
+        # meaning as the omitted attempt identity.
         real = FakeConnection()
         dbh = RAPIDDB.borrowing(real)
 
-        dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "s3://b/ref.fits", "cksum")
+        dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "s3://b/ref.fits", "cksum",
+                         run_id=None)
 
         _statement, params = real.statements[0]
-        self.assertEqual((None, None), params[-2:])
+        self.assertEqual((None, None, None), params[-3:])
 
     def test_add_diffimage_carries_the_identity_last_too(self):
         real = FakeConnection()
@@ -213,11 +218,26 @@ class BorrowingHandleTests(unittest.TestCase):
         corners = [float(n) for n in range(10)]
 
         dbh.add_diffimage(1, 2, 3, 0, 0, *corners, 1, "s3://b/diff.fits",
-                          "cksum", 99, 4)
+                          "cksum", 99, 4, run_id=None)
 
         _statement, params = real.statements[0]
-        self.assertEqual((99, 4), params[-2:])
+        self.assertEqual((99, 4), params[-3:-1])
         self.assertEqual(0, real.commits)
+
+    def test_run_id_reaches_add_refimage_and_add_diffimage_last(self):
+        # migration 115 appends run_id trailing the attempt identity on both
+        # stored functions; it must arrive as the final parameter on each.
+        real = FakeConnection()
+        dbh = RAPIDDB.borrowing(real)
+        corners = [float(n) for n in range(10)]
+
+        dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "s3://b/ref.fits", "cksum",
+                         42, 7, run_id="accept-20260911")
+        dbh.add_diffimage(1, 2, 3, 0, 0, *corners, 1, "s3://b/diff.fits",
+                          "cksum", 99, 4, run_id="accept-20260911")
+
+        for _statement, params in real.statements:
+            self.assertEqual("accept-20260911", params[-1])
 
     def test_the_placeholder_count_matches_the_parameter_count(self):
         # The two new `cast(%s as ...)` placeholders and the two new params
@@ -227,8 +247,9 @@ class BorrowingHandleTests(unittest.TestCase):
         dbh = RAPIDDB.borrowing(real)
         corners = [float(n) for n in range(10)]
 
-        dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "f", "c", 1, 1)
-        dbh.add_diffimage(1, 2, 3, 0, 0, *corners, 1, "f", "c", 1, 1)
+        dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "f", "c", 1, 1, run_id=None)
+        dbh.add_diffimage(1, 2, 3, 0, 0, *corners, 1, "f", "c", 1, 1,
+                          run_id=None)
 
         for statement, params in real.statements:
             self.assertEqual(statement.count("%s"), len(params),

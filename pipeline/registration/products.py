@@ -156,7 +156,8 @@ def role_product(record, science, role, attempt_id=None, fallback_roles=None):
 
 
 def register_reference_image(dbh, record, science, attempt_id=None,
-                             record_sequence=None, identity_repository=None):
+                             record_sequence=None, identity_repository=None,
+                             *, run_id):
     """The reference-image body. (Legacy `registerCompletedJobsInDB.py`.)
 
     Order is the legacy order and it matters: `add_refimage` inserts the row
@@ -173,6 +174,11 @@ def register_reference_image(dbh, record, science, attempt_id=None,
     supersession at a higher sequence still mints a new version. Both are
     optional here only so a caller mid-port is not broken — production always
     has them, because the candidate query selects both columns.
+
+    `run_id` is the campaign run this registration belongs to, matching
+    `work_units.run_id`'s convention: `None` for the production lane. It is
+    keyword-only and required so no caller can omit it silently; production
+    callers pass `None` explicitly.
     """
     products = published(record, attempt_id)
     image = _product(products, "reference_image", attempt_id)
@@ -187,7 +193,7 @@ def register_reference_image(dbh, record, science, attempt_id=None,
 
     dbh.add_refimage(ppid, field, fid, hp6, hp9, infobits, status,
                      image["uri"], image["checksum"],
-                     attempt_id, record_sequence)
+                     attempt_id, record_sequence, run_id=run_id)
     _check(dbh, "add_refimage", attempt_id)
 
     rfid = dbh.rfid
@@ -195,7 +201,8 @@ def register_reference_image(dbh, record, science, attempt_id=None,
 
     # Finalize, so vbest points at this version. Filename, checksum, infobits
     # and status are unchanged — the legacy comment says exactly this.
-    dbh.update_refimage(rfid, image["uri"], image["checksum"], status, version)
+    dbh.update_refimage(rfid, image["uri"], image["checksum"], status, version,
+                        run_id=run_id)
     _check(dbh, "update_refimage", attempt_id)
 
     registered = {"rfid": rfid, "version": version, "catalogs": []}
@@ -245,7 +252,7 @@ def register_reference_image(dbh, record, science, attempt_id=None,
 
 def register_difference_image(dbh, record, science, attempt_id=None,
                               record_sequence=None, fallback_roles=None,
-                              identity_repository=None):
+                              identity_repository=None, *, run_id):
     """The difference-image body. (Legacy `registerCompletedJobsInDB.py`.)
 
     Same shape as the reference body — `add_diffimage`, then `update_diffimage`
@@ -263,6 +270,11 @@ def register_difference_image(dbh, record, science, attempt_id=None,
     stops a replayed pass from writing a second difference image for work that
     was already registered — and it is only half the fix, because the rows and
     the watermark still have to commit together; see `registrar`.
+
+    `run_id` is the campaign run this registration belongs to, matching
+    `work_units.run_id`'s convention: `None` for the production lane. It is
+    keyword-only and required so no caller can omit it silently; production
+    callers pass `None` explicitly.
     """
     # THE ROLE, NOT AN ALGORITHM. The payload publishes three difference
     # images per attempt; the release binds the difference-image role to the
@@ -300,14 +312,14 @@ def register_difference_image(dbh, record, science, attempt_id=None,
 
     dbh.add_diffimage(rid, ppid, rfid, infobits_sci, infobits_ref, *corners,
                       status, difference["uri"], difference["checksum"],
-                      attempt_id, record_sequence)
+                      attempt_id, record_sequence, run_id=run_id)
     _check(dbh, "add_diffimage", attempt_id)
 
     pid = dbh.pid
     version = dbh.version
 
     dbh.update_diffimage(pid, difference["uri"], difference["checksum"],
-                         status, version)
+                         status, version, run_id=run_id)
     _check(dbh, "update_diffimage", attempt_id)
 
     # The ZOGY measurements. Every one is a value the science stages computed
@@ -521,15 +533,20 @@ def registrar(dbh, store, fallback_roles=None, identity_repository=None):
         # construction rather than by two call sites agreeing.
         record_sequence = row.get("terminal_record_sequence")
 
+        # The run comes off the attempt ROW, the same place record_sequence
+        # comes from and for the same reason: one source of truth so the
+        # product row and the attempt agree by construction.
+        run_id = row.get("run_id")
+
         if job_type == JOB_TYPE_REFERENCE_IMAGE:
             return register_reference_image(
                 resolve(), body, science, attempt_id, record_sequence,
-                identity_repository=identity_repository)
+                identity_repository=identity_repository, run_id=run_id)
         if job_type == JOB_TYPE_SCIENCE:
             return register_difference_image(
                 resolve(), body, science, attempt_id, record_sequence,
                 fallback_roles=fallback_roles,
-                identity_repository=identity_repository)
+                identity_repository=identity_repository, run_id=run_id)
         # Unreachable while `REGISTRABLE_JOB_TYPES` and the two branches above
         # agree — `is_registrable` has already returned for anything else. It
         # is kept as the guard for exactly that disagreement: a type added to

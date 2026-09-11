@@ -2008,7 +2008,7 @@ class RAPIDDB:
 ########################################################################################################
 
     def add_refimage(self,ppid,field,fid,hp6,hp9,infobits,status,filename,checksum,
-        attempt_id=None,registered_record_sequence=None):
+        attempt_id=None,registered_record_sequence=None,*,run_id):
 
         '''
         Add record in RefImages database table.
@@ -2030,6 +2030,13 @@ class RAPIDDB:
         default for callers that are not registering an attempt's products,
         because there is no attempt for the row to be idempotent with respect
         to.
+
+        run_id is the campaign run this registration belongs to, matching
+        work_units.run_id's convention: NULL for the production lane, a
+        run_id for a campaign registration. It is keyword-only and required
+        so no caller can silently write an unscoped row. updateRefImage uses
+        it to scope the vBest demotion to the writer's own run, so a
+        campaign registration can never demote a production row.
         '''
 
         self.exit_code = 0
@@ -2049,7 +2056,8 @@ class RAPIDDB:
             "cast(%s as character varying(32))," +\
             "cast(%s as smallint)," +\
             "cast(%s as bigint)," +\
-            "cast(%s as integer)) as " +\
+            "cast(%s as integer)," +\
+            "cast(%s as text)) as " +\
             "(rfid integer," +\
             " version smallint);"
 
@@ -2061,10 +2069,11 @@ class RAPIDDB:
         print('----> filename = {}'.format(filename))
         print('----> attempt_id = {}'.format(attempt_id))
         print('----> registered_record_sequence = {}'.format(registered_record_sequence))
+        print('----> run_id = {}'.format(run_id))
 
 
         params = (field, hp6, hp9, fid, ppid, infobits, filename, checksum, status,
-                  attempt_id, registered_record_sequence)
+                  attempt_id, registered_record_sequence, run_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2087,10 +2096,17 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_refimage(self,rfid,filename,checksum,status,version):
+    def update_refimage(self,rfid,filename,checksum,status,version,*,run_id):
 
         '''
         Update record in RefImages database table.
+
+        run_id is the campaign run this registration belongs to, matching
+        work_units.run_id's convention: NULL for the production lane, a
+        run_id for a campaign registration. It is keyword-only and required
+        so no caller can silently write an unscoped row. updateRefImage
+        uses it to scope the vBest demotion to the writer's own run, so a
+        campaign registration can never demote a production row.
         '''
 
         self.exit_code = 0
@@ -2104,7 +2120,8 @@ class RAPIDDB:
             "cast(%s as character varying(255))," +\
             "cast(%s as character varying(32))," +\
             "cast(%s as smallint)," +\
-            "cast(%s AS smallint));"
+            "cast(%s AS smallint)," +\
+            "cast(%s as text));"
 
 
         # Query database.
@@ -2114,9 +2131,10 @@ class RAPIDDB:
         print('----> checksum = {}'.format(checksum))
         print('----> status = {}'.format(status))
         print('----> version = {}'.format(version))
+        print('----> run_id = {}'.format(run_id))
 
 
-        params = (rfid, filename, checksum, status, version)
+        params = (rfid, filename, checksum, status, version, run_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2254,7 +2272,7 @@ class RAPIDDB:
 
     def add_diffimage(self,rid,ppid,rfid,infobitssci,infobitsref,
         ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,status,filename,checksum,
-        attempt_id=None,registered_record_sequence=None):
+        attempt_id=None,registered_record_sequence=None,*,run_id):
 
         '''
         Add record in DiffImages database table.
@@ -2267,6 +2285,13 @@ class RAPIDDB:
         sequence still mints a new version, which is how supersession keeps
         working.  Both optional, so callers that are not registering an
         attempt's products are unchanged.
+
+        run_id is the campaign run this registration belongs to, matching
+        work_units.run_id's convention: NULL for the production lane, a
+        run_id for a campaign registration. It is keyword-only and required
+        so no caller can silently write an unscoped row. updateDiffImage
+        uses it to scope the vBest demotion to the writer's own run, so a
+        campaign registration can never demote a production row.
         '''
 
         self.exit_code = 0
@@ -2295,7 +2320,8 @@ class RAPIDDB:
             "cast(%s as character varying(32))," +\
             "cast(%s as smallint)," +\
             "cast(%s as bigint)," +\
-            "cast(%s as integer)) as " +\
+            "cast(%s as integer)," +\
+            "cast(%s as text)) as " +\
             "(pid integer," +\
             " version smallint);"
 
@@ -2308,10 +2334,11 @@ class RAPIDDB:
         print('----> filename = {}'.format(filename))
         print('----> attempt_id = {}'.format(attempt_id))
         print('----> registered_record_sequence = {}'.format(registered_record_sequence))
+        print('----> run_id = {}'.format(run_id))
 
 
         params = (rid, ppid, rfid, infobitssci, infobitsref, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4, filename, checksum, status,
-                  attempt_id, registered_record_sequence)
+                  attempt_id, registered_record_sequence, run_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2334,10 +2361,17 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_diffimage(self,pid,filename,checksum,status,version):
+    def update_diffimage(self,pid,filename,checksum,status,version,*,run_id):
 
         '''
         Update record in DiffImages database table.
+
+        run_id is the campaign run this registration belongs to, matching
+        work_units.run_id's convention: NULL for the production lane, a
+        run_id for a campaign registration. It is keyword-only and required
+        so no caller can silently write an unscoped row. updateDiffImage
+        uses it to scope the vBest demotion to the writer's own run, so a
+        campaign registration can never demote a production row.
         '''
 
         self.exit_code = 0
@@ -2351,7 +2385,8 @@ class RAPIDDB:
             "cast(%s as character varying(255))," +\
             "cast(%s as character varying(32))," +\
             "cast(%s as smallint)," +\
-            "cast(%s AS smallint));"
+            "cast(%s AS smallint)," +\
+            "cast(%s as text));"
 
 
         # Query database.
@@ -2361,9 +2396,10 @@ class RAPIDDB:
         print('----> checksum = {}'.format(checksum))
         print('----> status = {}'.format(status))
         print('----> version = {}'.format(version))
+        print('----> run_id = {}'.format(run_id))
 
 
-        params = (pid, filename, checksum, status, version)
+        params = (pid, filename, checksum, status, version, run_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2381,6 +2417,153 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating DiffImages record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def add_psf(self,fid,sca,filename,checksum,status,
+        attempt_id=None,registered_record_sequence=None,*,run_id):
+
+        '''
+        Add record in PSFs database table.
+
+        attempt_id and registered_record_sequence carry the same meaning here
+        as in add_refimage: the identity of the registration inserting the
+        row, used by the stored function to find-or-insert on that pair
+        before minting max(version)+1, so a replayed registration returns the
+        row it already wrote instead of a duplicate at a new version.  A
+        higher sequence still mints a new version, which is how supersession
+        keeps working.  Both optional, so callers that are not registering an
+        attempt's products are unchanged.
+
+        run_id is the campaign run this registration belongs to, matching
+        work_units.run_id's convention: NULL for the production lane, a
+        run_id for a campaign registration. It is keyword-only and required
+        so no caller can silently write an unscoped row. updatePSF uses it
+        to scope the vBest demotion to the writer's own run, so a campaign
+        registration can never demote a production row.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query =\
+            "select * from addPSF(" +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as text)) as " +\
+            "(psfid integer," +\
+            " version smallint);"
+
+
+        # Query database.
+
+        print('----> fid = {}'.format(fid))
+        print('----> sca = {}'.format(sca))
+        print('----> filename = {}'.format(filename))
+        print('----> attempt_id = {}'.format(attempt_id))
+        print('----> registered_record_sequence = {}'.format(registered_record_sequence))
+        print('----> run_id = {}'.format(run_id))
+
+
+        params = (fid, sca, filename, checksum, status,
+                  attempt_id, registered_record_sequence, run_id)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        self.cur.execute(query, params)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            self.psfid = record[0]
+            self.version = record[1]
+        else:
+            self.psfid = None
+            self.version = None
+            print("*** Error: Could not insert PSFs record; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def update_psf(self,psfid,filename,checksum,status,version,
+        attempt_id=None,registered_record_sequence=None,*,run_id):
+
+        '''
+        Update record in PSFs database table.
+
+        run_id is the campaign run this registration belongs to, matching
+        work_units.run_id's convention: NULL for the production lane, a
+        run_id for a campaign registration. It is keyword-only and required
+        so no caller can silently write an unscoped row. updatePSF uses it
+        to scope the vBest demotion to the writer's own run, so a campaign
+        registration can never demote a production row.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query =\
+            "select * from updatePSF(" +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as text));"
+
+
+        # Query database.
+
+        print('----> psfid = {}'.format(psfid))
+        print('----> filename = {}'.format(filename))
+        print('----> checksum = {}'.format(checksum))
+        print('----> status = {}'.format(status))
+        print('----> version = {}'.format(version))
+        print('----> attempt_id = {}'.format(attempt_id))
+        print('----> registered_record_sequence = {}'.format(registered_record_sequence))
+        print('----> run_id = {}'.format(run_id))
+
+
+        params = (psfid, filename, checksum, status, version,
+                  attempt_id, registered_record_sequence, run_id)
+
+        print('query = {}, params = {}'.format(query, params))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query, params)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating PSFs record ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 

@@ -75,6 +75,7 @@ class FakeDB:
 
     def __init__(self, exit_code=0):
         self.calls = []
+        self.kwargs = []
         self.exit_code = exit_code
         self.rfid = 77
         self.pid = 900
@@ -84,8 +85,15 @@ class FakeDB:
 
     def __getattr__(self, name):
         if name.startswith(("add_", "update_", "register_")):
-            def record(*args):
+            def record(*args, **kwargs):
+                # `calls` stays a (name, args) 2-tuple — every existing
+                # assertion in this module unpacks exactly that shape.
+                # Keyword arguments (currently just `run_id`) are recorded
+                # separately so a caller that wants to assert on them can,
+                # without every positional-argument test having to learn
+                # about a third tuple element it does not care about.
                 self.calls.append((name, args))
+                self.kwargs.append((name, kwargs))
             return record
         raise AttributeError(name)
 
@@ -413,7 +421,7 @@ class ScaleFactorDirectionTests(unittest.TestCase):
         record = difference_record()
 
         products.register_difference_image(
-            dbh, record, record["science_provenance"], 2)
+            dbh, record, record["science_provenance"], 2, run_id=None)
 
         call = [args for name, args in dbh.calls
                 if name == "register_diffimmeta"][0]
@@ -433,7 +441,7 @@ class ReferenceImageBodyTests(unittest.TestCase):
         record = reference_record()
 
         result = products.register_reference_image(
-            dbh, record, record["science_provenance"], 1)
+            dbh, record, record["science_provenance"], 1, run_id=None)
 
         self.assertEqual([name for name, _ in dbh.calls],
                          ["add_refimage", "update_refimage",
@@ -445,7 +453,7 @@ class ReferenceImageBodyTests(unittest.TestCase):
         record = reference_record()
 
         products.register_reference_image(
-            dbh, record, record["science_provenance"], 1)
+            dbh, record, record["science_provenance"], 1, run_id=None)
 
         _name, args = dbh.calls[0]
         self.assertIn("s3://p/ref.fits", args)
@@ -456,7 +464,7 @@ class ReferenceImageBodyTests(unittest.TestCase):
         record = reference_record()
         science = record["science_provenance"]
 
-        products.register_reference_image(dbh, record, science, 1)
+        products.register_reference_image(dbh, record, science, 1, run_id=None)
 
         _name, args = dbh.calls[0]
         # add_refimage(ppid, field, fid, hp6, hp9, infobits, status, ...)
@@ -470,7 +478,7 @@ class ReferenceImageBodyTests(unittest.TestCase):
         record = reference_record()
 
         result = products.register_reference_image(
-            dbh, record, record["science_provenance"], 1)
+            dbh, record, record["science_provenance"], 1, run_id=None)
 
         self.assertEqual([c["cattype"] for c in result["catalogs"]],
                          [products.CATTYPE_SEXTRACTOR])
@@ -480,7 +488,7 @@ class ReferenceImageBodyTests(unittest.TestCase):
         dbh = FakeDB()
 
         result = products.register_reference_image(
-            dbh, record, record["science_provenance"], 1)
+            dbh, record, record["science_provenance"], 1, run_id=None)
 
         self.assertEqual([c["cattype"] for c in result["catalogs"]],
                          [products.CATTYPE_SEXTRACTOR,
@@ -495,7 +503,7 @@ class ReferenceImageBodyTests(unittest.TestCase):
 
         with self.assertRaises(products.MissingRecordFact) as caught:
             products.register_reference_image(
-                FakeDB(), record, record["science_provenance"], 1)
+                FakeDB(), record, record["science_provenance"], 1, run_id=None)
 
         self.assertEqual(caught.exception.field, "hp6")
 
@@ -504,7 +512,7 @@ class ReferenceImageBodyTests(unittest.TestCase):
 
         with self.assertRaises(products.MissingRecordFact):
             products.register_reference_image(
-                FakeDB(), record, record["science_provenance"], 1)
+                FakeDB(), record, record["science_provenance"], 1, run_id=None)
 
     def test_a_database_failure_raises_rather_than_exiting_the_process(self):
         # The legacy bodies called exit() from inside the registration, which
@@ -515,7 +523,25 @@ class ReferenceImageBodyTests(unittest.TestCase):
 
         with self.assertRaises(products.RegistrationFailed):
             products.register_reference_image(
-                dbh, record, record["science_provenance"], 1)
+                dbh, record, record["science_provenance"], 1, run_id=None)
+
+    def test_run_id_reaches_both_add_refimage_and_update_refimage(self):
+        # run_id is required and keyword-only precisely so it cannot be lost
+        # on the way down; assert it lands on BOTH stored-function calls,
+        # since update_refimage is the one that scopes the vBest demotion.
+        dbh = FakeDB()
+        record = reference_record()
+
+        products.register_reference_image(
+            dbh, record, record["science_provenance"], 1,
+            run_id="accept-20260911")
+
+        add_kwargs = dict(dbh.kwargs[0][1])
+        update_kwargs = dict(dbh.kwargs[1][1])
+        self.assertEqual("add_refimage", dbh.calls[0][0])
+        self.assertEqual("update_refimage", dbh.calls[1][0])
+        self.assertEqual("accept-20260911", add_kwargs["run_id"])
+        self.assertEqual("accept-20260911", update_kwargs["run_id"])
 
 
 class DifferenceImageRoleTests(unittest.TestCase):
@@ -532,7 +558,7 @@ class DifferenceImageRoleTests(unittest.TestCase):
         record = difference_record()
 
         result = products.register_difference_image(
-            dbh, record, record["science_provenance"], 2)
+            dbh, record, record["science_provenance"], 2, run_id=None)
 
         _name, args = dbh.calls[0]
         self.assertIn("s3://p/sfftdiffimage_masked.fits", args)
@@ -547,7 +573,7 @@ class DifferenceImageRoleTests(unittest.TestCase):
             product_roles={"difference_image": "zogy_diffimage"})
 
         result = products.register_difference_image(
-            dbh, record, record["science_provenance"], 2)
+            dbh, record, record["science_provenance"], 2, run_id=None)
 
         _name, args = dbh.calls[0]
         self.assertIn("s3://p/zogy_diffimage_masked.fits", args)
@@ -557,7 +583,7 @@ class DifferenceImageRoleTests(unittest.TestCase):
         record = difference_record(product_roles={})
         with self.assertRaises(products.MissingRecordFact) as caught:
             products.register_difference_image(
-                FakeDB(), record, record["science_provenance"], 2)
+                FakeDB(), record, record["science_provenance"], 2, run_id=None)
         self.assertEqual(caught.exception.field, "product_roles")
 
     def test_a_role_bound_to_an_unpublished_product_refuses(self):
@@ -568,7 +594,7 @@ class DifferenceImageRoleTests(unittest.TestCase):
             product_roles={"difference_image": "hotpants_diffimage"})
         with self.assertRaises(products.MissingRecordFact) as caught:
             products.register_difference_image(
-                FakeDB(), record, record["science_provenance"], 2)
+                FakeDB(), record, record["science_provenance"], 2, run_id=None)
         self.assertIn("hotpants_diffimage", caught.exception.field)
 
     def test_a_pre_binding_record_registers_from_the_release(self):
@@ -584,7 +610,8 @@ class DifferenceImageRoleTests(unittest.TestCase):
 
         result = products.register_difference_image(
             dbh, record, record["science_provenance"], 2,
-            fallback_roles={"difference_image": "sfft_diffimage"})
+            fallback_roles={"difference_image": "sfft_diffimage"},
+            run_id=None)
 
         _name, args = dbh.calls[0]
         self.assertIn("s3://p/sfftdiffimage_masked.fits", args)
@@ -599,7 +626,8 @@ class DifferenceImageRoleTests(unittest.TestCase):
 
         result = products.register_difference_image(
             dbh, record, record["science_provenance"], 2,
-            fallback_roles={"difference_image": "sfft_diffimage"})
+            fallback_roles={"difference_image": "sfft_diffimage"},
+            run_id=None)
 
         self.assertEqual(result["product"], "zogy_diffimage")
         self.assertEqual(result["role_resolved_from"], "record")
@@ -611,7 +639,7 @@ class DifferenceImageRoleTests(unittest.TestCase):
         del record["product_roles"]
         with self.assertRaises(products.MissingRecordFact) as caught:
             products.register_difference_image(
-                FakeDB(), record, record["science_provenance"], 2)
+                FakeDB(), record, record["science_provenance"], 2, run_id=None)
         self.assertEqual(caught.exception.field, "product_roles")
 
     def test_the_registrar_carries_no_algorithm_literal(self):
@@ -639,19 +667,37 @@ class DifferenceImageBodyTests(unittest.TestCase):
         record = difference_record()
 
         result = products.register_difference_image(
-            dbh, record, record["science_provenance"], 2)
+            dbh, record, record["science_provenance"], 2, run_id=None)
 
         self.assertEqual([name for name, _ in dbh.calls],
                          ["add_diffimage", "update_diffimage",
                           "register_diffimmeta"])
         self.assertEqual(result["pid"], 900)
 
+    def test_run_id_reaches_both_add_diffimage_and_update_diffimage(self):
+        # Same requirement as the reference-image body: run_id is required
+        # and keyword-only, and must reach BOTH stored-function calls since
+        # update_diffimage is the one that scopes the vBest demotion.
+        dbh = FakeDB()
+        record = difference_record()
+
+        products.register_difference_image(
+            dbh, record, record["science_provenance"], 2,
+            run_id="accept-20260911")
+
+        add_kwargs = dict(dbh.kwargs[0][1])
+        update_kwargs = dict(dbh.kwargs[1][1])
+        self.assertEqual("add_diffimage", dbh.calls[0][0])
+        self.assertEqual("update_diffimage", dbh.calls[1][0])
+        self.assertEqual("accept-20260911", add_kwargs["run_id"])
+        self.assertEqual("accept-20260911", update_kwargs["run_id"])
+
     def test_all_five_corners_reach_add_diffimage(self):
         dbh = FakeDB()
         record = difference_record()
 
         products.register_difference_image(
-            dbh, record, record["science_provenance"], 2)
+            dbh, record, record["science_provenance"], 2, run_id=None)
 
         _name, args = dbh.calls[0]
         for key in registration_facts.SKY_POSITION_KEYS:
@@ -664,7 +710,7 @@ class DifferenceImageBodyTests(unittest.TestCase):
         record = difference_record()
         science = record["science_provenance"]
 
-        products.register_difference_image(dbh, record, science, 2)
+        products.register_difference_image(dbh, record, science, 2, run_id=None)
 
         call = [args for name, args in dbh.calls
                 if name == "register_diffimmeta"][0]
@@ -689,7 +735,7 @@ class DifferenceImageBodyTests(unittest.TestCase):
 
         with self.assertRaises(products.MissingRecordFact):
             products.register_difference_image(
-                FakeDB(), record, record["science_provenance"], 2)
+                FakeDB(), record, record["science_provenance"], 2, run_id=None)
 
     def test_the_zogy_measurements_are_required(self):
         record = difference_record()
@@ -697,7 +743,7 @@ class DifferenceImageBodyTests(unittest.TestCase):
 
         with self.assertRaises(products.MissingRecordFact) as caught:
             products.register_difference_image(
-                FakeDB(), record, record["science_provenance"], 2)
+                FakeDB(), record, record["science_provenance"], 2, run_id=None)
 
         self.assertEqual(caught.exception.field, "scalefacref")
 
@@ -810,6 +856,39 @@ class RegistrarDispatchTests(unittest.TestCase):
         dbh.calls.clear()
         register({"attempt_id": 2}, None, record=difference_record())
         self.assertEqual(dbh.calls[0][0], "add_diffimage")
+
+    def test_run_id_is_read_off_the_row_not_defaulted(self):
+        # run_id comes off the candidate ROW, the same place record_sequence
+        # comes from and for the same reason: the row is the one source of
+        # truth, so the product row and the attempt agree by construction.
+        dbh = FakeDB()
+        register = products.registrar(dbh, InMemoryObjectStore())
+
+        register({"attempt_id": 1, "run_id": "accept-20260911"}, None,
+                 record=reference_record())
+        add_kwargs = dict(dbh.kwargs[0][1])
+        self.assertEqual("add_refimage", dbh.calls[0][0])
+        self.assertEqual("accept-20260911", add_kwargs["run_id"])
+
+        dbh.calls.clear()
+        dbh.kwargs.clear()
+        register({"attempt_id": 2, "run_id": "accept-20260911"}, None,
+                 record=difference_record())
+        add_kwargs = dict(dbh.kwargs[0][1])
+        self.assertEqual("add_diffimage", dbh.calls[0][0])
+        self.assertEqual("accept-20260911", add_kwargs["run_id"])
+
+    def test_a_row_with_no_run_id_registers_the_production_lane(self):
+        # A row without run_id (the production candidate query's shape today)
+        # must still register — as the production lane, run_id=None — rather
+        # than raising for want of a keyword the caller never had to supply.
+        dbh = FakeDB()
+        register = products.registrar(dbh, InMemoryObjectStore())
+
+        register({"attempt_id": 1}, None, record=reference_record())
+
+        add_kwargs = dict(dbh.kwargs[0][1])
+        self.assertIsNone(add_kwargs["run_id"])
 
     def test_a_record_with_no_job_type_at_all_is_a_missing_fact(self):
         register = products.registrar(FakeDB(), InMemoryObjectStore())
@@ -943,7 +1022,7 @@ class AttemptIdentityThreadingTests(unittest.TestCase):
         record = difference_record()
 
         products.register_difference_image(
-            dbh, record, record["science_provenance"], 2)
+            dbh, record, record["science_provenance"], 2, run_id=None)
 
         self.assertEqual((None,), dbh.calls[0][1][-1:])
 
