@@ -135,10 +135,16 @@ class CandidateScopingTests(unittest.TestCase):
         # only the target run_id cannot detect a scoping bug that returns
         # everything regardless of the predicate — this one contains a
         # decoy row under a different run_id that a broken scope would leak.
+        # Both matching rows carry a work unit: a run-scoped pass requires
+        # one by construction (the incident guard above), and this test's
+        # subject is prefix narrowing, not that requirement.
         conn = FakeConnection(rows=[
-            reconciled(1, run_id="w9-ramp-science-18-abc"),
-            reconciled(2, run_id="w9-ramp-science-18-abc"),
-            reconciled(3, run_id="some-other-run-entirely"),
+            reconciled(1, run_id="w9-ramp-science-18-abc", work_unit_id=1,
+                       work_unit_run_id="w9-ramp-science-18-abc"),
+            reconciled(2, run_id="w9-ramp-science-18-abc", work_unit_id=2,
+                       work_unit_run_id="w9-ramp-science-18-abc"),
+            reconciled(3, run_id="some-other-run-entirely", work_unit_id=3,
+                       work_unit_run_id="some-other-run-entirely"),
         ])
 
         rows = consumer.candidates(conn, run_id_prefix="w9-ramp-science-18-abc")
@@ -151,10 +157,16 @@ class CandidateScopingTests(unittest.TestCase):
         # (`f"{run_id}-{index}"`). A caller scoping to the run they submitted
         # must match every suffixed child, not just an exact, unsuffixed
         # run_id that may never appear alone.
+        # Both matching rows carry a work unit: a run-scoped pass requires
+        # one by construction (the incident guard above), and this test's
+        # subject is the split-batch suffix match, not that requirement.
         conn = FakeConnection(rows=[
-            reconciled(1, run_id="w9-ramp-science-270-xyz-0"),
-            reconciled(2, run_id="w9-ramp-science-270-xyz-1"),
-            reconciled(3, run_id="w9-ramp-science-18-different"),
+            reconciled(1, run_id="w9-ramp-science-270-xyz-0", work_unit_id=1,
+                       work_unit_run_id="w9-ramp-science-270-xyz"),
+            reconciled(2, run_id="w9-ramp-science-270-xyz-1", work_unit_id=2,
+                       work_unit_run_id="w9-ramp-science-270-xyz"),
+            reconciled(3, run_id="w9-ramp-science-18-different", work_unit_id=3,
+                       work_unit_run_id="w9-ramp-science-18-different"),
         ])
 
         rows = consumer.candidates(conn, run_id_prefix="w9-ramp-science-270-xyz")
@@ -176,8 +188,13 @@ class CandidateScopingTests(unittest.TestCase):
         # Scoping narrows an already-reconciled candidate set; it must not
         # widen it. A non-reconciled row inside the named run_id stays
         # excluded.
+        # Row 1 carries a work unit: a run-scoped pass requires one by
+        # construction (the incident guard above), and this test's subject
+        # is the reconciled-state gate, not that requirement, so the
+        # expected survivor must clear both.
         conn = FakeConnection(rows=[
-            reconciled(1, run_id="run-a"),
+            reconciled(1, run_id="run-a", work_unit_id=42,
+                       work_unit_run_id="run-a"),
             reconciled(2, run_id="run-a", lifecycle_state="started",
                        rapid_outcome=None, product_disposition=None,
                        started_at=None, application_intended_exit=None),
@@ -185,6 +202,59 @@ class CandidateScopingTests(unittest.TestCase):
 
         rows = consumer.candidates(conn, run_id_prefix="run-a")
 
+        self.assertEqual([1], [r["attempt_id"] for r in rows])
+
+    def test_a_run_scoped_query_requires_a_work_unit(self):
+        # THE 2026-09-11 INCIDENT GUARD. A run-scoped registration is by
+        # definition registering a campaign run's products, and the
+        # registrar (`pipeline.registration.products.registrar`) reads the
+        # campaign run from `work_unit_run_id` — the LEFT JOINed `work_units.
+        # run_id` — never from `attempts.run_id` (see that module's own
+        # comment on why). An attempt with no work unit has no campaign
+        # scope: its `work_unit_run_id` is NULL, so registering it under a
+        # run scope would write it to the production (`run_id IS NULL`) lane
+        # — precisely NOT what the operator scoped the registration to. Such
+        # an attempt is out of scope for a run-scoped pass by construction,
+        # so the run-prefix branch must also require
+        # `attempts.work_unit_id IS NOT NULL` in the SQL text it issues.
+        conn = FakeConnection(rows=[reconciled(1, run_id="run-a")])
+
+        consumer.candidates(conn, run_id_prefix="run-a")
+
+        text, _params = conn.statements[0]
+        self.assertIn(consumer._WORK_UNIT_ID_NOT_NULL_SQL, text)
+
+    def test_a_run_scoped_query_does_not_return_a_unit_less_attempt(self):
+        # The behavioural half of the incident guard above: a run-prefix-
+        # scoped call must not hand back an attempt whose `work_unit_id` is
+        # NULL, even though it matches the run prefix and the reconciled-
+        # state gate — that attempt has no campaign scope to register under,
+        # and returning it is exactly how the 2026-09-11 incident wrote
+        # 2,427 rows onto the production lane.
+        conn = FakeConnection(rows=[
+            reconciled(1, run_id="accept-20260911-13", work_unit_id=42,
+                      work_unit_run_id="accept-20260911"),
+            reconciled(2, run_id="accept-20260911-14", work_unit_id=None),
+        ])
+
+        rows = consumer.candidates(conn, run_id_prefix="accept-20260911")
+
+        self.assertEqual([1], [r["attempt_id"] for r in rows])
+
+    def test_an_attempt_ids_only_scope_does_not_require_a_work_unit(self):
+        # ORTHOGONAL SCOPE, DELIBERATELY UNFILTERED. `attempt_ids` is the
+        # operator naming exact rows by id — a caller who already knows
+        # precisely which attempts it means, unlike `run_id_prefix`'s
+        # campaign framing. That scope must not gain the work-unit
+        # requirement: only the run-prefix branch does.
+        conn = FakeConnection(rows=[
+            reconciled(1, run_id="run-a", work_unit_id=None),
+        ])
+
+        rows = consumer.candidates(conn, attempt_ids=[1])
+
+        text, _params = conn.statements[0]
+        self.assertNotIn(consumer._WORK_UNIT_ID_NOT_NULL_SQL, text)
         self.assertEqual([1], [r["attempt_id"] for r in rows])
 
 

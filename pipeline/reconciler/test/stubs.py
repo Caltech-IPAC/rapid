@@ -425,6 +425,13 @@ class FakeConnection:
                 prefix = pattern[:-1] if pattern.endswith("%") else pattern
                 matched = [row for row in matched
                            if row.get("run_id", "").startswith(prefix)]
+            # `consumer._WORK_UNIT_ID_NOT_NULL_SQL` — the 2026-09-11 incident
+            # guard, run-prefix scope only. Takes no parameter of its own
+            # (`IS NOT NULL` needs none), so it is matched on text alone and
+            # does not touch `next_param`.
+            if "work_unit_id is not null" in lowered:
+                matched = [row for row in matched
+                           if row.get("work_unit_id") is not None]
             if "attempt_id = any" in lowered:
                 wanted_ids = set(params[next_param])
                 next_param += 1

@@ -109,9 +109,15 @@ class DryRunTests(unittest.TestCase):
     verdict a scoped row can reach, not only REGISTER."""
 
     def test_dry_run_reports_registrable_rows_as_would_register(self):
+        # Both rows carry a work unit: a run-scoped pass requires one by
+        # construction (`consumer._WORK_UNIT_ID_NOT_NULL_SQL` — a unit-less
+        # attempt has no campaign scope), and this test's subject is dry-run
+        # counting, not that requirement.
         conn = FakeConnection(rows=[
-            reconciled(1, run_id="run-a"),
-            reconciled(2, run_id="run-a"),
+            reconciled(1, run_id="run-a", work_unit_id=1,
+                      work_unit_run_id="run-a"),
+            reconciled(2, run_id="run-a", work_unit_id=2,
+                      work_unit_run_id="run-a"),
         ])
 
         run, rows = scoped.run_scoped_registration(
@@ -129,9 +135,13 @@ class DryRunTests(unittest.TestCase):
         # must not reach register_batch AT ALL, so a SKIP-shaped candidate
         # in scope must not cause a single statement beyond the read-only
         # candidate query.
+        # Carries a work unit: a run-scoped pass requires one by construction
+        # (`consumer._WORK_UNIT_ID_NOT_NULL_SQL`), and this test's subject is
+        # write-suppression on a SKIP-shaped row, not that requirement.
         conn = FakeConnection(rows=[
             reconciled(1, run_id="run-a", rapid_outcome="failure",
-                      product_disposition=None),
+                      product_disposition=None, work_unit_id=1,
+                      work_unit_run_id="run-a"),
         ])
 
         run, rows = scoped.run_scoped_registration(
@@ -284,7 +294,12 @@ class DryRunNeverReachesRegisterBatchTests(unittest.TestCase):
     `register` callback)."""
 
     def test_dry_run_calls_neither_registrar_for_scope_nor_register_batch(self):
-        conn = FakeConnection(rows=[reconciled(1, run_id="run-a")])
+        # Carries a work unit: a run-scoped pass requires one by construction
+        # (`consumer._WORK_UNIT_ID_NOT_NULL_SQL`), and this test's subject is
+        # that dry run never reaches the registrar, not that requirement.
+        conn = FakeConnection(rows=[
+            reconciled(1, run_id="run-a", work_unit_id=1,
+                      work_unit_run_id="run-a")])
 
         def _unreachable(*args, **kwargs):
             raise AssertionError("must not be reached on a dry run")

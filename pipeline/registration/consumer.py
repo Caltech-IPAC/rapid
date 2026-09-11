@@ -278,6 +278,37 @@ _CANDIDATE_SQL = _CANDIDATE_WHERE_SQL + _CANDIDATE_ORDER_SQL
 _RUN_ID_PREFIX_SQL = "attempts.run_id LIKE %s"
 _ATTEMPT_IDS_SQL = "attempts.attempt_id = ANY(%s)"
 
+#: THE 2026-09-11 INCIDENT GUARD, run-prefix scope only. A run-scoped
+#: registration is, by definition, registering a campaign run's products —
+#: that is the entire meaning of "scope this pass to `run_id_prefix`". But
+#: `pipeline.registration.products.registrar` reads the campaign run for the
+#: product write from `work_unit_run_id` (the LEFT JOINed `work_units.
+#: run_id`, above), never from `attempts.run_id` — see that module's own
+#: `register` docstring for why the join column is the right source for the
+#: production path. An attempt with no work unit (`attempts.work_unit_id IS
+#: NULL` — pre-intent-layer, or held back by the definition-FK guard at
+#: submission time, `_COLUMNS`'s own comment on `work_unit_id`) therefore has
+#: `work_unit_run_id IS NULL` no matter what its `attempts.run_id` matches:
+#: it carries no campaign scope for the registrar to read. Letting such a row
+#: through a run-scoped pass means the registrar writes it with `run_id=
+#: None` — the PRODUCTION lane — which is precisely NOT what the operator
+#: scoped the registration to, and is exactly how the live incident wrote
+#: 2,427 unit-less `accept-20260911%` attempts onto production and demoted
+#: 2,375 production-current rows via `updatediffimage`'s vBest logic. A
+#: unit-less attempt is out of scope for a run-scoped pass by construction,
+#: so the run-prefix branch alone also requires this predicate.
+#:
+#: Deliberately NOT added to `_ATTEMPT_IDS_SQL`'s branch: an `attempt_ids`-
+#: only scope is the operator naming exact rows it already knows by id, an
+#: orthogonal scope from "this campaign run's products" — that caller has
+#: already made its own scoping decision about which attempts belong, and it
+#: is not this module's place to second-guess an explicit list. The
+#: unscoped production path is untouched by this constant entirely: it is
+#: exactly where a unit-less attempt legitimately belongs, registering under
+#: `work_unit_run_id=None` as `_CANDIDATE_WHERE_SQL`'s LEFT JOIN comment
+#: already documents.
+_WORK_UNIT_ID_NOT_NULL_SQL = "attempts.work_unit_id IS NOT NULL"
+
 
 def _escape_like(prefix):
     """Escape `%`/`_`/`\\` in a LIKE prefix so it matches literally.
@@ -520,6 +551,12 @@ def candidates(conn, states=RECONCILED_STATES, run_id_prefix=None,
         if run_id_prefix is not None:
             sql += " AND " + _RUN_ID_PREFIX_SQL
             params.append(_escape_like(run_id_prefix) + "%")
+            # THE 2026-09-11 INCIDENT GUARD (see `_WORK_UNIT_ID_NOT_NULL_SQL`'s
+            # own comment): run-prefix scope only, never the `attempt_ids`
+            # branch below. No parameter of its own — `IS NOT NULL` needs
+            # none — so it is appended to the text alone, right alongside the
+            # predicate it exists to close a gap in.
+            sql += " AND " + _WORK_UNIT_ID_NOT_NULL_SQL
         if attempt_ids is not None:
             sql += " AND " + _ATTEMPT_IDS_SQL
             params.append(list(attempt_ids))
