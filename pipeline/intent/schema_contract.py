@@ -137,6 +137,43 @@ REQUIRED_MIGRATIONS = (
      "`ROUTE_MIGRATIONS`, because every registration pass reads the "
      "consumed watermark regardless of job type, exactly as 018's "
      "registered watermark already does above"),
+    ("108-runs.sql",
+     "the `runs` table, queried by pipeline/operatorctl/actions.py's "
+     "`run_product_counts` and its `FROM runs WHERE name = %s` lookup, and "
+     "`work_units.run_id`, which pipeline/intent/writer.py's "
+     "`create_work_unit` writes and `find_current_unit` filters on; also "
+     "`attempts.run_id`, selected by pipeline/registration/consumer.py's "
+     "`_COLUMNS`, and (new on this branch) the `run_id` "
+     "pipeline/registration/products.py's `add_*`/`update_*` wrappers now "
+     "thread onto every product row"),
+    ("109-run-mutation-functions.sql",
+     "`derived.create_run`/`derived.archive_run`, the only callers of which "
+     "are pipeline/operatorctl/actions.py's `create_run`/`archive_run` "
+     "(invoked from pipeline/operatorctl/main.py's `run create`/`run "
+     "archive` commands)"),
+    ("113-attempts-resource-usage.sql",
+     "`attempts.peak_rss_kb`/`attempts.cpu_seconds`, written by "
+     "observability/attempts.py's `mark_application_closed` from "
+     "pipeline/runtime/termination.py's `capture_resource_usage`, and read "
+     "by pipeline/operatorctl/actions.py's `run status` distribution query"),
+    # 114 and 117 are deliberately NOT in this floor. 114 granted
+    # `rapid_pipeline_write` raw UPDATE on `work_units`; 117, on this same
+    # branch, revokes that same grant, so pinning the floor to 114 would
+    # assert a deployment state this branch reverses. 117 itself is also
+    # excluded: a REVOKE creates no object this repository's SQL
+    # references, so it cannot satisfy this module's own derivation rule.
+    ("115-product-writers-run-id.sql",
+     "the `run_id_` parameter on `adddiffimage`/`addrefimage`/`addpsf`/"
+     "`updatediffimage`/`updaterefimage`/`updatepsf`, which "
+     "database/modules/utils/rapid_db.py's `add_refimage`/`add_diffimage`/"
+     "`add_psf`/`update_refimage`/`update_diffimage`/`update_psf` now pass "
+     "as a REQUIRED keyword-only `run_id` argument — a database lacking 115 "
+     "fails every registration call, not just one missing a column"),
+    ("116-attempts-cgroup-peak.sql",
+     "`attempts.cgroup_peak_bytes`, written by the same "
+     "`mark_application_closed` call as 113's columns, from "
+     "pipeline/runtime/termination.py's `capture_resource_usage` reading "
+     "`read_cgroup_peak_bytes`"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than
