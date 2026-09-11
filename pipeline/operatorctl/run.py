@@ -442,9 +442,36 @@ def register_run_audited(conn, idempotency_key, name, reason, dry_run=True,
 
     from pipeline.registration.scoped import run_scoped_registration
 
-    run, rows = run_scoped_registration(
-        conn, run_id_prefix=name, dry_run=dry_run,
-        records_bucket=records_bucket, s3_client=s3_client)
+    # UNDER `submission_role` ON AN APPLY, for the same reason `submit_run`
+    # and `_release_one` are -- THE SAME IDENTITY DEFECT, reached through a
+    # fourth entry point. Registration performs the PIPELINE's own work: it
+    # inserts product rows and advances each attempt's watermark with
+    # `UPDATE attempts`, and the operate tier holds only `rapid_read`:
+    #
+    #     has_table_privilege('rapid_operator', 'attempts', 'UPDATE') = false
+    #     has_table_privilege('rapid_admin',    'attempts', 'UPDATE') = true
+    #
+    # so every attempt failed with `permission denied for table attempts`
+    # at the watermark write -- found live on 2026-09-11 registering the
+    # acceptance run, 1,557 attempts in, having registered nothing.
+    #
+    # A DRY RUN STAYS ON THE OPERATE TIER. It writes nothing, so widening
+    # for it would hand the read-only rehearsal a write-capable identity
+    # for no reason -- and the rehearsal being unable to write is part of
+    # what makes it a rehearsal.
+    #
+    # The audit row below is written OUTSIDE the switch, so the ledger
+    # keeps naming the human, exactly as `release_dead_letters_audited`
+    # does.
+    if dry_run:
+        run, rows = run_scoped_registration(
+            conn, run_id_prefix=name, dry_run=dry_run,
+            records_bucket=records_bucket, s3_client=s3_client)
+    else:
+        with submission_role(conn):
+            run, rows = run_scoped_registration(
+                conn, run_id_prefix=name, dry_run=dry_run,
+                records_bucket=records_bucket, s3_client=s3_client)
 
     counts = run.as_dict()
     detail = {"run_id_prefix": name, "scope_size": len(rows), "counts": counts}

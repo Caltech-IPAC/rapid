@@ -1976,3 +1976,67 @@ class ReconcileStrandedAuditedTests(unittest.TestCase):
         self.assertEqual(calls, [501, 502],
                          "both candidates must be attempted despite the "
                          "first one's failure")
+
+
+class RegisterRunSubmissionRoleTests(unittest.TestCase):
+    """`run register --apply` registers under `submission_role`.
+
+    THE SAME IDENTITY DEFECT, fourth entry point. Registration performs the
+    pipeline's own work -- product inserts and `UPDATE attempts` for each
+    watermark -- and the operate tier holds only `rapid_read`, so every
+    attempt failed with `permission denied for table attempts` when this
+    was first run against the real database.
+
+    A dry run stays on the operate tier deliberately: it writes nothing,
+    and a rehearsal that cannot write is part of what makes it a rehearsal.
+    """
+
+    def _run(self, dry_run):
+        import contextlib
+
+        from pipeline.operatorctl import run as run_mod
+
+        events = []
+        seen = {}
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            events.append("enter")
+            try:
+                yield conn
+            finally:
+                events.append("exit")
+
+        class _Run:
+            def as_dict(self):
+                return {"registered": 0}
+
+        def fake_registration(conn, run_id_prefix=None, dry_run=True,
+                              records_bucket=None, s3_client=None):
+            # Recorded AT THE MOMENT of the call: that is the assertion.
+            seen["at_call"] = list(events)
+            return _Run(), []
+
+        import pipeline.registration.scoped as scoped_mod
+        with mock.patch.object(run_mod, "submission_role",
+                               fake_submission_role), \
+             mock.patch.object(scoped_mod, "run_scoped_registration",
+                               fake_registration), \
+             mock.patch.object(run_mod, "_replay_lookup",
+                               lambda *a, **k: None), \
+             mock.patch.object(run_mod, "record_external_action",
+                               lambda *a, **k: {"audit_id": 1}):
+            run_mod.register_run_audited(
+                object(), "key", "accept-20260911", "reason",
+                dry_run=dry_run, records_bucket="b", out=io.StringIO())
+        return seen, events
+
+    def test_an_apply_registers_inside_the_role_block(self):
+        seen, events = self._run(dry_run=False)
+        self.assertEqual(["enter"], seen["at_call"])
+        self.assertEqual(["enter", "exit"], events)
+
+    def test_a_dry_run_stays_on_the_operate_tier(self):
+        seen, events = self._run(dry_run=True)
+        self.assertEqual([], seen["at_call"])
+        self.assertEqual([], events)
