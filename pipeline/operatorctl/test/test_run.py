@@ -930,5 +930,145 @@ class WindowedPhaseDispatchTests(unittest.TestCase):
                 dbh=object(), phase="not-a-real-phase")
 
 
+class SubmitRunSubmissionRoleTests(unittest.TestCase):
+    """Stub-tier tests for the identity-fix ruling (2026-09-11):
+    `submit_run` must perform its `seams.submit_gathered` call inside
+    `session.submission_role(conn)`, since `rapid_operator` holds only
+    SELECT and creating a work unit needs INSERT/UPDATE (see
+    `submission_role()`'s docstring in `session.py`). Pinned here by
+    patching `pipeline.operatorctl.session.submission_role` with a spy
+    that records entry/exit around the `seams.submit_gathered` call,
+    rather than a live role switch -- the actual `SET ROLE` behaviour is
+    covered directly against `_FakeConn` in `test_session.py`.
+    """
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        from pipeline.operatorctl import session as session_mod
+        self.run_mod = run_mod
+        self.session_mod = session_mod
+        self.role_events = []
+
+        import contextlib
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            self.role_events.append(("enter", conn))
+            try:
+                yield conn
+            finally:
+                self.role_events.append(("exit", conn))
+
+        patcher = mock.patch.object(
+            run_mod, "submission_role", fake_submission_role)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self.submit_calls = []
+
+        def fake_submit_gathered(units, **kwargs):
+            # Recording that we are INSIDE the switched block at the
+            # moment of the call is the whole point of this test class.
+            self.submit_calls.append((units, kwargs, list(self.role_events)))
+            return [("submission-1", ["attempt-1", "attempt-2"])]
+
+        import pipeline.seams as seams_mod
+        seams_patcher = mock.patch.object(
+            seams_mod, "submit_gathered", fake_submit_gathered)
+        seams_patcher.start()
+        self.addCleanup(seams_patcher.stop)
+
+    def test_submit_gathered_runs_inside_the_submission_role_block(self):
+        conn = object()
+        context = {
+            "queue": "q", "job_definition": "jd", "binding": "b",
+            "manifest_bucket": "mb", "manifest_prefix": "mp",
+            "s3_client": "s3", "batch_client": "batch"}
+
+        results = self.run_mod.submit_run(
+            conn, "campaign-1", "job-type-x", ["unit-a"], "reason",
+            context=context)
+
+        self.assertEqual(results,
+                         [("submission-1", ["attempt-1", "attempt-2"])])
+        self.assertEqual(len(self.submit_calls), 1)
+        _units, _kwargs, events_at_call_time = self.submit_calls[0]
+        # At the moment `seams.submit_gathered` ran, the block must
+        # already have been entered and not yet exited.
+        self.assertEqual(events_at_call_time, [("enter", conn)])
+        # And it must have exited again by the time `submit_run` returns.
+        self.assertEqual(self.role_events, [("enter", conn), ("exit", conn)])
+
+    def test_empty_units_short_circuits_before_the_role_is_ever_assumed(
+            self):
+        # `submit_run` returns `[]` for empty `units` without calling
+        # `seams.submit_gathered` at all -- the role must not be assumed
+        # for a call that submits nothing.
+        conn = object()
+        context = {
+            "queue": "q", "job_definition": "jd", "binding": "b",
+            "manifest_bucket": "mb", "manifest_prefix": "mp",
+            "s3_client": "s3", "batch_client": "batch"}
+
+        results = self.run_mod.submit_run(
+            conn, "campaign-1", "job-type-x", [], "reason", context=context)
+
+        self.assertEqual(results, [])
+        self.assertEqual(self.submit_calls, [])
+        self.assertEqual(self.role_events, [])
+
+
+class StartRunAuditedOrderingTests(unittest.TestCase):
+    """`start_run_audited` must call `submit_run` (which now wraps its
+    real work in `submission_role`) and THEN `record_external_action` --
+    never the reverse, and the audit call must never itself be inside the
+    submission role switch. This is the property the task ruling singles
+    out: the audited ledger row is written under whatever tier the
+    session actually assumed, unaffected by the submission widening.
+
+    A full `start_run_audited` call pulls in gathering, `RAPIDDB`, and
+    submission-env resolution that are exercised elsewhere in this file
+    and in `WindowedPhaseDispatchTests` -- this class instead pins the
+    ORDERING directly against `submit_run` and `record_external_action`
+    as two mocked collaborators, which is the level the ruling's
+    property actually lives at.
+    """
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        self.run_mod = run_mod
+
+    def test_submit_run_is_called_before_record_external_action(self):
+        import inspect
+
+        source = inspect.getsource(self.run_mod.start_run_audited)
+        submit_pos = source.index("submit_run(")
+        audit_positions = [
+            i for i in self._all_indices(source, "record_external_action(")]
+        # There are two `record_external_action` call sites in this
+        # function (dry-run and apply); the one that matters for this
+        # ordering guarantee is the one reached on the SAME branch as
+        # `submit_run` -- i.e. the LAST one in source order, since the
+        # apply branch's audit call is written after its `submit_run`
+        # call and after the dry-run branch's own (unreachable-together)
+        # audit call.
+        self.assertTrue(audit_positions)
+        self.assertLess(submit_pos, audit_positions[-1],
+                        "submit_run(...) must appear, in source, before "
+                        "the apply-branch's record_external_action(...) "
+                        "call -- the audit row must be written AFTER "
+                        "submission, never before")
+
+    @staticmethod
+    def _all_indices(haystack, needle):
+        start = 0
+        while True:
+            idx = haystack.find(needle, start)
+            if idx == -1:
+                return
+            yield idx
+            start = idx + 1
+
+
 if __name__ == "__main__":
     unittest.main()

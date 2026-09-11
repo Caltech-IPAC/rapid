@@ -54,10 +54,12 @@ from pipeline.operatorctl.session import (_ASSUMED_ROLES,
                                           AGENT_OPERATOR_ROLE,
                                           OPERATOR_ROLE,
                                           BREAK_GLASS_ROLE,
+                                          SUBMISSION_ROLES,
                                           OperatorSessionError,
                                           break_glass_role,
                                           operator_credentials,
-                                          operator_session)
+                                          operator_session,
+                                          submission_role)
 from database.modules.utils.rapid_db_connect import (Credentials,
                                                      DBCredentialError)
 
@@ -454,6 +456,134 @@ class OperatorSessionAgainstAnAttributeRefusingConnectionTests(
         self.assertEqual(_set_role_calls(conn),
                          ["SET ROLE " + BREAK_GLASS_ROLE,
                           "SET ROLE " + OPERATOR_ROLE])
+
+
+class SubmissionRoleTests(unittest.TestCase):
+    """Stub-tier tests for `submission_role()` — the identity-fix ruling
+    (2026-09-11) that lets `run start --apply` perform the pipeline's own
+    submission INSERT without widening `rapid_operator` itself. See
+    `submission_role()`'s own docstring in `session.py` for the full
+    reasoning; this suite pins the three properties that must not
+    regress: the role actually switches (a different `current_user` while
+    inside the block), the operate tier is restored on exit — not a
+    hard-coded constant — and a login that can assume none of
+    `SUBMISSION_ROLES` raises `OperatorSessionError` naming every role it
+    tried, having issued each attempt through a SAVEPOINT so a rejected
+    first guess cannot poison the second.
+    """
+
+    def test_the_first_assumable_role_is_used_and_current_user_switches(
+            self):
+        conn = _FakeConn()
+        _ASSUMED_ROLES[id(conn)] = OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
+
+        with submission_role(conn) as yielded:
+            self.assertIs(yielded, conn)
+            self.assertEqual(_set_role_calls(conn),
+                             ["SET ROLE " + SUBMISSION_ROLES[0]])
+
+        # Restored to the tier `operator_session()` actually recorded —
+        # not a constant — on exit.
+        self.assertEqual(_set_role_calls(conn),
+                         ["SET ROLE " + SUBMISSION_ROLES[0],
+                          "SET ROLE " + OPERATOR_ROLE])
+
+    def test_restores_the_agent_tier_not_a_hard_coded_human_role(self):
+        """The restore must come from `_ASSUMED_ROLES`, never a constant
+        — an agent-tier session that widens for submission must narrow
+        back to the agent tier, not silently promote itself to human.
+        """
+        conn = _FakeConn()
+        _ASSUMED_ROLES[id(conn)] = AGENT_OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
+
+        with submission_role(conn):
+            pass
+
+        self.assertEqual(_set_role_calls(conn)[-1],
+                         "SET ROLE " + AGENT_OPERATOR_ROLE)
+
+    def test_a_session_missing_the_role_marker_is_treated_as_human(self):
+        """Same default `break_glass_role()` uses for a connection that
+        never went through `operator_session()` at all.
+        """
+        conn = _FakeConn()
+        self.assertNotIn(id(conn), _ASSUMED_ROLES)
+
+        with submission_role(conn):
+            pass
+
+        self.assertEqual(_set_role_calls(conn)[-1],
+                         "SET ROLE " + OPERATOR_ROLE)
+
+    def test_falls_through_to_the_second_role_when_the_first_is_refused(
+            self):
+        """Models a login that is a member of `rapid_orchestrator` but
+        not `rapid_admin` — the mirror image of the human login this
+        ruling was measured against, which is a member of `rapid_admin`
+        but not `rapid_orchestrator`. Neither name may be hard-coded.
+        """
+        conn = _FakeConn(failing_statements=[
+            ("SET ROLE " + SUBMISSION_ROLES[0], Exception("not a member"))])
+        _ASSUMED_ROLES[id(conn)] = OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
+
+        with submission_role(conn):
+            calls = _set_role_calls(conn)
+            self.assertEqual(calls,
+                             ["SET ROLE " + SUBMISSION_ROLES[0],
+                              "SET ROLE " + SUBMISSION_ROLES[1]])
+
+        # The failed first attempt must not have poisoned the connection:
+        # no bare `conn.rollback()` was needed to recover from it, because
+        # the attempt was wrapped in its own SAVEPOINT.
+        self.assertEqual(conn.rolled_back, 0)
+        rollback_calls = [c for c in conn.calls
+                          if c.startswith("ROLLBACK TO SAVEPOINT")]
+        self.assertEqual(len(rollback_calls), 1)
+
+    def test_no_assumable_role_raises_naming_every_role_tried(self):
+        conn = _FakeConn(failing_statements=[
+            (sql, Exception("not a member")) for sql in
+            ("SET ROLE " + r for r in SUBMISSION_ROLES)])
+        _ASSUMED_ROLES[id(conn)] = OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
+
+        with self.assertRaises(OperatorSessionError) as ctx:
+            with submission_role(conn):
+                self.fail("must not yield when no role can be assumed")
+
+        message = str(ctx.exception)
+        for role in SUBMISSION_ROLES:
+            self.assertIn(role, message)
+        # The failure must not have left the connection in an aborted
+        # transaction state that a bare `conn.rollback()` would be needed
+        # to clear — each attempt is its own SAVEPOINT.
+        self.assertEqual(conn.rolled_back, 0)
+
+    def test_does_not_widen_the_operate_tier_itself(self):
+        """Regression guard for the ruling's central constraint: the fix
+        must not be a wider grant on `rapid_operator`/`rapid_agent_
+        operator` — it must be a scoped, temporary switch. This is not
+        directly testable against a fake connection (no live grants
+        here), so it is pinned structurally: `operator_session()` must
+        still assume exactly `OPERATOR_ROLE` with no other statement
+        alongside it, i.e. `submission_role()` is a distinct, separate
+        assumption layered on top rather than a change to what
+        `operator_session()` itself assumes.
+        """
+        conn = _FakeConn()
+
+        def connect_fn(application_name, lane=None, credentials=None):
+            return conn
+
+        with unittest.mock.patch.dict("os.environ", {}, clear=True):
+            with operator_session(credentials=Credentials("x", "placeholder"),
+                                  connect_fn=connect_fn):
+                pass
+
+        self.assertEqual(_set_role_calls(conn), ["SET ROLE " + OPERATOR_ROLE])
 
 
 if __name__ == "__main__":

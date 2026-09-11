@@ -82,6 +82,15 @@ OPERATOR_ROLE = "rapid_operator"
 AGENT_OPERATOR_ROLE = "rapid_agent_operator"
 BREAK_GLASS_ROLE = "rapid_break_glass"
 
+# Tried in this order by `submission_role()` — see that function's docstring
+# for why a list rather than a single hard-coded role. `rapid_admin` comes
+# first because it is the tier the survey found the human login already
+# holds; `rapid_orchestrator` is the narrower, submission-only role a
+# login might hold instead without also being an admin. Neither name is
+# the human login's own — both are roles reached the same way the operate
+# tier itself is reached, by membership plus `SET ROLE`.
+SUBMISSION_ROLES = ("rapid_admin", "rapid_orchestrator")
+
 APPLICATION_NAME = "rapidctl"
 
 # The env var that selects which operate tier `operator_session()` assumes.
@@ -300,6 +309,101 @@ def break_glass_role(conn):
             raise OperatorSessionError(
                 "cannot assume %s from this session (%s)"
                 % (BREAK_GLASS_ROLE, exc)) from exc
+    try:
+        yield conn
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("SET ROLE " + assumed_role)
+
+
+@contextlib.contextmanager
+def submission_role(conn):
+    """Widen an open operator session to a submission-capable role for the
+    duration of the block, then restore whichever operate tier the session
+    actually assumed.
+
+    THE DEFECT THIS CLOSES. ``rapid_operator`` (and ``rapid_agent_operator``)
+    hold only ``rapid_read`` — SELECT, no writes — because the operate tier
+    exists to run read-mostly operator commands (``run status``, ``run
+    archive`` dry-runs, and so on) under an identity that cannot mutate
+    anything by accident. ``run start --apply`` broke that assumption: it
+    performs the pipeline's OWN submission work (inserting the row that
+    claims a work unit, per the docstring on ``pipeline.operatorctl.run.
+    submit_run``) from inside an ``operator_session()`` block, and hit
+    ``InsufficientPrivilege: permission denied for table work_units`` the
+    first time it ran against the real database (2026-09-11). The fix is
+    NOT to widen ``rapid_operator`` — that would make every operator
+    command able to write, including the read-only ones this tier exists
+    to keep read-only. The fix is this function: submission is the
+    pipeline's work, not the operator's, so it runs under a
+    submission-capable role for exactly the one call that needs it, and
+    the session narrows back to the operate tier immediately after.
+
+    WHY A ROLE SWITCH AND NOT A SEPARATE CONNECTION. The audit function
+    (``derived.write_mutation_audit``, migration 031:92-108) records the
+    actor as ``session_user`` — the LOGIN that opened the connection —
+    never ``current_user``, which is what ``SET ROLE`` changes. So the
+    same property `break_glass_role()` relies on holds here: switching
+    roles inside one session cannot disturb which login lands in the
+    audit ledger, and a person's own name keeps writing every audited row
+    a person caused, even though the submission INSERT in between ran
+    under a different current_user. A second connection would have had to
+    reconnect as something else entirely and lose that property outright.
+
+    WHY A LIST OF ROLES, TRIED IN ORDER, RATHER THAN ONE HARD-CODED NAME.
+    ``rapid_orchestrator`` is the narrower role built for exactly this
+    (submission, nothing wider) but the human login ``rusholme`` is not a
+    member of it — only of ``rapid_admin``, which happens to carry the
+    same ``rapid_pipeline_write`` grant. A future login might be the
+    other way around: a member of ``rapid_orchestrator`` and not
+    ``rapid_admin``. Hard-coding either name would work for one login and
+    fail the other with a misleading "not a member" error, so
+    ``SUBMISSION_ROLES`` is tried in order and the first the session can
+    actually assume wins — this asks Postgres what the login can do
+    rather than this module guessing from which operate tier it assumed.
+
+    WHY A SAVEPOINT AROUND EACH ATTEMPT. A failed `SET ROLE` aborts the
+    current transaction in Postgres — every statement after it raises
+    `InFailedSqlTransaction` until a rollback, so trying a second role
+    name after the first fails would itself fail, not because the second
+    role is unavailable but because the connection is already poisoned.
+    Each attempt therefore runs inside its own `SAVEPOINT`, released on
+    success or rolled back to (not `conn.rollback()`, which would also
+    discard whatever the caller's transaction had already done before
+    entering this block) on failure, so a rejected first guess never
+    contaminates the second attempt or anything the caller did earlier in
+    the same transaction.
+
+    Raises `OperatorSessionError` — never a raw psycopg2 error — naming
+    every role that was tried, if none can be assumed: the remedy is a
+    `GRANT <role> TO <login>` for one of `SUBMISSION_ROLES`, and the
+    message says so rather than surfacing a bare "permission denied"
+    the caller would have to interpret.
+
+    On exit, restores whichever operate tier `operator_session()` recorded
+    for this connection in `_ASSUMED_ROLES` — read back exactly as
+    `break_glass_role()` does, never hard-coded to a single tier — so a
+    submission elevation can never leak past the block it was requested
+    for, and a restore can never itself widen privilege.
+    """
+    assumed_role = _ASSUMED_ROLES.get(id(conn), OPERATOR_ROLE)
+    tried = []
+    for candidate in SUBMISSION_ROLES:
+        with conn.cursor() as cur:
+            cur.execute("SAVEPOINT submission_role_attempt")
+            try:
+                cur.execute("SET ROLE " + candidate)
+            except Exception as exc:               # noqa: BLE001 — re-typed
+                cur.execute("ROLLBACK TO SAVEPOINT submission_role_attempt")
+                tried.append("%s (%s)" % (candidate, exc))
+                continue
+            cur.execute("RELEASE SAVEPOINT submission_role_attempt")
+        break
+    else:
+        raise OperatorSessionError(
+            "cannot assume a submission-capable role: tried %s — grant "
+            "this login membership in one of %r to fix"
+            % ("; ".join(tried), SUBMISSION_ROLES))
     try:
         yield conn
     finally:
