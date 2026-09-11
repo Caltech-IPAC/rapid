@@ -1034,7 +1034,13 @@ class SubmitRunSubmissionRoleTests(unittest.TestCase):
         self.addCleanup(seams_patcher.stop)
 
     def test_submit_gathered_runs_inside_the_submission_role_block(self):
-        conn = object()
+        # `types.SimpleNamespace`, not a bare `object()`: `submit_run` now
+        # reads `conn.commit` (fix-txn-core, `protocol_commit=conn.commit`)
+        # to build the call this test inspects, even though the mocked
+        # `seams.submit_gathered` never invokes it. Identity is still all
+        # this double needs to provide -- `role_events`/`submit_calls`
+        # below assert against object identity, not attribute values.
+        conn = types.SimpleNamespace(commit=lambda: None)
         context = {
             "queue": "q", "job_definition": "jd", "binding": "b",
             "manifest_bucket": "mb", "manifest_prefix": "mp",
@@ -1071,6 +1077,182 @@ class SubmitRunSubmissionRoleTests(unittest.TestCase):
         self.assertEqual(results, [])
         self.assertEqual(self.submit_calls, [])
         self.assertEqual(self.role_events, [])
+
+
+class _CrashableConn:
+    """A fake connection recording durability the way a real one would.
+
+    `cursor()` returns a cursor whose `execute` appends `(sql, params)` to
+    `self.pending`; nothing reaches `self.durable` until `self.commit()`
+    runs. This is deliberately the ONLY thing this double does -- it does
+    NOT itself decide when to autocommit. Whether `commit()` gets called
+    after every statement (the bug) or only when `submit_units`'s
+    `protocol_commit` calls it (the fix) is entirely up to the REAL
+    `ConnectionExecutor` under test: its own `execute()` calls
+    `self._conn.commit()` itself when `autocommit_each=True` (see
+    `database/modules/utils/rapid_db_connect.py`), so this double just
+    needs to answer `commit()` truthfully, not reimplement the policy.
+    """
+
+    def __init__(self):
+        self.durable = []
+        self.pending = []
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    @property
+    def description(self):
+        return None
+
+    @property
+    def rowcount(self):
+        return 1
+
+    def fetchall(self):
+        return []
+
+    def execute(self, sql, params=None):
+        self.pending.append((sql, params))
+
+    def commit(self):
+        self.durable.extend(self.pending)
+        self.pending = []
+
+    def rollback(self):
+        self.pending = []
+
+    def close(self):
+        pass
+
+
+class SubmitRunTransactionBoundaryTests(unittest.TestCase):
+    """fix-txn-core, extended to the operatorctl submission path
+    (2026-09-11): `submit_run` used to build `ConnectionExecutor(conn)`
+    with the default `autocommit_each=True`, exactly the defect
+    `pipeline.operator.service._execute_factory`'s docstring already
+    describes and fixed for the VPO path (read it in full before touching
+    this test) -- every statement `seams.submit_units` issues through that
+    executor committed AS ITS OWN TRANSACTION, so the work-unit CAS UPDATE
+    and the `unit_events` INSERT it exists to pair with had no atomicity
+    between them.
+
+    This class drives `submit_run` through the REAL `ConnectionExecutor`
+    (only `seams.submit_gathered` is stubbed, standing in for a real
+    `submit_units` call issuing exactly those two statements in order) and
+    proves the property the docstring above claims: a crash between the
+    CAS UPDATE and the `unit_events` INSERT must leave NEITHER durable.
+    Before the fix, the CAS UPDATE survives the crash (autocommit) while
+    the INSERT does not -- a torn write. After the fix, both are still
+    `pending` when the crash hits, so closing the connection without a
+    commit (`conn.close()`, never reached mid-transaction, but standing in
+    for the real driver's rollback-on-close) leaves neither durable.
+    """
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        from pipeline.operatorctl import session as session_mod
+        self.run_mod = run_mod
+        self.context = {
+            "queue": "q", "job_definition": "jd", "binding": "b",
+            "manifest_bucket": "mb", "manifest_prefix": "mp",
+            "s3_client": "s3", "batch_client": "batch"}
+
+        import contextlib
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            yield conn
+
+        patcher = mock.patch.object(
+            run_mod, "submission_role", fake_submission_role)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_crash_between_the_cas_and_the_event_insert_leaves_neither_durable(
+            self):
+        conn = _CrashableConn()
+        # This test reads whichever `autocommit_each` `submit_run` itself
+        # actually passes to `ConnectionExecutor`, by observing durability
+        # after a simulated crash, rather than hard-coding an expectation
+        # that would just restate the fix instead of proving it.
+
+        # Stands in for `seams.submit_units`'s first two statements,
+        # issued through whatever `execute` `submit_run` actually
+        # constructed -- the real object under test.
+        def fake_submit_gathered_crash(units, execute, protocol_commit=None,
+                                       **kwargs):
+            execute("UPDATE work_units SET state = 'submitted' ...",
+                   ("wu-1",))
+            # Simulated crash: the process dies here, before the
+            # `unit_events` INSERT and before any closing commit.
+            raise RuntimeError("simulated crash")
+
+        import pipeline.seams as seams_mod
+        with mock.patch.object(seams_mod, "submit_gathered",
+                              fake_submit_gathered_crash):
+            with self.assertRaises(RuntimeError):
+                self.run_mod.submit_run(
+                    conn, "campaign-1", "job-type-x", ["unit-a"], "reason",
+                    context=self.context)
+
+        # THE ASSERTION. Under the bug (autocommit_each=True, the
+        # ConnectionExecutor default `submit_run` used to pass), the CAS
+        # UPDATE committed as its own transaction the instant `execute()`
+        # returned -- it is durable even though the crash happened one
+        # statement later. Under the fix, it is not: nothing commits
+        # until `protocol_commit` runs, which the crash pre-empted, so
+        # `conn.durable` must be empty.
+        self.assertEqual([], conn.durable,
+                         "the work-unit CAS UPDATE must not be durable "
+                         "when the crash pre-empts the closing commit -- "
+                         "a non-empty conn.durable here means the fix's "
+                         "autocommit_each=False did not reach the real "
+                         "executor `submit_run` constructs")
+
+    def test_protocol_commit_is_wired_so_a_full_pass_still_commits(self):
+        # The companion to the crash test above: `autocommit_each=False`
+        # with NO `protocol_commit` would turn the correctness bug into a
+        # data-loss bug (nothing would ever commit) -- `submit_gathered`'s
+        # docstring on `protocol_commit` and `submit_units`'s docstring
+        # (around its two commit boundaries) are why this argument is not
+        # optional garnish. A full, uninterrupted pass must still leave
+        # both statements durable.
+        conn = _CrashableConn()
+
+        # Stands in for `seams.submit_units`'s two statements, issued
+        # through whatever `execute`/`protocol_commit` `submit_run`
+        # actually constructed -- the real object under test.
+        def fake_submit_gathered(units, execute, protocol_commit=None,
+                                 **kwargs):
+            execute("UPDATE work_units SET state = 'submitted' ...",
+                   ("wu-1",))
+            execute("INSERT INTO unit_events ...", ("wu-1", "submitted"))
+            if protocol_commit is not None:
+                protocol_commit()
+            return [("submission-1", ["attempt-1"])]
+
+        import pipeline.seams as seams_mod
+        with mock.patch.object(seams_mod, "submit_gathered",
+                              fake_submit_gathered):
+            results = self.run_mod.submit_run(
+                conn, "campaign-1", "job-type-x", ["unit-a"], "reason",
+                context=self.context)
+
+        self.assertEqual(results, [("submission-1", ["attempt-1"])])
+        self.assertEqual(2, len(conn.durable),
+                         "both the CAS UPDATE and the unit_events INSERT "
+                         "must be durable after a full pass -- an empty "
+                         "or short conn.durable here means submit_run "
+                         "passed autocommit_each=False without also "
+                         "wiring protocol_commit, which would silently "
+                         "discard every submission")
 
 
 class StartRunAuditedOrderingTests(unittest.TestCase):
@@ -1184,3 +1366,514 @@ class ReleaseOneSubmissionRoleTests(unittest.TestCase):
                          "the transition must run INSIDE the widened role")
         self.assertEqual(events, ["enter", "exit"],
                          "and the role must be restored afterwards")
+
+
+# ---------------------------------------------------------------------------
+# `run reconcile-stranded` — the stranded-unit reconciler (Batch-discovery
+# release beyond `release-dead-letters`' reach). No AWS, no database: a
+# fake paginating Batch client and a fake conn/cursor pair that scripts the
+# two SELECTs `find_stranded_candidates` issues (array ids, then stranded
+# units), matching this file's stub-tier convention throughout.
+# ---------------------------------------------------------------------------
+class _FakePaginator:
+    def __init__(self, pages_by_key):
+        self._pages_by_key = pages_by_key
+
+    def paginate(self, arrayJobId=None, jobStatus=None):   # noqa: N803
+        return self._pages_by_key.get((arrayJobId, jobStatus), [])
+
+
+class _FakeBatchClient:
+    """A Batch client whose `list_jobs` pages are scripted per
+    `(arrayJobId, jobStatus)` key — the same paginator idiom
+    `_PartiallyRefusingBatchClient` in `test_batch.py` uses, keyed for
+    array/status instead of queue/status since `batch_child_fate` and
+    `wave_in_flight` both call `list_jobs(arrayJobId=..., jobStatus=...)`.
+
+    `pages_by_key[(array_job_id, status)]` is a list of pages, each
+    `{"jobSummaryList": [...]}` — an absent key means zero pages (no jobs
+    in that array/status), never an error, matching real `list_jobs`
+    behaviour for a status with no matches.
+    """
+
+    def __init__(self, pages_by_key):
+        self._pages_by_key = pages_by_key
+
+    def get_paginator(self, name):
+        assert name == "list_jobs"
+        return _FakePaginator(self._pages_by_key)
+
+
+def _job(job_id):
+    return {"jobId": job_id}
+
+
+class _StrandedFakeCursor:
+    """Routes on SQL text between the two SELECTs `find_stranded_candidates`
+    issues and whatever the caller (`reconcile_stranded_audited`) also
+    issues via `_replay_lookup`/`record_external_action` — those two go
+    through `contract.call_function`, which this fake does not intercept,
+    so `array_ids_rows`/`stranded_rows` cover only the two SELECTs this
+    module's own cursor calls issue directly.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, sql, params=None):
+        text = " ".join(sql.split())
+        self._conn.calls.append((text, params))
+        if "split_part(scheduler_job_id" in text:
+            self._rows = self._conn.array_ids_rows
+        elif "FROM work_units w" in text and "JOIN attempts a" in text:
+            self._rows = self._conn.stranded_rows
+        else:
+            raise AssertionError("unexpected statement: %s" % sql)
+
+    def fetchall(self):
+        return self._rows
+
+
+class _StrandedFakeConn:
+    """`array_ids_rows`/`stranded_rows` script the two SELECTs;
+    `replay_and_audit_script` scripts whatever `_replay_lookup` and
+    `record_external_action` read through `contract.call_function` —
+    patched directly in each test rather than modeled here, since those
+    two go through a `psycopg2`-shaped cursor this fake does not emulate
+    (see `ReleaseDeadLettersTests` for the same split in the existing
+    dead-letter tests).
+    """
+
+    def __init__(self, array_ids_rows, stranded_rows):
+        self.array_ids_rows = array_ids_rows
+        self.stranded_rows = stranded_rows
+        self.calls = []
+        self.committed = 0
+        self.rolled_back = 0
+
+    def cursor(self):
+        return _StrandedFakeCursor(self)
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        self.rolled_back += 1
+
+
+class BatchChildFateTests(unittest.TestCase):
+    def test_maps_terminal_children_to_their_status(self):
+        from pipeline.operatorctl import run as run_mod
+
+        client = _FakeBatchClient({
+            ("array-1", "SUCCEEDED"): [
+                {"jobSummaryList": [_job("array-1:0"), _job("array-1:1")]}],
+            ("array-1", "FAILED"): [
+                {"jobSummaryList": [_job("array-1:2")]}],
+        })
+        fate = run_mod.batch_child_fate(client, ["array-1"])
+        self.assertEqual(fate, {
+            "array-1:0": "SUCCEEDED",
+            "array-1:1": "SUCCEEDED",
+            "array-1:2": "FAILED",
+        })
+
+    def test_paginates_across_multiple_pages(self):
+        from pipeline.operatorctl import run as run_mod
+
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [
+                {"jobSummaryList": [_job("array-1:0")]},
+                {"jobSummaryList": [_job("array-1:1")]},
+            ],
+        })
+        fate = run_mod.batch_child_fate(client, ["array-1"])
+        self.assertEqual(fate, {"array-1:0": "FAILED", "array-1:1": "FAILED"})
+
+    def test_in_flight_children_are_simply_absent(self):
+        from pipeline.operatorctl import run as run_mod
+
+        client = _FakeBatchClient({})
+        fate = run_mod.batch_child_fate(client, ["array-1"])
+        self.assertEqual(fate, {})
+
+
+class ArrayJobIdsForRunTests(unittest.TestCase):
+    def test_derives_distinct_array_ids_from_the_database(self):
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",), ("array-2",)], stranded_rows=[])
+        ids = run_mod.array_job_ids_for_run(conn, "w9-ramp")
+        self.assertEqual(ids, ["array-1", "array-2"])
+        sql, params = conn.calls[0]
+        self.assertIn("split_part(scheduler_job_id", sql)
+        self.assertEqual(params, ["w9-ramp%"])
+
+
+class FindStrandedCandidatesTests(unittest.TestCase):
+    """The correctness rule, tested directly: candidate/exclusion outcomes
+    for each of the required cases, over a fake Batch client and a fake
+    database cursor -- no AWS, no Postgres.
+    """
+
+    def test_all_children_failed_no_successful_attempt_is_a_candidate(self):
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(501, "blocked", ["array-1:0"], False)])
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
+        })
+        candidates, excluded = run_mod.find_stranded_candidates(
+            conn, "w9-ramp", client)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["work_unit_id"], 501)
+        self.assertEqual(candidates[0]["state"], "blocked")
+        self.assertEqual(excluded, [])
+
+    def test_failed_child_with_a_successful_attempt_is_excluded(self):
+        # THE REVIEW QUESTION'S EXACT CASE: the application succeeded and
+        # published, then the container exited nonzero on teardown. Batch
+        # says FAILED; the attempt row says success; the unit must not be
+        # released back to READY.
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(64, "submitted", ["array-1:0"], True)])
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
+        })
+        candidates, excluded = run_mod.find_stranded_candidates(
+            conn, "w9-ramp", client)
+        self.assertEqual(candidates, [])
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(excluded[0]["work_unit_id"], 64)
+        self.assertEqual(excluded[0]["reason"], "successful_sibling_attempt")
+
+    def test_succeeded_child_is_excluded_even_with_no_successful_attempt(self):
+        # The retry case: Batch's own FAILED->SUCCEEDED retry means the
+        # child now reports SUCCEEDED even though no attempt row recorded
+        # success (the pipeline attempt row is for the earlier failed
+        # try). Must be excluded as batch_child_not_failed, not released.
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(1604, "blocked", ["array-1:0"], False)])
+        client = _FakeBatchClient({
+            ("array-1", "SUCCEEDED"): [
+                {"jobSummaryList": [_job("array-1:0")]}],
+        })
+        candidates, excluded = run_mod.find_stranded_candidates(
+            conn, "w9-ramp", client)
+        self.assertEqual(candidates, [])
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(excluded[0]["work_unit_id"], 1604)
+        self.assertEqual(excluded[0]["reason"], "batch_child_not_failed")
+        self.assertEqual(excluded[0]["scheduler_job_id"], "array-1:0")
+
+    def test_submitted_and_blocked_units_both_become_candidates(self):
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[
+                (10, "submitted", ["array-1:0"], False),
+                (11, "blocked", ["array-1:1"], False),
+            ])
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [
+                {"jobSummaryList": [_job("array-1:0"), _job("array-1:1")]}],
+        })
+        candidates, _excluded = run_mod.find_stranded_candidates(
+            conn, "w9-ramp", client)
+        states = {c["work_unit_id"]: c["state"] for c in candidates}
+        self.assertEqual(states, {10: "submitted", 11: "blocked"})
+
+
+class ReleaseStrandedOneSubmissionRoleTests(unittest.TestCase):
+    """`_release_stranded_one` must widen for its transition and must
+    transition from the CANDIDATE'S OWN state, exactly as
+    `ReleaseOneSubmissionRoleTests` proves for `_release_one` -- never a
+    raw UPDATE, always through `WorkUnitWriter.transition_unit`.
+    """
+
+    def test_transitions_from_the_candidate_s_own_state_inside_the_role(self):
+        import contextlib
+
+        from pipeline.operatorctl import run as run_mod
+
+        events = []
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            events.append("enter")
+            try:
+                yield conn
+            finally:
+                events.append("exit")
+
+        seen = {}
+
+        class _FakeWriter:
+            def __init__(self, execute):
+                pass
+
+            def transition_unit(self, unit_id, frm, to, writer=None,
+                                reason=None):
+                seen["at_call"] = list(events)
+                seen["unit_id"] = unit_id
+                seen["from_state"] = frm
+                seen["to_state"] = to
+
+        import pipeline.intent.writer as writer_mod
+        with mock.patch.object(run_mod, "submission_role",
+                               fake_submission_role), \
+             mock.patch.object(writer_mod, "WorkUnitWriter", _FakeWriter):
+            run_mod._release_stranded_one(
+                object(), {"work_unit_id": 1604, "state": "submitted"},
+                "reconcile")
+
+        self.assertEqual(seen["unit_id"], 1604)
+        self.assertEqual(seen["from_state"], writer_mod.SUBMITTED)
+        self.assertEqual(seen["to_state"], writer_mod.READY)
+        self.assertEqual(seen["at_call"], ["enter"],
+                         "the transition must run INSIDE the widened role")
+        self.assertEqual(events, ["enter", "exit"])
+
+    def test_blocked_candidate_transitions_from_blocked(self):
+        import contextlib
+
+        from pipeline.operatorctl import run as run_mod
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            yield conn
+
+        seen = {}
+
+        class _FakeWriter:
+            def __init__(self, execute):
+                pass
+
+            def transition_unit(self, unit_id, frm, to, writer=None,
+                                reason=None):
+                seen["from_state"] = frm
+
+        import pipeline.intent.writer as writer_mod
+        with mock.patch.object(run_mod, "submission_role",
+                               fake_submission_role), \
+             mock.patch.object(writer_mod, "WorkUnitWriter", _FakeWriter):
+            run_mod._release_stranded_one(
+                object(), {"work_unit_id": 252, "state": "blocked"},
+                "reconcile")
+
+        self.assertEqual(seen["from_state"], writer_mod.BLOCKED)
+
+
+class WaveSplitTests(unittest.TestCase):
+    def test_splits_into_waves_of_the_max_size(self):
+        from pipeline.operatorctl import run as run_mod
+
+        candidates = [{"work_unit_id": i} for i in range(10)]
+        waves = run_mod.wave_split(candidates, max_wave=4)
+        self.assertEqual([len(w) for w in waves], [4, 4, 2])
+        self.assertEqual(waves[0][0]["work_unit_id"], 0)
+        self.assertEqual(waves[-1][-1]["work_unit_id"], 9)
+
+    def test_default_wave_size_is_4000(self):
+        from pipeline.operatorctl import run as run_mod
+        self.assertEqual(run_mod.DEFAULT_WAVE_SIZE, 4000)
+
+    def test_empty_candidate_list_yields_no_waves(self):
+        from pipeline.operatorctl import run as run_mod
+        self.assertEqual(run_mod.wave_split([], max_wave=4), [])
+
+
+class WaveInFlightTests(unittest.TestCase):
+    def test_true_when_a_child_is_runnable_or_running(self):
+        from pipeline.operatorctl import run as run_mod
+
+        client = _FakeBatchClient({
+            ("array-1", "RUNNING"): [{"jobSummaryList": [_job("array-1:0")]}],
+        })
+        self.assertTrue(run_mod.wave_in_flight(client, ["array-1"]))
+
+    def test_false_when_nothing_is_runnable_or_running(self):
+        from pipeline.operatorctl import run as run_mod
+
+        client = _FakeBatchClient({})
+        self.assertFalse(run_mod.wave_in_flight(client, ["array-1"]))
+
+
+class ReconcileStrandedAuditedTests(unittest.TestCase):
+    """`reconcile_stranded_audited`'s own contract: a distinct action name,
+    the dry-run branch writing no transition, and the wave/drain machinery
+    being consulted between waves on a real (non-dry-run) release.
+    """
+
+    def _patch_replay_and_audit(self, replay_result, audit_result):
+        """`_replay_lookup`/`record_external_action` both go through
+        `contract.call_function`, which the `_StrandedFakeConn` cursor
+        does not emulate (see that class's docstring) -- patched directly
+        here, matching how `ReleaseDeadLettersTests` scripts them via
+        `conn.script` for the OTHER fake-conn shape; this reconciler's
+        fake conn scripts only the two SELECTs `find_stranded_candidates`
+        issues, so replay/audit are patched at the function level instead.
+        """
+        from pipeline.operatorctl import run as run_mod
+        patchers = [
+            mock.patch.object(run_mod, "_replay_lookup",
+                              return_value=replay_result),
+            mock.patch.object(run_mod, "record_external_action",
+                              return_value=audit_result),
+        ]
+        for p in patchers:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_dry_run_writes_no_transition(self):
+        from pipeline.operatorctl import run as run_mod
+
+        self._patch_replay_and_audit(
+            None, {"action": "run_reconcile_stranded", "dry_run": True,
+                   "replayed": False, "rows_affected": 0, "audit_id": 1})
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(501, "blocked", ["array-1:0"], False)])
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
+        })
+
+        with mock.patch.object(run_mod, "_release_stranded_one") as release:
+            result, scope = run_mod.reconcile_stranded_audited(
+                conn, "recon-key-1", "w9-ramp", "reconcile", client,
+                dry_run=True, out=_null_out())
+
+        release.assert_not_called()
+        self.assertEqual(result["rows_affected"], 0)
+        self.assertEqual(scope, "run:w9-ramp:reconcile-stranded")
+
+    def test_action_class_is_distinct_from_release_dead_letters(self):
+        from pipeline.operatorctl import run as run_mod
+
+        self._patch_replay_and_audit(
+            None, {"action": "run_reconcile_stranded", "dry_run": True,
+                   "replayed": False, "rows_affected": 0, "audit_id": 2})
+
+        conn = _StrandedFakeConn(array_ids_rows=[], stranded_rows=[])
+        client = _FakeBatchClient({})
+
+        with mock.patch.object(run_mod, "_replay_lookup") as replay_mock:
+            replay_mock.return_value = None
+            run_mod.reconcile_stranded_audited(
+                conn, "recon-key-2", "w9-ramp", "reconcile", client,
+                dry_run=True, out=_null_out())
+        replay_mock.assert_called_once()
+        action_class = replay_mock.call_args[0][2]
+        self.assertEqual(action_class, "run_reconcile_stranded")
+        self.assertNotEqual(action_class, "run_release_dead_letters")
+
+    def test_expected_state_mismatch_is_raised_before_any_release(self):
+        from pipeline.operatorctl import run as run_mod
+        from pipeline.operatorctl.contract import ExpectedStateMismatch
+
+        self._patch_replay_and_audit(None, None)
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(501, "blocked", ["array-1:0"], False)])
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
+        })
+
+        with mock.patch.object(run_mod, "record_external_action") as audit:
+            with self.assertRaises(ExpectedStateMismatch):
+                run_mod.reconcile_stranded_audited(
+                    conn, "recon-key-3", "w9-ramp", "reconcile", client,
+                    expected_state={"candidates": 5}, dry_run=True,
+                    out=_null_out())
+            audit.assert_not_called()
+
+    def test_drain_check_is_consulted_between_waves_on_a_real_release(self):
+        from pipeline.operatorctl import run as run_mod
+
+        self._patch_replay_and_audit(
+            None, {"action": "run_reconcile_stranded", "dry_run": False,
+                   "replayed": False, "rows_affected": 6, "audit_id": 3})
+
+        stranded_rows = [(i, "submitted", ["array-1:%d" % i], False)
+                         for i in range(6)]
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)], stranded_rows=stranded_rows)
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [
+                {"jobSummaryList": [_job("array-1:%d" % i)
+                                    for i in range(6)]}],
+        })
+
+        drain_calls = []
+
+        def fake_wave_in_flight(batch_client, array_job_ids):
+            drain_calls.append(list(array_job_ids))
+            return False
+
+        with mock.patch.object(run_mod, "_release_stranded_one"), \
+             mock.patch.object(run_mod, "wave_in_flight",
+                               fake_wave_in_flight):
+            run_mod.reconcile_stranded_audited(
+                conn, "recon-key-4", "w9-ramp", "reconcile", client,
+                dry_run=False, max_wave=2, out=_null_out())
+
+        # 6 candidates, max_wave=2 -> 3 waves -> drain consulted before
+        # waves 2 and 3 (never before the first wave).
+        self.assertEqual(len(drain_calls), 2)
+        self.assertEqual(drain_calls[0], ["array-1"])
+
+    def test_a_failed_candidate_does_not_abort_the_rest(self):
+        from pipeline.operatorctl import run as run_mod
+
+        self._patch_replay_and_audit(
+            None, {"action": "run_reconcile_stranded", "dry_run": False,
+                   "replayed": False, "rows_affected": 1, "audit_id": 4})
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[
+                (501, "blocked", ["array-1:0"], False),
+                (502, "submitted", ["array-1:1"], False),
+            ])
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [
+                {"jobSummaryList": [_job("array-1:0"), _job("array-1:1")]}],
+        })
+
+        calls = []
+
+        def fake_release(conn, candidate, reason):
+            calls.append(candidate["work_unit_id"])
+            if candidate["work_unit_id"] == 501:
+                raise RuntimeError("CAS miss")
+
+        with mock.patch.object(run_mod, "_release_stranded_one",
+                               fake_release), \
+             mock.patch.object(run_mod, "wave_in_flight",
+                               return_value=False):
+            run_mod.reconcile_stranded_audited(
+                conn, "recon-key-5", "w9-ramp", "reconcile", client,
+                dry_run=False, out=_null_out())
+
+        self.assertEqual(calls, [501, 502],
+                         "both candidates must be attempted despite the "
+                         "first one's failure")

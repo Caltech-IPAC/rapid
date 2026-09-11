@@ -254,6 +254,13 @@ def submit_run(conn, name, job_type, units, reason, context=None):
         return []
 
     with submission_role(conn):
+        # `autocommit_each=False` + `protocol_commit=conn.commit`: the
+        # same fix-txn-core fix `pipeline.operator.service._execute_
+        # factory` carries for the VPO path — read that docstring before
+        # touching this. Without both together this call site has the
+        # exact defect that fix repairs (four independently-committed
+        # writes with no atomicity across them).
+        executor = ConnectionExecutor(conn, autocommit_each=False)
         return seams.submit_gathered(
             units, job_type=job_type, queue=context["queue"],
             job_definition=context["job_definition"],
@@ -262,8 +269,9 @@ def submit_run(conn, name, job_type, units, reason, context=None):
             manifest_prefix=context["manifest_prefix"],
             s3_client=context["s3_client"],
             batch_client=context["batch_client"],
-            execute=ConnectionExecutor(conn).execute, run_id=name,
-            reason=reason, work_unit_run_id=name)
+            execute=executor.execute, run_id=name,
+            reason=reason, work_unit_run_id=name,
+            protocol_commit=conn.commit)
 
 
 def start_run_audited(conn, idempotency_key, name, phase, reason,
@@ -547,6 +555,335 @@ def release_dead_letters_audited(conn, idempotency_key, name, reason,
 
     result = record_external_action(
         conn, idempotency_key, "run_release_dead_letters", scope, reason,
+        expected_state=expected_state, dry_run=False,
+        rows_affected=len(released), detail=detail,
+        policy_citation=policy_citation)
+    return result, scope
+
+
+# ---------------------------------------------------------------------------
+# `run reconcile-stranded` — Batch-discovery release for units a campaign's
+# array children died on before ever reaching the dead-letter shape
+# `release-dead-letters` looks for (`w.blocked_reason =
+# 'application_failure:internal_error'`, `a.started_at IS NULL`): a child
+# that died at container start never wrote that row at all.
+#
+# THE CORRECTNESS RULE (live-data finding, 2026-09-11). Reconciling the
+# acceptance run's 7,380 array children against the database found Batch
+# child fate is NOT authoritative for pipeline success in EITHER direction:
+#
+#   * 1,604 units: Batch child SUCCEEDED, no successful attempt row — the
+#     child was RETRIED by Batch; an earlier try's failure is what the
+#     attempt row recorded, while a LATER try (a different Batch child,
+#     invisible to a query that only checks the one child a work unit's
+#     `scheduler_job_id` names) succeeded.
+#   * 64 units: Batch child FAILED, but a successful attempt row EXISTS —
+#     the application published its products and only the container's own
+#     teardown exited nonzero (verified live on one child: 3 Batch tries,
+#     all exit 70, `rapid_outcome=success, product_disposition=published`
+#     on the attempt row throughout).
+#
+# So Batch fate is the DISCOVERY mechanism (it finds candidates a query
+# scoped to `blocked_reason` cannot see), and the database's own attempt
+# rows are the AUTHORITY (they are what decides whether releasing is safe).
+# A unit qualifies only when BOTH hold: every Batch child of its attempts
+# reports FAILED, AND it has no attempt with `rapid_outcome = 'success'`.
+# Dropping the second half would release the 64-unit cell above — completed
+# work — back to READY, resubmitting something that already happened.
+#
+# The live candidate set under this rule was 2,664 units, in TWO source
+# states — 2,412 `submitted`, 252 `blocked` — not only `blocked` as
+# `release-dead-letters` assumes; `_TRANSITION_GRAPH` admits both
+# `(BLOCKED, READY)` and `(SUBMITTED, READY)` with no writer restriction
+# (`pipeline.intent.writer`), so both are ordinary forward edges this
+# module can drive through `WorkUnitWriter` exactly as `_release_one` does.
+# ---------------------------------------------------------------------------
+#: Batch's documented ceiling per `list_jobs` page is handled by the
+#: paginator; this is the reconciler's OWN wave ceiling — how many
+#: work units `wave_split` puts in one release wave — matching the
+#: `--array-size` ceiling AWS Batch itself imposes on one array submission,
+#: so a wave never asks the fleet to run more children than one array could
+#: ever hold in the first place.
+DEFAULT_WAVE_SIZE = 4000
+
+#: Batch states that mean a child has not yet reached a terminal outcome —
+#: the drain check waits for this set to be empty before the next wave
+#: releases, so two waves' worth of work never contends for the queue at
+#: once.
+_IN_FLIGHT_STATES = ("RUNNABLE", "RUNNING")
+
+
+def batch_child_fate(batch_client, array_job_ids):
+    """`{child_job_id: "SUCCEEDED"|"FAILED"}` for every terminal child of
+    every array in `array_job_ids`.
+
+    Uses `list_jobs(arrayJobId=..., jobStatus=...)` — the discovery call
+    shape confirmed live, 2026-09-11: `describe_jobs` on an array job
+    returns only that array's own rolled-up `statusSummary`, never a
+    per-child row, so listing each terminal status separately per array is
+    the only way to recover which child landed where. Paginated via the
+    SAME `get_paginator("list_jobs")` idiom `aws/terminate_batch_jobs.
+    list_jobs` and `pipeline.operatorctl.batch._list_all` already use for
+    this client — not reimplemented here, just applied per (array, status)
+    pair instead of per (queue, status).
+
+    `batch_client` is INJECTED, matching `placement_lines`'s own
+    `session_factory` and `_resolve_submission_env`'s `context["batch_
+    client"]`: this function issues no AWS call of its own construction,
+    so the stub tier drives it with no boto3 client at all.
+
+    A child reported neither SUCCEEDED nor FAILED (still in flight) is
+    simply absent from the returned mapping — callers that need "has this
+    array finished" ask that separately, via `waves_in_flight`, rather than
+    this function inventing a third value for "not terminal yet".
+    """
+    fate = {}
+    for array_job_id in array_job_ids:
+        for status in ("SUCCEEDED", "FAILED"):
+            paginator = batch_client.get_paginator("list_jobs")
+            for page in paginator.paginate(arrayJobId=array_job_id,
+                                           jobStatus=status):
+                for job in page["jobSummaryList"]:
+                    fate[job["jobId"]] = status
+    return fate
+
+
+_ARRAY_JOB_IDS_SQL = (
+    "SELECT DISTINCT split_part(scheduler_job_id, ':', 1)"
+    " FROM attempts"
+    " WHERE run_id LIKE %s AND scheduler_job_id IS NOT NULL"
+)
+
+
+def array_job_ids_for_run(conn, name):
+    """The distinct array job ids a run's attempts were submitted under,
+    read from `attempts.scheduler_job_id` (`<arrayJobId>:<childIndex>`,
+    one-to-one onto a Batch array child) — never a hand-kept file of ids,
+    so this works for any run the database has attempts for, not only ones
+    someone remembered to list somewhere.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_ARRAY_JOB_IDS_SQL, ["%s%%" % name])
+        return [r[0] for r in cur.fetchall() if r[0]]
+
+
+# `w.state IN ('submitted', 'blocked')`, not only 'blocked': the live
+# candidate set was 2,412 `submitted` units against 252 `blocked` — the
+# brief this module implements assumed all-`blocked` and live data said
+# otherwise, so both source states are read here, each candidate carrying
+# its OWN `state` so the release step below transitions it from wherever it
+# actually is, never a hard-coded `from_state`.
+_STRANDED_UNITS_SQL = (
+    "SELECT w.work_unit_id, w.state,"
+    "       array_agg(DISTINCT a.scheduler_job_id) FILTER"
+    "         (WHERE a.scheduler_job_id IS NOT NULL),"
+    "       bool_or(a.rapid_outcome = 'success')"
+    " FROM work_units w"
+    " JOIN attempts a ON a.work_unit_id = w.work_unit_id"
+    " WHERE a.run_id LIKE %s"
+    "   AND w.state IN ('submitted', 'blocked')"
+    " GROUP BY w.work_unit_id, w.state"
+    " ORDER BY w.work_unit_id"
+)
+
+
+def find_stranded_candidates(conn, name, batch_client):
+    """Candidates and exclusions for run `name`'s stranded-unit reconciler.
+
+    Returns `(candidates, excluded)`:
+
+    * `candidates` — one dict per releasable unit: `work_unit_id`, `state`
+      (its CURRENT state — `submitted` or `blocked` — so the release step
+      transitions from the right `from_state`), and `reason`.
+    * `excluded` — one dict per unit that had a Batch-FAILED sibling but
+      did NOT qualify, each carrying `work_unit_id` and a machine-readable
+      `reason`: `"successful_sibling_attempt"` (a `rapid_outcome='success'`
+      attempt exists — THE review question's exact case, this is the
+      check that stops a unit whose work actually completed from being
+      released) or `"batch_child_not_failed"` plus `scheduler_job_id`
+      (some Batch child of this unit's attempts is not FAILED — SUCCEEDED,
+      or still in flight; the retry case, 1,604 live instances of it).
+
+    Every unit read here has at least one non-NULL `scheduler_job_id`
+    (the SQL's JOIN + `FILTER` guarantee that); a unit with none is
+    invisible to Batch discovery entirely and is not returned in either
+    list — `release-dead-letters`' own candidate query is the path for a
+    unit that never reached Batch at all.
+    """
+    array_job_ids = array_job_ids_for_run(conn, name)
+    fate = batch_child_fate(batch_client, array_job_ids)
+
+    with conn.cursor() as cur:
+        cur.execute(_STRANDED_UNITS_SQL, ["%s%%" % name])
+        rows = cur.fetchall()
+
+    candidates = []
+    excluded = []
+    for work_unit_id, state, scheduler_job_ids, has_success in rows:
+        scheduler_job_ids = scheduler_job_ids or []
+        not_failed = [sid for sid in scheduler_job_ids
+                     if fate.get(sid) != "FAILED"]
+        if not_failed:
+            excluded.append({
+                "work_unit_id": work_unit_id,
+                "reason": "batch_child_not_failed",
+                "scheduler_job_id": not_failed[0],
+            })
+            continue
+        if has_success:
+            excluded.append({
+                "work_unit_id": work_unit_id,
+                "reason": "successful_sibling_attempt",
+            })
+            continue
+        candidates.append({
+            "work_unit_id": work_unit_id,
+            "state": state,
+            "reason": "all_batch_children_failed_no_successful_attempt",
+        })
+    return candidates, excluded
+
+
+def _release_stranded_one(conn, candidate, reason):
+    """`candidate["state"] -> READY` for one stranded candidate, through
+    `WorkUnitWriter` — the same shape `_release_one` uses for the
+    dead-letter path, generalized to take the FROM-state rather than
+    hard-coding `BLOCKED`, since a stranded candidate may currently be
+    `submitted` OR `blocked` (see `find_stranded_candidates`).
+
+    Runs under `submission_role`, for the identical reason `_release_one`
+    does: the transition goes through `derived.transition_work_unit`, and
+    the operate tier does not hold EXECUTE on it. `submission_role` is
+    imported at module scope so a function-local import cannot bypass the
+    module attribute the tests patch to spy on the switch.
+    """
+    from pipeline.intent.writer import (BLOCKED, READY, SUBMITTED,
+                                        WRITER_MUTATION_API, WorkUnitWriter)
+    from database.modules.utils.rapid_db_connect import ConnectionExecutor
+    writer = WorkUnitWriter(ConnectionExecutor(conn).execute)
+    from_state = BLOCKED if candidate["state"] == "blocked" else SUBMITTED
+    with submission_role(conn):
+        writer.transition_unit(candidate["work_unit_id"], from_state, READY,
+                               writer=WRITER_MUTATION_API, reason=reason)
+
+
+def wave_split(candidates, max_wave=DEFAULT_WAVE_SIZE):
+    """`candidates` split into waves of at most `max_wave` each, in order —
+    plain slicing, kept as its own function so a caller (and a test) can
+    assert wave BOUNDARIES without also driving a release or a drain check.
+    """
+    return [candidates[i:i + max_wave]
+            for i in range(0, len(candidates), max_wave)]
+
+
+def wave_in_flight(batch_client, array_job_ids):
+    """True if any child of `array_job_ids` is RUNNABLE or RUNNING.
+
+    The drain check between waves — its own injectable function, per the
+    brief, rather than folded into a release loop: a caller waiting for a
+    wave to drain calls this on a poll interval, and a test can assert it
+    is CONSULTED between waves without also faking a whole sleep loop.
+    Terminal-only states (SUCCEEDED/FAILED) and pre-runnable queueing
+    states (SUBMITTED/PENDING/STARTING) are deliberately not polled here —
+    STARTING is close enough to RUNNING that treating it as still in
+    flight would rarely change an operator's decision, but the two states
+    that unambiguously mean "occupying the fleet's compute right now" are
+    the ones this gate exists to wait out.
+    """
+    for array_job_id in array_job_ids:
+        for status in _IN_FLIGHT_STATES:
+            paginator = batch_client.get_paginator("list_jobs")
+            for page in paginator.paginate(arrayJobId=array_job_id,
+                                           jobStatus=status):
+                if page["jobSummaryList"]:
+                    return True
+    return False
+
+
+def reconcile_stranded_audited(conn, idempotency_key, name, reason,
+                               batch_client, expected_state=None,
+                               dry_run=True, policy_citation=None, out=None,
+                               max_wave=DEFAULT_WAVE_SIZE):
+    """Resolve stranded-unit candidates, (maybe) release them in waves, and
+    audit once, after — mirroring `release_dead_letters_audited`'s shape
+    (replay lookup, `expected_state` check, dry-run branch that prints
+    what it WOULD do, `record_external_action` after) under a DISTINCT
+    action name (`run_reconcile_stranded`) so its audit rows are never
+    confused with `run_release_dead_letters`'s.
+
+    `expected_state` is `{"candidates": n}`, checked BEFORE any release is
+    attempted, exactly like `release_dead_letters_audited`'s own check.
+    Per-candidate independence: one failure records its own outcome in
+    `detail["failures"]` and the loop continues, matching that function
+    and `d8_release_blocked.release_candidates` before it.
+    """
+    from pipeline.operatorctl.contract import ExpectedStateMismatch
+
+    out = out or sys.stdout
+    scope = "run:%s:reconcile-stranded" % name
+
+    replay = _replay_lookup(conn, idempotency_key, "run_reconcile_stranded",
+                            scope)
+    if replay is not None:
+        return replay, scope
+
+    candidates, excluded = find_stranded_candidates(conn, name, batch_client)
+
+    if expected_state is not None and "candidates" in expected_state:
+        if expected_state["candidates"] != len(candidates):
+            raise ExpectedStateMismatch(
+                "expected-state mismatch: caller expected %s candidate(s), "
+                "found %s" % (expected_state["candidates"], len(candidates)))
+
+    detail = {"run_id_prefix": name, "candidate_count": len(candidates),
+              "excluded_count": len(excluded), "excluded": excluded[:200]}
+
+    if dry_run:
+        for c in candidates:
+            print("[dry-run] would release work_unit_id=%s (from %s)"
+                 % (c["work_unit_id"], c["state"]), file=out)
+        for x in excluded:
+            print("[dry-run] excluding work_unit_id=%s: %s"
+                 % (x["work_unit_id"], x["reason"]), file=out)
+        result = record_external_action(
+            conn, idempotency_key, "run_reconcile_stranded", scope, reason,
+            expected_state=expected_state, dry_run=True, rows_affected=0,
+            detail=detail, policy_citation=policy_citation)
+        return result, scope
+
+    array_job_ids = array_job_ids_for_run(conn, name)
+    released = []
+    failures = []
+    for wave_index, wave in enumerate(wave_split(candidates, max_wave)):
+        if wave_index > 0 and wave_in_flight(batch_client, array_job_ids):
+            print("wave %d: prior wave still has children in flight; "
+                 "stopping before releasing further waves" % wave_index,
+                 file=out)
+            for candidate in wave:
+                failures.append({"work_unit_id": candidate["work_unit_id"],
+                                 "error": "prior wave not drained"})
+            continue
+        for candidate in wave:
+            try:
+                _release_stranded_one(conn, candidate, reason)
+            except Exception as exc:                  # noqa: BLE001
+                conn.rollback()
+                failures.append({"work_unit_id": candidate["work_unit_id"],
+                                 "error": str(exc)})
+                print("FAILED to release work_unit_id=%s: %s"
+                     % (candidate["work_unit_id"], exc), file=out)
+                continue
+            conn.commit()
+            released.append(candidate["work_unit_id"])
+            print("released work_unit_id=%s (from %s)"
+                 % (candidate["work_unit_id"], candidate["state"]), file=out)
+
+    if failures:
+        detail["failures"] = failures
+    detail["released_work_unit_ids"] = released[:200]
+
+    result = record_external_action(
+        conn, idempotency_key, "run_reconcile_stranded", scope, reason,
         expected_state=expected_state, dry_run=False,
         rows_affected=len(released), detail=detail,
         policy_citation=policy_citation)
