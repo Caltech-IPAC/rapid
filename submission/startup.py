@@ -40,14 +40,11 @@ folding them in would give every child of one array a different
 configuration digest for identical configuration.
 """
 
-import dataclasses
 import hashlib
 import json
 import logging
 import os
 from typing import Any, Mapping
-
-from .manifest import Manifest, ProcessingUnit
 
 logger = logging.getLogger(__name__)
 
@@ -170,120 +167,3 @@ def configuration_digest(parameters: Mapping[str, str]) -> str:
                            sort_keys=True, separators=(",", ":"),
                            ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-@dataclasses.dataclass(frozen=True)
-class JobContext:
-    """Everything a starting job resolved about itself.
-
-    What the pipeline code reads instead of poking at the environment and
-    Parameter Store from a dozen places.
-    """
-
-    batch_id: str
-    array_index: int
-    unit: ProcessingUnit
-    parameters: dict[str, str]
-    config_digest: str
-    manifest_uri: str
-    manifest_checksum: str
-
-    def parameter(self, name: str, default: str | None = None) -> str:
-        """Read one configuration parameter.
-
-        Raises
-        ------
-        KeyError
-            If the parameter is absent and no default was given —
-            a missing configuration value is a deployment fault.
-        """
-        if name in self.parameters:
-            return self.parameters[name]
-        if default is not None:
-            return default
-        raise KeyError(
-            f"parameter {name!r} is not in the pipeline parameter tree "
-            f"(read {len(self.parameters)} parameters)")
-
-
-def resolve_job_context(environ: Mapping[str, str] | None = None,
-                        manifest: Manifest | None = None,
-                        manifest_loader: Any = None,
-                        parameters: Mapping[str, str] | None = None,
-                        ssm_client: Any = None,
-                        path: str = PIPELINE_PARAMETER_PATH) -> JobContext:
-    """The startup sequence: identifiers, parameters, digest, unit.
-
-    Every external dependency has an injection point, so the whole
-    sequence runs in a unit test with a dict for the environment, a
-    Manifest in memory, and a fake SSM client.
-
-    Parameters
-    ----------
-    environ : mapping, optional
-        Defaults to ``os.environ``.
-    manifest : Manifest, optional
-        Pre-loaded manifest. If absent, `manifest_loader` fetches it from
-        ``RAPID_MANIFEST_URI``.
-    manifest_loader : callable, optional
-        ``uri -> bytes``; typically ``S3ManifestStore.get``.
-    parameters : mapping, optional
-        Pre-fetched configuration. If absent, the tree is read.
-    ssm_client : object, optional
-        SSM client for the parameter read.
-
-    Raises
-    ------
-    ParameterFetchError
-        Configuration unreadable.
-    ValueError
-        A required identifier is missing, or the manifest does not match
-        the checksum the submitter recorded.
-    """
-    env = os.environ if environ is None else environ
-
-    raw_index = env.get(ENV_ARRAY_INDEX)
-    # A plain (non-array) job has no index; it is the single-unit batch
-    # case, and index 0 is its unit by construction.
-    array_index = int(raw_index) if raw_index is not None else 0
-
-    if manifest is None:
-        uri = env.get(ENV_MANIFEST_URI)
-        if not uri:
-            raise ValueError(
-                f"{ENV_MANIFEST_URI} is not set; the job cannot resolve which "
-                "processing unit it is")
-        if manifest_loader is None:
-            raise ValueError(
-                "no manifest and no manifest_loader; cannot fetch "
-                f"{uri}")
-        manifest = Manifest.from_json(manifest_loader(uri).decode("utf-8"))
-
-    expected_checksum = env.get(ENV_MANIFEST_CHECKSUM)
-    if expected_checksum and manifest.checksum() != expected_checksum:
-        # The submitter recorded a checksum; a mismatch means this job is
-        # reading a different manifest than the one that sized its array,
-        # so its index binding cannot be trusted.
-        raise ValueError(
-            f"manifest checksum mismatch: job expected {expected_checksum}, "
-            f"read {manifest.checksum()}")
-
-    unit = manifest.unit_for_index(array_index)
-
-    if parameters is None:
-        parameters = fetch_parameters(path=path, client=ssm_client)
-    parameters = dict(parameters)
-
-    digest = configuration_digest(parameters)
-    logger.info("job context: batch=%s index=%d unit=%s config_digest=%s",
-                manifest.batch_id, array_index, unit.key, digest)
-
-    return JobContext(
-        batch_id=str(manifest.batch_id or env.get(ENV_BATCH_ID, "")),
-        array_index=array_index,
-        unit=unit,
-        parameters=parameters,
-        config_digest=digest,
-        manifest_uri=env.get(ENV_MANIFEST_URI, ""),
-        manifest_checksum=manifest.checksum(),
-    )
