@@ -760,25 +760,40 @@ def _cmd_run_status(conn, args, out):
         for row in breakdown:
             print("    %-28s %s" % (row["lifecycle_state"], row["count"]),
                   file=out)
-    if walltime:
+    # D7's resource usage prints in the walltime panel but is NOT gated on
+    # walltime having rows. The two measure different things at different
+    # grains: walltime comes from `attempt_stages`, one row per stage that
+    # actually ran, while peak RSS and CPU seconds come from `attempts`
+    # itself, read once from rusage at terminal. A run whose attempts died
+    # before any stage completed — which is exactly the run someone is most
+    # likely to be staring at `run status` for — has NO stage rows and may
+    # still have perfectly good rusage for every attempt.
+    #
+    # Nesting the second loop inside `if walltime:` made that case print
+    # nothing at all, silently: not "n=0", not an empty panel, no line. It
+    # looked like the columns were never populated. Found by review on
+    # 2026-09-11, the same day the columns shipped, so no one had yet been
+    # misled by it.
+    #
+    # The heading is printed by whichever panel has something to say, once.
+    have_usage = any(row["n"] for row in resource_usage)
+    if walltime or have_usage:
         print("", file=out)
         print("  walltime by stage (ms; min/p50/p90/max, n):", file=out)
-        for row in walltime:
-            print("    %-20s %8s %8s %8s %8s  (n=%s)" % (
-                row["stage_name"], row["min_ms"], row["p50_ms"],
-                row["p90_ms"], row["max_ms"], row["n"]), file=out)
-        # D7: per-job resource usage joins the walltime panel rather than
-        # growing a second one. Rows only print for a metric with at least
-        # one non-NULL attempt (n=0 means every attempt in this run predates
-        # the columns, or every rusage read failed — nothing to show either
-        # way).
-        for row in resource_usage:
-            if not row["n"]:
-                continue
-            unit = "KB" if row["metric"] == "peak_rss_kb" else "s"
-            print("    %-20s %8s %8s %8s %8s  (n=%s) %s" % (
-                row["metric"], row["min_v"], row["p50_v"],
-                row["p90_v"], row["max_v"], row["n"], unit), file=out)
+    for row in walltime:
+        print("    %-20s %8s %8s %8s %8s  (n=%s)" % (
+            row["stage_name"], row["min_ms"], row["p50_ms"],
+            row["p90_ms"], row["max_ms"], row["n"]), file=out)
+    # A metric with n=0 stays hidden: every attempt in this run either
+    # predates the columns or had its rusage read fail, and there is
+    # nothing to show either way.
+    for row in resource_usage:
+        if not row["n"]:
+            continue
+        unit = "KB" if row["metric"] == "peak_rss_kb" else "s"
+        print("    %-20s %8s %8s %8s %8s  (n=%s) %s" % (
+            row["metric"], row["min_v"], row["p50_v"],
+            row["p90_v"], row["max_v"], row["n"], unit), file=out)
 
     if args.placement:
         if not args.queue:
