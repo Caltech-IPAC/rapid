@@ -483,8 +483,20 @@ def unit_events_for_work_unit(conn, work_unit_id):
 #     (see `_dead_lettered_pairs` in `pipeline.test.live_w9_ramp`) and so is
 #     not caught by the first disjunct at all; it needs naming explicitly or
 #     it is invisible to a status tally built only from the first clause.
+#
+# The `terminal%` LIKE pattern is a literal percent, doubled to `terminal%%`
+# below. This constant is only ever spliced into `_RUN_ATTEMPT_TALLY`, which
+# IS executed with a parameter (`run_id LIKE %s`) -- psycopg2 scans the
+# whole query string for `%`-placeholders whenever ANY parameters are
+# supplied, so an unescaped literal `%` is parsed as the start of one. A
+# single positional parameter then meets a query psycopg2 thinks needs two,
+# raising `IndexError: tuple index out of range` from inside `cur.execute`
+# -- not a SQL error, so it looks nothing like a query bug at the call site.
+# `test_run.py` unescapes this back to a single `%` before handing it to
+# SQLite, which has no `%`-placeholder convention at all and would
+# otherwise treat a doubled `%%` as two literal percent characters.
 _RUN_FAILURE_PREDICATE = (
-    "((lifecycle_state LIKE 'terminal%' AND rapid_outcome IS DISTINCT FROM "
+    "((lifecycle_state LIKE 'terminal%%' AND rapid_outcome IS DISTINCT FROM "
     "'success') OR lifecycle_state = 'missing_or_contradictory')")
 
 # `run status`'s tally: total attempts, failures (the predicate above), and

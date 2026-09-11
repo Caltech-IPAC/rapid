@@ -33,6 +33,7 @@ chain reaches `pipeline.operatorctl.contract.call_function`, which needs
 `psycopg2.Error` to exist as an exception class at call time).
 """
 
+import re
 import sqlite3
 import sys
 import types
@@ -116,6 +117,15 @@ class _FakeConn:
 # through the comparison. This is a real evaluation of the SQL text
 # `actions.py` ships, not a Python reimplementation of the predicate that
 # could silently drift from what is actually sent to the database.
+#
+# `_RUN_FAILURE_PREDICATE`'s `terminal%%` is psycopg2-escaped (doubled,
+# because the ONLY place this constant is used in production splices it
+# into a query executed WITH a parameter, where psycopg2 treats a bare `%`
+# as the start of a placeholder). SQLite has no such convention -- it would
+# read `%%` as two literal percent characters and match nothing -- so the
+# doubling is undone here before the text reaches SQLite. This keeps the
+# test exercising the real LIKE semantics (`terminal%` as "any suffix")
+# rather than silently drifting to a different, SQLite-only meaning.
 def _count_failures(rows):
     """`rows` is a list of (lifecycle_state, rapid_outcome) pairs. Returns
     how many the real predicate text in `actions._RUN_FAILURE_PREDICATE`
@@ -125,8 +135,8 @@ def _count_failures(rows):
     conn.execute(
         "CREATE TABLE attempts (lifecycle_state TEXT, rapid_outcome TEXT)")
     conn.executemany("INSERT INTO attempts VALUES (?, ?)", rows)
-    sql = ("SELECT count(*) FROM attempts WHERE "
-          + actions._RUN_FAILURE_PREDICATE)
+    predicate = actions._RUN_FAILURE_PREDICATE.replace("%%", "%")
+    sql = "SELECT count(*) FROM attempts WHERE " + predicate
     return conn.execute(sql).fetchone()[0]
 
 
@@ -174,6 +184,155 @@ class FailurePredicateTests(unittest.TestCase):
             ("submitted", None),                        # not a failure
         ]
         self.assertEqual(_count_failures(rows), 3)
+
+
+# ---------------------------------------------------------------------------
+# THE psycopg2-ESCAPING REGRESSION GUARD.
+# ---------------------------------------------------------------------------
+# The sci-c `run status` defect: `_RUN_FAILURE_PREDICATE` embedded the SQL
+# literal `terminal%`, spliced into `_RUN_ATTEMPT_TALLY`, which IS executed
+# with a parameter (`run_id LIKE %s`). psycopg2 scans the ENTIRE query
+# string for `%`-placeholders whenever any parameters are supplied at all --
+# not just inside the part the caller thinks of as "the placeholder" -- so
+# the bare `%` in `terminal%` was read as the start of a second placeholder.
+# `run_attempt_tally` passes exactly one parameter, so psycopg2's internal
+# substitution over a 2-placeholder-shaped query against a 1-tuple raises
+# `IndexError: tuple index out of range` from inside `cur.execute` -- not a
+# SQL syntax error, so it does not look like a query-text bug at the call
+# site, and the SQLite-based `FailurePredicateTests` above cannot see it at
+# all: SQLite has no `%`-placeholder convention, so a stray `%` is just a
+# LIKE wildcard there regardless of how many parameters are bound.
+#
+# Two layers, per the task's own menu:
+#
+#   * `PsycopgEscapingTextInvariantTests` -- a cheap, honest text-level
+#     check: every literal `%` in a query constant that is executed WITH
+#     parameters must be doubled. This is the same rule a human reviewer
+#     would apply, made mechanical.
+#   * `PsycopgPlaceholderCountingCursorTests` -- exercises the real code
+#     path (`run_attempt_tally` -> `_rows` -> `cur.execute`) through a fake
+#     cursor that replicates psycopg2's OWN placeholder-counting contract
+#     (documented and verified against the installed psycopg2 2.9.12: `%%`
+#     is a literal percent, every other `%` starts a placeholder, and
+#     `execute` raises `IndexError` when the placeholder count and the
+#     parameter count disagree) rather than psycopg2's stub in this test
+#     module's preamble, which only records `(sql, params)` and does no
+#     substitution at all -- that stub is what let this bug ship covered
+#     by tests in the first place, since every OTHER test in this file
+#     that calls `run_attempt_tally` etc. goes through `_FakeCursor` too.
+class _RealPsycopg2SubstitutionCursor:
+    """A cursor whose `execute` replicates psycopg2's actual `%`-handling,
+    not a permissive stub. Built directly from psycopg2's documented
+    contract (`%s` positional placeholders, `%%` an escaped literal
+    percent) and confirmed against the installed psycopg2 2.9.12: any
+    unescaped `%` that is not part of a `%s` token is what the C extension
+    treats as a second placeholder, and a params tuple shorter than the
+    placeholder count raises `IndexError`, not a SQL-syntax error --
+    exactly the live traceback this test is guarding against.
+
+    Matches `actions._rows`'s real contract (columns from `description`,
+    rows from `fetchall()` as tuples) -- the same shape `_RowsFakeCursor`
+    below uses, duplicated here rather than forward-referenced since this
+    class is defined earlier in the file.
+    """
+
+    _TOKEN_RE = re.compile(r"%%|%s|%")
+
+    def __init__(self, conn, columns, rows):
+        self._conn = conn
+        self._columns = columns
+        self._rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, sql, params=None):
+        params = () if params is None else params
+        placeholders = 0
+        for token in self._TOKEN_RE.findall(sql):
+            if token == "%%":
+                continue  # escaped literal percent -- not a placeholder
+            placeholders += 1  # "%s", or a bare stray "%" (the bug)
+        # This is the exact mechanism of the live failure: psycopg2 walks
+        # the placeholder positions against `params` by index, and an
+        # extra placeholder (from a stray `%`) makes it read past the end
+        # of the tuple.
+        if placeholders != len(params):
+            raise IndexError("tuple index out of range")
+        self._conn.calls.append((" ".join(sql.split()), params))
+
+    @property
+    def description(self):
+        return [(c,) for c in self._columns]
+
+    def fetchall(self):
+        return self._rows
+
+
+class _RealPsycopg2SubstitutionConn:
+    """`columns`/`rows` describe the single scripted result `run_attempt_
+    tally` reads back through `_rows`; `calls` records every
+    `(sql, params)` pair `execute` saw, matching `_FakeConn`'s own
+    `calls` convention.
+    """
+
+    def __init__(self, columns, rows):
+        self._columns = columns
+        self._rows = rows
+        self.calls = []
+
+    def cursor(self):
+        return _RealPsycopg2SubstitutionCursor(self, self._columns,
+                                               self._rows)
+
+
+class PsycopgEscapingTextInvariantTests(unittest.TestCase):
+    """Every literal `%` in a query constant executed WITH parameters must
+    be doubled -- the cheap, mechanical form of the same rule.
+    """
+
+    def test_run_failure_predicate_has_no_bare_percent(self):
+        # The regression itself: `terminal%` (one percent) is what broke
+        # `run_attempt_tally`; `terminal%%` is correct.
+        self.assertIn("terminal%%", actions._RUN_FAILURE_PREDICATE)
+        self.assertNotRegex(
+            actions._RUN_FAILURE_PREDICATE, r"(?<!%)%(?!%)",
+            "a bare (undoubled) literal percent here collides with "
+            "psycopg2's own %s-placeholder scanning the moment this text "
+            "is spliced into a query executed with parameters, exactly "
+            "as _RUN_ATTEMPT_TALLY is")
+
+    def test_run_attempt_tally_has_exactly_one_placeholder(self):
+        # `run_attempt_tally` passes exactly one parameter
+        # (`_run_prefix_pattern(name)`); the query text must ask for
+        # exactly one, counting %%-escaped percents as non-placeholders.
+        tokens = _RealPsycopg2SubstitutionCursor._TOKEN_RE.findall(
+            actions._RUN_ATTEMPT_TALLY)
+        placeholder_count = sum(1 for t in tokens if t != "%%")
+        self.assertEqual(placeholder_count, 1, (
+            "_RUN_ATTEMPT_TALLY must contain exactly one psycopg2 "
+            "placeholder -- a stray unescaped literal % (from the "
+            "embedded _RUN_FAILURE_PREDICATE) would raise IndexError "
+            "against the single parameter run_attempt_tally actually "
+            "passes"))
+
+
+class PsycopgPlaceholderCountingCursorTests(unittest.TestCase):
+    """`run_attempt_tally` through a cursor that actually counts
+    placeholders the way psycopg2 does -- this is the test that fails
+    against the unescaped predicate and passes against the fix.
+    """
+
+    def test_run_attempt_tally_does_not_raise_indexerror(self):
+        conn = _RealPsycopg2SubstitutionConn(
+            columns=["total", "failures"], rows=[(5, 2)])
+        result = actions.run_attempt_tally(conn, "w9-ramp-science-18")
+        self.assertEqual(result, {"total": 5, "failures": 2})
+        sql, params = conn.calls[0]
+        self.assertEqual(params, ("w9-ramp-science-18%",))
 
 
 # ---------------------------------------------------------------------------
