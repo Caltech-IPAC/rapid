@@ -119,10 +119,35 @@ fi
 # `sort` because brace-free globbing is already lexical here and the stream
 # is zero-padded to three digits throughout, so lexical order IS numeric
 # order; the explicit sort states the dependence rather than relying on it.
+# DATA MIGRATIONS ARE SKIPPED, AND NAMED HERE RATHER THAN DETECTED. A few
+# files in the stream act on production rows rather than on the schema, and
+# they are written to REFUSE when their premise is absent — which on an empty
+# database is always. 106 aborts with "manifest gbtds-sim/g0001/... not found;
+# the premise this migration was written against no longer holds", exactly as
+# designed, and 107 demotes rows that a fresh database does not have.
+#
+# There is no marker in the files to detect this from, so the list is
+# explicit: a guess would silently skip a schema migration someone later
+# wrote in a shape this heuristic mistook for data. Adding to it should mean
+# reading the file and deciding, which is the point.
+#
+# This surfaced only when the glob above was fixed; before that the loop
+# stopped at 099 and never reached either file.
+SKIP_DATA_MIGRATIONS="106-supersede-g0001-l2file-admissions.sql
+107-demote-g0001-leftover-l2files.sql"
+
 applied=0
+skipped=0
 for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9][0-9]-*.sql 2>/dev/null | sort); do
     [ -e "$f" ] || { echo "BRIEF-B-APPLY: FAIL exit=2 (no migration files matched)"; exit 2; }
     fn=$(basename "$f")
+    case "$SKIP_DATA_MIGRATIONS" in
+        *"$fn"*)
+            skipped=$((skipped + 1))
+            echo "BRIEF-B-APPLY-SKIP: $fn (data migration; no schema effect)"
+            continue
+            ;;
+    esac
     if psql -v ON_ERROR_STOP=1 -f "$f" >>"$LOG" 2>&1; then
         applied=$((applied + 1))
     else
@@ -135,7 +160,7 @@ for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9][0-9]-*.sql 2>/dev/null | sort); do
         "INSERT INTO schema_migrations (filename) VALUES ('$fn')
          ON CONFLICT DO NOTHING" >>"$LOG" 2>&1
 done
-echo "BRIEF-B-APPLY: PASS exit=0 ($applied migrations applied and recorded)"
+echo "BRIEF-B-APPLY: PASS exit=0 ($applied migrations applied and recorded, $skipped data migration(s) skipped)"
 
 recorded=$(psql -tAc "SELECT count(*) FROM schema_migrations" 2>>"$LOG")
 echo "BRIEF-B-SCHEMA-MIGRATIONS: $recorded rows recorded"
