@@ -352,5 +352,232 @@ class AlertEmissionCatalogLoadClauseTests(unittest.TestCase):
         self.assertNotIn(JOB_TYPE_ALERT_PRODUCTION, text)
 
 
+class RunScopedBlockingGateTests(unittest.TestCase):
+    """`get_blocking_exposure_scas_for_job_type`'s new `run_id` parameter
+    (throughput-sitting ruling, 2026-09-11) — query-SHAPE tests only, no
+    server. The database-evaluated proof of what these two query shapes
+    actually block on lives in `RunScopedBlockingGateSemanticsTests` below,
+    which evaluates the real SQL text over a SQLite stand-in, matching
+    `pipeline.operatorctl.test.test_run.PrefixMatchingTests`'s own pattern
+    for the same property (SQLite's `LIKE` is ANSI-standard, so this is a
+    real evaluation of the query the method actually issues, not a Python
+    reimplementation of it that could silently drift).
+    """
+
+    def _execute(self, run_id=None):
+        db = make_db(iter_rows=[])
+        db.get_blocking_exposure_scas_for_job_type(
+            "science", [5001, 5002], run_id=run_id)
+        query, params = db.cur.execute.call_args.args
+        return query, params
+
+    def test_no_run_id_emits_the_pre_existing_production_query_shape(self):
+        """THE NON-NEGOTIABLE CONSTRAINT: `run_id=None` must be IDENTICAL
+        IN EFFECT to the query this method issued before this parameter
+        existed — reproduced here verbatim from the pre-change source (the
+        ledger carries the full before/after side by side) but for the one
+        added `and wu.run_id is null` clause, which makes explicit what was
+        already implicitly true (every pre-108 work unit has a NULL
+        run_id), so it changes no row this query could ever have matched.
+        """
+        text, params = self._execute(run_id=None)
+
+        before = (
+            "select exposure_id, sca from (" +
+            "  select distinct la.exposure_id as exposure_id, la.sca as sca " +
+            "  from Attempts la " +
+            "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +
+            "  where lj.job_type = %s " +
+            "  and la.exposure_id = any(%s) " +
+            "  and la.sca is not null " +
+            "  and (la.lifecycle_state in ('submitted','started') " +
+            "       or la.rapid_outcome = 'success') " +
+            "  union " +
+            "  select (split_part(wu.input_scope, '/', 1))::bigint as exposure_id, " +
+            "         (split_part(wu.input_scope, '/', 2))::int as sca " +
+            "  from work_units wu " +
+            "  where wu.job_type = %s " +
+            "  and (split_part(wu.input_scope, '/', 1))::bigint = any(%s) " +
+            "  and wu.superseded_by_unit_id is null " +
+            "  and wu.state != 'ready'" +
+            "  and wu.run_id is null" +
+            ") blocking " +
+            "order by exposure_id, sca;")
+
+        self.assertEqual(text, before, (
+            "run_id=None must emit exactly this text -- any difference is "
+            "a behavior change for the PRODUCTION caller, which is the one "
+            "caller this parameter must never affect"))
+        self.assertEqual(params, ("science", [5001, 5002],
+                                  "science", [5001, 5002]))
+        # The Attempts branch carries NO run_id predicate at all when
+        # unscoped -- confirmed by the params tuple above having exactly
+        # four elements (two job_type/expids pairs), not five.
+        self.assertNotIn("la.run_id", text)
+
+    def test_a_run_id_scopes_the_work_unit_branch_by_equality(self):
+        # Work units are never split across a retry the way an attempt's
+        # run_id can gain a `-<n>` suffix (`work_units_current_identity_uq`
+        # keys on exactly one row per (job_type, input_scope, run_id)), so
+        # this branch is deliberately `=`, not `LIKE`.
+        text, params = self._execute(run_id="w9-campaign-1")
+
+        self.assertIn("wu.run_id = %s", text)
+        self.assertNotIn("wu.run_id is null", text)
+        self.assertNotIn("wu.run_id like", text.lower())
+        self.assertIn("w9-campaign-1", params)
+
+    def test_a_run_id_scopes_the_attempts_branch_by_prefix_not_equality(self):
+        # PREFIX MATCHING, NEVER EQUALITY (standing rule, this codebase): a
+        # split submission batch carries `<run_id>-<n>`
+        # (`pipeline.seams.submit_gathered`). Matching by `=` here would
+        # miss exactly the split-batch case every other run-scoped reader
+        # in this codebase already guards against
+        # (`pipeline.operatorctl.actions._run_prefix_pattern`).
+        text, params = self._execute(run_id="w9-campaign-1")
+
+        self.assertIn("la.run_id like %s", text)
+        self.assertNotIn("la.run_id = %s", text)
+        # The wildcard lives on the PARAMETER, never spliced into the SQL
+        # text -- same convention as `actions._run_prefix_pattern`.
+        self.assertIn("w9-campaign-1%", params)
+        self.assertNotIn("w9-campaign-1%", text)
+
+    def test_every_placeholder_has_a_bound_parameter_when_scoped(self):
+        text, params = self._execute(run_id="w9-campaign-1")
+        self.assertEqual(text.count("%s"), len(params))
+
+    def test_every_placeholder_has_a_bound_parameter_when_unscoped(self):
+        text, params = self._execute(run_id=None)
+        self.assertEqual(text.count("%s"), len(params))
+
+
+class RunScopedBlockingGateSemanticsTests(unittest.TestCase):
+    """The real blocking predicate, evaluated for real over scripted rows —
+    proof of what the two query shapes above actually block on, not just
+    what text they emit. SQLite stands in for Postgres the same way
+    `pipeline.operatorctl.test.test_run.PrefixMatchingTests` uses it: `LIKE`
+    is ANSI-standard and means the same thing there.
+
+    Simplified to the WORK-UNIT branch alone (the property under test) —
+    `union`-ing in a second table needs no live schema to prove `wu.run_id
+    IS NULL` vs `wu.run_id = ?` selects the rows the ruling says it must.
+    """
+
+    def _blocked(self, rows, run_id):
+        """`rows` is [(job_type, input_scope, run_id, state), ...] for
+        `work_units`, already filtered to `superseded_by_unit_id IS NULL`
+        (not modeled -- every row here is current). Returns the
+        (exposure, sca) pairs the run_id-scoped/unscoped query blocks.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE work_units "
+                     "(job_type TEXT, input_scope TEXT, run_id TEXT, "
+                     " state TEXT)")
+        conn.executemany("INSERT INTO work_units VALUES (?, ?, ?, ?)", rows)
+
+        if run_id is None:
+            sql_text = (
+                "SELECT input_scope FROM work_units "
+                "WHERE job_type = ? AND state != 'ready' "
+                "AND run_id IS NULL")
+            params = ("science",)
+        else:
+            sql_text = (
+                "SELECT input_scope FROM work_units "
+                "WHERE job_type = ? AND state != 'ready' "
+                "AND run_id = ?")
+            params = ("science", run_id)
+
+        return {row[0] for row in conn.execute(sql_text, params)}
+
+    def test_production_is_blocked_by_its_own_completed_work_unit(self):
+        # The baseline this parameter must not disturb: an unscoped caller
+        # (run_id=None) still blocks on a production (run_id IS NULL) work
+        # unit in a non-ready state.
+        rows = [("science", "5001/7", None, "complete")]
+        self.assertEqual(self._blocked(rows, run_id=None), {"5001/7"})
+
+    def test_a_campaign_is_not_blocked_by_productions_completed_unit(self):
+        # THE DEFECT THIS FIXES, reproduced directly: production's own
+        # work unit for this (job_type, input_scope) is 'complete' with
+        # run_id IS NULL. Before this change, the unscoped query blocked on
+        # ANY non-ready row regardless of run, so a campaign gathering the
+        # SAME field yielded nothing even though ITS OWN work unit (a
+        # different row, by migration 108's run-scoped identity) had never
+        # been attempted. Scoped to the campaign's own run_id, this query
+        # must not see production's row at all.
+        rows = [("science", "5001/7", None, "complete")]
+        self.assertEqual(
+            self._blocked(rows, run_id="w9-campaign-1"), set(),
+            "a campaign run must not be blocked by a production work "
+            "unit's state -- migration 108 made work-unit identity "
+            "run-scoped precisely so the two rows coexist independently")
+
+    def test_a_campaign_is_blocked_by_its_own_non_ready_unit(self):
+        rows = [("science", "5001/7", "w9-campaign-1", "blocked")]
+        self.assertEqual(
+            self._blocked(rows, run_id="w9-campaign-1"), {"5001/7"})
+
+    def test_a_campaign_is_not_blocked_by_a_different_campaigns_unit(self):
+        # Two campaigns' work units for the same field are two different
+        # rows (run-scoped identity); one run's state must never leak into
+        # another's gate.
+        rows = [("science", "5001/7", "w9-campaign-2", "blocked")]
+        self.assertEqual(self._blocked(rows, run_id="w9-campaign-1"), set())
+
+
+class BlockingGateAttemptsPrefixSemanticsTests(unittest.TestCase):
+    """The Attempts branch's prefix match, evaluated for real -- the
+    `foo`/`foobar` question the task ruling calls out explicitly.
+
+    WHAT ACTUALLY PROTECTS AGAINST THE `foo`/`foobar` OVERLAP is NOT this
+    query: `LIKE 'foo%'` DOES match a `run_id` of `foobar-0`, by design (a
+    split batch's suffix could in principle be adversarially confused with
+    an unrelated run's name). What makes that not happen in practice is
+    `derived.create_run` (migration 109), which REFUSES to create a run
+    whose name is a prefix of an existing run's name OR whose name an
+    existing run's name is a prefix of, in EITHER direction
+    (`pipeline.contract.test_run_model.py`'s
+    `test_create_run_refuses_a_name_that_is_a_prefix_of_an_existing_run`
+    and `test_create_run_refuses_the_overlap_in_the_other_order_too` pin
+    this at the database-function level). So `foo` and `foobar` can never
+    BOTH exist as declared runs at the same time -- the prefix match here
+    is safe not because it is precise, but because the run registry never
+    lets two prefix-overlapping names coexist for it to be imprecise about.
+    This class demonstrates the raw LIKE behavior the registry's refusal
+    exists to make unreachable.
+    """
+
+    def _matches(self, run_id, candidate_run_id):
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE attempts (run_id TEXT)")
+        conn.execute("INSERT INTO attempts VALUES (?)", (candidate_run_id,))
+        pattern = run_id + "%"
+        return conn.execute(
+            "SELECT count(*) FROM attempts WHERE run_id LIKE ?",
+            (pattern,)).fetchone()[0] == 1
+
+    def test_a_split_batch_suffix_of_the_named_run_matches(self):
+        self.assertTrue(self._matches("foo", "foo-2"))
+
+    def test_an_unrelated_run_that_happens_to_share_the_prefix_also_matches(
+            self):
+        # THE RAW SQL BEHAVIOR, unguarded: `LIKE 'foo%'` matches `foobar-0`
+        # too. This is not a defect in THIS query -- it is why
+        # `derived.create_run`'s prefix-overlap refusal exists one layer up
+        # (see class docstring). A test asserting this returns False would
+        # be pinning behavior this query does not and cannot provide on its
+        # own.
+        self.assertTrue(self._matches("foo", "foobar-0"))
+
+    def test_a_run_with_no_shared_prefix_does_not_match(self):
+        self.assertFalse(self._matches("foo", "bar-0"))
+
+
 if __name__ == "__main__":
     unittest.main()

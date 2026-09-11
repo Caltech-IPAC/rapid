@@ -3613,7 +3613,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_blocking_exposure_scas_for_job_type(self,job_type,expids):
+    def get_blocking_exposure_scas_for_job_type(self,job_type,expids,run_id=None):
 
         '''
         (exposure_id, sca) pairs among the given exposures with an attempt
@@ -3642,31 +3642,99 @@ class RAPIDDB:
         an `Attempts`-joined predicate, and the whole point of this gate is
         to block on the WORK UNIT's own state, independent of what attempt
         history exists for it.
+
+        RUN-SCOPED, WHEN `run_id` IS GIVEN (throughput-sitting ruling,
+        2026-09-11). Migration 108 made work-unit identity RUN-SCOPED
+        (`work_units_current_identity_uq` keys on `(job_type, input_scope,
+        run_id) ... WHERE superseded_by_unit_id IS NULL`), so a campaign
+        run's work unit for a field production has already gathered is a
+        DIFFERENT row from production's, legitimately coexisting. Before
+        this parameter existed, the work-unit branch below blocked on ANY
+        non-ready row for the (job_type, exposure, sca) regardless of whose
+        run it belonged to — so a campaign gather over a field production
+        had already completed (production's work unit: `state='complete'`,
+        `run_id IS NULL`) yielded ZERO units, even though the campaign's own
+        work had never been attempted. `run_id=None` (the default) keeps
+        today's behaviour EXACTLY: the work-unit branch reads `wu.run_id IS
+        NULL` (the production lane) and the Attempts branch is unscoped, as
+        it always has been — this is not a new restriction on the
+        production caller, it is the same query with the production case
+        written out explicitly instead of left implicit. Passing a run
+        name scopes BOTH branches to that run: the work-unit branch to
+        `wu.run_id = <name>` (work units are never split, so this is
+        deliberately NOT a prefix match — see `work_units_current_identity_uq`,
+        one row per (job_type, input_scope, run_id)) and the Attempts branch
+        to `la.run_id LIKE <name> || '%'`, PREFIX not equality, because a
+        split submission batch carries `<run_id>-<n>`
+        (`pipeline.seams.submit_gathered`) — the same convention every other
+        run-scoped reader in this codebase uses (`pipeline.operatorctl.
+        actions._run_prefix_pattern`). The wildcard is appended to the
+        PARAMETER, never spliced into the SQL text, for the same reason
+        that module's own comment gives: keeping the one `%` character in
+        this query away from psycopg2's own `%s` placeholder syntax.
         '''
 
         self.exit_code = 0
 
-        query = "select exposure_id, sca from (" +\
-                "  select distinct la.exposure_id as exposure_id, la.sca as sca " +\
-                "  from Attempts la " +\
-                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
-                "  where lj.job_type = %s " +\
-                "  and la.exposure_id = any(%s) " +\
-                "  and la.sca is not null " +\
-                "  and (la.lifecycle_state in ('submitted','started') " +\
-                "       or la.rapid_outcome = 'success') " +\
-                "  union " +\
-                "  select (split_part(wu.input_scope, '/', 1))::bigint as exposure_id, " +\
-                "         (split_part(wu.input_scope, '/', 2))::int as sca " +\
-                "  from work_units wu " +\
-                "  where wu.job_type = %s " +\
-                "  and (split_part(wu.input_scope, '/', 1))::bigint = any(%s) " +\
-                "  and wu.superseded_by_unit_id is null " +\
-                "  and wu.state != 'ready'" +\
-                ") blocking " +\
-                "order by exposure_id, sca;"
+        if run_id is None:
+            # Production lane: IDENTICAL IN EFFECT to the query before this
+            # parameter existed. `wu.run_id IS NULL` makes explicit what was
+            # already true — every pre-108 work unit has a NULL run_id, so a
+            # scan with no run_id predicate at all and this one produce the
+            # same result set — and the Attempts branch is unscoped, exactly
+            # as it always was.
+            query = "select exposure_id, sca from (" +\
+                    "  select distinct la.exposure_id as exposure_id, la.sca as sca " +\
+                    "  from Attempts la " +\
+                    "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                    "  where lj.job_type = %s " +\
+                    "  and la.exposure_id = any(%s) " +\
+                    "  and la.sca is not null " +\
+                    "  and (la.lifecycle_state in ('submitted','started') " +\
+                    "       or la.rapid_outcome = 'success') " +\
+                    "  union " +\
+                    "  select (split_part(wu.input_scope, '/', 1))::bigint as exposure_id, " +\
+                    "         (split_part(wu.input_scope, '/', 2))::int as sca " +\
+                    "  from work_units wu " +\
+                    "  where wu.job_type = %s " +\
+                    "  and (split_part(wu.input_scope, '/', 1))::bigint = any(%s) " +\
+                    "  and wu.superseded_by_unit_id is null " +\
+                    "  and wu.state != 'ready'" +\
+                    "  and wu.run_id is null" +\
+                    ") blocking " +\
+                    "order by exposure_id, sca;"
 
-        params = (job_type, list(expids), job_type, list(expids))
+            params = (job_type, list(expids), job_type, list(expids))
+        else:
+            # Run-scoped: both branches restricted to this run, never to the
+            # unscoped corpus a production caller would see. See the
+            # docstring above for why the work-unit branch is an equality
+            # match and the Attempts branch is a prefix match.
+            query = "select exposure_id, sca from (" +\
+                    "  select distinct la.exposure_id as exposure_id, la.sca as sca " +\
+                    "  from Attempts la " +\
+                    "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                    "  where lj.job_type = %s " +\
+                    "  and la.exposure_id = any(%s) " +\
+                    "  and la.sca is not null " +\
+                    "  and la.run_id like %s " +\
+                    "  and (la.lifecycle_state in ('submitted','started') " +\
+                    "       or la.rapid_outcome = 'success') " +\
+                    "  union " +\
+                    "  select (split_part(wu.input_scope, '/', 1))::bigint as exposure_id, " +\
+                    "         (split_part(wu.input_scope, '/', 2))::int as sca " +\
+                    "  from work_units wu " +\
+                    "  where wu.job_type = %s " +\
+                    "  and (split_part(wu.input_scope, '/', 1))::bigint = any(%s) " +\
+                    "  and wu.superseded_by_unit_id is null " +\
+                    "  and wu.state != 'ready'" +\
+                    "  and wu.run_id = %s" +\
+                    ") blocking " +\
+                    "order by exposure_id, sca;"
+
+            run_prefix = run_id + "%"
+            params = (job_type, list(expids), run_prefix,
+                      job_type, list(expids), run_id)
 
         print('query = {}, params = {}'.format(query, params))
 

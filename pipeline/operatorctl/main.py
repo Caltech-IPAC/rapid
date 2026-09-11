@@ -251,19 +251,45 @@ def build_parser():
     run_start.add_argument("--name", required=True,
                            help="the run to submit under -- becomes the "
                                 "run_id (or its prefix, if gathering "
-                                "splits into more than one batch)")
+                                "splits into more than one batch), and, "
+                                "for reference/science, the resubmission "
+                                "gate's run scope -- this run is blocked "
+                                "only by its own prior work, never by "
+                                "production's or another run's")
     run_start.add_argument("--phase", required=True,
                            choices=("catalog-load", "crossmatch",
-                                    "statistics", "merge-dedup"),
+                                    "statistics", "merge-dedup",
+                                    "reference", "science"),
                            help="which job type to gather and submit. "
-                                "reference/science are deliberately NOT "
-                                "offered here -- see the ledger for why "
-                                "tonight's implementation is scoped to "
-                                "the four post-DB-chain phases")
+                                "reference/science need --window-start/"
+                                "--window-end (and, for reference, a "
+                                "working submission environment -- see "
+                                "the ledger for the run-scoped resubmission-"
+                                "gate fix that makes gathering for them "
+                                "under a campaign run actually yield units)")
     run_start.add_argument("--proc-date", default=None,
                            help="processing date for catalog-load/"
                                 "crossmatch (YYYYMMDD); required by those "
-                                "two gatherers, ignored by the other two")
+                                "two gatherers, ignored by the other four")
+    run_start.add_argument(
+        "--window-start", default=None, metavar="'YYYY-MM-DD HH:MM:SS'",
+        help="observation window start for reference/science -- required "
+             "by those two phases, ignored by the other four. Same shape "
+             "as live_w9_ramp's W9_START/W9_END; converted through "
+             "pipeline.operator.gathering.mjd_window, not reimplemented "
+             "here")
+    run_start.add_argument(
+        "--window-end", default=None, metavar="'YYYY-MM-DD HH:MM:SS'",
+        help="observation window end for reference/science -- required by "
+             "those two phases, ignored by the other four")
+    run_start.add_argument(
+        "--fids", type=int, nargs="+", default=None, metavar="FID",
+        help="filter ids to gather for reference/science (fid 8 is W146); "
+             "ignored by the other four phases. THIS SELECTS FILTERS, NOT "
+             "FIELDS -- gather_science_units/gather_reference_units have "
+             "no field-level scoping at all, so a gather CANNOT be "
+             "narrowed to a handful of fields by any argument this command "
+             "offers. Default (omitted) is every filter")
     run_start.add_argument("--cap", type=int, default=None,
                            help="bound on units submitted; default is "
                                 "everything the gatherer returns")
@@ -698,7 +724,9 @@ def _cmd_run_start(conn, args, out):
         result, scope = start_run_audited(
             conn, key, args.name, args.phase, args.reason,
             proc_date=args.proc_date, cap=args.cap, dry_run=not args.apply,
-            policy_citation=args.policy_citation, out=out)
+            policy_citation=args.policy_citation, out=out,
+            window_start=args.window_start, window_end=args.window_end,
+            fids=args.fids)
     except RunStartEnvironmentError as exc:
         print("rapidctl: REFUSED — %s" % exc, file=sys.stderr)
         return EXIT_USAGE

@@ -37,6 +37,7 @@ import sqlite3
 import sys
 import types
 import unittest
+from unittest import mock
 
 if "boto3" not in sys.modules:
     try:
@@ -375,6 +376,183 @@ class ReleaseDeadLettersTests(unittest.TestCase):
 def _null_out():
     import io
     return io.StringIO()
+
+
+# ---------------------------------------------------------------------------
+# `run start --phase reference/science` (throughput-sitting ruling,
+# 2026-09-11): `gather_for_run` dispatches the two MJD-windowed phases to
+# the right gatherer with the right window, distinct from the four
+# post-DB-chain phases' `_phase_table()` dispatch. Tested against
+# `gather_for_run` directly, with `submission.gathering`'s two windowed
+# gatherers replaced by fakes that record their call -- no database, no
+# AWS, matching this file's own stub-tier convention throughout.
+# ---------------------------------------------------------------------------
+class WindowedPhaseDispatchTests(unittest.TestCase):
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        from submission import gathering
+
+        self.run_mod = run_mod
+        self.calls = []
+
+        def fake_reference(handle, start, end, start_mjdobs, end_mjdobs,
+                           min_images_to_coadd, s3_client, job_bucket,
+                           run_id, fids=None, run_scope=None):
+            self.calls.append({
+                "gatherer": "reference", "start": start, "end": end,
+                "start_mjdobs": start_mjdobs, "end_mjdobs": end_mjdobs,
+                "min_images_to_coadd": min_images_to_coadd,
+                "s3_client": s3_client, "job_bucket": job_bucket,
+                "run_id": run_id, "fids": fids, "run_scope": run_scope})
+            return iter(())
+
+        def fake_science(handle, start, end, start_mjdobs, end_mjdobs,
+                         min_images_to_coadd, fids=None,
+                         make_references=False, run_scope=None):
+            self.calls.append({
+                "gatherer": "science", "start": start, "end": end,
+                "start_mjdobs": start_mjdobs, "end_mjdobs": end_mjdobs,
+                "min_images_to_coadd": min_images_to_coadd,
+                "fids": fids, "make_references": make_references,
+                "run_scope": run_scope})
+            return iter(())
+
+        patcher_ref = mock.patch.object(
+            gathering, "gather_reference_units", fake_reference)
+        patcher_sci = mock.patch.object(
+            gathering, "gather_science_units", fake_science)
+        patcher_ref.start()
+        patcher_sci.start()
+        self.addCleanup(patcher_ref.stop)
+        self.addCleanup(patcher_sci.stop)
+
+    def _window(self, start_mjd=61600.0, end_mjd=61700.0, min_coadd=3):
+        return ("2027-10-01 00:00:00", "2027-10-08 00:00:00",
+               start_mjd, end_mjd, min_coadd)
+
+    def test_phase_reference_dispatches_to_gather_reference_units(self):
+        from submission import routes
+
+        job_type, units = self.run_mod.gather_for_run(
+            dbh=object(), phase="reference", window=self._window(),
+            run_name="w9-campaign-1", s3_client="fake-s3",
+            job_bucket="fake-bucket")
+
+        self.assertEqual(list(units), [])
+        self.assertEqual(job_type, routes.JOB_TYPE_REFERENCE_IMAGE)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0]["gatherer"], "reference")
+
+    def test_phase_science_dispatches_to_gather_science_units(self):
+        from submission import routes
+
+        job_type, units = self.run_mod.gather_for_run(
+            dbh=object(), phase="science", window=self._window(),
+            run_name="w9-campaign-1")
+
+        self.assertEqual(list(units), [])
+        self.assertEqual(job_type, routes.JOB_TYPE_SCIENCE)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0]["gatherer"], "science")
+
+    def test_the_window_reaches_the_gatherer_as_mjd_bounds(self):
+        self.run_mod.gather_for_run(
+            dbh=object(), phase="science",
+            window=self._window(start_mjd=61601.5, end_mjd=61701.5),
+            run_name="w9-campaign-1")
+
+        self.assertEqual(self.calls[0]["start_mjdobs"], 61601.5)
+        self.assertEqual(self.calls[0]["end_mjdobs"], 61701.5)
+
+    def test_run_name_reaches_the_gate_as_run_scope_for_science(self):
+        self.run_mod.gather_for_run(
+            dbh=object(), phase="science", window=self._window(),
+            run_name="w9-campaign-1")
+
+        self.assertEqual(self.calls[0]["run_scope"], "w9-campaign-1")
+
+    def test_run_name_reaches_both_run_id_and_run_scope_for_reference(self):
+        # THE JUDGMENT CALL this task ruling asked to be stated explicitly:
+        # `gather_reference_units`' own `run_id` (publish-key prefix) and
+        # the new `run_scope` (gate scope) are different parameters, but
+        # `run start`'s single `--name` is passed to BOTH -- a run
+        # publishes its own artifacts under its own name and is gated only
+        # on its own prior work. See `gathering.gather_reference_units`'s
+        # docstring for the full reasoning.
+        self.run_mod.gather_for_run(
+            dbh=object(), phase="reference", window=self._window(),
+            run_name="w9-campaign-1", s3_client="fake-s3",
+            job_bucket="fake-bucket")
+
+        self.assertEqual(self.calls[0]["run_id"], "w9-campaign-1")
+        self.assertEqual(self.calls[0]["run_scope"], "w9-campaign-1")
+
+    def test_fids_is_passed_through_unchanged(self):
+        self.run_mod.gather_for_run(
+            dbh=object(), phase="science", window=self._window(),
+            run_name="w9-campaign-1", fids=[8])
+
+        self.assertEqual(self.calls[0]["fids"], [8])
+
+    def test_reference_without_s3_client_or_bucket_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.run_mod.gather_for_run(
+                dbh=object(), phase="reference", window=self._window(),
+                run_name="w9-campaign-1")
+        self.assertIn("reference", str(ctx.exception))
+
+    def test_a_windowed_phase_without_a_window_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.run_mod.gather_for_run(
+                dbh=object(), phase="science", window=None,
+                run_name="w9-campaign-1")
+        self.assertIn("window", str(ctx.exception))
+
+    def test_a_windowed_phase_without_a_run_name_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.run_mod.gather_for_run(
+                dbh=object(), phase="science", window=self._window(),
+                run_name=None)
+        self.assertIn("run name", str(ctx.exception))
+
+    def test_cap_still_applies_to_a_windowed_gather(self):
+        from submission import gathering
+
+        def five_units(handle, start, end, start_mjdobs, end_mjdobs,
+                       min_images_to_coadd, fids=None, make_references=False,
+                       run_scope=None):
+            return iter(range(5))
+
+        with mock.patch.object(gathering, "gather_science_units",
+                               five_units):
+            _job_type, units = self.run_mod.gather_for_run(
+                dbh=object(), phase="science", window=self._window(),
+                run_name="w9-campaign-1", cap=2)
+
+        self.assertEqual(units, [0, 1])
+
+    def test_the_four_post_db_chain_phases_ignore_window_and_run_name(self):
+        # The non-windowed phases must keep working with NO new required
+        # arguments -- `window`/`run_name`/`s3_client`/`job_bucket`/`fids`
+        # all default to None and are simply unused for these four.
+        from submission import gathering
+
+        with mock.patch.object(gathering, "gather_statistics_units",
+                               lambda handle: iter(())):
+            job_type, units = self.run_mod.gather_for_run(
+                dbh=object(), phase="statistics")
+
+        from submission import routes
+        self.assertEqual(job_type, routes.JOB_TYPE_STATISTICS)
+        self.assertEqual(list(units), [])
+        # Neither fake windowed gatherer was called.
+        self.assertEqual(self.calls, [])
+
+    def test_an_unknown_phase_still_raises_keyerror(self):
+        with self.assertRaises(KeyError):
+            self.run_mod.gather_for_run(
+                dbh=object(), phase="not-a-real-phase")
 
 
 if __name__ == "__main__":
