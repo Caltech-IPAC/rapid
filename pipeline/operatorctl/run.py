@@ -194,7 +194,8 @@ def _resolve_submission_env(job_type):
             "cannot gather a binding without it") from exc
 
 
-def submit_run(conn, name, job_type, units, reason, context=None):
+def submit_run(conn, name, job_type, units, reason, context=None,
+              work_unit_run_id=None):
     """Submit `units` under `name`, through the SAME production path
     `live_w9_ramp` uses: `submission_env` for the binding, `pipeline.seams.
     submit_gathered` for the submission itself. Nothing here reimplements
@@ -229,6 +230,27 @@ def submit_run(conn, name, job_type, units, reason, context=None):
     `awaicgen54-proof-20260911`: GATHER returned 109 run-scoped units,
     submission created zero work_units rows).
 
+    **`work_unit_run_id`, when explicitly given, overrides that default
+    (release-scope ruling, 2026-09-11) — for the one case a declared run
+    RESUBMITS another run's work units rather than gathering its own.** A
+    stranded-unit reconciler releases a prior run's dead-lettered units
+    (`ready`, still carrying THAT run's `work_units.run_id`) and something
+    must then resubmit them; doing so under a fresh run name would, by the
+    `name`-defaulting behaviour above, look them up under the NEW name,
+    find nothing, and mint duplicate fresh units — orphaning the released
+    ones in `ready` forever, the exact opposite of the intent. Passing the
+    prior run's name here as `work_unit_run_id` (while `name`/`run_id`
+    stays this submission's own, separately-queryable identity) makes
+    `seams._decide_work_unit` find those released units and transition
+    them `ready -> submitted` instead. See `seams.submit_gathered`'s own
+    docstring for why `run_id` and `work_unit_run_id` are kept as two
+    genuinely separate facts rather than one collapsing into the other:
+    `run_id` is whose submission this is — the attempts and artifacts it
+    authors; `work_unit_run_id` is whose work units it claims. For an
+    ordinary run start these are the same value, so this parameter stays
+    at its `None` default and `work_unit_run_id` falls back to `name`
+    exactly as before this parameter existed.
+
     **RUNS UNDER `submission_role()`, NOT THE BARE OPERATOR SESSION
     (identity-fix ruling, 2026-09-11).** `rapid_operator` (and the agent
     tier) hold only SELECT — creating a work unit needs INSERT/UPDATE on
@@ -253,6 +275,9 @@ def submit_run(conn, name, job_type, units, reason, context=None):
     if not units:
         return []
 
+    if work_unit_run_id is None:
+        work_unit_run_id = name
+
     with submission_role(conn):
         # `autocommit_each=False` + `protocol_commit=conn.commit`: the
         # same fix-txn-core fix `pipeline.operator.service._execute_
@@ -270,17 +295,24 @@ def submit_run(conn, name, job_type, units, reason, context=None):
             s3_client=context["s3_client"],
             batch_client=context["batch_client"],
             execute=executor.execute, run_id=name,
-            reason=reason, work_unit_run_id=name,
+            reason=reason, work_unit_run_id=work_unit_run_id,
             protocol_commit=conn.commit)
 
 
 def start_run_audited(conn, idempotency_key, name, phase, reason,
                       proc_date=None, cap=None, dry_run=True,
                       policy_citation=None, out=None,
-                      window_start=None, window_end=None, fids=None):
+                      window_start=None, window_end=None, fids=None,
+                      work_unit_run_id=None):
     """Gather, (maybe) submit, and audit `run start`. Returns `(result,
     scope)` — the same shape `terminate_jobs_audited` returns, for the same
     reason: the CLI renders both through the identical `render_plan` call.
+
+    `work_unit_run_id`, when given, is threaded straight through to
+    `submit_run` — see that function's docstring for the resubmit-a-prior-
+    run's-released-units case it exists for. `None` (the default) keeps
+    today's behaviour: `submit_run` scopes work units to this run's own
+    `name`.
 
     THE DRY RUN GATHERS FOR REAL AND SUBMITS NOTHING — `contract.py`'s own
     rule ("the plan shown IS the answer the apply will act on, minus the
@@ -356,6 +388,13 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     detail = {"phase": phase, "job_type": job_type, "gathered": len(units),
               "cap": cap, "proc_date": proc_date,
               "window_start": window_start, "window_end": window_end}
+    # Only recorded when it differs from `name` -- an audit row naming a
+    # work-unit scope that is just this run's own identity says nothing an
+    # ordinary run start didn't already say via `scope` above, and
+    # inventing one for every ordinary run would bury the case this field
+    # exists to answer: which run's units did an UNUSUAL submission claim.
+    if work_unit_run_id is not None and work_unit_run_id != name:
+        detail["work_unit_run_id"] = work_unit_run_id
 
     if dry_run:
         print("[dry-run] would gather %d unit(s) for phase=%s (job_type=%s)"
@@ -366,7 +405,8 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
             policy_citation=policy_citation)
         return result, scope
 
-    results = submit_run(conn, name, job_type, units, reason, context=context)
+    results = submit_run(conn, name, job_type, units, reason, context=context,
+                         work_unit_run_id=work_unit_run_id)
     total_children = sum(len(attempt_ids) for _sub, attempt_ids in results)
     detail["batches"] = len(results)
     detail["children"] = total_children
@@ -673,8 +713,13 @@ def array_job_ids_for_run(conn, name):
 # otherwise, so both source states are read here, each candidate carrying
 # its OWN `state` so the release step below transitions it from wherever it
 # actually is, never a hard-coded `from_state`.
+#: `blocked_reason` is selected, not filtered in SQL, so a unit parked for a
+#: reason this reconciler must not release is EXCLUDED VISIBLY rather than
+#: silently absent — "which units did you decline, and why" is a question the
+#: caller has to be able to answer, and a row the query never returned cannot
+#: answer it.
 _STRANDED_UNITS_SQL = (
-    "SELECT w.work_unit_id, w.state,"
+    "SELECT w.work_unit_id, w.state, w.blocked_reason,"
     "       array_agg(DISTINCT a.scheduler_job_id) FILTER"
     "         (WHERE a.scheduler_job_id IS NOT NULL),"
     "       bool_or(a.rapid_outcome = 'success')"
@@ -682,9 +727,21 @@ _STRANDED_UNITS_SQL = (
     " JOIN attempts a ON a.work_unit_id = w.work_unit_id"
     " WHERE a.run_id LIKE %s"
     "   AND w.state IN ('submitted', 'blocked')"
-    " GROUP BY w.work_unit_id, w.state"
+    " GROUP BY w.work_unit_id, w.state, w.blocked_reason"
     " ORDER BY w.work_unit_id"
 )
+
+#: The one blocked reason this reconciler may release, matching
+#: `_RELEASE_CANDIDATES_SQL`'s own predicate rather than choosing a second
+#: policy. The retry policy also parks units under
+#: `application_failure:input_missing`, which is a park-until-the-input-
+#: arrives condition: a FAILED Batch child and no successful attempt say
+#: nothing about whether the input arrived, so releasing such a unit re-runs
+#: work that fails the same way. Measured on the live acceptance run, all
+#: 1,485 blocked units carry `internal_error`, so this constraint changes
+#: nothing about that release — it stops a LATER run's parked units being
+#: swept in by a reconciler that widened which rows it selects.
+_RELEASABLE_BLOCKED_REASON = "application_failure:internal_error"
 
 
 def find_stranded_candidates(conn, name, batch_client):
@@ -700,9 +757,10 @@ def find_stranded_candidates(conn, name, batch_client):
       `reason`: `"successful_sibling_attempt"` (a `rapid_outcome='success'`
       attempt exists — THE review question's exact case, this is the
       check that stops a unit whose work actually completed from being
-      released) or `"batch_child_not_failed"` plus `scheduler_job_id`
-      (some Batch child of this unit's attempts is not FAILED — SUCCEEDED,
-      or still in flight; the retry case, 1,604 live instances of it).
+      released; checked FIRST, see below) or `"batch_child_not_failed"`
+      plus `scheduler_job_id` (some Batch child of this unit's attempts is
+      not FAILED — SUCCEEDED, or still in flight; the retry case, 1,604
+      live instances of it).
 
     Every unit read here has at least one non-NULL `scheduler_job_id`
     (the SQL's JOIN + `FILTER` guarantee that); a unit with none is
@@ -719,10 +777,40 @@ def find_stranded_candidates(conn, name, batch_client):
 
     candidates = []
     excluded = []
-    for work_unit_id, state, scheduler_job_ids, has_success in rows:
+    for (work_unit_id, state, blocked_reason,
+         scheduler_job_ids, has_success) in rows:
         scheduler_job_ids = scheduler_job_ids or []
         not_failed = [sid for sid in scheduler_job_ids
                      if fate.get(sid) != "FAILED"]
+        # A unit with NO Batch child at all cannot satisfy "every child
+        # FAILED" -- it satisfies it VACUOUSLY, which is the opposite of
+        # evidence. There is no child, so there is nothing saying the work
+        # failed, and releasing it would re-run work whose fate is simply
+        # unknown to Batch. Tested FIRST, before the emptiness can be
+        # mistaken for agreement. Measured on the live acceptance run:
+        # zero units are in this state, so this guards a hazard rather
+        # than fixing a live miss -- but the reconciler is about to act on
+        # thousands of units, and a vacuous truth is a bad thing to have
+        # standing between it and them.
+        if not scheduler_job_ids:
+            excluded.append({
+                "work_unit_id": work_unit_id,
+                "reason": "no_batch_child",
+            })
+            continue
+        # `has_success` is tested BEFORE `not_failed` — a unit failing
+        # BOTH tests is excluded either way, so this order changes no
+        # unit's candidate/excluded classification, only which reason is
+        # REPORTED for a unit failing both. "This unit's work already
+        # succeeded" is the more informative account than "a Batch child
+        # of it hasn't failed yet" when both are true, so it is surfaced
+        # first rather than being hidden behind the other reason.
+        if has_success:
+            excluded.append({
+                "work_unit_id": work_unit_id,
+                "reason": "successful_sibling_attempt",
+            })
+            continue
         if not_failed:
             excluded.append({
                 "work_unit_id": work_unit_id,
@@ -730,10 +818,21 @@ def find_stranded_candidates(conn, name, batch_client):
                 "scheduler_job_id": not_failed[0],
             })
             continue
-        if has_success:
+        # A blocked unit is releasable only under the reason
+        # `release-dead-letters` itself releases; see
+        # `_RELEASABLE_BLOCKED_REASON` for why a differently-parked unit
+        # must not be swept in. A `submitted` unit carries no reason at
+        # all and is unaffected -- which matters, because those are the
+        # majority of the real candidate set.
+        # The literal, not an import of `pipeline.intent.writer.BLOCKED`:
+        # this module keeps that import function-local (see
+        # `_release_one`), and the same literal is what the SQL above
+        # selects on, so the two agree by sharing one spelling.
+        if state == "blocked" and blocked_reason != _RELEASABLE_BLOCKED_REASON:
             excluded.append({
                 "work_unit_id": work_unit_id,
-                "reason": "successful_sibling_attempt",
+                "reason": "blocked_reason_not_releasable",
+                "blocked_reason": blocked_reason,
             })
             continue
         candidates.append({

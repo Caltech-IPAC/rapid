@@ -193,13 +193,13 @@ def build_parser():
                     "free-form run_id prefix an operator has to remember. "
                     "`create`/`archive` are plain calls into the two "
                     "migration-109 audited functions; `start`/`register`/"
-                    "`release-dead-letters` act on AWS Batch, the "
-                    "registrar's own transaction, or a work-unit "
-                    "transition and record their outcome through "
-                    "`record_external_action` afterward, since none of "
-                    "the three has a single database function that could "
-                    "own its effect (109's own header explains why). "
-                    "`status`/`compare` are read-only.")
+                    "`release-dead-letters`/`reconcile-stranded` act on "
+                    "AWS Batch, the registrar's own transaction, or a "
+                    "work-unit transition and record their outcome "
+                    "through `record_external_action` afterward, since "
+                    "none of the four has a single database function "
+                    "that could own its effect (109's own header explains "
+                    "why). `status`/`compare` are read-only.")
     runsub = run_parser.add_subparsers(dest="run_command", required=True)
 
     run_create = runsub.add_parser(
@@ -369,6 +369,44 @@ def build_parser():
                                   "population has moved since")
     _mutation_arguments(run_release, "a run's dead-lettered work units")
     run_release.set_defaults(func=_cmd_run_release_dead_letters)
+
+    run_reconcile = runsub.add_parser(
+        "reconcile-stranded",
+        help="release a run's Batch-discovered stranded work units back "
+            "to ready",
+        description="Extends release-dead-letters' reach rather than "
+                    "replacing it: this discovers stranded units from AWS "
+                    "Batch child fate rather than from a blocked-reason "
+                    "predicate, so it reaches units whose Batch child died "
+                    "at container start and never reached a blocked state "
+                    "at all -- release-dead-letters' query can never see "
+                    "those. A unit is released ONLY when EVERY Batch "
+                    "child of its attempts reports FAILED AND the unit "
+                    "has no attempt with rapid_outcome='success' -- a "
+                    "unit whose work actually completed is never "
+                    "released, even if a Batch child of it failed.")
+    run_reconcile.add_argument("--name", required=True)
+    run_reconcile.add_argument("--expect-candidates", type=int, default=None,
+                               help="the candidate count seen in the dry "
+                                    "run; the apply refuses if the "
+                                    "population has moved since")
+    # Default mirrors `pipeline.operatorctl.run.DEFAULT_WAVE_SIZE` as a
+    # literal rather than an import: `run.py` is imported lazily by every
+    # `run` subcommand handler below (see `_cmd_run_start`'s comment on
+    # why) so the lightweight subcommands never pay for its heavy
+    # module-function imports, and a module-scope import here just to
+    # read one int constant would be the one exception to that discipline.
+    run_reconcile.add_argument("--max-wave", type=int, default=4000,
+                               help="cap on work units released per wave "
+                                    "(default: %(default)s, matching AWS "
+                                    "Batch's own array-size ceiling); "
+                                    "later waves wait for the prior wave "
+                                    "to drain before releasing")
+    run_reconcile.add_argument("--region", default=None)
+    run_reconcile.add_argument("--profile", default=None)
+    _mutation_arguments(run_reconcile, "a run's Batch-discovered stranded "
+                                       "work units")
+    run_reconcile.set_defaults(func=_cmd_run_reconcile_stranded)
 
     run_archive = runsub.add_parser(
         "archive", help="archive a run",
@@ -884,6 +922,38 @@ def _cmd_run_release_dead_letters(conn, args, out):
         dry_run=not args.apply, policy_citation=args.policy_citation,
         out=out)
     print(render_plan("run_release_dead_letters", scope, args.reason, key,
+                      result, args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_run_reconcile_stranded(conn, args, out):
+    # Imported here, not at module scope: same late-import discipline
+    # `_cmd_run_start` and `_cmd_terminate_batch` already follow -- the
+    # lightweight run subcommands (status, compare) must not pay for
+    # importing `run.py`'s AWS-reaching functions.
+    from pipeline.operatorctl.run import reconcile_stranded_audited
+
+    # A BARE Batch client, built the SAME way `pipeline.operatorctl.batch.
+    # _client` builds one for `terminate-batch` -- late `import boto3`,
+    # `boto3.Session(region_name=..., profile_name=...).client("batch")`
+    # -- rather than through `_resolve_submission_env`/`submission_env`:
+    # that path resolves a full submission BINDING (job definition, queue,
+    # buckets) for a `job_type`, which `reconcile_stranded_audited` has no
+    # use for -- it only ever calls `list_jobs` for Batch discovery, the
+    # same bare-client need `terminate-batch` has, not a submission need.
+    import boto3                                      # noqa: PLC0415
+    batch_client = boto3.Session(
+        region_name=args.region, profile_name=args.profile).client("batch")
+
+    key = args.idempotency_key or new_idempotency_key("run-reconcile")
+    expected = ({"candidates": args.expect_candidates}
+                if args.expect_candidates is not None else None)
+    result, scope = reconcile_stranded_audited(
+        conn, key, args.name, args.reason, batch_client,
+        expected_state=expected, dry_run=not args.apply,
+        policy_citation=args.policy_citation, out=out,
+        max_wave=args.max_wave)
+    print(render_plan("run_reconcile_stranded", scope, args.reason, key,
                       result, args.apply), file=out)
     return EXIT_OK
 

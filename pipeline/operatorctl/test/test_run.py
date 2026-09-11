@@ -1529,7 +1529,7 @@ class FindStrandedCandidatesTests(unittest.TestCase):
 
         conn = _StrandedFakeConn(
             array_ids_rows=[("array-1",)],
-            stranded_rows=[(501, "blocked", ["array-1:0"], False)])
+            stranded_rows=[(501, "blocked", "application_failure:internal_error", ["array-1:0"], False)])
         client = _FakeBatchClient({
             ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
         })
@@ -1540,6 +1540,79 @@ class FindStrandedCandidatesTests(unittest.TestCase):
         self.assertEqual(candidates[0]["state"], "blocked")
         self.assertEqual(excluded, [])
 
+    def test_a_unit_with_no_batch_child_is_excluded_not_released(self):
+        """No Batch child means no evidence the work failed.
+
+        An empty child list satisfies "every child FAILED" VACUOUSLY,
+        which is the opposite of evidence: Batch knows nothing about this
+        unit, so releasing it would re-run work whose fate is simply
+        unknown. Zero units are in this state on the live acceptance run,
+        so this guards a hazard rather than fixing a live miss.
+        """
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(900, "submitted", None, None, False)])
+        client = _FakeBatchClient({})
+        candidates, excluded = run_mod.find_stranded_candidates(
+            conn, "w9-ramp", client)
+        self.assertEqual(candidates, [])
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(excluded[0]["work_unit_id"], 900)
+        self.assertEqual(excluded[0]["reason"], "no_batch_child")
+
+    def test_a_differently_parked_blocked_unit_is_excluded(self):
+        """`input_missing` is park-until-the-input-arrives.
+
+        A FAILED Batch child and no successful attempt say nothing about
+        whether the missing input arrived, so releasing such a unit
+        re-runs work that fails the same way. `release-dead-letters`
+        constrains to `internal_error` for this reason and this
+        reconciler must not choose a second policy.
+        """
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(901, "blocked",
+                            "application_failure:input_missing",
+                            ["array-1:0"], False)])
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
+        })
+        candidates, excluded = run_mod.find_stranded_candidates(
+            conn, "w9-ramp", client)
+        self.assertEqual(candidates, [])
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(excluded[0]["work_unit_id"], 901)
+        self.assertEqual(excluded[0]["reason"],
+                         "blocked_reason_not_releasable")
+        self.assertEqual(excluded[0]["blocked_reason"],
+                         "application_failure:input_missing")
+
+    def test_a_submitted_unit_is_unaffected_by_the_blocked_reason_rule(self):
+        """A `submitted` unit carries no blocked reason at all.
+
+        This matters because those are the MAJORITY of the real candidate
+        set -- 2,412 of the acceptance run's 2,664 -- so a rule written
+        for blocked units must not catch them.
+        """
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(902, "submitted", None, ["array-1:0"], False)])
+        client = _FakeBatchClient({
+            ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
+        })
+        candidates, excluded = run_mod.find_stranded_candidates(
+            conn, "w9-ramp", client)
+        self.assertEqual(excluded, [])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["work_unit_id"], 902)
+        self.assertEqual(candidates[0]["state"], "submitted")
+
     def test_failed_child_with_a_successful_attempt_is_excluded(self):
         # THE REVIEW QUESTION'S EXACT CASE: the application succeeded and
         # published, then the container exited nonzero on teardown. Batch
@@ -1549,7 +1622,7 @@ class FindStrandedCandidatesTests(unittest.TestCase):
 
         conn = _StrandedFakeConn(
             array_ids_rows=[("array-1",)],
-            stranded_rows=[(64, "submitted", ["array-1:0"], True)])
+            stranded_rows=[(64, "submitted", None, ["array-1:0"], True)])
         client = _FakeBatchClient({
             ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
         })
@@ -1569,7 +1642,7 @@ class FindStrandedCandidatesTests(unittest.TestCase):
 
         conn = _StrandedFakeConn(
             array_ids_rows=[("array-1",)],
-            stranded_rows=[(1604, "blocked", ["array-1:0"], False)])
+            stranded_rows=[(1604, "blocked", "application_failure:internal_error", ["array-1:0"], False)])
         client = _FakeBatchClient({
             ("array-1", "SUCCEEDED"): [
                 {"jobSummaryList": [_job("array-1:0")]}],
@@ -1582,14 +1655,40 @@ class FindStrandedCandidatesTests(unittest.TestCase):
         self.assertEqual(excluded[0]["reason"], "batch_child_not_failed")
         self.assertEqual(excluded[0]["scheduler_job_id"], "array-1:0")
 
+    def test_success_and_unfailed_child_both_reports_the_success_reason(self):
+        # A unit failing BOTH tests -- a successful attempt exists AND a
+        # Batch child of it is not FAILED (still SUCCEEDED here) -- must
+        # report `successful_sibling_attempt`, not `batch_child_not_failed`:
+        # "this unit's work already succeeded" is the more informative
+        # account when both are true, and `has_success` is checked first
+        # in `find_stranded_candidates` for exactly that reason. Either
+        # test alone would exclude this unit, so the classification
+        # (excluded, never a candidate) is unchanged by the ordering --
+        # only the reported reason is.
+        from pipeline.operatorctl import run as run_mod
+
+        conn = _StrandedFakeConn(
+            array_ids_rows=[("array-1",)],
+            stranded_rows=[(77, "submitted", None, ["array-1:0"], True)])
+        client = _FakeBatchClient({
+            ("array-1", "SUCCEEDED"): [
+                {"jobSummaryList": [_job("array-1:0")]}],
+        })
+        candidates, excluded = run_mod.find_stranded_candidates(
+            conn, "w9-ramp", client)
+        self.assertEqual(candidates, [])
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(excluded[0]["work_unit_id"], 77)
+        self.assertEqual(excluded[0]["reason"], "successful_sibling_attempt")
+
     def test_submitted_and_blocked_units_both_become_candidates(self):
         from pipeline.operatorctl import run as run_mod
 
         conn = _StrandedFakeConn(
             array_ids_rows=[("array-1",)],
             stranded_rows=[
-                (10, "submitted", ["array-1:0"], False),
-                (11, "blocked", ["array-1:1"], False),
+                (10, "submitted", None, ["array-1:0"], False),
+                (11, "blocked", "application_failure:internal_error", ["array-1:1"], False),
             ])
         client = _FakeBatchClient({
             ("array-1", "FAILED"): [
@@ -1751,7 +1850,7 @@ class ReconcileStrandedAuditedTests(unittest.TestCase):
 
         conn = _StrandedFakeConn(
             array_ids_rows=[("array-1",)],
-            stranded_rows=[(501, "blocked", ["array-1:0"], False)])
+            stranded_rows=[(501, "blocked", "application_failure:internal_error", ["array-1:0"], False)])
         client = _FakeBatchClient({
             ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
         })
@@ -1793,7 +1892,7 @@ class ReconcileStrandedAuditedTests(unittest.TestCase):
 
         conn = _StrandedFakeConn(
             array_ids_rows=[("array-1",)],
-            stranded_rows=[(501, "blocked", ["array-1:0"], False)])
+            stranded_rows=[(501, "blocked", "application_failure:internal_error", ["array-1:0"], False)])
         client = _FakeBatchClient({
             ("array-1", "FAILED"): [{"jobSummaryList": [_job("array-1:0")]}],
         })
@@ -1813,7 +1912,7 @@ class ReconcileStrandedAuditedTests(unittest.TestCase):
             None, {"action": "run_reconcile_stranded", "dry_run": False,
                    "replayed": False, "rows_affected": 6, "audit_id": 3})
 
-        stranded_rows = [(i, "submitted", ["array-1:%d" % i], False)
+        stranded_rows = [(i, "submitted", None, ["array-1:%d" % i], False)
                          for i in range(6)]
         conn = _StrandedFakeConn(
             array_ids_rows=[("array-1",)], stranded_rows=stranded_rows)
@@ -1851,8 +1950,8 @@ class ReconcileStrandedAuditedTests(unittest.TestCase):
         conn = _StrandedFakeConn(
             array_ids_rows=[("array-1",)],
             stranded_rows=[
-                (501, "blocked", ["array-1:0"], False),
-                (502, "submitted", ["array-1:1"], False),
+                (501, "blocked", "application_failure:internal_error", ["array-1:0"], False),
+                (502, "submitted", None, ["array-1:1"], False),
             ])
         client = _FakeBatchClient({
             ("array-1", "FAILED"): [
