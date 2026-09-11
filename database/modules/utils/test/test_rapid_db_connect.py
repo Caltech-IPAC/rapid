@@ -28,6 +28,10 @@ from database.modules.utils.rapid_db_connect import (
     DEFAULT_BACKOFF_CAP_S,
     LANE_SESSION,
     LANE_TRANSACTION,
+    STARTUP_BACKOFF_CAP_S,
+    STARTUP_BACKOFF_INITIAL_S,
+    STARTUP_BACKOFF_MULTIPLIER,
+    STARTUP_CONNECT_ATTEMPTS,
     ConnectionExecutor,
     Credentials,
     DBCredentialError,
@@ -335,6 +339,98 @@ class ConnectRetryTests(unittest.TestCase):
             with self.assertRaises(DBCredentialError):
                 connect("registration", connect_fn=connect_fn)
         connect_fn.assert_not_called()
+
+
+class ConnectJitterTests(unittest.TestCase):
+    """D9: full jitter on the connect retry, opt-in via `jitter=True`.
+
+    Off by default (`ConnectRetryTests.test_backoff_doubles_and_is_capped`
+    above pins the exact deterministic sequence with no jitter) — these
+    tests are the jittered half.
+    """
+
+    def test_jitter_off_by_default_sleeps_the_deterministic_delay(self):
+        # Same assertion `test_backoff_doubles_and_is_capped` makes, but
+        # naming the property under test: `jitter` defaults to False, so
+        # `connect()`'s existing callers (none of them pass it) are
+        # unaffected by this change.
+        connect_fn = mock.MagicMock(
+            side_effect=psycopg2.OperationalError("connection refused"))
+        sleep = mock.MagicMock()
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("registration", attempts=3, connect_fn=connect_fn,
+                        sleep=sleep)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list],
+                         [0.5, 1.0])
+
+    def test_jitter_on_sleeps_a_random_value_in_0_to_delay(self):
+        # THE REGRESSION GUARD for D9's "full jitter, not fixed sleeps"
+        # requirement: 1,000 containers retrying on the SAME fixed backoff
+        # schedule re-collide at every retry. Proven by reverting the
+        # `wait = random_func(0, delay) if jitter else delay` line (making
+        # it always `delay`) and watching this test fail -- see
+        # LEDGER-rusage-backoff.md for the revert demonstration.
+        connect_fn = mock.MagicMock(
+            side_effect=psycopg2.OperationalError("connection refused"))
+        sleep = mock.MagicMock()
+        # A fake `random_func` that returns something OTHER than `delay`
+        # itself, so the test can tell "jittered" from "passed through
+        # unchanged" rather than merely "some value was passed".
+        random_func = mock.MagicMock(side_effect=lambda lo, hi: hi * 0.25)
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("registration", attempts=3, connect_fn=connect_fn,
+                        sleep=sleep, jitter=True, random_func=random_func)
+        # random_func was called with (0, delay) for each of the two
+        # sleeps, delay = 0.5 then 1.0 (the same schedule as the
+        # non-jittered test above -- jitter changes what is SLEPT, not
+        # the underlying delay sequence it is drawn from).
+        self.assertEqual([c.args for c in random_func.call_args_list],
+                         [(0, 0.5), (0, 1.0)])
+        self.assertEqual([c.args[0] for c in sleep.call_args_list],
+                         [0.125, 0.25])
+
+    def test_jitter_never_sleeps_longer_than_the_unjittered_delay(self):
+        # A real random.uniform(0, delay) run, not a fake -- proves the
+        # invariant the fake above cannot: every jittered sleep lands in
+        # [0, delay], never above it.
+        connect_fn = mock.MagicMock(
+            side_effect=psycopg2.OperationalError("connection refused"))
+        sleep = mock.MagicMock()
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("registration", attempts=5, connect_fn=connect_fn,
+                        sleep=sleep, jitter=True)
+        delays = [0.5, 1.0, 2.0, 4.0]
+        waited = [c.args[0] for c in sleep.call_args_list]
+        self.assertEqual(len(waited), len(delays))
+        for wait, delay in zip(waited, delays):
+            self.assertGreaterEqual(wait, 0.0)
+            self.assertLessEqual(wait, delay)
+
+
+class StartupSizingTests(unittest.TestCase):
+    """D9's sizing constants: >= 10 attempts, a few minutes of possible
+    total elapsed time under real (non-mocked) backoff growth.
+    """
+
+    def test_at_least_ten_attempts(self):
+        self.assertGreaterEqual(STARTUP_CONNECT_ATTEMPTS, 10)
+
+    def test_worst_case_elapsed_time_is_multiple_minutes(self):
+        # Sum of the unjittered backoff schedule (jitter only ever makes
+        # each sleep SHORTER, per ConnectJitterTests above, so the
+        # unjittered sum is the true worst case).
+        delay = STARTUP_BACKOFF_INITIAL_S
+        total = 0.0
+        for _ in range(STARTUP_CONNECT_ATTEMPTS - 1):
+            total += delay
+            delay = min(delay * STARTUP_BACKOFF_MULTIPLIER,
+                       STARTUP_BACKOFF_CAP_S)
+        self.assertGreaterEqual(total, 120.0, (
+            "STARTUP_* constants must sum to a few minutes of possible "
+            "total elapsed time (D9 requirement); got %.1fs" % total))
 
 
 class TransactionTests(unittest.TestCase):

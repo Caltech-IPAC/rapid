@@ -55,6 +55,24 @@ logger = logging.getLogger(__name__)
 # exactly this path (rapid_systems cloudformation/rapid-batch.yaml).
 PIPELINE_PARAMETER_PATH = "/rapid/pipeline"
 
+# D9 (throughput sitting): measured live 2026-09-10 — a 1,000-job start
+# burst had 218 jobs die at start-up because every container reads this
+# tree with ONE GetParametersByPath call, no retry Config, no jitter, and
+# SSM throttled the herd. `mode="adaptive"` is botocore's own client-side
+# rate limiter, which is exactly the right shape for a self-inflicted
+# thundering herd (it backs off the CLIENT's own request rate, not just the
+# individual call) rather than `"standard"`, which retries but does not
+# throttle the caller. 10 is the retry floor D9 sets; adaptive mode's own
+# backoff schedule (not a fixed one this module controls) is what stretches
+# that to a few minutes of possible total elapsed time under real
+# throttling. Every boto3 client this module creates carries this Config —
+# built lazily inside each function (deferred import, matching this
+# module's own existing `import boto3` inside `fetch_parameters`) so a
+# caller that never hits AWS never needs botocore importable.
+def _retry_config():
+    from botocore.config import Config
+    return Config(retries={"max_attempts": 10, "mode": "adaptive"})
+
 # Environment identifiers the submitter sets (submit.build_submit_kwargs)
 # plus the one Batch sets itself.
 ENV_MANIFEST_URI = "RAPID_MANIFEST_URI"
@@ -101,7 +119,9 @@ def fetch_parameters(path: str = PIPELINE_PARAMETER_PATH,
     """
     if client is None:
         import boto3
-        client = boto3.client("ssm")
+        # D9: adaptive retry mode, >= 10 attempts -- see `_retry_config`'s
+        # header comment for the 2026-09-10 measurement this answers.
+        client = boto3.client("ssm", config=_retry_config())
 
     prefix = path.rstrip("/") + "/"
     parameters: dict[str, str] = {}

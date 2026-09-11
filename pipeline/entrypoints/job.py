@@ -626,12 +626,22 @@ def _identity_extra(unit) -> dict:
 def _run(workload_class: str) -> int:
     """Startup, dispatch, termination."""
     import boto3
+    from botocore.config import Config
 
     # 1. The per-invocation environment. Fail-loud, no defaults.
     job_env = environment.read_environment()
     _logger.info("environment: %s", environment.describe(job_env))
 
-    s3_client = boto3.client("s3")
+    # D9: the manifest fetch below is one of the four start-up paths a
+    # 1,000-job burst hits at once (measured live 2026-09-10: 218/1000 jobs
+    # died at start-up to unretried throttling). Adaptive mode is
+    # botocore's own client-side rate limiter -- the right shape for a
+    # self-inflicted thundering herd -- and >= 10 attempts is the floor D9
+    # sets; adaptive mode's own backoff is what stretches worst-case
+    # elapsed time to a few minutes under real throttling.
+    startup_retry_config = Config(retries={"max_attempts": 10,
+                                           "mode": "adaptive"})
+    s3_client = boto3.client("s3", config=startup_retry_config)
 
     # 2-3. The manifest and the full route. Both before any row is touched: a
     # submission with an invalid route must not produce an attempt.
@@ -1037,6 +1047,7 @@ def database_connection_inputs(parameters: dict):
     secret_id = parameters["db/secret-id"]
 
     import boto3
+    from botocore.config import Config
 
     # OUTSIDE the try: a missing region is a region fault, and the handler
     # below would relabel its ConfigError as "could not resolve the
@@ -1044,8 +1055,17 @@ def database_connection_inputs(parameters: dict):
     # job role for a problem that is neither.
     region = environment.resolve_region()
 
+    # D9: the secret fetch is one of the four start-up paths a synchronized
+    # job burst hits at once -- same adaptive/>=10-attempt sizing as the
+    # SSM parameter fetch and S3 manifest fetch above, and for the same
+    # measured reason (2026-09-10: 218/1000 jobs died at start-up to
+    # unretried throttling).
+    startup_retry_config = Config(retries={"max_attempts": 10,
+                                           "mode": "adaptive"})
+
     try:
-        client = boto3.client("secretsmanager", region_name=region)
+        client = boto3.client("secretsmanager", region_name=region,
+                              config=startup_retry_config)
         secret = json.loads(
             client.get_secret_value(SecretId=secret_id)["SecretString"])
     except Exception as exc:  # noqa: BLE001 - re-raised as the helper's type
@@ -1082,6 +1102,10 @@ def _database(route, job_env, endpoint, credentials):
     environment: `main` reads them from the tree once and passes them down.
     """
     from database.modules.utils.rapid_db_connect import (
+        STARTUP_BACKOFF_CAP_S,
+        STARTUP_BACKOFF_INITIAL_S,
+        STARTUP_BACKOFF_MULTIPLIER,
+        STARTUP_CONNECT_ATTEMPTS,
         ConnectionExecutor,
         connection,
     )
@@ -1092,8 +1116,21 @@ def _database(route, job_env, endpoint, credentials):
                                                   verify_schema_contract)
 
     application_name = f"rapid-payload:{job_env.scheduler_job_id}"
+    # D9: this is the job entrypoint's FIRST database connection, opened
+    # right after every container in a start burst has already hit SSM and
+    # Secrets Manager (see `load_manifest`/`database_connection_inputs`
+    # above). The 2026-09-10 measurement was 218/1000 jobs dying at
+    # start-up from exactly this kind of synchronized fleet contention, so
+    # this connection gets the wider startup sizing — 10 attempts, jittered
+    # — rather than the general-purpose default (4 attempts, no jitter)
+    # every other caller of `connection()`/`connect()` still gets.
     with connection(application_name, lane=route.db_lane, endpoint=endpoint,
-                    credentials=credentials) as conn:
+                    credentials=credentials,
+                    attempts=STARTUP_CONNECT_ATTEMPTS,
+                    backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                    backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                    backoff_cap=STARTUP_BACKOFF_CAP_S,
+                    jitter=True) as conn:
         execute = ConnectionExecutor(conn)
         # THE PAYLOAD PREFLIGHTS TOO (rule 18: "Services AND PAYLOADS
         # preflight the application/schema contract at startup"). A payload

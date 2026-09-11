@@ -220,6 +220,35 @@ class ParseArgumentsTests(unittest.TestCase):
 # load_manifest
 # ---------------------------------------------------------------------------
 
+class ManifestFetchClientConfigTests(unittest.TestCase):
+    """D9: `_run`'s S3 client (used only for `load_manifest`) carries
+    adaptive retry, >= 10 attempts.
+
+    `_run` is the whole entrypoint orchestrator -- environment read,
+    manifest load, route validation, dispatch, termination -- and nothing
+    else in this file exercises it directly (every heavy dependency it
+    reaches is exactly what the module docstring above stubs `sys.modules`
+    to avoid importing). A source-level assertion is the right-sized test
+    for one client-construction line inside a function nothing else here
+    calls: it reads what `_run` actually does, the same way the D9
+    acceptance check itself is a grep, without paying to stand up the
+    rest of the orchestrator's dependencies.
+    """
+
+    def test_the_s3_client_construction_carries_adaptive_retry(self):
+        import inspect
+        source = inspect.getsource(job._run)
+        self.assertIn('boto3.client("s3", config=', source, (
+            "_run must construct its S3 client (used for load_manifest) "
+            "with a botocore retries Config, not a bare boto3.client(\"s3\")"))
+        # The Config object itself, not just that one is passed -- pins the
+        # actual retry shape (D9: adaptive mode, >= 10 attempts), matching
+        # what submission/startup.py's SSM client and job.py's
+        # secretsmanager client both carry for the same reason.
+        self.assertIn('"mode": "adaptive"', source)
+        self.assertIn('"max_attempts": 10', source)
+
+
 class LoadManifestTests(unittest.TestCase):
 
     def test_checksum_mismatch_raises_configerror(self):
@@ -452,6 +481,64 @@ class DatabaseConnectionInputsTests(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             self._run(boto3_module)
         self.assertIn("password", str(caught.exception))
+
+    def test_the_secretsmanager_client_carries_adaptive_retry(self):
+        # D9: the secret fetch is one of the four start-up paths a
+        # synchronized job burst hits at once (2026-09-10: 218/1000 jobs
+        # died at start-up to unretried throttling). THE REGRESSION GUARD:
+        # reverting the `config=` kwarg on this client's construction makes
+        # this test fail -- see LEDGER-rusage-backoff.md for the revert
+        # demonstration.
+        boto3_module = self._boto3(
+            '{"username": "rapid_pipeline", "password": "s3cret"}')
+        self._run(boto3_module)
+        _, kwargs = boto3_module.client.call_args
+        self.assertEqual(boto3_module.client.call_args.args[0],
+                         "secretsmanager")
+        config = kwargs.get("config")
+        self.assertIsNotNone(
+            config, "database_connection_inputs must construct its "
+            "secretsmanager client with a botocore retries Config")
+        self.assertEqual(config.retries.get("mode"), "adaptive")
+        self.assertGreaterEqual(config.retries.get("max_attempts", 0), 10)
+
+
+class DatabaseConnectionSizingTests(unittest.TestCase):
+    """D9: `_database` (the job entrypoint's FIRST database connection)
+    opts into the wider startup retry sizing -- `STARTUP_CONNECT_ATTEMPTS`,
+    jittered -- rather than `connect()`'s general-purpose default.
+
+    `_database` is a context manager wrapping the whole attempt lifetime
+    (writer, schema-contract preflight, stage execution); nothing else in
+    this file exercises it directly, for the same reason nothing exercises
+    `_run` (see `ManifestFetchClientConfigTests`'s docstring) -- a
+    source-level assertion is the right-sized test for one call site
+    inside a function this heavy to stand up.
+    """
+
+    def test_database_uses_startup_sizing_and_jitter(self):
+        import inspect
+        from database.modules.utils.rapid_db_connect import (
+            STARTUP_BACKOFF_CAP_S,
+            STARTUP_BACKOFF_INITIAL_S,
+            STARTUP_BACKOFF_MULTIPLIER,
+            STARTUP_CONNECT_ATTEMPTS,
+        )
+        source = inspect.getsource(job._database)
+        self.assertIn("STARTUP_CONNECT_ATTEMPTS", source)
+        self.assertIn("STARTUP_BACKOFF_INITIAL_S", source)
+        self.assertIn("STARTUP_BACKOFF_MULTIPLIER", source)
+        self.assertIn("STARTUP_BACKOFF_CAP_S", source)
+        self.assertIn("jitter=True", source, (
+            "_database must pass jitter=True to connection() -- D9 "
+            "requires full jitter, not just backoff, for the job "
+            "entrypoint's first connection"))
+        # Sanity: the constants it references are actually the sized-up
+        # ones, not merely present in an unrelated comment.
+        self.assertGreaterEqual(STARTUP_CONNECT_ATTEMPTS, 10)
+        self.assertGreater(STARTUP_BACKOFF_CAP_S, 0)
+        self.assertGreater(STARTUP_BACKOFF_INITIAL_S, 0)
+        self.assertGreater(STARTUP_BACKOFF_MULTIPLIER, 1)
 
 
 # ---------------------------------------------------------------------------
