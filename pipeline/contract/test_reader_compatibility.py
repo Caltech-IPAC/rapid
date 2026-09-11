@@ -70,8 +70,11 @@ def _columns(conn, table):
 #: the tail rather than disturbing anything before it. `checksum_algorithm`
 #: is CR-8 (rapid_systems migration 054), landed after D's `product_id`
 #: (048) in stream order; widening `checksum` itself is an `ALTER COLUMN
-#: ... TYPE`, not an append, so it does not appear here.
-TRAILING_COLUMNS_AFTER_PRODUCT_ID = ("checksum_algorithm",)
+#: ... TYPE`, not an append, so it does not appear here. `run_id` is
+#: migration 108, which appends it to both tables so per-run product
+#: currency can be a partial unique index rather than a convention — an
+#: index cannot join, so the run has to be on the row it indexes.
+TRAILING_COLUMNS_AFTER_PRODUCT_ID = ("checksum_algorithm", "run_id")
 
 
 @pytest.mark.parametrize("table", ALTERED_TABLES)
