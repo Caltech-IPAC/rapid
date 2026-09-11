@@ -103,8 +103,9 @@ class RecordingExecute:
 
     Extended (integration review ruling 13) to also stand in for
     work_units/unit_events: `work_units_by_scope` seeds the SELECT a
-    find-or-create issues (keyed by `(job_type, input_scope)`), and
-    `fk_missing_job_types` simulates the definition-FK guard `_precreate`
+    find-or-create issues (keyed by `(job_type, input_scope, run_id)` as of
+    migration 108's run-scoped identity — see that field's own docstring),
+    and `fk_missing_job_types` simulates the definition-FK guard `_precreate`
     is written to tolerate — a job type in that set makes an INSERT INTO
     work_units raise, exactly as the real FK does today for every job type
     Both simulated database failures are raised as `FakePgError` carrying a
@@ -154,18 +155,25 @@ class RecordingExecute:
         #: The clock reading at the first `INSERT INTO attempts`, so a test can
         #: assert the rows were written before SubmitJob was called.
         self.first_attempt_insert_call = None
-        #: (job_type, input_scope) -> {"work_unit_id": int, "state": str}.
-        #: Empty by default: every unit is a fresh work unit.
-        self.work_units_by_scope: dict[tuple[str, str], dict] = {}
+        #: (job_type, input_scope, run_id) -> {"work_unit_id": int, "state":
+        #: str}. Empty by default: every unit is a fresh work unit. `run_id`
+        #: joined the key at migration 108 (run-scoped identity, throughput-
+        #: sitting ruling 2026-09-11) — every seed that predates 108 (and
+        #: every test that never passes `work_unit_run_id`) carries
+        #: `run_id=None`, the production lane, exactly as before.
+        self.work_units_by_scope: dict[tuple[str, str, str | None], dict] = {}
         #: Job types whose INSERT INTO work_units raises SQLSTATE 23503,
         #: simulating a missing workflow_definitions row. No longer swallowed
         #: by production (rule 12): a missing definition is a hard error now
         #: that a deployment step loads them.
         self.fk_missing_job_types: set[str] = set()
-        #: (job_type, input_scope) pairs whose next INSERT raises SQLSTATE
-        #: 23505 and materializes `race_winner_id` as the winning row — the
-        #: claim-race loser's view (rule 6).
-        self.unique_violation_scopes: set[tuple[str, str]] = set()
+        #: (job_type, input_scope, run_id) triples whose next INSERT raises
+        #: SQLSTATE 23505 and materializes `race_winner_id` as the winning
+        #: row — the claim-race loser's view (rule 6). `run_id` joined the
+        #: key at migration 108 (run-scoped identity); every existing seed
+        #: predating that carries `run_id=None` explicitly now rather than
+        #: leaving it implicit in a 2-tuple.
+        self.unique_violation_scopes: set[tuple[str, str, str | None]] = set()
         #: The work_unit_id a simulated race winner holds.
         self.race_winner_id = 4242
         #: Whether DRAFT 044 (submissions) is "applied" in this double —
@@ -229,14 +237,27 @@ class RecordingExecute:
             # ignored, so the two cases must be distinguishable).
             return [(params[0],)] if params else [("lj",)]
         if "SELECT work_unit_id" in statement and "FROM work_units" in statement:
-            job_type, input_scope = params[0], params[1]
-            found = self.work_units_by_scope.get((job_type, input_scope))
+            # RUN-SCOPED (migration 108): the real SELECT's third bound
+            # parameter is `run_id`, matched `IS NOT DISTINCT FROM` — this
+            # double keys `work_units_by_scope` on the SAME
+            # (job_type, input_scope, run_id) triple so a test double that
+            # never seeded a run_id still behaves exactly as before (every
+            # existing key is implicitly `run_id=None`).
+            job_type, input_scope, run_id = params[0], params[1], params[2]
+            found = self.work_units_by_scope.get(
+                (job_type, input_scope, run_id))
             if found is None:
                 return []
             return [(found["work_unit_id"], job_type, input_scope,
                      "prompt-processing", 1, found["state"], None, None)]
         if "INSERT INTO work_units" in statement:
+            # Column order matches `WorkUnitWriter.create_work_unit`'s own
+            # INSERT list: job_type, input_scope, operational_class,
+            # definition_version, state, blocked_reason, campaign_id,
+            # run_id, created_at, updated_at, data_class — `run_id` is
+            # param index 7.
             job_type, input_scope = params[0], params[1]
+            run_id = params[7]
             if job_type in self.fk_missing_job_types:
                 # A DRIVER-SHAPED ERROR, not a message string. Production
                 # classifies by SQLSTATE (`pipeline.intent.errors`), so a
@@ -248,12 +269,13 @@ class RecordingExecute:
                                   'insert or update on table "work_units" '
                                   'violates foreign key constraint '
                                   '"work_units_definition_fk"')
-            if (job_type, input_scope) in self.unique_violation_scopes:
+            if (job_type, input_scope, run_id) in self.unique_violation_scopes:
                 # The claim-race loser's view: another transaction created
-                # this exact identity first and migration 036's partial
+                # this exact identity first and the run-scoped partial
                 # unique index refuses ours.
-                self.unique_violation_scopes.discard((job_type, input_scope))
-                self.work_units_by_scope[(job_type, input_scope)] = {
+                self.unique_violation_scopes.discard(
+                    (job_type, input_scope, run_id))
+                self.work_units_by_scope[(job_type, input_scope, run_id)] = {
                     "work_unit_id": self.race_winner_id, "state": "ready"}
                 raise FakePgError(UNIQUE_VIOLATION,
                                   'duplicate key value violates unique '
@@ -261,7 +283,7 @@ class RecordingExecute:
                                   '"work_units_current_identity_uq"')
             work_unit_id = self.next_work_unit_id
             self.next_work_unit_id += 1
-            self.work_units_by_scope[(job_type, input_scope)] = {
+            self.work_units_by_scope[(job_type, input_scope, run_id)] = {
                 "work_unit_id": work_unit_id, "state": "ready"}
             return [(work_unit_id,)]
         if "derived.transition_work_unit" in statement:
@@ -281,7 +303,7 @@ class RecordingExecute:
             # back, not the return shape.
             work_unit_id, from_state = params[0], params[1]
             job_type = None
-            for (jt, scope), row in self.work_units_by_scope.items():
+            for (jt, scope, run_id), row in self.work_units_by_scope.items():
                 if row["work_unit_id"] == work_unit_id:
                     if row["state"] == from_state:
                         row["state"] = params[2]
@@ -749,7 +771,7 @@ class SubmitGatheredAllExcludedTests(unittest.TestCase):
         from submission.subjects import subject_for
         subject = subject_for(job_type).subject_for(unit)
         scope = "/".join(str(c) for c in subject[1:])
-        self.execute.work_units_by_scope[(job_type, scope)] = {
+        self.execute.work_units_by_scope[(job_type, scope, None)] = {
             "work_unit_id": work_unit_id, "state": "submitted"}
 
     def test_a_fully_claimed_gather_submits_nothing_and_raises_nothing(self):
@@ -1063,11 +1085,11 @@ class SubmissionAuthorizationTests(unittest.TestCase):
         kwargs.update(overrides)
         return seams.submit_units(unit_list, **kwargs)
 
-    def _seed_scope(self, unit, state, work_unit_id=555):
+    def _seed_scope(self, unit, state, work_unit_id=555, run_id=None):
         from submission.subjects import subject_for
         subject = subject_for("science").subject_for(unit)
         scope = "/".join(str(c) for c in subject[1:])
-        self.execute.work_units_by_scope[("science", scope)] = {
+        self.execute.work_units_by_scope[("science", scope, run_id)] = {
             "work_unit_id": work_unit_id, "state": state}
         return scope
 
@@ -1109,7 +1131,7 @@ class SubmissionAuthorizationTests(unittest.TestCase):
                 unit = units(count=1)[0]
                 subject = subject_for("science").subject_for(unit)
                 scope = "/".join(str(c) for c in subject[1:])
-                execute.work_units_by_scope[("science", scope)] = {
+                execute.work_units_by_scope[("science", scope, None)] = {
                     "work_unit_id": 555, "state": state}
                 batch = FakeBatchClient()
 
@@ -1209,6 +1231,189 @@ class SubmissionAuthorizationTests(unittest.TestCase):
                           "for a unit the first replica already submitted")
 
 
+class RunScopedWorkUnitTests(unittest.TestCase):
+    """`work_unit_run_id` (throughput-sitting ruling, 2026-09-11): a
+    campaign run's work unit must be a DIFFERENT row from production's for
+    the same (job_type, input_scope), and production's own lookup must be
+    completely unaffected by the parameter's existence.
+
+    Reuses `SubmissionAuthorizationTests`' own `_submit`/`_seed_scope`
+    shape (this class needs the identical `submit_units` call surface,
+    just with `work_unit_run_id` exercised) rather than a parallel fixture.
+    """
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _submit(self, unit_list, **overrides):
+        kwargs = dict(
+            job_type="science", queue="rapid-queue-prompt",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="run-1",
+            now=utc(2026, 8, 6, 12, 0, 0))
+        kwargs.update(overrides)
+        return seams.submit_units(unit_list, **kwargs)
+
+    def _seed_scope(self, unit, state, work_unit_id=555, run_id=None):
+        from submission.subjects import subject_for
+        subject = subject_for("science").subject_for(unit)
+        scope = "/".join(str(c) for c in subject[1:])
+        self.execute.work_units_by_scope[("science", scope, run_id)] = {
+            "work_unit_id": work_unit_id, "state": state}
+        return scope
+
+    def test_production_still_finds_its_own_existing_row(self):
+        # THE REGRESSION GUARD: production (work_unit_run_id=None, the
+        # default) must find its own pre-existing row exactly as it did
+        # before run scoping existed — this is the "production lane
+        # unchanged" guarantee the task is non-negotiable about.
+        unit = units(count=1)[0]
+        self._seed_scope(unit, "ready", work_unit_id=777, run_id=None)
+
+        submission, attempt_ids = self._submit([unit])
+
+        self.assertEqual(1, submission.array_size)
+        self.assertEqual(1, len(attempt_ids))
+        transitions = [params for sql, params in self.execute.statements
+                      if "derived.transition_work_unit" in sql]
+        self.assertEqual(1, len(transitions))
+        self.assertIn(777, transitions[0],
+                      "production must transition ITS OWN pre-existing "
+                      "work unit (777), not create a second one")
+        creates = [s for s, _ in self.execute.statements
+                  if "INSERT INTO work_units" in s]
+        self.assertEqual([], creates,
+                         "production found its row and must not also "
+                         "create one")
+
+    def test_a_campaign_run_does_not_find_productions_row(self):
+        # THE DEFECT, DIRECTLY: production already completed this exact
+        # (job_type, input_scope) — its work unit is 'complete', which
+        # would exclude a caller that (incorrectly) found the SAME row.
+        # A campaign run's lookup for the SAME subject must not see it at
+        # all, and must therefore be free to create (and be authorized
+        # for) its OWN fresh work unit.
+        unit = units(count=1)[0]
+        self._seed_scope(unit, "complete", work_unit_id=999, run_id=None)
+
+        submission, attempt_ids = self._submit(
+            [unit], work_unit_run_id="awaicgen54-proof-20260911")
+
+        self.assertIsNotNone(
+            submission,
+            "a campaign run must submit its own unit even though "
+            "production's (job_type, input_scope) is already 'complete'")
+        self.assertEqual(1, submission.array_size)
+        self.assertEqual(1, len(attempt_ids))
+        creates = [(sql, params) for sql, params in self.execute.statements
+                  if "INSERT INTO work_units" in sql]
+        self.assertEqual(1, len(creates),
+                         "the campaign run must create its OWN row, not "
+                         "reuse production's")
+        _, create_params = creates[0]
+        self.assertNotIn(999, create_params)
+
+    def test_a_campaign_run_finds_its_own_row_on_a_second_lookup(self):
+        # A unit already staged 'ready' under THIS run (e.g. by a prior
+        # gathering pass under the same run) must be found and transitioned
+        # — the run-scoped analogue of "a pre-existing ready unit is still
+        # authorized and transitions".
+        unit = units(count=1)[0]
+        self._seed_scope(unit, "ready", work_unit_id=888,
+                         run_id="awaicgen54-proof-20260911")
+
+        submission, attempt_ids = self._submit(
+            [unit], work_unit_run_id="awaicgen54-proof-20260911")
+
+        self.assertEqual(1, submission.array_size)
+        self.assertEqual(1, len(attempt_ids))
+        transitions = [params for sql, params in self.execute.statements
+                      if "derived.transition_work_unit" in sql]
+        self.assertEqual(1, len(transitions))
+        self.assertIn(888, transitions[0])
+        creates = [s for s, _ in self.execute.statements
+                  if "INSERT INTO work_units" in s]
+        self.assertEqual([], creates,
+                         "the run's own existing unit must be reused, not "
+                         "duplicated")
+
+    def test_a_created_campaign_work_unit_carries_the_runs_name(self):
+        # `create_work_unit`'s INSERT must carry the run's bare name — see
+        # `WorkUnitWriter.create_work_unit`'s own INSERT column list
+        # (run_id is parameter index 7) — or the NEXT lookup under the same
+        # run will not find this row and will try to create it again every
+        # single poll.
+        unit = units(count=1)[0]
+
+        self._submit([unit], work_unit_run_id="awaicgen54-proof-20260911")
+
+        creates = [(sql, params) for sql, params in self.execute.statements
+                  if "INSERT INTO work_units" in sql]
+        self.assertEqual(1, len(creates))
+        _, create_params = creates[0]
+        self.assertEqual("awaicgen54-proof-20260911", create_params[7])
+
+    def test_two_different_campaign_runs_do_not_find_each_others_rows(self):
+        unit = units(count=1)[0]
+        self._seed_scope(unit, "ready", work_unit_id=111, run_id="run-alpha")
+
+        submission, attempt_ids = self._submit(
+            [unit], work_unit_run_id="run-beta")
+
+        self.assertIsNotNone(
+            submission,
+            "run-beta must submit its own unit rather than finding "
+            "run-alpha's and being excluded as already-claimed")
+        self.assertEqual(1, submission.array_size)
+        creates = [(sql, params) for sql, params in self.execute.statements
+                  if "INSERT INTO work_units" in sql]
+        self.assertEqual(1, len(creates),
+                         "run-beta must create its OWN row, not reuse "
+                         "run-alpha's")
+        _, create_params = creates[0]
+        self.assertEqual("run-beta", create_params[7])
+        self.assertNotIn(111, create_params)
+
+    def test_split_batches_of_one_run_share_one_work_unit(self):
+        # THE BATCH-SUFFIX GUARD: `submit_gathered` mints `<run_id>-<n>`
+        # per array-job batch for `attempts.run_id`/the manifest identity,
+        # but work-unit identity must stay keyed on the RUN's bare name —
+        # never the suffixed batch id. Simulated directly at the
+        # `submit_units` layer (which is what actually receives the
+        # decided `work_unit_run_id`) with two calls carrying DIFFERENT
+        # `run_id` (batch) values but the SAME `work_unit_run_id`.
+        unit = units(count=1)[0]
+
+        first_submission, _ = self._submit(
+            [unit], run_id="proof-0", work_unit_run_id="proof")
+        creates = [s for s, _ in self.execute.statements
+                  if "INSERT INTO work_units" in s]
+        self.assertEqual(1, len(creates))
+
+        # A second batch of the SAME run, same subject (a retried poll
+        # re-offering it): must find the first batch's work unit — now
+        # 'submitted' — and be DEFERRED, not create a second row keyed by
+        # a different batch-suffixed run_id.
+        second_batch = FakeBatchClient(clock=self.clock)
+        submission, attempt_ids = self._submit(
+            [unit], run_id="proof-1", work_unit_run_id="proof",
+            batch_client=second_batch)
+
+        self.assertIsNone(submission)
+        self.assertEqual([], attempt_ids)
+        creates_after = [s for s, _ in self.execute.statements
+                        if "INSERT INTO work_units" in s]
+        self.assertEqual(1, len(creates_after),
+                         "the second batch of the SAME run must not "
+                         "create a second work unit under its own "
+                         "batch-suffixed id")
+
+
 class AttachWorkUnitTests(unittest.TestCase):
     """`_precreate` attaches a work_unit_id to every new attempt (ruling 13).
 
@@ -1279,7 +1484,7 @@ class AttachWorkUnitTests(unittest.TestCase):
         from submission.subjects import subject_for
         subject = subject_for("science").subject_for(unit)
         scope = "/".join(str(c) for c in subject[1:])
-        self.execute.work_units_by_scope[("science", scope)] = {
+        self.execute.work_units_by_scope[("science", scope, None)] = {
             "work_unit_id": 777, "state": "ready"}
 
         self._submit(count=1)
@@ -1320,7 +1525,7 @@ class AttachWorkUnitTests(unittest.TestCase):
 
         unit = units(count=1)[0]
         scope = seams._input_scope_for("science", unit)
-        self.execute.unique_violation_scopes.add(("science", scope))
+        self.execute.unique_violation_scopes.add(("science", scope, None))
 
         _attach_work_unit(self.execute, "science", unit, attempt_id=601,
                           moment=utc(2027, 10, 1))
@@ -1463,10 +1668,11 @@ class CampaignUnitTransitionIntegrityTests(unittest.TestCase):
 
         # And the campaign's own work unit is the one now transitioned
         # ready->submitted and attached to the new attempt.
-        [(job_type, campaign_scope)] = self.execute.work_units_by_scope.keys()
+        [(job_type, campaign_scope, run_id)] = \
+            self.execute.work_units_by_scope.keys()
         self.assertEqual(parse_exposure_sca_scope(campaign_scope), (5001, 7))
         campaign_work_unit_id = self.execute.work_units_by_scope[
-            (job_type, campaign_scope)]["work_unit_id"]
+            (job_type, campaign_scope, run_id)]["work_unit_id"]
 
         updates = [params for sql, params in self.execute.statements
                    if "UPDATE attempts SET work_unit_id" in sql]
