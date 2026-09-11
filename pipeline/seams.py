@@ -261,6 +261,23 @@ def submit_units(units, job_type, queue, job_definition, binding,
     posture `_precreate`'s own `execute=None` branch already has for
     attaching work units, extended here for the same reason: a caller with
     no intent-layer connection has no work_units table to authorize against.
+
+    **RETURNS `(None, [])` IF AUTHORIZATION EXCLUDES EVERY UNIT** (observed
+    live 2026-09-11, first `rapidctl run start --phase reference --apply`:
+    `ValueError: a manifest needs at least one processing unit`, raised from
+    `Manifest.__init__` with no caller-visible sign that "every gathered
+    unit was already claimed" was the reason). Before this fix, a caller
+    that gathered N units and found all N already owned by someone else —
+    the ordinary "someone else already submitted this" outcome the
+    `SubmissionAuthorizationTests` docstrings call "correct, not
+    incidental" for a MIXED batch — hit that outcome at its most extreme
+    (zero survivors) as an unhandled `ValueError` instead. It is the same
+    outcome as gathering nothing in the first place (the `if not units`
+    guard three lines above this docstring's own function never has to
+    special-case "zero to start with" vs. "zero after authorization"; both
+    mean nothing to submit here), so it gets the same non-exceptional
+    result shape rather than a different one for the same fact arriving one
+    step later.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
     units = list(units)
@@ -275,6 +292,24 @@ def submit_units(units, job_type, queue, job_definition, binding,
                 "excluded from this manifest", run_id, len(authorized),
                 len(units), job_type)
         units = authorized
+        if not units:
+            # EVERY gathered unit was already claimed — not a partial
+            # exclusion (the mixed-batch case just above still builds a
+            # manifest from whatever survived) but ALL of it, so there is
+            # nothing left for a manifest to carry. `Manifest([])` would
+            # raise `ValueError` here with no mention of authorization at
+            # all — a caller catching that exception cannot tell "the
+            # gathering query is wrong" from "this run already submitted
+            # these exact units a moment ago" apart, and `submit_gathered`'s
+            # batch loop has nothing sane to do with a raised exception for
+            # an outcome this ordinary. Returning the same shape
+            # `submit_gathered` already uses for "nothing gathered at all"
+            # lets the caller tell the two apart from the log line above,
+            # emitted either way, rather than from a stack trace.
+            logger.info(
+                "run %s: every gathered %s unit was already claimed; "
+                "nothing to submit", run_id, job_type)
+            return None, []
     manifest = Manifest(units=units, batch_id=run_id, job_type=job_type,
                         reference_observation_window=(
                             reference_observation_window))
@@ -450,9 +485,18 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
     cuts), and each `submit_units` call commits it at its own two boundaries
     regardless of how many other batches share the connection.
 
-    Returns the list of (submission, attempt_ids) pairs, one per batch. A
-    batch that fails to submit raises: its rows remain as reconciliation
-    cases, and continuing to the next batch would hide that from the operator.
+    Returns the list of (submission, attempt_ids) pairs, ONE PER BATCH THAT
+    ACTUALLY SUBMITTED — never one per batch cut. A batch that fails to
+    submit raises: its rows remain as reconciliation cases, and continuing
+    to the next batch would hide that from the operator. A batch every one
+    of whose units authorization excludes is different from a failure —
+    `submit_units` now reports that as `(None, [])` rather than raising
+    (see its own docstring) — and is dropped from this list rather than
+    appended, so a caller summing `len(attempt_ids)` across the return
+    value never has to skip a `None` submission it did not ask for. The
+    length of the returned list can therefore be LESS than `len(batches)`;
+    it is never more, and a caller wanting to know how many batches were
+    cut still has `batches` computed just below.
     """
     units = list(units)
     if not units:
@@ -467,7 +511,7 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
     results = []
     for index, batch in enumerate(batches):
         batch_run_id = run_id if len(batches) == 1 else f"{run_id}-{index}"
-        results.append(submit_units(
+        submission, attempt_ids = submit_units(
             batch.manifest.units, job_type=job_type, queue=queue,
             job_definition=job_definition, binding=binding,
             manifest_bucket=manifest_bucket, manifest_prefix=manifest_prefix,
@@ -477,7 +521,18 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
             # they are one submission cut by the array ceiling, not runs
             # under different windows.
             reference_observation_window=reference_observation_window,
-            protocol_commit=protocol_commit))
+            protocol_commit=protocol_commit)
+        if submission is None:
+            # This batch's units were all claimed by someone else between
+            # gathering and submission (a stale gathered list, a second
+            # operator replica, a retried `--apply` re-offering units its
+            # own earlier, since-committed attempt already claimed) — see
+            # `submit_units`'s docstring for why that is `(None, [])`
+            # rather than a raise. Not appended: it is not a batch that was
+            # submitted, and a caller summing children across `results`
+            # must not have to filter a `None` out of it themselves.
+            continue
+        results.append((submission, attempt_ids))
     return results
 
 

@@ -10,7 +10,8 @@ from pipeline.intent.errors import (FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION,
 from pipeline.reconciler.test.stubs import FakeConnection, attempt_row, utc
 from submission import submit
 from submission.manifest import ProcessingUnit
-from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
+from submission.routes import (JOB_TYPE_CROSSMATCH, JOB_TYPE_REFERENCE_IMAGE,
+                               JOB_TYPE_SCIENCE)
 from submission.test import payload_fixtures as fixtures
 
 
@@ -695,6 +696,149 @@ class SubmitUnitsTests(unittest.TestCase):
                          "only the pre-Batch commit may have fired")
 
 
+class SubmitGatheredAllExcludedTests(unittest.TestCase):
+    """`submit_gathered` must survive a batch whose units are ALL excluded
+    by authorization — the exact shape of the live incident this class is
+    named for the fix, not a synthetic edge case.
+
+    OBSERVED LIVE 2026-09-11, `rapidctl run start --phase reference --apply`:
+    a campaign run's dry run reported "would gather 4 unit(s)"
+    (`gather_for_run` returning a plain materialized list, confirmed
+    correct — `rapidctl:run:_cmd_run_start` computes `len(units)` from the
+    SAME list object the `--apply` branch goes on to submit, so the count
+    was never in question). The identical `--apply` command then raised
+    `ValueError: a manifest needs at least one processing unit`, uncaught,
+    exit 70 — reproduced twice. Nothing was written to `work_units`,
+    `attempts`, or `refimages` for the run either time (verified against
+    the live database), which is consistent with every attempt failing at
+    the very first `Manifest()` construction, before any row for THIS
+    call's own units could be created — the exception came from
+    authorization finding the 4 gathered units already claimed by an
+    EARLIER commit (`pipeline.seams.ConnectionExecutor(conn).execute`
+    defaults `autocommit_each=True`, so `_decide_work_unit`'s
+    create-and-transition for a fresh unit lands durably the instant it
+    runs, not at some later transaction boundary this call controls) —
+    most plausibly the first of the two reproductions, whose own crash
+    happened AFTER that commit, not before it.
+
+    THE ROOT CAUSE ends at `pipeline.seams.submit_units`: `_authorize_
+    units` (step 0, `submit_units`'s own docstring) correctly excludes a
+    unit whose work unit is not `'ready'`, and when every gathered unit is
+    such a unit, `submit_units` used to still call `Manifest(units=[], ...)`
+    unconditionally — the empty-manifest guard three of this file's other
+    test classes already asserted as "the correct outcome, not incidental"
+    was itself the defect: an ordinary "nothing left to submit" fact
+    surfacing as an unhandled exception instead of the empty result
+    `submit_gathered` already knows how to report for "nothing gathered at
+    all". Fixed at `submit_units` (returns `(None, [])` rather than
+    raising) and at `submit_gathered` (skips a `(None, [])` batch result
+    rather than propagating whatever `Manifest([])` would have done) —
+    this class exercises the second half, end to end through
+    `submit_gathered` itself, because that is the call `pipeline.
+    operatorctl.run.submit_run` actually makes and the shape the CLI
+    command that crashed live goes through.
+    """
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _seed_submitted(self, unit, job_type, work_unit_id):
+        from submission.subjects import subject_for
+        subject = subject_for(job_type).subject_for(unit)
+        scope = "/".join(str(c) for c in subject[1:])
+        self.execute.work_units_by_scope[(job_type, scope)] = {
+            "work_unit_id": work_unit_id, "state": "submitted"}
+
+    def test_a_fully_claimed_gather_submits_nothing_and_raises_nothing(self):
+        # The live shape exactly: N>0 units come back from gathering (a
+        # non-empty `units` list, matching the dry run's own "would gather
+        # N unit(s)" count), and every one of them is already claimed by an
+        # earlier, committed submission. `submit_gathered` must return an
+        # empty result list, not raise.
+        reference_units = [
+            ProcessingUnit(payload=fixtures.reference_payload(
+                exposure=90000 + i, sca=(i % 18) + 1))
+            for i in range(4)]
+        for i, unit in enumerate(reference_units):
+            self._seed_submitted(unit, JOB_TYPE_REFERENCE_IMAGE,
+                                 work_unit_id=900 + i)
+
+        results = seams.submit_gathered(
+            reference_units, job_type=JOB_TYPE_REFERENCE_IMAGE,
+            queue="rapid-queue-bulk", job_definition="rapid-pipeline-bulk",
+            binding=BINDING, manifest_bucket="bucket",
+            manifest_prefix="submissions", s3_client=self.s3,
+            batch_client=self.batch, execute=self.execute, run_id="run-1",
+            now=utc(2026, 8, 6, 12, 0, 0))
+
+        self.assertEqual([], results)
+        self.assertIsNone(self.batch.submitted_at_call,
+                          "SubmitJob must never be called when every "
+                          "gathered unit was already claimed")
+        creates = [s for s, _ in self.execute.statements
+                  if "INSERT INTO attempts" in s]
+        self.assertEqual([], creates)
+
+    def test_a_partially_claimed_gather_still_submits_the_rest(self):
+        # The mixed case at the `submit_gathered` level (not just inside
+        # one `submit_units` call, which `SubmissionAuthorizationTests`
+        # already covers): a batch cut from several units, some already
+        # claimed, must still submit the survivors, and `results` must
+        # carry exactly one (submission, attempt_ids) pair for that batch
+        # — not a second, empty entry for units authorization excluded.
+        fresh = [ProcessingUnit(payload=fixtures.reference_payload(
+                     exposure=91000 + i, sca=1))
+                for i in range(2)]
+        claimed = [ProcessingUnit(payload=fixtures.reference_payload(
+                       exposure=90000, sca=1))]
+        self._seed_submitted(claimed[0], JOB_TYPE_REFERENCE_IMAGE,
+                             work_unit_id=555)
+
+        results = seams.submit_gathered(
+            fresh + claimed, job_type=JOB_TYPE_REFERENCE_IMAGE,
+            queue="rapid-queue-bulk", job_definition="rapid-pipeline-bulk",
+            binding=BINDING, manifest_bucket="bucket",
+            manifest_prefix="submissions", s3_client=self.s3,
+            batch_client=self.batch, execute=self.execute, run_id="run-1",
+            now=utc(2026, 8, 6, 12, 0, 0))
+
+        self.assertEqual(1, len(results))
+        submission, attempt_ids = results[0]
+        self.assertEqual(2, len(attempt_ids))
+        self.assertEqual(2, submission.array_size)
+
+
+    def test_a_post_db_chain_phase_shares_the_fix(self):
+        # `rapidctl run start`'s four post-DB-chain phases (catalog-load,
+        # crossmatch, statistics, merge-dedup — `_phase_table()` in
+        # `pipeline.operatorctl.run`) gather through a different branch of
+        # `gather_for_run` than reference/science, but `_cmd_run_start`
+        # submits EVERY phase through the same `submit_run` ->
+        # `seams.submit_gathered` -> `seams.submit_units` call chain (only
+        # the gathering side branches on `phase`) — so they were equally
+        # exposed to the pre-fix defect and are equally covered by the fix,
+        # not merely "probably fine by similarity". Exercised here with a
+        # crossmatch unit standing in for the class, the SAME as the
+        # reference-image case above but through `JOB_TYPE_CROSSMATCH`.
+        unit = ProcessingUnit(payload=fixtures.crossmatch_payload(
+            proc_date="20270930", field=1))
+        self._seed_submitted(unit, JOB_TYPE_CROSSMATCH, work_unit_id=777)
+
+        results = seams.submit_gathered(
+            [unit], job_type=JOB_TYPE_CROSSMATCH,
+            queue="rapid-queue-bulk", job_definition="rapid-pipeline-bulk",
+            binding=BINDING, manifest_bucket="bucket",
+            manifest_prefix="submissions", s3_client=self.s3,
+            batch_client=self.batch, execute=self.execute, run_id="run-1",
+            now=utc(2026, 8, 6, 12, 0, 0))
+
+        self.assertEqual([], results)
+        self.assertIsNone(self.batch.submitted_at_call)
+
+
 class SubmitGatheredJobTypeTests(unittest.TestCase):
     """`submit_gathered` must batch units under THEIR OWN job type.
 
@@ -932,17 +1076,22 @@ class SubmissionAuthorizationTests(unittest.TestCase):
         # already `submitted` (a stale gathered list, or a second operator
         # replica that already claimed it) must not get a second attempt
         # row or a second Batch job.
+        #
+        # ALL-EXCLUDED IS `(None, [])`, NOT A RAISE (submit-gap fix,
+        # observed live 2026-09-11): the whole batch had exactly one unit
+        # and it was excluded, so there is nothing left to submit — the
+        # SAME ordinary outcome as gathering nothing to start with, which
+        # `submit_gathered` already reports without raising. Before this
+        # fix `Manifest([])` raised `ValueError` here with nothing in the
+        # exception naming authorization as the reason; see
+        # `pipeline.seams.submit_units`'s own docstring for the incident.
         unit = units(count=1)[0]
         self._seed_scope(unit, "submitted")
 
-        with self.assertRaises(ValueError):
-            # Manifest() itself refuses an empty unit list — the whole
-            # batch had exactly one unit and it was excluded, so there is
-            # nothing left to submit. This is the correct outcome, not an
-            # incidental one: see the "everything excluded" test below for
-            # the assertion on WHY nothing was submitted.
-            self._submit([unit])
+        submission, attempt_ids = self._submit([unit])
 
+        self.assertIsNone(submission)
+        self.assertEqual([], attempt_ids)
         self.assertIsNone(self.batch.submitted_at_call,
                           "SubmitJob must never be called for a unit whose "
                           "work unit is not ready")
@@ -964,15 +1113,16 @@ class SubmissionAuthorizationTests(unittest.TestCase):
                     "work_unit_id": 555, "state": state}
                 batch = FakeBatchClient()
 
-                with self.assertRaises(ValueError):
-                    seams.submit_units(
-                        [unit], job_type="science", queue="rapid-queue-prompt",
-                        job_definition="rapid-pipeline-science",
-                        binding=BINDING, manifest_bucket="bucket",
-                        manifest_prefix="submissions", s3_client=FakeS3(),
-                        batch_client=batch, execute=execute, run_id="run-1",
-                        now=utc(2026, 8, 6, 12, 0, 0))
+                submission, attempt_ids = seams.submit_units(
+                    [unit], job_type="science", queue="rapid-queue-prompt",
+                    job_definition="rapid-pipeline-science",
+                    binding=BINDING, manifest_bucket="bucket",
+                    manifest_prefix="submissions", s3_client=FakeS3(),
+                    batch_client=batch, execute=execute, run_id="run-1",
+                    now=utc(2026, 8, 6, 12, 0, 0))
 
+                self.assertIsNone(submission)
+                self.assertEqual([], attempt_ids)
                 self.assertIsNone(batch.submitted_at_call)
 
     def test_a_mixed_batch_submits_only_the_authorized_units(self):
@@ -1039,16 +1189,21 @@ class SubmissionAuthorizationTests(unittest.TestCase):
         self.assertEqual(1, first_submission.array_size)
         self.assertEqual(1, len(first_attempts))
 
+        # ALL-EXCLUDED IS `(None, [])`, NOT A RAISE (submit-gap fix): the
+        # second replica's whole batch was this one, already-claimed unit
+        # — see the all-excluded test above for why that is not an
+        # exception.
         second_batch = FakeBatchClient(clock=self.clock)
-        with self.assertRaises(ValueError):
-            seams.submit_units(
-                [unit], job_type="science", queue="rapid-queue-prompt",
-                job_definition="rapid-pipeline-science", binding=BINDING,
-                manifest_bucket="bucket", manifest_prefix="submissions",
-                s3_client=self.s3, batch_client=second_batch,
-                execute=self.execute, run_id="run-2",
-                now=utc(2026, 8, 6, 12, 5, 0))
+        submission, attempt_ids = seams.submit_units(
+            [unit], job_type="science", queue="rapid-queue-prompt",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=second_batch,
+            execute=self.execute, run_id="run-2",
+            now=utc(2026, 8, 6, 12, 5, 0))
 
+        self.assertIsNone(submission)
+        self.assertEqual([], attempt_ids)
         self.assertIsNone(second_batch.submitted_at_call,
                           "the second replica must never call SubmitJob "
                           "for a unit the first replica already submitted")
