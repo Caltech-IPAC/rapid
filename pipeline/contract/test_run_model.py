@@ -37,6 +37,7 @@ import pytest
 from pipeline.contract import fixture
 from pipeline.operatorctl import actions
 from pipeline.operatorctl.contract import InvariantViolation
+from pipeline.intent.writer import READY
 
 
 def _key(name):
@@ -102,11 +103,27 @@ def _make_run_scoped_refimage(conn, run_id_name, field, fid, ppid, tag):
     `fixture._diffimage_parents` uses for its own refimages row) rather than
     through a dedicated fixture helper, since none exists yet for a
     standalone, run-attributed reference image -- 108 predates one.
+
+    **`version` MUST BE MINTED, NOT HARDCODED.** `refimagespk UNIQUE (field,
+    fid, ppid, version)` is a plain uniqueness constraint on the identity
+    group ALONE -- it has no `run_id` in it and no WHERE clause -- so it is
+    checked before either of 108's two partial `vbest`-current indexes is
+    ever reached. Two campaigns sharing one `(field, fid, ppid)` (the whole
+    point of the coexistence property this fixture serves) therefore need
+    two distinct `version`s to both insert at all, exactly as
+    `fixture._diffimage_parents` already computes a fresh version per
+    reference image it creates.
     """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT coalesce(max(version), 0) + 1 FROM refimages"
+            " WHERE field = %s AND fid = %s AND ppid = %s",
+            [field, fid, ppid])
+        version = cur.fetchone()[0]
     return fixture._insert_filling_required(
         conn, "refimages", "rfid",
-        {"field": field, "fid": fid, "ppid": ppid, "version": 1, "vbest": 1,
-         "run_id": run_id_name,
+        {"field": field, "fid": fid, "ppid": ppid, "version": version,
+         "vbest": 1, "run_id": run_id_name,
          "filename": f"ref/{fixture.RUN_TAG}/{tag}.fits"})
 
 
@@ -288,21 +305,26 @@ def test_two_production_diffimages_for_one_identity_still_collide(conn):
                     " WHERE pid = %s", [pid_a])
         rid, expid, fid, rfid = cur.fetchone()
 
+    # Built through `_insert_filling_required` rather than a hand-written
+    # INSERT (as `test_a_campaign_and_a_production_diffimage_coexist_for_one_
+    # identity` above also does for its second row) -- `diffimages` carries
+    # several other NOT NULL columns with no default (`hp6`, `hp9`,
+    # `infobitssci`, `infobitsref`, and `svid`, itself a foreign key to
+    # `swversions`), and the catalog-filling helper is what resolves all of
+    # them correctly, `svid`'s FK included, rather than this test
+    # re-deriving each one by hand as the schema happens to add them.
     attempt_b = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     with pytest.raises(Exception) as caught:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO diffimages"
-                "  (rid, expid, sca, ppid, version, vbest, rfid, field, fid,"
-                "   filename, attempt_id, registered_record_sequence,"
-                "   ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4)"
-                " VALUES (%s, %s, 1, %s, %s, 1, %s, %s, %s, %s, %s, 1,"
-                "         10.0, 10.0, 10.0, 10.0, 10.1, 10.0, 10.1, 10.1,"
-                "         10.0, 10.1)",
-                [rid, expid, ppid,
-                 _next_diffimage_version(conn, rid, ppid), rfid, field, fid,
-                 f"diffimages/{fixture.RUN_TAG}/prod-collide.fits",
-                 attempt_b])
+        fixture._insert_filling_required(
+            conn, "diffimages", "pid",
+            {"rid": rid, "expid": expid, "sca": 1, "ppid": ppid,
+             "version": _next_diffimage_version(conn, rid, ppid), "vbest": 1,
+             "rfid": rfid, "field": field, "fid": fid,
+             "filename": f"diffimages/{fixture.RUN_TAG}/prod-collide.fits",
+             "attempt_id": attempt_b, "registered_record_sequence": 1,
+             "ra0": 10.0, "dec0": 10.0, "ra1": 10.0, "dec1": 10.0,
+             "ra2": 10.1, "dec2": 10.0, "ra3": 10.1, "dec3": 10.1,
+             "ra4": 10.0, "dec4": 10.1})
     conn.rollback()
 
     assert getattr(caught.value, "pgcode", None) == "23505", (
@@ -404,12 +426,14 @@ def test_two_campaign_work_units_with_the_same_scope_coexist(conn):
     unit_a = fixture._insert_filling_required(
         conn, "work_units", "work_unit_id",
         {"job_type": fixture.JOB_TYPE, "input_scope": scope,
-         "run_id": run_a})
+         "run_id": run_a, "state": READY,
+         "definition_version": fixture.DEFINITION_VERSION})
     conn.commit()
     unit_b = fixture._insert_filling_required(
         conn, "work_units", "work_unit_id",
         {"job_type": fixture.JOB_TYPE, "input_scope": scope,
-         "run_id": run_b})
+         "run_id": run_b, "state": READY,
+         "definition_version": fixture.DEFINITION_VERSION})
     conn.commit()
 
     assert unit_a != unit_b
@@ -429,13 +453,16 @@ def test_two_production_work_units_with_the_same_scope_still_collide(conn):
 
     fixture._insert_filling_required(
         conn, "work_units", "work_unit_id",
-        {"job_type": fixture.JOB_TYPE, "input_scope": scope})
+        {"job_type": fixture.JOB_TYPE, "input_scope": scope, "state": READY,
+         "definition_version": fixture.DEFINITION_VERSION})
     conn.commit()
 
     with pytest.raises(Exception) as caught:
         fixture._insert_filling_required(
             conn, "work_units", "work_unit_id",
-            {"job_type": fixture.JOB_TYPE, "input_scope": scope})
+            {"job_type": fixture.JOB_TYPE, "input_scope": scope,
+             "state": READY,
+             "definition_version": fixture.DEFINITION_VERSION})
     conn.rollback()
 
     assert getattr(caught.value, "pgcode", None) == "23505"
