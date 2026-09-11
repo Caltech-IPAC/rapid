@@ -98,8 +98,15 @@ def create_run(conn, idempotency_key, name, owner, kind, purpose=None,
     """
     return call_function(
         conn,
-        "SELECT derived.create_run(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-        "                          %s::jsonb, %s, %s)",
+        # `input_generations` carries an explicit cast for the same reason
+        # `expected_state` does: it is the one parameter whose type is not
+        # inferable from a bare Python value, and psycopg2 binds None as an
+        # untyped NULL. Resolution happens to succeed without it today —
+        # measured, not assumed — but this is the only array parameter in the
+        # package and stating its type costs nothing, where discovering that
+        # it matters would cost a failed operator command.
+        "SELECT derived.create_run(%s, %s, %s, %s, %s, %s, %s, %s, "
+        "                          %s::text[], %s, %s::jsonb, %s, %s)",
         (idempotency_key, name, owner, kind, purpose, branch, image_digest,
          config_hash, input_generations, reason, _json(expected_state),
          dry_run, policy_citation))

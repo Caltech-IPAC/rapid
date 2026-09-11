@@ -107,8 +107,20 @@ fi
 # exactly as `apply-db-migrations.sh` does. Without that the table exists and
 # stays empty, and the startup preflight this suite tests would have nothing
 # to read.
+# THE GLOB IS THREE DIGITS, NOT A LEADING ZERO AND TWO. It was
+# `0[0-9][0-9]-*.sql`, which stopped matching the moment the stream reached
+# 100 — so migrations 100 upward were silently absent from every contract
+# run, and the tier reported PASS over a schema that did not contain them.
+# Found 2026-09-11 when a suite asserting 108/109's constraints failed with
+# `function derived.create_run does not exist` against a database the runner
+# had just declared ready. Nothing announced the skip: the loop simply had
+# fewer files to walk, and `applied` counted what it walked.
+#
+# `sort` because brace-free globbing is already lexical here and the stream
+# is zero-padded to three digits throughout, so lexical order IS numeric
+# order; the explicit sort states the dependence rather than relying on it.
 applied=0
-for f in "$MIGRATIONS_DIR"/0[0-9][0-9]-*.sql; do
+for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9][0-9]-*.sql 2>/dev/null | sort); do
     [ -e "$f" ] || { echo "BRIEF-B-APPLY: FAIL exit=2 (no migration files matched)"; exit 2; }
     fn=$(basename "$f")
     if psql -v ON_ERROR_STOP=1 -f "$f" >>"$LOG" 2>&1; then
