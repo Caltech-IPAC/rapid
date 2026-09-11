@@ -83,6 +83,44 @@ def add_problem_category(conn, idempotency_key, category, description, reason,
          _json(expected_state), dry_run, policy_citation))
 
 
+def create_run(conn, idempotency_key, name, owner, kind, purpose=None,
+              branch=None, image_digest=None, config_hash=None,
+              input_generations=None, reason=None, expected_state=None,
+              dry_run=True, policy_citation=None):
+    """Record a run and its provenance (migration 109: ``derived.create_run``).
+
+    ``expected_state`` is ``{"already_present": false}`` for the ordinary
+    case of declaring a run believed new — the same shape
+    ``add_problem_category`` uses for the same reason. The idempotency key
+    is FIRST, matching every DRAFT-047-shaped function; ``derived.create_run``
+    has no unkeyed overload to fall back to (109's header: "these are new
+    signatures with no pre-existing caller to stay compatible with").
+    """
+    return call_function(
+        conn,
+        "SELECT derived.create_run(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+        "                          %s::jsonb, %s, %s)",
+        (idempotency_key, name, owner, kind, purpose, branch, image_digest,
+         config_hash, input_generations, reason, _json(expected_state),
+         dry_run, policy_citation))
+
+
+def archive_run(conn, idempotency_key, name, reason, expected_state=None,
+                dry_run=True, policy_citation=None):
+    """Archive a run and demote its campaign products (``derived.archive_run``).
+
+    ``expected_state`` is ``{"state": "..."}`` — the run's state as the dry
+    run showed it; the apply refuses if the run moved states since (RA001),
+    the same "the world hasn't moved" contract every other expected-state
+    check in this module enforces.
+    """
+    return call_function(
+        conn,
+        "SELECT derived.archive_run(%s, %s, %s, %s::jsonb, %s, %s)",
+        (idempotency_key, name, reason, _json(expected_state), dry_run,
+         policy_citation))
+
+
 def repair_refused_outbox_rows(conn, idempotency_key, release_identity, reason,
                                expected_state=None, max_rows=200, dry_run=True,
                                policy_citation=None):
@@ -404,6 +442,160 @@ def unit_events_for_work_unit(conn, work_unit_id):
     rather than probing for the row first.
     """
     return _rows(conn, _UNIT_EVENTS, (work_unit_id,))
+
+
+# ---------------------------------------------------------------------------
+# `run status` / `run compare` (108/109): every reader here matches a run's
+# attempts by PREFIX, `run_id LIKE %s` with the wildcard appended to the
+# PARAMETER (never spliced into the SQL text as a literal `%`, which would
+# collide with psycopg2's own `%s`-substitution) — NEVER by equality. The
+# ninth defect of the 8/21 rerun (108's own COMMENT ON TABLE) was matching
+# by equality, which misses every split-pass batch's `<name>-<n>` suffix
+# (`pipeline.seams.submit_gathered`: "each batch gets its own run-scoped
+# identity `<run_id>-<n>` where there is more than one"). `runs.name` is
+# CHECKed free of LIKE metacharacters (108: `runs_name_shape_ck`), so
+# `_run_prefix_pattern` below needs no escaping the way `consumer.
+# _escape_like` needs it for an arbitrary caller-supplied prefix.
+# ---------------------------------------------------------------------------
+
+# THE FAILURE PREDICATE, matching `d9-post.sh`'s corrected gate exactly (the
+# gate the ramp chain settled on after an EARLIER version used
+# `rapid_outcome <> 'success'` alone and reported a clean pass over 218
+# dead letters that were parked, not attempted at all — see
+# `d8_release_blocked.py`'s header). Two disjuncts, not one:
+#
+#   * a TERMINAL attempt whose outcome is not success — `IS DISTINCT FROM`,
+#     not `<>`, because `<>` against a NULL `rapid_outcome` evaluates to
+#     NULL (neither true nor false) and silently excludes the row from
+#     both sides of the comparison. `IS DISTINCT FROM` treats NULL as its
+#     own comparable value, which is exactly the sci-c shape: 218 attempts
+#     dead-lettered with `started_at IS NULL` and `rapid_outcome` never set
+#     at all.
+#   * a `missing_or_contradictory` row — the reconciler's own dead-letter
+#     verdict, which is not itself a `lifecycle_state LIKE 'terminal%'` value
+#     (see `_dead_lettered_pairs` in `pipeline.test.live_w9_ramp`) and so is
+#     not caught by the first disjunct at all; it needs naming explicitly or
+#     it is invisible to a status tally built only from the first clause.
+_RUN_FAILURE_PREDICATE = (
+    "((lifecycle_state LIKE 'terminal%' AND rapid_outcome IS DISTINCT FROM "
+    "'success') OR lifecycle_state = 'missing_or_contradictory')")
+
+# `run status`'s tally: total attempts, failures (the predicate above), and
+# a lifecycle_state breakdown, all in one query over the prefix-matched
+# population — one round trip rather than one query per number, matching
+# `_ATTEMPTS_BY_STATE`'s own "coarse panel, one query" style.
+_RUN_ATTEMPT_TALLY = (
+    "SELECT count(*) AS total,"
+    "       count(*) FILTER (WHERE " + _RUN_FAILURE_PREDICATE + ") AS failures"
+    "  FROM attempts"
+    " WHERE run_id LIKE %s"
+)
+
+_RUN_STATE_BREAKDOWN = """
+SELECT lifecycle_state, count(*)
+  FROM attempts
+ WHERE run_id LIKE %s
+ GROUP BY lifecycle_state
+ ORDER BY lifecycle_state
+"""
+
+# Walltime distribution per stage — min/median/p90/max over `duration_ms`,
+# using PostgreSQL's own `percentile_cont` (a standard aggregate, not
+# anything this schema defines) rather than hand-rolled percentile
+# arithmetic in Python, which is the kind of thing `catalog.md` principle 4
+# already argues against doing in application code when the database can
+# state it as a structural fact about the rows. Joins to `attempts` (not a
+# bare `attempt_stages` scan) so the prefix match is the same one every
+# other run reader uses.
+_RUN_STAGE_WALLTIME = """
+SELECT s.stage_name,
+       count(*) AS n,
+       min(s.duration_ms) AS min_ms,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY s.duration_ms) AS p50_ms,
+       percentile_cont(0.9) WITHIN GROUP (ORDER BY s.duration_ms) AS p90_ms,
+       max(s.duration_ms) AS max_ms
+  FROM attempt_stages s
+  JOIN attempts a ON a.attempt_id = s.attempt_id
+ WHERE a.run_id LIKE %s
+   AND s.duration_ms IS NOT NULL
+ GROUP BY s.stage_name
+ ORDER BY s.stage_name
+"""
+
+# `run compare`'s product-count half — one row per product table, matching
+# 108's own denormalized `run_id` columns (`refimages`, `diffimages`,
+# `psfs`; `l2files` is deliberately absent, per 108's header: admission is
+# shared by every run and stays out of run-scoped accounting entirely).
+_RUN_PRODUCT_COUNTS = """
+SELECT 'refimages' AS product, count(*) AS n
+  FROM refimages WHERE run_id LIKE %s
+UNION ALL
+SELECT 'diffimages', count(*) FROM diffimages WHERE run_id LIKE %s
+UNION ALL
+SELECT 'psfs', count(*) FROM psfs WHERE run_id LIKE %s
+"""
+
+_RUN_ROW = """
+SELECT run_id, name, owner, kind, purpose, branch, image_digest,
+       config_hash, input_generations, state, created_at, started_at,
+       completed_at, archived_at
+  FROM runs WHERE name = %s
+"""
+
+
+def run_row(conn, name):
+    """The `runs` row for `name`, or None if no run has been declared by it.
+
+    Note this is an exact match on `runs.name` (the registry key), NOT a
+    prefix match — the prefix match is only ever against `attempts.run_id`
+    and the other product tables' denormalized `run_id` columns, never
+    against the registry itself, which has exactly one row per declared
+    name (108: `runs_name_uq`).
+    """
+    rows = _rows(conn, _RUN_ROW, (name,))
+    return rows[0] if rows else None
+
+
+def _run_prefix_pattern(name):
+    """`name` turned into the LIKE pattern every run reader matches
+    `attempts.run_id` (and the product tables' own `run_id`) against.
+
+    The wildcard is appended to the PARAMETER, not spliced into the SQL
+    text — the same convention `pipeline.registration.consumer.candidates`
+    already uses for `run_id_prefix` — so there is exactly one place a `%`
+    character enters a query, and it is never adjacent to a `%s`
+    placeholder in the SQL string itself. `runs.name` is CHECK-guaranteed
+    free of `%`/`_`/`\\` (108: `runs_name_shape_ck`), so no escaping is
+    needed here the way `consumer._escape_like` needs it for an arbitrary
+    caller-supplied `run_id_prefix`.
+    """
+    return name + "%"
+
+
+def run_attempt_tally(conn, name):
+    """`{"total": n, "failures": n}` for every attempt whose run_id matches
+    `name` by prefix. See `_RUN_FAILURE_PREDICATE` for exactly what counts
+    as a failure and why it is two disjuncts, not one.
+    """
+    rows = _rows(conn, _RUN_ATTEMPT_TALLY, (_run_prefix_pattern(name),))
+    return rows[0] if rows else {"total": 0, "failures": 0}
+
+
+def run_state_breakdown(conn, name):
+    """`lifecycle_state -> count` for every attempt matching `name` by prefix."""
+    return _rows(conn, _RUN_STATE_BREAKDOWN, (_run_prefix_pattern(name),))
+
+
+def run_stage_walltime(conn, name):
+    """Per-stage walltime distribution (min/p50/p90/max, ms) for a run."""
+    return _rows(conn, _RUN_STAGE_WALLTIME, (_run_prefix_pattern(name),))
+
+
+def run_product_counts(conn, name):
+    """`{"refimages": n, "diffimages": n, "psfs": n}` for a run."""
+    pattern = _run_prefix_pattern(name)
+    rows = _rows(conn, _RUN_PRODUCT_COUNTS, (pattern, pattern, pattern))
+    return {row["product"]: row["n"] for row in rows}
 
 
 def recent_mutations(conn, limit=20, with_draft_columns=None):

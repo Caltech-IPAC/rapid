@@ -184,6 +184,170 @@ def build_parser():
     _mutation_arguments(supersede, "attempts under a run prefix")
     supersede.set_defaults(func=_cmd_supersede)
 
+    # --- run registry (migrations 108/109) --------------------------------
+    run_parser = sub.add_parser(
+        "run",
+        help="the run registry: create, start, inspect, register and "
+            "archive a run",
+        description="A run is a first-class row (migration 108), not a "
+                    "free-form run_id prefix an operator has to remember. "
+                    "`create`/`archive` are plain calls into the two "
+                    "migration-109 audited functions; `start`/`register`/"
+                    "`release-dead-letters` act on AWS Batch, the "
+                    "registrar's own transaction, or a work-unit "
+                    "transition and record their outcome through "
+                    "`record_external_action` afterward, since none of "
+                    "the three has a single database function that could "
+                    "own its effect (109's own header explains why). "
+                    "`status`/`compare` are read-only.")
+    runsub = run_parser.add_subparsers(dest="run_command", required=True)
+
+    run_create = runsub.add_parser(
+        "create", help="declare a run",
+        description="Record a run's identity and provenance. Refuses a "
+                    "name overlapping an existing run as a prefix (RA011) "
+                    "-- every reader matches a run's attempts by LIKE, and "
+                    "two overlapping names could not be told apart.")
+    run_create.add_argument("--name", required=True,
+                            help="the run's name -- a LIKE prefix every "
+                                 "other command matches attempts.run_id "
+                                 "against; no percent, underscore or "
+                                 "backslash (108's own CHECK) -- spelled "
+                                 "out rather than shown as punctuation "
+                                 "because a literal %% would break "
+                                 "argparse's own %%-formatted help text")
+    run_create.add_argument("--owner", required=True,
+                            help="who this run belongs to; mandatory -- a "
+                                 "run nobody owns is the state 108 exists "
+                                 "to remove")
+    run_create.add_argument("--kind", required=True,
+                            choices=("production", "campaign"),
+                            help="production keeps the global one-current-"
+                                 "product rule; campaign is current only "
+                                 "within the run, never published")
+    run_create.add_argument("--purpose", default=None)
+    run_create.add_argument("--branch", default=None)
+    run_create.add_argument("--image-digest", default=None)
+    run_create.add_argument("--config-hash", default=None)
+    run_create.add_argument(
+        "--input-generation", dest="input_generations", action="append",
+        default=None, metavar="GENERATION",
+        help="an admission generation this run consumed; repeatable")
+    run_create.add_argument("--expect-absent", action="store_true",
+                            help="refuse if a run of this name already "
+                                 "exists, instead of reporting a no-op "
+                                 "success")
+    _mutation_arguments(run_create, "a run")
+    run_create.set_defaults(func=_cmd_run_create)
+
+    run_start = runsub.add_parser(
+        "start", help="gather and submit a phase under a run",
+        description="The in-process replacement for d7-ramp.sh/"
+                    "live_w9_ramp: gathers via the same submission."
+                    "gathering functions the VPO uses and submits via "
+                    "pipeline.seams.submit_gathered, under whatever role "
+                    "rapidctl itself is running as. The dry run gathers "
+                    "for real and submits nothing.")
+    run_start.add_argument("--name", required=True,
+                           help="the run to submit under -- becomes the "
+                                "run_id (or its prefix, if gathering "
+                                "splits into more than one batch)")
+    run_start.add_argument("--phase", required=True,
+                           choices=("catalog-load", "crossmatch",
+                                    "statistics", "merge-dedup"),
+                           help="which job type to gather and submit. "
+                                "reference/science are deliberately NOT "
+                                "offered here -- see the ledger for why "
+                                "tonight's implementation is scoped to "
+                                "the four post-DB-chain phases")
+    run_start.add_argument("--proc-date", default=None,
+                           help="processing date for catalog-load/"
+                                "crossmatch (YYYYMMDD); required by those "
+                                "two gatherers, ignored by the other two")
+    run_start.add_argument("--cap", type=int, default=None,
+                           help="bound on units submitted; default is "
+                                "everything the gatherer returns")
+    _mutation_arguments(run_start, "a run's gather-and-submit step")
+    run_start.set_defaults(func=_cmd_run_start)
+
+    run_status = runsub.add_parser(
+        "status", help="tally a run: state, failures, dead-letters, "
+                       "walltime by stage",
+        description="Read-only. Counts a FAILURE as either a terminal "
+                    "attempt whose outcome is not success (NULL included) "
+                    "or a missing_or_contradictory row -- rapid_outcome <> "
+                    "'success' alone silently drops every NULL-outcome "
+                    "dead letter (the sci-c defect: 218 attempts that "
+                    "never started). Matches attempts by run_id LIKE "
+                    "name || '%', never by equality.")
+    run_status.add_argument("--name", required=True)
+    run_status.add_argument(
+        "--placement", action="store_true",
+        help="also list container instances behind the run's job queue "
+            "(id, type, running tasks). Best-effort: degrades to an "
+            "advisory line if AWS is unreachable, never fails the "
+            "command")
+    run_status.add_argument("--queue", default=None,
+                            help="job queue to inspect for --placement; "
+                                 "required only when --placement is given")
+    run_status.add_argument("--region", default=None)
+    run_status.add_argument("--profile", default=None)
+    run_status.set_defaults(func=_cmd_run_status)
+
+    run_register = runsub.add_parser(
+        "register", help="the scoped registrar, under this run's prefix",
+        description="Wraps pipeline.registration.scoped."
+                    "run_scoped_registration, scoped to this run's name as "
+                    "a run_id_prefix, then records the outcome once, "
+                    "after -- bringing the third registration entrypoint "
+                    "under the same audited-mutation contract every other "
+                    "one already has.")
+    run_register.add_argument("--name", required=True)
+    run_register.add_argument("--records-bucket", default=None,
+                              help="overrides the parameter tree's records "
+                                   "bucket; mandatory to --apply if the "
+                                   "tree cannot be read from here")
+    _mutation_arguments(run_register, "a run's scoped registration")
+    run_register.set_defaults(func=_cmd_run_register)
+
+    run_compare = runsub.add_parser(
+        "compare", help="tallies, distributions and product counts, two "
+                        "runs side by side",
+        description="Read-only. The same panel `status` prints for one "
+                    "run, computed for two and shown side by side.")
+    run_compare.add_argument("run_a")
+    run_compare.add_argument("run_b")
+    run_compare.set_defaults(func=_cmd_run_compare)
+
+    run_release = runsub.add_parser(
+        "release-dead-letters",
+        help="release a run's application-failure dead letters back to "
+            "ready",
+        description="The rapidctl replacement for d8_release_blocked.py: "
+                    "blocked -> ready, through WorkUnitWriter, for every "
+                    "attempt dead-lettered under this run's prefix with "
+                    "started_at IS NULL and blocked_reason = "
+                    "'application_failure:internal_error'. Never any "
+                    "other blocked_reason, so a differently-blocked unit "
+                    "sharing the prefix is not swept in by accident.")
+    run_release.add_argument("--name", required=True)
+    run_release.add_argument("--expect-candidates", type=int, default=None,
+                             help="the candidate count seen in the dry "
+                                  "run; the apply refuses if the "
+                                  "population has moved since")
+    _mutation_arguments(run_release, "a run's dead-lettered work units")
+    run_release.set_defaults(func=_cmd_run_release_dead_letters)
+
+    run_archive = runsub.add_parser(
+        "archive", help="archive a run",
+        description="Mark a run archived and demote its campaign products "
+                    "(vbest 1 -> 0; nothing is deleted). A production "
+                    "run's products are left published, since nothing "
+                    "would succeed them.")
+    run_archive.add_argument("name", help="the run's name")
+    _mutation_arguments(run_archive, "a run")
+    run_archive.set_defaults(func=_cmd_run_archive)
+
     # --- break-glass -------------------------------------------------------
     bg = sub.add_parser(
         "break-glass",
@@ -499,6 +663,159 @@ def _cmd_supersede(conn, args, out):
         policy_citation=args.policy_citation, out=out)
     print(render_plan("external_evidence_supersede", scope, args.reason, key,
                       result, args.apply), file=out)
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# `run` subcommand bodies (migrations 108/109).
+# ---------------------------------------------------------------------------
+def _cmd_run_create(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    expected = {"already_present": False} if args.expect_absent else None
+    key = args.idempotency_key or new_idempotency_key("run-create")
+    result = _actions.create_run(
+        conn, key, args.name, args.owner, args.kind, purpose=args.purpose,
+        branch=args.branch, image_digest=args.image_digest,
+        config_hash=args.config_hash,
+        input_generations=args.input_generations, reason=args.reason,
+        expected_state=expected, dry_run=not args.apply,
+        policy_citation=args.policy_citation)
+    print(render_plan("run_create", "runs:%s" % args.name, args.reason, key,
+                      result, args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_run_start(conn, args, out):
+    # Imported here, not at module scope: `run.py` reaches `submission.
+    # gathering`/`pipeline.seams`/`pipeline.operator.submission`, none of
+    # which the lightweight run subcommands (status, compare) need to pay
+    # for importing -- the same late-import discipline `_cmd_terminate_
+    # batch` follows for boto3.
+    from pipeline.operatorctl.run import (RunStartEnvironmentError,
+                                          start_run_audited)
+    key = args.idempotency_key or new_idempotency_key("run-start")
+    try:
+        result, scope = start_run_audited(
+            conn, key, args.name, args.phase, args.reason,
+            proc_date=args.proc_date, cap=args.cap, dry_run=not args.apply,
+            policy_citation=args.policy_citation, out=out)
+    except RunStartEnvironmentError as exc:
+        print("rapidctl: REFUSED — %s" % exc, file=sys.stderr)
+        return EXIT_USAGE
+    print(render_plan("run_start", scope, args.reason, key, result,
+                      args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_run_status(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    run = _actions.run_row(conn, args.name)
+    if run is None:
+        print("rapidctl: no run named %r" % args.name, file=sys.stderr)
+        return EXIT_USAGE
+    tally = _actions.run_attempt_tally(conn, args.name)
+    breakdown = _actions.run_state_breakdown(conn, args.name)
+    walltime = _actions.run_stage_walltime(conn, args.name)
+
+    print("RUN %s  (run_id=%s, kind=%s, state=%s)" % (
+        run["name"], run["run_id"], run["kind"], run["state"]), file=out)
+    print("  owner   : %s" % run["owner"], file=out)
+    print("  purpose : %s" % run["purpose"], file=out)
+    print("  branch  : %s" % run["branch"], file=out)
+    print("  created : %s" % run["created_at"], file=out)
+    print("", file=out)
+    print("  attempts total    : %s" % tally["total"], file=out)
+    print("  attempts failures : %s" % tally["failures"], file=out)
+    if breakdown:
+        print("  by lifecycle_state:", file=out)
+        for row in breakdown:
+            print("    %-28s %s" % (row["lifecycle_state"], row["count"]),
+                  file=out)
+    if walltime:
+        print("", file=out)
+        print("  walltime by stage (ms; min/p50/p90/max, n):", file=out)
+        for row in walltime:
+            print("    %-20s %8s %8s %8s %8s  (n=%s)" % (
+                row["stage_name"], row["min_ms"], row["p50_ms"],
+                row["p90_ms"], row["max_ms"], row["n"]), file=out)
+
+    if args.placement:
+        if not args.queue:
+            print("rapidctl: --placement requires --queue", file=sys.stderr)
+            return EXIT_USAGE
+        from pipeline.operatorctl.run import placement_lines
+        print("", file=out)
+        print("  placement (queue=%s):" % args.queue, file=out)
+        for line in placement_lines(args.queue, region=args.region,
+                                    profile=args.profile):
+            print("    %s" % line, file=out)
+    return EXIT_OK
+
+
+def _cmd_run_register(conn, args, out):
+    from pipeline.operatorctl.run import register_run_audited
+    key = args.idempotency_key or new_idempotency_key("run-register")
+    result, scope = register_run_audited(
+        conn, key, args.name, args.reason, dry_run=not args.apply,
+        records_bucket=args.records_bucket,
+        policy_citation=args.policy_citation, out=out)
+    print(render_plan("run_register", scope, args.reason, key, result,
+                      args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_run_compare(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    rows = []
+    for name in (args.run_a, args.run_b):
+        run = _actions.run_row(conn, name)
+        if run is None:
+            print("rapidctl: no run named %r" % name, file=sys.stderr)
+            return EXIT_USAGE
+        rows.append({
+            "run": run,
+            "tally": _actions.run_attempt_tally(conn, name),
+            "walltime": _actions.run_stage_walltime(conn, name),
+            "products": _actions.run_product_counts(conn, name),
+        })
+
+    print("RUN COMPARE  %s  vs  %s" % (args.run_a, args.run_b), file=out)
+    for label, data in zip((args.run_a, args.run_b), rows):
+        print("", file=out)
+        print("  %s  (state=%s, kind=%s)" % (
+            label, data["run"]["state"], data["run"]["kind"]), file=out)
+        print("    attempts total/failures : %s / %s" % (
+            data["tally"]["total"], data["tally"]["failures"]), file=out)
+        print("    products                : %s" % data["products"], file=out)
+        for stage in data["walltime"]:
+            print("    stage %-20s min/p50/p90/max ms = %s/%s/%s/%s (n=%s)"
+                  % (stage["stage_name"], stage["min_ms"], stage["p50_ms"],
+                     stage["p90_ms"], stage["max_ms"], stage["n"]), file=out)
+    return EXIT_OK
+
+
+def _cmd_run_release_dead_letters(conn, args, out):
+    from pipeline.operatorctl.run import release_dead_letters_audited
+    key = args.idempotency_key or new_idempotency_key("run-release")
+    expected = ({"candidates": args.expect_candidates}
+                if args.expect_candidates is not None else None)
+    result, scope = release_dead_letters_audited(
+        conn, key, args.name, args.reason, expected_state=expected,
+        dry_run=not args.apply, policy_citation=args.policy_citation,
+        out=out)
+    print(render_plan("run_release_dead_letters", scope, args.reason, key,
+                      result, args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_run_archive(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    key = args.idempotency_key or new_idempotency_key("run-archive")
+    result = _actions.archive_run(
+        conn, key, args.name, args.reason, dry_run=not args.apply,
+        policy_citation=args.policy_citation)
+    print(render_plan("run_archive", "runs:%s" % args.name, args.reason,
+                      key, result, args.apply), file=out)
     return EXIT_OK
 
 
