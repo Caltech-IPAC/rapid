@@ -141,6 +141,31 @@ class CreateWorkUnitTests(unittest.TestCase):
         _, params = self.execute.calls[0]
         self.assertIn(42, params)
 
+    def test_run_id_defaults_to_none(self):
+        # PRODUCTION UNCHANGED (throughput-sitting ruling, 2026-09-11): a
+        # caller that never heard of run scoping still gets a NULL run_id
+        # on the row it creates, exactly as every pre-108 caller always
+        # did.
+        self.writer.create_work_unit(identity(), writer=WRITER_VALIDATION_INGEST)
+        _, params = self.execute.calls[0]
+        sql, _ = self.execute.calls[0]
+        self.assertIn("run_id", sql)
+        # None appears legitimately elsewhere too (blocked_reason,
+        # campaign_id), so assert on the parameter POSITION the INSERT's
+        # own column list documents rather than mere membership.
+        self.assertIn("job_type, input_scope, operational_class,"
+                      " definition_version, state, blocked_reason,"
+                      " campaign_id, run_id, created_at, updated_at,"
+                      " data_class", " ".join(sql.split()))
+        self.assertIsNone(params[7])
+
+    def test_run_id_is_written_when_supplied(self):
+        self.writer.create_work_unit(
+            identity(), writer=WRITER_VALIDATION_INGEST,
+            run_id="campaign-a")
+        _, params = self.execute.calls[0]
+        self.assertEqual("campaign-a", params[7])
+
 
 class FindCurrentUnitTests(unittest.TestCase):
     def test_returns_none_when_no_row(self):
@@ -165,7 +190,31 @@ class FindCurrentUnitTests(unittest.TestCase):
         writer.find_current_unit("catalog-load", "x")
         sql, params = execute.calls[0]
         self.assertIn("superseded_by_unit_id IS NULL", sql)
-        self.assertEqual(["catalog-load", "x"], params)
+        self.assertEqual(["catalog-load", "x", None], params)
+
+    def test_run_id_none_reads_run_id_is_not_distinct_from(self):
+        # THE NULL-SAFE EQUALITY (throughput-sitting ruling, 2026-09-11):
+        # migration 108's index is `NULLS NOT DISTINCT`, so the SELECT must
+        # use `IS NOT DISTINCT FROM`, never a plain `= %s` — `run_id = NULL`
+        # is never true in SQL for any row, so a plain equality would make
+        # this method return None for EVERY production lookup.
+        execute = RecordingExecutor()
+        execute._select_result = []
+        writer = WorkUnitWriter(execute)
+        writer.find_current_unit("catalog-load", "x")
+        sql, params = execute.calls[0]
+        self.assertIn("run_id IS NOT DISTINCT FROM %s", sql)
+        self.assertNotIn("run_id = %s", sql)
+        self.assertEqual(["catalog-load", "x", None], params)
+
+    def test_explicit_run_id_is_bound_as_a_parameter(self):
+        execute = RecordingExecutor()
+        execute._select_result = []
+        writer = WorkUnitWriter(execute)
+        writer.find_current_unit("catalog-load", "x", run_id="campaign-a")
+        sql, params = execute.calls[0]
+        self.assertIn("run_id IS NOT DISTINCT FROM %s", sql)
+        self.assertEqual(["catalog-load", "x", "campaign-a"], params)
 
 
 class TransitionLegalityTests(unittest.TestCase):

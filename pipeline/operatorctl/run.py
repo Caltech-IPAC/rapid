@@ -211,6 +211,22 @@ def submit_run(conn, name, job_type, units, reason, context=None):
 
     Raises `RunStartEnvironmentError` if `submission_env` cannot resolve a
     binding — see `_resolve_submission_env`.
+
+    **`work_unit_run_id=name` (throughput-sitting ruling, 2026-09-11).**
+    This is THE call site that must opt a submission into run-scoped
+    work-unit identity — `rapidctl run start --apply` is the one live path
+    that submits under a DECLARED, registered run rather than an ordinary
+    VPO poll, and `name` here is that run's bare `runs.name`, never a
+    batch-suffixed id (`seams.submit_gathered` mints those internally per
+    array-job batch and never lets one leak into `work_unit_run_id`; see
+    that function's own docstring). Without this, `seams._decide_work_unit`
+    looks up work units with `run_id=None` regardless of which run called
+    it, finds PRODUCTION's row for any (job_type, input_scope) production
+    has already processed, and — because that row is `state='complete'`
+    — judges the campaign's own gathered units already claimed and submits
+    nothing (observed live 2026-09-11, campaign run
+    `awaicgen54-proof-20260911`: GATHER returned 109 run-scoped units,
+    submission created zero work_units rows).
     """
     from pipeline import seams
     from database.modules.utils.rapid_db_connect import ConnectionExecutor
@@ -227,7 +243,8 @@ def submit_run(conn, name, job_type, units, reason, context=None):
         manifest_bucket=context["manifest_bucket"],
         manifest_prefix=context["manifest_prefix"],
         s3_client=context["s3_client"], batch_client=context["batch_client"],
-        execute=ConnectionExecutor(conn).execute, run_id=name, reason=reason)
+        execute=ConnectionExecutor(conn).execute, run_id=name, reason=reason,
+        work_unit_run_id=name)
 
 
 def start_run_audited(conn, idempotency_key, name, phase, reason,

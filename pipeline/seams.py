@@ -148,8 +148,29 @@ def submit_units(units, job_type, queue, job_definition, binding,
                  manifest_bucket, manifest_prefix, s3_client, batch_client,
                  execute, run_id=None, reason="vpo", job_name=None,
                  now=None, reference_observation_window=None,
-                 protocol_commit=None):
+                 protocol_commit=None, work_unit_run_id=None):
     """Submit one array job for `units`, with its attempt rows pre-created.
+
+    **`run_id` vs. `work_unit_run_id` — TWO DIFFERENT FACTS (throughput-
+    sitting ruling, 2026-09-11).** `run_id` here is this ARRAY JOB's own
+    identity — the manifest's `batch_id`, the submission record's key, and
+    `attempts.run_id` — and for a run split across several array jobs by
+    `submit_gathered`, it carries THAT BATCH's suffixed id (`<run
+    name>-<n>`), never the bare run name alone. `work_unit_run_id` is a
+    SEPARATE parameter precisely because reusing `run_id` for work-unit
+    scoping would be wrong in both directions: it would make two batches of
+    the SAME run resolve to two different (and, worse, two DIFFERENT
+    campaign runs') work units for the same (job_type, input_scope), and it
+    would break the documented two-replica contract this module's own test
+    suite asserts (`test_a_second_replicas_submit_units_call_defers_to_the_
+    first`: two `submit_units` calls under different `run_id` batch
+    identities for the SAME unit must still resolve to ONE work unit and
+    defer the second). `work_unit_run_id` therefore defaults to `None`
+    (production, unchanged) independently of whatever `run_id` this call
+    was given, and a run-scoped caller (`pipeline.operatorctl.run.
+    submit_run` via `submit_gathered`) passes its own bare run name here,
+    not the batch-suffixed `run_id`. See `_decide_work_unit`'s own
+    docstring for the full reasoning.
 
     ORDER MATTERS, and it is the reason this is one function rather than two
     calls the VPO makes in sequence: the rows are created BEFORE `submit_job`
@@ -284,7 +305,8 @@ def submit_units(units, job_type, queue, job_definition, binding,
     work_unit_ids = None
     if execute is not None:
         authorized, work_unit_ids = _authorize_units(
-            execute, job_type, units, moment)
+            execute, job_type, units, moment,
+            work_unit_run_id=work_unit_run_id)
         if len(authorized) != len(units):
             logger.info(
                 "run %s: %d of %d gathered %s unit(s) were not authorized "
@@ -452,8 +474,27 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
                     manifest_bucket, manifest_prefix, s3_client, batch_client,
                     execute, run_id, max_batch_size=None, reason="vpo",
                     now=None, reference_observation_window=None,
-                    protocol_commit=None):
+                    protocol_commit=None, work_unit_run_id=None):
     """Batch a gathered unit list and submit every batch. The VPO's entry.
+
+    **`work_unit_run_id` DEFAULTS TO `None`, INDEPENDENTLY OF `run_id`
+    (throughput-sitting ruling, 2026-09-11) — READ THIS BEFORE CHANGING
+    THAT DEFAULT.** `run_id` here is NEVER None in practice on the live
+    VPO path: `pipeline.operator.operator.Operator._run_id_for` always
+    synthesizes `vpo-<class>-<batch id>` when no explicit run is given, so
+    a caller cannot tell "ordinary production poll" from "a declared
+    campaign run" by whether `run_id` is None — both arrive here with a
+    non-None string. Defaulting work-unit scoping to `run_id` itself would
+    therefore scope EVERY ordinary VPO poll to its own unique synthesized
+    identity, splitting production's work units across as many `run_id`s
+    as there have been polls — exactly the bug this fix repairs, just
+    inflicted on production instead of a campaign run. `work_unit_run_id`
+    is therefore a genuinely separate, explicitly-opted-into parameter:
+    `pipeline.operatorctl.run.submit_run` (the one caller of a DECLARED,
+    registered run) passes its own bare run name here; every other caller
+    — the VPO's ordinary passes included — leaves it at `None` and keeps
+    today's production-shared work-unit identity exactly as it has always
+    been.
 
     `submit_units` submits ONE array job, which is the right unit of work for
     it: one manifest, one binding, one set of rows. But a gathering pass
@@ -521,7 +562,14 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
             # they are one submission cut by the array ceiling, not runs
             # under different windows.
             reference_observation_window=reference_observation_window,
-            protocol_commit=protocol_commit)
+            protocol_commit=protocol_commit,
+            # THE BARE RUN NAME, NOT `batch_run_id` (this function's own
+            # docstring, "`work_unit_run_id` DEFAULTS TO `None`..."): every
+            # batch of one run shares ONE work-unit identity, so this is
+            # the single `work_unit_run_id` passed unchanged to every
+            # `submit_units` call in the loop, never the per-batch suffixed
+            # value computed just above.
+            work_unit_run_id=work_unit_run_id)
         if submission is None:
             # This batch's units were all claimed by someone else between
             # gathering and submission (a stale gathered list, a second
@@ -748,8 +796,15 @@ def _data_class_for(unit):
     return getattr(unit.facts, "data_class", None)
 
 
-def _authorize_units(execute, job_type, units, moment):
+def _authorize_units(execute, job_type, units, moment, work_unit_run_id=None):
     """Decide, PER UNIT, whether this call may submit it (finding 1).
+
+    `work_unit_run_id` (throughput-sitting ruling, 2026-09-11) is the RUN
+    this submission is FOR, threaded straight to `_decide_work_unit`'s own
+    `run_id` parameter — see that function's docstring for the run-scoped
+    find-or-create it now performs and why this must be the run's bare
+    declared name, never a batch-suffixed id. `None` (the default) is the
+    production lane, unchanged.
 
     The gate `_attach_work_unit` never had: that function ran the SAME
     find-or-create/CAS dispatch this one runs, but its non-ready branch
@@ -783,14 +838,16 @@ def _authorize_units(execute, job_type, units, moment):
     authorized_units = []
     work_unit_ids = []
     for unit in units:
-        work_unit_id, ok = _decide_work_unit(execute, job_type, unit, moment)
+        work_unit_id, ok = _decide_work_unit(
+            execute, job_type, unit, moment, run_id=work_unit_run_id)
         if ok:
             authorized_units.append(unit)
             work_unit_ids.append(work_unit_id)
     return authorized_units, work_unit_ids
 
 
-def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
+def _attach_work_unit(execute, job_type, unit, attempt_id, moment,
+                      work_unit_run_id=None):
     """Find-or-create this unit's work unit, decide, and attach if authorized.
 
     A thin wrapper over `_decide_work_unit` kept for its own direct callers
@@ -811,21 +868,61 @@ def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
     correct — an existing caller of THIS function that wants the old
     submit-regardless behaviour never existed on the live path, which now
     goes through `_authorize_units`/`_precreate` instead.
+
+    `work_unit_run_id` defaults to `None` (production/no run scoping),
+    matching every existing direct caller's behaviour unchanged — none of
+    them are run-scoped submissions.
     """
-    work_unit_id, ok = _decide_work_unit(execute, job_type, unit, moment)
+    work_unit_id, ok = _decide_work_unit(
+        execute, job_type, unit, moment, run_id=work_unit_run_id)
     if ok:
         _set_attempt_work_unit(execute, attempt_id, work_unit_id)
     return work_unit_id
 
 
-def _decide_work_unit(execute, job_type, unit, moment):
+def _decide_work_unit(execute, job_type, unit, moment, run_id=None):
     """Find-or-create this unit's work unit, and decide if it is submittable.
+
+    **RUN-SCOPED (migration 108, throughput-sitting ruling 2026-09-11).**
+    `run_id` here MUST be the submitting run's own declared name (a
+    `runs.name`, e.g. what `pipeline.operatorctl.run.submit_run` receives
+    as its `name` parameter) — NEVER the batch-suffixed identity
+    `submit_gathered` mints per array-job batch (`<run_id>-<n>`) and passes
+    down as `submit_units`'s own `run_id` parameter. Those are two
+    different facts that happen to share a name at some call sites: a
+    work unit's identity is scoped to the RUN, because the whole point of
+    108's run model is that a campaign run's unit for a field production
+    has already gathered legitimately COEXISTS as a different row from
+    production's — it is not a per-array-job fact, and two batches of the
+    SAME run submitting the same (job_type, input_scope) — split gathering
+    across a poll boundary, say — must resolve to the SAME work unit, not
+    two different `<name>-0`/`<name>-1`-keyed rows the run-scoped index
+    would otherwise treat as unrelated. See `_authorize_units`'s own
+    `work_unit_run_id` parameter for where this is threaded from, and
+    `pipeline.seams.submit_units`'s docstring for where the batch-suffixed
+    value is deliberately NOT reused for this purpose (it collides with
+    the existing `test_a_second_replicas_submit_units_call_defers_to_the_
+    first` contract, which relies on two `submit_units` calls under
+    DIFFERENT `run_id` batch identities still resolving to ONE production
+    work unit).
+
+    `None` (the default) is the production lane: `find_current_unit`'s and
+    `create_work_unit`'s own `run_id=None` default, unchanged from every
+    caller's behaviour before 108 — production work units have never
+    carried (and still never carry) a run_id, and every ordinary VPO
+    submission (no explicit run name given) reaches this function with
+    `run_id=None` regardless of what string `submit_gathered` synthesizes
+    for the SAME call's `attempts.run_id`/manifest identity (see
+    `pipeline.operator.operator.Operator._run_id_for`: the VPO mints
+    `vpo-<class>-<batch id>` there for the SUBMISSION's own identity, which
+    is an entirely separate fact from work-unit run-scoping and was never
+    threaded here).
 
     **THE FIND-OR-CREATE SHAPE (task brief: document the exact SQL shape).**
     `WorkUnitWriter.find_current_unit` issues one SELECT against the
     partial unique index's own predicate
-    (`WHERE job_type = %s AND input_scope = %s AND superseded_by_unit_id
-    IS NULL`). Three outcomes:
+    (`WHERE job_type = %s AND input_scope = %s AND run_id IS NOT DISTINCT
+    FROM %s AND superseded_by_unit_id IS NULL`). Three outcomes:
 
     1. No row: this call is the creator. `create_work_unit(..., writer=
        WRITER_VALIDATION_INGEST, state='ready')` INSERTs, then this same
@@ -861,7 +958,7 @@ def _decide_work_unit(execute, job_type, unit, moment):
     docstring previously described a re-SELECT-after-conflict resolution and
     even cited a test asserting it; neither existed. The only `except` was
     the FK-substring guard below, so a genuine two-caller race on the same
-    (job_type, input_scope) let migration 036's partial-unique violation
+    (job_type, input_scope, run_id) let the partial-unique violation
     propagate out of the loser's call and — through the operator loop's
     single shared try/except — abort that whole poll pass, including the
     unrelated work streams later in it.
@@ -916,7 +1013,7 @@ def _decide_work_unit(execute, job_type, unit, moment):
     work_writer = WorkUnitWriter(execute)
 
     existing = work_writer.find_current_unit(
-        identity.job_type, identity.input_scope)
+        identity.job_type, identity.input_scope, run_id=run_id)
 
     if existing is None:
         # THE ARRIVAL-DRIVEN CASE: no upstream validation/ingest stage
@@ -933,20 +1030,20 @@ def _decide_work_unit(execute, job_type, unit, moment):
         try:
             work_unit_id = work_writer.create_work_unit(
                 identity, writer=WRITER_VALIDATION_INGEST, state=READY,
-                now=moment)
+                run_id=run_id, now=moment)
         except Exception as exc:  # noqa: BLE001 - re-raised unless 23505
             if not is_unique_violation(exc):
                 raise
             # WE LOST THE RACE, AND THAT IS A SUCCESS (rule 6). Between our
             # SELECT and our INSERT another transaction created the current
-            # unit for this exact (job_type, input_scope) and committed;
-            # migration 036's partial unique index refused ours. The row we
-            # needed exists — so re-SELECT it and fall through to the SAME
-            # state dispatch a pre-existing unit takes. Both racers end up
-            # returning one work_unit_id, and AT MOST one of them is
-            # authorized (finding 1) — see `_transition_or_defer`.
+            # unit for this exact (job_type, input_scope, run_id) and
+            # committed; the run-scoped partial unique index refused ours.
+            # The row we needed exists — so re-SELECT it and fall through
+            # to the SAME state dispatch a pre-existing unit takes. Both
+            # racers end up returning one work_unit_id, and AT MOST one of
+            # them is authorized (finding 1) — see `_transition_or_defer`.
             existing = work_writer.find_current_unit(
-                identity.job_type, identity.input_scope)
+                identity.job_type, identity.input_scope, run_id=run_id)
             if existing is None:
                 # A unique violation whose winning row cannot then be found
                 # is not a race — it is a contradiction (the winner rolled
@@ -955,9 +1052,9 @@ def _decide_work_unit(execute, job_type, unit, moment):
                 # blindly: raise the original error rather than loop.
                 raise
             logger.info(
-                "lost the work-unit claim race for %s/%s; resolved to the "
-                "winning unit %s", job_type, identity.input_scope,
-                existing["work_unit_id"])
+                "lost the work-unit claim race for %s/%s (run_id=%r); "
+                "resolved to the winning unit %s", job_type,
+                identity.input_scope, run_id, existing["work_unit_id"])
             return _transition_or_defer(
                 execute, work_writer, existing, job_type,
                 identity.input_scope, moment)

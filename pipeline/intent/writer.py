@@ -288,12 +288,18 @@ class WorkUnitIdentity:
 
     (job_type, input_scope, operational_class, definition_version) — the
     partial unique index enforces one NON-SUPERSEDED unit per
-    (job_type, input_scope), so a caller that finds an existing unit
-    matches on those two columns alone; operational_class and
+    (job_type, input_scope, run_id) as of migration 108 (RUN-SCOPED, not
+    (job_type, input_scope) alone as before it), so a caller that finds an
+    existing unit matches on those three columns; operational_class and
     definition_version are carried at creation but are not part of the
     uniqueness the index enforces (a definition-version migration is
     explicitly a mutation-API action per the design, not a fresh unit
-    under a new identity).
+    under a new identity). `run_id` is NOT a field of this dataclass —
+    unlike job_type/input_scope it is not fixed at the moment an identity
+    is computed from a `ProcessingUnit`'s payload, it is which RUN is doing
+    the submitting, so it travels as its own parameter alongside an
+    identity rather than inside one (see `find_current_unit` and
+    `create_work_unit`).
     """
 
     job_type: str
@@ -367,6 +373,7 @@ class WorkUnitWriter:
                          state: str = READY,
                          blocked_reason: str | None = None,
                          campaign_id: int | None = None,
+                         run_id: str | None = None,
                          reason: str | None = None,
                          detail: dict | None = None,
                          now: Any = None) -> int:
@@ -387,6 +394,17 @@ class WorkUnitWriter:
         (`work_units_blocked_reason_ck`) enforces this at the database, but
         it is validated here first so the failure names the missing reason
         at the caller rather than arriving as a bare constraint violation.
+
+        `run_id` (migration 108) is part of this unit's IDENTITY, not an
+        incidental attribute set later — `find_current_unit`'s SELECT and
+        this INSERT must agree on the same (job_type, input_scope, run_id)
+        the partial unique index keys on, or a unit created here under one
+        run_id is simply invisible to a lookup that omits it (and a second
+        creator for the same identity minus run_id sails past the index and
+        creates a genuine duplicate rather than losing the race the index
+        exists to police). `None` is the production lane, exactly as
+        `find_current_unit`'s own default is — unchanged from this
+        method's pre-108 behaviour for every caller that does not pass it.
 
         Both writes — the work_units INSERT and its unit_events creation
         row (from_state NULL, per migration 036: "one row per transition;
@@ -412,15 +430,15 @@ class WorkUnitWriter:
         sql = (
             "INSERT INTO work_units ("
             "  job_type, input_scope, operational_class, definition_version,"
-            "  state, blocked_reason, campaign_id, created_at, updated_at,"
-            "  data_class"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "  state, blocked_reason, campaign_id, run_id, created_at,"
+            "  updated_at, data_class"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " RETURNING work_unit_id"
         )
         rows = self._execute(sql, [
             identity.job_type, identity.input_scope,
             identity.operational_class, identity.definition_version,
-            state, blocked_reason, campaign_id, moment, moment,
+            state, blocked_reason, campaign_id, run_id, moment, moment,
             # NULL where the identity carries none, which 090's CHECK
             # admits deliberately — the class is genuinely unknown for
             # inputs admitted before it was recorded, and NULL is what makes
@@ -438,24 +456,59 @@ class WorkUnitWriter:
                     state)
         return work_unit_id
 
-    def find_current_unit(self, job_type: str, input_scope: str
-                          ) -> dict | None:
-        """The non-superseded work_units row for (job_type, input_scope), if any.
+    def find_current_unit(self, job_type: str, input_scope: str, *,
+                          run_id: str | None = None) -> dict | None:
+        """The non-superseded work_units row for (job_type, input_scope,
+        run_id), if any.
 
-        Reads through the partial unique index's own predicate
-        (`superseded_by_unit_id IS NULL`) — the SELECT half of the
-        find-or-create shape `pipeline.seams._precreate` uses (see that
-        module's docstring for the full race-tolerant sequence: SELECT
-        first, INSERT, re-SELECT on conflict).
+        **RUN-SCOPED (migration 108).** The partial unique index this reads
+        through is no longer `(job_type, input_scope)` — migration 108
+        widened it to `(job_type, input_scope, run_id) ... WHERE
+        superseded_by_unit_id IS NULL`, `NULLS NOT DISTINCT`, precisely so a
+        campaign run's work unit for a field production has already
+        gathered can coexist as a DIFFERENT row from production's, rather
+        than colliding with it. This method's SELECT has to match that
+        index's predicate exactly or the two coexisting rows are not really
+        independent: a caller that keeps reading production's row for a
+        campaign's lookup (or vice versa) sees the WRONG unit's state, which
+        is indistinguishable from data corruption to everything downstream
+        (`pipeline.seams._decide_work_unit`, the caller here).
+
+        `run_id=None` (the default) is the PRODUCTION LANE, and reads
+        `run_id IS NOT DISTINCT FROM NULL` — NOT `run_id = NULL`, which in
+        SQL is never true for any row, NULL included, and would silently
+        turn this method into "no row ever matches production" for a
+        caller that forgot the distinction. `IS NOT DISTINCT FROM` is the
+        NULL-safe equality the index's own `NULLS NOT DISTINCT` clause
+        requires on the read side to mean the same thing the index enforces
+        on the write side: two work_units rows with the same
+        (job_type, input_scope) and both NULL run_id are still a DUPLICATE
+        as far as the index is concerned, exactly as two rows sharing an
+        explicit run_id string would be. Passing an explicit `run_id`
+        behaves the same way at that value instead of NULL — one campaign
+        run's lookup never matches another's, and never matches
+        production's.
+
+        `run_id` here is the RUN's own declared name (the `runs.name` this
+        run was registered under), never a per-batch identity —
+        `pipeline.seams.submit_gathered` mints `<run_id>-<n>` per array-job
+        batch for `attempts.run_id`/the manifest's `batch_id`, and that
+        suffixed value must NOT reach here: two batches of the same run
+        submitting the same (job_type, input_scope) — should that ever
+        happen — need to find the SAME work unit, not two different
+        `<name>-<n>`-keyed rows the index would then treat as unrelated.
+        See `pipeline.seams._decide_work_unit`'s own docstring for where
+        the unsuffixed name is threaded from.
         """
         sql = (
             "SELECT work_unit_id, job_type, input_scope, operational_class,"
             "  definition_version, state, blocked_reason, campaign_id"
             " FROM work_units"
             " WHERE job_type = %s AND input_scope = %s"
+            "   AND run_id IS NOT DISTINCT FROM %s"
             "   AND superseded_by_unit_id IS NULL"
         )
-        rows = self._execute(sql, [job_type, input_scope])
+        rows = self._execute(sql, [job_type, input_scope, run_id])
         return _single_row_or_none(rows, columns=(
             "work_unit_id", "job_type", "input_scope", "operational_class",
             "definition_version", "state", "blocked_reason", "campaign_id"))
