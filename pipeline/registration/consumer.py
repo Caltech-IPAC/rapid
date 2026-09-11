@@ -1317,7 +1317,8 @@ def _bind_fence(conn, record, attempt_id,
 
 
 class BindFenced(RuntimeError):
-    """A bind key's fence could not be acquired — GC holds it.
+    """A bind key's fence could not be acquired — held by GC, or by another
+    registration attempt on the SAME key.
 
     Raised by `_bind_fence`, OUTSIDE the per-attempt `with
     _transaction(conn) as cur:` block (`register_batch` wraps that block
@@ -1327,8 +1328,41 @@ class BindFenced(RuntimeError):
     `_bind_fence`'s own `finally` already releases. `register_batch`'s
     outer `except Exception` still catches it exactly like any other
     registration failure: counted as failed, the attempt stays a
-    candidate, and a later pass retries once GC's fence has released or
+    candidate, and a later pass retries once the fence has released or
     expired.
+
+    **WHY THE MESSAGE NAMES BOTH POSSIBLE HOLDERS INSTEAD OF ONE.**
+    This used to say "GC holds it live" unconditionally, regardless of
+    which of the two `gc_fences` holder kinds (`gc_fence.HOLDER_GC`,
+    `gc_fence.HOLDER_REGISTRATION`) actually held the row. But
+    `_bind_fence` itself acquires under `HOLDER_REGISTRATION`
+    (`gc_fence.acquire_fence(..., holder_kind=gc_fence.HOLDER_REGISTRATION)`
+    in `_bind_fence` above), so a SECOND registration attempt colliding
+    with a first — the same key bound twice in one pass, or a retry
+    racing a still-live prior attempt — is a registration-on-registration
+    self-collision with no GC involvement at all. That is also the
+    commoner real case: two registration passes racing each other happens
+    on every overlapping run, where GC actually holding a bind key is the
+    rarer interleaving (GC only reaches a key once registration's own
+    watermark has moved past it). The old wording sent whoever read it
+    to go investigate GC for a problem GC did not cause
+    (`BindFenceKeysTests.test_one_key_named_by_two_products_is_fenced_once`
+    in `pipeline/registration/test/test_consumer.py` documents exactly
+    this: a bind that collided with its OWN not-yet-released fence,
+    reporting "GC holds it live" while `gc_fences` held nothing but that
+    row).
+
+    `acquire_fence`'s `False` return carries no holder identity — the
+    `ON CONFLICT ... WHERE expires_at < now()` clause that finds a live
+    row returns nothing from `RETURNING`, by design (see
+    `pipeline.gc.fence.acquire_fence`'s docstring) — and a database read
+    to find out (`pipeline.gc.fence.held_by`) does not belong on this
+    error path: it would add a round-trip to the exceptional case for
+    diagnostic value only, and the holder could change between that read
+    and this raise anyway. So the message states what IS known — a fence
+    is held over this key, by one of exactly two possible holders — names
+    both, and says which is likelier, rather than asserting a specific
+    holder this code cannot actually see.
     """
 
     def __init__(self, bucket, object_key, attempt_id=None):
@@ -1337,7 +1371,11 @@ class BindFenced(RuntimeError):
         self.attempt_id = attempt_id
         super().__init__(
             f"attempt {attempt_id}: could not acquire the registration "
-            f"fence over s3://{bucket}/{object_key} — GC holds it live; "
+            f"fence over s3://{bucket}/{object_key} — held by another "
+            f"registration attempt on this key (the likelier cause: two "
+            f"registration passes racing) or by GC "
+            f"(pipeline.gc.fence.HOLDER_REGISTRATION vs HOLDER_GC; the "
+            f"acquire call does not learn which); "
             f"this attempt's registration is deferred to a later pass")
 
 
