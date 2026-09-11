@@ -149,9 +149,20 @@ def unit_provenance(unit, job_type=None):
     # itself. Since D4 both live on the same payload object, but the
     # distinction still holds and is why `unit.sca` is read here rather than
     # the payload being treated as a flat bag.
-    if getattr(unit, "sca", None) is not None:
+    # ASK WHAT THE GRAIN DECLARES; do not probe with `getattr`. A payload
+    # that does not declare a component RAISES `SubjectError` from the
+    # property rather than being absent as an attribute, and `getattr`'s
+    # default only catches `AttributeError` — so `getattr(unit, "exposure",
+    # None)` propagates out of a date- or field-grained unit instead of
+    # yielding None. This is the same defect as the attempt-identity one
+    # (`pipeline/entrypoints/job.py`'s `_identity_extra`), at a second site:
+    # both were written when every unit carried an exposure/SCA-shaped
+    # carrier, and both were unreachable for catalog-load, crossmatch,
+    # statistics and merge-dedup until the identity site was fixed, because
+    # those jobs died earlier.
+    if unit.payload.declares("sca") and unit.sca is not None:
         provenance["sca"] = int(unit.sca)
-    if getattr(unit, "exposure", None) is not None:
+    if unit.payload.declares("exposure") and unit.exposure is not None:
         provenance["expid"] = int(unit.exposure)
 
     if facts is None:
