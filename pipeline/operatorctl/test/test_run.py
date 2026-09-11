@@ -493,6 +493,9 @@ class ResourceUsageTests(unittest.TestCase):
         self.assertEqual(rows[1]["n"], 0)
 
 
+_UNSET = object()
+
+
 # ---------------------------------------------------------------------------
 # `run status`'s printed panel: the walltime rows (from `attempt_stages`,
 # one row per stage that actually ran) and the resource-usage rows (from
@@ -511,7 +514,8 @@ class _StatusFakeConn:
     """
 
 
-def _run_status_out(name="some-run", walltime=(), resource_usage=()):
+def _run_status_out(name="some-run", walltime=(), resource_usage=(),
+                    name_positional=_UNSET, name_flag=None):
     """Run `_cmd_run_status` with `actions.run_row`/`run_attempt_tally`/
     `run_state_breakdown`/`run_stage_walltime`/`run_resource_usage` all
     patched to fixed, scripted values, and return what it printed.
@@ -519,13 +523,21 @@ def _run_status_out(name="some-run", walltime=(), resource_usage=()):
     `run_row`, the tally, and the breakdown are held constant across every
     test in this class -- only `walltime` and `resource_usage`, the two
     panels under test, vary per call.
+
+    By default `name` is passed as the positional (the current preferred
+    form); `name_positional`/`name_flag` let ArgumentResolutionTests drive
+    the positional and `--name` independently, including leaving the
+    positional unset (`None`, argparse's own default when it is omitted).
     """
+    if name_positional is _UNSET:
+        name_positional = name
     run = {"name": name, "run_id": "rid-1", "kind": "science",
            "state": "running", "owner": "sci-c", "purpose": "test",
            "branch": "main", "created_at": "2026-09-11T00:00:00Z"}
     tally = {"total": 5, "failures": 0}
     breakdown = []
-    args = argparse.Namespace(name=name, placement=False, queue=None,
+    args = argparse.Namespace(name_positional=name_positional,
+                              name=name_flag, placement=False, queue=None,
                               region=None, profile=None)
     out = io.StringIO()
     with mock.patch.object(actions, "run_row", return_value=run), \
@@ -613,6 +625,49 @@ class RunStatusResourceUsagePanelTests(unittest.TestCase):
         self.assertNotIn(self._WALLTIME_HEADING, output)
         self.assertNotIn("peak_rss_kb", output)
         self.assertNotIn("cpu_seconds", output)
+
+
+# ---------------------------------------------------------------------------
+# `run status` takes its name POSITIONALLY, matching `run archive`. `--name`
+# stays accepted as a deprecated alias for one release; the positional wins
+# when both are given; neither given is a usage error.
+# ---------------------------------------------------------------------------
+class ArgumentResolutionTests(unittest.TestCase):
+    def test_positional_name_alone_works(self):
+        rc, output = _run_status_out(name="some-run", name_positional="some-run",
+                                     name_flag=None)
+        self.assertEqual(rc, 0)
+        self.assertIn("RUN some-run", output)
+
+    def test_name_flag_alone_still_works_with_a_deprecation_note(self):
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stderr", stderr):
+            rc, output = _run_status_out(
+                name="some-run", name_positional=None, name_flag="some-run")
+        self.assertEqual(rc, 0)
+        self.assertIn("RUN some-run", output)
+        self.assertIn("deprecated", stderr.getvalue())
+
+    def test_positional_wins_when_both_are_given(self):
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stderr", stderr):
+            rc, output = _run_status_out(
+                name="positional-run", name_positional="positional-run",
+                name_flag="flag-run")
+        self.assertEqual(rc, 0)
+        self.assertIn("RUN positional-run", output)
+        # Both notes fire: the deprecation (--name was used at all) and the
+        # conflict (both forms were given, positional wins).
+        self.assertIn("deprecated", stderr.getvalue())
+        self.assertIn("using the positional NAME", stderr.getvalue())
+
+    def test_neither_form_is_a_usage_error(self):
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stderr", stderr):
+            rc, _output = _run_status_out(
+                name="unused", name_positional=None, name_flag=None)
+        self.assertEqual(rc, operatorctl_main.EXIT_USAGE)
+        self.assertIn("requires a run name", stderr.getvalue())
 
 
 # ---------------------------------------------------------------------------

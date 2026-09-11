@@ -306,7 +306,13 @@ def build_parser():
                     "dead letter (the sci-c defect: 218 attempts that "
                     "never started). Matches attempts by run_id LIKE "
                     "name || '%', never by equality.")
-    run_status.add_argument("--name", required=True)
+    run_status.add_argument(
+        "name_positional", nargs="?", default=None, metavar="name",
+        help="the run's name")
+    run_status.add_argument(
+        "--name", default=None,
+        help="deprecated: use the positional NAME instead. Kept as an "
+            "alias for one release so existing scripts do not break")
     run_status.add_argument(
         "--placement", action="store_true",
         help="also list container instances behind the run's job queue "
@@ -737,6 +743,24 @@ def _cmd_run_start(conn, args, out):
 
 def _cmd_run_status(conn, args, out):
     from pipeline.operatorctl import actions as _actions
+    # `status` used to take --name only; `archive` has always taken the
+    # run's name positionally. Bringing status into line: the positional
+    # wins when both are given, --name stays accepted (with a deprecation
+    # note) for one release so existing scripts do not break.
+    name = args.name_positional
+    if name is None:
+        name = args.name
+    elif args.name is not None:
+        print("rapidctl: both a positional NAME and --name were given; "
+              "using the positional NAME", file=sys.stderr)
+    if args.name is not None:
+        print("rapidctl: --name is deprecated for 'run status' -- pass "
+              "the run's name positionally instead", file=sys.stderr)
+    if name is None:
+        print("rapidctl: run status requires a run name (positional, or "
+              "--name)", file=sys.stderr)
+        return EXIT_USAGE
+    args.name = name
     run = _actions.run_row(conn, args.name)
     if run is None:
         print("rapidctl: no run named %r" % args.name, file=sys.stderr)
