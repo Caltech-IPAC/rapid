@@ -33,6 +33,8 @@ chain reaches `pipeline.operatorctl.contract.call_function`, which needs
 `psycopg2.Error` to exist as an exception class at call time).
 """
 
+import argparse
+import io
 import re
 import sqlite3
 import sys
@@ -55,6 +57,7 @@ if "psycopg2" not in sys.modules:
         sys.modules["psycopg2"] = stub
 
 from pipeline.operatorctl import actions
+from pipeline.operatorctl import main as operatorctl_main
 from pipeline.operatorctl.contract import render_plan
 
 
@@ -488,6 +491,128 @@ class ResourceUsageTests(unittest.TestCase):
         rows = actions.run_resource_usage(conn, "some-run")
         self.assertEqual(rows[0]["n"], 0)
         self.assertEqual(rows[1]["n"], 0)
+
+
+# ---------------------------------------------------------------------------
+# `run status`'s printed panel: the walltime rows (from `attempt_stages`,
+# one row per stage that actually ran) and the resource-usage rows (from
+# `attempts` itself, read once from rusage at terminal) are two different
+# measurements at two different grains, and must not be gated on each
+# other. A run whose attempts died before any stage completed has no
+# walltime rows and can still have good rusage for every attempt; before
+# the fix, the resource-usage loop was nested inside `if walltime:` and
+# that run printed no panel at all -- not "n=0", not an empty heading, no
+# line, as if the columns had never been populated.
+# ---------------------------------------------------------------------------
+class _StatusFakeConn:
+    """`_cmd_run_status` never touches the connection directly -- every
+    read goes through `actions`, which this test class patches. The conn
+    object itself only needs to exist to be passed through.
+    """
+
+
+def _run_status_out(name="some-run", walltime=(), resource_usage=()):
+    """Run `_cmd_run_status` with `actions.run_row`/`run_attempt_tally`/
+    `run_state_breakdown`/`run_stage_walltime`/`run_resource_usage` all
+    patched to fixed, scripted values, and return what it printed.
+
+    `run_row`, the tally, and the breakdown are held constant across every
+    test in this class -- only `walltime` and `resource_usage`, the two
+    panels under test, vary per call.
+    """
+    run = {"name": name, "run_id": "rid-1", "kind": "science",
+           "state": "running", "owner": "sci-c", "purpose": "test",
+           "branch": "main", "created_at": "2026-09-11T00:00:00Z"}
+    tally = {"total": 5, "failures": 0}
+    breakdown = []
+    args = argparse.Namespace(name=name, placement=False, queue=None,
+                              region=None, profile=None)
+    out = io.StringIO()
+    with mock.patch.object(actions, "run_row", return_value=run), \
+         mock.patch.object(actions, "run_attempt_tally", return_value=tally), \
+         mock.patch.object(actions, "run_state_breakdown",
+                           return_value=breakdown), \
+         mock.patch.object(actions, "run_stage_walltime",
+                           return_value=list(walltime)), \
+         mock.patch.object(actions, "run_resource_usage",
+                           return_value=list(resource_usage)):
+        rc = operatorctl_main._cmd_run_status(_StatusFakeConn(), args, out)
+    return rc, out.getvalue()
+
+
+class RunStatusResourceUsagePanelTests(unittest.TestCase):
+    _WALLTIME_HEADING = "walltime by stage (ms; min/p50/p90/max, n):"
+
+    def test_empty_walltime_with_populated_resource_usage_still_prints(self):
+        # The regression: attempts died before any stage completed, so
+        # `run_stage_walltime` returns nothing, but rusage was captured
+        # for every attempt. Before the fix this printed no heading and
+        # no rusage lines at all.
+        rc, output = _run_status_out(
+            walltime=[],
+            resource_usage=[
+                {"metric": "peak_rss_kb", "n": 5, "min_v": 100_000,
+                 "p50_v": 150_000, "p90_v": 190_000, "max_v": 200_000},
+                {"metric": "cpu_seconds", "n": 5, "min_v": 10.0,
+                 "p50_v": 15.0, "p90_v": 19.0, "max_v": 20.0},
+            ])
+        self.assertEqual(rc, 0)
+        self.assertIn(self._WALLTIME_HEADING, output)
+        self.assertIn("peak_rss_kb", output)
+        self.assertIn("cpu_seconds", output)
+
+    def test_populated_walltime_with_all_zero_resource_usage(self):
+        # Every attempt predates the D7 columns (or every rusage read
+        # failed): n=0 for both metrics. The walltime rows still print,
+        # but no rusage line does -- n=0 stays hidden.
+        rc, output = _run_status_out(
+            walltime=[
+                {"stage_name": "align", "min_ms": 100, "p50_ms": 150,
+                 "p90_ms": 190, "max_ms": 200, "n": 5},
+            ],
+            resource_usage=[
+                {"metric": "peak_rss_kb", "n": 0, "min_v": None,
+                 "p50_v": None, "p90_v": None, "max_v": None},
+                {"metric": "cpu_seconds", "n": 0, "min_v": None,
+                 "p50_v": None, "p90_v": None, "max_v": None},
+            ])
+        self.assertEqual(rc, 0)
+        self.assertIn(self._WALLTIME_HEADING, output)
+        self.assertIn("align", output)
+        self.assertNotIn("peak_rss_kb", output)
+        self.assertNotIn("cpu_seconds", output)
+
+    def test_both_populated_appear_under_one_shared_heading(self):
+        rc, output = _run_status_out(
+            walltime=[
+                {"stage_name": "align", "min_ms": 100, "p50_ms": 150,
+                 "p90_ms": 190, "max_ms": 200, "n": 5},
+            ],
+            resource_usage=[
+                {"metric": "peak_rss_kb", "n": 5, "min_v": 100_000,
+                 "p50_v": 150_000, "p90_v": 190_000, "max_v": 200_000},
+                {"metric": "cpu_seconds", "n": 5, "min_v": 10.0,
+                 "p50_v": 15.0, "p90_v": 19.0, "max_v": 20.0},
+            ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(output.count(self._WALLTIME_HEADING), 1)
+        self.assertIn("align", output)
+        self.assertIn("peak_rss_kb", output)
+        self.assertIn("cpu_seconds", output)
+
+    def test_both_empty_prints_no_heading_and_does_not_crash(self):
+        rc, output = _run_status_out(
+            walltime=[],
+            resource_usage=[
+                {"metric": "peak_rss_kb", "n": 0, "min_v": None,
+                 "p50_v": None, "p90_v": None, "max_v": None},
+                {"metric": "cpu_seconds", "n": 0, "min_v": None,
+                 "p50_v": None, "p90_v": None, "max_v": None},
+            ])
+        self.assertEqual(rc, 0)
+        self.assertNotIn(self._WALLTIME_HEADING, output)
+        self.assertNotIn("peak_rss_kb", output)
+        self.assertNotIn("cpu_seconds", output)
 
 
 # ---------------------------------------------------------------------------
