@@ -952,9 +952,11 @@ class ResourceUsageCaptureTests(unittest.TestCase):
                 ru_maxrss=50_000, ru_utime=2.0, ru_stime=1.0),
         }
         usage = termination.capture_resource_usage(
-            getrusage=lambda who: responses[who])
+            getrusage=lambda who: responses[who],
+            cgroup_peak_bytes=lambda: 123_456_789)
         self.assertEqual(usage["peak_rss_kb"], 150_000)
         self.assertAlmostEqual(usage["cpu_seconds"], 5.0)
+        self.assertEqual(usage["cgroup_peak_bytes"], 123_456_789)
 
     def test_a_process_with_no_children_still_reports_self(self):
         import resource as resource_module
@@ -966,9 +968,11 @@ class ResourceUsageCaptureTests(unittest.TestCase):
                 ru_maxrss=0, ru_utime=0.0, ru_stime=0.0),
         }
         usage = termination.capture_resource_usage(
-            getrusage=lambda who: responses[who])
+            getrusage=lambda who: responses[who],
+            cgroup_peak_bytes=lambda: None)
         self.assertEqual(usage["peak_rss_kb"], 42_000)
         self.assertAlmostEqual(usage["cpu_seconds"], 0.3)
+        self.assertIsNone(usage["cgroup_peak_bytes"])
 
     def test_a_getrusage_failure_is_caught_and_returns_none_for_both(self):
         # THE REGRESSION GUARD: a failure to read rusage must never fail the
@@ -983,6 +987,7 @@ class ResourceUsageCaptureTests(unittest.TestCase):
         usage = termination.capture_resource_usage(getrusage=broken_getrusage)
         self.assertIsNone(usage["peak_rss_kb"])
         self.assertIsNone(usage["cpu_seconds"])
+        self.assertIsNone(usage["cgroup_peak_bytes"])
 
     def test_default_getrusage_is_the_real_resource_module_function(self):
         # Called with no argument, it must read the REAL process's rusage
@@ -993,6 +998,47 @@ class ResourceUsageCaptureTests(unittest.TestCase):
         self.assertIsNotNone(usage["cpu_seconds"])
         self.assertGreater(usage["peak_rss_kb"], 0)
         self.assertGreaterEqual(usage["cpu_seconds"], 0.0)
+
+
+class CgroupPeakBytesTests(unittest.TestCase):
+    """`read_cgroup_peak_bytes` reads the container cgroup's own peak
+    memory -- one kernel-measured number across the whole cgroup, unlike
+    the summed rusage `capture_resource_usage` computes above. Entirely
+    against fake paths/readers -- no dependency on a real `/sys/fs/cgroup`
+    existing on whatever host runs the test.
+    """
+
+    def test_reads_the_first_path_that_parses_as_an_integer(self):
+        contents = {"/fake/memory.peak": "104857600\n"}
+        value = termination.read_cgroup_peak_bytes(
+            paths=("/fake/memory.peak",),
+            read_text=lambda path: contents[path])
+        self.assertEqual(value, 104_857_600)
+
+    def test_falls_back_to_the_second_path_when_the_first_is_unreadable(self):
+        def read_text(path):
+            if path == "/fake/v2":
+                raise FileNotFoundError(path)
+            return "5000\n"
+
+        value = termination.read_cgroup_peak_bytes(
+            paths=("/fake/v2", "/fake/v1"), read_text=read_text)
+        self.assertEqual(value, 5000)
+
+    def test_a_missing_file_yields_none_and_does_not_raise(self):
+        def read_text(path):
+            raise FileNotFoundError(path)
+
+        value = termination.read_cgroup_peak_bytes(
+            paths=("/fake/memory.peak", "/fake/memory.max_usage_in_bytes"),
+            read_text=read_text)
+        self.assertIsNone(value)
+
+    def test_malformed_content_yields_none_and_does_not_raise(self):
+        value = termination.read_cgroup_peak_bytes(
+            paths=("/fake/memory.peak",),
+            read_text=lambda path: "not-a-number\n")
+        self.assertIsNone(value)
 
 
 class TerminateWritesResourceUsageTests(unittest.TestCase):
@@ -1020,7 +1066,8 @@ class TerminateWritesResourceUsageTests(unittest.TestCase):
         # monkeypatch-based test lie about what it covers.
         original = termination.capture_resource_usage
         termination.capture_resource_usage = (
-            lambda: {"peak_rss_kb": 154_000, "cpu_seconds": 8.0})
+            lambda: {"peak_rss_kb": 154_000, "cpu_seconds": 8.0,
+                     "cgroup_peak_bytes": 200_000_000})
         self.addCleanup(
             setattr, termination, "capture_resource_usage", original)
 
@@ -1029,8 +1076,10 @@ class TerminateWritesResourceUsageTests(unittest.TestCase):
         sql, params = self.harness.executor.calls[-1]
         self.assertIn("peak_rss_kb = %s", sql)
         self.assertIn("cpu_seconds = %s", sql)
+        self.assertIn("cgroup_peak_bytes = %s", sql)
         self.assertIn(154_000, params)
         self.assertIn(8.0, params)
+        self.assertIn(200_000_000, params)
 
     def test_a_measurement_failure_does_not_block_the_close(self):
         # The regression this whole feature exists to avoid: a broken
@@ -1057,8 +1106,11 @@ class TerminateWritesResourceUsageTests(unittest.TestCase):
         self.assertIn("peak_rss_kb = %s", sql)
         peak_rss_index = _column_param_index(sql, params, "peak_rss_kb")
         cpu_seconds_index = _column_param_index(sql, params, "cpu_seconds")
+        cgroup_peak_index = _column_param_index(
+            sql, params, "cgroup_peak_bytes")
         self.assertIsNone(params[peak_rss_index])
         self.assertIsNone(params[cpu_seconds_index])
+        self.assertIsNone(params[cgroup_peak_index])
 
 
 def _column_param_index(sql, params, column):

@@ -396,7 +396,59 @@ def upload_bundle(store: Any, key: str, body: bytes) -> dict:
 # Resource usage (D7: per-job peak RSS and CPU seconds)
 # ---------------------------------------------------------------------------
 
-def capture_resource_usage(getrusage: Any = resource.getrusage) -> dict:
+# cgroup v2 keeps a single running peak for the whole cgroup; v1 has no
+# direct equivalent but `memory.max_usage_in_bytes` is the same idea for a
+# cgroup that was never reset. Order matters: v2 is checked first since
+# that's what every current job container runs.
+_CGROUP_PEAK_PATHS = (
+    "/sys/fs/cgroup/memory.peak",
+    "/sys/fs/cgroup/memory/memory.max_usage_in_bytes",
+)
+
+
+def read_cgroup_peak_bytes(paths: Any = _CGROUP_PEAK_PATHS,
+                            read_text: Any = None) -> Any:
+    """The container cgroup's own peak memory, in bytes, or None.
+
+    Unlike summed rusage (`capture_resource_usage` below), this is a single
+    number the kernel maintains across the WHOLE cgroup over the container's
+    lifetime — parent and every child process share one accounting domain,
+    so there is no "self peak" and "children peak" to add together and no
+    risk of summing two high-water marks that never coincided.
+
+    Tries each path in `paths` in order and returns the first one that
+    parses as an integer: cgroup v2's `memory.peak` first, falling back to
+    cgroup v1's `memory.max_usage_in_bytes` for older hosts. `paths` and
+    `read_text` are both injectable — mirroring how `capture_resource_usage`
+    injects `getrusage` — so a unit test can supply a fake file or reader
+    instead of depending on `/sys/fs/cgroup` existing on the test host.
+
+    **Never raises.** Neither path existing, a read failing, or the content
+    not parsing as an integer are all routine (a non-Linux host, a cgroup
+    v1-only host missing the v2 file, a cgroup that was never sampled) and
+    are logged at debug rather than warning — this is a supplementary
+    number, not the one D7 already depends on, so its absence is quieter.
+    Returns None whenever no path yields a value.
+    """
+    _read = read_text if read_text is not None else (
+        lambda path: open(path, "r").read())
+    for path in paths:
+        try:
+            raw = _read(path)
+        except Exception:  # noqa: BLE001 - a missing/unreadable path is routine
+            continue
+        try:
+            return int(str(raw).strip())
+        except (TypeError, ValueError):
+            _logger.debug(
+                "cgroup peak-memory file %s did not contain a plain "
+                "integer; skipping it", path)
+            continue
+    return None
+
+
+def capture_resource_usage(getrusage: Any = resource.getrusage,
+                            cgroup_peak_bytes: Any = read_cgroup_peak_bytes) -> dict:
     """Peak resident memory and CPU seconds for the job process tree, at
     terminal.
 
@@ -419,12 +471,30 @@ def capture_resource_usage(getrusage: Any = resource.getrusage) -> dict:
     processor time the job process tree consumed, wall-clock elapsed being
     tracked separately by `started_at`/`ended_at`.
 
-    Returns `{"peak_rss_kb": int, "cpu_seconds": float}`. **Never raises** —
-    a failure to read rusage must not fail the job or lose the terminal
-    record (D7 requirement); on any exception this logs a warning and
-    returns `{"peak_rss_kb": None, "cpu_seconds": None}`, which
-    `mark_application_closed` writes as NULL. `getrusage` is injectable so
-    tests can supply a fake rather than depending on a real subprocess tree.
+    **`peak_rss_kb` is an upper bound, not a measured peak — `cgroup_peak_
+    bytes` is the truthful one.** The rusage sum adds the parent's
+    high-water mark to the children's high-water mark, but those two marks
+    need not have occurred at the same moment: the parent may have peaked
+    long before any child started, or vice versa, and summing two peaks
+    that never coexisted reports a peak memory the process tree never
+    actually held at once. The cgroup's own `memory.peak` (or v1's
+    `memory.max_usage_in_bytes`) has no such flaw — it is the kernel's
+    single running maximum of the WHOLE cgroup's memory over time, so it
+    reflects what was actually resident at once. `peak_rss_kb` is kept
+    exactly as before regardless: existing rows carry it, and comparing the
+    two numbers against each other is the point of adding the second one.
+
+    Returns `{"peak_rss_kb": int, "cpu_seconds": float, "cgroup_peak_bytes":
+    int}` (each may be `None` on measurement failure). **Never raises** — a
+    failure to read rusage must not fail the job or lose the terminal
+    record (D7 requirement); on a `getrusage` exception this logs a warning
+    and returns `{"peak_rss_kb": None, "cpu_seconds": None,
+    "cgroup_peak_bytes": None}`, which `mark_application_closed` writes as
+    NULL. A `cgroup_peak_bytes` read failure is independent and never
+    raises on its own (see `read_cgroup_peak_bytes`), so it cannot take
+    `peak_rss_kb`/`cpu_seconds` down with it. `getrusage` and
+    `cgroup_peak_bytes` are both injectable so tests can supply fakes
+    rather than depending on a real subprocess tree or `/sys/fs/cgroup`.
     """
     try:
         self_usage = getrusage(resource.RUSAGE_SELF)
@@ -432,12 +502,13 @@ def capture_resource_usage(getrusage: Any = resource.getrusage) -> dict:
         peak_rss_kb = max(self_usage.ru_maxrss, 0) + max(children_usage.ru_maxrss, 0)
         cpu_seconds = (self_usage.ru_utime + self_usage.ru_stime
                        + children_usage.ru_utime + children_usage.ru_stime)
-        return {"peak_rss_kb": int(peak_rss_kb), "cpu_seconds": float(cpu_seconds)}
+        return {"peak_rss_kb": int(peak_rss_kb), "cpu_seconds": float(cpu_seconds),
+                "cgroup_peak_bytes": cgroup_peak_bytes()}
     except Exception:  # noqa: BLE001 - measurement is best-effort, never fatal
         _logger.warning(
             "could not read rusage for this attempt's resource-usage "
             "columns; leaving peak_rss_kb/cpu_seconds NULL", exc_info=True)
-        return {"peak_rss_kb": None, "cpu_seconds": None}
+        return {"peak_rss_kb": None, "cpu_seconds": None, "cgroup_peak_bytes": None}
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +926,7 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
             error_category=(serialized.error_category if serialized else None),
             peak_rss_kb=usage["peak_rss_kb"],
             cpu_seconds=usage["cpu_seconds"],
+            cgroup_peak_bytes=usage["cgroup_peak_bytes"],
         )
     except Exception as exc:  # noqa: BLE001 - translated
         # The record is already durable and valid; only the row transition

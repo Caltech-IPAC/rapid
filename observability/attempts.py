@@ -783,7 +783,8 @@ class AttemptWriter:
                                 error_category: str | None = None,
                                 reconciler_materialized: bool = False,
                                 peak_rss_kb: int | None = None,
-                                cpu_seconds: float | None = None) -> None:
+                                cpu_seconds: float | None = None,
+                                cgroup_peak_bytes: int | None = None) -> None:
         """Close the application-authored half of an attempt.
 
         The termination protocol's final database step
@@ -823,6 +824,14 @@ class AttemptWriter:
         and default to None: a measurement failure (caught inside
         `capture_resource_usage`, which never raises) must not block the
         close it rides alongside.
+
+        `cgroup_peak_bytes` rides alongside the same call, read by the same
+        `capture_resource_usage`, for the same reason and with the same
+        NULLable default: it is the container cgroup's own peak-memory
+        reading (kernel-measured across the whole process tree at once),
+        kept beside `peak_rss_kb` because the summed-rusage number can
+        overcount when the parent's and children's high-water marks did
+        not coincide in time.
         """
         if terminal_record_sequence < 0:
             raise ValueError(
@@ -846,7 +855,7 @@ class AttemptWriter:
             "  product_disposition = %s, error_category = %s,"
             "  terminal_record_key = %s, terminal_record_sequence = %s,"
             "  terminal_record_checksum = %s, reconciler_materialized = %s,"
-            "  peak_rss_kb = %s, cpu_seconds = %s"
+            "  peak_rss_kb = %s, cpu_seconds = %s, cgroup_peak_bytes = %s"
             " WHERE attempt_id = %s AND lifecycle_state = %s"
         )
         result = self._execute(sql, [
@@ -855,7 +864,7 @@ class AttemptWriter:
             _value(product_disposition), error_category,
             terminal_record_key, terminal_record_sequence,
             terminal_record_checksum, reconciler_materialized,
-            peak_rss_kb, cpu_seconds, attempt_id,
+            peak_rss_kb, cpu_seconds, cgroup_peak_bytes, attempt_id,
             LifecycleState.STARTED.value,
         ])
         _require_one_row(result, "mark_application_closed", attempt_id,
