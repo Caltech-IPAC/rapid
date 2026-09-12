@@ -16,8 +16,9 @@ candidate if the allowlist admitted its class. Every retention test then
 breaks exactly one thing.
 
 **THE STUB INVENTORY CAN REFUSE**, which is the property that makes it worth
-having (`~/Vault/knowledge/stub-blind-testing.md`'s standing lesson, and the
-brief's requirement): it can return a missing object, a partial page, a
+having (the standing stub-blind-testing lesson — a double that cannot refuse
+tests nothing but the caller's own beliefs — and the brief's requirement): it
+can return a missing object, a partial page, a
 changed version and a stale snapshot. A double that cannot fail proves
 nothing.
 """

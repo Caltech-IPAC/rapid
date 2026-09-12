@@ -1,7 +1,7 @@
 """Acceptance criteria 9 and 10 — plan integrity, and execution safety.
 
 **THE STUB S3 CAN REFUSE, FAIL, AND REPORT A CHANGED VERSION.** A double that
-cannot fail proves nothing (`~/Vault/knowledge/stub-blind-testing.md`, and the
+cannot fail proves nothing (the standing stub-blind-testing lesson, and the
 brief's explicit requirement). `StubS3` below can: return a missing object,
 fail a delete, report a version that changed after planning, and count calls
 so a test can assert something was NOT attempted.

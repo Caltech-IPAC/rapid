@@ -9,6 +9,7 @@
 #   2. the internal NASA science-cloud hostname -> hard block, no allowlist
 #   3. any 12-digit AWS-account-like number     -> block unless allowlisted
 #   4. /Users/<name> personal paths             -> block unless allowlisted
+#   5. ~/Vault, ~/Claude personal note paths    -> block unless allowlisted
 #
 # stdin (from git): <local ref> <local sha> <remote ref> <remote sha>
 #
@@ -85,6 +86,7 @@ smdc-account|no|$SMDC_ACCOUNT
 sciencecloud-host|no|$SCIENCECLOUD_HOST
 aws-account-12digit|yes|(?<![0-9.])[0-9]{12}(?![0-9])
 users-path|yes|/Users/[A-Za-z0-9_.-]+
+personal-notes-path|yes|~/(Vault|Claude)\b
 PATTERNS
     return $bad
 }

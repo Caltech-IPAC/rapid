@@ -10,7 +10,8 @@
 > is the handoff spec for finishing both. It was rescued from the delegate run's
 > scratch directory before that directory was deleted; the worktree path and
 > branch it names were removed at the end of that run and no longer exist.
-> Campaign context: `~/Claude/rapid-threads.md` §2b.
+> Campaign context: the D-process campaign thread, section 2b — the running
+> tracker for the D2/D3 work, kept outside this repo.
 
 Worktree: `rapid-wt-d` (removed at end of run), branch `campaign/d-process` (based on `smdc`).
 `rapid_systems` was read-only throughout — no edits made there; all rapid_systems-side work is

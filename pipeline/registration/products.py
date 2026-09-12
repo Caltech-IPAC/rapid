@@ -51,7 +51,7 @@ logger = logging.getLogger("rapid.registration.products")
 #: fake database accepts whatever it is handed, so a type the real column
 #: cannot hold looks identical to one it can.
 #:
-#: PROPOSED VALUES, and they need Ben's ratification (recorded in the FixD
+#: PROPOSED VALUES, and they need project ratification (recorded in the FixD
 #: ledger and the disposition page). The legacy body read these from
 #: `product_config['REF_IMAGE'][...cattype]` — a per-job product config that
 #: the W6 cutover deleted and that never lived in this repo — and neither
