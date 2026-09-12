@@ -223,6 +223,12 @@ def _make_l2file(conn, expid, dateobs, sca, tag):
         conn, "l2files", "rid",
         {"expid": expid, "sca": sca, "version": version, "vbest": 1,
          "field": field, "fid": fid, "dateobs": dateobs,
+         # `overlapfields` has a DEFAULT, so the catalog fill leaves it on
+         # `'{}'` — which 104 refuses on every INSERT
+         # (`cardinality(overlapfields) >= 1`, `field = ANY(overlapfields)`).
+         # `[field]` is the minimal true footprint: the centre tile is
+         # genuinely overlapped, and no assertion here reads the column.
+         "overlapfields": [field],
          # `l2files.checksum` is varchar(32) and TRUNCATES every SHA-256 given
          # to it (CR-8, unlanded). The value written here is deliberately short
          # so this fixture does not depend on that defect either way; admission

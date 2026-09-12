@@ -502,6 +502,13 @@ def _diffimage_parents(conn, field, tag):
         conn, "l2files", "rid",
         {"expid": expid, "sca": 1, "version": 1, "vbest": 1,
          "field": field, "fid": fid,
+         # `overlapfields` HAS a default, so the catalog query above leaves it
+         # alone — and its default `'{}'` is exactly what 104's two checks
+         # refuse: `cardinality(overlapfields) >= 1` and
+         # `field = ANY(overlapfields)`. Empty means NOT COMPUTED there, never
+         # "overlaps nothing". `[field]` is the minimal footprint satisfying
+         # both, and a true one: the centre tile really is overlapped.
+         "overlapfields": [field],
          "filename": f"l2/{RUN_TAG}/{tag}.fits", "checksum": tag[:8]})
 
     with conn.cursor() as cur:
