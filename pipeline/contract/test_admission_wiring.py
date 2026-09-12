@@ -86,14 +86,33 @@ def test_every_ingest_script_calls_the_whole_admission_lifecycle(script,
 
 
 @pytest.mark.parametrize("script", INGEST_SCRIPTS)
-def test_the_manifest_is_sealed_after_the_admissions_not_before(script):
-    """B1's crash ordering: seal LAST.
+def test_the_manifest_is_opened_before_it_is_sealed(script):
+    """The half of B1's crash ordering that survived 051.
 
-    Asserted structurally — `seal_admission_run` must appear after the
-    admission calls in the source — because the ordering IS the guarantee: a
-    manifest sealed before its admissions could be cited by an admission that
-    never happened, which is the one state 051's trigger and this ordering
-    exist together to prevent.
+    `begin_admission_run` must precede `seal_admission_run`: a manifest
+    cannot be sealed before it is opened. That is asserted here, structurally.
+
+    **WHAT THIS TEST NO LONGER ASSERTS, AND WHY.** It used to also require the
+    string `UNSEALED` beside the seal call — i.e. that the seal be GUARDED on
+    a clean run, so a partial ingest left the manifest explicitly unsealed.
+    That requirement was retired by `d9e66d0c` (2026-09-09), which is the
+    authority here because it is backed by live evidence, not by argument:
+    rapid_systems migration 051 installs BEFORE INSERT triggers
+    (`admission_l2files_manifest_sealed`, `admission_exposures_manifest_
+    sealed`) that REFUSE any admission citing a manifest whose `sealed_at IS
+    NULL`. Sealing last is therefore not a stricter discipline, it is an
+    unreachable state: observed live 2026-09-09 22:51 UTC, all 890 of 890
+    `record_l2file_admission` calls failed with "admission cites manifest 38
+    which is not sealed". The three registrars now seal immediately after the
+    enumeration commit, and a partial ingest is recorded the way the database
+    permits — a sealed manifest whose `entry_count` exceeds the rows joined in
+    `admission_l2files`, plus the run's own `n_failed` summary and `exit(65)`.
+
+    The replacement lives with the scripts it judges:
+    `database/sims/test/test_db_register_seal_ordering.py`, which parses each
+    script with `ast` and asserts the seal precedes the per-file admission
+    phase. Keeping this assertion alongside it left the tier holding two
+    tests that could not both pass.
     """
     with open(os.path.join(REPO_ROOT, script), "r",
               encoding="utf-8") as handle:
@@ -105,11 +124,6 @@ def test_the_manifest_is_sealed_after_the_admissions_not_before(script):
     begin_at = text.rindex("begin_admission_run(")
     assert begin_at < seal_at, (
         "%s seals its manifest before opening it" % script)
-    # And the seal is guarded on a clean run rather than unconditional.
-    assert "UNSEALED" in text[seal_at - 1200:seal_at + 1200], (
-        "%s seals unconditionally; a run with failures must leave the "
-        "manifest explicitly unsealed, which is the honest record of a "
-        "partial ingest" % script)
 
 
 # ---------------------------------------------------------------------------
