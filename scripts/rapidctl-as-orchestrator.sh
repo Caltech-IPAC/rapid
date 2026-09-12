@@ -114,6 +114,17 @@ trap 'rm -f "$envfile"; exit 130' INT TERM
 {
     echo "PGUSER=${PGUSER}"
     echo "PGPASSWORD=${PGPASSWORD:-}"
+    # DBUSER/DBPASS AS WELL AS PGUSER/PGPASSWORD, because the two halves of
+    # the codebase read different variables for the same login. The operator
+    # session (`pipeline.operatorctl.session`) reads PGUSER/PGPASSWORD; the
+    # product layer (`database.modules.utils.rapid_db`) reads DBUSER/DBPASS,
+    # or a Secrets Manager secret named by RAPID_DB_SECRET_ID. Subcommands
+    # that reach the product layer -- `run start`, and anything that opens a
+    # RAPIDDB handle of its own rather than borrowing the session's
+    # connection -- refuse with "environment variable(s) not set: DBUSER,
+    # DBPASS" when only the PG* pair is supplied.
+    echo "DBUSER=${PGUSER}"
+    echo "DBPASS=${PGPASSWORD:-}"
     echo "DBSERVER=$(param /rapid/pipeline/db/server)"
     echo "DBPORT=$(param /rapid/pipeline/db/port)"
     echo "DBNAME=$(param /rapid/pipeline/db/name)"
