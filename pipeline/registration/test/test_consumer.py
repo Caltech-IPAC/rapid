@@ -1611,5 +1611,185 @@ class RegistrationCountsOnlyWhatItCommittedTests(unittest.TestCase):
             "every attempt in the batch must be accounted for exactly once")
 
 
+class SavepointConn(FakeConn):
+    """A `FakeConn` that models SAVEPOINT / ROLLBACK TO / RELEASE, and the
+    fact that an unguarded failed statement aborts the whole transaction.
+
+    `FakeConn` cannot show this defect: its `execute` never fails, so the
+    CAS miss that `_complete_work_unit` swallows arrives as a bare Python
+    exception with no transaction consequences. On a real connection the
+    miss is SQLSTATE RA001 raised by `derived.transition_work_unit`, which
+    aborts the transaction -- and a savepoint is the only thing that keeps
+    the abort from reaching the writes made before it.
+
+    `work_units` starting a unit in any state but `submitted` is what makes
+    the CAS miss, exactly as the live database had them (`blocked`, from
+    earlier failed siblings).
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.aborted = False
+        #: Savepoint names currently held, innermost last.
+        self.savepoints = []
+        #: True for each commit that made rows durable.
+        self.commit_was_durable = []
+
+    def execute(self, statement, params=None):
+        lowered = statement.strip().lower()
+        if lowered.startswith("savepoint "):
+            self.savepoints.append(lowered.split()[1])
+            self.statements.append((statement, params))
+            return None
+        if lowered.startswith("rollback to savepoint "):
+            # The abort is undone, which is the whole point of the guard.
+            self.aborted = False
+            name = lowered.split()[-1]
+            if name in self.savepoints:
+                del self.savepoints[self.savepoints.index(name):]
+            self.statements.append((statement, params))
+            return None
+        if lowered.startswith("release savepoint "):
+            name = lowered.split()[-1]
+            if name in self.savepoints:
+                self.savepoints.remove(name)
+            self.statements.append((statement, params))
+            return None
+        if self.aborted:
+            raise RuntimeError(
+                "current transaction is aborted, commands ignored until "
+                "end of transaction block")
+        try:
+            return super().execute(statement, params)
+        except Exception:
+            # A failed statement aborts the transaction. `FakeConn` raises
+            # the RA001-shaped `FakePgError` from its
+            # `derived.transition_work_unit` branch on a CAS miss; on a real
+            # connection that abort is the server's, not the driver's.
+            self.aborted = True
+            raise
+
+    def commit(self):
+        durable = not self.aborted
+        self.commit_was_durable.append(durable)
+        self.commits += 1
+        if durable:
+            self.committed.extend(self._pending)
+        self._pending = []
+        self._pending = []
+        self.aborted = False
+        self.savepoints = []
+
+    def rollback(self):
+        self.rollbacks += 1
+        self._pending = []
+        self.aborted = False
+        self.savepoints = []
+
+
+class ACASMissDoesNotDiscardTheRegistrationTests(unittest.TestCase):
+    """`_complete_work_unit`'s CAS miss must cost only the transition.
+
+    Its docstring promises exactly this -- "a CAS miss is logged, not
+    raised ... refusing to complete a unit someone else has already
+    dispositioned is not a reason to roll all of that back" -- and before
+    the savepoint the code delivered the opposite. `derived.
+    transition_work_unit` signals a miss by RAISING SQLSTATE RA001, which
+    ABORTS the transaction; PostgreSQL then discards everything it wrote
+    and its COMMIT silently behaves as ROLLBACK. Catching the Python
+    exception does not un-abort anything.
+
+    Measured live on 2026-09-12 registering `accept-20260911`: 18 of 19
+    candidates wrote their product rows, outcome, watermark and milestone
+    successfully, and every one was discarded here. Stepping the
+    post-register calls one at a time showed the transaction status going
+    from 2 (INTRANS) to 3 (INERROR) at `_complete_work_unit` and at no
+    other call. The units were `blocked`, not `submitted` -- earlier failed
+    siblings had blocked them -- which is the very case the posture exists
+    to let through.
+    """
+
+    def test_a_cas_miss_still_commits_the_product_rows_and_watermark(self):
+        # The unit is `blocked`, so the SUBMITTED -> COMPLETE CAS misses,
+        # exactly as the live units did.
+        conn = SavepointConn(work_units={42: "blocked"})
+
+        run = consumer.register_batch(
+            conn, [reconciled(1, work_unit_id=42)],
+            register=product_writer(conn))
+
+        self.assertEqual(
+            [True], conn.commit_was_durable,
+            "the commit discarded everything: a CAS miss aborted the "
+            "transaction instead of costing only its own statement")
+        committed = " ".join(statement for statement, _ in conn.committed)
+        self.assertIn("addDiffImage", committed,
+                      "the product write was discarded by the CAS miss")
+        self.assertIn("registered_record_sequence", committed,
+                      "the watermark was discarded by the CAS miss")
+        self.assertEqual(
+            1, run.registered,
+            "the attempt registered -- its rows and watermark are durable "
+            "-- so it must be counted as registered")
+        self.assertEqual(0, run.uncommitted)
+
+    def test_the_cas_runs_inside_a_savepoint(self):
+        # The mechanism, named. Without the savepoint there is nothing to
+        # roll back to and the abort reaches the whole transaction.
+        conn = SavepointConn(work_units={42: "blocked"})
+
+        consumer.register_batch(
+            conn, [reconciled(1, work_unit_id=42)],
+            register=product_writer(conn))
+
+        issued = [statement.strip().lower()
+                  for statement, _ in conn.statements]
+        self.assertTrue(
+            any(s.startswith("savepoint ") for s in issued),
+            "no SAVEPOINT was taken around the work-unit CAS")
+        self.assertTrue(
+            any(s.startswith("rollback to savepoint ") for s in issued),
+            "the CAS miss did not roll back to its savepoint, so the "
+            "transaction stayed aborted")
+
+    def test_a_successful_transition_releases_its_savepoint(self):
+        # The other half: a unit in `submitted` transitions, and the
+        # savepoint is released rather than left open. A savepoint left
+        # open per attempt would accumulate across a batch.
+        conn = SavepointConn(work_units={42: "submitted"})
+
+        run = consumer.register_batch(
+            conn, [reconciled(1, work_unit_id=42)],
+            register=product_writer(conn))
+
+        issued = [statement.strip().lower()
+                  for statement, _ in conn.statements]
+        self.assertTrue(
+            any(s.startswith("release savepoint ") for s in issued),
+            "a successful transition left its savepoint open")
+        self.assertEqual([], conn.savepoints,
+                         "a savepoint was left held at the end of the pass")
+        self.assertEqual("complete", conn.work_units[42])
+        self.assertEqual(1, run.registered)
+
+    def test_a_cas_miss_mid_batch_does_not_harm_the_attempts_after_it(self):
+        # The batch-level property. Attempt 1's unit is blocked and misses;
+        # attempts 2 and 3 have submitted units and must register normally.
+        conn = SavepointConn(work_units={41: "blocked", 42: "submitted",
+                                         43: "submitted"})
+        rows = [reconciled(1, work_unit_id=41),
+                reconciled(2, work_unit_id=42),
+                reconciled(3, work_unit_id=43)]
+
+        run = consumer.register_batch(conn, rows,
+                                      register=product_writer(conn))
+
+        self.assertEqual([True, True, True], conn.commit_was_durable,
+                         "an attempt's commit discarded its rows")
+        self.assertEqual(3, run.registered)
+        self.assertEqual(0, run.uncommitted)
+        self.assertEqual(0, run.failed)
+
+
 if __name__ == "__main__":
     unittest.main()

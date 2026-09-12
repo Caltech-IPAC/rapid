@@ -924,18 +924,13 @@ def _complete_work_unit(attempt_id, work_unit_id, cursor):
         # verbatim: absent means absence, not a sentinel, one layer up.
         return
     work_writer = WorkUnitWriter(_cursor_executor(cursor))
-    try:
-        work_writer.transition_unit(
-            work_unit_id, SUBMITTED, COMPLETE, writer=WRITER_RECONCILER,
-            detail={"deciding_attempt_id": attempt_id,
-                    "disposition": "close_complete"})
-    except WorkUnitNotFound:
-        logger.info(
-            "work unit %s (attempt %s) was not in 'submitted' when "
-            "registration accepted its result; another writer already "
-            "resolved it, so this registration's own product writes and "
-            "watermark still commit without forcing the work unit",
-            work_unit_id, attempt_id)
+    # Delegated to `_transition_or_log`, which owns the savepoint that makes
+    # "a CAS miss is logged, not raised" actually true — see its docstring
+    # for why catching the exception alone discarded this registration's
+    # product rows and watermark.
+    _transition_or_log(work_writer, work_unit_id, attempt_id, COMPLETE,
+                       cursor=cursor, disposition="close_complete",
+                       savepoint="registration_complete_unit")
 
 
 #: The three effect dispositions, as plain strings — `_EFFECT_ATTEMPT_COUNT_
@@ -1034,7 +1029,9 @@ def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
 
     if disposition == ProductDisposition.EFFECT_CONFIRMED.value:
         _transition_or_log(work_writer, work_unit_id, attempt_id, COMPLETE,
-                           disposition="close_complete_effect")
+                           cursor=cursor,
+                           disposition="close_complete_effect",
+                           savepoint="registration_close_effect")
         return
 
     if disposition == ProductDisposition.EFFECT_UNCONFIRMED.value:
@@ -1043,13 +1040,17 @@ def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
             effect_attempt_count=count)
         if verdict == RETRY_READY:
             _transition_or_log(work_writer, work_unit_id, attempt_id, READY,
-                               disposition="retry_ready_unconfirmed_effect")
+                               cursor=cursor,
+                               disposition="retry_ready_unconfirmed_effect",
+                               savepoint="registration_retry_ready")
         else:
             assert verdict == PARK_BLOCKED
             _transition_or_log(
                 work_writer, work_unit_id, attempt_id, BLOCKED,
+                cursor=cursor,
                 disposition="park_blocked_unconfirmed_effect",
-                blocked_reason=EFFECT_RETRY_EXHAUSTED_REASON)
+                blocked_reason=EFFECT_RETRY_EXHAUSTED_REASON,
+                savepoint="registration_park_blocked")
         return
 
     if disposition == ProductDisposition.EFFECT_DEFERRED.value:
@@ -1134,13 +1135,37 @@ def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
 
 
 def _transition_or_log(work_writer, work_unit_id, attempt_id, to_state, *,
-                       disposition, blocked_reason=None):
+                       cursor, disposition, blocked_reason=None,
+                       savepoint="registration_transition_unit"):
     """`transition_unit(SUBMITTED, to_state, ...)`, CAS-miss logged not
-    raised — the identical posture `_complete_work_unit` already documents
-    at length for its own single case. Shared here across `_apply_skip_
-    disposition`'s several closing branches rather than repeating that
-    try/except per branch.
+    raised — the identical posture `_complete_work_unit` documents at
+    length. Shared across `_apply_skip_disposition`'s several closing
+    branches and `_complete_work_unit`'s single one, so the savepoint below
+    has ONE implementation rather than one per call site.
+
+    **THE SAVEPOINT IS WHAT MAKES "LOGGED, NOT RAISED" TRUE.**
+    `derived.transition_work_unit` signals a CAS miss by RAISING SQLSTATE
+    RA001, and a raised database error ABORTS THE TRANSACTION: PostgreSQL
+    then discards everything that transaction wrote, and its COMMIT
+    silently behaves as ROLLBACK. So catching the Python exception alone
+    delivered the exact opposite of the intent — the product rows, the
+    outcome, the watermark and the milestone were all thrown away, and the
+    attempt reported success having written nothing.
+
+    Measured live 2026-09-12 registering `accept-20260911`: 18 of 19
+    candidates wrote their rows successfully and were discarded here, the
+    transaction status turning from 2 (INTRANS) to 3 (INERROR) at this call
+    and nowhere else. Their units were `blocked` rather than `submitted`,
+    earlier failed siblings having blocked them — precisely the case the
+    posture exists to let through.
+
+    A savepoint scopes the abort to this one statement: released on
+    success, rolled back to on a miss, leaving the transaction usable with
+    everything written before it intact. Same discipline, same reason, as
+    `pipeline.operatorctl.session.submission_role`'s savepoint around its
+    own `SET ROLE` attempts.
     """
+    cursor.execute("SAVEPOINT " + savepoint)
     try:
         work_writer.transition_unit(
             work_unit_id, SUBMITTED, to_state, writer=WRITER_RECONCILER,
@@ -1148,12 +1173,15 @@ def _transition_or_log(work_writer, work_unit_id, attempt_id, to_state, *,
             detail={"deciding_attempt_id": attempt_id,
                     "disposition": disposition})
     except WorkUnitNotFound:
+        cursor.execute("ROLLBACK TO SAVEPOINT " + savepoint)
         logger.info(
             "work unit %s (attempt %s) was not in 'submitted' when "
-            "registration's SKIP verdict (%s) reached it; another writer "
-            "already resolved it, so this attempt's own consumption still "
-            "commits without forcing the work unit", work_unit_id,
+            "registration's verdict (%s) reached it; another writer "
+            "already resolved it, so this attempt's own writes still "
+            "commit without forcing the work unit", work_unit_id,
             attempt_id, disposition)
+    else:
+        cursor.execute("RELEASE SAVEPOINT " + savepoint)
 
 
 #: The rejection sibling of `_RECORD_OUTCOME_SQL` (integration ruling 4):
