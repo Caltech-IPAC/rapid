@@ -51,6 +51,8 @@ docs/source/analyses/count_fields_imaged/count_fields_imaged.rst	/Users/laher
 .githooks/pre-push	526133100000
 .githooks/pre-push	526133100001
 .githooks/pre-push	/Users/laher
+.githooks/pre-push	~/Vault
+.githooks/pre-push	~/Claude
 EOF
 )"
 
