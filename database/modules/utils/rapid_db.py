@@ -588,7 +588,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_l2file_fourth_order(self,expid,sca,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
+    def add_l2file_fourth_order(self,expid,sca,field,overlapfields,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
         a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,b_0_2,b_0_3,
@@ -597,6 +597,16 @@ class RAPIDDB:
 
         '''
         Add record in L2files database table.
+
+        `overlapfields` is the ascending list of every sky tile the image
+        overlaps (database.modules.utils.overlapping_fields), NOT just the
+        centre tile `field` — it sits beside `field` here because the two
+        are the same kind of fact about the same image. Bound through
+        addL2File's `overlapfields_` by NAME rather than by position: the
+        positional arguments stop at skymean_, and 026's trailing
+        attempt_id_/record_sequence_ pair has never been passed by this
+        wrapper, so named notation reaches the new argument without
+        inventing values for the two it skips.
         '''
 
         self.exit_code = 0
@@ -663,7 +673,8 @@ class RAPIDDB:
             "cast(%s as real)," +\
             "cast(%s as real)," +\
             "cast(%s as real)," +\
-            "cast(%s AS real)) as " +\
+            "cast(%s AS real)," +\
+            "overlapfields_ => cast(%s as integer[])) as " +\
             "(rid integer," +\
             " version smallint);"
 
@@ -679,7 +690,8 @@ class RAPIDDB:
                   ctype1, ctype2, cunit1, cunit2, a_order, a_0_2, a_0_3, a_0_4, a_1_1,
                   a_1_2, a_1_3, a_2_0, a_2_1, a_2_2, a_3_0, a_3_1, a_4_0, b_order, b_0_2, b_0_3,
                   b_0_4, b_1_1, b_1_2, b_1_3, b_2_0, b_2_1, b_2_2, b_3_0, b_3_1,
-                  b_4_0, equinox, ra, dec, paobsy, pafpa, zptmag, skymean)
+                  b_4_0, equinox, ra, dec, paobsy, pafpa, zptmag, skymean,
+                  overlapfields)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -703,7 +715,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_l2file_fifth_order(self,expid,sca,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
+    def add_l2file_fifth_order(self,expid,sca,field,overlapfields,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,
         a_order,a_0_1,a_0_2,a_0_3,a_0_4,a_0_5,a_1_0,a_1_1,a_1_2,a_1_3,a_1_4,
@@ -714,6 +726,16 @@ class RAPIDDB:
 
         '''
         Add record in L2files database table.
+
+        `overlapfields` is the ascending list of every sky tile the image
+        overlaps (database.modules.utils.overlapping_fields), NOT just the
+        centre tile `field` — it sits beside `field` here because the two
+        are the same kind of fact about the same image. Bound through
+        addL2File's `overlapfields_` by NAME rather than by position: the
+        positional arguments stop at skymean_, and 026's trailing
+        attempt_id_/record_sequence_ pair has never been passed by this
+        wrapper, so named notation reaches the new argument without
+        inventing values for the two it skips.
         '''
 
         self.exit_code = 0
@@ -796,7 +818,8 @@ class RAPIDDB:
             "cast(%s as real)," +\
             "cast(%s as real)," +\
             "cast(%s as real)," +\
-            "cast(%s AS real)) as " +\
+            "cast(%s AS real)," +\
+            "overlapfields_ => cast(%s as integer[])) as " +\
             "(rid integer," +\
             " version smallint);"
 
@@ -814,7 +837,8 @@ class RAPIDDB:
                   a_2_0, a_2_1, a_2_2, a_2_3, a_3_0, a_3_1, a_3_2, a_4_0, a_4_1, a_5_0,
                   b_order, b_0_1, b_0_2, b_0_3, b_0_4, b_0_5, b_1_0, b_1_1, b_1_2, b_1_3, b_1_4,
                   b_2_0, b_2_1, b_2_2, b_2_3, b_3_0, b_3_1, b_3_2, b_4_0, b_4_1, b_5_0,
-                  equinox, ra, dec, paobsy, pafpa, zptmag, skymean)
+                  equinox, ra, dec, paobsy, pafpa, zptmag, skymean,
+                  overlapfields)
 
         print('query = {}, params = {}'.format(query, params))
 
