@@ -45,37 +45,32 @@
 # false substrate this whole tier exists to eliminate.
 #
 # ---------------------------------------------------------------------------
-# PR-GATING (D4, process-hardening campaign, 2026-08-13): PROPOSED, NOT
-# RATIFIED. `on:` below still fires on `push` to smdc and manual dispatch
-# only — this workflow does not gate pull requests today, and the decision
-# below is to LEAVE IT THAT WAY for now rather than add `pull_request` here.
+# PR-GATING: NOW ON, for same-repository pull requests only (project ruling
+# 2026-09-12, the 2026-09-13 handoff plan: "CI runs on every push and pull
+# request"). `on:` below fires on a push to ANY branch and on
+# `pull_request`, so a branch and a PR each get the contract tier before a
+# merge lands rather than only after.
 #
-# Reasoning, weighed conservative-by-default per this run's own instruction
-# (unattended, no one to catch a wrong call before it starts blocking PRs):
+# THE FORK BOUND, AND WHY THE JOB SKIPS RATHER THAN FAILS. Caltech-IPAC/
+# rapid is PUBLIC, and a `pull_request` run from a FORK gets no access to
+# repository secrets. The App secrets would be absent and this workflow's
+# own "fail closed if the cross-org read secret is not provisioned" step
+# would then fail EVERY fork PR, always, for a reason that has nothing to
+# do with the PR's own change — a required check a legitimate contributor
+# can never pass is worse than no check. So the job carries an `if:` that
+# skips a pull request whose head repository is not this one. A fork PR
+# gets no contract tier; it does not get a spurious red.
 #
-#   * Caltech-IPAC/rapid is PUBLIC (verified live: `gh repo view` reports
-#     visibility PUBLIC). A `pull_request`-triggered run from a FORK gets no
-#     access to repository secrets by default — the App secrets
-#     would be absent, and this workflow's own "fail closed if the cross-org
-#     read secret is not provisioned" step would then fail EVERY fork PR,
-#     always, for a reason that has nothing to do with the PR's own change.
-#     A required check that a class of legitimate contributor can never pass
-#     is worse than no check.
-#   * The safe way to hand secrets to a `pull_request`-shaped run is
-#     `pull_request_target` (runs in the base repo's context, secrets
-#     available) — but it runs with the BASE branch's workflow file against
-#     the PR's head content, and mishandling that split is exactly how
-#     `pull_request_target` gets a fork PR arbitrary secret access; not a
-#     change to make unattended, and not evaluated in this pass.
-#   * No PR-triggered run history exists yet to gauge flakiness or runtime
-#     under PR concurrency — this is genuinely THIS repo's first Actions
-#     workflow (see header above), proven on `push` only so far.
+# NOT `pull_request_target`, deliberately. That is the way to hand secrets
+# to a fork-shaped run, but it runs the BASE branch's workflow against the
+# PR's head content, and mishandling that split is exactly how
+# `pull_request_target` grants a fork PR arbitrary secret access. Reaching
+# the fork case is not worth that exposure, and it is not a change to make
+# unattended.
 #
-# Revisit once: (a) push-triggered runs have a track record, and (b) a
-# pull_request_target design (or an org policy restricting who may open PRs)
-# closes the fork-secret gap above. Until then this stays a `push` gate —
-# reversible, and this comment is the record of why, per this campaign's
-# ledger (wave-d).
+# Revisit once fork PRs actually appear and the tier has a PR-triggered
+# track record; until then the same-repo gate is the whole of it, and this
+# comment is the record of why.
 name: contract-tests
 
 on:
@@ -99,6 +94,15 @@ concurrency:
 jobs:
   contract:
     runs-on: ubuntu-latest
+    # SKIP A FORK PR RATHER THAN FAIL IT — see "THE FORK BOUND" in the
+    # header. A pull request from a fork cannot see this repository's
+    # secrets, so the cross-org migration-stream checkout is impossible and
+    # the fail-closed step below would red every such PR for a reason
+    # unrelated to its change. Every push, and every same-repository pull
+    # request, runs normally.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     # No step here does genuinely unbounded work (the longest is the
     # contract suite itself against a service-container Postgres), so the
     # GitHub Actions default of 6h is a runaway-job budget, not a real one.
@@ -147,7 +151,7 @@ jobs:
       # the run's own log as evidence: "record the revision used" is part of
       # the required outcome, and a run that cannot say which schema it tested
       # against has not demonstrated anything reproducible.
-      RAPID_SYSTEMS_REF: 165692b3b0bf955807b59b525013b5419cd79b99
+      RAPID_SYSTEMS_REF: 7a68a8cf597e7169c4b17a1238cb0ea8d421a88c
 
     steps:
       - name: check out rapid
@@ -295,7 +299,7 @@ jobs:
           # guaranteed to a `with:` input, and a ref that silently resolved
           # to empty would check out the default branch — testing against an
           # unpinned schema while claiming a pinned one.
-          ref: 165692b3b0bf955807b59b525013b5419cd79b99
+          ref: 7a68a8cf597e7169c4b17a1238cb0ea8d421a88c
           token: ${{ steps.rapid-systems-token.outputs.token }}
           path: rapid_systems
           persist-credentials: false
