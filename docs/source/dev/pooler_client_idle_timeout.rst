@@ -117,6 +117,20 @@ established connection being closed under an in-flight statement. Papering
 over that would hide a pooler that drops payload connections, at a scale
 where ~1,000 concurrent jobs will each hold one.
 
+A related but distinct fix belongs here for contrast: ``rapid_db_connect.connect``
+now sets TCP keepalives (``KEEPALIVES_*`` in that module) on every connection
+it opens, sized to detect a vanished peer at the socket in about a minute
+instead of the kernel's default two hours (measured live 2026-09-12, when a
+rapid-db host roll left a reconciler connection pointed at an address that no
+longer existed). This is socket-level dead-peer detection, not the
+reconnect-and-retry pattern warned against above — it does not retry a
+statement that was in flight when the peer vanished, and it does nothing at
+all for a live pooler that closes a healthy connection out from under a
+statement, which is what this document is about. What it fixes is a
+different failure shape: a peer that is simply gone, where without it the
+caller would sit believing the connection healthy for two hours before
+finding out otherwise.
+
 The fix, and what is still owed
 -------------------------------
 

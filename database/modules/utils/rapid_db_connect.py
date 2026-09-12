@@ -45,6 +45,30 @@ downstream. Both now pass what they hold.
 Every dynamic identifier goes through ``psycopg2.sql.Identifier``; there
 is no code path in this module that interpolates a value or a name into
 SQL text.
+
+``connect`` also sets TCP keepalives (``KEEPALIVES_*`` below) on every
+connection it opens. This is SOCKET-LEVEL dead-peer detection only: it
+makes the OS notice that the other end of an established TCP connection
+has vanished, in about a minute. It does NOT retry a statement that was
+in flight when the peer vanished — a connection dropped mid-statement
+still surfaces as an ``OperationalError`` to the caller, exactly as
+before; what changes is how long the socket takes to report it instead
+of sitting there silently.
+
+The incident this closes: on 2026-09-12 a reconciler poll connected to
+rapid-db at 10:09:37Z. Between 10:19Z and 10:22Z a host roll replaced
+rapid-db with a new instance at a new private address, so the peer the
+open connection pointed at was simply gone. Nothing about that is
+visible at the TCP layer unless something goes looking: no RST arrives
+for a socket whose peer no longer exists, no FIN, nothing. The
+connection sat there, believed healthy, until 12:28:11Z — over two
+hours later — when the kernel's DEFAULT TCP keepalive finally ran its
+course (``tcp_keepalive_time`` 7200s, then 9 probes 75s apart) and
+psycopg2 reported ``could not receive data from server: Connection
+timed out``. The ``KEEPALIVES_*`` settings below replace those defaults
+with idle=30s, interval=10s, count=3 (30 + 3*10 = ~60s to detect), plus
+``tcp_user_timeout`` as a second, kernel-enforced backstop on the same
+budget.
 """
 
 import collections
@@ -90,6 +114,20 @@ STARTUP_CONNECT_ATTEMPTS = 10
 STARTUP_BACKOFF_INITIAL_S = 0.5
 STARTUP_BACKOFF_MULTIPLIER = 2.0
 STARTUP_BACKOFF_CAP_S = 30.0
+
+# TCP keepalives (module docstring has the incident and the arithmetic).
+# The kernel's own defaults (idle 7200s, then 9 probes 75s apart) took two
+# hours to notice a vanished peer live on 2026-09-12; these bring detection
+# down to about a minute: KEEPALIVES_IDLE_S before the first probe, then up
+# to KEEPALIVES_COUNT probes KEEPALIVES_INTERVAL_S apart (30 + 3*10 = 60s).
+# TCP_USER_TIMEOUT_MS is a second, independent backstop the Linux kernel
+# enforces on unacknowledged data regardless of the keepalive probe count,
+# sized to the same ~60s budget.
+KEEPALIVES = 1
+KEEPALIVES_IDLE_S = 30
+KEEPALIVES_INTERVAL_S = 10
+KEEPALIVES_COUNT = 3
+TCP_USER_TIMEOUT_MS = 60000
 
 # The two lanes at the one pooler door (design/database.md, and the route
 # matrix in the Batch payload contract). The lane is part of each job
@@ -282,6 +320,11 @@ def connect(application_name,
             backoff_initial=DEFAULT_BACKOFF_INITIAL_S,
             backoff_multiplier=DEFAULT_BACKOFF_MULTIPLIER,
             backoff_cap=DEFAULT_BACKOFF_CAP_S,
+            keepalives=KEEPALIVES,
+            keepalives_idle=KEEPALIVES_IDLE_S,
+            keepalives_interval=KEEPALIVES_INTERVAL_S,
+            keepalives_count=KEEPALIVES_COUNT,
+            tcp_user_timeout=TCP_USER_TIMEOUT_MS,
             jitter=False,
             sleep=time.sleep,
             connect_fn=None,
@@ -322,6 +365,19 @@ def connect(application_name,
     tests below assert exactly, and a caller with no reason to avoid
     synchronized retries (an isolated reconnect after one blip) has no
     reason to pay for a wider possible spread either.
+
+    ``keepalives``, ``keepalives_idle``, ``keepalives_interval``,
+    ``keepalives_count`` and ``tcp_user_timeout`` default to the
+    ``KEEPALIVES_*`` / ``TCP_USER_TIMEOUT_MS`` module constants (see the
+    module docstring for the incident and the arithmetic) and are passed
+    straight through to the driver on every connection this opens. Each is
+    an ordinary keyword argument, so a caller with a reason to size it
+    differently overrides it the same way it already overrides
+    ``connect_timeout`` — passing ``keepalives_idle=60`` here wins over the
+    module default. This is dead-peer detection at the SOCKET level only:
+    it does not retry a statement that was already in flight when the peer
+    vanished, it only bounds how long a now-pointless connection is believed
+    healthy.
 
     ``sleep``, ``connect_fn`` and ``random_func`` are injection points for
     tests; nothing in production passes them.
@@ -387,6 +443,11 @@ def connect(application_name,
                 password=password,
                 connect_timeout=connect_timeout,
                 application_name=composed_name,
+                keepalives=keepalives,
+                keepalives_idle=keepalives_idle,
+                keepalives_interval=keepalives_interval,
+                keepalives_count=keepalives_count,
+                tcp_user_timeout=tcp_user_timeout,
             )
         except psycopg2.OperationalError as exc:
             last_exc = exc

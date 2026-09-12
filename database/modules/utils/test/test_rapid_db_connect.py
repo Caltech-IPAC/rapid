@@ -26,12 +26,17 @@ from psycopg2 import sql
 
 from database.modules.utils.rapid_db_connect import (
     DEFAULT_BACKOFF_CAP_S,
+    KEEPALIVES,
+    KEEPALIVES_COUNT,
+    KEEPALIVES_IDLE_S,
+    KEEPALIVES_INTERVAL_S,
     LANE_SESSION,
     LANE_TRANSACTION,
     STARTUP_BACKOFF_CAP_S,
     STARTUP_BACKOFF_INITIAL_S,
     STARTUP_BACKOFF_MULTIPLIER,
     STARTUP_CONNECT_ATTEMPTS,
+    TCP_USER_TIMEOUT_MS,
     ConnectionExecutor,
     Credentials,
     DBCredentialError,
@@ -200,6 +205,11 @@ class ConnectSuccessTests(unittest.TestCase):
             password="s3cret",
             connect_timeout=17,
             application_name="registration[transaction]",
+            keepalives=KEEPALIVES,
+            keepalives_idle=KEEPALIVES_IDLE_S,
+            keepalives_interval=KEEPALIVES_INTERVAL_S,
+            keepalives_count=KEEPALIVES_COUNT,
+            tcp_user_timeout=TCP_USER_TIMEOUT_MS,
         )
 
     def test_application_name_carries_the_lane(self):
@@ -246,6 +256,31 @@ class ConnectSuccessTests(unittest.TestCase):
         with patch_env(), patch_credentials():
             connect("registration", connect_fn=mock.MagicMock(), sleep=sleep)
         sleep.assert_not_called()
+
+    def test_keepalive_kwargs_reach_the_driver(self):
+        # Socket-level dead-peer detection (module docstring has the
+        # incident): every one of these five must reach the driver with
+        # its exact module-default value, or a vanished peer goes back to
+        # taking two hours to notice instead of about a minute.
+        connect_fn = mock.MagicMock()
+        with patch_env(), patch_credentials():
+            connect("registration", connect_fn=connect_fn)
+        kwargs = connect_fn.call_args.kwargs
+        self.assertEqual(kwargs["keepalives"], KEEPALIVES)
+        self.assertEqual(kwargs["keepalives_idle"], KEEPALIVES_IDLE_S)
+        self.assertEqual(kwargs["keepalives_interval"], KEEPALIVES_INTERVAL_S)
+        self.assertEqual(kwargs["keepalives_count"], KEEPALIVES_COUNT)
+        self.assertEqual(kwargs["tcp_user_timeout"], TCP_USER_TIMEOUT_MS)
+
+    def test_a_caller_supplied_keepalive_override_wins(self):
+        # Overridable the same way connect_timeout already is: a caller
+        # with a reason to size it differently passes the keyword and it
+        # beats the module default.
+        connect_fn = mock.MagicMock()
+        with patch_env(), patch_credentials():
+            connect("registration", connect_fn=connect_fn,
+                    keepalives_idle=60)
+        self.assertEqual(connect_fn.call_args.kwargs["keepalives_idle"], 60)
 
 
 class ConnectRetryTests(unittest.TestCase):
