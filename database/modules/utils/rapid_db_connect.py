@@ -456,6 +456,62 @@ def forget_widened_role(conn):
     _WIDENED_ROLES.pop(id(conn), None)
 
 
+#: Whether the LAST `transaction(conn)` block on each connection actually
+#: made its rows durable. Keyed by `id(conn)`, like `_WIDENED_ROLES` above
+#: and for the same reason: a psycopg2 connection takes no new attributes.
+#:
+#: Read through `transaction_committed(conn)`. It exists because a commit on
+#: an aborted transaction returns without raising and writes nothing, so a
+#: caller that counts successful blocks needs a fact the driver does not
+#: volunteer.
+_LAST_COMMIT_DURABLE: dict = {}
+
+
+def transaction_committed(conn):
+    """Did the last `transaction(conn)` block on `conn` commit durably?
+
+    `True` only when that block exited cleanly AND its transaction was not
+    aborted at the moment it committed. A caller counting units of work
+    should count this rather than "the block did not raise" -- those differ
+    exactly when a callee swallowed a database error, which is
+    `rapid_db.py`'s documented contract for all thirty-two of its product
+    methods.
+
+    Defaults to `False` for a connection no `transaction()` block has run
+    on: never having committed is not a durable commit.
+    """
+    return _LAST_COMMIT_DURABLE.get(id(conn), False)
+
+
+def _in_aborted_transaction(conn):
+    """Is `conn` inside a transaction PostgreSQL has already aborted?
+
+    Reads psycopg2's own transaction status rather than inferring from
+    caught exceptions, so it is right regardless of who swallowed what.
+    `INTRANS` (clean, open) and `IDLE` are NOT aborted; only `INERROR` is.
+    `UNKNOWN` means the connection is broken, which a rollback will not
+    help, so it reads as not-aborted and the next statement raises honestly.
+
+    Falls back to `False` if the driver's extensions are unavailable (the
+    stub tier, where connections are plain Python doubles) -- the doubles
+    model abort state themselves when they mean to test it.
+    """
+    try:
+        from psycopg2.extensions import TRANSACTION_STATUS_INERROR
+    except Exception:  # noqa: BLE001 - stub tier, no driver
+        return bool(getattr(conn, "aborted", False))
+    # EVERY PATH THAT CANNOT READ THE DRIVER'S STATUS FALLS BACK TO THE
+    # DOUBLE'S OWN FLAG, including an `info` that exists but carries no
+    # `transaction_status`. Returning False there instead would make this
+    # function answer "clean" for a double that is explicitly modelling an
+    # aborted transaction -- which is exactly the case the tests exist to
+    # cover, so the fallback has to be the last word, not one branch of it.
+    try:
+        return conn.info.transaction_status == TRANSACTION_STATUS_INERROR
+    except Exception:  # noqa: BLE001
+        return bool(getattr(conn, "aborted", False))
+
+
 def _reassert_role(conn):
     """Re-apply `conn`'s recorded widening after a transaction boundary.
 
@@ -470,8 +526,18 @@ def _reassert_role(conn):
         with conn.cursor() as cur:
             cur.execute("SET ROLE " + role)
     except Exception:  # noqa: BLE001 - never mask the caller's error
-        logger.debug("could not re-apply the widened role %s", role,
-                     exc_info=True)
+        # AT WARNING, NAMING THE ROLE, not DEBUG. This never raises -- the
+        # docstring's contract, and it runs on the error path where raising
+        # would replace the caller's real error. But it used to disappear at
+        # DEBUG, so a failed `SET ROLE` was invisible: every write after it
+        # ran as the LOGIN role and was denied, and the only evidence was
+        # the denials themselves. A re-widening that did not happen is a
+        # fact about privilege the next statement depends on, so it is
+        # reported even though it is not raised. Found while diagnosing the
+        # acceptance run's registration (2026-09-11/12).
+        logger.warning("could not re-apply the widened role %s; subsequent "
+                       "statements on this connection run as the login role",
+                       role, exc_info=True)
 
 
 @contextlib.contextmanager
@@ -483,7 +549,61 @@ def transaction(conn):
     contract wants for a failed rollback. This wrapper yields a cursor,
     always closes it, and lets the original exception propagate.
     """
+    # A UNIT OF WORK STARTS FROM A KNOWN-CLEAN TRANSACTION STATE.
+    #
+    # PostgreSQL refuses every statement on a connection whose transaction
+    # has already aborted (`InFailedSqlTransaction`) until that transaction
+    # ends. A caller that loops -- `register_batch` over a batch of
+    # attempts, one transaction each -- therefore has a failure mode this
+    # block owns: if the PREVIOUS iteration left the transaction aborted
+    # without ending it, this iteration's first statement fails for a
+    # reason that has nothing to do with its own work, and so does every
+    # iteration after it. One attempt's error becomes the whole batch's.
+    #
+    # It can be left aborted, because `rapid_db.py`'s thirty-two product
+    # methods catch their database errors, set `exit_code`, and RETURN
+    # NORMALLY (see `update_diffimage`). Nothing raises, so the `except`
+    # below never runs and never rolls back -- but the statement did fail,
+    # so the transaction is aborted. Measured live 2026-09-12: this is how
+    # the acceptance run's registration reported `registered: 19` having
+    # written nothing.
+    #
+    # `_abort_state` reads psycopg2's own view of the transaction rather
+    # than guessing, and the rollback is unconditional-if-dirty rather than
+    # always: rolling back a clean idle connection is harmless but would
+    # discard work a caller had deliberately left open in an outer
+    # transaction, which `submission_role`'s savepoint discipline relies on
+    # not happening.
+    if _in_aborted_transaction(conn):
+        logger.warning(
+            "the connection's transaction was already aborted when this "
+            "unit of work began; rolling it back so this block starts "
+            "clean (an earlier caller failed without ending it)")
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            logger.exception("could not clear the aborted transaction")
+        # THE WIDENING IS RE-APPLIED BEFORE THE RE-CHECK, and the re-check
+        # is what makes this guard authoritative rather than best-effort.
+        # `_reassert_role` issues a statement of its own (`SET ROLE`), and a
+        # statement can itself fail and re-abort the transaction this
+        # rollback just cleared -- which would hand the block below exactly
+        # the poisoned connection the guard exists to prevent, with the
+        # warning already logged saying it had been cleared. So: clear,
+        # re-widen, then verify, and rollback once more if the re-widening
+        # was what dirtied it.
+        _reassert_role(conn)
+        if _in_aborted_transaction(conn):
+            logger.warning(
+                "re-applying the widened role left the transaction aborted; "
+                "rolling back again so this block still starts clean")
+            try:
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                logger.exception("could not clear the aborted transaction")
+
     cur = conn.cursor()
+    committed = False
     try:
         yield cur
     except Exception:
@@ -494,9 +614,27 @@ def transaction(conn):
         _reassert_role(conn)
         raise
     else:
+        # A COMMIT ON AN ABORTED TRANSACTION DOES NOT RAISE, and makes
+        # nothing durable: the server treats it as ROLLBACK and reports
+        # success (measured against the live database, 2026-09-12, inside
+        # the pinned image). So "commit() returned" is not evidence that
+        # this block's work survived, and a caller counting successes on
+        # that basis counts writes that never happened. The state is read
+        # BEFORE committing, because committing clears it.
+        aborted = _in_aborted_transaction(conn)
         conn.commit()
+        committed = not aborted
+        if aborted:
+            # Not raised: this block's contract is commit-or-rollback, and
+            # the caller's own accounting is what needs to know. Reported
+            # so the fact is never silent, and exposed through
+            # `transaction_committed` below for callers that count.
+            logger.warning(
+                "this unit of work's transaction was aborted, so its commit "
+                "discarded every row it wrote and nothing was made durable")
         _reassert_role(conn)
     finally:
+        _LAST_COMMIT_DURABLE[id(conn)] = committed
         cur.close()
 
 

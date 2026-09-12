@@ -1400,6 +1400,28 @@ class AbortingConn(FakeConn):
             raise RuntimeError("permission denied for table diffimages")
         return super().execute(statement, params)
 
+    def commit(self):
+        # A commit on an ABORTED transaction does NOT raise and does NOT
+        # make anything durable: the server treats it as ROLLBACK and
+        # reports success. Measured against the live database 2026-09-12
+        # inside the pinned image. `commit_was_durable` records which of
+        # the two happened, which is the fact the driver never volunteers
+        # and the consumer's counter needs.
+        durable = not self.aborted
+        self.commit_was_durable.append(durable)
+        self.commits += 1
+        if durable:
+            self.committed.extend(self._pending)
+        self._pending = []
+        self.aborted = False
+
+    def rollback(self):
+        # Ending the transaction clears the abort, which is why a rollback
+        # between attempts is what makes the next one able to run at all.
+        self.rollbacks += 1
+        self._pending = []
+        self.aborted = False
+
 
 def swallowing_product_writer(conn, rows=None):
     """A `register` callback that aborts the transaction WITHOUT raising.
@@ -1447,21 +1469,35 @@ def swallowing_product_writer(conn, rows=None):
 
     return register
 
-    def commit(self):
-        # A commit on an aborted transaction does NOT raise and does NOT
-        # make anything durable. The driver reports success either way.
-        durable = not self.aborted
-        self.commit_was_durable.append(durable)
-        self.commits += 1
-        if durable:
-            self.committed.extend(self._pending)
-        self._pending = []
-        self.aborted = False
+class DiscardingConn(AbortingConn):
+    """An `AbortingConn` whose post-failure statements SUCCEED.
 
-    def rollback(self):
-        self.rollbacks += 1
-        self._pending = []
-        self.aborted = False
+    This is the live shape, and it is the one `AbortingConn` alone does not
+    reproduce. Once a statement has failed, this connection lets the
+    statements that follow run (they touch nothing that the aborted
+    transaction refuses -- an advisory lock, a watermark UPDATE matching no
+    row) while the transaction remains aborted, so the eventual `commit()`
+    silently discards everything.
+
+    WHY THIS MATTERS FOR REPRODUCING `registered: 19`. In the live run the
+    registrar swallowed its database error (`rapid_db.py` catches, sets
+    `exit_code`, returns) and the attempts that followed printed successful
+    `updateDiffImage` / `registerDiffImMeta` results -- `('',)` -- right up
+    to the summary line. Statements succeeding is what distinguishes this
+    from a connection that refuses everything: a refusing connection raises,
+    and `register_batch`'s per-attempt `except` already counts that as
+    failed. A connection that answers normally and discards at commit is
+    the one the counter cannot see, and the only evidence is the summary it
+    prints.
+    """
+
+    def execute(self, statement, params=None):
+        if self.aborted and (self.fail_on or "") not in statement:
+            # Answered normally, as the live run's post-failure statements
+            # were. The transaction stays aborted regardless, which is what
+            # the commit below then discards.
+            return FakeConn.execute(self, statement, params)
+        return super().execute(statement, params)
 
 
 class RegistrationCountsOnlyWhatItCommittedTests(unittest.TestCase):
@@ -1469,121 +1505,110 @@ class RegistrationCountsOnlyWhatItCommittedTests(unittest.TestCase):
 
     Found live on 2026-09-11 registering `accept-20260911`: a 20-attempt
     scoped registration printed `{'registered': 19, ..., 'failed': 1}` and
-    `rows affected: 19`, while `registered_at`,
-    `registered_record_sequence` and `consumed_record_sequence` were all
-    still NULL on every one of the twenty attempts and not one product row
-    existed. The lowest attempt id was processed first, its privilege error
-    aborted the transaction, and the nineteen that followed were counted as
-    registered.
+    `rows affected: 19` while writing nothing at all. Re-verified against
+    the live database on 2026-09-12: of 13,204 `accept-20260911%` attempts
+    with `registered_at IS NULL`, exactly 20 are genuine registration
+    candidates, and every one of them still has a NULL
+    `consumed_record_sequence` -- so not one of the nineteen "registered"
+    attempts advanced its watermark either.
 
-    Two independent defects share this one path, and each gets its own
-    test below:
+    THE MECHANISM, measured rather than reasoned. Inside the pinned image,
+    against the live database:
 
-      * the COUNTER trusts a non-raising `commit()`. `register_batch`'s
-        `else:` clause does `run.registered += 1` once the `with
-        _transaction(conn)` block exits without an exception, and an
-        aborted transaction's commit exits exactly that way. Nothing reads
-        back whether the attempt's own rows survived.
+        commit() on an ABORTED transaction: returned WITHOUT raising
+        rows durable after that commit: 0
 
-      * the TRANSACTION is not reset between attempts, so one attempt's
-        failure poisons the next attempt's statements rather than being
-        confined to its own.
+    `register_batch` increments `run.registered` in the `else:` clause of
+    the `try` around its per-attempt `with _transaction(conn)` block -- so
+    it counts an attempt registered whenever nothing raised. An aborted
+    transaction's commit does not raise and writes nothing, so the two
+    differ exactly when something below swallowed a database error instead
+    of raising it. That is `rapid_db.py`'s documented contract for all
+    thirty-two of its product methods (`update_diffimage`: catch, print
+    'skipping...', set `exit_code = 67`, return).
 
-    An operator reading that summary would conclude the pass had largely
-    worked. The summary is the only thing an operator sees, so a count it
-    cannot justify from committed state is worse than no count.
+    The counter is therefore derived from committed state instead, and an
+    attempt that reported success while committing nothing gets its own
+    count (`uncommitted`) rather than being folded into either
+    `registered` or `failed` -- the two are different findings, and folding
+    is how this stayed invisible.
     """
 
-    def test_an_attempt_whose_transaction_aborted_is_not_counted_registered(self):
-        # THE COUNTER DEFECT, minimal: one attempt, its product write
-        # denied. The block still exits cleanly because the consumer's own
-        # `except` is not reached -- the raise happens inside the
-        # registrar, is caught, and the aborted transaction's commit
-        # returns quietly.
-        conn = AbortingConn(fail_on="addDiffImage")
+    def test_an_attempt_whose_commit_discarded_its_rows_is_not_registered(self):
+        # THE DEFECT, minimal and exact: one attempt, its product write
+        # swallowed, every later statement answering normally, and the
+        # commit discarding the lot.
+        conn = DiscardingConn(fail_on="addDiffImage")
 
         run = consumer.register_batch(
             conn, [reconciled(1)],
             register=swallowing_product_writer(conn))
 
+        self.assertEqual([False], conn.commit_was_durable,
+                         "the fixture must actually have discarded the "
+                         "commit, or this test proves nothing")
         self.assertEqual([], conn.committed,
-                         "nothing can have been made durable: the "
-                         "transaction was aborted before it committed")
+                         "nothing can be durable: the transaction was "
+                         "aborted when it committed")
         self.assertEqual(
             0, run.registered,
-            "an attempt whose transaction committed nothing was counted as "
-            "registered -- this is the `registered: 19` over zero rows")
-        self.assertEqual(
-            1, run.failed + run.deferred + run.skipped + run.rejected,
-            "the attempt must be accounted for somewhere other than "
-            "`registered`")
+            "an attempt whose commit discarded every row it wrote was "
+            "counted as registered -- this is `registered: 19` over zero "
+            "product rows")
 
-    def test_one_attempts_failure_does_not_poison_the_rest_of_the_batch(self):
-        # THE POISONED-TRANSACTION DEFECT, as the live run hit it: the
-        # FIRST attempt is denied and the nineteen after it must each get a
-        # clean transaction of their own. `fail_times=1` denies only the
-        # first, so every later refusal in `refused_while_aborted` is the
-        # connection carrying attempt 1's abort forward.
-        rows = [reconciled(n) for n in (1, 2, 3, 4)]
-        conn = AbortingConn(fail_on="addDiffImage", fail_times=1)
+    def test_the_discarded_attempt_is_counted_as_uncommitted(self):
+        # It must not vanish either. An attempt that reported success and
+        # committed nothing is a third outcome, and needs to appear as one:
+        # `failed` would say an error path ran, and none did.
+        conn = DiscardingConn(fail_on="addDiffImage")
 
         run = consumer.register_batch(
-            conn, rows, register=swallowing_product_writer(conn))
+            conn, [reconciled(1)],
+            register=swallowing_product_writer(conn))
 
         self.assertEqual(
-            [], conn.refused_while_aborted,
-            "a later attempt's statement was refused because an earlier "
-            "attempt's transaction was still aborted: one failure poisoned "
-            "the batch instead of being confined to its own attempt")
-        self.assertEqual(
-            run.registered, len([d for d in conn.commit_was_durable if d]),
-            "the registered count must equal the number of commits that "
-            "actually made rows durable")
-        self.assertEqual(
-            3, run.registered,
-            "the three attempts after the failure each deserve a clean "
-            "transaction of their own, so all three must commit and count")
+            1, run.uncommitted,
+            "the attempt that committed nothing is unaccounted for")
+        self.assertEqual(0, run.failed,
+                         "nothing raised, so no error path ran")
 
-    def test_the_summary_counts_committed_and_uncommitted_separately(self):
-        # What the operator reads. `registered` must mean "committed", and
-        # the attempts whose transactions did not commit must be visible as
-        # their own number rather than folded into the success count.
+    def test_a_run_containing_a_discarded_attempt_cannot_exit_zero(self):
+        # The operator-facing half. A pass that wrote nothing while saying
+        # it registered is the most dangerous outcome here, so it must not
+        # look like a clean run. Had the live run's FIRST attempt swallowed
+        # its error like the nineteen after it, the pass would have exited 0.
+        conn = DiscardingConn(fail_on="addDiffImage")
+
+        run = consumer.register_batch(
+            conn, [reconciled(1)],
+            register=swallowing_product_writer(conn))
+
+        self.assertNotEqual(
+            0, run.exit_code,
+            "a pass that registered nothing while reporting success exited "
+            "zero")
+
+    def test_the_registered_count_equals_the_durable_commits(self):
+        # The invariant stated directly, over a mixed batch: attempt 1's
+        # write is swallowed and discarded, attempts 2 and 3 commit for
+        # real. Whatever the counters say, `registered` must equal the
+        # number of commits that actually made rows durable.
         rows = [reconciled(n) for n in (1, 2, 3)]
-        conn = AbortingConn(fail_on="addDiffImage", fail_times=1)
-
-        run = consumer.register_batch(
-            conn, rows, register=swallowing_product_writer(conn))
-        summary = run.as_dict()
-
-        self.assertEqual(
-            2, summary["registered"],
-            "`registered` must count only attempts that committed")
-        self.assertEqual(
-            1, summary["failed"],
-            "the attempt that did not commit must appear as failed")
-        accounted = (summary["registered"] + summary["failed"]
-                     + summary["skipped"] + summary["deferred"]
-                     + summary["rejected"])
-        self.assertEqual(
-            len(rows), accounted,
-            "every attempt in the batch must be accounted for exactly once")
-
-    def test_a_commit_that_discarded_its_rows_is_not_a_registration(self):
-        # The property stated directly, independent of counting: for every
-        # attempt the consumer counted as registered, that attempt's own
-        # commit must have been durable. This is the invariant the fix has
-        # to establish, and the one an aborted commit silently breaks.
-        rows = [reconciled(n) for n in (1, 2)]
-        conn = AbortingConn(fail_on="addDiffImage", fail_times=1)
+        conn = DiscardingConn(fail_on="addDiffImage", fail_times=1)
 
         run = consumer.register_batch(
             conn, rows, register=swallowing_product_writer(conn))
 
-        durable_commits = [d for d in conn.commit_was_durable if d]
+        durable = [d for d in conn.commit_was_durable if d]
         self.assertEqual(
-            run.registered, len(durable_commits),
+            run.registered, len(durable),
             "the registered count does not equal the number of commits "
             "that actually made rows durable")
+        self.assertEqual(
+            len(rows),
+            (run.registered + run.failed + run.uncommitted + run.skipped
+             + run.deferred + run.rejected),
+            "every attempt in the batch must be accounted for exactly once")
 
 
 if __name__ == "__main__":

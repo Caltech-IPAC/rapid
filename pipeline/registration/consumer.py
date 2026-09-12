@@ -400,6 +400,50 @@ def _reread_watermark(cursor, attempt_id):
     return tuple(row) if row is not None else None
 
 
+#: The fallback `_transaction` path's own record of whether its last block
+#: committed durably, mirroring `rapid_db_connect._LAST_COMMIT_DURABLE`.
+#: Only written when the driver module could not be imported.
+_LOCAL_COMMIT_DURABLE: dict = {}
+
+
+def _connection_aborted(conn):
+    """Is `conn` inside a transaction the server has already aborted?
+
+    The driver-free half of `rapid_db_connect._in_aborted_transaction`: the
+    real one reads psycopg2's transaction status, and this path exists
+    precisely because psycopg2 could not be imported. A test double that
+    models abort state exposes it as `aborted`; anything else reads as
+    clean.
+    """
+    return bool(getattr(conn, "aborted", False))
+
+
+def _committed_durably(conn):
+    """Did the attempt's own `_transaction(conn)` block make rows durable?
+
+    THE COUNTER'S ONE SOURCE OF TRUTH. `register_batch` used to count an
+    attempt registered whenever its `with` block exited without raising,
+    and that is not the same question: a commit on an ALREADY-ABORTED
+    transaction returns without raising and writes nothing (measured
+    against the live database, 2026-09-12, inside the pinned image). The
+    acceptance run reported `registered: 19` over zero product rows on
+    exactly that difference.
+
+    Asks the transaction helper that owns the boundary, in preference
+    order: the sanctioned `rapid_db_connect.transaction_committed` when the
+    driver is present, this module's fallback record when it is not, and
+    -- for a caller whose connection has never been through either, which
+    only happens in a test that stubs `_transaction` itself -- `True`, so
+    the absence of a record is not read as a failure.
+    """
+    try:
+        from database.modules.utils.rapid_db_connect import (
+            transaction_committed)
+    except ImportError:
+        return _LOCAL_COMMIT_DURABLE.get(id(conn), True)
+    return transaction_committed(conn)
+
+
 @contextlib.contextmanager
 def _transaction(conn):
     """`rapid_db_connect.transaction`, resolved at call time.
@@ -421,7 +465,24 @@ def _transaction(conn):
     try:
         from database.modules.utils.rapid_db_connect import transaction
     except ImportError:
+        # THE SAME CONTRACT, WRITTEN OUT -- including the two properties the
+        # sanctioned version grew for this defect: a block starts from a
+        # known-clean transaction state, and a commit that only appeared to
+        # succeed is recorded as not durable. A weaker boundary here is the
+        # defect this fix exists to close, arriving by a different door (the
+        # docstring above already says so about the original pair).
+        aborted_on_entry = _connection_aborted(conn)
+        if aborted_on_entry:
+            logger.warning(
+                "the connection's transaction was already aborted when this "
+                "unit of work began; rolling it back so this block starts "
+                "clean")
+            try:
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                logger.exception("could not clear the aborted transaction")
         cur = conn.cursor()
+        committed = False
         try:
             yield cur
         except Exception:
@@ -431,8 +492,15 @@ def _transaction(conn):
                 logger.exception("rollback failed; the original error follows")
             raise
         else:
+            aborted = _connection_aborted(conn)
             conn.commit()
+            committed = not aborted
+            if aborted:
+                logger.warning(
+                    "this unit of work's transaction was aborted, so its "
+                    "commit discarded every row it wrote")
         finally:
+            _LOCAL_COMMIT_DURABLE[id(conn)] = committed
             cur.close()
         return
 
@@ -470,6 +538,15 @@ class RegistrationRun:
         #: permanently-wrong record the same as a transient database error
         #: worth alerting on.
         self.rejected = 0
+        #: ATTEMPTS THAT REPORTED SUCCESS AND COMMITTED NOTHING. The
+        #: acceptance run's `registered: 19` over zero product rows: an
+        #: attempt whose transaction was already aborted when it committed,
+        #: because something below it swallowed a database error instead of
+        #: raising. Counted apart from BOTH `registered` (nothing is
+        #: durable, so it did not register) and `failed` (nothing raised, so
+        #: no error path ran) — it is a third outcome, and the whole reason
+        #: it went unnoticed is that it had no counter of its own.
+        self.uncommitted = 0
 
     @property
     def exit_code(self):
@@ -482,8 +559,16 @@ class RegistrationRun:
         Rejections do not contribute: a rejection is a recorded, durable
         verdict on the attempt's own data, reached without error — the
         opposite of a run that "could not do its job".
+
+        UNCOMMITTED ATTEMPTS DO CONTRIBUTE, and must. An attempt that
+        reported success while committing nothing is the most dangerous
+        outcome this class counts — the run looks like it worked — so a pass
+        containing even one cannot exit zero. The acceptance run exited 65
+        only because one attempt also raised; had the first attempt
+        swallowed its error like the nineteen after it, the pass would have
+        exited 0 having written nothing at all.
         """
-        return EXIT_FAILURES if self.failed else EXIT_OK
+        return EXIT_FAILURES if (self.failed or self.uncommitted) else EXIT_OK
 
     def as_dict(self):
         return {
@@ -491,6 +576,7 @@ class RegistrationRun:
             "skipped": self.skipped,
             "deferred": self.deferred,
             "failed": self.failed,
+            "uncommitted": self.uncommitted,
             "rejected": self.rejected,
             "refused_application_failed": self.refused_application_failed,
             "would_register": self.would_register,
@@ -1808,9 +1894,39 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False,
                 "back, so no product rows and no watermark were written and "
                 "it remains a candidate", verdict.attempt_id)
         else:
-            run.registered += 1
-            logger.info("attempt %s registered: %s",
-                        verdict.attempt_id, verdict.reason)
+            # COUNTED FROM COMMITTED STATE, NOT FROM A CLEAN BLOCK EXIT.
+            #
+            # Reaching here means nothing raised. It does NOT mean this
+            # attempt's rows are durable: `rapid_db.py`'s product methods
+            # catch their own database errors, set `exit_code`, and return
+            # normally, which leaves the transaction aborted with no
+            # exception to catch -- and a commit on an aborted transaction
+            # returns without raising and discards everything it wrote.
+            #
+            # The acceptance run's 20-attempt registration is what this
+            # distinction costs when it is missing: `registered: 19`, `rows
+            # affected: 19`, zero product rows, and `registered_at` still
+            # NULL on all twenty (verified live 2026-09-12). An operator
+            # reading that summary concludes the pass largely worked.
+            #
+            # `uncommitted` is counted separately rather than folded into
+            # `failed`, because the two are different findings: `failed` is
+            # an attempt that raised and was rolled back, and this is an
+            # attempt that reported success while committing nothing. The
+            # second is a defect in whatever swallowed the error, and
+            # hiding it inside the first is how it stayed invisible.
+            if _committed_durably(conn):
+                run.registered += 1
+                logger.info("attempt %s registered: %s",
+                            verdict.attempt_id, verdict.reason)
+            else:
+                run.uncommitted += 1
+                logger.error(
+                    "attempt %s reported success but its transaction "
+                    "committed nothing: no product rows and no watermark "
+                    "were written, and it remains a candidate. Something in "
+                    "the registration path swallowed a database error "
+                    "instead of raising it", verdict.attempt_id)
 
     logger.info("registration pass: %s", run.as_dict())
     return run
