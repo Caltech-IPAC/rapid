@@ -133,8 +133,36 @@ def _public_methods(text):
 #: FROM NOW ON any further addition fails in every venue. The next person to
 #: change this constant should have a ratified decision to cite, and should
 #: list what it absorbs the same way.
+#:
+#: **RE-RATIFICATION, 2026-09-12 — the convergence merge.** The ratified
+#: decision cited is the project's convergence ruling of 2026-09-12: `smdc`
+#: becomes the team branch, carrying `run-overhaul` and `origin/smdc`
+#: together. Both parents had ALREADY changed this frozen file independently
+#: before the merge, so the previous digest matched neither parent and could
+#: not be restored by any merge resolution — it described a state that no
+#: longer existed on either side. Re-freezing at the merged file is therefore
+#: not a waiver of the friction: it records the state the team actually
+#: receives, and the friction resumes from here.
+#:
+#: WHAT THE NEW DIGEST ABSORBS, named rather than elided — two public methods,
+#: measured as the set difference against the 2026-08-15 ratified state
+#: (`smdc` @ 95614085), no method removed:
+#:
+#:   * `add_psf`, `update_psf` — `63cb2322` (registration through addPSF and
+#:     updatePSF), reworked by `a75e30b2` and `ceefb25b`. They predate this
+#:     merge on `run-overhaul` and are in live use on the PSF registration
+#:     path; carving them out now would be a behavioural change made to
+#:     satisfy a guard that was not enforcing across the branch split.
+#:
+#: The remaining difference is not a method-set change at all: `overlapfields`
+#: is threaded through `add_l2file_fourth_order` and `add_l2file_fifth_order`,
+#: which is a signature change on two methods that already existed, required
+#: by rapid_systems migration 102.
+#:
+#: The previous value, for the record, was
+#: `474cc92e27265dec8b27e3c195acd159c8af44767923bf79abdfb8bcf4069487`.
 RAPID_DB_BRANCH_POINT_SHA256 = (
-    "474cc92e27265dec8b27e3c195acd159c8af44767923bf79abdfb8bcf4069487")
+    "d7517bb3b4972a24a4965ab94671144875426233edc2bcaf0e719a0872523c89")
 
 
 def _file_digest(path):
