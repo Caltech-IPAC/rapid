@@ -300,11 +300,23 @@ def _l2file_row(cur, expid, sca, field, fid):
         "version": 1, "vbest": 1, "status": 1, "infobits": 0,
         "filename": f"s3://bucket/{fixture.RUN_TAG}/sci{expid}_{sca}.fits",
         "checksum": "b" * 32,
+        # `overlapfields` (rapid_systems 101) is the ONE defaulted column the
+        # catalog query below cannot skip. Its DEFAULT is `'{}'`, which 104's
+        # two NOT VALID checks then refuse on every INSERT --
+        # `cardinality(overlapfields) >= 1` and `field = ANY(overlapfields)`.
+        # An empty array means NOT COMPUTED there, never "overlaps nothing":
+        # an image always covers at least its own centre tile. `[field]` is
+        # the minimal footprint that satisfies both, and it is a real one --
+        # the centre tile is genuinely overlapped. It is deliberately NOT the
+        # exact footprint `overlapping_fields` computes: no reader under test
+        # here reads the column, and a fixture that invented extra tiles would
+        # be asserting geometry it never computed.
+        "overlapfields": [field],
     }
     cur.execute(
         "SELECT column_name, data_type FROM information_schema.columns"
         " WHERE table_name = 'l2files' AND is_nullable = 'NO'"
-        "   AND column_default IS NULL"
+        "   AND (column_default IS NULL OR column_name = 'overlapfields')"
         "   AND is_identity = 'NO'"
         " ORDER BY ordinal_position")
     columns, values = [], []

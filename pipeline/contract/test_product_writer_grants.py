@@ -40,9 +40,13 @@ reasons besides privilege. The privilege is the invariant that broke, so the
 privilege is what is asserted, by the same `has_*_privilege` reads used to
 diagnose it.
 
-Migrations 101-105 are excluded from every floor assertion here: they are
-reserved outside this campaign by ruling and are absent from the live
-database (it jumps 100 -> 106).
+Migrations 101-105 are part of the floor this module judges against. They
+were reserved for a time and the reserve was retired on 2026-09-12: `smdc`'s
+`RAPIDDB.add_l2file_{fourth,fifth}_order` bind `overlapfields_` by name, and
+that parameter exists only once 102 has landed, so a database missing the
+range cannot register an L2 file from this branch at all. Asserting their
+PRESENCE is therefore the same kind of floor assertion as 115-118 below:
+it names the schema a run from this code requires.
 """
 
 import pytest
@@ -209,17 +213,24 @@ def test_the_product_writers_run_with_the_callers_privileges(conn,
         % ", ".join(definers))
 
 
-def test_migration_115_is_applied_and_the_reserved_range_is_not(conn,
+def test_the_schema_floor_this_module_judges_against_is_applied(conn,
                                                                 target_named):
     """The schema floor this module judges against, asserted rather than
-    assumed -- and the reserved range asserted ABSENT.
+    assumed -- 101-105 and 115-118 both.
 
     115 is what threads `run_id` through the writers and reissues their
     grants, so every assertion above is only meaningful on a database
-    where it has landed. Migrations 101-105 are reserved outside this
-    campaign by ruling; they are absent from the live database, and a test
-    run against a database where they HAD been applied would be judging
-    something this campaign never validated.
+    where it has landed.
+
+    101-105 add `l2files.overlapfields` and make it a written column, and
+    they are a floor for the same reason: `RAPIDDB.add_l2file_fourth_order`
+    and `..._fifth_order` on this branch bind `overlapfields_` BY NAME, so
+    against a database missing 102 every L2 registration from this code
+    raises `function ... does not exist`. They were reserved outside an
+    earlier campaign and that reserve was retired on 2026-09-12 (project
+    ruling) precisely because the consumer had moved: asserting their
+    absence would now pin the database to a schema this branch cannot
+    register against.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT filename FROM public.schema_migrations")
@@ -230,9 +241,10 @@ def test_migration_115_is_applied_and_the_reserved_range_is_not(conn,
     assert len(floor) == 4, (
         "migrations 115-118 must all be applied; found %s" % sorted(floor))
 
-    reserved = sorted(f for f in applied
-                      if f.startswith(("101-", "102-", "103-", "104-",
-                                       "105-")))
-    assert not reserved, (
-        "migrations 101-105 are RESERVED outside this campaign by ruling, "
-        "but are applied here: %s" % reserved)
+    overlapfields = sorted(f for f in applied
+                           if f.startswith(("101-", "102-", "103-", "104-",
+                                            "105-")))
+    assert len(overlapfields) == 5, (
+        "migrations 101-105 add and populate l2files.overlapfields, which "
+        "this branch's add_l2file_* bind by name; all five must be applied, "
+        "found %s" % overlapfields)
