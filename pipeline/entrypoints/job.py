@@ -557,13 +557,23 @@ def dispatch_registration(context) -> None:
 
     context.record(registration=run.as_dict())
 
-    if run.failed:
+    if run.failed or run.uncommitted:
         # This job's own failures are its own outcome — the counting pattern
         # that closes the hardcoded-exit-0 defect. Raised so it is classified
         # and recorded like any other application failure, rather than
         # returned as a status nobody checks. `records_error` is the honest
         # category: what failed was writing this pass's account of other
         # attempts' products.
+        #
+        # `uncommitted` COUNTS HERE TOO, and checking `failed` alone was the
+        # incident's own shape surviving in a second place. An attempt that
+        # swallowed a database error and committed nothing does not raise,
+        # so it lands in `uncommitted` and not in `failed` — and a pass of
+        # `failed=0, uncommitted=N` wrote nothing at all while this route
+        # returned success. That is exactly what `registered: 19` over zero
+        # product rows looked like on 2026-09-11, differing only in which
+        # counter it landed in. `RegistrationRun.exit_code` already treats
+        # the two alike; this check now matches it.
         raise RecordsError(
             f"{run.failed} of {len(rows)} registration(s) failed; "
             f"registered {run.registered}, skipped {run.skipped}, "

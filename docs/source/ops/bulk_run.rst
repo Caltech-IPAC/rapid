@@ -694,11 +694,13 @@ command-line arguments or in SSM command content.
    RAPID_RELEASE_IDENTITY=<release> \
      scripts/rapidctl-as-orchestrator.sh run register --name <run> --apply
 
-``RAPID_RELEASE_IDENTITY`` is required and deliberately not defaulted: a
-process that cannot say which release it is fails closed rather than
-producing unattributable results. Set ``RAPID_SRC`` to run a working tree
-instead of the image's baked code, and ``PODMAN_ROOT`` to use an isolated
-podman store.
+``RAPID_RELEASE_IDENTITY`` must be set. The script passes it through when
+present and never invents one; the enforcement is ``rapidctl``'s own
+startup preflight, which refuses with exit 64 and names the missing
+variable, because a process that cannot say which release it is cannot
+have its results attributed to one. Set ``RAPID_SRC`` to run a working
+tree instead of the image's baked code, and ``PODMAN_ROOT`` to use an
+isolated podman store.
 
 .. _retired_four_step:
 

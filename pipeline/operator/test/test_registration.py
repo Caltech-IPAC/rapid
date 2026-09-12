@@ -89,5 +89,76 @@ class RunPassStoreForwardingTests(unittest.TestCase):
         self.assertEqual(calls, [("CONN", "REG", store)])
 
 
+class AnUncommittedPassIsNotAnOkVerdictTests(unittest.TestCase):
+    """A pass that registered nothing must not report "ok".
+
+    `RegistrationVerdict`, not `RegistrationRun`, is what the operator's
+    PERIODIC pass reports from (`Operator._register` -> `run_pass` ->
+    `service.py`'s `result.registration.exit_code`). It used to copy only
+    `failed` off the run, so an attempt that swallowed its database error
+    and committed nothing -- which never raises, and so lands in
+    `uncommitted` rather than `failed` -- was invisible here:
+
+        run.uncommitted = 20; run.failed = 0
+        run.exit_code                       -> 65   (correct)
+        RegistrationVerdict(run).exit_code  -> 0    ("ok")
+
+    So the recurring unattended path logged `'verdict': 'ok'` for a pass
+    that wrote nothing. That is the 2026-09-11 acceptance-run incident's own
+    shape reaching a second, worse place: not a one-off CLI invocation an
+    operator reads, but the loop nobody is watching.
+    """
+
+    def _run(self, **counts):
+        from pipeline.registration.consumer import RegistrationRun
+        run = RegistrationRun()
+        for name, value in counts.items():
+            setattr(run, name, value)
+        return run
+
+    def test_an_all_uncommitted_pass_is_a_total_failure(self):
+        verdict = opregistration.RegistrationVerdict(
+            self._run(registered=0, failed=0, uncommitted=20))
+
+        self.assertNotEqual(opregistration.EXIT_OK, verdict.exit_code,
+                            "a pass that registered nothing reported ok")
+        self.assertEqual(opregistration.EXIT_TOTAL, verdict.exit_code)
+        self.assertEqual("total", verdict.as_dict()["verdict"])
+        self.assertTrue(verdict.total_failure)
+
+    def test_a_partly_uncommitted_pass_is_a_partial_failure(self):
+        verdict = opregistration.RegistrationVerdict(
+            self._run(registered=5, failed=0, uncommitted=3))
+
+        self.assertEqual(opregistration.EXIT_PARTIAL, verdict.exit_code)
+        self.assertEqual("partial", verdict.as_dict()["verdict"])
+        self.assertTrue(verdict.partial_failure)
+
+    def test_uncommitted_attempts_count_as_attempted(self):
+        # `attempted` is "items that got as far as a registration call",
+        # and an uncommitted attempt got all the way through one -- it just
+        # did not survive its commit. Leaving it out silently undercounted.
+        verdict = opregistration.RegistrationVerdict(
+            self._run(registered=5, failed=2, uncommitted=3))
+
+        self.assertEqual(10, verdict.attempted)
+        self.assertEqual(5, verdict.unsuccessful)
+
+    def test_a_clean_pass_is_still_ok(self):
+        verdict = opregistration.RegistrationVerdict(
+            self._run(registered=7, failed=0, uncommitted=0))
+
+        self.assertEqual(opregistration.EXIT_OK, verdict.exit_code)
+        self.assertEqual("ok", verdict.as_dict()["verdict"])
+        self.assertFalse(verdict.total_failure)
+        self.assertFalse(verdict.partial_failure)
+
+    def test_the_count_is_carried_into_the_reported_dict(self):
+        verdict = opregistration.RegistrationVerdict(
+            self._run(registered=0, failed=0, uncommitted=4))
+
+        self.assertEqual(4, verdict.as_dict()["uncommitted"])
+
+
 if __name__ == "__main__":
     unittest.main()

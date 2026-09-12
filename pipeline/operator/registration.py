@@ -63,32 +63,52 @@ class RegistrationVerdict:
         self.skipped = run.skipped
         self.deferred = run.deferred
         self.would_register = run.would_register
+        #: ATTEMPTS THAT REPORTED SUCCESS AND COMMITTED NOTHING. Carried up
+        #: here because this class, not `RegistrationRun`, is what the
+        #: operator's periodic pass reports from — and a verdict that drops
+        #: the count reports "ok" for a pass that wrote nothing, which is
+        #: the 2026-09-11 incident's own shape reaching the recurring,
+        #: unattended path instead of a one-off CLI run.
+        self.uncommitted = getattr(run, "uncommitted", 0)
+
+    @property
+    def unsuccessful(self):
+        """Items that did not register, for either reason.
+
+        An attempt that RAISED (`failed`) and one that reported success
+        while committing nothing (`uncommitted`) are different findings and
+        keep their own counters, but every judgement this class makes --
+        attempted, total, partial, exit code -- is about "did it register",
+        and the answer for both is no. Reading `failed` alone is what let a
+        pass of `failed=0, uncommitted=N` report "ok".
+        """
+        return self.failed + self.uncommitted
 
     @property
     def attempted(self):
         """Items that got as far as a registration call."""
-        return self.registered + self.failed
+        return self.registered + self.unsuccessful
 
     @property
     def total_failure(self):
         """Every item that could be attempted failed, and some were."""
-        return self.failed > 0 and self.registered == 0
+        return self.unsuccessful > 0 and self.registered == 0
 
     @property
     def partial_failure(self):
         """Some failed while others got through."""
-        return self.failed > 0 and self.registered > 0
+        return self.unsuccessful > 0 and self.registered > 0
 
     @property
     def exit_code(self):
-        if not self.failed:
+        if not self.unsuccessful:
             return EXIT_OK
         return EXIT_TOTAL if self.total_failure else EXIT_PARTIAL
 
     def as_dict(self):
         d = dict(self.run.as_dict())
         d["exit_code"] = self.exit_code
-        d["verdict"] = ("ok" if not self.failed else
+        d["verdict"] = ("ok" if not self.unsuccessful else
                         "total" if self.total_failure else "partial")
         return d
 
