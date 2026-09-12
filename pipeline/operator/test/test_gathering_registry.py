@@ -39,13 +39,28 @@ class RegistryShapeTests(unittest.TestCase):
         # type at all, see pipeline.operator.gathering's module header) are
         # exactly what REGISTRY carries. Each row is now a four-tuple
         # (registry_key, class_name, gather, route_job_type).
+        # The two currency sweeps are NO LONGER among them (project ruling
+        # 2026-09-12): they are unregistered in code, so the daemon cannot
+        # reach them. See `test_the_currency_sweeps_are_unregistered` below.
         registered = {registry_key for registry_key, _, _, _ in REGISTRY}
         self.assertEqual(registered, {
             JOB_TYPE_SCIENCE, JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_CATALOG_LOAD,
-            JOB_TYPE_CROSSMATCH, JOB_TYPE_STATISTICS, JOB_TYPE_MERGE_CURRENCY,
-            JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
+            JOB_TYPE_CROSSMATCH, JOB_TYPE_STATISTICS, JOB_TYPE_MERGE_DEDUP,
             JOB_TYPE_ALERT_PRODUCTION, CAMPAIGN_GATHERING_KEY,
         })
+
+    def test_the_currency_sweeps_are_unregistered(self):
+        # Project ruling 2026-09-12: the daemon's post chain is disabled in
+        # CODE, not left to a deploy-time disposition. REGISTRY is the only
+        # live path that ever carried the sweeps, so their absence from it is
+        # what makes them unreachable; `rapidctl run start --phase` — the
+        # sole remaining post-chain surface — has never listed them.
+        registered = {registry_key for registry_key, _, _, _ in REGISTRY}
+        self.assertNotIn(JOB_TYPE_MERGE_CURRENCY, registered)
+        self.assertNotIn(JOB_TYPE_SOURCE_CURRENCY, registered)
+        fanned_out = job_types_for_class(opclasses.PROMPT_PROCESSING)
+        self.assertNotIn(JOB_TYPE_MERGE_CURRENCY, fanned_out)
+        self.assertNotIn(JOB_TYPE_SOURCE_CURRENCY, fanned_out)
 
     def test_reference_construction_keeps_its_one_job_type(self):
         self.assertEqual(
@@ -55,13 +70,14 @@ class RegistryShapeTests(unittest.TestCase):
     def test_prompt_processing_fans_out_to_the_complete_chain(self):
         # The headline defect this ruling closes: before it, prompt
         # processing gathered only science. It now registers science, the
-        # six post-DB job types, and alert production — the complete
-        # operator-scheduled chain the ADOPTED operations text describes.
+        # post-DB job types, and alert production — the complete
+        # operator-scheduled chain the ADOPTED operations text describes,
+        # LESS the two currency sweeps, which project ruling 2026-09-12
+        # unregistered until the defective deletes are rewritten.
         self.assertEqual(
             job_types_for_class(opclasses.PROMPT_PROCESSING), (
                 JOB_TYPE_SCIENCE, JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
-                JOB_TYPE_STATISTICS, JOB_TYPE_MERGE_CURRENCY,
-                JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
+                JOB_TYPE_STATISTICS, JOB_TYPE_MERGE_DEDUP,
                 JOB_TYPE_ALERT_PRODUCTION))
 
     def test_test_class_registers_the_campaign_gatherer(self):
@@ -124,13 +140,15 @@ class ProcessingDateTests(unittest.TestCase):
 class ClassFanOutTests(unittest.TestCase):
     """`service._classes_for_pass`: one running class, several operators."""
 
-    def test_prompt_processing_expands_to_eight_operational_classes(self):
+    def test_prompt_processing_expands_to_six_operational_classes(self):
+        # Six, not the original eight: project ruling 2026-09-12 unregistered
+        # the two currency sweeps, and this fan-out reads REGISTRY.
         from pipeline.operator.service import _classes_for_pass
 
         running = opclasses.class_for(opclasses.PROMPT_PROCESSING)
         expanded = _classes_for_pass(running)
 
-        self.assertEqual(len(expanded), 8)
+        self.assertEqual(len(expanded), 6)
         self.assertEqual(tuple(c.job_type for c in expanded),
                          job_types_for_class(opclasses.PROMPT_PROCESSING))
         # Every expanded entry is still a real OperationalClass — the exact

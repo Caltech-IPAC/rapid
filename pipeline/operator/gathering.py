@@ -72,11 +72,15 @@ import logging
 
 from pipeline.operator import classes as opclasses
 from submission import gathering
+# JOB_TYPE_MERGE_CURRENCY and JOB_TYPE_SOURCE_CURRENCY are deliberately NOT
+# imported: the two sweeps are no longer registered in REGISTRY below
+# (project ruling 2026-09-12). They remain defined in submission.routes for
+# the guard test that asserts they stay unreachable.
 from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
                                JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
-                               JOB_TYPE_MERGE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
+                               JOB_TYPE_MERGE_DEDUP,
                                JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE,
-                               JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_STATISTICS)
+                               JOB_TYPE_STATISTICS)
 
 logger = logging.getLogger("rapid.operator.gathering")
 
@@ -334,10 +338,20 @@ REGISTRY = (
                  _crossmatch_gatherer),
     _registry_row(JOB_TYPE_STATISTICS, opclasses.PROMPT_PROCESSING,
                  _statistics_gatherer),
-    _registry_row(JOB_TYPE_MERGE_CURRENCY, opclasses.PROMPT_PROCESSING,
-                 _merge_currency_gatherer),
-    _registry_row(JOB_TYPE_SOURCE_CURRENCY, opclasses.PROMPT_PROCESSING,
-                 _source_currency_gatherer),
+    # THE TWO CURRENCY SWEEPS ARE DELIBERATELY NOT REGISTERED (project
+    # ruling 2026-09-12). `merge-currency-sweep` and `source-currency-sweep`
+    # used to sit here, between statistics and merge-dedup, and this
+    # REGISTRY was the only live path that carried them: the daemon fans a
+    # pass out over `job_types_for_class` below, which reads this tuple.
+    # They are the defective deletes — `delete_superseded_rows` joins
+    # `merges.sid` to image ids (pipeline/stages/catalog_db.py) — that must
+    # not run on data anyone wants to keep, and unregistering them here is
+    # what disables them in code rather than leaving them to a deploy-time
+    # disposition. Their gatherers, sequences, routes and workflow
+    # definitions are intentionally left in place so the rewrite has
+    # something to come back to; nothing reaches them now. The post chain's
+    # only surface is `rapidctl run start --phase`, whose own phase table
+    # (pipeline/operatorctl/run.py) has never listed the sweeps.
     _registry_row(JOB_TYPE_MERGE_DEDUP, opclasses.PROMPT_PROCESSING,
                  _merge_dedup_gatherer),
     _registry_row(JOB_TYPE_ALERT_PRODUCTION, opclasses.PROMPT_PROCESSING,

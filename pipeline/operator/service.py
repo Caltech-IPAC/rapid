@@ -194,9 +194,11 @@ def _classes_for_pass(operational_class):
     gathering" — the class axis (`to_run`, `pipeline.operator.inputs`) still
     gates which of the five declared classes runs this pass; THIS is what a
     running class fans out to. Reference construction fans out to its one
-    job type exactly as before; prompt processing fans out to eight (science
-    plus the six post-DB job types plus alert production) — the complete
-    operator-scheduled chain the ADOPTED operations text describes; test
+    job type exactly as before; prompt processing fans out to six (science
+    plus four post-DB job types plus alert production) — the complete
+    operator-scheduled chain the ADOPTED operations text describes, less the
+    two currency sweeps, which are no longer registered (project ruling
+    2026-09-12; see the note in `pipeline.operator.gathering.REGISTRY`); test
     fans out to its one campaign-gathering entry (IR-13-a).
 
     Returns `OperationalClass` instances, one per registered entry, built

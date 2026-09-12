@@ -80,7 +80,8 @@ name: contract-tests
 
 on:
   push:
-    branches: [smdc]
+    branches: ['**']
+  pull_request:
   workflow_dispatch:
 
 # Least privilege: the job reads this repo's code and writes issues — the
