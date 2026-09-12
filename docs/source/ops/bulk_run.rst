@@ -666,6 +666,40 @@ Several subcommands take ``--expect-candidates``, ``--expect-jobs`` or
 ``--expect-absent``: the caller states what they believe they are acting on,
 and a mismatch refuses rather than proceeds.
 
+Registering from rapid-admin
+------------------------------------
+
+Run ``rapidctl run register`` from the admin host through
+``scripts/rapidctl-as-orchestrator.sh``, not by invoking ``rapidctl``
+directly. Registration reads each attempt's terminal closure record from
+``s3://roman-rapid-records``, and the admin host's own instance role has no
+``s3:GetObject`` there — it returns ``AccessDenied``. The script chains the
+container's AWS identity into ``rapid-orchestrator-role``, which is allowed
+and which the admin role already holds ``sts:AssumeRole`` on, so
+registration runs as the identity the pipeline itself registers with. It is
+the intended path rather than a widening, and needs no IAM change.
+
+It supplies the personal login (``PGUSER``) as well as the role chain,
+because the two identities do different jobs and both are required: the
+operator session connects as the human login so the mutation ledger keeps
+naming a person (the audit function records ``session_user``, which ``SET
+ROLE`` does not change), while the assumed role only buys S3 read access.
+Credentials reach the container in a mode-0600 env file and never as
+command-line arguments or in SSM command content.
+
+.. code-block::
+
+   RAPID_RELEASE_IDENTITY=<release> \
+     scripts/rapidctl-as-orchestrator.sh run register --name <run>
+   RAPID_RELEASE_IDENTITY=<release> \
+     scripts/rapidctl-as-orchestrator.sh run register --name <run> --apply
+
+``RAPID_RELEASE_IDENTITY`` is required and deliberately not defaulted: a
+process that cannot say which release it is fails closed rather than
+producing unattributable results. Set ``RAPID_SRC`` to run a working tree
+instead of the image's baked code, and ``PODMAN_ROOT`` to use an isolated
+podman store.
+
 .. _retired_four_step:
 
 What replaced the four-step procedure
