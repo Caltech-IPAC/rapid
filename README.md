@@ -5,7 +5,19 @@ Repository for RAPID (***R***oman ***A***lerts ***P***romptly from ***I***mage *
 
 ## Documentation
 
-Install instructions and documentation are available on [ReadTheDocs](https://caltech-ipac-rapid.readthedocs.io/en/latest/)
+Two sites, with different jobs:
+
+- **[The RAPID reference site](https://roman-rapid.readthedocs.io/en/latest/)**
+  — what RAPID is and what it is built to be: the system design
+  documents, the project section, and the log. This is the site to read
+  first, and the authoritative statement of the design.
+- **[This repository's own docs](https://caltech-ipac-rapid.readthedocs.io/en/latest/)**
+  — the code-level documentation built from `docs/` in this repository.
+
+Operational documentation — how to deploy a change, run a campaign, and
+what to do when a job fails — lives in the private `rapid_systems`
+repository rather than on either site, because it describes a specific
+deployed environment.
 
 ## Contributing
 

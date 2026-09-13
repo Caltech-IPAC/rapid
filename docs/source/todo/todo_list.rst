@@ -1,3 +1,11 @@
+.. admonition:: Retired
+   :class: warning
+
+   This page is retired and is kept for history only. Work items are
+   tracked as GitHub issues in this repository and in ``rapid_systems``,
+   which is where to look for what is outstanding. Nothing on this page is
+   maintained.
+
 To-Do List
 ####################################################
 

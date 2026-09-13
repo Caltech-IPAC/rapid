@@ -1,3 +1,10 @@
+.. admonition:: Retired
+   :class: warning
+
+   This page is retired and is kept for history only. Pipeline images are
+   built by ``rebuild.sh`` on the build host and consumed by digest; they
+   are not built by the steps described here.
+
 Create Docker image
 ####################################################
 

@@ -26,6 +26,67 @@ This project adheres to a [Code of Conduct](CODE_OF_CONDUCT.md). By participatin
 4. Ensure all tests pass before submitting.
 5. Submit a pull request with a clear description of the changes.
 
+Changes intended for the deployed SMDC environment branch from `smdc`
+instead — see below.
+
+### The `smdc` branch
+
+RAPID runs on the NASA Science Mission Directorate Cloud (SMDC), and the
+branch that environment actually runs is `smdc`, not `main`. Every
+pipeline image built for the account is built from an `smdc` commit, and
+six consumers — two AWS Batch job definitions and three long-running
+services — are pinned to the digest that build produced.
+
+The practical consequence for a contributor: **a change merged to `main`
+does not reach the deployed environment.** If your change is meant to run
+on SMDC, branch from `smdc` and open your pull request against `smdc`.
+The two branches converge at cutover, when `smdc` becomes the project's
+development line; until then, `smdc` is what runs and carries commits
+`main` does not.
+
+`contract-tests.yml` is the workflow that runs on `smdc`, on push to any
+branch, so you can see it run without opening a pull request. It is a
+test gate only: it builds and pushes no image.
+
+### Deployment
+
+Merging to `smdc` does not deploy. Deployment is a separate, deliberate
+act performed by someone with access to the SMDC account: the pipeline
+image is rebuilt from your commit and all six consumers are repinned to
+the resulting digest. Until that happens, the environment keeps running
+the previously pinned image, and the repository and the environment
+disagree by design.
+
+Nothing in this repository performs that deployment or can. The procedure
+lives in the infrastructure repository (see below), and repinning fewer
+than all six consumers is a known failure mode with its own check — a
+2026-08-14 incident left the Batch job definitions five days stale on a
+pre-fix digest while the services were current, and Batch silently ran
+the old code.
+
+If your change needs to reach the environment on a particular timescale,
+say so in the pull request. It will not happen automatically.
+
+### The `rapid_systems` checkout the contract tier needs
+
+The contract test tier runs the suite against a real PostgreSQL built
+from the authoritative database migrations, and those migrations do not
+live in this repository — they live in `rapid_systems`, which is a
+separate, **private** repository under the `IPAC-SW` organization.
+
+So the contract tier needs a local checkout of `rapid_systems` and
+therefore access to that organization, which is granted per person rather
+than being public. The stub tier needs neither, which is why it is the
+default and the tier CI and `git push` gate on. If you do not have
+`rapid_systems` access, the stub tier is the tier you can run, and a
+change that genuinely needs contract coverage should say so in the pull
+request so someone with access runs it.
+
+`rapid_systems` is also where the deployment procedure, the operational
+runbooks, and the campaign documentation live. See
+[`pipeline/contract/README.md`](pipeline/contract/README.md) for exactly
+what the contract tier expects.
+
 ### Running the Tests
 
 The suite has three tiers — stub, contract, and live — described in full in

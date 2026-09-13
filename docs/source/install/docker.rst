@@ -1,3 +1,11 @@
+.. admonition:: Retired
+   :class: warning
+
+   This page is retired and is kept for history only. It installs Docker on
+   an Ubuntu EC2 instance. The deployed environment runs RHEL 10 with
+   rootless podman, not Ubuntu with Docker, and container hosts are built
+   from a golden AMI rather than configured by hand.
+
 Install Docker on EC2 instance
 ####################################################
 

@@ -1,3 +1,13 @@
+.. admonition:: Retired
+   :class: warning
+
+   This page is retired and is kept for history only. It describes a
+   laptop/EC2 source install that is not how RAPID runs. The deployed
+   pipeline runs from a pinned container image built by ``rebuild.sh`` and
+   pinned onto six consumers; the procedure lives in the ``rapid_systems``
+   repository, not here. For running the tests locally, see the repository
+   README and ``CONTRIBUTING.md``.
+
 Installing RAPID Pipeline
 ####################################################
 

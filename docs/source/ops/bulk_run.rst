@@ -30,6 +30,21 @@ Operator, ``design/compute.md`` § Submission, and ``design/security.md``
 § Job configuration. The restructure record — what each piece is and why it
 has the shape it has — is :doc:`/dev/vpo_service`.
 
+.. admonition:: Running one for real
+   :class: tip
+
+   This page describes the execution model: the processes, what each is,
+   and how they relate. It is not the procedure for actually running a
+   campaign on the deployed environment.
+
+   That procedure is ``docs/running-a-campaign-on-smdc.md`` in the
+   ``rapid_systems`` repository. It carries the step-by-step for a real
+   run — stage inputs, admission, the release identity, declaring the run,
+   reference and science phases, register, compare, archive — along with
+   the operating envelope (the pooler ceiling, the daemon hold, serial
+   admission) and what to do when something fails. Read this page to
+   understand the machinery; read that one to operate it.
+
 The processes
 ====================================
 
