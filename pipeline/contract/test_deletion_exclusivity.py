@@ -161,8 +161,25 @@ def _public_methods(text):
 #:
 #: The previous value, for the record, was
 #: `474cc92e27265dec8b27e3c195acd159c8af44767923bf79abdfb8bcf4069487`.
+#:
+#: **RE-RATIFICATION, 2026-09-12 evening — the run-aware reference lookup.**
+#: The ratified decision cited is the owner's approval of 2026-09-12 20:07 PDT
+#: (the pre-Prove review's recommendation, campaign `handoff-2026-09-13`,
+#: `LEDGER-fix-reference-lookup.md`): `get_best_reference_image` gains a
+#: `run_id` parameter and an `ORDER BY`. Since rapid_systems migration 115 a
+#: production current reference and a campaign run's own current reference
+#: for the same (ppid, field, fid) coexist legally, and the unscoped,
+#: unordered `fetchone()` handed a run whichever the planner emitted first.
+#: The fix ranks the caller's own run first, the production lane second, and
+#: never another run's row (`df88939d`).
+#:
+#: WHAT THE NEW DIGEST ABSORBS: no public method added, none removed. One
+#: signature change on an existing method — `get_best_reference_image(ppid,
+#: field, fid, run_id=None)` — and the query text behind it. The previous
+#: value, for the record, was
+#: `d7517bb3b4972a24a4965ab94671144875426233edc2bcaf0e719a0872523c89`.
 RAPID_DB_BRANCH_POINT_SHA256 = (
-    "d7517bb3b4972a24a4965ab94671144875426233edc2bcaf0e719a0872523c89")
+    "6d6beab99839d3e4a0f45ed8677626b02198ffc585629c9c39eb05e9d650044d")
 
 
 def _file_digest(path):
