@@ -34,6 +34,34 @@ class FakeUniqueViolation(Exception):
     """
 
 
+class FakeCheckViolation(Exception):
+    """`attempts_state_terminal_after_start_check`, raised by the fake database.
+
+    Named for the constraint for the same reason `FakeUniqueViolation` is: the
+    suite runs with psycopg2 stubbed out of `sys.modules`, and `service.py`
+    catches `Exception` rather than any psycopg2 class, so the behaviour under
+    test is identical either way.
+
+    The live definition is rapid_systems migration
+    `014-abrupt-loss-representable.sql` (013's is superseded by it; 075 only
+    documents it). Modelled here are the two halves that a reconciler-written
+    row can actually fail:
+
+    * the UNGATED requirement `started_at IS NOT NULL`, and
+    * the `schema_version >= 2` requirement that the submission-time execution
+      binding be present — `binding_job_definition_arn`,
+      `binding_image_digest`, `binding_manifest_checksum`.
+
+    The second is the one that fired live on 2026-09-12: `resolve_attempt`
+    (the ONLY path that creates a scheduler-discovered row) writes no
+    `binding_*` column, and `create_submitted` — which does, and refuses to
+    create a row without them at schema_version >= 2 — is the submitter's
+    path, not the reconciler's. So a resolver-created row can never legally
+    reach `terminal_after_start`, and a fake that reports void success for
+    every `UPDATE attempts` cannot witness that.
+    """
+
+
 class FakeBatch:
     """A Batch client that returns prepared job descriptions.
 
@@ -331,6 +359,9 @@ class FakeConnection:
             self.closed_attempts[attempt_id] = (text, params)
             row = self.rows.get(attempt_id)
             if row is not None and "lifecycle_state = %s" in lowered:
+                # The state CHECKs are enforced BEFORE the row moves: a
+                # constraint the database rejects leaves the row where it was.
+                self._check_state(row, params[0], text, params)
                 row["lifecycle_state"] = params[0]
             if "scheduler_attempt_index = coalesce(%s," in lowered:
                 # `AttemptWriter.record_scheduler_observation`'s UPDATE, the
@@ -379,6 +410,43 @@ class FakeConnection:
         exc = self.route_raises.get(branch)
         if exc is not None:
             raise exc
+
+    def _check_state(self, row, new_state, text, params):
+        """Enforce `attempts_state_terminal_after_start_check` (migration 014).
+
+        Only the terminal_after_start CHECK is modelled, and only the two
+        predicates a reconciler-written row can actually fail: the ungated
+        `started_at IS NOT NULL`, and the schema_version >= 2 requirement for
+        the submission-time execution binding.
+
+        The other predicates in 014 (`ended_at`, `scheduler_state`,
+        `rapid_outcome`, `product_disposition`, `scheduler_observed_exit`,
+        `terminal_record_key`, `terminal_record_sequence`) are all written by
+        the very statement making the transition, so modelling them would
+        assert on this fake's own parameter handling rather than on anything
+        the reconciler decides. `source_sha`/`container_digest`/
+        `job_definition_rev`/`config_digest` are written by `mark_started` in
+        the SAME statement as `started_at`, so they cannot be independently
+        NULL on a row that has one.
+        """
+        if new_state != "terminal_after_start":
+            return
+        if row.get("started_at") is None:
+            raise FakeCheckViolation(
+                "new row for relation \"attempts\" violates check constraint "
+                '"attempts_state_terminal_after_start_check": attempt '
+                f"{row.get('attempt_id')} has no started_at")
+        missing = [column for column in ("binding_job_definition_arn",
+                                         "binding_image_digest",
+                                         "binding_manifest_checksum")
+                   if row.get(column) is None]
+        if missing:
+            raise FakeCheckViolation(
+                "new row for relation \"attempts\" violates check constraint "
+                '"attempts_state_terminal_after_start_check": attempt '
+                f"{row.get('attempt_id')} carries no execution binding "
+                f"({', '.join(missing)} IS NULL) and schema_version >= 2 "
+                "requires one")
 
     def _apply_scheduler_index(self, row, attempt_index):
         """Write `scheduler_attempt_index` under the partial unique index.

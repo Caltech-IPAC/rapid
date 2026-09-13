@@ -116,6 +116,39 @@ CLASS_ABRUPT_LOSS = "abrupt_loss"
 CLASS_NEVER_STARTED = "never_started"
 CLASS_NEVER_RESOLVED = "never_resolved"
 
+#: The submission-time execution binding, which migration 014 requires on
+#: every `terminal_after_start` row at `schema_version >= 2`. Only
+#: `AttemptWriter.create_submitted` ever writes these — the submitter's path,
+#: which refuses to create a row without them. `resolve_attempt`, the path
+#: that creates every scheduler-discovered row, writes none of them and
+#: nothing backfills them later, so a resolver-created row can never satisfy
+#: the constraint.
+_EXECUTION_BINDING_COLUMNS = (
+    "binding_job_definition_arn",
+    "binding_image_digest",
+    "binding_manifest_checksum",
+)
+
+
+def _missing_execution_binding(row):
+    """Is this row unable to satisfy 014's `terminal_after_start` CHECK?"""
+    return any(row.get(column) is None
+               for column in _EXECUTION_BINDING_COLUMNS)
+
+
+def _reaches_terminal_after_start(classification):
+    """Do these classifications write `terminal_after_start`?
+
+    `CLASS_AGREED` and `CLASS_MATERIALIZED` reach it through
+    `mark_terminal_after_start` directly; `CLASS_ABRUPT_LOSS` through
+    `mark_abrupt_loss`, which is a thin wrapper over the same method (see
+    `observability.attempts`). `CLASS_NEVER_STARTED` writes
+    `terminal_without_start` instead and is deliberately absent.
+    """
+    return classification in (CLASS_AGREED, CLASS_MATERIALIZED,
+                              CLASS_ABRUPT_LOSS)
+
+
 # Every column a closure record may need to fold in. Completeness here is not
 # cosmetic (review finding #14): a reconciler-first record is built FROM THE
 # ROW, so a column the reconciler does not select is a fact the record cannot
@@ -1331,13 +1364,41 @@ class ReconcilerService:
 
     @staticmethod
     def _is_contradictory(row, classification):
-        """Application facts with no start time — neither terminal state fits.
+        """A row that cannot REPRESENT either terminal state.
 
         `terminal_after_start` requires `started_at IS NOT NULL`;
         `terminal_without_start` requires the application fields be NULL. A
         row with an outcome but no start satisfies neither, and the disagreement
         is real rather than a classification mistake.
+
+        A SECOND WAY TO SATISFY NEITHER (live, 2026-09-12). Migration 014
+        also requires, at `schema_version >= 2`, that a `terminal_after_start`
+        row carry its submission-time execution binding —
+        `binding_job_definition_arn`, `binding_image_digest`,
+        `binding_manifest_checksum`. Exactly one row-creation path writes
+        those: `create_submitted`, the submitter's, which refuses to create a
+        row without them. `resolve_attempt` — the ONLY path that creates a
+        scheduler-discovered row, and the one `_resolve_discovered` uses —
+        writes none of them, and nothing backfills them afterwards.
+
+        So a resolver-created row that the runtime later started has a real
+        `started_at` and real provenance but no binding, and
+        `terminal_after_start` is unavailable to it no matter what the
+        scheduler observed. This method checked `started_at` alone, waved it
+        through, and `_transition` issued a transition the database refused —
+        the CheckViolation that crash-looped the reconciler beside the
+        UniqueViolation, on every poll, forever.
+
+        `terminal_without_start` is equally unavailable: the row HAS a start
+        and the provenance that comes with it, which that state forbids. The
+        row genuinely satisfies neither, which is what
+        `missing_or_contradictory` is for — flagged for a human with the
+        closure record already published, rather than forced into a state by
+        deleting the evidence that does not fit.
         """
+        if _reaches_terminal_after_start(classification) and \
+                _missing_execution_binding(row):
+            return True
         if row.get("started_at") is not None:
             return False
         # From here the row has no start time, so `terminal_after_start` is
@@ -1345,8 +1406,7 @@ class ReconcilerService:
         # Any classification that would land there is a contradiction, as is
         # any row carrying application facts it could only have authored by
         # running.
-        if classification in (CLASS_AGREED, CLASS_MATERIALIZED,
-                              CLASS_ABRUPT_LOSS):
+        if _reaches_terminal_after_start(classification):
             return True
         return any(row.get(field) is not None
                    for field in ("rapid_outcome", "product_disposition",

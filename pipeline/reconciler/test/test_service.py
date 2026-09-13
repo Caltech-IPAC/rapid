@@ -1480,6 +1480,73 @@ class SchedulerDiscoveryTests(unittest.TestCase):
             1, conn.rows[1]["scheduler_attempt_index"],
             "index 1 is owned by attempt 7, whatever the open set shows")
 
+    def test_a_resolver_created_row_never_lands_in_terminal_after_start(self):
+        """The CheckViolation, and why it is a property of the row's ORIGIN.
+
+        LIVE, 2026-09-12: alongside the UniqueViolation, every poll also
+        raised `attempts_state_terminal_after_start_check` from
+        `mark_terminal_after_start`.
+
+        Migration 014 requires, at `schema_version >= 2`, that a
+        `terminal_after_start` row carry its submission-time execution
+        binding: `binding_job_definition_arn`, `binding_image_digest`,
+        `binding_manifest_checksum`. There are exactly two row-creation paths
+        and only one of them writes those columns:
+
+        * `create_submitted` — the SUBMITTER's — INSERTs all three, and
+          REFUSES to create a row without them at schema_version >= 2.
+        * `resolve_attempt` — the RESOLVER's, which `_resolve_discovered`
+          uses — passes identity, timestamps and the two indexes, and no
+          `binding_*` column at all. Nothing backfills them afterwards.
+
+        So a resolver-created row can NEVER legally reach
+        `terminal_after_start`. `_is_contradictory` did not catch it because
+        it guards `started_at` only — and this row HAS a start, written by
+        the runtime's own `mark_started` when the container came up and
+        claimed it. Every other column 014 names is written by the
+        transition itself or alongside `started_at`, so the binding is the
+        only one that can be missing.
+
+        What this pins: the classification must consider whether the row can
+        REPRESENT the state, not merely whether it started.
+        """
+        rows = [attempt_row(2, lifecycle_state="started",
+                            application_attempt_index=2)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+
+        summary = svc.poll_once()
+
+        # The resolver created attempt 1's row in this poll, exactly as it
+        # does live — and, like the real `resolve_attempt`, with no binding.
+        self.assertEqual(1, summary["discovered"])
+        resolved_id = max(conn.rows)
+        resolved = conn.rows[resolved_id]
+        self.assertIsNone(resolved.get("binding_image_digest"),
+                          "a resolver-created row carries no execution "
+                          "binding — if it did, this test pins nothing")
+
+        # The runtime then started it: `mark_started` writes started_at and
+        # the runtime provenance in one statement, but NOT the binding, which
+        # only the submitter ever writes.
+        resolved["started_at"] = utc(2026, 8, 6, 10, 0, 0)
+        resolved["lifecycle_state"] = "started"
+
+        summary = svc.poll_once()
+
+        # THE ASSERTION: no poll may attempt a state this row cannot satisfy.
+        self.assertEqual(
+            0, summary["errors"],
+            "a row with no execution binding was driven into "
+            "terminal_after_start — this is the CheckViolation on "
+            "attempts_state_terminal_after_start_check")
+        self.assertNotEqual(
+            "terminal_after_start", conn.rows[resolved_id]["lifecycle_state"],
+            "migration 014 forbids terminal_after_start without the binding")
+        self.assertNotIn(
+            conn.rows[resolved_id]["lifecycle_state"], service.OPEN_STATES,
+            "the row must still reach a terminal state, not stay open and "
+            "keep every poll unproductive")
+
     def test_a_discovered_retry_inherits_its_template_siblings_work_unit(self):
         """FINDING 18: a scheduler-discovered row must not be born orphaned.
 
