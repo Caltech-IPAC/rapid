@@ -142,6 +142,7 @@ from submission.manifest import Manifest, ProcessingUnit  # noqa: E402
 from submission.routes import (  # noqa: E402
     CLASS_BULK,
     CLASS_PROMPT,
+    JOB_TYPE_ALERT_PRODUCTION,
     JOB_TYPE_SCIENCE,
     JOB_TYPE_STATISTICS,
     RouteError,
@@ -161,6 +162,17 @@ def _science_manifest(**overrides) -> Manifest:
             exposure=1, sca=2,
             science_image_uri="s3://rapid-bucket/sci.fits"))
     fields = {"units": [unit], "job_type": JOB_TYPE_SCIENCE}
+    fields.update(overrides)
+    return Manifest(fields.pop("units"), **fields)
+
+
+def _alert_production_manifest(**overrides) -> Manifest:
+    # The prompt-only counterpart to `_science_manifest`, above: alert
+    # production is route-fixed to the prompt lane (it is not a capacity
+    # default like science's bulk-first LANES_EITHER), so it is the job type
+    # a bulk-queue submission can still catch after the two-lane change.
+    unit = ProcessingUnit(payload=fixtures.alert_payload(exposure=1, sca=2))
+    fields = {"units": [unit], "job_type": JOB_TYPE_ALERT_PRODUCTION}
     fields.update(overrides)
     return Manifest(fields.pop("units"), **fields)
 
@@ -307,11 +319,38 @@ class ValidateRouteTests(unittest.TestCase):
         route = job.validate_route(manifest, CLASS_PROMPT, job_env, QUEUE_NAMES)
         self.assertEqual(route.job_type, JOB_TYPE_SCIENCE)
 
-    def test_right_class_wrong_queue_is_rejected(self):
-        manifest = _science_manifest()
+    def test_lane_alert_production_on_the_bulk_queue_is_rejected(self):
+        # Science is no longer the right fixture for "right class, wrong
+        # queue": two Batch lanes (2026-09-13) put science on LANES_EITHER,
+        # default bulk, so science on rapid-queue-bulk is now the CORRECT
+        # queue rather than the wrong one (see the acceptance test below).
+        # Alert production keeps both class (prompt) and queue (route-fixed
+        # prompt-only) matching this test's original name, so it is the
+        # fixture left that a bulk-queue submission can still catch.
+        manifest = _alert_production_manifest()
         job_env = make_job_environment(queue_name="rapid-queue-bulk")
         with self.assertRaises(RouteError):
             job.validate_route(manifest, CLASS_PROMPT, job_env, QUEUE_NAMES)
+
+    def test_lane_science_is_accepted_on_either_lane_but_alert_production_is_not(self):
+        # The entrypoint-level twin of the two-lane matrix: science may run
+        # on either queue (bulk-default, but prompt is still legal — a
+        # `--lane prompt` submission must not be refused at startup), while
+        # alert production stays refused on bulk regardless of class, since
+        # its route is prompt-only rather than merely prompt-default.
+        science = _science_manifest()
+        for queue in ("rapid-queue-bulk", "rapid-queue-prompt"):
+            with self.subTest(queue=queue):
+                job_env = make_job_environment(queue_name=queue)
+                route = job.validate_route(
+                    science, CLASS_PROMPT, job_env, QUEUE_NAMES)
+                self.assertEqual(route.job_type, JOB_TYPE_SCIENCE)
+
+        alert_production = _alert_production_manifest()
+        job_env = make_job_environment(queue_name="rapid-queue-bulk")
+        with self.assertRaises(RouteError):
+            job.validate_route(alert_production, CLASS_PROMPT, job_env,
+                               QUEUE_NAMES)
 
 
 # ---------------------------------------------------------------------------

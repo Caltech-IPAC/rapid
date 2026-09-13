@@ -167,8 +167,8 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
     return job_type, units
 
 
-def _resolve_submission_env(job_type):
-    """`submission_env(job_type)`, with its `exit(64)` refusals translated
+def _resolve_submission_env(job_type, lane=None):
+    """`submission_env(job_type, lane=lane)`, with its `exit(64)` refusals translated
     to `RunStartEnvironmentError` — the one place that translation happens
     (see `RunStartEnvironmentError`'s own docstring for why it cannot
     happen inside `submission_env` itself). Shared by `submit_run` and, as
@@ -177,11 +177,17 @@ def _resolve_submission_env(job_type):
     before it ever gathers a single unit (its coadd-input publish step, not
     only its eventual submission), so a dry run for that phase must resolve
     it too, never only the eventual `--apply`.
+
+    `lane` is the run's chosen Batch lane (`prompt`/`bulk`, None for the
+    job type's default) and reaches `submission_env` unchanged. It is
+    resolved here rather than later because the queue it selects is part
+    of the binding the audit records: a dry run must show the lane it
+    would actually submit to.
     """
     from pipeline.operator.submission import submission_env
 
     try:
-        return submission_env(job_type)
+        return submission_env(job_type, lane=lane)
     except SystemExit as exc:
         # `submission_env` calls `exit(64)` on missing environment/tree keys
         # rather than raising — see the class docstring. A `SystemExit`
@@ -195,7 +201,7 @@ def _resolve_submission_env(job_type):
 
 
 def submit_run(conn, name, job_type, units, reason, context=None,
-              work_unit_run_id=None):
+              work_unit_run_id=None, lane=None):
     """Submit `units` under `name`, through the SAME production path
     `live_w9_ramp` uses: `submission_env` for the binding, `pipeline.seams.
     submit_gathered` for the submission itself. Nothing here reimplements
@@ -270,7 +276,11 @@ def submit_run(conn, name, job_type, units, reason, context=None,
     from database.modules.utils.rapid_db_connect import ConnectionExecutor
 
     if context is None:
-        context = _resolve_submission_env(job_type)
+        # `lane` is only consulted on this path. When a caller supplies
+        # `context` it has already resolved the lane's queue into it —
+        # re-reading the lane here would be a second, possibly
+        # disagreeing, resolution of a decision already made.
+        context = _resolve_submission_env(job_type, lane=lane)
 
     if not units:
         return []
@@ -303,7 +313,7 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
                       proc_date=None, cap=None, dry_run=True,
                       policy_citation=None, out=None,
                       window_start=None, window_end=None, fids=None,
-                      work_unit_run_id=None):
+                      work_unit_run_id=None, lane=None):
     """Gather, (maybe) submit, and audit `run start`. Returns `(result,
     scope)` — the same shape `terminate_jobs_audited` returns, for the same
     reason: the CLI renders both through the identical `render_plan` call.
@@ -333,9 +343,28 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     `fids` selects FILTERS, not fields — see `_cmd_run_start`'s own
     argument help text for why a gather cannot be narrowed to a handful of
     fields at all.
+
+    `lane` is which Batch lane to submit to — `prompt` or `bulk`, None for
+    the job type's default (bulk, since the two-lane change 2026-09-13).
+    It reaches `submission_env` through `_resolve_submission_env`, which
+    is what actually selects the queue, and it is part of the AUDIT SCOPE
+    below: the lane is a chosen execution attribute of the run, so two
+    runs of the same name and phase on different lanes are different
+    actions and must not replay onto one another. The run-envelope work
+    persists it as a `runs` column; here it lives in the scope string and
+    in the binding the submission records.
     """
     out = out or sys.stdout
     scope = "run:%s:phase=%s" % (name, phase)
+    # The lane joins the scope whenever one was named. `lane=None` — the
+    # in-process default, and what every pre-lane caller passes — keeps
+    # the scope string it was written with, so no historical idempotency
+    # key is stranded by this change. The CLI names its default
+    # explicitly (`--lane` defaults to "bulk"), so a run started through
+    # `rapidctl` always records which lane it chose rather than leaving
+    # the reader to infer it.
+    if lane is not None:
+        scope += ":lane=%s" % lane
 
     replay = _replay_lookup(conn, idempotency_key, "run_start", scope)
     if replay is not None:
@@ -369,7 +398,7 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
         job_type_for_env = (routes.JOB_TYPE_REFERENCE_IMAGE
                             if phase == "reference"
                             else routes.JOB_TYPE_SCIENCE)
-        context = _resolve_submission_env(job_type_for_env)
+        context = _resolve_submission_env(job_type_for_env, lane=lane)
 
     try:
         job_type, units = gather_for_run(
@@ -406,7 +435,7 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
         return result, scope
 
     results = submit_run(conn, name, job_type, units, reason, context=context,
-                         work_unit_run_id=work_unit_run_id)
+                         work_unit_run_id=work_unit_run_id, lane=lane)
     total_children = sum(len(attempt_ids) for _sub, attempt_ids in results)
     detail["batches"] = len(results)
     detail["children"] = total_children

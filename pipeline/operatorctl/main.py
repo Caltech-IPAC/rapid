@@ -294,6 +294,19 @@ def build_parser():
                            help="bound on units submitted; default is "
                                 "everything the gatherer returns")
     run_start.add_argument(
+        "--lane", choices=("bulk", "prompt"), default="bulk",
+        help="which Batch lane to submit to. bulk (the DEFAULT) is the "
+             "Spot lane, ceilinged at the Spot vCPU quota; prompt is the "
+             "on-demand lane, ceilinged at the on-demand quota. The two "
+             "draw on different quotas and neither overflows into the "
+             "other, so this chooses cost-and-reclaim exposure against "
+             "latency, not priority. A job type that may not run on the "
+             "lane asked for is REFUSED at submission (alert production "
+             "is prompt-only). Note the lane is not the workload class: "
+             "science is prompt-class -- which fixes its job definition, "
+             "attempt timeout and log group -- while defaulting to the "
+             "bulk lane")
+    run_start.add_argument(
         "--claim-work-units-of", dest="work_unit_run_id", default=None,
         metavar="RUN",
         help="claim ANOTHER run's work units instead of this run's own. "
@@ -781,7 +794,8 @@ def _cmd_run_start(conn, args, out):
             proc_date=args.proc_date, cap=args.cap, dry_run=not args.apply,
             policy_citation=args.policy_citation, out=out,
             window_start=args.window_start, window_end=args.window_end,
-            fids=args.fids, work_unit_run_id=args.work_unit_run_id)
+            fids=args.fids, work_unit_run_id=args.work_unit_run_id,
+            lane=args.lane)
     except RunStartEnvironmentError as exc:
         print("rapidctl: REFUSED — %s" % exc, file=sys.stderr)
         return EXIT_USAGE

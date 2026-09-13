@@ -139,10 +139,16 @@ class SubmissionEnvRoutingTests(unittest.TestCase):
             context["job_definition"])
         self.assertEqual(routes.CLASS_BULK, context["workload_class"])
 
-    def test_science_is_submitted_to_the_prompt_class(self):
+    def test_lane_science_defaults_to_the_bulk_queue(self):
+        # Two Batch lanes (2026-09-13): science's WORKLOAD CLASS is still
+        # prompt — that is what fixes its job definition, attempt timeout,
+        # and log group, and is asserted below unchanged — but its lane
+        # (which queue it lands on) now defaults to bulk, the Spot lane,
+        # since `lane=None` resolves the route's first (default) entry and
+        # science's `lanes` tuple is now bulk-first.
         context = self._resolve(routes.JOB_TYPE_SCIENCE)
 
-        self.assertEqual("rapid-queue-prompt", context["queue"])
+        self.assertEqual("rapid-queue-bulk", context["queue"])
         self.assertEqual(
             self.ACCOUNT_ARN.format("rapid-pipeline-science", 14),
             context["job_definition"])
@@ -155,13 +161,25 @@ class SubmissionEnvRoutingTests(unittest.TestCase):
 
         Each assertion above would still pass if `submission_env` returned a
         constant that happened to match — this is the one that cannot.
+
+        The QUEUE is no longer the discriminator here: two Batch lanes
+        (2026-09-13) put reference-image on bulk-only and default science to
+        bulk too, so both phases now resolve to the SAME queue in the
+        ordinary, no-explicit-lane case this test exercises. That is a
+        correct outcome, not the regression this test was written against —
+        the regression was one JOB DEFINITION serving both classes, which
+        the workload-class axis still keeps apart (reference-image is
+        CLASS_BULK, science is CLASS_PROMPT, unchanged by the lane work), so
+        the job definition is what still proves `submission_env` is not
+        returning a constant.
         """
         reference = self._resolve(routes.JOB_TYPE_REFERENCE_IMAGE)
         science = self._resolve(routes.JOB_TYPE_SCIENCE)
 
-        self.assertNotEqual(reference["queue"], science["queue"])
         self.assertNotEqual(reference["job_definition"],
                             science["job_definition"])
+        self.assertNotEqual(reference["workload_class"],
+                            science["workload_class"])
 
     def test_the_binding_recorded_is_the_definition_submitted_to(self):
         """Submitted ARN == recorded ARN == a VERSIONED ARN (round-5).

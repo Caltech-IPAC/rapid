@@ -36,6 +36,29 @@ crossmatch) get the session-pooled, budgeted lane. The co-design is
 explicit about this and the matrix below encodes it: bulk-queue
 reprocessing is on the transaction lane.
 
+**A route names LANES, plural, not one queue** (2026-09-13). Batch now
+runs two lanes rather than a partitioned four-environment fleet: the
+prompt lane is on-demand at the on-demand vCPU quota, the bulk lane is
+Spot at the Spot quota, and the two draw on different quotas. Which lane
+a job takes is therefore a submit-time CHOICE for most job types, not a
+property fixed by the class — the same science job is correct on either,
+differing only in cost and reclaim exposure.
+
+So `Route.lanes` is an ordered tuple of queue parameter keys, default
+first, and the queue check below accepts ANY of them. The entrypoint's
+rejection keeps its exact meaning: a job on a queue its type may not use
+is still `config_invalid`. What changed is the size of the allowed set,
+from one to the lanes the type may legitimately run on.
+
+Bulk is the default because the Spot lane is the larger, cheaper one and
+most work tolerates reclaim; alert production is route-fixed to prompt,
+because the whole point of the trigger is that an alert follows its
+difference image promptly. Note that the lane is orthogonal to the
+WORKLOAD CLASS: science is prompt-class (its job definition's command
+says so, and that fixes the attempt timeout and the log group) while
+defaulting to the bulk lane. Class is what the image can trust about
+itself; lane is where the operator put the work.
+
 **The ppid map lives here.** The pipeline identifiers (12, 15, 17) were
 defined in three places — a hardcoded map in virtualPipelineOperator, three
 `ppid` keys in the master .ini, and bare integer literals in SQL. They are
@@ -91,6 +114,31 @@ JOB_TYPE_MERGE_DEDUP = "merge-dedup"
 JOB_TYPE_ALERT_PRODUCTION = "alert-production"
 
 
+# --- Execution lanes -------------------------------------------------------
+# The two Batch lanes (2026-09-13). A lane is named by the parameter-tree
+# key of its queue, never by the queue's own name: the names are
+# operational configuration and live in the parameter tree.
+#
+# LANE_* below are DATABASE lanes and are a different axis entirely —
+# transaction vs session pooling. These are the execution lanes.
+
+QUEUE_PARAM_PROMPT = "batch/queue-prompt"
+QUEUE_PARAM_BULK = "batch/queue-bulk"
+
+# What `run start --lane` accepts, mapped to the parameter key it selects.
+# The CLI's vocabulary is the short name; the matrix's is the parameter key.
+LANE_NAMES: dict[str, str] = {
+    "prompt": QUEUE_PARAM_PROMPT,
+    "bulk": QUEUE_PARAM_BULK,
+}
+DEFAULT_LANE = "bulk"
+
+# The three lane sets the matrix uses, default first in each.
+LANES_EITHER = (QUEUE_PARAM_BULK, QUEUE_PARAM_PROMPT)
+LANES_BULK_ONLY = (QUEUE_PARAM_BULK,)
+LANES_PROMPT_ONLY = (QUEUE_PARAM_PROMPT,)
+
+
 class RouteError(ValueError):
     """A submission's route is not one the matrix allows.
 
@@ -116,9 +164,12 @@ class Route:
         What the manifest names.
     workload_class : str
         Which job definition's command runs it.
-    queue_parameter : str
-        The parameter-tree key naming this class's queue — the queue name
-        itself is operational configuration and is NOT duplicated here.
+    lanes : tuple of str
+        The parameter-tree keys of every queue this job type may run on,
+        DEFAULT FIRST. A job type with one entry is route-fixed to that
+        lane; one with two may be sent to either, and `run start --lane`
+        is how a submitter chooses. See the module docstring's "lane"
+        section for why this is a tuple rather than a single key.
     definition_parameter : str
         The parameter-tree key naming this class's job definition, same
         reasoning.
@@ -132,34 +183,49 @@ class Route:
 
     job_type: str
     workload_class: str
-    queue_parameter: str
+    lanes: tuple[str, ...]
     definition_parameter: str
     db_lane: str
     ppid: int | None = None
+
+    @property
+    def queue_parameter(self) -> str:
+        """The DEFAULT lane's queue parameter key.
+
+        Kept as the name every pre-lane caller already used, now meaning
+        "the lane this job type takes when nobody chooses one". Callers
+        that must honour an explicit choice use `lanes` and
+        `queue_parameter_for_lane` instead.
+        """
+        return self.lanes[0]
 
 
 # The matrix, exactly as the co-design states it. Queue and job-definition
 # NAMES are deliberately absent: they live in the parameter tree
 # (batch/queue-prompt, batch/job-definition-science, ...) and naming them
 # here would be a second home for the same fact.
+#
+# The lane tuples are DEFAULT FIRST. Science and registration may run on
+# either lane and default to bulk; every bulk-class type is bulk-only;
+# alert production is prompt-only.
 ROUTES: tuple[Route, ...] = (
     Route(JOB_TYPE_SCIENCE, CLASS_PROMPT,
-          "batch/queue-prompt", "batch/job-definition-science",
+          LANES_EITHER, "batch/job-definition-science",
           LANE_TRANSACTION, ppid=15),
     Route(JOB_TYPE_REFERENCE_IMAGE, CLASS_BULK,
-          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=12),
     Route(JOB_TYPE_REGISTRATION, CLASS_PROMPT,
-          "batch/queue-prompt", "batch/job-definition-science",
+          LANES_EITHER, "batch/job-definition-science",
           LANE_TRANSACTION, ppid=None),
     Route(JOB_TYPE_REPROCESSING, CLASS_BULK,
-          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=15),
     Route(JOB_TYPE_CATALOG_LOAD, CLASS_BULK,
-          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_SESSION, ppid=None),
     Route(JOB_TYPE_CROSSMATCH, CLASS_BULK,
-          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_SESSION, ppid=None),
     # The four remaining post-DB job types. All bulk class, all TRANSACTION
     # lane: the database design assigns the budgeted session lane by
@@ -169,16 +235,16 @@ ROUTES: tuple[Route, ...] = (
     # putting them on the session lane would spend a budgeted connection on
     # work that does not need one.
     Route(JOB_TYPE_STATISTICS, CLASS_BULK,
-          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=None),
     Route(JOB_TYPE_MERGE_CURRENCY, CLASS_BULK,
-          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=None),
     Route(JOB_TYPE_SOURCE_CURRENCY, CLASS_BULK,
-          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=None),
     Route(JOB_TYPE_MERGE_DEDUP, CLASS_BULK,
-          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=None),
     # Alert production: PROMPT class, because it is prompt work — the whole
     # point of the trigger is that an alert follows its difference image
@@ -189,7 +255,7 @@ ROUTES: tuple[Route, ...] = (
     # products, so it belongs to no pipeline's row lineage; a placeholder
     # would put rows in a pipeline they are not from.
     Route(JOB_TYPE_ALERT_PRODUCTION, CLASS_PROMPT,
-          "batch/queue-prompt", "batch/job-definition-science",
+          LANES_PROMPT_ONLY, "batch/job-definition-science",
           LANE_TRANSACTION, ppid=None),
 )
 
@@ -262,6 +328,45 @@ def route_for(job_type: str) -> Route:
             f"{job_type!r} is not a known job type; the vocabulary is "
             + ", ".join(JOB_TYPES))
     return _BY_TYPE[job_type]
+
+
+def queue_parameter_for_lane(job_type: str, lane: str | None = None) -> str:
+    """The queue parameter key a submission should use.
+
+    Parameters
+    ----------
+    job_type : str
+        From the manifest.
+    lane : str, optional
+        A short lane name (``prompt``/``bulk``) as `run start --lane`
+        takes it. None means "take this job type's default", which is
+        the first entry in its `lanes`.
+
+    Raises
+    ------
+    RouteError
+        If the lane name is not one of the two, or if the job type may
+        not run on the lane asked for. The second is the submit-time
+        twin of the entrypoint's rejection: alert production asked for
+        bulk is refused here rather than being submitted and then
+        refused by the container.
+    """
+    route = route_for(job_type)
+    if lane is None:
+        return route.queue_parameter
+    if lane not in LANE_NAMES:
+        raise RouteError(
+            f"{lane!r} is not a lane; expected one of "
+            + ", ".join(sorted(LANE_NAMES)))
+    key = LANE_NAMES[lane]
+    if key not in route.lanes:
+        allowed = ", ".join(
+            name for name, param in sorted(LANE_NAMES.items())
+            if param in route.lanes)
+        raise RouteError(
+            f"job type {job_type!r} may not run on the {lane} lane; it "
+            f"runs on: {allowed}")
+    return key
 
 
 def ppid_for(job_type: str) -> int:
@@ -381,16 +486,27 @@ def validate_route(job_type: str,
             f"class; the {workload_class} class runs: "
             + ", ".join(types_for_class(workload_class)))
 
+    # The queue check accepts ANY lane the route names, not just the
+    # default: with two Batch lanes the same science job is correct on
+    # either, and pinning the check to the default would reject every
+    # `--lane prompt` run at startup. The rejection keeps its meaning —
+    # a job type on a lane it may not use (alert production on bulk) is
+    # still refused, as config_invalid, before any work is claimed.
     if queue_name is not None and queue_names is not None:
-        expected = queue_names.get(route.queue_parameter)
-        if expected is None:
+        allowed = {}
+        for key in route.lanes:
+            value = queue_names.get(key)
+            if value is not None:
+                allowed[value] = key
+        if not allowed:
             raise RouteError(
-                f"the parameter tree does not carry {route.queue_parameter}, "
-                f"so the queue for job type {job_type!r} cannot be checked")
-        if queue_name != expected:
+                "the parameter tree carries none of "
+                + ", ".join(route.lanes)
+                + f", so the queue for job type {job_type!r} cannot be checked")
+        if queue_name not in allowed:
             raise RouteError(
-                f"job type {job_type!r} runs on {expected} "
-                f"({route.queue_parameter}), but this job was submitted to "
-                f"{queue_name}")
+                f"job type {job_type!r} runs on "
+                + ", ".join(f"{name} ({allowed[name]})" for name in sorted(allowed))
+                + f", but this job was submitted to {queue_name}")
 
     return route

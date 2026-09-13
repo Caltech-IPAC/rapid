@@ -162,7 +162,7 @@ class SubmissionBinding:
 
 
 def submission_env(job_type, parameters=None, batch_client=None,
-                   s3_client=None):
+                   s3_client=None, lane=None):
 
     '''
     The queue, job definition, binding and clients one submission needs.
@@ -207,6 +207,13 @@ def submission_env(job_type, parameters=None, batch_client=None,
     job_type : str
         The phase being submitted. Selects the route, and through it the
         queue and job definition.
+    lane : str, optional
+        Which Batch lane to submit to — ``prompt`` or ``bulk``, as
+        `run start --lane` takes it. None means this job type's default
+        lane, which since 2026-09-13 is bulk for everything that may run
+        on it. A lane the job type may not use is a `RouteError` HERE,
+        at submission, rather than a container that starts and refuses
+        itself: both ends check, and the near end fails cheaper.
     parameters : dict, optional
         Parameter-tree values, relative-keyed, as `fetch_parameters`
         returns them. Injected by the tests and by a caller that has
@@ -237,11 +244,16 @@ def submission_env(job_type, parameters=None, batch_client=None,
 
     route = routes.route_for(job_type)
 
+    # The lane chooses among the queues this route allows; None takes the
+    # route's default. `queue_parameter_for_lane` raises RouteError for a
+    # lane this job type may not run on.
+    queue_key = routes.queue_parameter_for_lane(job_type, lane)
+
     # A tree that does not carry this route's keys cannot bind the phase, and
     # guessing one would submit to whatever the last phase happened to use —
     # which is the defect this replaces. One clear message, before submission.
     binding_names = {}
-    for kind, key in (("queue", route.queue_parameter),
+    for kind, key in (("queue", queue_key),
                       ("job_definition", route.definition_parameter)):
         value = parameters.get(key)
         if not value:

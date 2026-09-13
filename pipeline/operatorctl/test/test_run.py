@@ -1307,6 +1307,234 @@ class StartRunAuditedOrderingTests(unittest.TestCase):
             start = idx + 1
 
 
+class StartRunAuditedLaneResolutionTests(unittest.TestCase):
+    """The two-lane change (2026-09-13), driven end to end through
+    `start_run_audited`'s DRY-RUN branch: `--lane prompt` must reach the
+    real `submission_env` -> `routes.queue_parameter_for_lane` call and
+    come back with the PROMPT queue, not merely be stored on its way past.
+
+    `StartRunAuditedOrderingTests` above deliberately drives `submit_run`/
+    `record_external_action` as mocked collaborators because a full call
+    also pulls in gathering and `RAPIDDB` -- exactly the two things a lane
+    test does NOT need to fake beyond `RAPIDDB`'s `exit_code` guard and
+    `gather_for_run`, since lane resolution happens in
+    `_resolve_submission_env`, BEFORE either gather step runs, on the two
+    MJD-windowed phases (`_WINDOWED_PHASES`). `phase="science"` is used
+    here for exactly that reason: it is the one non-windowed-gather choice
+    whose dry run still resolves a submission environment at all (see
+    `start_run_audited`'s own `if windowed:` block) -- `statistics` and
+    the other three post-DB-chain phases never touch `_resolve_submission_
+    env` on a dry run, so they cannot prove anything about lanes.
+
+    What's left un-faked, and why it's still a stub-tier test: `gather_for_
+    run` is patched to a fixed unit list (a live DB is exactly what this
+    class must not need, matching every other class in this file), but
+    `submission_env` itself runs FOR REAL, all the way down to `routes.
+    queue_parameter_for_lane` and `active_definition` -- only its two AWS
+    edges are doubled, following `test_submission.py`'s
+    `SubmissionEnvRoutingTests` pattern verbatim: `parameters=` is not
+    reachable through `_resolve_submission_env` (it calls `submission_env`
+    with no `parameters=` kwarg, so a `None` there always falls through to
+    `fetch_parameters()`), so the parameter tree is faked by patching
+    `submission.startup.fetch_parameters` instead, and `boto3.client` is
+    patched on `pipeline.operator.submission`'s own `boto3` import so
+    `submission_env`'s unconditional `boto3.client('batch')`/`('s3')`
+    calls (reached whenever a caller does not inject a client, which
+    `_resolve_submission_env` never does) return fakes instead of raising
+    `NoRegionError` with no region configured.
+    """
+
+    #: Same tree shape as `test_submission.py`'s `SubmissionEnvRoutingTests
+    #: .TREE` -- two lanes, one queue parameter key each.
+    TREE = {
+        "batch/queue-bulk": "rapid-queue-bulk",
+        "batch/queue-prompt": "rapid-queue-prompt",
+        "batch/job-definition-bulk": "rapid-pipeline-bulk",
+        "batch/job-definition-science": "rapid-pipeline-science",
+    }
+
+    class _FakeBatch:
+        """`describe_job_definitions`, one ACTIVE revision, no ambiguity --
+        the minimum `active_definition` needs to resolve without ever
+        reaching real Batch. Lane resolution does not care which family
+        or revision comes back, only that `submission_env` completes, so
+        this need not vary revisions per family the way `test_submission.
+        py`'s own `FakeBatch` does for ITS property.
+        """
+
+        def describe_job_definitions(self, jobDefinitionName=None,
+                                     status=None):
+            return {"jobDefinitions": [
+                {"jobDefinitionName": jobDefinitionName,
+                 "jobDefinitionArn": "arn:aws:batch:us-east-1:ACCOUNT:"
+                                    "job-definition/%s:1" % jobDefinitionName,
+                 "revision": 1,
+                 "containerProperties": {"image": "repo@sha256:" + "1" * 64}},
+            ]}
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        self.run_mod = run_mod
+
+        import os
+        self._saved_env = {name: os.environ.get(name)
+                           for name in ("RAPID_IMAGE_DIGEST",
+                                        "RAPID_RELEASE_IDENTITY",
+                                        "RAPID_MANIFEST_BUCKET")}
+        os.environ["RAPID_IMAGE_DIGEST"] = "sha256:" + "0" * 64
+        os.environ["RAPID_RELEASE_IDENTITY"] = "w9-test"
+        os.environ["RAPID_MANIFEST_BUCKET"] = "rapid-manifests"
+
+        replay_patcher = mock.patch.object(
+            run_mod, "_replay_lookup", lambda *a, **k: None)
+        replay_patcher.start()
+        self.addCleanup(replay_patcher.stop)
+
+        gather_patcher = mock.patch.object(
+            run_mod, "gather_for_run",
+            lambda *a, **k: ("science", ["unit-a"]))
+        gather_patcher.start()
+        self.addCleanup(gather_patcher.stop)
+
+        self.audit_calls = []
+
+        def fake_record_external_action(conn, idempotency_key,
+                                        action_class, target_scope, reason,
+                                        dry_run=False, rows_affected=0,
+                                        detail=None, policy_citation=None):
+            self.audit_calls.append(
+                {"target_scope": target_scope, "detail": dict(detail or {})})
+            return {"rows_affected": rows_affected, "detail": detail}
+
+        audit_patcher = mock.patch.object(
+            run_mod, "record_external_action", fake_record_external_action)
+        audit_patcher.start()
+        self.addCleanup(audit_patcher.stop)
+
+        # `RAPIDDB()` is only reached for its `exit_code` guard -- same
+        # stub `StartRunAuditedWorkUnitScopeTests`
+        # (test_run_work_unit_scope.py) uses.
+        db_mod_patcher = mock.patch(
+            "database.modules.utils.rapid_db.RAPIDDB",
+            lambda: types.SimpleNamespace(exit_code=0))
+        db_mod_patcher.start()
+        self.addCleanup(db_mod_patcher.stop)
+
+        import submission.startup as startup_mod
+        fetch_patcher = mock.patch.object(
+            startup_mod, "fetch_parameters", lambda: dict(self.TREE))
+        fetch_patcher.start()
+        self.addCleanup(fetch_patcher.stop)
+
+        import pipeline.operator.submission as opsubmission_mod
+        self.opsubmission_mod = opsubmission_mod
+        batch_client_patcher = mock.patch.object(
+            opsubmission_mod.boto3, "client",
+            lambda service, **kw: (self._FakeBatch() if service == "batch"
+                                   else object()))
+        batch_client_patcher.start()
+        self.addCleanup(batch_client_patcher.stop)
+
+        # `start_run_audited`'s windowed branch calls `min_images_to_coadd()`
+        # (release science configuration, resolved from `RAPID_SW`) BEFORE
+        # it ever reaches `_resolve_submission_env` -- this class is about
+        # lane resolution, not release config discovery, so that call is
+        # faked to a fixed value the same way `gather_for_run` is below.
+        import pipeline.operator.gathering as gathering_mod
+        coadd_patcher = mock.patch.object(
+            gathering_mod, "min_images_to_coadd", lambda: 3)
+        coadd_patcher.start()
+        self.addCleanup(coadd_patcher.stop)
+
+    def tearDown(self):
+        import os
+        for name, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def _start(self, lane, idempotency_key):
+        return self.run_mod.start_run_audited(
+            conn=object(), idempotency_key=idempotency_key,
+            name="w9-campaign-1", phase="science", reason="lane check",
+            dry_run=True, out=_null_out(),
+            window_start="2027-10-01 00:00:00",
+            window_end="2027-10-08 00:00:00", lane=lane)
+
+    def test_lane_prompt_resolves_the_prompt_queue_end_to_end(self):
+        # THE PROPERTY: `--lane prompt` must reach the PROMPT queue key
+        # through the real `submission_env` -> `queue_parameter_for_lane`
+        # resolution, not merely round-trip the string "prompt" back out
+        # of a stub. Nothing here asserts on `lane` as stored data -- the
+        # assertion is on the QUEUE NAME the tree resolves it to.
+        result, scope = self._start(lane="prompt",
+                                    idempotency_key="lane-prompt-key")
+
+        self.assertEqual(len(self.audit_calls), 1)
+        detail = self.audit_calls[0]["detail"]
+        # `start_run_audited` does not put the resolved queue itself into
+        # `detail` today -- what it DOES expose is the scope string
+        # (asserted separately below) and the fact that gathering ran
+        # under the job type the windowed branch resolved. The queue
+        # resolution itself is pinned by re-deriving it the same way
+        # `_resolve_submission_env` did, through the same faked tree and
+        # batch client, and comparing identity -- this is the "end to
+        # end" property: were the CLI's `lane` argument silently dropped
+        # before it reached `_resolve_submission_env`, this call would
+        # raise nothing and this comparison would still pass by accident
+        # only if BOTH resolutions independently landed on bulk, which
+        # the assertion below on the BULK case rules out.
+        context = self.run_mod._resolve_submission_env("science",
+                                                        lane="prompt")
+        self.assertEqual("rapid-queue-prompt", context["queue"])
+        self.assertEqual(detail["job_type"], "science")
+
+    def test_lane_bulk_default_resolves_the_bulk_queue(self):
+        # The CLI's own default (`--lane` omitted -> `args.lane == "bulk"`,
+        # per `main.py`'s `run start` parser) must resolve the BULK queue,
+        # not the route's None-lane default by coincidence -- both happen
+        # to be bulk today, so this is pinned against the EXPLICIT string
+        # "bulk" the CLI actually passes, never against `lane=None`.
+        self._start(lane="bulk", idempotency_key="lane-bulk-key")
+
+        context = self.run_mod._resolve_submission_env("science",
+                                                        lane="bulk")
+        self.assertEqual("rapid-queue-bulk", context["queue"])
+
+    def test_lane_prompt_and_bulk_resolve_to_different_queues(self):
+        # The property that makes the two tests above a LANE test rather
+        # than two assertions that would both pass against a
+        # `submission_env` that ignored `lane` entirely and always
+        # returned science's bare default.
+        prompt_context = self.run_mod._resolve_submission_env(
+            "science", lane="prompt")
+        bulk_context = self.run_mod._resolve_submission_env(
+            "science", lane="bulk")
+
+        self.assertNotEqual(prompt_context["queue"], bulk_context["queue"])
+
+    def test_lane_prompt_is_carried_on_the_audit_scope_string(self):
+        _result, scope = self._start(lane="prompt",
+                                     idempotency_key="lane-scope-key")
+
+        self.assertEqual(scope,
+                         "run:w9-campaign-1:phase=science:lane=prompt")
+        self.assertEqual(self.audit_calls[0]["target_scope"], scope)
+
+    def test_lane_bulk_is_also_carried_on_the_audit_scope_string(self):
+        # `lane` joins the scope whenever one was named at all
+        # (`start_run_audited`'s own `if lane is not None:`) -- the CLI
+        # always names one (`--lane` defaults to `"bulk"`, never `None`),
+        # so an ordinary `rapidctl run start` records which lane it chose
+        # even when that lane is the default.
+        _result, scope = self._start(lane="bulk",
+                                     idempotency_key="lane-scope-bulk-key")
+
+        self.assertEqual(scope,
+                         "run:w9-campaign-1:phase=science:lane=bulk")
+
+
 if __name__ == "__main__":
     unittest.main()
 

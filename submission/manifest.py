@@ -581,6 +581,13 @@ class Manifest:
         to that class, or whose route does not run on that queue, is
         rejected before any work begins.
 
+        Since the two-lane change (2026-09-13) "that queue" means ANY
+        lane the job type's route names, not one fixed queue: science on
+        either lane passes, alert production on bulk is still refused.
+        The widening lives in `routes.validate_route`; this method is the
+        manifest-side door to it and passes both queue arguments through
+        unchanged.
+
         Raises
         ------
         RouteError

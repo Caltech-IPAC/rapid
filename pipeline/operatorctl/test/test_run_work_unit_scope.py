@@ -163,10 +163,15 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
 
         self.submit_calls = []
 
+        # `lane` is accepted and RECORDED rather than ignored: a stub that
+        # merely swallowed it with **kwargs would keep passing if the lane
+        # stopped being threaded through at all, which is the one thing the
+        # argument exists to do.
         def fake_submit_run(conn, name, job_type, units, reason,
-                            context=None, work_unit_run_id=None):
+                            context=None, work_unit_run_id=None, lane=None):
             self.submit_calls.append({
-                "name": name, "work_unit_run_id": work_unit_run_id})
+                "name": name, "work_unit_run_id": work_unit_run_id,
+                "lane": lane})
             submission = types.SimpleNamespace(job_id="job-1")
             return [(submission, ["attempt-1"])]
 

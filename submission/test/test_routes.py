@@ -137,11 +137,19 @@ def test_the_rejection_names_what_the_class_can_run():
         routes.validate_route("science", CLASS_BULK)
 
 
-def test_right_definition_wrong_queue_is_rejected():
+def test_lane_right_definition_wrong_queue_is_rejected():
     # The other W8 case: the queue is a submit-time parameter Batch does
     # not bind to the definition, so it has to be checked separately.
+    #
+    # Since the two-lane change this needs a job type that is genuinely
+    # restricted to one lane — science may now run on either, so science
+    # on the bulk queue is CORRECT rather than the rejection it used to
+    # be (see test_lane_science_validates_on_either_lane). Alert
+    # production is the route-fixed one: it is prompt-only because the
+    # whole point of the trigger is that an alert follows its difference
+    # image promptly.
     with pytest.raises(RouteError, match="submitted to rapid-queue-bulk"):
-        routes.validate_route("science", CLASS_PROMPT,
+        routes.validate_route("alert-production", CLASS_PROMPT,
                               queue_name="rapid-queue-bulk",
                               queue_names=QUEUE_NAMES)
 
@@ -154,8 +162,13 @@ def test_queue_is_not_checked_when_the_tree_was_not_supplied():
     assert route.job_type == "science"
 
 
-def test_a_tree_missing_the_queue_parameter_is_a_route_error():
-    with pytest.raises(RouteError, match="does not carry batch/queue-prompt"):
+def test_lane_a_tree_missing_every_lane_parameter_is_a_route_error():
+    # "Every", not "the": a two-lane route is checkable as long as the
+    # tree carries ONE of its lanes, so the error is raised only when it
+    # carries none of them — and the message names the whole set rather
+    # than one key, or a reader would go looking for a single missing
+    # parameter that was never the only requirement.
+    with pytest.raises(RouteError, match="carries none of"):
         routes.validate_route("science", CLASS_PROMPT,
                               queue_name="rapid-queue-prompt",
                               queue_names={})
@@ -238,3 +251,121 @@ def test_the_implemented_set_matches_what_the_payload_actually_has():
 
 def test_every_implemented_type_is_in_the_matrix():
     assert routes.IMPLEMENTED_JOB_TYPES <= set(routes.JOB_TYPES)
+
+
+# --- execution lanes (two-lane change, 2026-09-13) --------------------
+#
+# Every test below carries `lane` in its name so `pytest -k lane` selects
+# the set — the acceptance check the brief runs, and the set whose failure
+# on a reverted diff is the proof that these tests actually bind the code.
+
+def test_lane_every_route_names_at_least_one_known_lane():
+    for route in routes.ROUTES:
+        assert route.lanes, f"{route.job_type} names no lane"
+        for key in route.lanes:
+            assert key in routes.LANE_NAMES.values(), \
+                f"{route.job_type} names unknown lane {key}"
+
+
+def test_lane_default_is_the_first_entry_and_queue_parameter_agrees():
+    # `queue_parameter` is the name every pre-lane caller used and must
+    # keep meaning "the lane taken when nobody chooses one".
+    for route in routes.ROUTES:
+        assert route.queue_parameter == route.lanes[0]
+
+
+def test_lane_bulk_is_the_default_for_everything_that_may_run_on_it():
+    # Ben, 2026-09-13 12:17: "bulk is the default unless otherwise
+    # specified". The only job type that does not default to bulk is the
+    # one that may not use it at all.
+    for route in routes.ROUTES:
+        if routes.QUEUE_PARAM_BULK in route.lanes:
+            assert route.queue_parameter == routes.QUEUE_PARAM_BULK, \
+                f"{route.job_type} may run on bulk but does not default to it"
+
+
+def test_lane_science_and_registration_may_run_on_either():
+    for job_type in ("science", "registration"):
+        assert set(routes.route_for(job_type).lanes) == {
+            routes.QUEUE_PARAM_BULK, routes.QUEUE_PARAM_PROMPT}
+
+
+def test_lane_alert_production_is_prompt_only():
+    # Route-fixed: the trigger exists so an alert follows its difference
+    # image promptly, and the bulk lane is Spot.
+    assert routes.route_for("alert-production").lanes == (
+        routes.QUEUE_PARAM_PROMPT,)
+
+
+def test_lane_every_bulk_class_type_is_bulk_only():
+    for route in routes.ROUTES:
+        if route.workload_class == CLASS_BULK:
+            assert route.lanes == (routes.QUEUE_PARAM_BULK,), \
+                f"{route.job_type} is bulk class but names {route.lanes}"
+
+
+def test_lane_is_not_the_workload_class():
+    # The axis this change most easily gets confused with. Science is
+    # PROMPT class — which fixes its job definition, attempt timeout and
+    # log group — while defaulting to the BULK lane.
+    science = routes.route_for("science")
+    assert science.workload_class == CLASS_PROMPT
+    assert science.queue_parameter == routes.QUEUE_PARAM_BULK
+
+
+def test_lane_queue_parameter_for_lane_resolves_each_choice():
+    assert routes.queue_parameter_for_lane("science", "prompt") == \
+        routes.QUEUE_PARAM_PROMPT
+    assert routes.queue_parameter_for_lane("science", "bulk") == \
+        routes.QUEUE_PARAM_BULK
+    # None means the route's default.
+    assert routes.queue_parameter_for_lane("science", None) == \
+        routes.QUEUE_PARAM_BULK
+
+
+def test_lane_an_unknown_lane_name_is_refused():
+    with pytest.raises(RouteError, match="is not a lane"):
+        routes.queue_parameter_for_lane("science", "spot")
+
+
+def test_lane_a_job_type_may_not_be_sent_to_a_lane_it_does_not_run_on():
+    # Refused at SUBMISSION, the near end — rather than submitted and then
+    # refused by the container it reaches.
+    with pytest.raises(RouteError, match="may not run on the bulk lane"):
+        routes.queue_parameter_for_lane("alert-production", "bulk")
+
+
+def test_lane_science_validates_on_either_lane():
+    # The entrypoint's check keeps its meaning while accepting both: this
+    # is what makes a `--lane prompt` science run startable at all.
+    for queue_name in ("rapid-queue-bulk", "rapid-queue-prompt"):
+        route = routes.validate_route("science", CLASS_PROMPT,
+                                      queue_name=queue_name,
+                                      queue_names=QUEUE_NAMES)
+        assert route.job_type == "science"
+
+
+def test_lane_the_entrypoint_still_refuses_a_lane_the_type_may_not_use():
+    # The property the widening must not cost: a job on a queue its type
+    # may not use is still a route error, which the entrypoint reports as
+    # config_invalid.
+    with pytest.raises(RouteError, match="submitted to rapid-queue-bulk"):
+        routes.validate_route("alert-production", CLASS_PROMPT,
+                              queue_name="rapid-queue-bulk",
+                              queue_names=QUEUE_NAMES)
+
+
+def test_lane_one_lane_present_in_the_tree_is_enough_to_check():
+    # A partially-populated tree still checks the lane it does carry,
+    # rather than refusing because the other key is absent.
+    route = routes.validate_route(
+        "science", CLASS_PROMPT, queue_name="rapid-queue-bulk",
+        queue_names={"batch/queue-bulk": "rapid-queue-bulk"})
+    assert route.job_type == "science"
+
+
+def test_lane_a_queue_in_no_lane_of_the_route_is_rejected():
+    with pytest.raises(RouteError, match="submitted to rapid-queue-nonsense"):
+        routes.validate_route("science", CLASS_PROMPT,
+                              queue_name="rapid-queue-nonsense",
+                              queue_names=QUEUE_NAMES)

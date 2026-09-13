@@ -180,8 +180,17 @@ def test_validate_for_rejects_an_incompatible_class():
         manifest.validate_for(CLASS_BULK)
 
 
-def test_validate_for_rejects_the_wrong_queue():
-    manifest = Manifest(units(), job_type="science")
+def test_lane_validate_for_rejects_a_queue_outside_the_routes_lanes():
+    # Science is no longer the right fixture for "the wrong queue": the two
+    # Batch lanes (2026-09-13) put science on LANES_EITHER, default bulk, so
+    # science on rapid-queue-bulk is now the CORRECT queue rather than the
+    # wrong one. Alert production is still prompt-only (route-fixed, not a
+    # capacity default like the rest), so it is the job type left that a
+    # bulk-queue submission can still catch.
+    manifest = Manifest(
+        [ProcessingUnit(payload=fixtures.alert_payload(exposure=90210, sca=n + 1))
+         for n in range(2)],
+        job_type="alert-production")
     with pytest.raises(RouteError, match="submitted to rapid-queue-bulk"):
         manifest.validate_for(CLASS_PROMPT, queue_name="rapid-queue-bulk",
                               queue_names=QUEUE_NAMES)
