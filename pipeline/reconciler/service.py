@@ -175,6 +175,26 @@ _OPEN_SET_SQL = (
     " FROM attempts WHERE lifecycle_state = ANY(%s) ORDER BY attempt_id"
 )
 
+# WHO OWNS WHICH ATTEMPT INDEX, over the whole table rather than the open set.
+#
+# Index ownership is enforced by `attempts_scheduler_job_sched_index_uq`, a
+# partial unique index over ALL rows of a scheduler job whatever their
+# lifecycle state. The open set is not that: it is `OPEN_STATES` plus a
+# 24-hour supersession window, so a sibling that owns an index and went
+# terminal yesterday is invisible to it. Deciding ownership from the open set
+# therefore hands out indexes the table already holds — which is exactly the
+# UniqueViolation that survived `ead1316b`.
+#
+# Deliberately NARROW: five columns, and only for job ids the open set already
+# named, so this is bounded by the work the poll is doing anyway rather than
+# being a scan of history. It is one statement per poll, not one per row.
+_INDEX_OWNERS_SQL = (
+    "SELECT attempt_id, scheduler_job_id, application_attempt_index,"
+    "  scheduler_attempt_index, lifecycle_state"
+    " FROM attempts WHERE scheduler_job_id = ANY(%s)"
+    " ORDER BY attempt_id"
+)
+
 # The bounded supersession requery (review finding #15). Terminal rows whose
 # scheduler facts could still change — closed inside the window, and carrying
 # a scheduler job id there is anything to re-ask about.
@@ -360,6 +380,28 @@ class ReconcilerService:
         rows.extend(self._supersedable())
         return rows
 
+    def index_owners(self, job_ids):
+        """Every row of these scheduler jobs, whatever its lifecycle state.
+
+        The ownership question and the open-set question are different
+        questions, and conflating them is what kept the reconciler crash-
+        looping after `ead1316b`. `attempts_scheduler_job_sched_index_uq`
+        constrains the TABLE; `open_attempts()` returns the open states plus a
+        24-hour supersession window. A sibling that owns an index and closed
+        more than 24 hours ago satisfies the constraint and is absent from the
+        open set, so both `_resolve_discovered` and `_pick_observation`
+        believed its index was free and handed it out again.
+
+        Returned as `{job_id: [row, ...]}` so both callers read ownership from
+        one place and cannot drift apart again.
+        """
+        if not job_ids:
+            return {}
+        owners = {}
+        for row in self._select(_INDEX_OWNERS_SQL, (list(job_ids),)):
+            owners.setdefault(row["scheduler_job_id"], []).append(row)
+        return owners
+
     def _supersedable(self):
         """Terminal rows whose scheduler facts could still change."""
         horizon = self._now() - SUPERSESSION_WINDOW
@@ -454,9 +496,16 @@ class ReconcilerService:
         # sanctioned path, and its advisory lock plus partial unique indexes are
         # what make a reconciler-discovered retry and a late-starting runtime
         # resolve to the same row instead of racing to two.
+        #
+        # Ownership is read from the TABLE, once, for the jobs this poll is
+        # about — not from `by_job`, which is the open set. See
+        # `index_owners`: the two are different questions, and answering the
+        # first with the second is what handed out an index a terminal sibling
+        # already held.
+        owners = self.index_owners(by_job.keys())
         try:
             discovered, resolve_errors = self._resolve_discovered(
-                by_job, observations)
+                by_job, observations, owners)
         except Exception:  # noqa: BLE001 - discovery must not kill the cycle
             self._safe_rollback()
             logger.exception("resolving scheduler-discovered attempts failed")
@@ -481,12 +530,17 @@ class ReconcilerService:
                 else:
                     unresolved.append(row)
             summary["open"] = len(rows)
+            # The resolver just created rows that own indexes, so ownership is
+            # re-read with them. Skipped when nothing was discovered: the
+            # answer cannot have changed.
+            owners = self.index_owners(by_job.keys())
 
         for job_id, attempts in by_job.items():
             for row in attempts:
                 try:
                     outcome = self._reconcile_attempt(
-                        row, observations.get(job_id, []), siblings=attempts)
+                        row, observations.get(job_id, []),
+                        siblings=owners.get(job_id, attempts))
                 except Exception:  # noqa: BLE001 - one bad attempt must not
                     # take the cycle down; the next poll retries it. The
                     # rollback is not optional: without it a failed statement
@@ -647,7 +701,7 @@ class ReconcilerService:
                 found[job.get("jobId")] = observations_for_job(job)
         return found
 
-    def _resolve_discovered(self, by_job, observations):
+    def _resolve_discovered(self, by_job, observations, owners=None):
         """Give every scheduler attempt a row (review finding #4).
 
         For each open job, compare the attempt indexes the scheduler reports
@@ -682,8 +736,19 @@ class ReconcilerService:
                 # not break out gives nothing to reconcile against.
                 continue
 
-            known = {row.get("application_attempt_index") for row in rows}
-            known.update(row.get("scheduler_attempt_index") for row in rows)
+            # OWNERSHIP IS A PROPERTY OF THE TABLE, NOT OF THE OPEN SET.
+            #
+            # This read `rows` — the open set for this job — so an index held
+            # by a sibling that had already gone terminal was not `known`, and
+            # this method resolved a row for it again. `owners` is every row
+            # of the job whatever its lifecycle state, which is the same scope
+            # the unique index itself has. It falls back to `rows` so the
+            # three-argument call still answers for callers with no owner map.
+            known_rows = (owners or {}).get(job_id) or rows
+            known = {row.get("application_attempt_index")
+                     for row in known_rows}
+            known.update(row.get("scheduler_attempt_index")
+                         for row in known_rows)
             known.discard(None)
 
             template = rows[0]

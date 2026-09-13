@@ -1417,6 +1417,69 @@ class SchedulerDiscoveryTests(unittest.TestCase):
         # It never ran, so it must not carry a scheduler index it did not own.
         self.assertIsNone(conn.rows[1]["scheduler_attempt_index"])
 
+    def test_ownership_sees_a_sibling_that_has_already_gone_terminal(self):
+        """The half of the ownership rule the open set cannot see.
+
+        LIVE, 2026-09-12 20:33-20:44 PDT, with `ead1316b` deployed: the
+        reconciler still exited 71 about every five minutes, still on
+        `attempts_scheduler_job_sched_index_uq`, raised from the same UPDATE
+        in `record_scheduler_observation`.
+
+        `ead1316b` made `_resolve_discovered`'s `known` set and
+        `_pick_observation`'s `claimed` set agree, but it built both from the
+        SAME list — `poll_once`'s `by_job`, which comes from
+        `open_attempts()`. That list is `OPEN_STATES` plus the BOUNDED
+        supersession requery: terminal rows are included only while
+        `ended_at >= now - SUPERSESSION_WINDOW` (24 hours).
+
+        So a sibling that owns an index and went terminal more than 24 hours
+        ago is in neither set. Both paths then believe its index is free, and
+        `_pick_observation` hands it to the pre-created row — whose UPDATE
+        the database rejects, because the index is owned in the TABLE whatever
+        the open set happens to show.
+
+        The live population is exactly this shape: 16,571 attempts already
+        `missing_or_contradictory` in the same job shards, against 4,126 open
+        `submitted` rows. `missing_or_contradictory` is precisely what
+        `_resolve_discovered`'s own dedicated rows become.
+
+        What this pins: ownership is a property of the TABLE, not of the open
+        set. An index any row of the same scheduler job holds is unavailable,
+        whatever that row's lifecycle state and however long ago it closed.
+        """
+        rows = [attempt_row(1, lifecycle_state="submitted",
+                            application_attempt_index=None,
+                            scheduler_attempt_index=None)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+
+        # A sibling that owns index 1 and closed LONG ago — terminal, and far
+        # outside the 24h supersession window, so `open_attempts()` does not
+        # return it. This is the live shape: the resolver created it on an
+        # earlier poll and it has since gone terminal.
+        conn.rows[7] = attempt_row(
+            7, lifecycle_state="missing_or_contradictory",
+            scheduler_attempt_index=1,
+            ended_at=utc(2026, 8, 1, 10, 0, 0))
+
+        summary = svc.poll_once()
+
+        # It must not be in the open set — if it were, `ead1316b`'s fix would
+        # already cover it and this test would be pinning nothing.
+        self.assertNotIn(
+            7, {row["attempt_id"] for row in svc.open_attempts()},
+            "the terminal sibling must be outside the open set, or this test "
+            "does not exercise the defect it exists for")
+
+        # THE ASSERTION: the collision must not reach the poll as an error.
+        self.assertEqual(
+            0, summary["errors"],
+            "an index a TERMINAL sibling owns was handed out again — this is "
+            "the UniqueViolation that still crash-looped the reconciler "
+            "after ead1316b")
+        self.assertNotEqual(
+            1, conn.rows[1]["scheduler_attempt_index"],
+            "index 1 is owned by attempt 7, whatever the open set shows")
+
     def test_a_discovered_retry_inherits_its_template_siblings_work_unit(self):
         """FINDING 18: a scheduler-discovered row must not be born orphaned.
 

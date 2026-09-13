@@ -452,6 +452,19 @@ class FakeConnection:
     def _select_attempts(self, text, params):
         columns = _columns_of(text)
         lowered = text.lower()
+        if "scheduler_job_id = any" in lowered:
+            # `ReconcilerService.index_owners` — who holds which attempt
+            # index, over the WHOLE table rather than the open set. No
+            # lifecycle predicate, deliberately: that is the entire point of
+            # the statement, and a stub that filtered by state here could not
+            # tell the fix from the defect it replaces.
+            wanted = set(params[0])
+            matched = [row for row in self.rows.values()
+                       if row.get("scheduler_job_id") in wanted]
+            matched.sort(key=lambda row: row["attempt_id"])
+            description = [(name,) for name in columns]
+            return ([tuple(row.get(name) for name in columns)
+                     for row in matched], description)
         if "lifecycle_state = any" in lowered:
             wanted = set(params[0])
             matched = [row for row in self.rows.values()
