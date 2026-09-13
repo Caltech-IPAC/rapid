@@ -129,11 +129,75 @@ _EXECUTION_BINDING_COLUMNS = (
     "binding_manifest_checksum",
 )
 
+#: Columns migration 014's `terminal_after_start` CHECK requires NOT NULL,
+#: that `mark_terminal_after_start` does not supply, and that can genuinely
+#: be NULL on their own.
+#:
+#: The runtime provenance — `source_sha`, `container_digest`,
+#: `job_definition_rev`, `config_digest` — is deliberately ABSENT. Those four
+#: are written by `mark_started` in the same UPDATE as `started_at`
+#: (`observability/attempts.py:750-771`), so a row with a start carries all
+#: four by construction and checking them here would only reject rows that
+#: are in fact closable.
+_TERMINAL_AFTER_START_ROW_COLUMNS = _EXECUTION_BINDING_COLUMNS + (
+    "started_at",
+    "scheduler_job_id",
+)
+
 
 def _missing_execution_binding(row):
     """Is this row unable to satisfy 014's `terminal_after_start` CHECK?"""
     return any(row.get(column) is None
                for column in _EXECUTION_BINDING_COLUMNS)
+
+
+def _can_represent_terminal_after_start(row, observation):
+    """Could this row satisfy 014's CHECK if it were closed that way?
+
+    MIRRORS THE CONSTRAINT RATHER THAN GUESSING AT IT (live, 2026-09-12).
+    `_is_contradictory` tested `started_at`, then the execution binding, and
+    each time a DIFFERENT column in the same CHECK turned out to be the NULL
+    one — a guard added per-column is a guard that crashes again on the next
+    column. This reads the whole list, so any future NULL in it routes to
+    `missing_or_contradictory` instead of a refused transition.
+
+    Two sources, because the constraint is evaluated on the POST-UPDATE row:
+
+    * columns the writer does not supply, or folds in with
+      `COALESCE(existing, new)` — read from the row, since what it already
+      holds is what survives; and
+    * `scheduler_observed_exit` and `scheduler_state`, which
+      `mark_terminal_after_start` writes UNCONDITIONALLY from the
+      observation. A None there lands as NULL even over a stored value, so
+      the OBSERVATION is decisive and the row's own value is irrelevant.
+
+    That last one is the live failure: attempts of runs terminated through
+    the scheduler on 2026-09-11 have a `statusReason` and no `exitCode`, so
+    `observation.exit_code` is None (`scheduler.observation_from_job` reads
+    `container.get("exitCode")`), and all 88 affected `application_closed`
+    rows carry `scheduler_observed_exit IS NULL`.
+
+    Three groups of the constraint's columns are deliberately NOT checked,
+    each because a NULL on the row is not a NULL after the UPDATE:
+
+    * `rapid_outcome` and `product_disposition` — COALESCE'd with values the
+      caller derives from the closure record, and `mark_abrupt_loss` supplies
+      a disposition outright;
+    * `ended_at` — supplied unconditionally by the writer's own caller, which
+      falls back to `self._now()`;
+    * the runtime provenance (`source_sha`, `container_digest`,
+      `job_definition_rev`, `config_digest`) — written by `mark_started` in
+      the SAME UPDATE as `started_at`, so a row with a start carries all four
+      by construction and testing them would reject closable rows.
+    """
+    if any(row.get(column) is None
+           for column in _TERMINAL_AFTER_START_ROW_COLUMNS):
+        return False
+    if observation is None:
+        return False
+    # Written unconditionally from the observation, so these decide.
+    return (observation.exit_code is not None
+            and observation.state is not None)
 
 
 def _reaches_terminal_after_start(classification):
@@ -1363,7 +1427,7 @@ class ReconcilerService:
         return observation.attempt_index is not None
 
     @staticmethod
-    def _is_contradictory(row, classification):
+    def _is_contradictory(row, classification, observation=None):
         """A row that cannot REPRESENT either terminal state.
 
         `terminal_after_start` requires `started_at IS NOT NULL`;
@@ -1395,9 +1459,21 @@ class ReconcilerService:
         `missing_or_contradictory` is for — flagged for a human with the
         closure record already published, rather than forced into a state by
         deleting the evidence that does not fit.
+
+        THE CHECK IS MIRRORED WHOLE, NOT COLUMN BY COLUMN. The binding was
+        the second column of the same constraint to be found NULL live, and
+        `scheduler_observed_exit` was the third — attempts of runs terminated
+        through the scheduler carry a `statusReason` and no `exitCode`, and
+        the writer puts the observation's exit on the row unconditionally.
+        Guarding one column at a time yields a guard that crashes on the
+        next one, so `_can_represent_terminal_after_start` reads the whole of
+        014's list from the row and the observation together. `observation`
+        defaults to None so the two-argument call still answers — and a
+        caller with no observation cannot reach `terminal_after_start`
+        anyway, since the state's own facts come from one.
         """
         if _reaches_terminal_after_start(classification) and \
-                _missing_execution_binding(row):
+                not _can_represent_terminal_after_start(row, observation):
             return True
         if row.get("started_at") is not None:
             return False
@@ -1584,7 +1660,7 @@ class ReconcilerService:
         # deleting evidence to fit a state. The adopted state for stores that
         # disagree is missing_or_contradictory, and that is what it gets:
         # flagged for a human, with the closure record already published.
-        if self._is_contradictory(row, classification):
+        if self._is_contradictory(row, classification, observation):
             writer.mark_missing_or_contradictory(
                 attempt_id,
                 reconciliation_class="contradictory",

@@ -431,6 +431,21 @@ class FakeConnection:
         """
         if new_state != "terminal_after_start":
             return
+        # `scheduler_observed_exit` is written UNCONDITIONALLY by
+        # `mark_terminal_after_start` (it is not one of the COALESCE'd
+        # columns), so the value the statement carries is what the row ends
+        # up with — a None parameter lands as NULL even over a stored value.
+        # Read it from the statement's own parameters for that reason, not
+        # from `self.rows`. This is the column that was NULL on all 88 live
+        # `application_closed` rows of the terminated 2026-09-11 runs.
+        if "scheduler_observed_exit = %s" in text.lower() and params:
+            if params[2] is None:
+                raise FakeCheckViolation(
+                    "new row for relation \"attempts\" violates check "
+                    'constraint "attempts_state_terminal_after_start_check": '
+                    f"attempt {row.get('attempt_id')} has no "
+                    "scheduler_observed_exit and schema_version >= 2 "
+                    "requires one")
         if row.get("started_at") is None:
             raise FakeCheckViolation(
                 "new row for relation \"attempts\" violates check constraint "

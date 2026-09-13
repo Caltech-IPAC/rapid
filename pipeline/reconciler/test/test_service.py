@@ -694,6 +694,75 @@ class LeaseTests(unittest.TestCase):
                          "a row that can satisfy neither terminal state is "
                          "flagged, not rewritten into one of them")
 
+    def test_a_terminated_attempt_with_no_exit_code_is_not_forced_terminal(self):
+        """THE LIVE CheckViolation, from the row dump of 2026-09-12.
+
+        Attempt 23894, run `accept-20260911-13`: `application_closed`,
+        schema_version 2, and EVERY column migration 014 requires present —
+        `started_at`, the runtime provenance four, the binding triple,
+        `terminal_record_key`/`sequence`, `rapid_outcome`,
+        `product_disposition`. Across all affected jobs no row anywhere has a
+        NULL binding. The one column that IS NULL is
+        `scheduler_observed_exit`, on all 88 `application_closed` rows.
+
+        These attempts belong to runs TERMINATED through the scheduler on
+        2026-09-11. Batch's attempt record for a terminated container carries
+        a `statusReason` and NO `exitCode`, and
+        `scheduler.observation_from_job` reads the exit as
+        `container.get("exitCode")` — None. `mark_terminal_after_start` then
+        writes `scheduler_observed_exit = %s` UNCONDITIONALLY (it is not one
+        of the COALESCE'd columns), so the NULL lands on the row and 014's
+        `schema_version >= 2` clause refuses the UPDATE. The row never moves,
+        so the same rejection recurs on every poll.
+
+        The application says it closed; the scheduler says it was killed and
+        reports no exit code. That is the stores disagreeing, which is what
+        `missing_or_contradictory` means — not a state to be forced by
+        writing a NULL the constraint forbids or by fabricating an exit code
+        that would assert something untrue about how the process ended.
+        """
+        row = attempt_row(1, lifecycle_state="application_closed",
+                          scheduler_attempt_index=1,
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
+                          ended_at=utc(2026, 8, 6, 11, 30, 0),
+                          # Every column 014 requires, present — as live.
+                          source_sha="sha", container_digest="cd",
+                          job_definition_rev=10, config_digest="cfg",
+                          application_intended_exit=0,
+                          rapid_outcome="failure",
+                          product_disposition="none",
+                          terminal_record_key="k",
+                          terminal_record_sequence=0)
+        # A terminated attempt: a reason, and no exit code at all.
+        jobs = [batch_job(status="FAILED", exit_code=None,
+                          status_reason="Job terminated by user",
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        # The row is `application_closed` and cites a sequence-0 record, so
+        # the application DID write one: this is CLASS_AGREED, not an abrupt
+        # loss. That matters — `mark_abrupt_loss` substitutes 128+SIGKILL for
+        # a missing exit code, so the abrupt-loss path never carries the NULL
+        # through. The agreed path passes `observation.exit_code` straight to
+        # `mark_terminal_after_start`, which writes it unconditionally.
+        store = InMemoryObjectStore()
+        seed_record(store, row, application_record(1))
+        svc, conn, _batch, _store, _tag = build([row], jobs, records=store)
+
+        summary = svc.poll_once()
+
+        # THE ASSERTION: the poll must not issue a transition the database
+        # refuses, then make the identical attempt again next minute.
+        self.assertEqual(
+            0, summary["errors"],
+            "a NULL scheduler_observed_exit was written into "
+            "terminal_after_start — this is the live CheckViolation on "
+            "attempts_state_terminal_after_start_check")
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual(
+            "missing_or_contradictory", conn.rows[1]["lifecycle_state"],
+            "the application closed it and the scheduler reports a kill with "
+            "no exit code; the stores disagree and the row says so")
+
     def test_a_terminal_row_whose_facts_agree_is_left_alone(self):
         # The bound on the other side: revisiting must not re-close every
         # finished attempt on every poll.
