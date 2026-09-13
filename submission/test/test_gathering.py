@@ -150,6 +150,12 @@ class StubSource:
     def __init__(self, **overrides):
         self.exit_code = 0
         self.reference_calls = []
+        # The `run_id` each reference lookup was given, recorded alongside
+        # the ppid calls above (2026-09-12): which RUN's reference a unit
+        # differences against is now part of this method's contract, so a
+        # stub that dropped the argument could not tell a threaded scope
+        # from an unthreaded one.
+        self.reference_run_ids = []
         self.blocking_calls = []
         # (rid, sca, fid, ra0, dec0, ra1..ra4, dec1..dec4)
         self.meta = overrides.get("meta", {
@@ -218,10 +224,24 @@ class StubSource:
     def get_best_psf(self, sca, fid):
         return self.psf
 
-    def get_best_reference_image(self, ppid, field, fid):
+    def get_best_reference_image(self, ppid, field, fid, run_id=None):
         self.reference_calls.append(ppid)
+        self.reference_run_ids.append(run_id)
         if callable(self.reference):
-            result = self.reference(self, ppid, field, fid)
+            # The callback keeps its original four-argument shape; a
+            # callback that also wants the run_id declares a fifth
+            # parameter and gets it. Dispatched on the callback's DECLARED
+            # arity, never on catching `TypeError` from the call -- that
+            # would swallow a genuine TypeError raised inside the callback
+            # body and retry it, turning a test's own bug into a confusing
+            # second failure.
+            import inspect
+            wants_run_id = len(
+                inspect.signature(self.reference).parameters) >= 5
+            if wants_run_id:
+                result = self.reference(self, ppid, field, fid, run_id)
+            else:
+                result = self.reference(self, ppid, field, fid)
         else:
             result = self.reference
         _refuse_if_failed(self, "get_best_reference_image")
@@ -422,6 +442,74 @@ class ReferenceSelectionTests(unittest.TestCase):
                           field=4678622, fid=8)
         self.assertIn("64", str(ctx.exception))
 
+    # -------------------------------------------------------------------
+    # `run_scope` reaching the reference lookup (2026-09-12). Migration 115
+    # made reference currency run-scoped: `refimages` carries a `run_id`
+    # and has SEPARATE partial unique indexes for the production lane
+    # (`run_id IS NULL`) and per-run lanes, so a campaign run and
+    # production can each hold a current reference for the same
+    # (ppid, field, fid). Until now this lookup was given no run at all,
+    # so which of the two a campaign's science differenced against was
+    # whatever the database happened to return first. The database-level
+    # proof that the scoped query selects the right row is
+    # `RunScopedReferenceLookupSemanticsTests` in
+    # `database.modules.utils.test.test_rapid_db`; what these tests prove
+    # is the other half -- that the run actually REACHES that query.
+    # -------------------------------------------------------------------
+
+    def test_no_run_scope_looks_the_reference_up_in_the_production_lane(
+            self):
+        # The call every existing caller makes today. `None` is the
+        # production lane, and must stay the default.
+        source = StubSource(reference=self._reference_under(12))
+        science_facts(source, 101, field=4678622, fid=8,
+                      reference_ppid=12, science_ppid=15)
+        self.assertEqual(source.reference_run_ids, [None])
+
+    def test_a_run_scope_reaches_the_reference_lookup(self):
+        source = StubSource(reference=self._reference_under(12))
+        science_facts(source, 101, field=4678622, fid=8,
+                      reference_ppid=12, science_ppid=15,
+                      run_scope="w9-campaign-1")
+        self.assertEqual(source.reference_run_ids, ["w9-campaign-1"])
+
+    def test_the_run_scope_is_carried_into_the_ppid_fallback_call_too(self):
+        # The ppid loop runs INSIDE the run scope, not across it: both
+        # calls carry the same run. A fallback that silently dropped the
+        # scope would hand a campaign production's science-ppid reference
+        # in preference to its own.
+        source = StubSource(reference=self._reference_under(15))
+        science_facts(source, 101, field=4678622, fid=8,
+                      reference_ppid=12, science_ppid=15,
+                      run_scope="w9-campaign-1")
+        self.assertEqual(source.reference_calls, [12, 15])
+        self.assertEqual(source.reference_run_ids,
+                         ["w9-campaign-1", "w9-campaign-1"])
+
+    def test_a_run_gets_its_own_reference_not_productions(self):
+        # The defect end to end, at this layer: two references exist for
+        # the identity group, one production and one this run's. The stub
+        # answers as the scoped query would, and the campaign must be
+        # handed its own row.
+        def by_run(source, ppid, field, fid, run_id):
+            if run_id == "w9-campaign-1":
+                return {"rfid": 202, "filename": "s3://camp/ref.fits",
+                        "infobits": 0, "version": 1}
+            return {"rfid": 101, "filename": "s3://prod/ref.fits",
+                    "infobits": 0, "version": 2}
+
+        campaign = science_facts(StubSource(reference=by_run), 101,
+                                 field=4678622, fid=8,
+                                 run_scope="w9-campaign-1")
+        production = science_facts(StubSource(reference=by_run), 101,
+                                   field=4678622, fid=8)
+
+        self.assertEqual(campaign["reference_image_id"], 202)
+        self.assertEqual(production["reference_image_id"], 101,
+                         "an unscoped caller must still get the "
+                         "production-lane reference")
+
+
 
 # ---------------------------------------------------------------------------
 # The two-stage gathering loop
@@ -566,6 +654,29 @@ class GatherScienceUnitsTests(unittest.TestCase):
             min_images_to_coadd=10, fids=[8], run_scope="w9-campaign-1"))
         self.assertTrue(units)
         self.assertEqual(source.blocking_calls, ["w9-campaign-1"])
+
+    def test_run_scope_reaches_the_reference_lookup_through_the_loop(self):
+        # The gathering loop's own threading, distinct from
+        # `ReferenceSelectionTests`' direct `science_facts` calls: the
+        # scope must survive the trip from this function's parameter,
+        # through `science_facts`, to the reference query. It previously
+        # reached the resubmission gate and stopped there.
+        source = StubSource()
+        list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8], run_scope="w9-campaign-1"))
+        self.assertTrue(source.reference_run_ids)
+        self.assertEqual(set(source.reference_run_ids), {"w9-campaign-1"})
+
+    def test_an_unscoped_gather_still_reads_the_production_lane(self):
+        source = StubSource()
+        list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8]))
+        self.assertTrue(source.reference_run_ids)
+        self.assertEqual(set(source.reference_run_ids), {None})
 
 
 class FakeConditionalS3:

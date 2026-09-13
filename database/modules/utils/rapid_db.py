@@ -1814,10 +1814,55 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_best_reference_image(self,ppid,field,fid):
+    def get_best_reference_image(self,ppid,field,fid,run_id=None):
 
         '''
         Query RefImages database table for the best (latest unless version is locked) version of reference image.
+
+        RUN-SCOPED AND DETERMINISTIC. Migration 115 put a `run_id` column
+        on the product tables and gave RefImages two PARTIAL unique
+        indexes for currency — `refimages_vbest_current_unique`
+        (`run_id IS NULL`, the production lane) and
+        `refimages_vbest_current_per_run_unique` (`run_id IS NOT NULL`).
+        A production current reference and a campaign run's own current
+        reference for the SAME (ppid, field, fid) therefore coexist
+        legally, as two rows. This query used to carry NO run predicate
+        and NO `ORDER BY`, read with `fetchone()`: the moment that second
+        row exists, WHICH reference a run's science differences against is
+        whatever the planner emits first — undefined, and silently
+        variable between invocations. (Latent, not yet firing: at the time
+        of writing every current reference in the live database is
+        production-lane.)
+
+        `run_id=None` (the default) is the PRODUCTION LANE, and preserves
+        the behaviour every existing caller depends on: `run_id IS NULL`
+        makes explicit what was implicitly true before migration 115, when
+        no other kind of row could exist. It is not a new restriction on
+        the production caller; it is what stops a campaign's reference
+        from being handed to production now that campaign rows can exist.
+
+        A run name RANKS the two acceptable lanes: the caller's OWN run
+        first, the production lane as fallback, and NOTHING else. A run
+        with no reference of its own falls back to production's, which is
+        what lets a campaign that builds no references work at all; a run
+        never receives a DIFFERENT run's reference, which is the
+        cross-contamination this ranking exists to make unreachable.
+
+        EQUALITY, NOT PREFIX, unlike the `Attempts`-branch match in
+        `get_blocking_exposure_scas_for_job_type`. The product tables'
+        `run_id` is written from `work_units.run_id` — the run NAME —
+        not from `attempts.run_id`, which is the finer per-shard
+        submission-batch label that can carry a `-<n>` suffix (see
+        `pipeline.registration.products`, "THE RUN COMES OFF THE WORK
+        UNIT, NOT THE ATTEMPT"). There is no suffix here to match past,
+        and the partial unique index is keyed on the exact value.
+
+        The `ORDER BY` is present in BOTH shapes, not just the scoped one:
+        a `fetchone()` over an unordered result set is a planner-defined
+        choice as soon as the set has more than one member, and the
+        partial unique indexes are what keep it to one. Should either
+        index ever be dropped or bypassed, `rfid DESC` still yields the
+        most recently registered row rather than an arbitrary one.
         '''
 
         self.exit_code = 0
@@ -1825,14 +1870,43 @@ class RAPIDDB:
 
         # Define query template.
 
-        query =\
-            "select rfid,filename,infobits,version " +\
-            "from RefImages " +\
-            "where vbest > 0 " +\
-            "and status > 0 " +\
-            "and ppid = %s " +\
-            "and field = %s " +\
-            "and fid = %s; "
+        if run_id is None:
+            # Production lane. Identical in effect to the pre-115 query
+            # for every row that query could ever have matched, plus the
+            # ordering that makes the single-row read deterministic.
+            query =\
+                "select rfid,filename,infobits,version " +\
+                "from RefImages " +\
+                "where vbest > 0 " +\
+                "and status > 0 " +\
+                "and ppid = %s " +\
+                "and field = %s " +\
+                "and fid = %s " +\
+                "and run_id is null " +\
+                "order by rfid desc; "
+
+            params = (ppid, field, fid)
+
+        else:
+            # Run-scoped. Both acceptable lanes are admitted by the
+            # `in (%s, null)`-equivalent predicate below, then RANKED by
+            # the first `order by` term so the caller's own run wins; the
+            # production row is reached only when the run has none. The
+            # run name is BOUND twice (once to filter, once to rank),
+            # never spliced into the SQL text.
+            query =\
+                "select rfid,filename,infobits,version " +\
+                "from RefImages " +\
+                "where vbest > 0 " +\
+                "and status > 0 " +\
+                "and ppid = %s " +\
+                "and field = %s " +\
+                "and fid = %s " +\
+                "and (run_id = %s or run_id is null) " +\
+                "order by (case when run_id = %s then 0 else 1 end), " +\
+                "rfid desc; "
+
+            params = (ppid, field, fid, run_id, run_id)
 
 
         # Formulate query by substituting parameters into query template.
@@ -1840,9 +1914,8 @@ class RAPIDDB:
         print('----> ppid = {}'.format(ppid))
         print('----> field = {}'.format(field))
         print('----> fid = {}'.format(fid))
+        print('----> run_id = {}'.format(run_id))
 
-
-        params = (ppid, field, fid)
 
         print('query = {}, params = {}'.format(query, params))
 

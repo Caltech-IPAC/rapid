@@ -130,8 +130,14 @@ class UnitSource(Protocol):
 
     def get_best_psf(self, sca: int, fid: int) -> Sequence[Any]: ...
 
+    # `run_id` (2026-09-12) ranks the two lanes a run may legitimately read
+    # a reference from — its own first, the production lane as fallback —
+    # and admits no other run's. `None` is the production lane. See that
+    # method's own docstring for why the match is equality, not the prefix
+    # the Attempts-branch gates use.
     def get_best_reference_image(self, ppid: int, field: int,
-                                 fid: int) -> Any: ...
+                                 fid: int,
+                                 run_id: str | None = ...) -> Any: ...
 
     # `rid` is typed loosely because it is not a rid in the caller that
     # matters: `_overlapping_l2files` passes the string 'null' to select the
@@ -296,7 +302,8 @@ def _tile_position(rtid: int) -> dict[str, float] | None:
 
 def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
                   reference_ppid: int | None = None,
-                  science_ppid: int | None = None) -> dict:
+                  science_ppid: int | None = None,
+                  run_scope: str | None = None) -> dict:
     """Resolve one science unit's per-invocation facts.
 
     The fact set the deleted `awsBatchSubmitJobs_launchSingleSciencePipeline`
@@ -313,6 +320,15 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
     all is returned WITHOUT reference facts rather than skipped — whether
     that is submittable is the job type's call, made by `require`, not
     gathering's.
+
+    `run_scope` names WHICH run's reference this unit should difference
+    against (2026-09-12). It is the same fact `gather_science_units`
+    already carries under that name for the resubmission gate, and it is
+    carried here for the same reason: migration 115 made reference
+    currency run-scoped, so a campaign run and production can each hold a
+    current reference for one (field, filter) and the choice between them
+    must be the caller's, not the planner's. `None` (the default) is the
+    production lane, exactly what every caller got before that migration.
     """
     reference_ppid = (ppid_for(JOB_TYPE_REFERENCE_IMAGE)
                       if reference_ppid is None else reference_ppid)
@@ -387,7 +403,7 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
         facts["psf_uri"] = _maybe_str(psf[1])
 
     reference = _best_reference(handle, reference_ppid, science_ppid,
-                                field, fid)
+                                field, fid, run_scope=run_scope)
     if reference is not None:
         facts["reference_image_id"] = _maybe_int(reference.get("rfid"))
         facts["reference_image_uri"] = _maybe_str(reference.get("filename"))
@@ -490,7 +506,8 @@ def _data_class_for_inputs(handle: UnitSource,
 
 def _best_reference(handle: UnitSource, reference_ppid: int,
                     science_ppid: int, field: int,
-                    fid: int) -> dict[str, Any] | None:
+                    fid: int,
+                    run_scope: str | None = None) -> dict[str, Any] | None:
     """The launcher's two-ppid reference lookup, with its ppid recorded.
 
     `get_best_reference_image` does not return the ppid it matched on, and
@@ -498,6 +515,16 @@ def _best_reference(handle: UnitSource, reference_ppid: int,
     by the reference-image job type and one built incidentally by a
     science run are different objects. So the ppid is folded in here, at
     the only place that knows which call answered.
+
+    `run_scope` is passed straight through as that method's `run_id`: the
+    run whose OWN reference is preferred, falling back to the production
+    lane and never to another run's. `None` (the default) is the
+    production lane, which is what every caller got before migration 115
+    made a second current reference per identity group possible at all.
+    The ppid loop is unchanged and runs INSIDE the scope, not across it —
+    a run's own reference under the reference-image ppid still beats
+    production's under the science ppid, because reference-ppid provenance
+    is the stronger preference of the two and the ppid order encodes it.
     """
     for ppid in (reference_ppid, science_ppid):
         # exit_code 7 is the documented "no reference yet" signal, and the
@@ -506,7 +533,8 @@ def _best_reference(handle: UnitSource, reference_ppid: int,
         # failure raises `RapidDBCallFailed` here, and is not caught: it
         # must not read as "no reference".
         try:
-            record = handle.get_best_reference_image(ppid, field, fid)
+            record = handle.get_best_reference_image(ppid, field, fid,
+                                                    run_id=run_scope)
         except RapidDBCallFailed as exc:
             raise GatheringError(
                 f"reference lookup failed for field {field} fid {fid} "
@@ -587,7 +615,14 @@ def gather_science_units(handle: UnitSource, start, end,
             chosen = rows[1:]
         for row in chosen:
             rid = int(row[0])
-            facts = science_facts(handle, rid, field, fid)
+            # THE RUN SCOPE REACHES THE REFERENCE LOOKUP HERE. The same
+            # `run_scope` the resubmission gate below is given: a run
+            # differences against its own reference where it has one, and
+            # production's otherwise. Before this it was not passed at
+            # all, so a campaign's science could pick up either lane's
+            # reference nondeterministically once both existed.
+            facts = science_facts(handle, rid, field, fid,
+                                  run_scope=run_scope)
             exposure = facts.get("expid")
             if exposure is None:
                 raise GatheringError(
@@ -735,6 +770,18 @@ def gather_campaign_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
         # shape exactly.
         rid, field, fid = _campaign_unit_l2_identity(
             handle, exposure, sca, work_unit_id, campaign_name)
+        # NO `run_scope` HERE, DELIBERATELY — this gatherer reads the
+        # production lane, as it always has. `get_ready_test_campaign_units`
+        # selects (work_unit_id, campaign_id, campaign_name, job_type,
+        # input_scope) and does NOT select `work_units.run_id`, so the run
+        # name simply is not in hand at this point; the honest default is
+        # the behaviour this call already had rather than a guess derived
+        # from `campaign_name`, which is a different identifier (a
+        # campaigns-table name, not a runs-table one). Widening that query
+        # is the change that would make this run-aware, and it is out of
+        # this fix's scope. Mission-mock test campaigns register no
+        # references of their own today, so the production-lane reference
+        # is also the only one that exists for them.
         facts = science_facts(handle, rid, field, fid)
 
         logger.info(

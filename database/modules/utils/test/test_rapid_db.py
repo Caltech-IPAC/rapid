@@ -579,5 +579,187 @@ class BlockingGateAttemptsPrefixSemanticsTests(unittest.TestCase):
         self.assertFalse(self._matches("foo", "bar-0"))
 
 
+class RunScopedReferenceLookupTests(unittest.TestCase):
+    """`get_best_reference_image`'s new `run_id` parameter — query-SHAPE
+    tests, no server.
+
+    Migration 115 put a `run_id` column on `refimages`/`diffimages`/`psfs`
+    and gave `refimages` TWO partial unique indexes for currency:
+    `refimages_vbest_current_unique` (`run_id IS NULL`, the production
+    lane) and `refimages_vbest_current_per_run_unique` (`run_id IS NOT
+    NULL`). A production current reference and a campaign run's own
+    current reference for the SAME (field, fid, ppid) can therefore
+    coexist as two rows without violating either index. This lookup used
+    to have NO run predicate and NO `ORDER BY`, read with `fetchone()` —
+    so once that second row exists, WHICH reference a campaign's science
+    differences against is whatever the planner emits first. The
+    database-evaluated proof of what the new query actually selects is
+    `RunScopedReferenceLookupSemanticsTests` below.
+    """
+
+    def _execute(self, run_id=None):
+        db = make_db(fetchone=None)
+        db.get_best_reference_image(15, 5001, 1, run_id=run_id)
+        query, params = db.cur.execute.call_args.args
+        return query, params
+
+    def test_the_query_is_ordered_so_the_choice_is_never_planner_defined(
+            self):
+        # THE CORE PROPERTY, true in BOTH lanes: a `fetchone()` over an
+        # unordered result set picks an arbitrary row the moment the set
+        # has more than one member. Every shape this method emits must
+        # carry an ORDER BY.
+        for run_id in (None, "w9-campaign-1"):
+            text, _ = self._execute(run_id=run_id)
+            self.assertIn("order by", text.lower(),
+                          f"run_id={run_id!r} emitted an unordered query; "
+                          "fetchone() over it is a planner-defined choice")
+
+    def test_no_run_id_restricts_the_lookup_to_the_production_lane(self):
+        # The default preserves today's INTENT for the production caller:
+        # production reads production's reference. Before migration 115
+        # there was no other kind of row, so an unscoped scan and this one
+        # returned the same thing; now `run_id IS NULL` is what keeps a
+        # campaign's reference out of production's result.
+        text, params = self._execute(run_id=None)
+
+        self.assertIn("run_id is null", text.lower())
+        self.assertNotIn("run_id = %s", text)
+        self.assertEqual(params, (15, 5001, 1))
+
+    def test_a_run_id_prefers_that_run_then_falls_back_to_production(self):
+        # Two acceptable rows, ranked: the caller's own run first, the
+        # production lane second. Never another campaign's — that is the
+        # `in` restriction, asserted by the semantics tests below.
+        text, params = self._execute(run_id="w9-campaign-1")
+
+        lowered = text.lower()
+        self.assertIn("run_id", lowered)
+        self.assertIn("order by", lowered)
+        self.assertIn("w9-campaign-1", params)
+
+    def test_every_placeholder_has_a_bound_parameter(self):
+        for run_id in (None, "w9-campaign-1"):
+            text, params = self._execute(run_id=run_id)
+            self.assertEqual(text.count("%s"), len(params),
+                             f"placeholder/param mismatch for {run_id!r}")
+
+    def test_the_run_id_is_bound_never_spliced_into_the_sql_text(self):
+        text, params = self._execute(run_id=HOSTILE)
+        self.assertNotIn(HOSTILE, text)
+        self.assertIn(HOSTILE, params)
+
+
+class RunScopedReferenceLookupSemanticsTests(unittest.TestCase):
+    """WHICH reference row the query actually selects, evaluated for real
+    over scripted rows — the same SQLite stand-in pattern
+    `RunScopedBlockingGateSemanticsTests` uses, and for the same reason:
+    the ordering and the `IN`/`IS NULL` predicates are ANSI-standard, so
+    this evaluates the selection rule rather than reimplementing it in
+    Python where it could silently drift from the SQL.
+    """
+
+    def _selected(self, rows, run_id):
+        """`rows` is [(rfid, run_id), ...] for RefImages, all of them
+        current (vbest > 0, status > 0) and all in the SAME
+        (ppid, field, fid) identity group. Returns the rfid the lookup
+        would hand back, or None.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE refimages (rfid INTEGER, run_id TEXT)")
+        conn.executemany("INSERT INTO refimages VALUES (?, ?)", rows)
+
+        # THE SQL EVALUATED HERE IS THE METHOD'S OWN, not a
+        # reimplementation of it: the real query text is read off the
+        # cursor the method was handed, then the clauses this stand-in
+        # cannot model (the identity-group and currency predicates, and
+        # the `RefImages` spelling) are stripped, leaving the run
+        # predicate and the ordering — the two things under test —
+        # exactly as the method emits them. So if the method's ranking
+        # rule ever changes, these assertions change with it rather than
+        # silently drifting.
+        db = make_db(fetchone=None)
+        db.get_best_reference_image(15, 5001, 1, run_id=run_id)
+        text, db_params = db.cur.execute.call_args.args
+
+        sql_text = text
+        for clause in ("and vbest > 0 ", "and status > 0 ",
+                       "and ppid = %s ", "and field = %s ",
+                       "and fid = %s "):
+            sql_text = sql_text.replace(clause, "", 1)
+        # The first predicate keeps the `where` grammatical once the three
+        # identity clauses above are gone.
+        sql_text = sql_text.replace("where vbest > 0 ", "where 1=1 ", 1)
+        sql_text = sql_text.replace("select rfid,filename,infobits,version",
+                                    "select rfid")
+        sql_text = sql_text.replace("from RefImages", "from refimages")
+        sql_text = sql_text.replace("%s", "?")
+        # Whatever identity parameters were stripped go with their
+        # clauses; only the run_id bindings remain.
+        params = tuple(p for p in db_params if p == run_id)
+
+        row = conn.execute(sql_text, params).fetchone()
+        return None if row is None else row[0]
+
+    def test_a_caller_in_a_run_gets_that_runs_own_reference(self):
+        # THE DEFECT THIS FIXES, in its first half: both rows are current
+        # and legal (the two partial unique indexes let them coexist), so
+        # before this change the unordered `fetchone()` could return
+        # either. The campaign must get its own.
+        rows = [(101, None), (202, "w9-campaign-1")]
+        self.assertEqual(self._selected(rows, run_id="w9-campaign-1"), 202)
+
+    def test_the_run_wins_regardless_of_which_row_the_scan_reaches_first(
+            self):
+        # Same two rows, inserted the other way round. An ordering rule
+        # that only happened to work for one insertion order would be no
+        # rule at all.
+        rows = [(202, "w9-campaign-1"), (101, None)]
+        self.assertEqual(self._selected(rows, run_id="w9-campaign-1"), 202)
+
+    def test_a_caller_with_no_run_gets_the_production_reference(self):
+        # Production must not silently start differencing against a
+        # campaign's reference the moment a campaign registers one.
+        rows = [(101, None), (202, "w9-campaign-1")]
+        self.assertEqual(self._selected(rows, run_id=None), 101)
+
+    def test_a_run_with_no_reference_of_its_own_falls_back_to_production(
+            self):
+        # The common case during a campaign that builds no references of
+        # its own: there is exactly one current reference and it is
+        # production's. Falling back is what keeps such a campaign working
+        # at all.
+        rows = [(101, None)]
+        self.assertEqual(self._selected(rows, run_id="w9-campaign-1"), 101)
+
+    def test_a_run_never_gets_a_different_campaigns_reference(self):
+        # THE DEFECT THIS FIXES, in its second half: run Y's science must
+        # never difference against run X's reference. With no production
+        # row present the correct answer is NOTHING — the caller's
+        # documented "no reference yet" path — not X's row.
+        rows = [(202, "w9-campaign-x")]
+        self.assertIsNone(self._selected(rows, run_id="w9-campaign-y"))
+
+    def test_a_different_campaigns_reference_never_displaces_productions(
+            self):
+        rows = [(101, None), (202, "w9-campaign-x")]
+        self.assertEqual(self._selected(rows, run_id="w9-campaign-y"), 101)
+
+    def test_ties_within_one_lane_are_broken_deterministically(self):
+        # Two current production rows should not be reachable (the partial
+        # unique index forbids it), but if the index is ever dropped or
+        # bypassed the answer must still be stable rather than arbitrary:
+        # highest rfid, the most recently registered.
+        rows = [(101, None), (105, None)]
+        self.assertEqual(self._selected(rows, run_id=None), 105)
+        self.assertEqual(self._selected(rows, run_id="w9-campaign-1"), 105)
+
+    def test_no_current_reference_at_all_selects_nothing(self):
+        self.assertIsNone(self._selected([], run_id=None))
+        self.assertIsNone(self._selected([], run_id="w9-campaign-1"))
+
+
 if __name__ == "__main__":
     unittest.main()
