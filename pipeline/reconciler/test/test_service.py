@@ -633,6 +633,67 @@ class LeaseTests(unittest.TestCase):
         self.assertTrue(sequences, "no closure record was published")
         self.assertGreaterEqual(max(sequences), 2)
 
+    def test_a_superseded_row_with_no_binding_does_not_retry_forever(self):
+        """The live CheckViolation shape, reached through SUPERSESSION.
+
+        LIVE, 2026-09-12: attempt 23894's failing-row dump showed a row that
+        was ALREADY `terminal_after_start`, stopped 2026-09-11, being handed
+        to `mark_terminal_after_start` again — 374 CheckViolations in one
+        restart window.
+
+        Re-closing it is not itself the bug. `_classify` admits a
+        SUPERSEDABLE terminal row whose scheduler facts have changed, and
+        that is review finding #15 working as designed (the two tests around
+        this one pin both sides of it). Its `ended_at` of 2026-09-11 is
+        inside `SUPERSESSION_WINDOW`, so it is legitimately in the open set.
+
+        The bug is that supersession then rewrites `terminal_after_start` on
+        a row that cannot satisfy that state's CHECK. The row was created by
+        `resolve_attempt`, which writes no `binding_*` column, so migration
+        014's `schema_version >= 2` clause rejects the UPDATE — every poll,
+        for as long as the scheduler keeps reporting a changed fact. The row
+        never moves, so the supersession trigger stays true forever.
+
+        Note this row carries FULL runtime provenance (`source_sha`,
+        `container_digest`, `job_definition_rev`, `config_digest`) and a real
+        `started_at`: it genuinely ran. Only the submitter-written binding is
+        absent, which is why nothing before this guard caught it.
+        """
+        row = attempt_row(1, lifecycle_state="terminal_after_start",
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
+                          ended_at=utc(2026, 8, 6, 11, 30, 0),
+                          scheduler_state="FAILED",
+                          scheduler_observed_exit=1,
+                          rapid_outcome="failure",
+                          product_disposition="none",
+                          application_intended_exit=1,
+                          terminal_record_sequence=1,
+                          source_sha="sha", container_digest="cd",
+                          job_definition_rev=10, config_digest="cfg",
+                          # Resolver-created: the submitter's binding is absent
+                          # and nothing ever backfills it.
+                          binding_job_definition_arn=None,
+                          binding_image_digest=None,
+                          binding_manifest_checksum=None)
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _batch, _store, _tag = build([row], jobs)
+
+        summary = svc.poll_once()
+
+        # THE ASSERTION: the poll must not raise and count an error it will
+        # make again on the next poll, and the one after that.
+        self.assertEqual(
+            0, summary["errors"],
+            "supersession rewrote a state the row cannot satisfy — this is "
+            "the CheckViolation on attempts_state_terminal_after_start_check")
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual("missing_or_contradictory",
+                         conn.rows[1]["lifecycle_state"],
+                         "a row that can satisfy neither terminal state is "
+                         "flagged, not rewritten into one of them")
+
     def test_a_terminal_row_whose_facts_agree_is_left_alone(self):
         # The bound on the other side: revisiting must not re-close every
         # finished attempt on every poll.
