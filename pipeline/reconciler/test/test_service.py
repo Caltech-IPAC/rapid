@@ -1273,24 +1273,149 @@ class SchedulerDiscoveryTests(unittest.TestCase):
         # The attempt that DOES have a row is still reconciled.
         self.assertEqual(1, summary["classified"])
 
-    def test_an_unindexed_row_picks_the_first_attempt_deterministically(self):
-        # The pre-created-row case: created at submission, before any attempt
-        # existed, so it carries no index. Returning None sent it down the
-        # unresolved path, which eventually closed it `never_resolved` —
-        # asserting it never ran while the scheduler's history says otherwise.
+    def test_the_first_attempts_history_is_recorded_on_its_own_row(self):
+        """Attempt 1's outcome must reach a record — on WHICHEVER row owns it.
+
+        Review finding #4 named the loss this guards: the pre-created row
+        (created at submission, before any attempt existed, so carrying no
+        index) used to be sent down the unresolved path and closed
+        `never_resolved`, asserting the attempt never ran while the
+        scheduler's own history said otherwise. Attempt 1's exit 137 was
+        recorded nowhere.
+
+        This test asserted that by having the pre-created row itself claim
+        index 1 — correct when that row was the only candidate, and the
+        assumption that later collided with `_resolve_discovered`'s dedicated
+        index-1 row (see `test_an_unindexed_row_never_claims_an_index_a_
+        sibling_owns`). The PROPERTY it was protecting is unchanged and is
+        what it now asserts: attempt 1's history is recorded, on the row that
+        owns index 1. Only the identity of that row moved — from the
+        pre-created row to the resolver's dedicated one, which is where the
+        resolver's own rule always said it belonged.
+        """
         rows = [attempt_row(1, lifecycle_state="submitted",
                             application_attempt_index=None,
                             scheduler_attempt_index=None)]
-        svc, _, _, store, _ = build(rows, [self._retry_job()])
+        svc, conn, _, store, _ = build(rows, [self._retry_job()])
 
-        svc.poll_once()
+        summary = svc.poll_once()
+
+        # Every observed attempt got its own row, and none of them errored.
+        self.assertEqual(2, summary["discovered"])
+        self.assertEqual(0, summary["errors"])
+
+        owner = [attempt_id for attempt_id, row in conn.rows.items()
+                 if row.get("scheduler_attempt_index") == 1]
+        self.assertEqual(1, len(owner),
+                         "exactly one row may own scheduler index 1")
 
         body = json.loads(store.get(
-            "attempts/records/run-1/90000_1/attempt-1/seq-0001.json"))
-        # The submitter's row stands for the job's FIRST attempt: exit 137,
-        # not the final attempt's 0.
+            f"attempts/records/run-1/90000_1/attempt-{owner[0]}/seq-0001.json"))
+        # Attempt 1's facts, not the final attempt's exit 0.
         self.assertEqual(1, body["scheduler_attempt_index"])
         self.assertEqual(137, body["scheduler_observed_exit"])
+
+    def test_an_unindexed_row_never_claims_an_index_a_sibling_owns(self):
+        """The index-ownership collision that crash-looped the reconciler.
+
+        LIVE, 2026-09-12: ~3,444 rows from `release-accept-20260911-3`, the
+        unit exiting 71 every ~4.5 minutes and systemd restarting it, 42
+        restarts and climbing. The mechanism is two reconciler paths
+        disagreeing about who owns attempt index 1:
+
+        * `_resolve_discovered` gives EVERY scheduler-observed index its own
+          dedicated row, index 1 included.
+        * `_pick_observation` independently hands the lowest observed index
+          to any row that still has none — written when the submitter's
+          pre-created row was the only candidate for attempt 1, and never
+          revisited after the resolver started creating that row itself.
+
+        Both run in the same `poll_once` (the resolver's new rows are picked
+        up by the re-read at "Re-read so the new rows are reconciled in this
+        same cycle"), so the very first poll over a job with >=2 observed
+        attempts and an unindexed row sets `scheduler_attempt_index = 1` on a
+        row whose sibling already owns 1, and
+        `attempts_scheduler_job_sched_index_uq` rejects the UPDATE.
+
+        `poll_once` catches it per row and counts `errors`, so the poll
+        classifies nothing; five such polls trip
+        `CLOSURE_FAILURE_POLL_THRESHOLD` and the service reports itself
+        unhealthy by design. The row stays open, so it recurs forever.
+
+        What this pins is the ownership rule, not the exception: an unindexed
+        row may only take an index no sibling of the same scheduler job
+        already holds.
+        """
+        rows = [attempt_row(1, lifecycle_state="submitted",
+                            application_attempt_index=None,
+                            scheduler_attempt_index=None)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+
+        summary = svc.poll_once()
+
+        # The resolver did its half: dedicated rows for the indexes the
+        # pre-created row does not carry, which is both of them.
+        self.assertEqual(2, summary["discovered"])
+        siblings = {attempt_id: row["scheduler_attempt_index"]
+                    for attempt_id, row in conn.rows.items()
+                    if attempt_id != 1}
+        self.assertEqual({1, 2}, set(siblings.values()),
+                         "the resolver must own both observed indexes")
+
+        # THE ASSERTION. The pre-created row must not be given an index one of
+        # those siblings already owns.
+        claimed = conn.rows[1]["scheduler_attempt_index"]
+        self.assertNotIn(
+            claimed, set(siblings.values()),
+            "the pre-created row took an index a sibling already owns — this "
+            "is the UniqueViolation that crash-looped the live reconciler")
+
+        # And the collision must not be reaching the poll as an error at all.
+        self.assertEqual(
+            0, summary["errors"],
+            "the ownership conflict must be decided, not raised and counted")
+
+    def test_a_superseded_pre_created_row_leaves_the_open_set(self):
+        """Not colliding is only half of it; it must also stop being open.
+
+        The live failure had two halves. The collision itself is one; the
+        other is that the row it hit stayed `submitted` forever, so every
+        poll re-attempted it, classified nothing, and drove
+        `consecutive_unproductive_polls` to its threshold. A fix that merely
+        declined to assign the index — and left the row open — would keep the
+        second half exactly as it was: no exception, still no progress, still
+        an unproductive poll every 60 seconds.
+
+        When every observed index is owned by a dedicated sibling, the
+        pre-created row stands for nothing and `_pick_observation` returns
+        None, which is the EXISTING redirect to `_reconcile_unresolved` — no
+        new lifecycle state was added for this. That path asks the submission
+        record first and the submission-anchored horizon second; this row is
+        `submitted`, has no application account and no submission record, and
+        is past the horizon, so it closes `terminal_without_start` with
+        `error_category = scheduler_provisioning` (`_attempt_ran` is false on
+        every one of its branches: no `started_at`, no outcome, no
+        disposition, no `application_attempt_index`, no predecessor record).
+        """
+        rows = [attempt_row(1, lifecycle_state="submitted",
+                            application_attempt_index=None,
+                            scheduler_attempt_index=None)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+
+        summary = svc.poll_once()
+
+        # The poll is PRODUCTIVE: every row closed, nothing errored. This is
+        # what keeps `consecutive_unproductive_polls` at zero.
+        self.assertEqual(0, summary["errors"])
+        self.assertEqual(3, summary["classified"])
+        self.assertEqual(0, summary["deferred"])
+
+        self.assertEqual("terminal_without_start",
+                         conn.rows[1]["lifecycle_state"])
+        self.assertNotIn(conn.rows[1]["lifecycle_state"], service.OPEN_STATES,
+                         "the superseded row must not be polled again")
+        # It never ran, so it must not carry a scheduler index it did not own.
+        self.assertIsNone(conn.rows[1]["scheduler_attempt_index"])
 
     def test_a_discovered_retry_inherits_its_template_siblings_work_unit(self):
         """FINDING 18: a scheduler-discovered row must not be born orphaned.

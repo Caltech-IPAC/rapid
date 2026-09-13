@@ -13,6 +13,27 @@ def ms(moment):
     return int(moment.timestamp() * 1000)
 
 
+class FakeUniqueViolation(Exception):
+    """`attempts_scheduler_job_sched_index_uq`, raised by the fake database.
+
+    Named for the constraint rather than for psycopg2 because the suite runs
+    with psycopg2 stubbed out of `sys.modules` and cannot import the real
+    `psycopg2.errors.UniqueViolation`. What the reconciler does with it is
+    identical either way: nothing in `service.py` catches this class
+    specifically — `poll_once`'s per-row handler catches `Exception`.
+
+    The constraint is rapid_systems migration
+    `013-attempt-record-amendments.sql`: a partial unique index on
+    `(scheduler_job_id, scheduler_attempt_index) WHERE
+    scheduler_attempt_index IS NOT NULL`, i.e. at most one row per scheduler
+    job per scheduler-observed attempt index. Modelling it here rather than
+    letting every `UPDATE attempts` report void success is the difference
+    between a test that asserts a CHOICE and one that reproduces the live
+    failure: the production crash-loop of 2026-09-12 was this index firing on
+    an `UPDATE`, and a fake that cannot raise it cannot witness the bug.
+    """
+
+
 class FakeBatch:
     """A Batch client that returns prepared job descriptions.
 
@@ -311,6 +332,19 @@ class FakeConnection:
             row = self.rows.get(attempt_id)
             if row is not None and "lifecycle_state = %s" in lowered:
                 row["lifecycle_state"] = params[0]
+            if "scheduler_attempt_index = coalesce(%s," in lowered:
+                # `AttemptWriter.record_scheduler_observation`'s UPDATE, the
+                # one statement in the reconciler that assigns a scheduler
+                # attempt index to an EXISTING row — and therefore the one
+                # that can collide with a sibling row of the same scheduler
+                # job. Modelled as data, with the partial unique index
+                # enforced, because this exact statement is what raised
+                # `UniqueViolation` in production.
+                #
+                # Positional params are
+                # `[scheduler_state, created_at, started_at, stopped_at,
+                #   attempt_index, attempt_id]` — the index is params[4].
+                self._apply_scheduler_index(row, params[4])
             # `submission_outcome_at_closure`'s write-once stamp
             # (`ReconcilerService._stamp_submission_outcome`, wave-E finding
             # #1) lands here too — a plain `UPDATE attempts SET
@@ -345,6 +379,36 @@ class FakeConnection:
         exc = self.route_raises.get(branch)
         if exc is not None:
             raise exc
+
+    def _apply_scheduler_index(self, row, attempt_index):
+        """Write `scheduler_attempt_index` under the partial unique index.
+
+        `COALESCE(%s, scheduler_attempt_index)` semantics: a NULL parameter
+        leaves the stored value alone, so a no-op write can never collide. A
+        non-NULL parameter on a row that ALREADY carries that same index is
+        also a no-op — PostgreSQL's uniqueness is over the resulting rows, and
+        a row does not conflict with itself.
+
+        Otherwise the write lands, and it raises if any OTHER row of the same
+        `scheduler_job_id` already owns the index.
+        """
+        if row is None or attempt_index is None:
+            return
+        if row.get("scheduler_attempt_index") is not None:
+            # COALESCE keeps the existing value; the statement writes nothing.
+            return
+        job_id = row.get("scheduler_job_id")
+        for other_id, other in self.rows.items():
+            if other_id == row.get("attempt_id"):
+                continue
+            if (other.get("scheduler_job_id") == job_id
+                    and other.get("scheduler_attempt_index") == attempt_index):
+                raise FakeUniqueViolation(
+                    "duplicate key value violates unique constraint "
+                    '"attempts_scheduler_job_sched_index_uq": scheduler job '
+                    f"{job_id} attempt index {attempt_index} is already "
+                    f"owned by attempt {other_id}")
+        row["scheduler_attempt_index"] = attempt_index
 
     def _resolve_attempt(self, params):
         """`AttemptWriter.resolve_attempt`'s DB function, claim-or-create.

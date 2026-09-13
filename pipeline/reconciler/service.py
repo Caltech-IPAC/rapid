@@ -486,7 +486,7 @@ class ReconcilerService:
             for row in attempts:
                 try:
                     outcome = self._reconcile_attempt(
-                        row, observations.get(job_id, []))
+                        row, observations.get(job_id, []), siblings=attempts)
                 except Exception:  # noqa: BLE001 - one bad attempt must not
                     # take the cycle down; the next poll retries it. The
                     # rollback is not optional: without it a failed statement
@@ -791,13 +791,18 @@ class ReconcilerService:
 
     # -- one attempt -----------------------------------------------------
 
-    def _pick_observation(self, row, observations):
+    def _pick_observation(self, row, observations, siblings=()):
         """Which of a job's attempt observations belongs to this row.
 
         Matched on the attempt index where both sides have one — a job with a
         retry history has several observations and several rows, and pairing
         them wrongly would attribute one attempt's exit code to another. Where
         the row has no index yet, a single observation is unambiguous.
+
+        `siblings` is the other open rows of the SAME scheduler job, and it is
+        what makes the unindexed case safe — see the ownership rule below.
+        It defaults to empty so the two-argument call still answers the
+        indexed and single-observation cases, which consult no sibling.
         """
         if not observations:
             return None
@@ -828,15 +833,61 @@ class ReconcilerService:
         # Choosing the lowest index is therefore not a heuristic tiebreak — it
         # is the same rule the resolver applies, so both agree about which row
         # means which attempt.
+        #
+        # AND THE ROW A SIBLING ALREADY OWNS IS NOT AVAILABLE TO CLAIM.
+        #
+        # "Retries get their own rows from `_resolve_discovered` rather than
+        # competing for this one" was true of retries and false of attempt 1.
+        # `_resolve_discovered` does not exempt the lowest index: it resolves a
+        # dedicated row for EVERY observed index this job's rows do not already
+        # carry, and an unindexed pre-created row carries none of them — so
+        # index 1 gets a dedicated row too, in the same poll, and then this
+        # method handed the pre-created row that same index 1. The resulting
+        # `UPDATE attempts SET scheduler_attempt_index = 1` violates
+        # `attempts_scheduler_job_sched_index_uq` (rapid_systems migration
+        # 013: at most one row per scheduler job per scheduler-observed
+        # index). `poll_once` catches it per row and counts an error, the row
+        # stays open, and the same collision recurs every poll — enough of
+        # them and `CLOSURE_FAILURE_POLL_THRESHOLD` takes the service out with
+        # exit 71. (Live 2026-09-12: ~3,444 rows from
+        # `release-accept-20260911-3`, 42 restarts.)
+        #
+        # So the two mechanisms agree by CONSTRUCTION rather than by a shared
+        # assumption that had quietly stopped holding: an index a sibling row
+        # of the same scheduler job already owns is not a candidate here. The
+        # check is the same shape as the `known` set `_resolve_discovered`
+        # builds, read from the same two columns, so neither path can hand out
+        # an index the other has placed.
+        claimed = {sibling.get("application_attempt_index")
+                   for sibling in siblings
+                   if sibling.get("attempt_id") != row.get("attempt_id")}
+        claimed.update(sibling.get("scheduler_attempt_index")
+                       for sibling in siblings
+                       if sibling.get("attempt_id") != row.get("attempt_id"))
+        claimed.discard(None)
+
         indexed = [observation for observation in observations
-                   if observation.attempt_index is not None]
+                   if observation.attempt_index is not None
+                   and observation.attempt_index not in claimed]
         if not indexed:
+            # EVERY observed index already has its own dedicated row. There is
+            # nothing left for this row to stand for, and saying so is the
+            # whole point: returning None sends it to `_reconcile_unresolved`,
+            # which is already the sanctioned path for "the scheduler returned
+            # the job but no attempt we can pair" (see `_reconcile_attempt`'s
+            # redirect and `_reconcile_unresolved`'s own docstring, case (b)).
+            # That path asks the submission record first and the
+            # submission-anchored horizon second, then closes the row — so it
+            # LEAVES THE OPEN SET rather than staying open forever and keeping
+            # every poll unproductive, which is the second half of the live
+            # failure. No new state and no new terminal disposition is
+            # introduced here; the existing redirect already has one.
             return None
         return min(indexed, key=lambda observation: observation.attempt_index)
 
-    def _reconcile_attempt(self, row, observations):
+    def _reconcile_attempt(self, row, observations, siblings=()):
         attempt_id = row["attempt_id"]
-        observation = self._pick_observation(row, observations)
+        observation = self._pick_observation(row, observations, siblings)
 
         if observation is None:
             # The scheduler returned the job but not an attempt we can pair.
