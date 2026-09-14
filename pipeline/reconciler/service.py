@@ -2276,6 +2276,17 @@ class ReconcilerService:
           run-wide wave of phantom rows, which is the failure mode this whole
           fix exists to prevent, arriving by a different door. The row waits.
 
+          **This catch does not hide an outage, and the reason is ordering.**
+          `poll_once`'s own bulk `_observe` runs BEFORE any row reaches this
+          method and is deliberately unguarded, so a Batch that is unreachable
+          at all raises out of the whole poll and meets the service's
+          poll-failure threshold exactly as before. What this catch can see is
+          narrower by construction: a per-row describe that fails while the
+          bulk one succeeded. Treating that as a per-row condition matches
+          every other per-row handler in this class, and "waiting" is not in
+          the health arithmetic (`classified + deferred + errors`), so it
+          neither inflates nor suppresses the unproductive-poll count.
+
         A job the scheduler reports FAILED, or one it has no record of at all,
         returns None: those are the two answers the classification below is
         actually for.
