@@ -107,11 +107,32 @@ def parse_arguments(argv=None) -> argparse.Namespace:
         description="The RAPID Batch payload entrypoint. The workload class "
                     "is fixed by the job definition's command; everything "
                     "else comes from the submission manifest.")
-    parser.add_argument(
-        "--class", dest="workload_class", required=True,
+    # --burst is the one alternative to --class, and it is here rather
+    # than in its own image entrypoint for a mechanical reason: on
+    # ECS-backed Batch a job definition's `command` is Docker CMD, which
+    # is APPENDED to the image's ENTRYPOINT and cannot replace it. This
+    # module IS that entrypoint, so every job definition sharing the
+    # image arrives at this parser whatever its command says, and a job
+    # that runs a different module has to be dispatched from here.
+    #
+    # It is a flag and not a workload class on purpose: the classes are
+    # the route matrix's closed vocabulary, each carrying a manifest, a
+    # queue, a unit grain and an attempt record, and a burst job has none
+    # of those. Adding one would put a shape in the matrix that no
+    # science route will ever use.
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--class", dest="workload_class",
         choices=list(WORKLOAD_CLASSES),
         help="the workload class this job definition runs (fixed per "
              "definition, never overridden at submit time)")
+    group.add_argument(
+        "--burst", action="store_true",
+        help="run the admission load generator instead of a science "
+             "payload (pipeline.entrypoints.burst): connect, hold, "
+             "disconnect, reconnect. Proves the pooler's client ceiling "
+             "and the retry horizon at fleet scale; runs no science and "
+             "records no attempt.")
     return parser.parse_args(argv)
 
 
@@ -618,6 +639,15 @@ def main(argv=None) -> int:
     """
     arguments = parse_arguments(argv)
     logging_setup.configure()
+
+    # The burst branch returns BEFORE any of the attempt protocol: no
+    # manifest, no route validation, no ownership, no attempt row. That
+    # is the whole point of it being a branch here rather than a class —
+    # it has none of those inputs, and inventing them for a load
+    # generator would put a fiction in the records the reconciler reads.
+    if getattr(arguments, "burst", False):
+        from pipeline.entrypoints import burst
+        return burst.main()
 
     try:
         return _run(arguments.workload_class)
