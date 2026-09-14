@@ -406,6 +406,12 @@ def connect(application_name,
     move it; and the last sleep is truncated to land ON the deadline, so
     the horizon always ends on a failed attempt rather than on a sleep.
 
+    It is a floor on patience rather than a ceiling on elapsed time: the
+    final attempt starts at or before the deadline and its own
+    ``connect_timeout`` runs past it, so the caller can wait up to
+    ``horizon + connect_timeout``. Cutting that last attempt short to hit
+    an exact number would discard the try the wait was for.
+
     ``jitter`` (D9) applies FULL JITTER (``random_func(0, delay)``, the
     AWS architecture-blog algorithm) to each computed backoff before
     sleeping — the default backoff schedule is deterministic, so every
@@ -519,12 +525,22 @@ def connect(application_name,
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     break
-                # Never sleep PAST the deadline: the horizon is a promise
-                # about when the caller gets an answer, and a final sleep
-                # that overshoots would break it by up to a whole backoff
-                # cap. A truncated sleep still leaves time for one more
-                # attempt, which is the attempt the horizon was sized to
-                # allow.
+                # Never SLEEP past the deadline: an untruncated final
+                # sleep would overshoot by up to a whole backoff cap
+                # (30s), which is the difference the horizon is sized in.
+                # The truncated sleep lands on the deadline and leaves
+                # time for one more attempt, which is the attempt the
+                # horizon was sized to allow.
+                #
+                # The horizon is therefore a floor on patience, not a
+                # hard ceiling on elapsed time: the last attempt STARTS
+                # at or before the deadline and its own connect_timeout
+                # runs past it, so a caller can wait up to
+                # `horizon + connect_timeout` before hearing back —
+                # about 910s at these settings. Sized deliberately that
+                # way round: cutting the last attempt short to hit an
+                # exact wall-clock number would throw away the try the
+                # whole wait was for.
                 wait = min(wait, remaining)
             logger.warning(
                 "database connect attempt %d failed (%s); retrying in "
@@ -555,10 +571,21 @@ def connect(application_name,
         return conn
 
     elapsed = monotonic() - started
-    exhausted = (f"{attempt} attempt(s) over {elapsed:.0f}s"
-                 if horizon is None
-                 else f"the whole {horizon:.0f}s retry horizon "
-                      f"({attempt} attempt(s) over {elapsed:.0f}s)")
+    # WHICH BOUND ENDED THE LOOP, not merely which bounds existed. A
+    # horizon can be set and still not be what stopped the retrying: with
+    # a low attempt count the attempts run out first, and saying "the
+    # whole 900s retry horizon" then sends an operator looking for a
+    # fifteen-minute outage that never happened. The two cases get
+    # different sentences.
+    if horizon is not None and elapsed >= horizon:
+        exhausted = (f"the whole {horizon:.0f}s retry horizon "
+                     f"({attempt} attempt(s) over {elapsed:.0f}s)")
+    elif horizon is not None:
+        exhausted = (f"{attempt} attempt(s) over {elapsed:.0f}s — the "
+                     f"attempt ceiling, not the {horizon:.0f}s horizon, "
+                     f"which had {horizon - elapsed:.0f}s left")
+    else:
+        exhausted = f"{attempt} attempt(s) over {elapsed:.0f}s"
     raise DBUnavailable(
         f"could not connect to {host}:{port}/{dbname} as {user} after "
         f"{exhausted}: {last_exc}") from last_exc

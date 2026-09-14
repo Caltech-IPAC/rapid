@@ -1163,6 +1163,31 @@ class StartupHorizonTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("900s retry horizon", message)
 
+    def test_the_message_does_not_claim_a_horizon_that_was_not_spent(self):
+        # The other half of the same contract, and the one that misleads:
+        # a horizon can be SET without being what ended the retrying. With
+        # a low attempt ceiling the attempts run out in seconds, and a
+        # message saying "the whole 900s retry horizon" then sends an
+        # operator hunting a fifteen-minute outage that never happened.
+        clock = FakeClock(attempt_cost=1.0)
+
+        def failing(**_kwargs):
+            clock.connect_attempt()
+            raise psycopg2.OperationalError("connection refused")
+
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable) as caught:
+                connect("payload", connect_fn=failing, attempts=3,
+                        backoff_initial=0.5, backoff_multiplier=2.0,
+                        backoff_cap=30.0, horizon=STARTUP_HORIZON_S,
+                        sleep=clock.sleep, monotonic=clock.monotonic)
+        message = str(caught.exception)
+        self.assertNotIn("the whole 900s retry horizon", message)
+        self.assertIn("attempt ceiling", message)
+        # And it says how much of the horizon was left, so the reader can
+        # see at a glance that patience was not the limiting factor.
+        self.assertIn("horizon, which had", message)
+
 
 class AdmissionRefusalTests(unittest.TestCase):
     """The two refusals seen live on 2026-09-11, fed through verbatim.
