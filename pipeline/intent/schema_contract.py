@@ -217,6 +217,15 @@ REQUIRED_MIGRATIONS = (
      "on a database without 123 those rows are created with a NULL work "
      "unit, which is the shape that produced the 2026-09-13 orphan-attempt "
      "tail and the 2026-09-14 phantom-FAILED rows"),
+    ("124-create-run-envelope-null-defaults.sql",
+     "`derived.create_run` coalescing each envelope argument before "
+     "validating it, so a NULL and an omitted argument both mean 'use the "
+     "default'. Required because pipeline/operatorctl/actions.py's "
+     "`create_run` passes all four BY NAME on every call — the default lives "
+     "in the function alone rather than being restated in the CLI — so on a "
+     "database with 122 but not 124 every ordinary `run create` raises "
+     "`retry_attempts must be at least 1 ... got <NULL>` and creates no run "
+     "at all"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than
