@@ -35,7 +35,8 @@ from observability.attempts import (
     ProductDisposition, RapidOutcome)
 from pipeline.intent.lock import lock_work_unit
 from pipeline.intent.retry_policy import (
-    CLOSE_COMPLETE, PARK_BLOCKED, RETRY_READY, blocked_reason_for,
+    CLOSE_COMPLETE, PARK_BLOCKED, RETRY_READY,
+    TRANSIENT_APPLICATION_CATEGORIES, blocked_reason_for,
     disposition_for_terminal_attempt, policy_version)
 from pipeline.intent.writer import (
     BLOCKED, COMPLETE, FAILED, READY, SUBMITTED, WRITER_RECONCILER,
@@ -1947,14 +1948,30 @@ class ReconcilerService:
         reading, not a stale snapshot.
         """
         rows = self._execute_on_conn(
-            "SELECT registered_at, error_category, lifecycle_state"
+            "SELECT registered_at, error_category, lifecycle_state,"
+            "       submitted_at"
             "  FROM attempts"
             " WHERE work_unit_id = %s AND attempt_id <> %s",
             [work_unit_id, exclude_attempt_id])
         sibling_accepted = False
         scheduler_losses = 0
         sibling_open = False
-        for registered_at, error_category, lifecycle_state in rows or ():
+        # THE RUN'S BUDGET, counted from the same one round trip (migration
+        # 122). `transient_failures` is what the run's `retry_attempts` bounds;
+        # `first_submitted_at` is what its `retry_wallclock_s` is measured
+        # from, and it is the EARLIEST submission of the whole series
+        # precisely because a re-release starts a new attempt and would
+        # otherwise reset the clock the bound exists to enforce.
+        transient_failures = 0
+        first_submitted_at = None
+        for (registered_at, error_category, lifecycle_state,
+             submitted_at) in rows or ():
+            if error_category in TRANSIENT_APPLICATION_CATEGORIES:
+                transient_failures += 1
+            if submitted_at is not None and (
+                    first_submitted_at is None
+                    or submitted_at < first_submitted_at):
+                first_submitted_at = submitted_at
             # ACCEPTANCE, NOT "the row looks successful": rule 4 admits
             # `complete` only "from an accepted (registered) result", and
             # `registered_at` is the column the registrar stamps inside the
@@ -1970,7 +1987,49 @@ class ReconcilerService:
                 scheduler_losses += 1
             if lifecycle_state in OPEN_STATES:
                 sibling_open = True
-        return sibling_accepted, scheduler_losses, sibling_open
+        return (sibling_accepted, scheduler_losses, sibling_open,
+                transient_failures, first_submitted_at)
+
+    def _run_envelope_for_unit(self, work_unit_id):
+        """The retry budget of the run this work unit belongs to (122).
+
+        Joined `work_units.run_id -> runs.name`, which is the join the
+        registry offers: `work_units` carries the run's NAME, and `runs.name`
+        is unique (108's `runs_name_uq`). An exact match, never the LIKE
+        prefix every attempt reader uses — the prefix is for `attempts.run_id`,
+        whose split-pass suffix the registry itself never carries.
+
+        Returns an empty mapping wherever there is no budget to apply: no work
+        unit, no run row, a run predating 122, or a read that fails. That is
+        the conservative direction and it matters here more than usual — an
+        empty mapping leaves `retry_attempts` None, which makes
+        `disposition_for_terminal_attempt` skip the transient branch entirely
+        and park exactly as it did before this migration. A read error must
+        never be able to close a unit failed.
+        """
+        if work_unit_id is None:
+            return {}
+        try:
+            rows = self._execute_on_conn(
+                "SELECT r.retry_attempts, r.retry_wallclock_s"
+                "  FROM work_units w JOIN runs r ON r.name = w.run_id"
+                " WHERE w.work_unit_id = %s",
+                [work_unit_id])
+        except Exception:  # noqa: BLE001 - absent budget, not a failed unit
+            self._safe_rollback()
+            logger.warning(
+                "could not read the run envelope for work unit %s; applying "
+                "the pre-122 behaviour (park) rather than closing it on a "
+                "budget this poll could not read", work_unit_id,
+                exc_info=True)
+            return {}
+        if not rows:
+            return {}
+        first = rows[0]
+        if isinstance(first, dict):
+            return {"retry_attempts": first.get("retry_attempts"),
+                    "retry_wallclock_s": first.get("retry_wallclock_s")}
+        return {"retry_attempts": first[0], "retry_wallclock_s": first[1]}
 
     def _execute_on_conn(self, sql, params):
         """One read on the caller's open transaction. See `_Executor`."""
@@ -2087,7 +2146,8 @@ class ReconcilerService:
         # work must be able to complete the unit" also runs the other way —
         # an EARLIER-reconciled success must not be undone by a
         # later-reconciled failure.
-        sibling_accepted, scheduler_losses, sibling_open = \
+        (sibling_accepted, scheduler_losses, sibling_open,
+         transient_failures, first_submitted_at) = \
             self._work_unit_series(work_unit_id, attempt_id)
 
         # FINDING 6. A sibling still `submitted`/`started`/`application_
@@ -2116,10 +2176,30 @@ class ReconcilerService:
                 attempt_id, work_unit_id)
             return
 
+        # THE RUN'S BUDGET (migration 122). Counted from the unit's own
+        # attempt rows — the pipeline's count, not Batch's, which is the whole
+        # point of the ruling: Batch's 10 is the outer bound reclaims consume,
+        # and it cannot tell a reclaim from an application failure.
+        #
+        # THIS ROW COUNTS TOO. `_work_unit_series` excludes the attempt being
+        # reconciled, so its own transient failure must be added: a unit whose
+        # budget is 3 and which has two prior transient failures is at three
+        # WITH this one, and counting only the siblings would give it a fourth
+        # attempt the run never authorised.
+        if error_category in TRANSIENT_APPLICATION_CATEGORIES:
+            transient_failures += 1
+        if first_submitted_at is None:
+            first_submitted_at = row.get("submitted_at")
+        envelope = self._run_envelope_for_unit(work_unit_id)
         disposition = disposition_for_terminal_attempt(
             succeeded=succeeded,
             error_category=error_category,
-            scheduler_loss_count=scheduler_losses)
+            scheduler_loss_count=scheduler_losses,
+            transient_failure_count=transient_failures,
+            retry_attempts=envelope.get("retry_attempts"),
+            first_submitted_at=first_submitted_at,
+            retry_wallclock_s=envelope.get("retry_wallclock_s"),
+            now=self._now())
 
         blocked_reason = None
         if disposition == CLOSE_COMPLETE:

@@ -241,7 +241,8 @@ class WorkUnitClosureTests(unittest.TestCase):
 
         # THE SERIES CENSUS IS THE MECHANISM, asserted directly: it reports an
         # accepted sibling, which is what makes the closure a no-op.
-        sibling_accepted, losses, sibling_open = svc._work_unit_series(55, 1)
+        (sibling_accepted, losses, sibling_open,
+         _transient, _first_submitted) = svc._work_unit_series(55, 1)
         self.assertTrue(sibling_accepted,
                         "the census did not see the accepted sibling")
         self.assertEqual(0, losses)
@@ -298,7 +299,8 @@ class WorkUnitClosureTests(unittest.TestCase):
         # failure do to a unit whose OTHER attempt is still running?
         conn.rows[running["attempt_id"]] = dict(running)
 
-        sibling_accepted, losses, sibling_open = svc._work_unit_series(55, 1)
+        (sibling_accepted, losses, sibling_open,
+         _transient, _first_submitted) = svc._work_unit_series(55, 1)
         self.assertTrue(sibling_open,
                         "the census did not see the running sibling")
         self.assertFalse(sibling_accepted)

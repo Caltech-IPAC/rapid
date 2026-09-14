@@ -66,6 +66,7 @@ twenty containers to Spot reclamation has a fleet problem an operator
 should see as an explicit exhaustion, not as silent perpetual motion.
 """
 
+import datetime
 import logging
 
 from observability.attempts import (
@@ -107,6 +108,44 @@ DISPOSITIONS = frozenset({
 #: deliberately generous.
 SCHEDULER_RETRY_CEILING = 20
 
+#: The application failure categories a RUN'S RETRY BUDGET may be spent on
+#: (migration 122, the 2026-09-13 13:01 ruling). Named as a set rather than
+#: left implicit because the ruling's own words are "at most 3 attempts in
+#: total for TRANSIENT failures, none for DETERMINISTIC ones", and which
+#: category is which is the whole content of that distinction.
+#:
+#: The three here are the ones where running the same unit again could
+#: plausibly succeed without anything else changing:
+#:
+#:   `db_unavailable`   — the pooler refused, or the database was unreachable.
+#:                        The pooler-refusal category the ruling names; the
+#:                        client's own fifteen-minute backoff horizon already
+#:                        absorbed the short outages, so an attempt spent here
+#:                        is one that outlasted it.
+#:   `db_error`         — a transaction lost to a conflict or a restart. Same
+#:                        reasoning: the input was fine and nothing about the
+#:                        unit needs to change.
+#:   `resource_exhausted` — memory or disk ran out on THIS placement. Another
+#:                        placement may have more, so a retry is not obviously
+#:                        pointless. Deliberately included, deliberately
+#:                        bounded: 3 attempts is what stops a unit that is
+#:                        simply too big from consuming Batch's whole ceiling.
+#:
+#: EVERY OTHER APPLICATION CATEGORY STILL PARKS, unchanged. `input_missing`,
+#: `input_invalid`, `config_invalid`, `reference_missing`, `tool_failure`,
+#: `storage_error`, `records_error` and `internal_error` are deterministic:
+#: the same unit, the same inputs, the same code, so the second attempt fails
+#: exactly as the first did and the retry is pure waste. Parking is right for
+#: them because they need a CHANGE — an operator, a fixed input, a new
+#: release — not another try.
+#:
+#: SCHEDULER-VISIBLE LOSSES ARE NOT IN THIS SET, and that is the ruling too:
+#: "Spot reclaims never counted". They keep their own path and their own
+#: ceiling below, because a reclaim is not a failure of the work at all.
+TRANSIENT_APPLICATION_CATEGORIES = frozenset({
+    "db_unavailable", "db_error", "resource_exhausted",
+})
+
 #: The `blocked_reason` for a terminal failure that never said why. Kept
 #: distinct from every real category so an operator can grep for the
 #: "we do not know" population specifically.
@@ -122,7 +161,12 @@ APPLICATION_PARK_PREFIX = "application_failure"
 
 
 def disposition_for_terminal_attempt(*, succeeded, error_category,
-                                     scheduler_loss_count=0):
+                                     scheduler_loss_count=0,
+                                     transient_failure_count=0,
+                                     retry_attempts=None,
+                                     first_submitted_at=None,
+                                     retry_wallclock_s=None,
+                                     now=None):
     """What a terminal attempt means for its WORK UNIT, per policy v1.
 
     `succeeded` is the application's own accepted verdict — not the
@@ -133,6 +177,29 @@ def disposition_for_terminal_attempt(*, succeeded, error_category,
     values or None. `scheduler_loss_count` is how many scheduler-visible
     losses this unit's attempt series has already absorbed, used only for
     the ceiling.
+
+    THE RUN'S RETRY BUDGET (migration 122, the 2026-09-13 13:01 ruling).
+    `transient_failure_count` is how many attempts this unit has already spent
+    on `TRANSIENT_APPLICATION_CATEGORIES`; `retry_attempts` and
+    `retry_wallclock_s` are the run's own two bounds; `first_submitted_at` is
+    when the unit was first submitted, which is what the wall-clock is
+    measured from. A transient application failure re-releases the unit while
+    both bounds hold and closes it failed — an exhausted unit — when either is
+    reached.
+
+    All five are optional and default to the pre-122 behaviour, so every
+    existing call site keeps its meaning: with no `retry_attempts` the
+    transient branch is not taken at all and every application category parks
+    exactly as before. That is deliberate rather than convenient — a run that
+    declared no budget has not asked for retries, and inventing one for it
+    would start re-running work nobody asked to have re-run.
+
+    SCHEDULER-VISIBLE LOSSES ARE NEVER COUNTED AGAINST THE RUN'S BUDGET, which
+    is the ruling's "Spot reclaims never counted". They are handled by the
+    branch above, against `SCHEDULER_RETRY_CEILING`, and never reach the
+    transient branch — a reclaim says nothing about the work, so spending the
+    run's budget on it would let a bad afternoon on the Spot market exhaust
+    units whose science never once failed.
 
     Returns one of `DISPOSITIONS`. The caller performs the transition; this
     function performs no I/O and reads no row, so it is exhaustively
@@ -153,11 +220,79 @@ def disposition_for_terminal_attempt(*, succeeded, error_category,
             return CLOSE_FAILED
         return RETRY_READY
 
+    # THE RUN'S OWN RETRY BUDGET (migration 122, the 2026-09-13 13:01
+    # ruling). A transient application failure may be retried — but only
+    # while BOTH bounds hold, and only when the run declared a budget at all.
+    #
+    # `retry_attempts is None` means the unit's run carries no envelope: a run
+    # predating 122, or a unit with no run row. The behaviour there is exactly
+    # what it was before this branch existed — park — because inventing a
+    # budget for a run that never declared one would start retrying work
+    # nobody asked to have retried.
+    if (error_category in TRANSIENT_APPLICATION_CATEGORIES
+            and retry_attempts is not None):
+        exhausted_by = _budget_exhausted_by(
+            transient_failure_count=transient_failure_count,
+            retry_attempts=retry_attempts,
+            first_submitted_at=first_submitted_at,
+            retry_wallclock_s=retry_wallclock_s,
+            now=now)
+        if exhausted_by is None:
+            return RETRY_READY
+        # AN EXHAUSTED UNIT — the term every record uses. The log names which
+        # bound closed it, because "it stopped retrying" and "it ran out of
+        # time" and "it ran out of attempts" are three different operational
+        # situations and the row alone cannot distinguish them.
+        logger.warning(
+            "work unit exhausted its run's retry budget on %s failures "
+            "(%s); closing it failed rather than re-releasing it",
+            error_category, exhausted_by)
+        return CLOSE_FAILED
+
     # Everything else parks. This deliberately catches BOTH the eleven
     # application categories and an absent/unrecognized one: see the module
     # docstring on why an unexplained failure is park-shaped, not
     # retry-shaped.
     return PARK_BLOCKED
+
+
+def _budget_exhausted_by(*, transient_failure_count, retry_attempts,
+                         first_submitted_at, retry_wallclock_s, now):
+    """Which bound, if either, has closed this unit's retry budget.
+
+    Returns a short phrase naming the bound that ended it, or None while the
+    unit may still be retried.
+
+    TWO BOUNDS, BOTH NECESSARY, AND THE WALL-CLOCK IS NOT DECORATION. The
+    2026-09-13 overnight run is why: its body finished at 06:30 and its clock
+    ran past 11:00 on a retry loop. An attempt COUNT alone did not stop that,
+    because each re-release started a fresh attempt series — so the count kept
+    resetting while the wall-clock kept running. The elapsed-time bound is
+    measured from the unit's FIRST submission for exactly that reason: it is
+    the one quantity a re-release cannot reset.
+
+    A missing `first_submitted_at` or `retry_wallclock_s` disables only the
+    wall-clock half; the count still applies. Absent data is not evidence the
+    budget is spent, and closing a unit failed on a NULL timestamp would fail
+    work for a reason that has nothing to do with the work.
+    """
+    if transient_failure_count >= retry_attempts:
+        return ("%d of %d attempts used"
+                % (transient_failure_count, retry_attempts))
+    if first_submitted_at is None or retry_wallclock_s is None:
+        return None
+    moment = now or datetime.datetime.now(datetime.timezone.utc)
+    if first_submitted_at.tzinfo is None:
+        raise ValueError(
+            "first_submitted_at %r is naive; every timestamp in this system "
+            "is stored timestamptz and read back aware, and comparing a naive "
+            "one against an aware `now` would raise deep inside the "
+            "disposition rather than here" % (first_submitted_at,))
+    elapsed = (moment - first_submitted_at).total_seconds()
+    if elapsed >= retry_wallclock_s:
+        return ("%.0fs elapsed of a %ds wall-clock budget"
+                % (elapsed, retry_wallclock_s))
+    return None
 
 
 #: The `blocked_reason` for a unit parked because its effect-attempt series
