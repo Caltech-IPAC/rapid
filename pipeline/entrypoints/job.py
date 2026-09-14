@@ -505,12 +505,39 @@ def dispatch_registration(context) -> None:
     wrote `.done` sentinels on failure paths as well as success ones, and
     hardcoded process exit 0. Deleted at the cutover fence.
     """
-    from database.modules.utils.rapid_db_connect import connection
+    from database.modules.utils.rapid_db_connect import (
+        STARTUP_BACKOFF_CAP_S,
+        STARTUP_BACKOFF_INITIAL_S,
+        STARTUP_BACKOFF_MULTIPLIER,
+        STARTUP_CONNECT_ATTEMPTS,
+        STARTUP_HORIZON_S,
+        connection,
+    )
     from pipeline.registration import candidates, register_batch
 
     logger = context.logger
 
-    with connection("rapid-registration", lane="transaction") as conn:
+    # THE SECOND CONNECTION A JOB OPENS, and the reason the admission
+    # arithmetic counts two clients per job rather than one: registration
+    # runs inside the attempt but takes a connection of its own, because
+    # the product rows and the consumer's watermark have to be one
+    # transaction (see the docstring above).
+    #
+    # It gets the same startup sizing and the same 900s horizon as the
+    # attempt's own connection. It is opened LATE — at the end of a
+    # successful science attempt, not in the start burst — so it is less
+    # exposed to synchronized contention, but it is MORE exposed to a
+    # planned outage: an attempt that has already done all its work and
+    # cannot record it has wasted the whole attempt, whereas one that
+    # fails at startup has wasted a container start. The patient policy
+    # matters more here, not less.
+    with connection("rapid-registration", lane="transaction",
+                    attempts=STARTUP_CONNECT_ATTEMPTS,
+                    backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                    backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                    backoff_cap=STARTUP_BACKOFF_CAP_S,
+                    horizon=STARTUP_HORIZON_S,
+                    jitter=True) as conn:
         # THE REGISTRAR IS REAL NOW (round 2). `registrar_for` used to return
         # None unconditionally, so this ran as a labelled decision pass in
         # production — honest about writing nothing, but the ratified
@@ -1116,6 +1143,7 @@ def _database(route, job_env, endpoint, credentials):
         STARTUP_BACKOFF_INITIAL_S,
         STARTUP_BACKOFF_MULTIPLIER,
         STARTUP_CONNECT_ATTEMPTS,
+        STARTUP_HORIZON_S,
         ConnectionExecutor,
         connection,
     )
@@ -1131,15 +1159,23 @@ def _database(route, job_env, endpoint, credentials):
     # Secrets Manager (see `load_manifest`/`database_connection_inputs`
     # above). The 2026-09-10 measurement was 218/1000 jobs dying at
     # start-up from exactly this kind of synchronized fleet contention, so
-    # this connection gets the wider startup sizing — 10 attempts, jittered
-    # — rather than the general-purpose default (4 attempts, no jitter)
-    # every other caller of `connection()`/`connect()` still gets.
+    # this connection gets the wider startup sizing — jittered, and with a
+    # DEADLINE — rather than the general-purpose default (4 attempts, no
+    # jitter) every other caller of `connection()`/`connect()` still gets.
+    #
+    # The horizon, not the attempt count, is what makes this survive a
+    # planned outage: STARTUP_HORIZON_S is 900s, the length of the drained
+    # pooler restart the infrastructure defines, and the same number as
+    # the pooler's own query_wait_timeout. A job that starts while the
+    # pooler is down waits it out and connects, instead of exhausting a
+    # count in under four minutes and failing at the door.
     with connection(application_name, lane=route.db_lane, endpoint=endpoint,
                     credentials=credentials,
                     attempts=STARTUP_CONNECT_ATTEMPTS,
                     backoff_initial=STARTUP_BACKOFF_INITIAL_S,
                     backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
                     backoff_cap=STARTUP_BACKOFF_CAP_S,
+                    horizon=STARTUP_HORIZON_S,
                     jitter=True) as conn:
         execute = ConnectionExecutor(conn)
         # THE PAYLOAD PREFLIGHTS TOO (rule 18: "Services AND PAYLOADS

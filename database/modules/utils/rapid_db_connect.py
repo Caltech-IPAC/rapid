@@ -106,11 +106,41 @@ DEFAULT_BACKOFF_CAP_S = 8.0
 # for an ordinary caller reconnecting after an isolated blip, not for a
 # synchronized fleet-wide retry storm — 1,000 containers retrying on the
 # SAME fixed backoff schedule re-collide at every retry, which is exactly
-# why jitter, not just backoff, is required. These are the sizing a job
-# entrypoint's FIRST connection should opt into: at least 10 attempts, a
-# few minutes of total possible elapsed time (0.5 * 2^9 capped at 30s per
-# step, ~10 retries -> comfortably multi-minute worst case), full jitter on.
-STARTUP_CONNECT_ATTEMPTS = 10
+# why jitter, not just backoff, is required.
+#
+# THE STARTUP POLICY IS A DEADLINE, NOT A COUNT, and the difference is
+# the whole point. A count guarantees nothing about elapsed time: ten
+# attempts on this schedule is 0.5+1+2+4+8+16+30+30+30 = 121.5s of sleeps
+# plus ten 10s connect timeouts, so 221s is the MAXIMUM a job would wait —
+# and with full jitter each sleep averages half its cap, so the
+# EXPECTATION is about half that. A job starting during a planned pooler
+# outage would therefore give up well inside it, having "retried ten
+# times", which reads like resilience and is not.
+#
+# The horizon is sized to OUTLAST the longest planned DB-host
+# unavailability, which is the drained pooler restart the infrastructure
+# defines (rapid_systems docs/reference/operator-runbook.md §8):
+#
+#   600 s  the drain deadline after PAUSE — in-flight transactions
+#          finish; nothing in this pipeline holds one longer
+#   160 s  a postgres restart replaying at most max_wal_size 8 GB of WAL
+#          at a CPU-bound 50 MB/s
+#   140 s  margin
+#   ----
+#   900 s
+#
+# It is the SAME number as the pooler's own query_wait_timeout, on
+# purpose: a client that gets in and waits for a server connection, and a
+# client that cannot get in at all, then survive the same outage rather
+# than one of them failing at a different door. 900 s is 6% of the prompt
+# lane's 4h attempt timeout and 2% of bulk's 12h, so waiting the whole
+# horizon still leaves a job almost its entire attempt.
+#
+# Attempts remain BOUNDED as a backstop against a wedged clock or a
+# connect that returns instantly forever: the deadline is what normally
+# ends the retry, and this is what ends it if the deadline somehow cannot.
+STARTUP_HORIZON_S = 900
+STARTUP_CONNECT_ATTEMPTS = 1000
 STARTUP_BACKOFF_INITIAL_S = 0.5
 STARTUP_BACKOFF_MULTIPLIER = 2.0
 STARTUP_BACKOFF_CAP_S = 30.0
@@ -325,10 +355,12 @@ def connect(application_name,
             keepalives_interval=KEEPALIVES_INTERVAL_S,
             keepalives_count=KEEPALIVES_COUNT,
             tcp_user_timeout=TCP_USER_TIMEOUT_MS,
+            horizon=None,
             jitter=False,
             sleep=time.sleep,
             connect_fn=None,
-            random_func=random.uniform):
+            random_func=random.uniform,
+            monotonic=time.monotonic):
     """Open one connection, with bounded retry and backoff. Raises on failure.
 
     ``application_name`` is required, not defaulted: it is what makes
@@ -354,6 +386,25 @@ def connect(application_name,
     environment at its boundary, which is what a plain script still does.
     Passing a credential explicitly is the only way to reach the database
     without the password existing in the process environment.
+
+    ``horizon``, in seconds, makes the retry DEADLINE-BASED rather than
+    count-based: attempts continue until that much wall-clock has elapsed
+    since the first one, whatever the backoff schedule does. ``None``
+    (the default) keeps the pure count behaviour for callers that want a
+    fast, bounded failure.
+
+    A count guarantees no elapsed time — ten attempts on the startup
+    schedule is at most 221s and, with jitter, about half that in
+    expectation — so a caller that must outlast a KNOWN outage states the
+    outage's length here instead of guessing an attempt count that
+    happens to cover it. ``STARTUP_HORIZON_S`` is that number for a job
+    entrypoint: 900s, the drained pooler restart, matched to the pooler's
+    own ``query_wait_timeout`` so both doors have the same patience.
+
+    The deadline is fixed at the first attempt and never extended; the
+    clock is ``monotonic``, so a wall-clock step during the outage cannot
+    move it; and the last sleep is truncated to land ON the deadline, so
+    the horizon always ends on a failed attempt rather than on a sleep.
 
     ``jitter`` (D9) applies FULL JITTER (``random_func(0, delay)``, the
     AWS architecture-blog algorithm) to each computed backoff before
@@ -433,6 +484,12 @@ def connect(application_name,
 
     delay = backoff_initial
     last_exc = None
+    # The deadline is fixed from the FIRST attempt, not extended by each
+    # retry: `horizon` is a promise about total elapsed wall-clock, and
+    # a per-attempt reset would make the guarantee unbounded. Monotonic,
+    # so a clock step during the outage cannot shorten or lengthen it.
+    started = monotonic()
+    deadline = None if horizon is None else started + horizon
     for attempt in range(1, attempts + 1):
         try:
             conn = connect_fn(
@@ -458,13 +515,34 @@ def connect(application_name,
             # off one throttling event do not all wake on the same clock
             # tick and re-collide on the next attempt.
             wait = random_func(0, delay) if jitter else delay
+            if deadline is not None:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    break
+                # Never sleep PAST the deadline: the horizon is a promise
+                # about when the caller gets an answer, and a final sleep
+                # that overshoots would break it by up to a whole backoff
+                # cap. A truncated sleep still leaves time for one more
+                # attempt, which is the attempt the horizon was sized to
+                # allow.
+                wait = min(wait, remaining)
             logger.warning(
-                "database connect attempt %d/%d failed (%s); retrying in "
-                "%.1fs%s",
-                attempt, attempts, exc, wait,
-                " (jittered from %.1fs)" % delay if jitter else "")
+                "database connect attempt %d failed (%s); retrying in "
+                "%.1fs%s%s",
+                attempt, exc, wait,
+                " (jittered from %.1fs)" % delay if jitter else "",
+                "" if deadline is None
+                else " (%.0fs of the %.0fs horizon remain)"
+                     % (deadline - monotonic(), horizon))
             sleep(wait)
             delay = min(delay * backoff_multiplier, backoff_cap)
+            # Deliberately NO deadline test here. A sleep truncated to the
+            # deadline lands exactly on it, and breaking at that point
+            # would mean the last thing the horizon bought was a sleep
+            # rather than a try. The test above — before the sleep — is
+            # the one that ends the loop, so every horizon ends on a
+            # failed ATTEMPT, and a client whose pooler returns at second
+            # 899 still connects.
             continue
 
         # Transactions are explicit here (context managers below), so
@@ -476,9 +554,14 @@ def connect(application_name,
                     host, port, dbname, user, composed_name)
         return conn
 
+    elapsed = monotonic() - started
+    exhausted = (f"{attempt} attempt(s) over {elapsed:.0f}s"
+                 if horizon is None
+                 else f"the whole {horizon:.0f}s retry horizon "
+                      f"({attempt} attempt(s) over {elapsed:.0f}s)")
     raise DBUnavailable(
         f"could not connect to {host}:{port}/{dbname} as {user} after "
-        f"{attempts} attempt(s): {last_exc}") from last_exc
+        f"{exhausted}: {last_exc}") from last_exc
 
 
 #: Connections whose caller has widened the session role and needs that

@@ -17,6 +17,7 @@ and — the load-bearing one for this module's reason to exist — that
 ``ConnectionExecutor`` has no ``exit_code`` member to check.
 """
 
+import importlib
 import os
 import unittest
 from unittest import mock
@@ -52,6 +53,17 @@ from database.modules.utils.rapid_db_connect import (
 )
 
 MODULE = "database.modules.utils.rapid_db_connect"
+
+# The startup HORIZON is imported softly rather than in the block above,
+# on purpose. Reverting the code under a test is how this repo proves a
+# test is really testing something (AGENTS.md: revert the fix and watch
+# the suite fail), and a hard import of a constant the reverted module
+# does not define turns that proof into a COLLECTION error — one line
+# saying the module would not import, naming no test at all. Read
+# defensively, every horizon test then fails on its own assertion and
+# names itself, which is what the proof is supposed to show.
+STARTUP_HORIZON_S = getattr(
+    importlib.import_module(MODULE), "STARTUP_HORIZON_S", None)
 
 # A complete operational environment. Individual tests remove one key to prove
 # each is genuinely required rather than defaulted somewhere.
@@ -957,6 +969,275 @@ class ExplicitInterfaceTests(unittest.TestCase):
             connect("payload", connect_fn=mock.MagicMock(),
                     endpoint=("host-only", "6432", ""),
                     credentials=Credentials("u", "p"))
+
+
+class FakeClock:
+    """A monotonic clock that only moves when something sleeps.
+
+    The horizon is a promise about ELAPSED TIME, so testing it against the
+    real clock would mean either waiting 900 real seconds or asserting
+    nothing. This advances by exactly what each `sleep` was asked for —
+    plus, optionally, a fixed cost per connect attempt, since a connect
+    that times out consumes wall-clock too and the horizon has to account
+    for it.
+
+    Wiring it as both `sleep` and `monotonic` is what makes the deadline
+    deterministic: no tolerance, no flakiness, and a failure means the
+    arithmetic is wrong rather than that the machine was busy.
+    """
+
+    def __init__(self, attempt_cost=0.0):
+        self.now = 1000.0          # not zero, so a bare truthiness bug shows
+        self.attempt_cost = attempt_cost
+        self.slept = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def connect_attempt(self):
+        """Charge one connect attempt's wall-clock to the clock."""
+        self.now += self.attempt_cost
+
+    @property
+    def elapsed(self):
+        return self.now - 1000.0
+
+
+class StartupHorizonTests(unittest.TestCase):
+    """The startup policy is a DEADLINE, and the deadline is what binds.
+
+    The policy these tests pin exists because a count-based one guaranteed
+    nothing: ten attempts on the startup schedule is 121.5s of sleeps plus
+    ten 10s connect timeouts — a 221s MAXIMUM, and with full jitter about
+    half that in expectation — while the outage it has to outlast is a
+    900s drained pooler restart. "Retried ten times" reads like resilience
+    and was not.
+    """
+
+    def test_the_horizon_is_the_planned_outage_length(self):
+        # Not a free parameter: it is the drained-restart bracket (600s
+        # drain + 160s WAL replay + 140s margin) and the same number as the
+        # pooler's own query_wait_timeout, so both doors have one patience.
+        self.assertEqual(STARTUP_HORIZON_S, 900)
+
+    def test_retry_continues_until_the_horizon_elapses(self):
+        # Every attempt fails, each costing a 10s connect timeout. The loop
+        # must keep going until 900s of wall-clock have passed — far beyond
+        # the ~221s a ten-attempt count would have allowed.
+        clock = FakeClock(attempt_cost=10.0)
+
+        def failing(**_kwargs):
+            clock.connect_attempt()
+            raise psycopg2.OperationalError("connection refused")
+
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("payload", connect_fn=failing,
+                        attempts=STARTUP_CONNECT_ATTEMPTS,
+                        backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                        backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                        backoff_cap=STARTUP_BACKOFF_CAP_S,
+                        horizon=STARTUP_HORIZON_S,
+                        sleep=clock.sleep, monotonic=clock.monotonic)
+
+        self.assertGreaterEqual(clock.elapsed, STARTUP_HORIZON_S)
+        # And the count-based schedule really would have stopped early, so
+        # this is a difference in behaviour and not just in bookkeeping.
+        self.assertGreater(clock.elapsed, 221)
+
+    def test_the_horizon_is_not_overshot_by_the_last_sleep(self):
+        # A backoff cap of 30s against a 900s deadline could overshoot by
+        # most of a cap if the final sleep were not truncated. The caller
+        # was promised an answer at the horizon, so the overshoot must be
+        # zero: the last sleep lands exactly on the deadline.
+        clock = FakeClock(attempt_cost=0.0)
+        connect_fn = mock.MagicMock(
+            side_effect=psycopg2.OperationalError("connection refused"))
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("payload", connect_fn=connect_fn,
+                        attempts=STARTUP_CONNECT_ATTEMPTS,
+                        backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                        backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                        backoff_cap=STARTUP_BACKOFF_CAP_S,
+                        horizon=STARTUP_HORIZON_S,
+                        sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertEqual(clock.elapsed, STARTUP_HORIZON_S)
+
+    def test_the_horizon_ends_on_an_attempt_not_on_a_sleep(self):
+        # The last thing a 900s wait buys must be a TRY. A client whose
+        # pooler comes back at second 899 has to get in; if the loop spent
+        # its final second sleeping and then gave up, that client fails for
+        # no reason. So the attempt count is one more than the sleep count.
+        clock = FakeClock(attempt_cost=0.0)
+        connect_fn = mock.MagicMock(
+            side_effect=psycopg2.OperationalError("connection refused"))
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("payload", connect_fn=connect_fn,
+                        attempts=STARTUP_CONNECT_ATTEMPTS,
+                        backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                        backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                        backoff_cap=STARTUP_BACKOFF_CAP_S,
+                        horizon=STARTUP_HORIZON_S,
+                        sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertEqual(connect_fn.call_count, len(clock.slept) + 1)
+
+    def test_a_pooler_that_returns_inside_the_horizon_is_connected_to(self):
+        # The behaviour the whole change exists for: the pooler is down for
+        # most of the horizon and comes back before it expires, and the job
+        # connects instead of having failed at the door minutes earlier.
+        clock = FakeClock(attempt_cost=10.0)
+        good = mock.MagicMock(name="conn")
+        recovers_at = 600.0
+
+        def flaky(**_kwargs):
+            clock.connect_attempt()
+            if clock.elapsed < recovers_at:
+                raise psycopg2.OperationalError(
+                    "FATAL:  no more connections allowed (max_client_conn)")
+            return good
+
+        with patch_env(), patch_credentials():
+            conn = connect("payload", connect_fn=flaky,
+                           attempts=STARTUP_CONNECT_ATTEMPTS,
+                           backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                           backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                           backoff_cap=STARTUP_BACKOFF_CAP_S,
+                           horizon=STARTUP_HORIZON_S,
+                           sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertIs(conn, good)
+        self.assertGreaterEqual(clock.elapsed, recovers_at)
+        self.assertLess(clock.elapsed, STARTUP_HORIZON_S)
+
+    def test_the_deadline_is_fixed_at_the_first_attempt(self):
+        # Not extended per retry: `horizon` is a total, and a per-attempt
+        # reset would make the guarantee unbounded — the exact failure a
+        # deadline is supposed to replace.
+        clock = FakeClock(attempt_cost=1.0)
+        connect_fn = mock.MagicMock(
+            side_effect=psycopg2.OperationalError("connection refused"))
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("payload", connect_fn=connect_fn, attempts=10_000,
+                        backoff_initial=1.0, backoff_multiplier=1.0,
+                        backoff_cap=1.0, horizon=60.0,
+                        sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertLessEqual(clock.elapsed, 61.0)
+
+    def test_no_horizon_keeps_the_count_based_behaviour(self):
+        # Callers with no outage to outlast still get a fast bounded
+        # failure; the deadline is opt-in, not a global change of policy.
+        clock = FakeClock()
+        connect_fn = mock.MagicMock(
+            side_effect=psycopg2.OperationalError("connection refused"))
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("registration", attempts=3, connect_fn=connect_fn,
+                        sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertEqual(connect_fn.call_count, 3)
+
+    def test_the_message_says_the_horizon_was_exhausted(self):
+        # An operator reading the failure must be able to tell "we waited
+        # the full planned-outage window and it never came back" from
+        # "we gave up after four tries".
+        clock = FakeClock(attempt_cost=10.0)
+
+        def failing(**_kwargs):
+            clock.connect_attempt()
+            raise psycopg2.OperationalError("connection refused")
+
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable) as caught:
+                connect("payload", connect_fn=failing,
+                        attempts=STARTUP_CONNECT_ATTEMPTS,
+                        backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                        backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                        backoff_cap=STARTUP_BACKOFF_CAP_S,
+                        horizon=STARTUP_HORIZON_S,
+                        sleep=clock.sleep, monotonic=clock.monotonic)
+        message = str(caught.exception)
+        self.assertIn("900s retry horizon", message)
+
+
+class AdmissionRefusalTests(unittest.TestCase):
+    """The two refusals seen live on 2026-09-11, fed through verbatim.
+
+    Both were terminal for the job that hit them, and both are the pooler
+    saying "not now" rather than "never" — so both must be retried, and
+    both must be retried against the horizon rather than a handful of
+    attempts. Feeding the EXACT server text matters: psycopg2 reports
+    these as OperationalError, and a future change that starts classifying
+    on message content would silently stop retrying them.
+    """
+
+    # The exact strings, as the server and the driver produced them.
+    MAX_CLIENT_CONN = ("connection to server at \"pooler.internal\", port 6432 "
+                       "failed: FATAL:  no more connections allowed "
+                       "(max_client_conn)")
+    FD_EXHAUSTION = ("connection to server at \"pooler.internal\", port 6432 "
+                     "failed: server closed the connection unexpectedly\n"
+                     "\tThis probably means the server terminated abnormally\n"
+                     "\tbefore or while processing the request.")
+
+    def _retried_then_succeeds(self, server_message):
+        clock = FakeClock(attempt_cost=10.0)
+        good = mock.MagicMock(name="conn")
+        calls = {"n": 0}
+
+        def flaky(**_kwargs):
+            clock.connect_attempt()
+            calls["n"] += 1
+            if calls["n"] <= 5:
+                raise psycopg2.OperationalError(server_message)
+            return good
+
+        with patch_env(), patch_credentials():
+            conn = connect("payload", connect_fn=flaky,
+                           attempts=STARTUP_CONNECT_ATTEMPTS,
+                           backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                           backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                           backoff_cap=STARTUP_BACKOFF_CAP_S,
+                           horizon=STARTUP_HORIZON_S,
+                           sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertIs(conn, good)
+        self.assertEqual(calls["n"], 6)
+
+    def test_max_client_conn_refusal_is_retried(self):
+        # The admission ceiling refusing a wave: ~2,000 jobs met this on
+        # 2026-09-11 and each one died on the spot.
+        self._retried_then_succeeds(self.MAX_CLIENT_CONN)
+
+    def test_the_descriptor_exhaustion_reset_is_retried(self):
+        # The same incident's other face: the pooler could not accept
+        # another socket ("accept() failed: Too many open files") and the
+        # client saw the connection close mid-handshake.
+        self._retried_then_succeeds(self.FD_EXHAUSTION)
+
+    def test_a_refusal_that_never_clears_exhausts_the_horizon(self):
+        # And when it genuinely does not clear, the job still waits the
+        # whole planned-outage window before giving up — the horizon is a
+        # floor on patience, not only a ceiling on it.
+        clock = FakeClock(attempt_cost=10.0)
+
+        def failing(**_kwargs):
+            clock.connect_attempt()
+            raise psycopg2.OperationalError(self.MAX_CLIENT_CONN)
+
+        with patch_env(), patch_credentials():
+            with self.assertRaises(DBUnavailable):
+                connect("payload", connect_fn=failing,
+                        attempts=STARTUP_CONNECT_ATTEMPTS,
+                        backoff_initial=STARTUP_BACKOFF_INITIAL_S,
+                        backoff_multiplier=STARTUP_BACKOFF_MULTIPLIER,
+                        backoff_cap=STARTUP_BACKOFF_CAP_S,
+                        horizon=STARTUP_HORIZON_S,
+                        sleep=clock.sleep, monotonic=clock.monotonic)
+        self.assertGreaterEqual(clock.elapsed, STARTUP_HORIZON_S)
 
 
 if __name__ == "__main__":
