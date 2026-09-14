@@ -34,6 +34,23 @@ SQLSTATE_IDEMPOTENCY_CONFLICT = "RA002"
 # the world did not move, the call itself is illegal, and retrying will
 # never help.
 SQLSTATE_INVARIANT_VIOLATION = "RA011"
+# Migration 121's two run-state refusals, both the same CHARACTER as RA011
+# and classified with it: a run's state machine refusing an illegal move.
+# RA012 is "this run is not in a state that admits this transition"
+# (starting a complete run, completing one that never started); RA013 is
+# "this run still has attempts in an open lifecycle state", which blocks
+# completion because a `completed_at` the rows go on changing after is not
+# a summary of anything.
+#
+# Distinct constants rather than a widened RA011 because the two codes
+# carry different remedies and a reader of this list should see them:
+# RA012 needs a different run or a different command, while RA013 needs
+# only time — the same call succeeds once the attempts finish. They map to
+# one exception type because the PRESENTATION is identical (a refusal, not
+# a failure, exit 64); it is the message that tells the operator which
+# remedy applies, and both functions' messages say so explicitly.
+SQLSTATE_RUN_STATE_REFUSED = "RA012"
+SQLSTATE_RUN_HAS_OPEN_ATTEMPTS = "RA013"
 
 
 class OperatorError(Exception):
@@ -114,7 +131,9 @@ def classify(exc):
         return ExpectedStateMismatch(_message_of(exc))
     if code == SQLSTATE_IDEMPOTENCY_CONFLICT:
         return IdempotencyConflict(_message_of(exc))
-    if code == SQLSTATE_INVARIANT_VIOLATION:
+    if code in (SQLSTATE_INVARIANT_VIOLATION,
+                SQLSTATE_RUN_STATE_REFUSED,
+                SQLSTATE_RUN_HAS_OPEN_ATTEMPTS):
         return InvariantViolation(_message_of(exc))
     return None
 

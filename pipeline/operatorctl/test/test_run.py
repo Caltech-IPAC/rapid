@@ -3288,3 +3288,51 @@ class RampStepTests(unittest.TestCase):
         self._start("k1")
         self._start("k2")
         self.assertEqual([s["run_key"] for s in self.submissions], [88, 88])
+
+
+class RunStateSqlstateClassificationTests(unittest.TestCase):
+    """121's RA012/RA013 are refusals, not crashes.
+
+    `derived.start_run` and `derived.complete_run` raise their state-machine
+    refusals with SQLSTATEs, and `contract.classify` is what turns a
+    psycopg2 error into this package's typed refusal. Without RA012/RA013 in
+    that mapping the refusals reach `main`'s catch-all and print
+    `rapidctl: UNEXPECTED — DatabaseError: ...` with exit 70 — the shape
+    reserved for exceptions nobody classified, which tells an operator the
+    tool is broken when in fact it is working exactly as designed.
+    Observed live before this was added, on the proof run's own
+    `run complete` dry run.
+    """
+
+    class _PgError(Exception):
+        def __init__(self, code, message):
+            super().__init__(message)
+            self.pgcode = code
+
+    def _classify(self, code):
+        from pipeline.operatorctl import contract
+        return contract.classify(self._PgError(code, "refused: %s" % code))
+
+    def test_ra012_classifies_as_an_invariant_violation(self):
+        from pipeline.operatorctl.contract import InvariantViolation
+        self.assertIsInstance(self._classify("RA012"), InvariantViolation)
+
+    def test_ra013_classifies_as_an_invariant_violation(self):
+        from pipeline.operatorctl.contract import InvariantViolation
+        self.assertIsInstance(self._classify("RA013"), InvariantViolation)
+
+    def test_both_carry_the_category_main_renders_as_REFUSED(self):
+        # `main`'s catch-all prints `REFUSED` and returns EXIT_USAGE for any
+        # exception carrying an `error_category`, and `UNEXPECTED` with
+        # EXIT_UNEXPECTED for one that does not. The category is what makes
+        # the difference, so it is what this asserts.
+        for code in ("RA012", "RA013"):
+            typed = self._classify(code)
+            self.assertEqual(getattr(typed, "error_category", None),
+                             "invariant_violation", code)
+
+    def test_an_unrelated_sqlstate_still_propagates_unclassified(self):
+        # The mapping stays CLOSED: widening it to "any RA0xx" would
+        # silently swallow a future code nobody has decided the remedy for.
+        self.assertIsNone(self._classify("RA099"))
+        self.assertIsNone(self._classify("23505"))
