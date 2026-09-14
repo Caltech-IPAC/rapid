@@ -2590,5 +2590,103 @@ class S1FeedsS2WithinOneCycleTests(unittest.TestCase):
                          conn.rows[1]["lifecycle_state"])
 
 
+class AskTheSchedulerBeforeJudgingTests(unittest.TestCase):
+    """The phantom-FAILED defect: a row is never judged `missing` by a clock
+    while the scheduler says its job is alive, and never written
+    `missing_or_contradictory` for a job the scheduler reports SUCCEEDED.
+
+    These two tests are built from rows MEASURED LIVE on rapid-db (2026-09-14),
+    not from a hypothetical. 21 rows for `run_id like 'two-lanes-%'` carried
+    `lifecycle_state='missing_or_contradictory'`, `scheduler_state='FAILED'`,
+    `reconciler_materialized=false`, most with no `ended_at` and a NULL
+    `rapid_outcome`, while the Batch side of the same array read 520/520
+    children SUCCEEDED. One named child, `ce33a635-...-af48f6dd0398:433`,
+    describes as SUCCEEDED with exit code 0 against rows 54774 (application
+    index 1, work unit bound) and 54864 (index 2, `work_unit_id` NULL) — the
+    two shapes reproduced below.
+
+    The mechanism, traced in the code rather than guessed: a row that carries a
+    `scheduler_job_id` goes to `_reconcile_attempt`; when `_pick_observation`
+    cannot pair it with an observation the call is redirected to
+    `_reconcile_unresolved`, which consults the submission record and then the
+    submission-anchored horizon and classifies — WITHOUT EVER DESCRIBING THE
+    ROW'S OWN JOB. A clock decided what a single `describe-jobs` call would
+    have settled, and the phantom rows drove real re-executions of completed
+    work (three of them measured on the memory-profile probe run).
+
+    The ruling this enforces names it twice: "the reconciler never judges a
+    running attempt by a clock", and "retry only when the terminal record was
+    not written" (Ben, 2026-09-13 13:01, via the direction review's ratified
+    envelope ruling).
+    """
+
+    def test_running_not_missing_however_late_the_clock(self):
+        # The live shape at application_attempt_index 2 with work_unit_id NULL
+        # (attempt 54864's signature), 45 minutes past submitted_at — well
+        # beyond the 30-minute submission horizon. The stub scheduler reports
+        # the job RUNNING. The clock says classify; the scheduler says the
+        # container is alive; asking must win.
+        #
+        # `_reconcile_unresolved` is called DIRECTLY, on a row that carries a
+        # `scheduler_job_id`. That is case (b) of the method's own docstring —
+        # "redirected from `_reconcile_attempt` when Batch returned the job but
+        # no attempt observation could be paired — those rows DO carry a
+        # `scheduler_job_id`" — and it is the live rows' shape exactly: all 21
+        # carried their child id. Calling it directly, rather than arranging a
+        # pairing failure through `poll_once`, keeps this test about the one
+        # rule it exists to pin and not about how the redirect is reached.
+        #
+        # 45 minutes past submitted_at: well beyond the 30-minute submission
+        # horizon, so the old code classifies. The stub scheduler reports the
+        # job RUNNING. Batch's attempt list omits a running attempt, which is
+        # why a row for it pairs with nothing in the first place.
+        row = attempt_row(1, scheduler_job_id="job-phantom",
+                          submitted_at=utc(2026, 8, 6, 11, 15, 0))
+        running = batch_job("job-phantom", status="RUNNING",
+                            started=utc(2026, 8, 6, 11, 20, 0))
+        svc, conn, _, _, _ = build([row], jobs=[running],
+                                   now=utc(2026, 8, 6, 12, 0, 0))
+
+        outcome = svc._reconcile_unresolved(row)
+
+        self.assertEqual("waiting", outcome)
+        self.assertEqual("submitted", conn.rows[1]["lifecycle_state"])
+
+    def test_succeeded_not_missing_or_contradictory(self):
+        # The live shape at application_attempt_index 1 with the work unit
+        # bound (attempt 54774's signature): the row reads FAILED and carries
+        # no ended_at, while its own child describes as SUCCEEDED with exit 0.
+        # A row whose described job succeeded is reconciled against that
+        # observation; writing it missing_or_contradictory asserts a failure
+        # the scheduler denies, which is the exact transition the 21 live rows
+        # took AFTER their last child had already succeeded.
+        # Called at the same seam as the test above, for the same reason. The
+        # row carries an application account (it ran and closed itself), which
+        # is what sends `_reconcile_unresolved` down its
+        # `mark_missing_or_contradictory` branch — while its own job describes
+        # as SUCCEEDED. Nothing about "we could not pair an observation"
+        # justifies asserting a contradiction the scheduler denies.
+        row = attempt_row(1, scheduler_job_id="job-phantom",
+                          lifecycle_state="application_closed",
+                          application_attempt_index=1,
+                          work_unit_id=27683,
+                          started_at=utc(2026, 8, 6, 11, 5, 0),
+                          rapid_outcome="success",
+                          product_disposition="published",
+                          application_intended_exit=0,
+                          submitted_at=utc(2026, 8, 6, 11, 0, 0))
+        succeeded = batch_job("job-phantom", status="SUCCEEDED",
+                              started=utc(2026, 8, 6, 11, 5, 0),
+                              stopped=utc(2026, 8, 6, 11, 30, 0),
+                              exit_code=0)
+        svc, conn, _, _, _ = build([row], jobs=[succeeded],
+                                   now=utc(2026, 8, 6, 12, 0, 0))
+
+        svc._reconcile_unresolved(row)
+
+        self.assertNotEqual("missing_or_contradictory",
+                            conn.rows[1]["lifecycle_state"])
+
+
 if __name__ == "__main__":
     unittest.main()

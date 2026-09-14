@@ -110,6 +110,14 @@ POLL_FAILURE_THRESHOLD = 3
 CLOSURE_FAILURE_POLL_THRESHOLD = 5
 
 # Classifications this service records, so a row says *why* it was closed.
+#: The scheduler states that mean "this container has not finished". A row
+#: whose job is in one of these is alive, whatever a clock says about its
+#: submission time — the rule the phantom-FAILED rows of 2026-09-13/14
+#: violated. `SUBMITTED` and `PENDING` are deliberately absent: a job that has
+#: not yet reached the queue is exactly what the submission-anchored horizon
+#: is for, and treating it as alive would make that horizon unreachable.
+_SCHEDULER_ALIVE_STATES = frozenset({"RUNNABLE", "STARTING", "RUNNING"})
+
 CLASS_AGREED = "agreed"
 CLASS_MATERIALIZED = "materialized_from_record"
 CLASS_ABRUPT_LOSS = "abrupt_loss"
@@ -2152,6 +2160,97 @@ class ReconcilerService:
 
     # -- the never-resolved case -----------------------------------------
 
+    def _scheduler_says_alive(self, row):
+        """Describe this row's own job before any clock is consulted.
+
+        Returns a `_reconcile_unresolved` outcome string when the scheduler's
+        answer settles the question, and None when classification may proceed.
+
+        Three answers stop classification, and each for its own reason:
+
+        * **RUNNABLE / STARTING / RUNNING** — the container is alive. A row
+          whose job is running has not been lost, however far past its
+          submission horizon it is. This is the case the clock got wrong.
+        * **SUCCEEDED, for a row that carries an application account** — the
+          work is done and its terminal record was written. That is the row
+          `_reconcile_unresolved` would otherwise flag
+          `missing_or_contradictory`, and doing so asserts a failure the
+          scheduler denies. It is what drove real re-executions of completed
+          work. The row is left open for the ordinary path to reconcile
+          against the observation, which is the writer that owns that
+          transition.
+
+          **Scoped to that branch on purpose.** A SUCCEEDED job whose
+          pre-created row carries NO application account is a different thing:
+          it stands for an attempt that never ran, every observed index
+          belongs to a dedicated sibling, and closing it
+          `terminal_without_start` is both correct and necessary — a row left
+          open there would re-enter every poll, classify nothing, and drive
+          `consecutive_unproductive_polls` to its threshold, which is the
+          second half of the live failure `test_a_superseded_pre_created_row_
+          leaves_the_open_set` exists to pin. So the rule is the one the
+          ruling actually states — a row whose job SUCCEEDED is never written
+          `missing_or_contradictory` — and not the broader "never closed".
+        * **A describe that RAISES** — an unreachable scheduler is not a
+          negative answer. Classifying on it would turn a Batch outage into a
+          run-wide wave of phantom rows, which is the failure mode this whole
+          fix exists to prevent, arriving by a different door. The row waits.
+
+        A job the scheduler reports FAILED, or one it has no record of at all,
+        returns None: those are the two answers the classification below is
+        actually for.
+
+        A row with no `scheduler_job_id` also returns None — case (a) of the
+        caller's docstring, where there is no job to describe and the
+        submission record is the right first question.
+        """
+        job_id = row.get("scheduler_job_id")
+        if not job_id:
+            return None
+
+        try:
+            observed = self._observe([job_id])
+        except Exception:  # noqa: BLE001 - an outage is not an answer
+            self._safe_rollback()
+            logger.warning(
+                "could not describe job %s for attempt %s; leaving it open "
+                "rather than classifying on an unanswered question",
+                job_id, row.get("attempt_id"), exc_info=True)
+            return "waiting"
+
+        observations = observed.get(job_id) or []
+        if not observations:
+            # The scheduler has no record of this job. That IS an answer, and
+            # it is the one the classification below is for.
+            return None
+
+        states = {observation.state for observation in observations
+                  if observation.state is not None}
+
+        if states & _SCHEDULER_ALIVE_STATES:
+            logger.info(
+                "attempt %s is unpaired but its job %s is %s; waiting rather "
+                "than judging a running attempt by a clock",
+                row.get("attempt_id"), job_id,
+                ",".join(sorted(states & _SCHEDULER_ALIVE_STATES)))
+            return "waiting"
+
+        if "SUCCEEDED" in states and self._attempt_ran(row, None, None):
+            # The `_attempt_ran` guard is what keeps this to the branch the
+            # ruling names. Only a row with an application account reaches
+            # `mark_missing_or_contradictory` below — it is the very predicate
+            # that selects that branch — so gating on the same predicate means
+            # this returns "waiting" exactly where a contradiction would
+            # otherwise be asserted, and nowhere else.
+            logger.info(
+                "attempt %s carries an application account and its job %s "
+                "SUCCEEDED; leaving it for reconciliation against that "
+                "observation rather than flagging it missing_or_contradictory",
+                row.get("attempt_id"), job_id)
+            return "waiting"
+
+        return None
+
     def _reconcile_unresolved(self, row):
         """A pre-created child the scheduler cannot account for.
 
@@ -2161,11 +2260,43 @@ class ReconcilerService:
         observation could be paired — those rows DO carry a
         `scheduler_job_id`, so nothing here may assume it is absent.
 
-        THE SUBMISSION RECORD DECIDES FIRST, THE HORIZON IS THE BACKSTOP
-        (`horizons.py`'s own docstring). A durable FOUND/LOST record is
-        positive evidence; a clock is not — so the clock is consulted only
-        where there is no such evidence to consult (open/ambiguous, or no
-        submission row at all: every pre-044 attempt).
+        THE SCHEDULER IS ASKED BEFORE ANY CLOCK IS CONSULTED (2026-09-14, the
+        phantom-FAILED fix). Where the row carries a `scheduler_job_id` — case
+        (b) above, and every row the redirect sends here — that job is
+        described FIRST. A job the scheduler reports RUNNABLE, STARTING or
+        RUNNING returns "waiting" however old `submitted_at` is, and a job it
+        reports SUCCEEDED is never written `missing_or_contradictory`: it is
+        left for the ordinary path to reconcile against that observation. Only
+        a job the scheduler reports terminal-failed, or one it cannot find at
+        all, reaches the classification below.
+
+        This is not a refinement. Before it, a row that carried its child id
+        and whose job was alive and well was classified `missing` by a
+        thirty-minute clock, because `_pick_observation` could not pair it and
+        nothing on this path ever asked. Measured live on rapid-db 2026-09-14:
+        21 rows of `run_id like 'two-lanes-%'` reading
+        `lifecycle_state='missing_or_contradictory'`, `scheduler_state='FAILED'`
+        and `reconciler_materialized=false` against a Batch array that read
+        520/520 children SUCCEEDED — one named child,
+        `ce33a635-...-af48f6dd0398:433`, describing as SUCCEEDED with exit 0
+        against rows 54774 and 54864. Reproduced independently on the
+        memory-profile probe run, where three such phantom rows drove three
+        real re-executions of work that had already succeeded. The ruling
+        (Ben, 2026-09-13 13:01) names it twice: "the reconciler never judges a
+        running attempt by a clock", and "retry only when the terminal record
+        was not written".
+
+        THE HORIZON WAS NOT MOVED, AND DELIBERATELY SO. `SUBMISSION_HORIZON_
+        SECONDS` is unchanged: lengthening it would have hidden the symptom
+        while leaving a clock deciding a question the scheduler can answer.
+        The horizon now bounds silence AFTER the scheduler has been asked,
+        never instead of asking.
+
+        THE SUBMISSION RECORD DECIDES BEFORE THE HORIZON (`horizons.py`'s own
+        docstring). A durable FOUND/LOST record is positive evidence; a clock
+        is not — so the clock is consulted only where there is no such
+        evidence to consult (open/ambiguous, or no submission row at all:
+        every pre-044 attempt).
 
         **THE UNIFIED FACT (campaign C4).** This used to call this module's
         own `_submission_classification`, which read only `submissions.
@@ -2183,6 +2314,12 @@ class ReconcilerService:
         now a counted failure, not a silent downgrade to the weaker
         horizon-only path.
         """
+        # ASK THE SCHEDULER FIRST. See this method's docstring for the live
+        # rows this exists to stop being written.
+        alive = self._scheduler_says_alive(row)
+        if alive is not None:
+            return alive
+
         outcome = submission_protocol.resolve_submission_outcome(
             _Executor(self.conn), row)
         if outcome == submission_protocol.SubmissionOutcome.FOUND:

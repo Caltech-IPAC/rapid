@@ -37,6 +37,23 @@ record exists at all — every attempt predating DRAFT migration 044.
 So the duration was never the defect and is unchanged. What changed is what
 elapsed time is permitted to CONCLUDE: it no longer decides what happened to a
 submission, it only bounds how long the evidence is allowed to stay silent.
+
+**AND THE SCHEDULER IS ASKED BEFORE THIS CLOCK IS CONSULTED AT ALL**
+(2026-09-14). The horizon bounds silence AFTER the scheduler has been asked,
+never instead of asking. `service._scheduler_says_alive` describes the row's
+own job first: a job reported RUNNABLE, STARTING or RUNNING returns "waiting"
+however old `submitted_at` is, and a job reported SUCCEEDED is never flagged
+missing_or_contradictory. Before that gate existed, a row that carried its
+child job id and whose container was alive and well was classified `missing`
+by this thirty-minute clock, because `_pick_observation` could not pair it and
+nothing on that path ever asked Batch. Measured live on rapid-db 2026-09-14: 21
+rows of `run_id like 'two-lanes-%'` reading missing_or_contradictory against a
+Batch array of 520/520 children SUCCEEDED, and three such rows on the
+memory-profile probe run that drove three real re-executions of completed work.
+
+`SUBMISSION_HORIZON_SECONDS` was deliberately NOT lengthened in response.
+Moving the clock would have hidden the symptom while leaving a clock deciding
+a question the scheduler can answer; the fix is to ask.
 """
 
 import datetime
