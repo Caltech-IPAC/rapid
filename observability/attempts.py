@@ -784,7 +784,12 @@ class AttemptWriter:
                                 reconciler_materialized: bool = False,
                                 peak_rss_kb: int | None = None,
                                 cpu_seconds: float | None = None,
-                                cgroup_peak_bytes: int | None = None) -> None:
+                                cgroup_peak_bytes: int | None = None,
+                                anon_peak_bytes: int | None = None,
+                                file_peak_bytes: int | None = None,
+                                memory_events_max: int | None = None,
+                                memory_events_oom_kill: int | None = None,
+                                memory_sample_count: int | None = None) -> None:
         """Close the application-authored half of an attempt.
 
         The termination protocol's final database step
@@ -832,6 +837,23 @@ class AttemptWriter:
         kept beside `peak_rss_kb` because the summed-rusage number can
         overcount when the parent's and children's high-water marks did
         not coincide in time.
+
+        The five memory-accounting columns (migration 120) ride the same
+        call for the same reason again — one terminal write, one set of
+        kwargs, all NULLable. They exist because `cgroup_peak_bytes` alone
+        is CENSORED at the container's hard limit: every successful Prove
+        science attempt recorded exactly 16,384 MiB, which measures where
+        the kernel was told to stop the job and not what the job needed.
+        `anon_peak_bytes` is the unreclaimable working set — the number a
+        hard limit must exceed; `file_peak_bytes` is reclaimable cache
+        demand above it; `memory_events_max` counts limit-hit-and-reclaim
+        events, so nonzero is what a binding limit looks like from inside;
+        `memory_events_oom_kill` is 0 on a healthy attempt and nonzero is
+        the failure signature; `memory_sample_count` is the series length,
+        and 0 distinguishes "the sampler never ran" from "it ran and
+        measured nothing". All five come from
+        `pipeline.runtime.memory_sampler.MemorySampler`, read through the
+        same `capture_resource_usage` as the three above.
         """
         if terminal_record_sequence < 0:
             raise ValueError(
@@ -855,7 +877,10 @@ class AttemptWriter:
             "  product_disposition = %s, error_category = %s,"
             "  terminal_record_key = %s, terminal_record_sequence = %s,"
             "  terminal_record_checksum = %s, reconciler_materialized = %s,"
-            "  peak_rss_kb = %s, cpu_seconds = %s, cgroup_peak_bytes = %s"
+            "  peak_rss_kb = %s, cpu_seconds = %s, cgroup_peak_bytes = %s,"
+            "  anon_peak_bytes = %s, file_peak_bytes = %s,"
+            "  memory_events_max = %s, memory_events_oom_kill = %s,"
+            "  memory_sample_count = %s"
             " WHERE attempt_id = %s AND lifecycle_state = %s"
         )
         result = self._execute(sql, [
@@ -864,7 +889,9 @@ class AttemptWriter:
             _value(product_disposition), error_category,
             terminal_record_key, terminal_record_sequence,
             terminal_record_checksum, reconciler_materialized,
-            peak_rss_kb, cpu_seconds, cgroup_peak_bytes, attempt_id,
+            peak_rss_kb, cpu_seconds, cgroup_peak_bytes,
+            anon_peak_bytes, file_peak_bytes, memory_events_max,
+            memory_events_oom_kill, memory_sample_count, attempt_id,
             LifecycleState.STARTED.value,
         ])
         _require_one_row(result, "mark_application_closed", attempt_id,

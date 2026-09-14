@@ -174,6 +174,17 @@ REQUIRED_MIGRATIONS = (
      "`mark_application_closed` call as 113's columns, from "
      "pipeline/runtime/termination.py's `capture_resource_usage` reading "
      "`read_cgroup_peak_bytes`"),
+    ("120-attempts-memory-accounting.sql",
+     "`attempts.anon_peak_bytes`/`file_peak_bytes`/`memory_events_max`/"
+     "`memory_events_oom_kill`/`memory_sample_count`, written by the same "
+     "observability/attempts.py `mark_application_closed` call as 113's and "
+     "116's columns, from pipeline/runtime/termination.py's "
+     "`capture_resource_usage` reading the maxima of "
+     "pipeline/runtime/memory_sampler.py's `MemorySampler` — the sampler "
+     "the entrypoint (pipeline/entrypoints/job.py) starts once `workdir` "
+     "exists. Every one of the five is in the same UPDATE's SET clause, so "
+     "a database without 120 fails the terminal write of EVERY attempt, "
+     "not only a sampled one"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than

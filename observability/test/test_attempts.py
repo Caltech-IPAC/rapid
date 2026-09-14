@@ -772,6 +772,60 @@ class ApplicationClosedTests(unittest.TestCase):
         self.assertIsNone(params[10])
         self.assertIsNone(params[11])
 
+    def test_memory_accounting_columns_default_to_none_and_zero(self):
+        # Migration 120. A caller that knows nothing of the sampler — every
+        # caller before this brief — still closes the row, with the columns
+        # saying "not measured" rather than claiming a zero-byte working
+        # set. `memory_sample_count` defaults to None here (the writer's
+        # own default); `capture_resource_usage` is what turns "no sampler"
+        # into the explicit 0 that the analysis reads.
+        self.close()
+        sql, params = self.execute.only()
+        for column in ("anon_peak_bytes", "file_peak_bytes",
+                       "memory_events_max", "memory_events_oom_kill",
+                       "memory_sample_count"):
+            self.assertIn(column + " = %s", sql)
+        self.assertIsNone(params[13])   # anon_peak_bytes
+        self.assertIsNone(params[14])   # file_peak_bytes
+        self.assertIsNone(params[15])   # memory_events_max
+        self.assertIsNone(params[16])   # memory_events_oom_kill
+        self.assertIsNone(params[17])   # memory_sample_count
+
+    def test_memory_accounting_columns_flow_through_when_supplied(self):
+        # The five values `pipeline.runtime.termination.terminate` passes
+        # from the sampler's maxima. Pinned positionally AND by column name:
+        # a reordered SET clause that still contained the right values would
+        # write each number into the wrong column.
+        self.close(anon_peak_bytes=6_442_450_944,
+                   file_peak_bytes=9_663_676_416,
+                   memory_events_max=412, memory_events_oom_kill=0,
+                   memory_sample_count=3_700)
+        _, params = self.execute.only()
+        self.assertEqual(params[13], 6_442_450_944)
+        self.assertEqual(params[14], 9_663_676_416)
+        self.assertEqual(params[15], 412)
+        self.assertEqual(params[16], 0)
+        self.assertEqual(params[17], 3_700)
+
+    def test_a_measured_zero_oom_kill_is_written_as_zero_not_null(self):
+        # The distinction the acceptance turns on: NULL means the kernel's
+        # kill counter was never read, 0 means it was read and nothing was
+        # killed. Asserted with `assertIs` against the int, since `0 == False`
+        # and `assertEqual` alone would accept a boolean written by mistake.
+        self.close(memory_events_oom_kill=0, memory_sample_count=1)
+        _, params = self.execute.only()
+        self.assertIsNotNone(params[16])
+        self.assertEqual(params[16], 0)
+        self.assertNotIsInstance(params[16], bool)
+
+    def test_cgroup_peak_bytes_flows_through_beside_the_new_columns(self):
+        # 116's column, unmoved by 120's five arriving after it: the
+        # positional contract the whole parameter list depends on.
+        self.close(cgroup_peak_bytes=17_179_869_184)
+        sql, params = self.execute.only()
+        self.assertIn("cgroup_peak_bytes = %s", sql)
+        self.assertEqual(params[12], 17_179_869_184)
+
     def test_resource_usage_columns_flow_through_when_supplied(self):
         # D7: `pipeline.runtime.termination.terminate` passes the rusage
         # capture through as these two kwargs; this pins that the writer

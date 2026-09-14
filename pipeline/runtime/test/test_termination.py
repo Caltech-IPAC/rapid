@@ -95,7 +95,7 @@ class _Harness:
 
     def terminate(self, outcome="success", disposition="published",
                   error=None, on_step=None, science_provenance=None,
-                  products=None):
+                  products=None, memory_sampler=None):
         return termination.terminate(
             self.writer, self.store, self.ownership, self.job_env,
             self.workdir, PREFIX,
@@ -105,7 +105,8 @@ class _Harness:
             stages=[{"stage_name": "difference", "outcome": "success",
                      "duration_ms": 12.5}],
             provenance=self.provenance, error=error, on_step=on_step,
-            science_provenance=science_provenance, products=products)
+            science_provenance=science_provenance, products=products,
+            memory_sampler=memory_sampler)
 
     @property
     def bundle_key(self):
@@ -1066,8 +1067,13 @@ class TerminateWritesResourceUsageTests(unittest.TestCase):
         # monkeypatch-based test lie about what it covers.
         original = termination.capture_resource_usage
         termination.capture_resource_usage = (
-            lambda: {"peak_rss_kb": 154_000, "cpu_seconds": 8.0,
-                     "cgroup_peak_bytes": 200_000_000})
+            lambda **kwargs: {"peak_rss_kb": 154_000, "cpu_seconds": 8.0,
+                              "cgroup_peak_bytes": 200_000_000,
+                              "anon_peak_bytes": None,
+                              "file_peak_bytes": None,
+                              "memory_events_max": None,
+                              "memory_events_oom_kill": None,
+                              "memory_sample_count": 0})
         self.addCleanup(
             setattr, termination, "capture_resource_usage", original)
 
@@ -1090,10 +1096,11 @@ class TerminateWritesResourceUsageTests(unittest.TestCase):
         # None path inside terminate()'s own call, not a stand-in.
         original = termination.capture_resource_usage
 
-        def _capture_with_broken_rusage():
+        def _capture_with_broken_rusage(**kwargs):
             def broken(who):
                 raise RuntimeError("simulated rusage failure")
-            return original(getrusage=broken)
+            kwargs["getrusage"] = broken
+            return original(**kwargs)
 
         termination.capture_resource_usage = _capture_with_broken_rusage
         self.addCleanup(
@@ -1111,6 +1118,239 @@ class TerminateWritesResourceUsageTests(unittest.TestCase):
         self.assertIsNone(params[peak_rss_index])
         self.assertIsNone(params[cpu_seconds_index])
         self.assertIsNone(params[cgroup_peak_index])
+
+
+class _FakeSampler:
+    """Stands in for `MemorySampler` — the two methods termination uses.
+
+    Records whether `stop()` was called, which is the ordering guarantee
+    `MemorySamplerAccountingTests` below pins: the series has to be closed
+    before the bundle is tarred, not after.
+    """
+
+    def __init__(self, maxima=None, stop_error=None):
+        self._maxima = maxima if maxima is not None else {
+            "anon_peak_bytes": 6_442_450_944,
+            "file_peak_bytes": 9_663_676_416,
+            "memory_events_max": 412,
+            "memory_events_oom_kill": 0,
+            "memory_sample_count": 3_700,
+        }
+        self._stop_error = stop_error
+        self.stopped = False
+        self.stopped_before_bundle = None
+
+    def stop(self, timeout=5.0):
+        self.stopped = True
+        if self._stop_error is not None:
+            raise self._stop_error
+        return self
+
+    def maxima(self):
+        return dict(self._maxima)
+
+
+class MemorySamplerAccountingTests(unittest.TestCase):
+    """Migration 120's five columns: the sampler's maxima reach the
+    application-closed UPDATE, the series is closed before the bundle is
+    built, and a sampler that misbehaves cannot cost the attempt its record.
+
+    `cgroup_peak_bytes` alone reads 16,384 MiB on every Prove attempt — the
+    hard limit, not the need. These columns are the uncensored half, so a
+    silent failure to write them would leave the sizing question exactly as
+    unanswerable as it was before.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.harness = _Harness(self._tmp.name)
+
+    def _closing_params(self):
+        return self.harness.executor.calls[-1]
+
+    def test_the_samplers_maxima_reach_the_application_closed_update(self):
+        sampler = _FakeSampler()
+
+        self.harness.terminate(memory_sampler=sampler)
+
+        sql, params = self._closing_params()
+        for column in ("anon_peak_bytes", "file_peak_bytes",
+                       "memory_events_max", "memory_events_oom_kill",
+                       "memory_sample_count"):
+            self.assertIn(column + " = %s", sql)
+        self.assertEqual(
+            params[_column_param_index(sql, params, "anon_peak_bytes")],
+            6_442_450_944)
+        self.assertEqual(
+            params[_column_param_index(sql, params, "file_peak_bytes")],
+            9_663_676_416)
+        self.assertEqual(
+            params[_column_param_index(sql, params, "memory_events_max")],
+            412)
+        self.assertEqual(
+            params[_column_param_index(sql, params,
+                                       "memory_events_oom_kill")], 0)
+        self.assertEqual(
+            params[_column_param_index(sql, params, "memory_sample_count")],
+            3_700)
+
+    def test_a_zero_oom_kill_is_written_as_zero_not_null(self):
+        # The acceptance reads `memory_events_oom_kill is distinct from 0`:
+        # NULL would pass a "no OOM kills" check it never actually made.
+        self.harness.terminate(memory_sampler=_FakeSampler())
+        sql, params = self._closing_params()
+        index = _column_param_index(sql, params, "memory_events_oom_kill")
+        self.assertIsNotNone(params[index])
+        self.assertEqual(params[index], 0)
+
+    def test_no_sampler_writes_nulls_and_a_zero_sample_count(self):
+        # Every caller before this brief, and every job on a host with no
+        # cgroup. The row still closes; the columns say "not measured".
+        self.harness.terminate()
+        sql, params = self._closing_params()
+        self.assertIsNone(
+            params[_column_param_index(sql, params, "anon_peak_bytes")])
+        self.assertIsNone(
+            params[_column_param_index(sql, params, "file_peak_bytes")])
+        self.assertIsNone(
+            params[_column_param_index(sql, params,
+                                       "memory_events_oom_kill")])
+        self.assertEqual(
+            params[_column_param_index(sql, params, "memory_sample_count")],
+            0)
+
+    def test_the_sampler_is_stopped_before_the_bundle_is_built(self):
+        # An open handle's unflushed rows would be missing from the tar, and
+        # the last line would be half-written. The step hook fires BEFORE
+        # each step, so a sampler already stopped at `build_bundle` is the
+        # ordering this asserts.
+        sampler = _FakeSampler()
+        seen = {}
+
+        def on_step(name):
+            if name == "build_bundle":
+                seen["stopped_at_bundle"] = sampler.stopped
+
+        self.harness.terminate(memory_sampler=sampler, on_step=on_step)
+        self.assertTrue(seen["stopped_at_bundle"])
+
+    def test_a_sampler_that_raises_on_stop_does_not_fail_the_attempt(self):
+        # `MemorySampler.stop` swallows its own errors, but termination must
+        # not depend on that: a stand-in sampler (or a future one) that
+        # raises still cannot cost the attempt its terminal record.
+        sampler = _FakeSampler(stop_error=RuntimeError("sampler wedged"))
+
+        result = self.harness.terminate(memory_sampler=sampler)
+
+        self.assertEqual(result.intended_exit, 0)
+        sql, params = self._closing_params()
+        self.assertIn("anon_peak_bytes = %s", sql)
+
+    def test_a_sampler_whose_maxima_raise_leaves_the_columns_null(self):
+        # The measurement fails; the close does not. This is the same
+        # posture `capture_resource_usage` already holds for rusage.
+        class _AngrySampler(_FakeSampler):
+            def maxima(self):
+                raise RuntimeError("maxima unavailable")
+
+        result = self.harness.terminate(memory_sampler=_AngrySampler())
+
+        self.assertEqual(result.intended_exit, 0)
+        sql, params = self._closing_params()
+        self.assertIsNone(
+            params[_column_param_index(sql, params, "anon_peak_bytes")])
+        self.assertEqual(
+            params[_column_param_index(sql, params, "memory_sample_count")],
+            0)
+
+    def test_a_broken_rusage_read_does_not_cost_the_sampled_columns(self):
+        # The two measurements fail independently: rusage and the cgroup
+        # sampler are separate readings, and one taking the other down
+        # would lose the half that is not censored.
+        original = termination.capture_resource_usage
+
+        def _capture_with_broken_rusage(**kwargs):
+            def broken(who):
+                raise RuntimeError("simulated rusage failure")
+            kwargs["getrusage"] = broken
+            return original(**kwargs)
+
+        termination.capture_resource_usage = _capture_with_broken_rusage
+        self.addCleanup(
+            setattr, termination, "capture_resource_usage", original)
+
+        self.harness.terminate(memory_sampler=_FakeSampler())
+
+        sql, params = self._closing_params()
+        self.assertIsNone(
+            params[_column_param_index(sql, params, "peak_rss_kb")])
+        self.assertEqual(
+            params[_column_param_index(sql, params, "anon_peak_bytes")],
+            6_442_450_944)
+
+
+class CaptureResourceUsageMemoryTests(unittest.TestCase):
+    """`capture_resource_usage`'s own half of migration 120, called
+    directly — the sampler's maxima, plus one final `memory.events` read to
+    catch a reclaim that landed after the last sample."""
+
+    def _rusage(self):
+        import resource as resource_module
+
+        responses = {
+            resource_module.RUSAGE_SELF: _FakeRusage(
+                ru_maxrss=100_000, ru_utime=1.0, ru_stime=0.0),
+            resource_module.RUSAGE_CHILDREN: _FakeRusage(
+                ru_maxrss=0, ru_utime=0.0, ru_stime=0.0),
+        }
+        return lambda who: responses[who]
+
+    def test_the_five_columns_come_from_the_samplers_maxima(self):
+        usage = termination.capture_resource_usage(
+            getrusage=self._rusage(), cgroup_peak_bytes=lambda: 1,
+            sampler=_FakeSampler(), memory_events=lambda: {})
+        self.assertEqual(usage["anon_peak_bytes"], 6_442_450_944)
+        self.assertEqual(usage["file_peak_bytes"], 9_663_676_416)
+        self.assertEqual(usage["memory_sample_count"], 3_700)
+
+    def test_a_later_events_read_wins_over_a_stale_sampled_counter(self):
+        # The counters are monotonic and the sampler stops a moment early,
+        # so a reclaim during the last stage's teardown must not be lost.
+        usage = termination.capture_resource_usage(
+            getrusage=self._rusage(), cgroup_peak_bytes=lambda: 1,
+            sampler=_FakeSampler(),
+            memory_events=lambda: {"max": 500, "oom_kill": 0})
+        self.assertEqual(usage["memory_events_max"], 500)
+        self.assertEqual(usage["memory_events_oom_kill"], 0)
+
+    def test_a_failed_events_read_keeps_the_sampled_counter(self):
+        # An unreadable events file must not walk a measured 412 back to
+        # NULL — the sampler's reading is still a real measurement.
+        usage = termination.capture_resource_usage(
+            getrusage=self._rusage(), cgroup_peak_bytes=lambda: 1,
+            sampler=_FakeSampler(), memory_events=lambda: {})
+        self.assertEqual(usage["memory_events_max"], 412)
+
+    def test_no_sampler_yields_nulls_and_a_zero_count(self):
+        usage = termination.capture_resource_usage(
+            getrusage=self._rusage(), cgroup_peak_bytes=lambda: 1)
+        self.assertIsNone(usage["anon_peak_bytes"])
+        self.assertIsNone(usage["file_peak_bytes"])
+        self.assertIsNone(usage["memory_events_max"])
+        self.assertIsNone(usage["memory_events_oom_kill"])
+        self.assertEqual(usage["memory_sample_count"], 0)
+
+    def test_read_memory_events_returns_only_max_and_oom_kill(self):
+        text = "low 0\nhigh 2\nmax 9\noom 0\noom_kill 1\n"
+        events = termination.read_memory_events(read_text=lambda path: text)
+        self.assertEqual(events, {"max": 9, "oom_kill": 1})
+
+    def test_read_memory_events_never_raises_on_a_missing_file(self):
+        def angry(path):
+            raise FileNotFoundError(path)
+
+        self.assertEqual(termination.read_memory_events(read_text=angry), {})
 
 
 def _column_param_index(sql, params, column):

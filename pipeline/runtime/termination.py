@@ -447,8 +447,45 @@ def read_cgroup_peak_bytes(paths: Any = _CGROUP_PEAK_PATHS,
     return None
 
 
+#: The five memory-accounting values (migration 120) as they read when no
+#: sampler ran at all: every peak NULL, and a sample count of 0 that says so
+#: explicitly. `memory_sample_count = 0` is the distinguishing fact — an
+#: attempt whose row carries it was never sampled, as opposed to one that
+#: was sampled and happened to see nothing.
+_NO_MEMORY_ACCOUNTING = {
+    "anon_peak_bytes": None,
+    "file_peak_bytes": None,
+    "memory_events_max": None,
+    "memory_events_oom_kill": None,
+    "memory_sample_count": 0,
+}
+
+
+def read_memory_events(read_text: Any = None) -> dict:
+    """A final `memory.events` read at terminal — `max` and `oom_kill`.
+
+    The sampler already carries these as running maxima, but it stops a
+    moment before this runs and the counters are monotonic: a reclaim
+    provoked by the last stage's teardown would land after the final sample
+    and be lost. Reading once more here costs one file read and closes that
+    window. Returns `{}` on any failure — never raises, for the same reason
+    nothing else in this measurement path does.
+    """
+    from pipeline.runtime.memory_sampler import V2_EVENTS, _parse_keyed
+
+    _read = read_text if read_text is not None else (
+        lambda path: open(path, "r").read())
+    try:
+        events = _parse_keyed(_read(V2_EVENTS))
+    except Exception:  # noqa: BLE001 - an unreadable pseudo-file is routine
+        return {}
+    return {key: events[key] for key in ("max", "oom_kill") if key in events}
+
+
 def capture_resource_usage(getrusage: Any = resource.getrusage,
-                            cgroup_peak_bytes: Any = read_cgroup_peak_bytes) -> dict:
+                            cgroup_peak_bytes: Any = read_cgroup_peak_bytes,
+                            sampler: Any = None,
+                            memory_events: Any = read_memory_events) -> dict:
     """Peak resident memory and CPU seconds for the job process tree, at
     terminal.
 
@@ -495,20 +532,67 @@ def capture_resource_usage(getrusage: Any = resource.getrusage,
     `peak_rss_kb`/`cpu_seconds` down with it. `getrusage` and
     `cgroup_peak_bytes` are both injectable so tests can supply fakes
     rather than depending on a real subprocess tree or `/sys/fs/cgroup`.
+
+    **The five memory-accounting values (migration 120) ride alongside**,
+    read from `sampler` — the `MemorySampler` the entrypoint started when
+    `workdir` appeared and stopped just before this runs. `cgroup_peak_bytes`
+    answers "how high did the whole cgroup go", which every Prove attempt
+    answered with the hard limit itself; these answer the question that
+    reading is censored on. `anon_peak_bytes` is the working set a hard
+    limit must EXCEED (unreclaimable); `file_peak_bytes` is cache demand
+    above it (reclaimable, so not a requirement); `memory_events_max` counts
+    the times the cgroup hit its limit and had to reclaim — nonzero is what
+    "the limit is binding" looks like from inside; `memory_events_oom_kill`
+    is 0 on a healthy attempt and nonzero is the failure signature;
+    `memory_sample_count` is the series length, 0 meaning the sampler never
+    ran. `sampler=None` (every caller before this brief, and every test that
+    does not exercise the feature) yields the all-NULL, count-0 shape, so a
+    caller that knows nothing of the sampler still writes a truthful row.
+
+    The sampler's own maxima are combined with one final `memory.events`
+    read: the sampler stops a moment before this and the counters are
+    monotonic, so a reclaim during the last stage's teardown would otherwise
+    be lost. Both are best-effort; neither can raise out of here.
     """
+    memory = dict(_NO_MEMORY_ACCOUNTING)
+    try:
+        if sampler is not None:
+            memory.update(sampler.maxima())
+            events = memory_events()
+            # Monotonic counters: a later read can only be higher, and
+            # `max` here keeps a failed read (an absent key) from walking a
+            # sampled value back to None.
+            if "max" in events:
+                memory["memory_events_max"] = max(
+                    events["max"], memory["memory_events_max"] or 0)
+            if "oom_kill" in events:
+                memory["memory_events_oom_kill"] = max(
+                    events["oom_kill"], memory["memory_events_oom_kill"] or 0)
+    except Exception:  # noqa: BLE001 - measurement is best-effort, never fatal
+        _logger.warning(
+            "could not read the memory sampler's maxima for this attempt's "
+            "memory-accounting columns; leaving them NULL", exc_info=True)
+        memory = dict(_NO_MEMORY_ACCOUNTING)
+
     try:
         self_usage = getrusage(resource.RUSAGE_SELF)
         children_usage = getrusage(resource.RUSAGE_CHILDREN)
         peak_rss_kb = max(self_usage.ru_maxrss, 0) + max(children_usage.ru_maxrss, 0)
         cpu_seconds = (self_usage.ru_utime + self_usage.ru_stime
                        + children_usage.ru_utime + children_usage.ru_stime)
-        return {"peak_rss_kb": int(peak_rss_kb), "cpu_seconds": float(cpu_seconds),
-                "cgroup_peak_bytes": cgroup_peak_bytes()}
+        usage = {"peak_rss_kb": int(peak_rss_kb),
+                 "cpu_seconds": float(cpu_seconds),
+                 "cgroup_peak_bytes": cgroup_peak_bytes()}
     except Exception:  # noqa: BLE001 - measurement is best-effort, never fatal
         _logger.warning(
             "could not read rusage for this attempt's resource-usage "
             "columns; leaving peak_rss_kb/cpu_seconds NULL", exc_info=True)
-        return {"peak_rss_kb": None, "cpu_seconds": None, "cgroup_peak_bytes": None}
+        usage = {"peak_rss_kb": None, "cpu_seconds": None,
+                 "cgroup_peak_bytes": None}
+    # The two measurements fail independently: a broken rusage read must not
+    # cost the sampled memory accounting, nor the other way round.
+    usage.update(memory)
+    return usage
 
 
 # ---------------------------------------------------------------------------
@@ -838,7 +922,8 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
               on_step: Any = None, record_store: Any = None,
               science_provenance: dict | None = None,
               products: dict | None = None,
-              job_type: str | None = None) -> TerminationResult:
+              job_type: str | None = None,
+              memory_sampler: Any = None) -> TerminationResult:
     """Run the ordered closing sequence. Raises `RecordsError` if any step fails.
 
     `store` receives the diagnostics bundle; `record_store` receives the
@@ -879,6 +964,21 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
     # raise out of it.
     intended_exit = EXIT_RECORDED
 
+    # The memory series must be closed BEFORE the bundle is built, or the
+    # tar carries a half-written last line and an open file handle's worth
+    # of unflushed rows. `MemorySampler.stop` swallows its own errors, but
+    # this does not RELY on that: termination's contract is that no
+    # measurement can cost an attempt its terminal record, and a contract
+    # enforced only at the other end of the call is a contract one refactor
+    # away from being untrue.
+    if memory_sampler is not None:
+        try:
+            memory_sampler.stop()
+        except Exception:  # noqa: BLE001 - measurement is never fatal
+            _logger.warning(
+                "the memory sampler did not stop cleanly; the bundle may "
+                "carry a truncated memory series", exc_info=True)
+
     _step(on_step, "build_bundle")
     body = build_bundle(workdir.bundle_dir)
 
@@ -911,7 +1011,13 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
     # every stage and subprocess has run and been waited on, and before the
     # row closes. Best-effort: `capture_resource_usage` never raises, so a
     # measurement failure cannot cost the job its terminal record.
-    usage = capture_resource_usage()
+    #
+    # The memory sampler's maxima ride the same call (migration 120). The
+    # sampler was already STOPPED above, before `build_bundle`, so its
+    # series file is closed and complete in the tar — the maxima read here
+    # are the final ones and no further row can arrive after the bundle was
+    # built.
+    usage = capture_resource_usage(sampler=memory_sampler)
 
     try:
         writer.mark_application_closed(
@@ -927,6 +1033,11 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
             peak_rss_kb=usage["peak_rss_kb"],
             cpu_seconds=usage["cpu_seconds"],
             cgroup_peak_bytes=usage["cgroup_peak_bytes"],
+            anon_peak_bytes=usage["anon_peak_bytes"],
+            file_peak_bytes=usage["file_peak_bytes"],
+            memory_events_max=usage["memory_events_max"],
+            memory_events_oom_kill=usage["memory_events_oom_kill"],
+            memory_sample_count=usage["memory_sample_count"],
         )
     except Exception as exc:  # noqa: BLE001 - translated
         # The record is already durable and valid; only the row transition

@@ -66,6 +66,7 @@ from pipeline.runtime.errors import (
 from pipeline.runtime.ownership import lifecycle_reader_for, resolve_ownership
 from pipeline.runtime.process import redact
 from pipeline.runtime.stages import StageRecorder, run_stage
+from pipeline.runtime.memory_sampler import MemorySampler
 from pipeline.runtime.termination import (
     EXIT_RECORDED,
     EXIT_UNRECORDABLE,
@@ -740,6 +741,30 @@ def _run(workload_class: str) -> int:
                                       attempt_id=job_env.attempt_index)
     logger = logging_setup.get_logger("job", adapter=adapter)
 
+    # The cgroup memory sampler, started as soon as there is a bundle
+    # directory to write its series into and stopped by `terminate` before
+    # the bundle is tarred. It answers the question `cgroup_peak_bytes`
+    # cannot: that column reads 16,384 MiB on every attempt because that is
+    # the container's HARD LIMIT, so the peak it reports is where the kernel
+    # was told to stop the job, not what the job needed. The sampler splits
+    # anonymous (unreclaimable — what a limit must exceed) from file cache
+    # (reclaimable — demand, not need), once a second, for the whole run.
+    #
+    # `start()` never raises and starts nothing on a host with no cgroup
+    # hierarchy, so this costs a job on such a host one log line and no
+    # behaviour change. It is deliberately started BEFORE the database
+    # connection: the measurement covers the whole attempt, and a sampler
+    # that only ran once a connection was up would miss the startup the
+    # profile is partly asking about.
+    # On a path that raises out before `terminate` runs, the sampler is not
+    # stopped explicitly — and does not need to be. The thread is a DAEMON,
+    # so it cannot hold the interpreter open at exit, and every row is
+    # flushed as it is taken, so the series on disk is already complete to
+    # the last full second. An attempt that dies before terminal has no row
+    # to write the maxima into in any case: the reconciler closes it from
+    # Batch state, with no rusage and no sampler to report.
+    sampler = MemorySampler(workdir.bundle_dir).start()
+
     with _database(route, job_env, db_endpoint, db_credentials) as (writer,
                                                                     execute,
                                                                     conn):
@@ -900,7 +925,10 @@ def _run(workload_class: str) -> int:
             # registrar, round 2 — neither job_type nor ppid was recorded, so
             # a registrar could not tell a reference-image attempt from a
             # science one).
-            job_type=manifest.job_type)
+            job_type=manifest.job_type,
+            # Stopped inside `terminate`, before the bundle is built, and
+            # read for the memory-accounting columns at the closing write.
+            memory_sampler=sampler)
 
     logger.info("terminated: outcome=%s disposition=%s record=%s exit=%d",
                 result.outcome, result.product_disposition,

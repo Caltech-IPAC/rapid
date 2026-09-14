@@ -135,6 +135,14 @@ class RequiredMigrationsFailsClosedOnNewEntriesTests(unittest.TestCase):
         self._assert_fails_closed_missing_only(
             "116-attempts-cgroup-peak.sql")
 
+    def test_missing_120_attempts_memory_accounting_fails_closed(self):
+        # 120's five columns are in the SAME UPDATE as 113's and 116's, so
+        # a database without it fails EVERY attempt's terminal write, not
+        # only a sampled one — which is exactly why it belongs in the
+        # unconditional floor rather than in ROUTE_MIGRATIONS.
+        self._assert_fails_closed_missing_only(
+            "120-attempts-memory-accounting.sql")
+
     def test_the_full_floor_passes_when_every_entry_is_present(self):
         # The complement of the five tests above: staging every required
         # migration (nothing withheld) must verify cleanly, so a future typo
