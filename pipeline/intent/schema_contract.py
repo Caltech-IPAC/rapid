@@ -232,6 +232,27 @@ REQUIRED_MIGRATIONS = (
      "at index > 1 against a logical job with no lower-indexed row is created "
      "with `work_unit_id` NULL — the shape 123 exists to prevent, reached by "
      "the one path 123's refusal did not cover"),
+    ("126-reference-sets.sql",
+     "`public.reference_sets`, `refimages.reference_set_id`, "
+     "`psfs.reference_set_id` and `runs.reference_set_id`, with currency on "
+     "the two product tables keyed on the SET rather than the run. Without "
+     "126 `get_best_reference_image` and `get_best_psf` reference a column "
+     "that does not exist and every gathering pass fails at its first "
+     "reference lookup — and `derived.create_run` has nowhere to store the "
+     "set a run declares, so `run create --reference-set` could not be "
+     "honoured even if the column check were skipped"),
+    ("127-reference-set-functions.sql",
+     "the registration writers resolving a row's reference set server-side "
+     "from `run_id_`, their vBest demotion guards scoped by SET rather than "
+     "by run, the three `derived.*` set-management functions, and "
+     "`derived.create_run`'s `p_reference_set_id`. Without 127 a database "
+     "has 126's set-keyed unique indexes but writers that populate no set: "
+     "registration lands every row in the default set's slot, so the SECOND "
+     "run to register a reference for one identity group collides with the "
+     "first — two coexisting sets being precisely what 126 exists to allow. "
+     "The demotion guard is the sharper half: a run-scoped guard under "
+     "set-keyed currency demotes ACROSS the set boundary, silently "
+     "superseding another set's current reference"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than

@@ -1814,12 +1814,138 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_best_reference_image(self,ppid,field,fid,run_id=None):
+    def get_default_reference_set(self):
+
+        '''
+        Return (reference_set_id, name, psf_set_id) of production's default
+        reference set, or None if there is none.
+
+        THE DEFAULT IS A ROW, NOT A CONVENTION (migration 126). Exactly one
+        `reference_sets` row carries `is_default`, enforced by the partial
+        unique index `reference_sets_default_unique`, and moving it is an
+        operator's separately audited act (`rapidctl refset default`) rather
+        than a side effect of registering a reference — which is precisely
+        what used to happen and what the whole design removes.
+
+        Callers resolve this ONCE per pass and pass the id explicitly, so a
+        long pass reads one set from its first unit to its last even if the
+        default moves underneath it. A run resolves its set at CREATION
+        instead and stores it; this reader is for production, which has no
+        run of its own to have stored one.
+        '''
+
+        self.exit_code = 0
+
+        query =\
+            "select reference_set_id, name, psf_set_id " +\
+            "from reference_sets " +\
+            "where is_default; "
+
+        print('query = {}'.format(query))
+
+        try:
+            self.cur.execute(query)
+            record = self.cur.fetchone()
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting the default reference set ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return None
+
+        if record is None:
+            print("*** Error: No default reference set found; continuing...")
+            self.exit_code = 67
+            return None
+
+        return record
+
+
+########################################################################################################
+
+    def get_reference_set_by_name(self,name):
+
+        '''
+        Return (reference_set_id, name, psf_set_id, state) for a named
+        reference set, or None if no set carries that name.
+
+        Names are unique (`reference_sets_name_uq`, migration 126), so this
+        is a single-row read by design rather than by ordering.
+        '''
+
+        self.exit_code = 0
+
+        query =\
+            "select reference_set_id, name, psf_set_id, state " +\
+            "from reference_sets " +\
+            "where name = %s; "
+
+        params = (name,)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            record = self.cur.fetchone()
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting reference set by name ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return None
+
+        if record is None:
+            print("*** Error: No reference set named {}; continuing...".format(name))
+            self.exit_code = 67
+            return None
+
+        return record
+
+
+########################################################################################################
+
+    def get_best_reference_image(self,ppid,field,fid,reference_set_id):
 
         '''
         Query RefImages database table for the best (latest unless version is locked) version of reference image.
 
-        RUN-SCOPED AND DETERMINISTIC. Migration 115 put a `run_id` column
+        SET-SCOPED, AND THERE IS NO FALLBACK. Migration 126 made the
+        REFERENCE SET the unit of currency: `refimages` currency is keyed
+        on `(field, fid, ppid, reference_set_id)` by
+        `refimages_vbest_current_per_set_unique`, several sets are current
+        at once, and a run declares the set it differences against at
+        creation. This query therefore carries ONE predicate —
+        `reference_set_id = %s` — and admits nothing else.
+
+        WHY THE FALLBACK IS GONE, and it is the whole point. Under 115's
+        run-scoped shape this reader admitted two lanes, the caller's own
+        run and the production lane, ranking the run's own first. That
+        fallback is what made a run's reference a function of WHEN it
+        gathered: a run with no references of its own read whichever
+        production reference was current at gather time, and a
+        registration landing between two of its waves silently changed
+        what its later waves differenced against. Sets remove the need for
+        the fallback rather than merely narrowing it — a run with no
+        references of its own is given the DEFAULT SET at creation, stored
+        on the run, so it has a set of its own to read from the first wave
+        to the last, and "whichever is current now" never enters.
+
+        `reference_set_id` is REQUIRED, with no default. A default would
+        reintroduce the failure by the back door: a caller that forgot to
+        pass one would silently read some set rather than fail, which is
+        exactly the class of silence 126 exists to end. Callers resolve
+        the set from the run (campaign) or from `is_default` (production)
+        and pass it explicitly.
+
+        The `ORDER BY rfid DESC` is kept from the run-scoped shape, for
+        its own reason: a `fetchone()` over an unordered result set is a
+        planner-defined choice as soon as the set has more than one
+        member, and the partial unique index is what keeps it to one.
+        Should that index ever be dropped or bypassed, `rfid DESC` still
+        yields the most recently registered row rather than an arbitrary
+        one.
+
+        The pre-126 text is kept below because the reasoning it records —
+        why a run predicate was needed at all, and why equality rather
+        than prefix — is still the reasoning behind the set predicate.
+
+        RUN-SCOPED AND DETERMINISTIC (115, superseded by 126). Migration 115 put a `run_id` column
         on the product tables and gave RefImages two PARTIAL unique
         indexes for currency — `refimages_vbest_current_unique`
         (`run_id IS NULL`, the production lane) and
@@ -1870,43 +1996,21 @@ class RAPIDDB:
 
         # Define query template.
 
-        if run_id is None:
-            # Production lane. Identical in effect to the pre-115 query
-            # for every row that query could ever have matched, plus the
-            # ordering that makes the single-row read deterministic.
-            query =\
-                "select rfid,filename,infobits,version " +\
-                "from RefImages " +\
-                "where vbest > 0 " +\
-                "and status > 0 " +\
-                "and ppid = %s " +\
-                "and field = %s " +\
-                "and fid = %s " +\
-                "and run_id is null " +\
-                "order by rfid desc; "
+        # ONE SHAPE, ONE PREDICATE. There is no production branch and no
+        # run branch: production IS a set, so the same query serves both
+        # and there is no lane for a caller to be placed in wrongly.
+        query =\
+            "select rfid,filename,infobits,version " +\
+            "from RefImages " +\
+            "where vbest > 0 " +\
+            "and status > 0 " +\
+            "and ppid = %s " +\
+            "and field = %s " +\
+            "and fid = %s " +\
+            "and reference_set_id = %s " +\
+            "order by rfid desc; "
 
-            params = (ppid, field, fid)
-
-        else:
-            # Run-scoped. Both acceptable lanes are admitted by the
-            # `in (%s, null)`-equivalent predicate below, then RANKED by
-            # the first `order by` term so the caller's own run wins; the
-            # production row is reached only when the run has none. The
-            # run name is BOUND twice (once to filter, once to rank),
-            # never spliced into the SQL text.
-            query =\
-                "select rfid,filename,infobits,version " +\
-                "from RefImages " +\
-                "where vbest > 0 " +\
-                "and status > 0 " +\
-                "and ppid = %s " +\
-                "and field = %s " +\
-                "and fid = %s " +\
-                "and (run_id = %s or run_id is null) " +\
-                "order by (case when run_id = %s then 0 else 1 end), " +\
-                "rfid desc; "
-
-            params = (ppid, field, fid, run_id, run_id)
+        params = (ppid, field, fid, reference_set_id)
 
 
         # Formulate query by substituting parameters into query template.
@@ -1914,7 +2018,7 @@ class RAPIDDB:
         print('----> ppid = {}'.format(ppid))
         print('----> field = {}'.format(field))
         print('----> fid = {}'.format(fid))
-        print('----> run_id = {}'.format(run_id))
+        print('----> reference_set_id = {}'.format(reference_set_id))
 
 
         print('query = {}, params = {}'.format(query, params))
@@ -2105,7 +2209,7 @@ class RAPIDDB:
 ########################################################################################################
 
     def add_refimage(self,ppid,field,fid,hp6,hp9,infobits,status,filename,checksum,
-        attempt_id=None,registered_record_sequence=None,*,run_id):
+        attempt_id=None,registered_record_sequence=None,*,run_id,reference_set_id=None):
 
         '''
         Add record in RefImages database table.
@@ -2154,7 +2258,8 @@ class RAPIDDB:
             "cast(%s as smallint)," +\
             "cast(%s as bigint)," +\
             "cast(%s as integer)," +\
-            "cast(%s as text)) as " +\
+            "cast(%s as text)," +\
+            "cast(%s as bigint)) as " +\
             "(rfid integer," +\
             " version smallint);"
 
@@ -2169,8 +2274,12 @@ class RAPIDDB:
         print('----> run_id = {}'.format(run_id))
 
 
+        # `reference_set_id` is normally None: the SQL function resolves the
+        # set server-side from `run_id`, which is what keeps the deployed
+        # pipeline image out of this change entirely (migration 127). It is
+        # passed only by the operator tooling, which knows the set directly.
         params = (field, hp6, hp9, fid, ppid, infobits, filename, checksum, status,
-                  attempt_id, registered_record_sequence, run_id)
+                  attempt_id, registered_record_sequence, run_id, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2193,7 +2302,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_refimage(self,rfid,filename,checksum,status,version,*,run_id):
+    def update_refimage(self,rfid,filename,checksum,status,version,*,run_id,reference_set_id=None):
 
         '''
         Update record in RefImages database table.
@@ -2218,7 +2327,8 @@ class RAPIDDB:
             "cast(%s as character varying(32))," +\
             "cast(%s as smallint)," +\
             "cast(%s AS smallint)," +\
-            "cast(%s as text));"
+            "cast(%s as text)," +\
+            "cast(%s as bigint));"
 
 
         # Query database.
@@ -2229,9 +2339,14 @@ class RAPIDDB:
         print('----> status = {}'.format(status))
         print('----> version = {}'.format(version))
         print('----> run_id = {}'.format(run_id))
+        print('----> reference_set_id = {}'.format(reference_set_id))
 
 
-        params = (rfid, filename, checksum, status, version, run_id)
+        # Normally None: updateRefImage scopes its vBest demotion to the set
+        # the ROW already carries (migration 127), so an ordinary
+        # registration needs to say nothing. Passed only by the operator
+        # tooling, which knows the set directly.
+        params = (rfid, filename, checksum, status, version, run_id, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2258,10 +2373,42 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_best_psf(self,sca,fid):
+    def get_best_psf(self,sca,fid,reference_set_id):
 
         '''
         Query PSFs database table for the best (latest unless version is locked) version of PSF.
+
+        SET-SCOPED, THE SAME PREDICATE THE REFERENCE READER CARRIES, AND
+        NO FALLBACK. This reader was the unhardened twin: `addpsf` has
+        written `run_id` since migration 115, but the reader was never
+        given a predicate to match, so from 115 until 126 it read
+        whichever current PSF the planner emitted first across every
+        lane — the same defect the reference reader was fixed for, left
+        open on the PSF side because nothing had yet written a campaign
+        PSF row. Migration 126 keys `psfs` currency on
+        `(fid, sca, reference_set_id)`, so two sets can legally hold a
+        current PSF for one (sca, fid) and the predicate is now load-
+        bearing rather than precautionary.
+
+        THE SET PASSED HERE IS THE REFERENCE SET'S `psf_set_id`, NOT THE
+        RUN'S OWN SET. PSFs are registered by
+        `scripts/generate_refim_psfs.py` and never written by a pipeline
+        job, so a new set of coadds DECLARES which set's PSF rows it
+        reads rather than owning any; production's set points at itself.
+        Callers resolve the reference set first and pass its
+        `psf_set_id`, which is what keeps a coadd and the PSF it was
+        built against together.
+
+        `ORDER BY psfid DESC` is NEW here — this query had no ordering at
+        all, and `fetchone()` over an unordered result is a planner-
+        defined choice the moment more than one row matches. Same
+        reasoning as the reference reader's: the partial unique index
+        should keep it to one row, and the ordering is what makes the
+        read deterministic if that index is ever dropped or bypassed.
+
+        `reference_set_id` is REQUIRED, with no default, for the reason
+        the reference reader gives: a default would let a caller that
+        forgot to pass one read some set silently instead of failing.
         '''
 
         self.exit_code = 0
@@ -2275,16 +2422,19 @@ class RAPIDDB:
             "where vbest > 0 " +\
             "and status > 0 " +\
             "and sca = %s " +\
-            "and fid = %s; "
+            "and fid = %s " +\
+            "and reference_set_id = %s " +\
+            "order by psfid desc; "
 
 
         # Formulate query by substituting parameters into query template.
 
         print('----> sca = {}'.format(sca))
         print('----> fid = {}'.format(fid))
+        print('----> reference_set_id = {}'.format(reference_set_id))
 
 
-        params = (sca, fid)
+        params = (sca, fid, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2524,7 +2674,7 @@ class RAPIDDB:
 ########################################################################################################
 
     def add_psf(self,fid,sca,filename,checksum,status,
-        attempt_id=None,registered_record_sequence=None,*,run_id):
+        attempt_id=None,registered_record_sequence=None,*,run_id,reference_set_id=None):
 
         '''
         Add record in PSFs database table.
@@ -2560,7 +2710,8 @@ class RAPIDDB:
             "cast(%s as smallint)," +\
             "cast(%s as bigint)," +\
             "cast(%s as integer)," +\
-            "cast(%s as text)) as " +\
+            "cast(%s as text)," +\
+            "cast(%s as bigint)) as " +\
             "(psfid integer," +\
             " version smallint);"
 
@@ -2575,8 +2726,10 @@ class RAPIDDB:
         print('----> run_id = {}'.format(run_id))
 
 
+        # Normally None: addPSF resolves the set server-side from run_id
+        # (migration 127). Passed only by the operator tooling.
         params = (fid, sca, filename, checksum, status,
-                  attempt_id, registered_record_sequence, run_id)
+                  attempt_id, registered_record_sequence, run_id, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2600,7 +2753,7 @@ class RAPIDDB:
 ########################################################################################################
 
     def update_psf(self,psfid,filename,checksum,status,version,
-        attempt_id=None,registered_record_sequence=None,*,run_id):
+        attempt_id=None,registered_record_sequence=None,*,run_id,reference_set_id=None):
 
         '''
         Update record in PSFs database table.
@@ -2627,7 +2780,8 @@ class RAPIDDB:
             "cast(%s as smallint)," +\
             "cast(%s as bigint)," +\
             "cast(%s as integer)," +\
-            "cast(%s as text));"
+            "cast(%s as text)," +\
+            "cast(%s as bigint));"
 
 
         # Query database.
@@ -2640,10 +2794,14 @@ class RAPIDDB:
         print('----> attempt_id = {}'.format(attempt_id))
         print('----> registered_record_sequence = {}'.format(registered_record_sequence))
         print('----> run_id = {}'.format(run_id))
+        print('----> reference_set_id = {}'.format(reference_set_id))
 
 
+        # Normally None: updatePSF scopes its vBest demotion to the set the
+        # ROW already carries (migration 127). Passed only by the operator
+        # tooling, which knows the set directly.
         params = (psfid, filename, checksum, status, version,
-                  attempt_id, registered_record_sequence, run_id)
+                  attempt_id, registered_record_sequence, run_id, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 

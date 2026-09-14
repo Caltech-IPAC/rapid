@@ -150,12 +150,19 @@ class StubSource:
     def __init__(self, **overrides):
         self.exit_code = 0
         self.reference_calls = []
-        # The `run_id` each reference lookup was given, recorded alongside
-        # the ppid calls above (2026-09-12): which RUN's reference a unit
-        # differences against is now part of this method's contract, so a
-        # stub that dropped the argument could not tell a threaded scope
-        # from an unthreaded one.
-        self.reference_run_ids = []
+        # The `reference_set_id` each reference lookup was given, recorded
+        # alongside the ppid calls above (2026-09-14, migration 126; it
+        # recorded `run_id` from 2026-09-12 until then). Which SET's
+        # reference a unit differences against is part of this method's
+        # contract, so a stub that dropped the argument could not tell a
+        # threaded set from an unthreaded one.
+        self.reference_set_ids = []
+        # The `reference_set_id` each PSF lookup was given (126). The PSF
+        # reader gained the argument at the same time, and it is NOT
+        # necessarily the same value — it is the reference set's declared
+        # `psf_set_id` — so it is recorded separately rather than assumed
+        # to match.
+        self.psf_set_ids = []
         self.blocking_calls = []
         # (rid, sca, fid, ra0, dec0, ra1..ra4, dec1..dec4)
         self.meta = overrides.get("meta", {
@@ -221,25 +228,30 @@ class StubSource:
     def get_exposure_filter(self, fid):
         return self.filter_name
 
-    def get_best_psf(self, sca, fid):
+    def get_best_psf(self, sca, fid, reference_set_id):
+        # `reference_set_id` is REQUIRED here exactly as it is on the real
+        # method (126). A stub that kept it optional would let a production
+        # change that stopped passing it pass this suite silently.
+        self.psf_set_ids.append(reference_set_id)
         return self.psf
 
-    def get_best_reference_image(self, ppid, field, fid, run_id=None):
+    def get_best_reference_image(self, ppid, field, fid, reference_set_id):
         self.reference_calls.append(ppid)
-        self.reference_run_ids.append(run_id)
+        self.reference_set_ids.append(reference_set_id)
         if callable(self.reference):
             # The callback keeps its original four-argument shape; a
-            # callback that also wants the run_id declares a fifth
-            # parameter and gets it. Dispatched on the callback's DECLARED
-            # arity, never on catching `TypeError` from the call -- that
-            # would swallow a genuine TypeError raised inside the callback
-            # body and retry it, turning a test's own bug into a confusing
-            # second failure.
+            # callback that also wants the reference_set_id declares a
+            # fifth parameter and gets it. Dispatched on the callback's
+            # DECLARED arity, never on catching `TypeError` from the call
+            # -- that would swallow a genuine TypeError raised inside the
+            # callback body and retry it, turning a test's own bug into a
+            # confusing second failure.
             import inspect
-            wants_run_id = len(
+            wants_set = len(
                 inspect.signature(self.reference).parameters) >= 5
-            if wants_run_id:
-                result = self.reference(self, ppid, field, fid, run_id)
+            if wants_set:
+                result = self.reference(self, ppid, field, fid,
+                                        reference_set_id)
             else:
                 result = self.reference(self, ppid, field, fid)
         else:
@@ -392,10 +404,18 @@ class ReferenceSelectionTests(unittest.TestCase):
             return None
         return answer
 
+    #: Every test in this class that expects a reference to be RESOLVED
+    #: must declare a set (2026-09-14, migration 126): `_best_reference`
+    #: returns None immediately when `reference_set_id is None`, so a
+    #: setless call no longer reaches the ppid loop at all. That skip is
+    #: itself under test in `ReferenceSetThreadingTests` below.
+    SET = 7
+
     def test_the_reference_ppid_is_tried_first(self):
         source = StubSource(reference=self._reference_under(12))
         facts = science_facts(source, 101, field=4678622, fid=8,
-                              reference_ppid=12, science_ppid=15)
+                              reference_ppid=12, science_ppid=15,
+                              reference_set_id=self.SET)
         self.assertEqual(facts["reference_image_id"], 900)
         self.assertEqual(source.reference_calls, [12])
 
@@ -404,7 +424,8 @@ class ReferenceSelectionTests(unittest.TestCase):
         # registered under the science ppid — the launcher's second call.
         source = StubSource(reference=self._reference_under(15))
         facts = science_facts(source, 101, field=4678622, fid=8,
-                              reference_ppid=12, science_ppid=15)
+                              reference_ppid=12, science_ppid=15,
+                              reference_set_id=self.SET)
         self.assertEqual(facts["reference_image_id"], 900)
         self.assertEqual(source.reference_calls, [12, 15])
 
@@ -414,7 +435,8 @@ class ReferenceSelectionTests(unittest.TestCase):
         # are different objects, and the query does not return the ppid.
         source = StubSource(reference=self._reference_under(15))
         facts = science_facts(source, 101, field=4678622, fid=8,
-                              reference_ppid=12, science_ppid=15)
+                              reference_ppid=12, science_ppid=15,
+                              reference_set_id=self.SET)
         self.assertEqual(facts["reference_image_ppid"], 15)
 
     def test_no_reference_anywhere_leaves_the_facts_absent(self):
@@ -428,7 +450,8 @@ class ReferenceSelectionTests(unittest.TestCase):
             source.exit_code = 7
             return None
         source = StubSource(reference=none_at_all)
-        facts = science_facts(source, 101, field=4678622, fid=8)
+        facts = science_facts(source, 101, field=4678622, fid=8,
+                              reference_set_id=self.SET)
         self.assertNotIn("reference_image_id", facts)
 
     def test_a_real_query_failure_is_not_read_as_no_reference(self):
@@ -439,75 +462,190 @@ class ReferenceSelectionTests(unittest.TestCase):
             return None
         with self.assertRaises(GatheringError) as ctx:
             science_facts(StubSource(reference=broken), 101,
-                          field=4678622, fid=8)
+                          field=4678622, fid=8,
+                          reference_set_id=self.SET)
         self.assertIn("64", str(ctx.exception))
 
-    # -------------------------------------------------------------------
-    # `run_scope` reaching the reference lookup (2026-09-12). Migration 115
-    # made reference currency run-scoped: `refimages` carries a `run_id`
-    # and has SEPARATE partial unique indexes for the production lane
-    # (`run_id IS NULL`) and per-run lanes, so a campaign run and
-    # production can each hold a current reference for the same
-    # (ppid, field, fid). Until now this lookup was given no run at all,
-    # so which of the two a campaign's science differenced against was
-    # whatever the database happened to return first. The database-level
-    # proof that the scoped query selects the right row is
-    # `RunScopedReferenceLookupSemanticsTests` in
-    # `database.modules.utils.test.test_rapid_db`; what these tests prove
-    # is the other half -- that the run actually REACHES that query.
-    # -------------------------------------------------------------------
 
-    def test_no_run_scope_looks_the_reference_up_in_the_production_lane(
-            self):
-        # The call every existing caller makes today. `None` is the
-        # production lane, and must stay the default.
-        source = StubSource(reference=self._reference_under(12))
-        science_facts(source, 101, field=4678622, fid=8,
-                      reference_ppid=12, science_ppid=15)
-        self.assertEqual(source.reference_run_ids, [None])
+class ReferenceSetThreadingTests(unittest.TestCase):
+    """`reference_set_id`/`psf_set_id` reaching the two readers
+    (2026-09-14, migration 126).
 
-    def test_a_run_scope_reaches_the_reference_lookup(self):
+    REPLACES the `run_scope`-reaching-the-reference-lookup block that used
+    to sit inside `ReferenceSelectionTests`. Under migration 115 this
+    function passed `run_scope` through as the reader's `run_id`, which
+    ranked the run's own lane first and fell back to production's current
+    reference — so a registration landing between two of a run's waves
+    changed what the later waves differenced against. 126 makes the SET
+    the unit of currency: a run declares one at creation and reads it from
+    its first wave to its last, and `run_scope` keeps its own separate job
+    (the resubmission gate). The old assertions pinned the fallback, so
+    they are replaced rather than adapted.
+
+    The database-level proof that the set-scoped query selects the right
+    row is `SetScopedReferenceLookupSemanticsTests` in
+    `database.modules.utils.test.test_rapid_db`; what these prove is the
+    other half — that the set actually REACHES that query.
+    """
+
+    def _reference_under(self, wanted_ppid):
+        def answer(source, ppid, field, fid):
+            if ppid == wanted_ppid:
+                return {"rfid": 900, "filename": "s3://prod/ref.fits",
+                        "infobits": 0, "version": 2}
+            source.exit_code = 7          # the documented "none yet" signal
+            return None
+        return answer
+
+    def test_a_reference_set_id_reaches_the_reference_lookup(self):
         source = StubSource(reference=self._reference_under(12))
         science_facts(source, 101, field=4678622, fid=8,
                       reference_ppid=12, science_ppid=15,
-                      run_scope="w9-campaign-1")
-        self.assertEqual(source.reference_run_ids, ["w9-campaign-1"])
+                      reference_set_id=7)
+        self.assertEqual(source.reference_set_ids, [7])
 
-    def test_the_run_scope_is_carried_into_the_ppid_fallback_call_too(self):
-        # The ppid loop runs INSIDE the run scope, not across it: both
-        # calls carry the same run. A fallback that silently dropped the
-        # scope would hand a campaign production's science-ppid reference
-        # in preference to its own.
+    def test_the_reference_set_id_is_carried_into_the_ppid_fallback_call_too(
+            self):
+        # The ppid loop runs INSIDE the set, not across it: both calls
+        # carry the same set. A fallback that silently dropped it would
+        # hand a run another set's science-ppid reference in preference to
+        # its own set's.
         source = StubSource(reference=self._reference_under(15))
         science_facts(source, 101, field=4678622, fid=8,
                       reference_ppid=12, science_ppid=15,
-                      run_scope="w9-campaign-1")
+                      reference_set_id=7)
         self.assertEqual(source.reference_calls, [12, 15])
-        self.assertEqual(source.reference_run_ids,
-                         ["w9-campaign-1", "w9-campaign-1"])
+        self.assertEqual(source.reference_set_ids, [7, 7])
 
-    def test_a_run_gets_its_own_reference_not_productions(self):
-        # The defect end to end, at this layer: two references exist for
-        # the identity group, one production and one this run's. The stub
-        # answers as the scoped query would, and the campaign must be
-        # handed its own row.
-        def by_run(source, ppid, field, fid, run_id):
-            if run_id == "w9-campaign-1":
-                return {"rfid": 202, "filename": "s3://camp/ref.fits",
+    def test_a_caller_gets_the_reference_from_the_set_it_declared(self):
+        # The defect end to end, at this layer: two sets each hold a
+        # current reference for the identity group. The stub answers as
+        # the set-scoped query would, and each caller must be handed the
+        # row from ITS set.
+        def by_set(source, ppid, field, fid, reference_set_id):
+            if reference_set_id == 2:
+                return {"rfid": 202, "filename": "s3://set2/ref.fits",
                         "infobits": 0, "version": 1}
-            return {"rfid": 101, "filename": "s3://prod/ref.fits",
+            return {"rfid": 101, "filename": "s3://set1/ref.fits",
                     "infobits": 0, "version": 2}
 
-        campaign = science_facts(StubSource(reference=by_run), 101,
-                                 field=4678622, fid=8,
-                                 run_scope="w9-campaign-1")
-        production = science_facts(StubSource(reference=by_run), 101,
-                                   field=4678622, fid=8)
+        second = science_facts(StubSource(reference=by_set), 101,
+                               field=4678622, fid=8, reference_set_id=2)
+        first = science_facts(StubSource(reference=by_set), 101,
+                              field=4678622, fid=8, reference_set_id=1)
 
-        self.assertEqual(campaign["reference_image_id"], 202)
-        self.assertEqual(production["reference_image_id"], 101,
-                         "an unscoped caller must still get the "
-                         "production-lane reference")
+        self.assertEqual(second["reference_image_id"], 202)
+        self.assertEqual(first["reference_image_id"], 101)
+
+    # --- the PSF set is the reference set's declared psf_set_id ----------
+
+    def test_the_psf_lookup_receives_the_psf_set_id_when_one_is_given(self):
+        # PSFs are registered by `scripts/generate_refim_psfs.py` and never
+        # by a pipeline job, so a set of coadds DECLARES which set's PSF
+        # rows it reads rather than owning any. A lookup that passed the
+        # reference set here would read the wrong set's PSFs for every set
+        # that points at another's.
+        source = StubSource()
+        science_facts(source, 101, field=4678622, fid=8,
+                      reference_set_id=7, psf_set_id=3)
+        self.assertEqual(source.psf_set_ids, [3])
+
+    def test_the_psf_lookup_receives_the_reference_set_id_when_psf_set_is_none(
+            self):
+        # Production's set points at itself, which is this case: no
+        # separate PSF set declared, so the reference set IS the PSF set.
+        source = StubSource()
+        science_facts(source, 101, field=4678622, fid=8,
+                      reference_set_id=7)
+        self.assertEqual(source.psf_set_ids, [7])
+
+    # --- no set means no lookup at all ----------------------------------
+
+    def test_no_reference_set_id_never_calls_the_reference_lookup(self):
+        # THE SILENT-DEFAULT REFUSAL. A caller that resolved no set has
+        # nothing to difference against, and searching a default set would
+        # reintroduce exactly the "whatever is current now" behaviour sets
+        # exist to remove. Under 115 this same call read the production
+        # lane and produced reference facts — that is what must no longer
+        # happen.
+        source = StubSource(reference=self._reference_under(12))
+        facts = science_facts(source, 101, field=4678622, fid=8,
+                              reference_ppid=12, science_ppid=15)
+
+        self.assertEqual(source.reference_calls, [])
+        self.assertEqual(source.reference_set_ids, [])
+        self.assertNotIn("reference_image_id", facts)
+        self.assertNotIn("reference_image_uri", facts)
+        self.assertNotIn("reference_image_ppid", facts)
+
+    def test_no_reference_set_id_skips_the_psf_lookup_too(self):
+        # The PSF set is resolved WITH the reference set, so a caller with
+        # no set has no PSF set either — and the reader would have nothing
+        # legitimate to pass as its now-required third argument.
+        source = StubSource()
+        facts = science_facts(source, 101, field=4678622, fid=8)
+
+        self.assertEqual(source.psf_set_ids, [])
+        self.assertNotIn("psfid", facts)
+        self.assertNotIn("psf_uri", facts)
+
+    # --- run_scope and reference_set_id are independent facts ------------
+
+    def test_run_scope_and_reference_set_id_are_independent_facts(self):
+        # The point of sets: a run can gather under its OWN scope while
+        # reading a set another run built. Passing both, each must reach
+        # its own destination — the set to the reference lookup, the scope
+        # to the resubmission gate — and neither may substitute for the
+        # other. A production change that renamed `run_scope` into the set
+        # (rather than adding a second parameter) would fail here.
+        source = StubSource(reference=self._reference_under(12))
+        list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8],
+            run_scope="w9-campaign-1", reference_set_id=7))
+
+        self.assertEqual(source.blocking_calls, ["w9-campaign-1"])
+        self.assertTrue(source.reference_set_ids)
+        self.assertEqual(set(source.reference_set_ids), {7})
+        self.assertNotIn("w9-campaign-1", source.reference_set_ids)
+
+    def test_a_reference_set_id_reaches_the_lookup_through_the_loop(self):
+        # The gathering loop's own threading, distinct from the direct
+        # `science_facts` calls above: the set must survive the trip from
+        # `gather_science_units`' parameter, through `science_facts`, to
+        # the reference query.
+        source = StubSource()
+        list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8], reference_set_id=7))
+
+        self.assertTrue(source.reference_set_ids)
+        self.assertEqual(set(source.reference_set_ids), {7})
+
+    def test_a_psf_set_id_reaches_the_psf_lookup_through_the_loop(self):
+        source = StubSource()
+        list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8],
+            reference_set_id=7, psf_set_id=3))
+
+        self.assertTrue(source.psf_set_ids)
+        self.assertEqual(set(source.psf_set_ids), {3})
+
+    def test_a_setless_gather_through_the_loop_looks_up_no_reference(self):
+        source = StubSource()
+        list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8], run_scope="w9-campaign-1"))
+
+        self.assertEqual(source.reference_set_ids, [])
+        self.assertEqual(source.psf_set_ids, [])
+        # The gate is still reached — the two facts really are independent.
+        self.assertEqual(source.blocking_calls, ["w9-campaign-1"])
 
 
 
@@ -655,28 +793,34 @@ class GatherScienceUnitsTests(unittest.TestCase):
         self.assertTrue(units)
         self.assertEqual(source.blocking_calls, ["w9-campaign-1"])
 
-    def test_run_scope_reaches_the_reference_lookup_through_the_loop(self):
-        # The gathering loop's own threading, distinct from
-        # `ReferenceSelectionTests`' direct `science_facts` calls: the
-        # scope must survive the trip from this function's parameter,
-        # through `science_facts`, to the reference query. It previously
-        # reached the resubmission gate and stopped there.
+    def test_run_scope_no_longer_reaches_the_reference_lookup(self):
+        # RETARGETED at migration 126. Under 115 `run_scope` was threaded
+        # into the reference reader as its `run_id`, and this test asserted
+        # that. It is now the resubmission gate's fact ALONE: the reference
+        # lookup is scoped by `reference_set_id`, a separate parameter, and
+        # a `run_scope`-only caller resolves no set, so no reference lookup
+        # happens at all. Threading the scope into the reader again — the
+        # obvious "restore the old behaviour" regression — fails here.
+        # `ReferenceSetThreadingTests` covers the set's own threading.
         source = StubSource()
         list(gather_science_units(
             source, start="2026-01-01", end="2026-12-31",
             start_mjdobs=61600.0, end_mjdobs=61700.0,
             min_images_to_coadd=10, fids=[8], run_scope="w9-campaign-1"))
-        self.assertTrue(source.reference_run_ids)
-        self.assertEqual(set(source.reference_run_ids), {"w9-campaign-1"})
+        self.assertEqual(source.blocking_calls, ["w9-campaign-1"])
+        self.assertEqual(source.reference_set_ids, [])
 
-    def test_an_unscoped_gather_still_reads_the_production_lane(self):
+    def test_an_unscoped_gather_reads_no_reference_without_a_set(self):
+        # RETARGETED at 126 with the test above: an unscoped gather used to
+        # read the production lane, which is precisely the "whatever is
+        # current now" behaviour sets remove. With no set declared there is
+        # nothing to difference against and the lookup is skipped.
         source = StubSource()
         list(gather_science_units(
             source, start="2026-01-01", end="2026-12-31",
             start_mjdobs=61600.0, end_mjdobs=61700.0,
             min_images_to_coadd=10, fids=[8]))
-        self.assertTrue(source.reference_run_ids)
-        self.assertEqual(set(source.reference_run_ids), {None})
+        self.assertEqual(source.reference_set_ids, [])
 
 
 class FakeConditionalS3:

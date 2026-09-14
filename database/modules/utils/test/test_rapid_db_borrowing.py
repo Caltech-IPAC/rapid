@@ -186,8 +186,10 @@ class BorrowingHandleTests(unittest.TestCase):
     def test_the_attempt_identity_is_the_last_two_parameters(self):
         # The stored function declares them last and defaulted (migration 018),
         # so they must arrive last -- ahead of run_id, which migration 115
-        # appended trailing them. Anywhere else and every legacy argument
-        # after them shifts by two.
+        # appended trailing them, and ahead of reference_set_id, which 127
+        # appended trailing THAT. Anywhere else and every legacy argument
+        # after them shifts. The slice moved from [-3:-1] to [-4:-2] for that
+        # reason and no other; the invariant being asserted is unchanged.
         real = FakeConnection()
         dbh = RAPIDDB.borrowing(real)
 
@@ -195,7 +197,7 @@ class BorrowingHandleTests(unittest.TestCase):
                          42, 7, run_id=None)
 
         _statement, params = real.statements[0]
-        self.assertEqual((42, 7), params[-3:-1])
+        self.assertEqual((42, 7), params[-4:-2])
 
     def test_omitting_the_identity_sends_nulls_and_nothing_else_changes(self):
         # Optional means optional. The stored function defaults them, so a
@@ -227,17 +229,33 @@ class BorrowingHandleTests(unittest.TestCase):
     def test_run_id_reaches_add_refimage_and_add_diffimage_last(self):
         # migration 115 appends run_id trailing the attempt identity on both
         # stored functions; it must arrive as the final parameter on each.
+        #
+        # AMENDED FOR 127, and the asymmetry is the point. `addRefImage`
+        # gained a further trailing `reference_set_id_`, so run_id is now its
+        # SECOND-to-last parameter; `addDiffImage` did not, because a
+        # difference image is a run's product and is not set-scoped at all
+        # (126 deliberately leaves `diffimages` on its run-keyed indexes). A
+        # single `params[-1]` assertion over both calls would therefore have
+        # to be wrong about one of them. Asserting each function's own shape
+        # is what keeps this test able to catch a REAL slip — an argument
+        # silently dropped or reordered — rather than being loosened until it
+        # catches nothing.
         real = FakeConnection()
         dbh = RAPIDDB.borrowing(real)
         corners = [float(n) for n in range(10)]
 
         dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "s3://b/ref.fits", "cksum",
                          42, 7, run_id="accept-20260911")
+        ref_statement, ref_params = real.statements[-1]
+        self.assertIn("addRefImage", ref_statement)
+        self.assertEqual("accept-20260911", ref_params[-2])
+        self.assertIsNone(ref_params[-1])
+
         dbh.add_diffimage(1, 2, 3, 0, 0, *corners, 1, "s3://b/diff.fits",
                           "cksum", 99, 4, run_id="accept-20260911")
-
-        for _statement, params in real.statements:
-            self.assertEqual("accept-20260911", params[-1])
+        diff_statement, diff_params = real.statements[-1]
+        self.assertIn("addDiffImage", diff_statement)
+        self.assertEqual("accept-20260911", diff_params[-1])
 
     def test_the_placeholder_count_matches_the_parameter_count(self):
         # The two new `cast(%s as ...)` placeholders and the two new params

@@ -543,6 +543,18 @@ def registrar(dbh, store, fallback_roles=None, identity_repository=None):
         # campaign's products across as many partitions as it had
         # submission batches. `row["work_unit_run_id"]` is
         # `consumer._CANDIDATE_WHERE_SQL`'s `LEFT JOIN work_units` column.
+        #
+        # AND THE REFERENCE SET COMES OFF THE RUN, SERVER-SIDE (migration
+        # 127). Since 126, currency on `refimages` and `psfs` is keyed on the
+        # reference SET rather than on the run — but nothing in this file
+        # changes, and that is deliberate. `addRefImage`/`addPSF` resolve the
+        # set from the `run_id_` they are already passed: the run's declared
+        # set for a campaign run, the default set when it is NULL. So the
+        # registration path keeps passing exactly what it passed before, and
+        # THE DEPLOYED PIPELINE IMAGE NEEDS NO REBUILD AND NO REPIN for
+        # reference sets to work. Had the set been a new argument here, a
+        # schema change would have required a code release to be correct —
+        # which is the shape the server-side resolution exists to avoid.
         run_id = row.get("work_unit_run_id")
 
         if job_type == JOB_TYPE_REFERENCE_IMAGE:

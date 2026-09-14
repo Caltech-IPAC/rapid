@@ -128,16 +128,23 @@ class UnitSource(Protocol):
 
     def get_exposure_filter(self, fid: int) -> Any: ...
 
-    def get_best_psf(self, sca: int, fid: int) -> Sequence[Any]: ...
+    # `reference_set_id` (2026-09-14, migration 126) is the PSF SET the
+    # reference set declares through its `psf_set_id`, not the run's own
+    # set: PSFs are registered outside any pipeline job, so a set of coadds
+    # declares which PSF rows it reads rather than owning any. Required, for
+    # the same reason the reference reader's is.
+    def get_best_psf(self, sca: int, fid: int,
+                     reference_set_id: int) -> Sequence[Any]: ...
 
-    # `run_id` (2026-09-12) ranks the two lanes a run may legitimately read
-    # a reference from — its own first, the production lane as fallback —
-    # and admits no other run's. `None` is the production lane. See that
-    # method's own docstring for why the match is equality, not the prefix
-    # the Attempts-branch gates use.
+    # `reference_set_id` (2026-09-14) replaced `run_id` (2026-09-12) when
+    # migration 126 made the reference SET the unit of currency. It is one
+    # predicate with no fallback: the run's declared set, fixed at run
+    # creation, so which reference a run differences against cannot change
+    # between its own waves. Required — a default would let a caller that
+    # forgot to pass one read some set silently.
     def get_best_reference_image(self, ppid: int, field: int,
                                  fid: int,
-                                 run_id: str | None = ...) -> Any: ...
+                                 reference_set_id: int) -> Any: ...
 
     # `rid` is typed loosely because it is not a rid in the caller that
     # matters: `_overlapping_l2files` passes the string 'null' to select the
@@ -303,7 +310,9 @@ def _tile_position(rtid: int) -> dict[str, float] | None:
 def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
                   reference_ppid: int | None = None,
                   science_ppid: int | None = None,
-                  run_scope: str | None = None) -> dict:
+                  run_scope: str | None = None,
+                  reference_set_id: int | None = None,
+                  psf_set_id: int | None = None) -> dict:
     """Resolve one science unit's per-invocation facts.
 
     The fact set the deleted `awsBatchSubmitJobs_launchSingleSciencePipeline`
@@ -321,14 +330,26 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
     that is submittable is the job type's call, made by `require`, not
     gathering's.
 
-    `run_scope` names WHICH run's reference this unit should difference
-    against (2026-09-12). It is the same fact `gather_science_units`
-    already carries under that name for the resubmission gate, and it is
-    carried here for the same reason: migration 115 made reference
-    currency run-scoped, so a campaign run and production can each hold a
-    current reference for one (field, filter) and the choice between them
-    must be the caller's, not the planner's. `None` (the default) is the
-    production lane, exactly what every caller got before that migration.
+    `reference_set_id` names WHICH SET's reference this unit differences
+    against (2026-09-14, migration 126), and it is a SEPARATE argument from
+    `run_scope` rather than a renaming of it. `run_scope` stays and still
+    means "which run's work units and attempts the resubmission gate below
+    reasons about"; the two answer different questions and a run can
+    perfectly well gather under its own scope while reading a set another
+    run built — which is the entire point of sets.
+
+    It replaces what `run_scope` used to ALSO do here. Under migration 115
+    this function passed `run_scope` through as the reader's `run_id`,
+    which ranked the run's own lane first and fell back to production's
+    current reference. That fallback made a run's reference a function of
+    WHEN it gathered: a registration between two waves changed what the
+    later waves differenced against. A run now declares a set at creation,
+    and that set is what it reads from the first wave to the last.
+
+    `None` means the caller resolved no set, and the reference lookup is
+    skipped rather than performed against some default — a silent default
+    here would reintroduce exactly the "whatever is current now" behaviour
+    sets exist to remove.
     """
     reference_ppid = (ppid_for(JOB_TYPE_REFERENCE_IMAGE)
                       if reference_ppid is None else reference_ppid)
@@ -393,17 +414,26 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
     if filter_name is not None:
         facts["filter_name"] = str(filter_name)
 
-    try:
-        psf = handle.get_best_psf(sca, fid)
-    except RapidDBCallFailed as exc:
-        raise GatheringError(
-            f"PSF lookup failed for sca {sca} fid {fid}: {exc}") from exc
-    if psf is not None and len(psf) >= 2 and psf[0] is not None:
-        facts["psfid"] = _maybe_int(psf[0])
-        facts["psf_uri"] = _maybe_str(psf[1])
+    # THE PSF SET IS THE REFERENCE SET'S `psf_set_id`, RESOLVED WITH THE SET.
+    # A set of coadds declares which set's PSF rows it reads rather than
+    # owning any (PSFs are registered by scripts/generate_refim_psfs.py, never
+    # by a pipeline job), and the caller resolves both together — so a coadd
+    # and the PSF it was built against stay together. Absent a set, the lookup
+    # is skipped rather than performed against a default.
+    if reference_set_id is not None:
+        psf_set = (psf_set_id if psf_set_id is not None else reference_set_id)
+        try:
+            psf = handle.get_best_psf(sca, fid, psf_set)
+        except RapidDBCallFailed as exc:
+            raise GatheringError(
+                f"PSF lookup failed for sca {sca} fid {fid}: {exc}") from exc
+        if psf is not None and len(psf) >= 2 and psf[0] is not None:
+            facts["psfid"] = _maybe_int(psf[0])
+            facts["psf_uri"] = _maybe_str(psf[1])
 
     reference = _best_reference(handle, reference_ppid, science_ppid,
-                                field, fid, run_scope=run_scope)
+                                field, fid,
+                                reference_set_id=reference_set_id)
     if reference is not None:
         facts["reference_image_id"] = _maybe_int(reference.get("rfid"))
         facts["reference_image_uri"] = _maybe_str(reference.get("filename"))
@@ -507,7 +537,8 @@ def _data_class_for_inputs(handle: UnitSource,
 def _best_reference(handle: UnitSource, reference_ppid: int,
                     science_ppid: int, field: int,
                     fid: int,
-                    run_scope: str | None = None) -> dict[str, Any] | None:
+                    reference_set_id: int | None = None
+                    ) -> dict[str, Any] | None:
     """The launcher's two-ppid reference lookup, with its ppid recorded.
 
     `get_best_reference_image` does not return the ppid it matched on, and
@@ -516,16 +547,25 @@ def _best_reference(handle: UnitSource, reference_ppid: int,
     science run are different objects. So the ppid is folded in here, at
     the only place that knows which call answered.
 
-    `run_scope` is passed straight through as that method's `run_id`: the
-    run whose OWN reference is preferred, falling back to the production
-    lane and never to another run's. `None` (the default) is the
-    production lane, which is what every caller got before migration 115
-    made a second current reference per identity group possible at all.
-    The ppid loop is unchanged and runs INSIDE the scope, not across it —
-    a run's own reference under the reference-image ppid still beats
-    production's under the science ppid, because reference-ppid provenance
-    is the stronger preference of the two and the ppid order encodes it.
+    `reference_set_id` is passed straight through as that method's only
+    scope predicate (2026-09-14, migration 126): the SET this run declared
+    at creation, with no fallback to anything else. It replaces the
+    `run_scope`-as-`run_id` ranking migration 115 introduced, whose
+    production fallback made a run's reference depend on when it gathered.
+
+    THE PPID LOOP IS UNCHANGED, and now runs INSIDE THE SET rather than
+    inside the run. A reference registered under the reference-image ppid
+    still beats one registered incidentally under the science ppid,
+    because reference-ppid provenance is the stronger preference and the
+    ppid order encodes it — that preference was never about runs and is
+    untouched by keying currency on sets.
+
+    `None` skips the lookup entirely rather than searching a default set:
+    a caller that resolved no set has nothing to difference against, and
+    guessing one is the behaviour this whole change removes.
     """
+    if reference_set_id is None:
+        return None
     for ppid in (reference_ppid, science_ppid):
         # exit_code 7 is the documented "no reference yet" signal, and the
         # adapter passes it through as a clean (empty) result rather than
@@ -533,8 +573,8 @@ def _best_reference(handle: UnitSource, reference_ppid: int,
         # failure raises `RapidDBCallFailed` here, and is not caught: it
         # must not read as "no reference".
         try:
-            record = handle.get_best_reference_image(ppid, field, fid,
-                                                    run_id=run_scope)
+            record = handle.get_best_reference_image(
+                ppid, field, fid, reference_set_id)
         except RapidDBCallFailed as exc:
             raise GatheringError(
                 f"reference lookup failed for field {field} fid {fid} "
@@ -551,7 +591,9 @@ def gather_science_units(handle: UnitSource, start, end,
                          min_images_to_coadd: int,
                          fids: Iterable[int] | None = None,
                          make_references: bool = False,
-                         run_scope: str | None = None
+                         run_scope: str | None = None,
+                         reference_set_id: int | None = None,
+                         psf_set_id: int | None = None
                          ) -> Iterator[ProcessingUnit]:
     """Yield the science (or reference-image) units ready in a window.
 
@@ -615,14 +657,18 @@ def gather_science_units(handle: UnitSource, start, end,
             chosen = rows[1:]
         for row in chosen:
             rid = int(row[0])
-            # THE RUN SCOPE REACHES THE REFERENCE LOOKUP HERE. The same
-            # `run_scope` the resubmission gate below is given: a run
-            # differences against its own reference where it has one, and
-            # production's otherwise. Before this it was not passed at
-            # all, so a campaign's science could pick up either lane's
-            # reference nondeterministically once both existed.
+            # THE DECLARED SET REACHES THE REFERENCE LOOKUP HERE, and it is
+            # a DIFFERENT fact from the `run_scope` the resubmission gate
+            # below is given. `run_scope` is which run's work units and
+            # attempts that gate reasons about; `reference_set_id` is which
+            # set this run differences against, fixed when the run was
+            # created. Both are passed, neither substitutes for the other —
+            # a run can gather under its own scope while reading a set
+            # another run built, which is what sets are for.
             facts = science_facts(handle, rid, field, fid,
-                                  run_scope=run_scope)
+                                  run_scope=run_scope,
+                                  reference_set_id=reference_set_id,
+                                  psf_set_id=psf_set_id)
             exposure = facts.get("expid")
             if exposure is None:
                 raise GatheringError(
@@ -1225,7 +1271,9 @@ def gather_reference_units(handle: UnitSource, start, end,
                            reference_window: tuple[float, float] | None = None,
                            on_blocked: Any = None,
                            on_unblocked: Any = None,
-                           run_scope: str | None = None
+                           run_scope: str | None = None,
+                           reference_set_id: int | None = None,
+                           psf_set_id: int | None = None
                            ) -> Iterator[ProcessingUnit]:
     """Yield reference-image units, each with its coadd inputs published.
 
@@ -1297,7 +1345,9 @@ def gather_reference_units(handle: UnitSource, start, end,
     for unit in gather_science_units(handle, start, end, start_mjdobs,
                                      end_mjdobs, min_images_to_coadd,
                                      fids=fids, make_references=True,
-                                     run_scope=run_scope):
+                                     run_scope=run_scope,
+                                     reference_set_id=reference_set_id,
+                                     psf_set_id=psf_set_id):
         facts = unit.facts
         rid = facts.rid
         # All three are dereferenced below, and `UnitFacts` documents every

@@ -294,7 +294,8 @@ class _RealPsycopg2SubstitutionConn:
 
 
 def _stub_registry_binding(case, run_mod, kind="campaign", state="running",
-                           run_id=77, seq=0):
+                           run_id=77, seq=0, reference_set_id=7,
+                           psf_set_id=None, reference_set="set-alpha"):
     """Stub the registry reads `start_run_audited` gained at migration 121.
 
     Every `start_run_audited` test in this file drives the function with a
@@ -309,11 +310,22 @@ def _stub_registry_binding(case, run_mod, kind="campaign", state="running",
     kind, a completed run) does not use this helper — see
     `RunStartRegistryBindingTests`, which drives `_bind_registry_row`
     directly against a scripted `run_row`.
+
+    THE ROW CARRIES A REFERENCE SET (migration 126). `start_run_audited`
+    reads `reference_set_id` off this row and REFUSES a windowed phase
+    that has none, so the ordinary row this helper stands up must declare
+    one — otherwise every lane, family and ordering test in this file
+    would fail on a fact none of them is about. A test that cares about
+    the refusal passes `reference_set_id=None` explicitly; see
+    `RunStartReferenceSetTests`.
     """
     bind_patcher = mock.patch.object(
         run_mod, "_bind_registry_row",
         lambda conn, name: {"run_id": run_id, "name": name, "kind": kind,
-                            "state": state})
+                            "state": state,
+                            "reference_set_id": reference_set_id,
+                            "psf_set_id": psf_set_id,
+                            "reference_set": reference_set})
     bind_patcher.start()
     case.addCleanup(bind_patcher.stop)
 
@@ -881,26 +893,38 @@ class WindowedPhaseDispatchTests(unittest.TestCase):
         self.run_mod = run_mod
         self.calls = []
 
+        # `reference_set_id`/`psf_set_id` (migration 126) are recorded here
+        # alongside `run_scope` because they are a THIRD and FOURTH fact
+        # `gather_for_run` threads, not a renaming of the scope — a fake
+        # that omitted them would raise `TypeError` rather than prove the
+        # threading, which is what happened when the production change
+        # landed.
         def fake_reference(handle, start, end, start_mjdobs, end_mjdobs,
                            min_images_to_coadd, s3_client, job_bucket,
-                           run_id, fids=None, run_scope=None):
+                           run_id, fids=None, run_scope=None,
+                           reference_set_id=None, psf_set_id=None):
             self.calls.append({
                 "gatherer": "reference", "start": start, "end": end,
                 "start_mjdobs": start_mjdobs, "end_mjdobs": end_mjdobs,
                 "min_images_to_coadd": min_images_to_coadd,
                 "s3_client": s3_client, "job_bucket": job_bucket,
-                "run_id": run_id, "fids": fids, "run_scope": run_scope})
+                "run_id": run_id, "fids": fids, "run_scope": run_scope,
+                "reference_set_id": reference_set_id,
+                "psf_set_id": psf_set_id})
             return iter(())
 
         def fake_science(handle, start, end, start_mjdobs, end_mjdobs,
                          min_images_to_coadd, fids=None,
-                         make_references=False, run_scope=None):
+                         make_references=False, run_scope=None,
+                         reference_set_id=None, psf_set_id=None):
             self.calls.append({
                 "gatherer": "science", "start": start, "end": end,
                 "start_mjdobs": start_mjdobs, "end_mjdobs": end_mjdobs,
                 "min_images_to_coadd": min_images_to_coadd,
                 "fids": fids, "make_references": make_references,
-                "run_scope": run_scope})
+                "run_scope": run_scope,
+                "reference_set_id": reference_set_id,
+                "psf_set_id": psf_set_id})
             return iter(())
 
         patcher_ref = mock.patch.object(
@@ -1006,7 +1030,8 @@ class WindowedPhaseDispatchTests(unittest.TestCase):
 
         def five_units(handle, start, end, start_mjdobs, end_mjdobs,
                        min_images_to_coadd, fids=None, make_references=False,
-                       run_scope=None):
+                       run_scope=None, reference_set_id=None,
+                       psf_set_id=None):
             return iter(range(5))
 
         with mock.patch.object(gathering, "gather_science_units",
@@ -3376,7 +3401,45 @@ class RunEnvelopeCliTests(unittest.TestCase):
         for name in ("p_lane =>", "p_retry_attempts =>",
                      "p_retry_wallclock_s =>", "p_attempt_timeout_s =>"):
             self.assertIn(name, sql)
-        self.assertEqual(["prompt", 2, 100, 50], list(params[-4:]))
+        # Migration 126 appended `p_reference_set_id` AFTER the envelope, so
+        # the envelope is no longer the tail of the params tuple. Sliced
+        # from -5 to -1 rather than from -4, and the set's own position is
+        # asserted separately below — a `[-4:]` that silently started
+        # reading the set plus three envelope values would be exactly the
+        # positional slide this test exists to catch.
+        self.assertEqual(["prompt", 2, 100, 50], list(params[-5:-1]))
+
+    def test_the_reference_set_id_is_passed_by_name_after_the_envelope(self):
+        # Migration 126's `p_reference_set_id` is appended at position 19,
+        # after 122's envelope. By NAME for the same reason the envelope is:
+        # it is a bigint following four nullable scalars, so a positional
+        # call that dropped one would slide it into `p_attempt_timeout_s`
+        # — an integer parameter PostgreSQL would accept silently.
+        conn = _FakeConn([self._result()])
+        actions.create_run(conn, "k", "refset-probe", "rusholme",
+                           "campaign", reason="why", dry_run=False,
+                           reference_set_id=7)
+        sql, params = conn.calls[0]
+        self.assertIn("p_reference_set_id =>", sql)
+        self.assertEqual(7, params[-1])
+
+    def test_no_reference_set_sends_null_so_the_function_resolves_default(
+            self):
+        # None means "the DEFAULT SET as of now", resolved and STORED by
+        # `derived.create_run`. Resolved there rather than in the CLI so
+        # exactly one place decides what the default means at this instant
+        # — and so the stored value is never "whatever is default later".
+        conn = _FakeConn([self._result()])
+        actions.create_run(conn, "k", "refset-default", "rusholme",
+                           "campaign", reason="why", dry_run=False)
+        sql, params = conn.calls[0]
+        # THE SQL MUST NAME THE PARAMETER. Asserting only that the last bound
+        # value is None passes against the pre-126 call too, where the last
+        # value is `p_attempt_timeout_s` and is also None — so the assertion
+        # would hold with no reference set in the statement at all.
+        self.assertIn("p_reference_set_id => %s::bigint", sql)
+        self.assertIsNone(params[-1])
+        self.assertEqual(sql.count("%s"), len(params))
 
     def test_a_defaulted_call_sends_null_so_the_function_derives(self):
         # The defaults live in `derived.create_run`, which derives the
@@ -3386,7 +3449,9 @@ class RunEnvelopeCliTests(unittest.TestCase):
         actions.create_run(conn, "k", "envelope-default", "rusholme",
                            "campaign", reason="why", dry_run=False)
         _, params = conn.calls[0]
-        self.assertEqual([None, None, None, None], list(params[-4:]))
+        # `[-5:-1]`, not `[-4:]`: 126 appended `p_reference_set_id` after
+        # the envelope. See the by-name test above.
+        self.assertEqual([None, None, None, None], list(params[-5:-1]))
 
     def test_the_lane_derived_wallclock_is_printed_from_the_answer(self):
         # Three of the four may be defaulted and two of those are DERIVED from
@@ -3401,7 +3466,11 @@ class RunEnvelopeCliTests(unittest.TestCase):
             input_generations=None, expect_absent=False, reason="why",
             idempotency_key="k", apply=True, policy_citation=None,
             lane="prompt", retry_attempts=None, retry_wallclock_s=None,
-            attempt_timeout_s=None)
+            attempt_timeout_s=None,
+            # The three flags migration 126 added. All absent here: this
+            # test is about the envelope, and `_cmd_run_create` reads all
+            # three before it prints anything.
+            reference_set=None, build_reference_set=None, psf_set=None)
         out = io.StringIO()
         operatorctl_main._cmd_run_create(conn, args, out)
         text = out.getvalue()
@@ -3478,3 +3547,297 @@ class RunStartLaneDefaultsToTheRunsTests(unittest.TestCase):
         self.assertIsNone(
             operatorctl_run._run_envelope(self._row(lane=None)))
         self.assertIsNone(operatorctl_run._run_envelope(None))
+
+
+class ReferenceSetRunCreateAndStartTests(unittest.TestCase):
+    """`run create`'s reference-set flags and `run start`'s refusal of a
+    windowed phase on a setless run (migrations 126/127).
+
+    Two halves, both stub-tier and neither needing a database.
+
+    THE PARSER HALF. `--reference-set` (declare an EXISTING set) and
+    `--build-reference-set` (create a NEW one this run fills) are a
+    mutually exclusive group, and `--psf-set` says which set's PSF rows a
+    NEW set reads — so it means nothing without `--build-reference-set`,
+    and `_cmd_run_create` refuses it before touching the connection. Both
+    refusals are argparse/`SystemExit`, not a message and a zero exit: an
+    operator who typed a contradictory pair must be stopped before a run
+    row exists, because the set a run declares is fixed at creation and
+    cannot be corrected afterwards.
+
+    Omitting both flags is NOT a third mode: it means the default set AS
+    OF NOW, resolved and STORED by `derived.create_run`. That resolution
+    is the FUNCTION's job, so the CLI must send NULL rather than reading
+    `is_default` itself — one place decides what the default means at
+    this instant, and the stored value is never "whatever is default
+    later".
+
+    THE START HALF. `start_run_audited` reads the run's stored set and
+    refuses a WINDOWED phase (reference/science) that has none. A campaign
+    run with no set is a DEFECT rather than a default: every run created
+    since 127 stores one, so a NULL means the row predates it, and
+    gathering against a guessed set is the silent substitution 126
+    removes. The four post-database-chain phases read no reference and are
+    not refused for a fact they never use.
+    """
+
+    # --- the mutually exclusive group ------------------------------------
+
+    def _run_create_argv(self, *extra):
+        return ["run", "create", "--name", "refset-probe", "--owner",
+                "rusholme", "--kind", "campaign", "--reason", "why"] + list(
+                    extra)
+
+    def test_reference_set_and_build_reference_set_are_mutually_exclusive(
+            self):
+        # Declaring an existing set and creating a new one are different
+        # acts with different provenance, and a run has exactly one set.
+        # Accepting both would leave argparse's last-wins order deciding
+        # which — a silent choice about what the run differences against.
+        parser = operatorctl_main.build_parser()
+        # EACH FLAG MUST PARSE ALONE FIRST. Without this half the test passes
+        # against a parser that has NEITHER flag: argparse exits 2 for an
+        # unrecognised argument exactly as it does for a mutually-exclusive
+        # violation, so `assertRaises(SystemExit)` alone cannot tell "refused
+        # because they conflict" from "refused because neither exists".
+        alpha = parser.parse_args(
+            self._run_create_argv("--reference-set", "alpha"))
+        self.assertEqual("alpha", alpha.reference_set)
+        beta = parser.parse_args(
+            self._run_create_argv("--build-reference-set", "beta"))
+        self.assertEqual("beta", beta.build_reference_set)
+
+        with self.assertRaises(SystemExit):
+            parser.parse_args(self._run_create_argv(
+                "--reference-set", "alpha",
+                "--build-reference-set", "beta"))
+
+    def test_reference_set_alone_parses(self):
+        parser = operatorctl_main.build_parser()
+        args = parser.parse_args(
+            self._run_create_argv("--reference-set", "alpha"))
+        self.assertEqual("alpha", args.reference_set)
+        self.assertIsNone(args.build_reference_set)
+
+    def test_build_reference_set_alone_parses(self):
+        parser = operatorctl_main.build_parser()
+        args = parser.parse_args(
+            self._run_create_argv("--build-reference-set", "beta"))
+        self.assertEqual("beta", args.build_reference_set)
+        self.assertIsNone(args.reference_set)
+
+    def test_neither_reference_set_flag_leaves_both_none(self):
+        # The ordinary call, and the one the default-resolution test below
+        # exercises: no set named, both attributes None.
+        parser = operatorctl_main.build_parser()
+        args = parser.parse_args(self._run_create_argv())
+        self.assertIsNone(args.reference_set)
+        self.assertIsNone(args.build_reference_set)
+
+    # --- --psf-set without --build-reference-set --------------------------
+
+    def _args(self, **overrides):
+        body = dict(
+            name="refset-probe", owner="rusholme", kind="campaign",
+            purpose=None, branch=None, image_digest=None, config_hash=None,
+            input_generations=None, expect_absent=False, reason="why",
+            idempotency_key="k", apply=False, policy_citation=None,
+            lane=None, retry_attempts=None, retry_wallclock_s=None,
+            attempt_timeout_s=None, reference_set=None,
+            build_reference_set=None, psf_set=None)
+        body.update(overrides)
+        return argparse.Namespace(**body)
+
+    def test_psf_set_without_build_reference_set_raises_system_exit(self):
+        # `--psf-set` says which PSFs a NEW set reads; an EXISTING set
+        # already declares its own, so the pair is meaningless rather than
+        # merely redundant. Refused BEFORE the connection is used — the
+        # `object()` here would raise `AttributeError` on any attribute
+        # access, so a refusal that came later could not reach this
+        # assertion.
+        with self.assertRaises(SystemExit) as caught:
+            operatorctl_main._cmd_run_create(
+                object(), self._args(psf_set="psf-alpha"), _null_out())
+        self.assertIn("--psf-set", str(caught.exception))
+
+    def test_psf_set_with_build_reference_set_is_not_refused_by_that_check(
+            self):
+        # The complement: the same flag WITH `--build-reference-set` must
+        # get past the refusal, or the check above would be refusing the
+        # combination it exists to permit. Proven by the failure mode
+        # changing — it reaches the connection (`object()` has no
+        # `cursor`) instead of exiting.
+        with self.assertRaises(Exception) as caught:
+            operatorctl_main._cmd_run_create(
+                object(),
+                self._args(psf_set="psf-alpha",
+                           build_reference_set="beta"),
+                _null_out())
+        self.assertNotIsInstance(caught.exception, SystemExit)
+        # AND IT MUST BE THE CONNECTION THAT FAILED, named. `assertNotIsInstance`
+        # alone passes against a handler that never had the check at all and
+        # died of something unrelated — an AttributeError on a missing `args`
+        # attribute, say. Requiring the bare `object()` to be what broke is
+        # what makes this evidence that the combination was PERMITTED and
+        # execution carried on to the database.
+        self.assertIsInstance(caught.exception, AttributeError)
+        self.assertIn("cursor", str(caught.exception))
+        # THIS TEST ALONE DOES NOT FAIL WHEN THE CHANGE IS REVERTED, and that
+        # is correct rather than a weakness: a handler with NO check also
+        # reaches the connection and dies the same way, so "got past the
+        # refusal" is indistinguishable from "there was no refusal". It is one
+        # half of a pair. Its partner —
+        # `test_psf_set_without_build_reference_set_is_refused` — is what
+        # fails on revert, and this half exists only to show that partner is
+        # not over-refusing the combination the flag exists for. Kept
+        # deliberately; do not "strengthen" it into asserting something it
+        # cannot observe.
+
+    # --- neither flag: the function resolves and stores the default -------
+
+    def test_neither_flag_calls_create_run_with_reference_set_id_none(self):
+        # THE STORED DEFAULT IS THE FUNCTION'S JOB. A CLI that read
+        # `is_default` itself would give the same decision two homes, and
+        # the one in the CLI would be made a moment earlier than the
+        # insert — the window sets exist to close.
+        from pipeline.operatorctl import actions as actions_mod
+
+        recorded = {}
+
+        def fake_create_run(conn, key, name, owner, kind, **kwargs):
+            recorded.update(kwargs)
+            return {"action": "run_create", "dry_run": True,
+                    "replayed": False, "already_present": False,
+                    "rows_affected": 0, "audit_id": 1,
+                    "idempotency_key": key, "run_id": 42,
+                    "would_add": True, "lane": "bulk", "retry_attempts": 3,
+                    "retry_wallclock_s": 129600,
+                    "attempt_timeout_s": 43200}
+
+        with mock.patch.object(actions_mod, "create_run", fake_create_run):
+            operatorctl_main._cmd_run_create(
+                object(), self._args(), _null_out())
+
+        self.assertIn("reference_set_id", recorded)
+        self.assertIsNone(recorded["reference_set_id"])
+
+    # --- run start refuses a windowed phase with no stored set ------------
+
+    def _start(self, phase, reference_set_id, window=True):
+        """Drive `start_run_audited`'s dry run against a scripted `runs`
+        row, with the registry reads, the database handle, the submission
+        environment and the gather all stubbed — no database and no AWS.
+
+        THE HANDLE AND THE ENVIRONMENT MUST BE STUBBED, and that is worth
+        stating: the reference-set refusal sits AFTER `RAPIDDB()` and
+        after `_resolve_submission_env`, so a setless run still opens a
+        database handle and resolves a Batch environment before being
+        told it has no set. See the ledger's defect note — the refusal
+        would cost nothing where the other registry refusals sit, above
+        the replay lookup.
+        """
+        run_mod = operatorctl_run
+
+        row = {"run_id": 77, "name": "w9-campaign-1", "kind": "campaign",
+               "state": "running", "reference_set_id": reference_set_id,
+               "psf_set_id": None, "reference_set": "set-alpha"}
+
+        self.gathers = []
+
+        def fake_gather(*a, **k):
+            self.gathers.append(k)
+            return ("science", ["unit-a"])
+
+        from database.modules.utils import rapid_db as db_mod
+        import pipeline.operator.gathering as gathering_mod
+
+        class _FakeHandle:
+            exit_code = 0
+
+        patchers = [
+            # Release science configuration (`RAPID_SW`), called by the
+            # windowed branch before it reaches anything this class is
+            # about — faked to a fixed value exactly as
+            # `StartRunAuditedLaneResolutionTests` does.
+            mock.patch.object(gathering_mod, "min_images_to_coadd",
+                              lambda: 3),
+            mock.patch.object(run_mod, "_bind_registry_row",
+                              lambda conn, name: row),
+            mock.patch.object(run_mod, "next_submission_seq",
+                              lambda conn, key: 0),
+            mock.patch.object(run_mod, "_replay_lookup",
+                              lambda *a, **k: None),
+            mock.patch.object(run_mod, "gather_for_run", fake_gather),
+            mock.patch.object(run_mod, "_check_job_definition_family",
+                              lambda *a, **k: None),
+            mock.patch.object(db_mod, "RAPIDDB", _FakeHandle),
+            mock.patch.object(run_mod, "_resolve_submission_env",
+                              lambda *a, **k: {"s3_client": "fake-s3",
+                                               "manifest_bucket": "bucket"}),
+            # The audit write, faked the same way
+            # `StartRunAuditedLaneResolutionTests` fakes it: this class is
+            # about the set, not about what the ledger records.
+            mock.patch.object(
+                run_mod, "record_external_action",
+                lambda conn, idempotency_key, action_class, target_scope,
+                reason, dry_run=False, rows_affected=0, detail=None,
+                policy_citation=None: {"rows_affected": rows_affected,
+                                       "detail": detail}),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        kwargs = {}
+        if window:
+            kwargs = {"window_start": "2027-10-01 00:00:00",
+                      "window_end": "2027-10-08 00:00:00"}
+        return run_mod.start_run_audited(
+            conn=object(), idempotency_key="k", name="w9-campaign-1",
+            phase=phase, reason="reference-set proof", dry_run=True,
+            out=_null_out(), **kwargs)
+
+    def test_a_windowed_science_start_with_no_reference_set_is_refused(self):
+        from pipeline.operatorctl.run import RunStartRegistryError
+
+        with self.assertRaises(RunStartRegistryError) as caught:
+            self._start("science", reference_set_id=None)
+        message = str(caught.exception)
+        self.assertIn("reference set", message)
+        # The message must name the command that fixes it, as every other
+        # registry refusal in this file does.
+        self.assertIn("--reference-set", message)
+
+    def test_a_windowed_reference_start_with_no_reference_set_is_refused(
+            self):
+        from pipeline.operatorctl.run import RunStartRegistryError
+
+        with self.assertRaises(RunStartRegistryError):
+            self._start("reference", reference_set_id=None)
+
+    def test_the_reference_set_refusal_precedes_gathering(self):
+        from pipeline.operatorctl.run import RunStartRegistryError
+
+        with self.assertRaises(RunStartRegistryError):
+            self._start("science", reference_set_id=None)
+        # Gathering against a guessed set is the silent substitution this
+        # refusal exists to prevent, so it must not have happened at all.
+        self.assertEqual(self.gathers, [])
+
+    def test_a_windowed_start_with_a_reference_set_threads_it_to_the_gather(
+            self):
+        # The complement, and what makes the refusal above a real test
+        # rather than a blanket failure: the same call with a set stored
+        # proceeds, and the set reaches `gather_for_run` as its own
+        # keyword rather than being derived from the run name.
+        self._start("science", reference_set_id=7)
+
+        self.assertEqual(len(self.gathers), 1)
+        self.assertEqual(7, self.gathers[0]["reference_set_id"])
+        self.assertEqual("w9-campaign-1", self.gathers[0]["run_name"])
+
+    def test_the_psf_set_falls_back_to_the_reference_set_when_unset(self):
+        # Production's set points at itself: no separate PSF set declared,
+        # so the reference set IS the PSF set.
+        self._start("science", reference_set_id=7)
+        self.assertEqual(7, self.gathers[0]["psf_set_id"])

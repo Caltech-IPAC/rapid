@@ -301,7 +301,7 @@ def _capped(units, cap):
 
 def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
                    run_name=None, s3_client=None, job_bucket=None,
-                   fids=None):
+                   fids=None, reference_set_id=None, psf_set_id=None):
     """Gather units for `phase`, capped, via the SAME `submission.gathering`
     functions the VPO and `live_w9_ramp` call. Returns `(job_type, units)`.
 
@@ -324,6 +324,13 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
     gated only on its own prior work, never on a different run's or
     production's. See `gathering.gather_reference_units`'s own docstring
     for why they remain two parameters rather than one.
+
+    `reference_set_id` IS A THIRD FACT, and does NOT share that value
+    (migration 126). It is the set this run differences against, read once
+    from the `runs` row by `start_run_audited` and passed here — never
+    derived from `run_name`, because the entire point of sets is that a run
+    may read a set another run built. `psf_set_id` is that set's declared
+    PSF source, resolved with it.
     """
     if phase in _WINDOWED_PHASES:
         from submission import gathering, routes
@@ -344,13 +351,15 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
                 dbh, start, end, start_mjdobs=start_mjd, end_mjdobs=end_mjd,
                 min_images_to_coadd=min_coadd, s3_client=s3_client,
                 job_bucket=job_bucket, run_id=run_name, fids=fids,
-                run_scope=run_name)
+                run_scope=run_name,
+                reference_set_id=reference_set_id, psf_set_id=psf_set_id)
             job_type = routes.JOB_TYPE_REFERENCE_IMAGE
         else:
             units = gathering.gather_science_units(
                 dbh, start, end, start_mjdobs=start_mjd, end_mjdobs=end_mjd,
                 min_images_to_coadd=min_coadd, fids=fids,
-                run_scope=run_name)
+                run_scope=run_name,
+                reference_set_id=reference_set_id, psf_set_id=psf_set_id)
             job_type = routes.JOB_TYPE_SCIENCE
 
         units = list(units)
@@ -708,13 +717,45 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
             job_type_for_env, lane=lane,
             job_definition_family=job_definition_family)
 
+    # THE RUN'S DECLARED SET, READ ONCE FROM THE ROW ALREADY BOUND, and
+    # REFUSED if a windowed phase has none.
+    #
+    # Read once here rather than per unit: a submission differences every one
+    # of its units against one set, and re-reading per unit would let an
+    # operator moving the default part-way through split a single submission
+    # across two sets — a subtler version of the "current at gather time"
+    # defect migration 126 exists to remove.
+    #
+    # The refusal covers `reference` and `science` alone (`_WINDOWED_PHASES`);
+    # the four post-database-chain phases read no reference and would be
+    # refused for a fact they never use. A campaign run with no set is a
+    # DEFECT rather than a default: `derived.create_run` stores one on every
+    # run it writes, so a NULL here means the row predates 127 or was written
+    # around it, and gathering it against a guessed set would be exactly the
+    # silent substitution this brief removes.
+    reference_set_id = run.get("reference_set_id")
+    psf_set_id = run.get("psf_set_id") or reference_set_id
+    if windowed and reference_set_id is None:
+        raise RunStartRegistryError(
+            "run %r declares no reference set, so there is nothing to say "
+            "which references its %s phase should difference against. Every "
+            "run created since migration 127 stores one; a run without one "
+            "predates it. Declare a set on a new run with `rapidctl run "
+            "create --reference-set NAME`, or `rapidctl refset list` to see "
+            "what exists." % (name, phase))
+    if windowed:
+        print("  reference set: %s (id %s, PSFs from set %s)"
+              % (run.get("reference_set"), reference_set_id, psf_set_id),
+              file=out)
+
     try:
         job_type, units = gather_for_run(
             dbh, phase, proc_date=proc_date, cap=cap, window=window,
             run_name=name,
             s3_client=context["s3_client"] if context else None,
             job_bucket=context["manifest_bucket"] if context else None,
-            fids=fids)
+            fids=fids, reference_set_id=reference_set_id,
+            psf_set_id=psf_set_id)
     except KeyError:
         table = ("catalog-load", "crossmatch", "statistics", "merge-dedup",
                  "reference", "science")

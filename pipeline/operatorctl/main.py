@@ -294,6 +294,34 @@ def build_parser():
              "it has used. Defaults to 3 x the lane's attempt timeout (bulk "
              "129600, prompt 43200). It exists because an attempt count "
              "alone did not stop the 2026-09-13 run's five-hour retry tail")
+    # --- the run's reference set (migration 126) ---------------------------
+    # Which references this run differences against, fixed HERE and stored, so
+    # a registration landing between two of the run's waves cannot change the
+    # answer. Mutually exclusive: `--reference-set` declares an EXISTING set,
+    # `--build-reference-set` creates a new one this run will fill. Neither
+    # means the default set as of creation, resolved and stored explicitly —
+    # never left as "whatever is default later".
+    refset_choice = run_create.add_mutually_exclusive_group()
+    refset_choice.add_argument(
+        "--reference-set", default=None, metavar="NAME",
+        help="the EXISTING reference set this run differences against, "
+             "resolved at creation and stored on the run. Omit for "
+             "production's default set AS OF NOW -- which is resolved and "
+             "stored the same way, so the run reads one set from its first "
+             "wave to its last even if the default moves afterwards")
+    refset_choice.add_argument(
+        "--build-reference-set", default=None, metavar="NAME",
+        help="create a NEW reference set with this name, owned by this run "
+             "(`built_by_run`), and declare it -- for a run that builds its "
+             "own references rather than reading someone else's. Its PSFs "
+             "come from the default set unless --psf-set says otherwise")
+    run_create.add_argument(
+        "--psf-set", default=None, metavar="NAME",
+        help="with --build-reference-set: which set's PSF rows the new set "
+             "reads. PSFs are registered by scripts/generate_refim_psfs.py "
+             "and never by a pipeline job, so a new set of coadds declares "
+             "the PSFs it uses rather than owning any. Defaults to the "
+             "default set's")
     run_create.add_argument("--expect-absent", action="store_true",
                             help="refuse if a run of this name already "
                                  "exists, instead of reporting a no-op "
@@ -515,6 +543,121 @@ def build_parser():
     _mutation_arguments(run_reconcile, "a run's Batch-discovered stranded "
                                        "work units")
     run_reconcile.set_defaults(func=_cmd_run_reconcile_stranded)
+
+    # --- reference sets (migrations 126/127) ------------------------------
+    refset_parser = sub.add_parser(
+        "refset",
+        help="the reference-set registry: create, list, default and "
+            "archive a named set of reference images",
+        description="A reference set is a NAMED set of reference images "
+                    "with its own provenance (migration 126), and several "
+                    "are current at once. Each run declares the set it "
+                    "differences against, fixed at run creation; "
+                    "production names one set its default. This replaces "
+                    "the state where 'current' was a single global slot "
+                    "and a newly registered coadd superseded the last one "
+                    "for everybody -- awaicgen 5.4 superseded 5.3 and no "
+                    "run could name the older set afterwards. "
+                    "`create`/`default`/`archive` are calls into the three "
+                    "migration-127 audited functions, with the same "
+                    "dry-run-by-default contract every other mutation "
+                    "here carries; `list` is read-only.")
+    refsetsub = refset_parser.add_subparsers(dest="refset_command",
+                                             required=True)
+
+    refset_create = refsetsub.add_parser(
+        "create", help="declare a reference set",
+        description="Record a set's identity and provenance. A set is "
+                    "NEVER created as the default -- moving the default "
+                    "is `refset default`, a separate and separately "
+                    "audited act, because a set silently becoming default "
+                    "at creation is the supersede-on-arrival behaviour "
+                    "this design removes.")
+    refset_create.add_argument("--name", required=True,
+                               help="the set's name; no percent, "
+                                    "underscore or backslash (126's own "
+                                    "CHECK, matching runs')")
+    refset_create.add_argument("--owner", required=True,
+                               help="who this set belongs to; mandatory, "
+                                    "for the reason a run needs an owner")
+    refset_create.add_argument("--purpose", default=None)
+    refset_create.add_argument("--coadder", default=None,
+                               help="which coadder built this set's "
+                                    "references, e.g. awaicgen")
+    refset_create.add_argument("--coadder-version", default=None,
+                               help="the coadder's version. The field "
+                                    "whose absence caused the defect this "
+                                    "design fixes: nothing recorded which "
+                                    "awaicgen built which reference")
+    refset_create.add_argument("--frame-rule", default=None,
+                               help="the frame-selection rule these "
+                                    "references were coadded under, named "
+                                    "from the science configuration")
+    refset_create.add_argument("--min-frames", type=int, default=None,
+                               help="the depth: the minimum frames "
+                                    "coadded into a reference of this set")
+    refset_create.add_argument("--epoch-start", default=None,
+                               help="start of the observation window "
+                                    "these references cover")
+    refset_create.add_argument("--epoch-end", default=None)
+    refset_create.add_argument("--psf-set", default=None, metavar="NAME",
+                               help="which set's PSF rows this set reads. "
+                                    "PSFs are registered by "
+                                    "scripts/generate_refim_psfs.py and "
+                                    "never by a pipeline job, so a set of "
+                                    "coadds declares the PSFs it uses "
+                                    "rather than owning any. Defaults to "
+                                    "the default set's")
+    refset_create.add_argument("--image-digest", default=None,
+                               help="the pipeline image digest that built "
+                                    "this set")
+    refset_create.add_argument("--built-by-run", default=None,
+                               metavar="NAME",
+                               help="the run that built this set, where "
+                                    "one did")
+    _mutation_arguments(refset_create, "a reference set")
+    refset_create.set_defaults(func=_cmd_refset_create)
+
+    refset_list = refsetsub.add_parser(
+        "list", help="list the reference sets",
+        description="Every set, its state, whether it is production's "
+                    "default, how many runs declare it and how many "
+                    "reference rows it holds. Read-only.")
+    refset_list.add_argument("--all", action="store_true",
+                             help="include archived sets (default: "
+                                  "current sets only)")
+    refset_list.set_defaults(func=_cmd_refset_list)
+
+    refset_default = refsetsub.add_parser(
+        "default", help="make a set production's default",
+        description="Change which set a LATER run with no declaration of "
+                    "its own is given. Runs already created keep the set "
+                    "they stored -- that is the point of storing it at "
+                    "creation, and is why this command touches no run and "
+                    "no product row.")
+    refset_default.add_argument("name_positional", metavar="NAME",
+                                help="the set to make default")
+    refset_default.add_argument("--expect-current-default", default=None,
+                                metavar="NAME",
+                                help="the default the dry run showed; the "
+                                     "apply refuses if it moved since")
+    _mutation_arguments(refset_default, "production's default reference set")
+    refset_default.set_defaults(func=_cmd_refset_default)
+
+    refset_archive = refsetsub.add_parser(
+        "archive", help="stop offering a set for new work",
+        description="Archiving a set DEMOTES NOTHING. Unlike archiving a "
+                    "run, which demotes that run's campaign products, "
+                    "archiving a set leaves every row exactly as it is: a "
+                    "run already declared on the set must keep reading "
+                    "the references it has been reading. Archiving says "
+                    "only 'do not choose this set for new work'. The "
+                    "default set cannot be archived -- move the default "
+                    "first.")
+    refset_archive.add_argument("name_positional", metavar="NAME",
+                                help="the set to archive")
+    _mutation_arguments(refset_archive, "a reference set")
+    refset_archive.set_defaults(func=_cmd_refset_archive)
 
     run_complete = runsub.add_parser(
         "complete", help="mark a run complete",
@@ -865,10 +1008,76 @@ def _cmd_supersede(conn, args, out):
 # ---------------------------------------------------------------------------
 # `run` subcommand bodies (migrations 108/109).
 # ---------------------------------------------------------------------------
+def _resolve_reference_set_for_run(conn, args, out, key):
+    """The set this run will declare, as an id, resolved BEFORE the run exists.
+
+    Three cases, and the third is the one that matters:
+
+      * ``--reference-set NAME`` — an existing set, looked up and refused if
+        absent or archived. Refusing here rather than letting the run be
+        created against a set nobody can build into is the difference between
+        an error at the command and a run that gathers nothing.
+      * ``--build-reference-set NAME`` — created first, so the run can point
+        at it. The set is created with no ``built_by_run`` (the run does not
+        exist yet) and is bound to the run by name below.
+      * neither — None, which ``derived.create_run`` resolves to the DEFAULT
+        SET AND STORES. Resolved there rather than here so exactly one place
+        decides what "the default" means at this instant.
+
+    On a dry run nothing is created, so a ``--build-reference-set`` dry run
+    reports the set it WOULD create and returns None: a dry run that invented
+    an id would be describing a row that does not exist.
+    """
+    from pipeline.operatorctl import actions as _actions
+
+    if args.reference_set:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT reference_set_id, state FROM reference_sets "
+                "WHERE name = %s", (args.reference_set,))
+            row = cur.fetchone()
+        if row is None:
+            raise SystemExit(
+                "no reference set named %s; `rapidctl refset list` shows "
+                "what exists" % args.reference_set)
+        if row[1] != "current":
+            raise SystemExit(
+                "reference set %s is %s: a run cannot declare an archived "
+                "set" % (args.reference_set, row[1]))
+        print("  reference set: %s (existing, id %s)"
+              % (args.reference_set, row[0]), file=out)
+        return int(row[0])
+
+    if args.build_reference_set:
+        built = _actions.create_reference_set(
+            conn, key + "-refset", args.build_reference_set, args.owner,
+            args.reason,
+            purpose="references built by run %s" % args.name,
+            psf_set=args.psf_set, image_digest=args.image_digest,
+            dry_run=not args.apply,
+            policy_citation=args.policy_citation)
+        new_id = built.get("reference_set_id")
+        print("  reference set: %s (%s, id %s)"
+              % (args.build_reference_set,
+                 "created" if args.apply else "would create",
+                 new_id), file=out)
+        return int(new_id) if new_id is not None else None
+
+    print("  reference set: production's default, resolved and stored at "
+          "creation", file=out)
+    return None
+
+
 def _cmd_run_create(conn, args, out):
     from pipeline.operatorctl import actions as _actions
     expected = {"already_present": False} if args.expect_absent else None
     key = args.idempotency_key or new_idempotency_key("run-create")
+    if args.psf_set and not args.build_reference_set:
+        raise SystemExit(
+            "--psf-set says which PSFs a NEW set reads, so it only means "
+            "something with --build-reference-set; an existing set already "
+            "declares its own")
+    reference_set_id = _resolve_reference_set_for_run(conn, args, out, key)
     result = _actions.create_run(
         conn, key, args.name, args.owner, args.kind, purpose=args.purpose,
         branch=args.branch, image_digest=args.image_digest,
@@ -878,9 +1087,17 @@ def _cmd_run_create(conn, args, out):
         policy_citation=args.policy_citation,
         lane=args.lane, retry_attempts=args.retry_attempts,
         retry_wallclock_s=args.retry_wallclock_s,
-        attempt_timeout_s=args.attempt_timeout_s)
+        attempt_timeout_s=args.attempt_timeout_s,
+        reference_set_id=reference_set_id)
     print(render_plan("run_create", "runs:%s" % args.name, args.reason, key,
                       result, args.apply), file=out)
+    # THE SET IS PRINTED FROM THE FUNCTION'S ANSWER, for the same reason the
+    # envelope is: when neither flag was given, what the run got is the
+    # default the function resolved, which the CLI never saw.
+    if result.get("reference_set") is not None:
+        print("  reference set recorded: %s (id %s)"
+              % (result.get("reference_set"), result.get("reference_set_id")),
+              file=out)
     # THE ENVELOPE IS PRINTED FROM THE FUNCTION'S ANSWER, never from the
     # arguments. Three of the four may be defaulted, and two of those are
     # DERIVED from the lane, so what the operator asked for is not what the
@@ -946,6 +1163,86 @@ def _cmd_run_complete(conn, args, out):
     return EXIT_OK
 
 
+def _cmd_refset_create(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    key = args.idempotency_key or new_idempotency_key("refset-create")
+    result = _actions.create_reference_set(
+        conn, key, args.name, args.owner, args.reason,
+        purpose=args.purpose, coadder=args.coadder,
+        coadder_version=args.coadder_version, frame_rule=args.frame_rule,
+        min_frames=args.min_frames, epoch_start=args.epoch_start,
+        epoch_end=args.epoch_end, psf_set=args.psf_set,
+        image_digest=args.image_digest, built_by_run=args.built_by_run,
+        dry_run=not args.apply, policy_citation=args.policy_citation)
+    print(render_plan("refset_create", "reference_sets:%s" % args.name,
+                      args.reason, key, result, args.apply), file=out)
+    # The PSF set is printed from the function's answer for the reason the
+    # run envelope is: it may have been defaulted, so what the set got is not
+    # what the operator typed.
+    if result.get("psf_set_id") is not None:
+        print("  PSFs from set id %s" % result["psf_set_id"], file=out)
+    return EXIT_OK
+
+
+def _cmd_refset_list(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    rows = _actions.reference_set_rows(conn, include_archived=args.all)
+    if not rows:
+        print("no reference sets", file=out)
+        return EXIT_OK
+    print("%-28s %-9s %-8s %-10s %6s %8s  %s"
+          % ("NAME", "STATE", "DEFAULT", "COADDER", "RUNS", "REFS",
+             "BUILT BY"), file=out)
+    for row in rows:
+        print("%-28s %-9s %-8s %-10s %6s %8s  %s" % (
+            row["name"],
+            row["state"],
+            "yes" if row["is_default"] else "",
+            (row.get("coadder_version") or row.get("coadder") or ""),
+            row["runs_declaring_it"],
+            row["refimages_rows"],
+            row.get("built_by_run_name") or ""), file=out)
+    return EXIT_OK
+
+
+def _cmd_refset_default(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    name = args.name_positional
+    expected = ({"current_default": args.expect_current_default}
+                if args.expect_current_default is not None else None)
+    key = args.idempotency_key or new_idempotency_key("refset-default")
+    result = _actions.set_default_reference_set(
+        conn, key, name, args.reason, expected_state=expected,
+        dry_run=not args.apply, policy_citation=args.policy_citation)
+    print(render_plan("refset_default", "reference_sets:%s" % name,
+                      args.reason, key, result, args.apply), file=out)
+    # WHAT IS BEING REPLACED IS PRINTED, always. This is the one command that
+    # changes what every later undeclared run will read, so the operator sees
+    # which set they are moving away from rather than only which they are
+    # moving to.
+    if result.get("previous_default") is not None:
+        print("  previous default: %s" % result["previous_default"], file=out)
+    return EXIT_OK
+
+
+def _cmd_refset_archive(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    name = args.name_positional
+    key = args.idempotency_key or new_idempotency_key("refset-archive")
+    result = _actions.archive_reference_set(
+        conn, key, name, args.reason, dry_run=not args.apply,
+        policy_citation=args.policy_citation)
+    print(render_plan("refset_archive", "reference_sets:%s" % name,
+                      args.reason, key, result, args.apply), file=out)
+    # Reported, not refused: archiving a set runs still declare is ordinary
+    # (they keep reading it), but the operator should see how many.
+    print("  %s run(s) declare this set; %s reference row(s) stay exactly "
+          "as they are -- archiving demotes nothing"
+          % (result.get("runs_declaring_it"), result.get("refimages_rows")),
+          file=out)
+    return EXIT_OK
+
+
 def _cmd_run_status(conn, args, out):
     from pipeline.operatorctl import actions as _actions
     # `status` used to take --name only; `archive` has always taken the
@@ -975,8 +1272,18 @@ def _cmd_run_status(conn, args, out):
     walltime = _actions.run_stage_walltime(conn, args.name)
     resource_usage = _actions.run_resource_usage(conn, args.name)
 
-    print("RUN %s  (run_id=%s, kind=%s, state=%s)" % (
-        run["name"], run["run_id"], run["kind"], run["state"]), file=out)
+    # THE DECLARED SET IS ON THE HEADER LINE, not in the body, because it is
+    # part of WHICH RUN THIS IS rather than a detail about it: two runs over
+    # the same window differing only in their set are different experiments,
+    # and the header is where a reader establishes identity.
+    #
+    # Read with `.get` and rendered `n/a` when absent, following the contract
+    # `_run_columns` states for this column: a run row written before
+    # migration 127's `SET NOT NULL` can carry NULL, and `run status` must
+    # report that rather than raising.
+    print("RUN %s  (run_id=%s, kind=%s, state=%s, reference_set=%s)" % (
+        run["name"], run["run_id"], run["kind"], run["state"],
+        run.get("reference_set") or "n/a"), file=out)
     print("  owner   : %s" % run["owner"], file=out)
     print("  purpose : %s" % run["purpose"], file=out)
     print("  branch  : %s" % run["branch"], file=out)

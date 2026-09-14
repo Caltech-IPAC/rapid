@@ -75,6 +75,32 @@ if __name__ == '__main__':
 
     fid_sca_dict = {}
 
+
+    # Resolve production's default reference set ONCE, and read its PSFs.
+    #
+    # This script is the only writer of PSF rows — no pipeline job registers
+    # one — so it is the production PSF source, and the set it reads is
+    # production's default (migration 126/127). Resolved once rather than per
+    # (fid, sca) so one pass reads one set even if an operator moves the
+    # default while it runs.
+    #
+    # `psf_set_id` rather than the set's own id: a reference set DECLARES
+    # which set's PSF rows it reads rather than owning any, and production's
+    # row points at itself — so for production the two are equal, and taking
+    # the declared one keeps this call correct if that ever stops being true.
+
+    default_set = dbh.get_default_reference_set()
+
+    if default_set is None:
+        print("*** Error: no default reference set; cannot resolve which "
+              "PSFs to read. Exiting.")
+        exit(67)
+
+    psf_set_id = default_set[2]
+
+    print("default reference set =", default_set[1], "psf_set_id =", psf_set_id)
+
+
     # Select all distinct fid, sca pairs in PSFs database table.
 
     records = dbh.get_distinct_fid_sca_from_psfs()
@@ -87,7 +113,7 @@ if __name__ == '__main__':
 
         # Query database for associated L2FileMeta record.
 
-        psfid,s3_full_name_psf = dbh.get_best_psf(sca,fid)
+        psfid,s3_full_name_psf = dbh.get_best_psf(sca,fid,psf_set_id)
 
         print("psfid,s3_full_name_psf =",psfid,s3_full_name_psf)
 

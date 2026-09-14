@@ -88,7 +88,7 @@ def create_run(conn, idempotency_key, name, owner, kind, purpose=None,
               input_generations=None, reason=None, expected_state=None,
               dry_run=True, policy_citation=None,
               lane=None, retry_attempts=None, retry_wallclock_s=None,
-              attempt_timeout_s=None):
+              attempt_timeout_s=None, reference_set_id=None):
     """Record a run and its provenance (migration 109: ``derived.create_run``).
 
     ``expected_state`` is ``{"already_present": false}`` for the ordinary
@@ -111,6 +111,14 @@ def create_run(conn, idempotency_key, name, owner, kind, purpose=None,
     here would give the same fact two homes that could drift; passing None
     means "use the function's default", and the CLI prints what that will be
     rather than deciding it.
+
+    THE REFERENCE SET (migration 126). ``reference_set_id`` is which set of
+    references this run differences against. Passed as an id rather than a
+    name because the CLI resolves the name — or creates the set — before
+    calling, so what reaches the database is unambiguous. None means the
+    default set, resolved by ``derived.create_run`` and STORED: the stored
+    value is never "whatever is default later", which is the behaviour
+    migration 126 exists to remove.
     """
     return call_function(
         conn,
@@ -142,11 +150,106 @@ def create_run(conn, idempotency_key, name, owner, kind, purpose=None,
         "                          p_lane => %s::text, "
         "                          p_retry_attempts => %s::integer, "
         "                          p_retry_wallclock_s => %s::integer, "
-        "                          p_attempt_timeout_s => %s::integer)",
+        "                          p_attempt_timeout_s => %s::integer, "
+        "                          p_reference_set_id => %s::bigint)",
         (idempotency_key, name, owner, kind, purpose, branch, image_digest,
          config_hash, input_generations, reason, _json(expected_state),
          dry_run, policy_citation,
-         lane, retry_attempts, retry_wallclock_s, attempt_timeout_s))
+         lane, retry_attempts, retry_wallclock_s, attempt_timeout_s,
+         reference_set_id))
+
+
+def create_reference_set(conn, idempotency_key, name, owner, reason,
+                         purpose=None, coadder=None, coadder_version=None,
+                         frame_rule=None, min_frames=None,
+                         epoch_start=None, epoch_end=None, psf_set=None,
+                         image_digest=None, built_by_run=None,
+                         expected_state=None, dry_run=True,
+                         policy_citation=None):
+    """Create a named reference set (migration 127:
+    ``derived.create_reference_set``).
+
+    ``psf_set`` and ``built_by_run`` are NAMES, resolved inside the function
+    — an operator names a set and a run, never an id, and resolving in SQL
+    keeps the check and the insert in one transaction rather than leaving a
+    window between them.
+
+    A set is NEVER created as the default. Moving the default is
+    ``set_default_reference_set``, a separate and separately audited act,
+    because a new set silently becoming default at creation is the
+    supersede-on-arrival behaviour migration 126 exists to remove.
+
+    Every argument after ``reason`` is passed BY NAME for the reason
+    ``create_run``'s envelope arguments are: this function takes eighteen
+    parameters, eleven of them optional and most of them text, so a
+    positional call that dropped one would slide the rest along silently and
+    PostgreSQL would accept it.
+    """
+    return call_function(
+        conn,
+        "SELECT derived.create_reference_set("
+        "    %s, %s, %s, %s, %s, "
+        "    p_coadder => %s::text, "
+        "    p_coadder_version => %s::text, "
+        "    p_frame_rule => %s::text, "
+        "    p_min_frames => %s::integer, "
+        "    p_epoch_start => %s::timestamptz, "
+        "    p_epoch_end => %s::timestamptz, "
+        "    p_psf_set => %s::text, "
+        "    p_image_digest => %s::text, "
+        "    p_built_by_run => %s::text, "
+        "    p_expected_state => %s::jsonb, "
+        "    p_dry_run => %s, "
+        "    p_policy_citation => %s::text)",
+        (idempotency_key, name, owner, purpose, reason,
+         coadder, coadder_version, frame_rule, min_frames,
+         epoch_start, epoch_end, psf_set, image_digest, built_by_run,
+         _json(expected_state), dry_run, policy_citation))
+
+
+def set_default_reference_set(conn, idempotency_key, name, reason,
+                              expected_state=None, dry_run=True,
+                              policy_citation=None):
+    """Move production's default reference set (migration 127:
+    ``derived.set_default_reference_set``).
+
+    ``expected_state`` is ``{"current_default": "..."}`` — which set the dry
+    run showed as default; the apply refuses if it moved since (RA001). That
+    matters more here than for most: this is the one command that changes
+    what every LATER run with no declaration of its own will read, so an
+    operator acting on a stale reading would redirect work they never saw.
+
+    Runs ALREADY created keep the set they stored. That is the point of
+    storing it at creation, and is why this command touches no run.
+    """
+    return call_function(
+        conn,
+        "SELECT derived.set_default_reference_set(%s, %s, %s, %s::jsonb, "
+        "                                         %s, %s)",
+        (idempotency_key, name, reason, _json(expected_state), dry_run,
+         policy_citation))
+
+
+def archive_reference_set(conn, idempotency_key, name, reason,
+                          expected_state=None, dry_run=True,
+                          policy_citation=None):
+    """Archive a reference set (migration 127:
+    ``derived.archive_reference_set``).
+
+    DELIBERATELY NOT ``archive_run``'S SEMANTIC. Archiving a run demotes its
+    campaign products; archiving a SET demotes nothing at all, because a run
+    already declared on it must keep reading exactly the references it has
+    been reading. Archiving says only "do not choose this set for new work".
+
+    The function refuses to archive the default set and reports how many runs
+    still declare the one being archived — reported, not refused, since a set
+    runs still declare is an ordinary thing to archive.
+    """
+    return call_function(
+        conn,
+        "SELECT derived.archive_reference_set(%s, %s, %s, %s::jsonb, %s, %s)",
+        (idempotency_key, name, reason, _json(expected_state), dry_run,
+         policy_citation))
 
 
 def archive_run(conn, idempotency_key, name, reason, expected_state=None,
@@ -651,12 +754,29 @@ SELECT 'psfs', count(*) FROM psfs WHERE run_id LIKE %s
 """
 
 _RUN_ROW = """
-SELECT run_id, name, owner, kind, purpose, branch, image_digest,
-       config_hash, input_generations, state, created_at, started_at,
-       completed_at, archived_at,
-       lane, retry_attempts, retry_wallclock_s, attempt_timeout_s
-  FROM runs WHERE name = %s
+SELECT r.run_id, r.name, r.owner, r.kind, r.purpose, r.branch,
+       r.image_digest, r.config_hash, r.input_generations, r.state,
+       r.created_at, r.started_at, r.completed_at, r.archived_at,
+       r.lane, r.retry_attempts, r.retry_wallclock_s, r.attempt_timeout_s,
+       r.reference_set_id, s.name AS reference_set, s.psf_set_id
+  FROM runs r
+  LEFT JOIN reference_sets s ON s.reference_set_id = r.reference_set_id
+ WHERE r.name = %s
 """
+# THE JOIN IS A LEFT JOIN, and every set column is read with `.get`
+# downstream. An INNER JOIN would return NO ROW for a run whose
+# `reference_set_id` is NULL, turning "this run has no set recorded" into
+# "this run does not exist" — and `_bind_registry_row` refuses an absent run
+# by telling the operator to declare it, which would be exactly the wrong
+# advice. A NULL id is possible on any database where 126 ran but 127's
+# `SET NOT NULL` has not (the applier commits per file), and on a run row
+# written between the two.
+#
+# `reference_sets` itself is assumed to EXIST, unlike the column, because
+# `pipeline/intent/schema_contract.py` carries 126 under REQUIRED_MIGRATIONS:
+# operatorctl runs from the checkout against a database at the checkout's own
+# floor, so a database without the table is one this command already refuses
+# to act on for reasons that have nothing to do with sets.
 
 
 def run_row(conn, name):
@@ -670,6 +790,39 @@ def run_row(conn, name):
     """
     rows = _rows(conn, _RUN_ROW, (name,))
     return rows[0] if rows else None
+
+
+_REFERENCE_SET_ROWS = """
+SELECT s.reference_set_id, s.name, s.owner, s.purpose, s.coadder,
+       s.coadder_version, s.frame_rule, s.min_frames,
+       s.epoch_start, s.epoch_end, s.psf_set_id, s.image_digest,
+       s.state, s.is_default, s.created_at, s.archived_at,
+       b.name AS built_by_run_name,
+       (SELECT count(*) FROM runs r
+         WHERE r.reference_set_id = s.reference_set_id) AS runs_declaring_it,
+       (SELECT count(*) FROM refimages f
+         WHERE f.reference_set_id = s.reference_set_id) AS refimages_rows
+  FROM reference_sets s
+  LEFT JOIN runs b ON b.run_id = s.built_by_run
+ WHERE (%s OR s.state = 'current')
+ ORDER BY s.is_default DESC, s.name
+"""
+
+
+def reference_set_rows(conn, include_archived=False):
+    """Every reference set, with what depends on it (migration 126).
+
+    The two counts are subqueries rather than joins because a set with no
+    runs and no references must still appear — that is exactly the state a
+    freshly created set is in, and a join would hide the set an operator
+    just made. `built_by_run` is LEFT JOINed for the same reason: most sets
+    have none.
+
+    Archived sets are hidden by default. An archived set is one nobody
+    should CHOOSE, and a list whose common use is "which set do I declare"
+    reads better without them; `--all` shows the history.
+    """
+    return _rows(conn, _REFERENCE_SET_ROWS, (bool(include_archived),))
 
 
 def _run_prefix_pattern(name):

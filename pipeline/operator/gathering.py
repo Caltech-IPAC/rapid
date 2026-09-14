@@ -201,6 +201,51 @@ def _release_identity():
     return value
 
 
+def _default_reference_set(handle):
+    """Production's default reference set, as `(reference_set_id, psf_set_id)`.
+
+    PRODUCTION'S SEMANTIC, STATED ONCE. A production pass has no run of its
+    own to have stored a set on, so it reads the set marked `is_default`
+    (migration 126) — and it reads it ONCE PER PASS, here, rather than per
+    unit. That is the whole difference the set mechanism buys production: a
+    pass differences every one of its units against one set even if an
+    operator moves the default while it runs, and switching which set
+    production publishes from is `rapidctl refset default`, a recorded act,
+    rather than an emergent consequence of whoever registered a reference
+    most recently.
+
+    Raises rather than falling back. There is no set to guess: a database
+    with no default is a database where 126's seed row was removed or never
+    applied, and gathering against "whichever reference happens to be
+    current" is exactly the behaviour this replaced.
+    """
+    # The handle is a `CheckedHandle`, so an absent default arrives as a
+    # raised `RapidDBCallFailed` (the reader sets exit_code 67) rather than as
+    # a None return. Both shapes are turned into the same message, because a
+    # caller reading this traceback wants to know WHICH fact is missing, not
+    # which of two mechanisms reported it.
+    # Imported here, not at module scope, for the reason `gather()` below
+    # imports `rapid_db` the same way: this module is imported by callers with
+    # no database stack available, and a top-level import would make it
+    # unimportable for them.
+    from database.modules.utils.checked import RapidDBCallFailed
+
+    try:
+        row = handle.get_default_reference_set()
+    except RapidDBCallFailed as exc:
+        raise RuntimeError(
+            "no default reference set: production gathering cannot resolve "
+            "which references to difference against. Migration 126 seeds one "
+            "named `production`; `rapidctl refset default NAME` moves it."
+        ) from exc
+    if not row:
+        raise RuntimeError(
+            "no default reference set: production gathering cannot resolve "
+            "which references to difference against. Migration 126 seeds one "
+            "named `production`; `rapidctl refset default NAME` moves it.")
+    return int(row[0]), (int(row[2]) if row[2] is not None else int(row[0]))
+
+
 def _science_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
                       parameters, s3_client):
     # `parameters`/`s3_client` unused, taken anyway: every REGISTRY row's
@@ -208,10 +253,17 @@ def _science_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
     # registry docstring states, so the dispatcher never branches. This
     # row was the ONE that didn't — a TypeError at first prompt-class
     # gather, found live at the mock's enablement.
+    #
+    # The set is resolved HERE, from the handle this row already takes,
+    # rather than by widening that union to seven for the rows that could
+    # never use it — the same reasoning the union's own docstring gives for
+    # keeping `on_blocked` out of it.
+    reference_set_id, psf_set_id = _default_reference_set(handle)
     return list(gathering.gather_science_units(
         handle, operator_input.start, operator_input.end,
         start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
-        min_images_to_coadd=min_images_to_coadd()))
+        min_images_to_coadd=min_images_to_coadd(),
+        reference_set_id=reference_set_id, psf_set_id=psf_set_id))
 
 
 def _reference_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
@@ -232,13 +284,15 @@ def _reference_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
     tests and any caller with no database connection want; the operator's
     own pass always supplies one.
     """
+    reference_set_id, psf_set_id = _default_reference_set(handle)
     return list(gathering.gather_reference_units(
         handle, operator_input.start, operator_input.end,
         start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
         min_images_to_coadd=min_images_to_coadd(),
         s3_client=s3_client,
         job_bucket=parameters["s3/products-bucket"],
-        run_id=None, on_blocked=on_blocked, on_unblocked=on_unblocked))
+        run_id=None, on_blocked=on_blocked, on_unblocked=on_unblocked,
+        reference_set_id=reference_set_id, psf_set_id=psf_set_id))
 
 
 def _catalog_load_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,

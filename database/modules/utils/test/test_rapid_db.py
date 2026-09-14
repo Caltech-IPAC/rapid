@@ -579,109 +579,114 @@ class BlockingGateAttemptsPrefixSemanticsTests(unittest.TestCase):
         self.assertFalse(self._matches("foo", "bar-0"))
 
 
-class RunScopedReferenceLookupTests(unittest.TestCase):
-    """`get_best_reference_image`'s new `run_id` parameter — query-SHAPE
-    tests, no server.
+class SetScopedReferenceLookupTests(unittest.TestCase):
+    """`get_best_reference_image`'s `reference_set_id` parameter —
+    query-SHAPE tests, no server.
 
-    Migration 115 put a `run_id` column on `refimages`/`diffimages`/`psfs`
-    and gave `refimages` TWO partial unique indexes for currency:
-    `refimages_vbest_current_unique` (`run_id IS NULL`, the production
-    lane) and `refimages_vbest_current_per_run_unique` (`run_id IS NOT
-    NULL`). A production current reference and a campaign run's own
-    current reference for the SAME (field, fid, ppid) can therefore
-    coexist as two rows without violating either index. This lookup used
-    to have NO run predicate and NO `ORDER BY`, read with `fetchone()` —
-    so once that second row exists, WHICH reference a campaign's science
-    differences against is whatever the planner emits first. The
-    database-evaluated proof of what the new query actually selects is
-    `RunScopedReferenceLookupSemanticsTests` below.
+    SUPERSEDES THE RUN-SCOPED SHAPE THIS CLASS USED TO PIN (migration 115,
+    `run_id=None` for the production lane and a two-lane ranked query for
+    a run). Migration 126 made the reference SET the unit of currency:
+    `refimages` currency is keyed on `(field, fid, ppid,
+    reference_set_id)`, several sets are current at once, and a run
+    declares its set at creation. There is now ONE query shape with ONE
+    predicate, no production lane, and no fallback — so the old class's
+    assertions (`run_id is null`, the ranked `case when`, the
+    two-parameter binding) were asserting the exact behaviour 126
+    removes, and are replaced rather than kept alongside.
+
+    The database-evaluated proof of what the new query selects is
+    `SetScopedReferenceLookupSemanticsTests` below;
+    `ReferenceSetLookupSemanticsTests` pins the SQL text of both readers.
     """
 
-    def _execute(self, run_id=None):
+    def _execute(self, reference_set_id=7):
         db = make_db(fetchone=None)
-        db.get_best_reference_image(15, 5001, 1, run_id=run_id)
+        db.get_best_reference_image(15, 5001, 1, reference_set_id)
         query, params = db.cur.execute.call_args.args
         return query, params
 
-    def test_the_query_is_ordered_so_the_choice_is_never_planner_defined(
+    def test_the_reference_set_query_is_ordered_so_the_choice_is_never_planner_defined(
             self):
-        # THE CORE PROPERTY, true in BOTH lanes: a `fetchone()` over an
+        # THE CORE PROPERTY, unchanged by 126: a `fetchone()` over an
         # unordered result set picks an arbitrary row the moment the set
-        # has more than one member. Every shape this method emits must
-        # carry an ORDER BY.
-        for run_id in (None, "w9-campaign-1"):
-            text, _ = self._execute(run_id=run_id)
-            self.assertIn("order by", text.lower(),
-                          f"run_id={run_id!r} emitted an unordered query; "
-                          "fetchone() over it is a planner-defined choice")
+        # has more than one member.
+        text, _ = self._execute()
+        self.assertIn("order by", text.lower(),
+                      "an unordered query; fetchone() over it is a "
+                      "planner-defined choice")
 
-    def test_no_run_id_restricts_the_lookup_to_the_production_lane(self):
-        # The default preserves today's INTENT for the production caller:
-        # production reads production's reference. Before migration 115
-        # there was no other kind of row, so an unscoped scan and this one
-        # returned the same thing; now `run_id IS NULL` is what keeps a
-        # campaign's reference out of production's result.
-        text, params = self._execute(run_id=None)
-
-        self.assertIn("run_id is null", text.lower())
-        self.assertNotIn("run_id = %s", text)
-        self.assertEqual(params, (15, 5001, 1))
-
-    def test_a_run_id_prefers_that_run_then_falls_back_to_production(self):
-        # Two acceptable rows, ranked: the caller's own run first, the
-        # production lane second. Never another campaign's — that is the
-        # `in` restriction, asserted by the semantics tests below.
-        text, params = self._execute(run_id="w9-campaign-1")
+    def test_the_reference_set_is_the_only_scope_predicate(self):
+        # The whole of migration 126 at the SQL level: one predicate, and
+        # no trace of the run lanes that predicate replaced. A query that
+        # still carried `run_id` would still have a lane for a caller to
+        # be placed in wrongly.
+        text, params = self._execute(reference_set_id=7)
 
         lowered = text.lower()
-        self.assertIn("run_id", lowered)
-        self.assertIn("order by", lowered)
-        self.assertIn("w9-campaign-1", params)
+        self.assertIn("reference_set_id = %s", lowered)
+        self.assertNotIn("run_id", lowered)
+        self.assertEqual(params, (15, 5001, 1, 7))
 
-    def test_every_placeholder_has_a_bound_parameter(self):
-        for run_id in (None, "w9-campaign-1"):
-            text, params = self._execute(run_id=run_id)
-            self.assertEqual(text.count("%s"), len(params),
-                             f"placeholder/param mismatch for {run_id!r}")
+    def test_every_placeholder_has_a_bound_parameter_for_the_reference_set(
+            self):
+        text, params = self._execute()
+        self.assertEqual(text.count("%s"), len(params),
+                         "placeholder/param mismatch")
 
-    def test_the_run_id_is_bound_never_spliced_into_the_sql_text(self):
-        text, params = self._execute(run_id=HOSTILE)
+    def test_the_reference_set_id_is_bound_never_spliced_into_the_sql_text(
+            self):
+        text, params = self._execute(reference_set_id=HOSTILE)
         self.assertNotIn(HOSTILE, text)
         self.assertIn(HOSTILE, params)
 
+    def test_the_reference_set_id_is_required_with_no_default(self):
+        # A default would let a caller that forgot to pass one read SOME
+        # set silently instead of failing — exactly the class of silence
+        # 126 exists to end. Pinned at the signature, because that is
+        # where a well-meaning "make it optional again" would land.
+        db = make_db(fetchone=None)
+        with self.assertRaises(TypeError):
+            db.get_best_reference_image(15, 5001, 1)
 
-class RunScopedReferenceLookupSemanticsTests(unittest.TestCase):
+
+class SetScopedReferenceLookupSemanticsTests(unittest.TestCase):
     """WHICH reference row the query actually selects, evaluated for real
     over scripted rows — the same SQLite stand-in pattern
     `RunScopedBlockingGateSemanticsTests` uses, and for the same reason:
-    the ordering and the `IN`/`IS NULL` predicates are ANSI-standard, so
-    this evaluates the selection rule rather than reimplementing it in
-    Python where it could silently drift from the SQL.
+    the equality predicate and the ordering are ANSI-standard, so this
+    evaluates the selection rule rather than reimplementing it in Python
+    where it could silently drift from the SQL.
+
+    REWRITTEN FOR SETS (126). The run-scoped version of this class scripted
+    `(rfid, run_id)` rows and asserted a two-lane RANKING with a fallback
+    to production. There is no ranking and no fallback now, so those cases
+    could not be adapted row by row: the scripted column is
+    `reference_set_id` and the rule under test is plain equality plus a
+    deterministic tie-break.
     """
 
-    def _selected(self, rows, run_id):
-        """`rows` is [(rfid, run_id), ...] for RefImages, all of them
-        current (vbest > 0, status > 0) and all in the SAME
+    def _selected(self, rows, reference_set_id):
+        """`rows` is [(rfid, reference_set_id), ...] for RefImages, all of
+        them current (vbest > 0, status > 0) and all in the SAME
         (ppid, field, fid) identity group. Returns the rfid the lookup
         would hand back, or None.
         """
         import sqlite3
 
         conn = sqlite3.connect(":memory:")
-        conn.execute("CREATE TABLE refimages (rfid INTEGER, run_id TEXT)")
+        conn.execute(
+            "CREATE TABLE refimages (rfid INTEGER, reference_set_id INTEGER)")
         conn.executemany("INSERT INTO refimages VALUES (?, ?)", rows)
 
         # THE SQL EVALUATED HERE IS THE METHOD'S OWN, not a
         # reimplementation of it: the real query text is read off the
         # cursor the method was handed, then the clauses this stand-in
         # cannot model (the identity-group and currency predicates, and
-        # the `RefImages` spelling) are stripped, leaving the run
+        # the `RefImages` spelling) are stripped, leaving the set
         # predicate and the ordering — the two things under test —
-        # exactly as the method emits them. So if the method's ranking
-        # rule ever changes, these assertions change with it rather than
-        # silently drifting.
+        # exactly as the method emits them.
         db = make_db(fetchone=None)
-        db.get_best_reference_image(15, 5001, 1, run_id=run_id)
+        db.get_best_reference_image(15, 5001, 1, reference_set_id)
         text, db_params = db.cur.execute.call_args.args
 
         sql_text = text
@@ -697,68 +702,148 @@ class RunScopedReferenceLookupSemanticsTests(unittest.TestCase):
         sql_text = sql_text.replace("from RefImages", "from refimages")
         sql_text = sql_text.replace("%s", "?")
         # Whatever identity parameters were stripped go with their
-        # clauses; only the run_id bindings remain.
-        params = tuple(p for p in db_params if p == run_id)
+        # clauses; only the set binding remains.
+        params = (reference_set_id,)
 
         row = conn.execute(sql_text, params).fetchone()
         return None if row is None else row[0]
 
-    def test_a_caller_in_a_run_gets_that_runs_own_reference(self):
-        # THE DEFECT THIS FIXES, in its first half: both rows are current
-        # and legal (the two partial unique indexes let them coexist), so
-        # before this change the unordered `fetchone()` could return
-        # either. The campaign must get its own.
-        rows = [(101, None), (202, "w9-campaign-1")]
-        self.assertEqual(self._selected(rows, run_id="w9-campaign-1"), 202)
+    def test_a_caller_gets_the_reference_from_its_own_set(self):
+        # THE DEFECT SETS FIX, in its first half: both rows are current and
+        # legal (126's per-set partial unique index lets them coexist), so
+        # an unscoped `fetchone()` could return either. The caller must get
+        # the row from the set it declared.
+        rows = [(101, 1), (202, 2)]
+        self.assertEqual(self._selected(rows, reference_set_id=2), 202)
 
-    def test_the_run_wins_regardless_of_which_row_the_scan_reaches_first(
+    def test_the_declared_reference_set_wins_regardless_of_scan_order(self):
+        # Same two rows, inserted the other way round. A rule that only
+        # happened to work for one insertion order would be no rule at all.
+        rows = [(202, 2), (101, 1)]
+        self.assertEqual(self._selected(rows, reference_set_id=2), 202)
+
+    def test_another_set_is_never_returned_when_the_declared_set_is_empty(
             self):
-        # Same two rows, inserted the other way round. An ordering rule
-        # that only happened to work for one insertion order would be no
-        # rule at all.
-        rows = [(202, "w9-campaign-1"), (101, None)]
-        self.assertEqual(self._selected(rows, run_id="w9-campaign-1"), 202)
+        # THE DEFECT SETS FIX, in its second half, and the CHANGE FROM 115:
+        # under the run-scoped shape a caller whose own lane held nothing
+        # fell back to production's row. There is NO fallback now — the
+        # correct answer is NOTHING, the caller's documented "no reference
+        # yet" path. A query that still returned 101 here would have
+        # reintroduced the "whatever is current now" behaviour.
+        rows = [(101, 1)]
+        self.assertIsNone(self._selected(rows, reference_set_id=2))
 
-    def test_a_caller_with_no_run_gets_the_production_reference(self):
-        # Production must not silently start differencing against a
-        # campaign's reference the moment a campaign registers one.
-        rows = [(101, None), (202, "w9-campaign-1")]
-        self.assertEqual(self._selected(rows, run_id=None), 101)
+    def test_a_reference_set_never_displaces_another_sets_current_row(self):
+        rows = [(101, 1), (202, 2)]
+        self.assertEqual(self._selected(rows, reference_set_id=1), 101)
 
-    def test_a_run_with_no_reference_of_its_own_falls_back_to_production(
+    def test_ties_within_one_reference_set_are_broken_deterministically(
             self):
-        # The common case during a campaign that builds no references of
-        # its own: there is exactly one current reference and it is
-        # production's. Falling back is what keeps such a campaign working
-        # at all.
-        rows = [(101, None)]
-        self.assertEqual(self._selected(rows, run_id="w9-campaign-1"), 101)
-
-    def test_a_run_never_gets_a_different_campaigns_reference(self):
-        # THE DEFECT THIS FIXES, in its second half: run Y's science must
-        # never difference against run X's reference. With no production
-        # row present the correct answer is NOTHING — the caller's
-        # documented "no reference yet" path — not X's row.
-        rows = [(202, "w9-campaign-x")]
-        self.assertIsNone(self._selected(rows, run_id="w9-campaign-y"))
-
-    def test_a_different_campaigns_reference_never_displaces_productions(
-            self):
-        rows = [(101, None), (202, "w9-campaign-x")]
-        self.assertEqual(self._selected(rows, run_id="w9-campaign-y"), 101)
-
-    def test_ties_within_one_lane_are_broken_deterministically(self):
-        # Two current production rows should not be reachable (the partial
+        # Two current rows in one set should not be reachable (the partial
         # unique index forbids it), but if the index is ever dropped or
         # bypassed the answer must still be stable rather than arbitrary:
         # highest rfid, the most recently registered.
-        rows = [(101, None), (105, None)]
-        self.assertEqual(self._selected(rows, run_id=None), 105)
-        self.assertEqual(self._selected(rows, run_id="w9-campaign-1"), 105)
+        rows = [(101, 1), (105, 1)]
+        self.assertEqual(self._selected(rows, reference_set_id=1), 105)
 
-    def test_no_current_reference_at_all_selects_nothing(self):
-        self.assertIsNone(self._selected([], run_id=None))
-        self.assertIsNone(self._selected([], run_id="w9-campaign-1"))
+    def test_no_current_reference_in_any_set_selects_nothing(self):
+        self.assertIsNone(self._selected([], reference_set_id=1))
+
+
+class ReferenceSetLookupSemanticsTests(unittest.TestCase):
+    """The SQL TEXT both set-scoped readers emit (migration 126).
+
+    Modelled on `SetScopedReferenceLookupTests` above, and deliberately
+    covering the pair together: `get_best_psf` was the UNHARDENED TWIN.
+    `addpsf` has written `run_id` since 115 but the reader was never given
+    a matching predicate, so from 115 until 126 it read whichever current
+    PSF the planner emitted first across every lane. 126 keys `psfs`
+    currency on `(fid, sca, reference_set_id)`, so the predicate is now
+    load-bearing rather than precautionary, and the reader also gained the
+    `ORDER BY` it never had.
+
+    Every assertion here fails if the production change is reverted: the
+    pre-126 reference query carried `run_id` and no set, and the pre-126
+    PSF query carried neither a set predicate nor any ordering.
+    """
+
+    def _reference(self, ppid=15, field=5001, fid=1, reference_set_id=7):
+        db = make_db(fetchone=None)
+        db.get_best_reference_image(ppid, field, fid, reference_set_id)
+        return db.cur.execute.call_args.args
+
+    def _psf(self, sca=7, fid=1, reference_set_id=7):
+        db = make_db(fetchone=None)
+        db.get_best_psf(sca, fid, reference_set_id)
+        return db.cur.execute.call_args.args
+
+    # --- get_best_reference_image ---------------------------------------
+
+    def test_the_reference_query_carries_the_reference_set_predicate(self):
+        text, _ = self._reference()
+        self.assertIn("reference_set_id = %s", text.lower())
+
+    def test_the_reference_query_has_no_run_id_predicate_left_at_all(self):
+        # Not merely "no `run_id = %s`": no `run_id` in any form. The 115
+        # shape also carried `run_id is null` and a `case when run_id`
+        # ranking term, and a partial removal that left either behind
+        # would leave a lane the set predicate cannot see.
+        text, _ = self._reference()
+        lowered = text.lower()
+        self.assertNotIn("run_id", lowered)
+        self.assertNotIn("case when", lowered)
+
+    def test_the_reference_query_keeps_its_rfid_ordering(self):
+        # Kept from the run-scoped shape for its own reason: `fetchone()`
+        # over an unordered result is planner-defined as soon as the unique
+        # index is dropped or bypassed.
+        text, _ = self._reference()
+        self.assertIn("order by rfid desc", text.lower())
+
+    def test_the_reference_query_binds_exactly_its_four_parameters(self):
+        text, params = self._reference(ppid=15, field=5001, fid=1,
+                                       reference_set_id=7)
+        self.assertEqual(params, (15, 5001, 1, 7))
+        self.assertEqual(text.count("%s"), len(params))
+
+    # --- get_best_psf ----------------------------------------------------
+
+    def test_the_psf_query_carries_the_reference_set_predicate(self):
+        text, _ = self._psf()
+        self.assertIn("reference_set_id = %s", text.lower())
+
+    def test_the_psf_query_is_ordered_by_psfid_descending(self):
+        # NEW at 126: this query had no ORDER BY at all, so `fetchone()`
+        # over two current rows for one (sca, fid) was a planner-defined
+        # choice.
+        text, _ = self._psf()
+        self.assertIn("order by psfid desc", text.lower())
+
+    def test_the_psf_query_has_no_run_id_predicate(self):
+        text, _ = self._psf()
+        self.assertNotIn("run_id", text.lower())
+
+    def test_the_psf_query_binds_exactly_its_three_parameters(self):
+        text, params = self._psf(sca=7, fid=1, reference_set_id=7)
+        self.assertEqual(params, (7, 1, 7))
+        self.assertEqual(text.count("%s"), len(params))
+
+    def test_the_psf_reference_set_id_is_required_with_no_default(self):
+        # Same reasoning as the reference reader's: a default would let a
+        # caller that forgot to pass one read some set silently.
+        db = make_db(fetchone=None)
+        with self.assertRaises(TypeError):
+            db.get_best_psf(7, 1)
+
+    def test_both_readers_carry_the_same_reference_set_predicate_text(self):
+        # The two readers are resolved from ONE set decision by the caller
+        # (the reference set and its declared `psf_set_id`), so a
+        # divergence in how they spell the scope would be a real
+        # divergence in what a coadd and its PSF are matched on.
+        ref_text, _ = self._reference()
+        psf_text, _ = self._psf()
+        self.assertIn("and reference_set_id = %s ", ref_text)
+        self.assertIn("and reference_set_id = %s ", psf_text)
 
 
 if __name__ == "__main__":
