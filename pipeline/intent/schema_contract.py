@@ -226,6 +226,12 @@ REQUIRED_MIGRATIONS = (
      "database with 122 but not 124 every ordinary `run create` raises "
      "`retry_attempts must be at least 1 ... got <NULL>` and creates no run "
      "at all"),
+    ("125-resolve-attempt-refuse-orphan-retry.sql",
+     "`public.resolve_attempt` refusing a retry with NO predecessor at all, "
+     "not only one whose predecessor is unbound. Without 125 a row resolved "
+     "at index > 1 against a logical job with no lower-indexed row is created "
+     "with `work_unit_id` NULL — the shape 123 exists to prevent, reached by "
+     "the one path 123's refusal did not cover"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than

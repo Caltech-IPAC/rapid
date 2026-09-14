@@ -49,13 +49,16 @@ Nonzero is TWO codes, not one, and the difference is whether retrying could
 possibly help. **70** (`EXIT_UNRECORDABLE`) is the pooler refusal and every
 other path that could not write an account at all: the work was never judged,
 so the definition's `OnExitCode '70' -> RETRY` rule is right to retry it.
-**72** (`EXIT_LIFECYCLE_CONTRADICTION`) is `mark_application_closed` finding
-its row no longer in `started` — the compare-and-set holding, because another
-writer's account now stands. A retry hits the identical point, since the row
-will not return to `started`, so 72 takes the definition's `OnReason '*' ->
-EXIT` catch-all instead. Collapsing the two into 70 is what spent a whole
-retry budget per unit on 2026-09-13: 16 exhausted units, 328 orphan attempt
-rows, and a five-hour tail. See `pipeline.runtime.termination`.
+**72** (`EXIT_LIFECYCLE_CONTRADICTION`) is ANY lifecycle-transition
+compare-and-set finding its row no longer in the state it may leave — the CAS
+holding, because another writer's account now stands. Two such transitions are
+reachable from `_run`: `mark_application_closed` (the case that produced the
+2026-09-13 tail) and `mark_started`. Both are the same contradiction and both
+are equally unhelpful to retry, since the row will not return to the state the
+transition needs, so 72 takes the definition's `OnReason '*' -> EXIT` catch-all
+for either. Collapsing them into 70 is what spent a whole retry budget per unit
+on 2026-09-13: 16 exhausted units, 328 orphan attempt rows, and a five-hour
+tail. See `pipeline.runtime.termination`.
 """
 
 import argparse
@@ -691,6 +694,17 @@ def main(argv=None) -> int:
         # row has LEFT that state — the reconciler classified it while this
         # container was still running — so the compare-and-set has done its
         # job and refused to overwrite another writer's account.
+        #
+        # THIS CATCHES `mark_started`'s CAS FAILURE TOO, and deliberately.
+        # Both are reachable from `_run`, and a `mark_started` failure means
+        # another writer took the row out of `submitted` — the same
+        # contradiction, equally unhelpful to retry, since that row will not
+        # return to `submitted` either. The module docstring says "any
+        # lifecycle-transition compare-and-set" for this reason rather than
+        # naming one call site; an earlier draft claimed the narrower scope
+        # and would have sent the next reader looking for an
+        # application-closed CAS that did not exist. (`record_stage` cannot
+        # reach here: its call site swallows every exception.)
         #
         # This used to fall into the handler below and exit 70, which the job
         # definition's `OnExitCode '70' -> RETRY` rule retries. The retry hit
