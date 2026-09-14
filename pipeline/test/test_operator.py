@@ -768,3 +768,47 @@ class TestProductionPassesCarryTheirRunKey(unittest.TestCase):
 
         self.assertEqual(self._run(connection_factory=exploding_factory),
                          [None])
+
+
+class LiveSubmitterNamesEveryThreadedParameter(unittest.TestCase):
+    """Parameters that must reach the seam are NAMED, never left to `**_ignored`.
+
+    `LiveSubmitter.submit` carries a `**_ignored` catch-all so the rehearsal and
+    live submitters can share one call site. That catch-all is a trap for any
+    parameter that must actually arrive: it swallows the argument silently, the
+    seam never sees it, and nothing anywhere reports a problem.
+
+    `run_key` learned this the hard way (migration 121) and the method's
+    docstring records it. `envelope` (migration 122) was very nearly the second
+    case — found by the run-stage review, not by a test, which is why this test
+    now exists. Its failure mode: every array job running under the job
+    definition's own timeout instead of the run's, all four `submissions`
+    columns NULL, and `run status` reporting an envelope the run never carried.
+
+    Asserted against the SIGNATURE rather than by calling, so the test fails at
+    the moment a parameter is dropped from the declaration — which is the edit
+    that would cause the defect.
+    """
+
+    def test_every_seam_parameter_is_named_in_the_signature(self):
+        import inspect
+        from pipeline.operator.submitters import LiveSubmitter
+
+        named = set(inspect.signature(LiveSubmitter.submit).parameters)
+        for parameter in ("run_id", "run_key", "envelope",
+                          "reference_observation_window"):
+            self.assertIn(
+                parameter, named,
+                "%s must be named in LiveSubmitter.submit's signature: left to "
+                "**_ignored it reaches the seam as its default and reports no "
+                "error" % parameter)
+
+    def test_the_envelope_is_forwarded_to_the_seam(self):
+        # Naming it is half of it; the call must also pass it on. A signature
+        # that accepts the parameter and a body that forgets it fails exactly
+        # as silently.
+        import inspect
+        from pipeline.operator import submitters
+
+        body = inspect.getsource(submitters.LiveSubmitter.submit)
+        self.assertIn("envelope=envelope", body)

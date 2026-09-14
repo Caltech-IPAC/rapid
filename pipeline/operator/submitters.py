@@ -143,6 +143,7 @@ class LiveSubmitter:
 
     def submit(self, units, operational_class: OperationalClass,
                run_id=None, reference_observation_window=None, run_key=None,
+               envelope=None,
                **_ignored):
         """Submit these units as this class's route. Returns submissions.
 
@@ -156,6 +157,28 @@ class LiveSubmitter:
         parameter that must reach the seam is spelled out here so that
         dropping it would be a visible change rather than an invisible
         one.
+
+        **`envelope` IS NAMED HERE FOR THE SAME REASON (migration 122), and
+        it was very nearly not.** The run's execution envelope — lane, retry
+        budget and attempt timeout — reaches Batch and the `submissions` row
+        through `submit_gathered`, and this is the only live call site that
+        reaches it. Left to `**_ignored` it would have failed in exactly the
+        shape the paragraph above describes: every array job running under
+        the job definition's own timeout instead of the run's, all four
+        `submissions` columns NULL, `run status` reporting an envelope the
+        run never carried, and no error raised anywhere. Found by this
+        brief's own run-stage review, which noted that the lesson recorded
+        above for `run_key` had not been applied one level up.
+
+        **The VPO does not yet RESOLVE an envelope**, and the caller
+        (`operator.run_pass`) passes none, so this defaults to None and the
+        deployment's own timeout applies — the pre-122 behaviour, unchanged.
+        That is deliberate rather than unfinished: the VPO submits production
+        work under a run it did not create, and which run row it should read
+        an envelope from is the run-identity brief's question, not this one's.
+        What matters is that the parameter now EXISTS on the path, so
+        supplying it later is one line at the caller rather than a silent
+        no-op that looks like it already works.
 
         The import is INSIDE the method, and that is not laziness. It is
         what keeps `submit_gathered` out of the module namespace that
@@ -197,6 +220,7 @@ class LiveSubmitter:
                 execute=execute,
                 run_id=run_id,
                 run_key=run_key,
+                envelope=envelope,
                 max_batch_size=self._max_batch_size,
                 reference_observation_window=reference_observation_window,
                 protocol_commit=protocol_commit)
