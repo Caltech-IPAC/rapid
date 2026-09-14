@@ -1115,6 +1115,105 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
     return results
 
 
+# -- NED backend: the web service via astroquery ----------------------------
+
+# astroquery's NED result columns -> NED_COLUMNS. The web service labels
+# columns for display, not by the object-directory schema; "Redshift
+# Uncertainty" does not exist there at all, so zunc is filled with NaN.
+# Measured 2026-09-14 against astroquery 0.4.11: 'No.', 'Object Name',
+# 'RA', 'DEC', 'Type', 'Velocity', 'Redshift', 'Redshift Flag',
+# 'Magnitude and Filter', 'Separation', 'References', 'Notes', ...
+ASTROQUERY_NED_COLUMNS = {
+    "prefname": "Object Name",
+    "ra": "RA",
+    "dec": "DEC",
+    "ptype": "Type",
+    "z": "Redshift",
+    "zflag": "Redshift Flag",
+}
+
+
+def ned_table_to_columns(table: Any) -> dict[str, np.ndarray]:
+    """Convert an astroquery NED result table to NED_COLUMNS arrays.
+
+    Masked cells (astroquery returns a masked Table) become NaN in the
+    numeric columns and None in the string columns, which is the contract
+    build_nedcat() and _ned_match_from_row() rely on. Columns the web
+    service lacks (zunc) are filled with NaN. Pure function so the mapping
+    is testable without a network.
+
+    Parameters
+    ----------
+    table : astropy.table.Table
+        As returned by ``astroquery.ipac.ned.Ned.query_region``.
+
+    Returns
+    -------
+    dict
+        NED_COLUMNS -> array, all the same length (possibly zero).
+    """
+    n = len(table)
+    out: dict[str, np.ndarray] = {}
+    for name in NED_COLUMNS:
+        numeric = name in ("ra", "dec", "z", "zunc")
+        src = ASTROQUERY_NED_COLUMNS.get(name)
+        if src is None or src not in table.colnames:
+            out[name] = (np.full(n, np.nan)
+                         if numeric else np.full(n, None, dtype=object))
+            continue
+        col = table[src]
+        mask = np.ma.getmaskarray(col)
+        data = np.ma.getdata(col)
+        if numeric:
+            values = np.asarray(data, dtype=float)
+            values[mask] = np.nan
+        else:
+            values = np.array([None if m else str(v)
+                               for v, m in zip(data, mask)], dtype=object)
+        out[name] = values
+    return out
+
+
+class AstroqueryNedReader:
+    """A NedSliceReader over the NED web service (astroquery).
+
+    One HTTP cone search per call. Sized for one call per chip: a Roman
+    SCA needs a ~5.3' cone, which returned ~1100 rows in ~12 s on the
+    HLTDS-like field (2026-09-14); a ~3.9' cone took ~3 s. Exceptions
+    propagate -- the provider treats them as "could not run".
+
+    Known limits of this path, accepted for v1 (see
+    alerts/scratch/ned-crossmatch-design-notes.md section 3): results
+    are not reproducible across NED releases, an outage leaves nedMatches
+    null for the affected chips, and many concurrent jobs are a burst
+    against a shared production service. A local HATS copy replaces this
+    class without touching the matcher.
+
+    Parameters
+    ----------
+    timeout_s : float, optional
+        HTTP timeout applied to the NED query.
+    """
+
+    def __init__(self, timeout_s: float = 120.0) -> None:
+        self.timeout_s = float(timeout_s)
+
+    def __call__(self, ra_deg: float, dec_deg: float,
+                 radius_arcsec: float) -> dict[str, np.ndarray]:
+        # deferred import: astroquery is not in the pipeline image, and
+        # the module must import without it (the KONA/astropy pattern)
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+        from astroquery.ipac.ned import Ned
+
+        Ned.TIMEOUT = self.timeout_s
+        centre = SkyCoord(ra_deg * u.deg, dec_deg * u.deg)
+        table = Ned.query_region(centre, radius=radius_arcsec * u.arcsec)
+        logger.debug("NED cone (%.5f, %.5f) r=%.1f\": %d rows",
+                     ra_deg, dec_deg, radius_arcsec, len(table))
+        return ned_table_to_columns(table)
+
+
 # ---------------------------------------------------------------------------
 # The alert data provider
 #
