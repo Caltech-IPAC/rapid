@@ -27,11 +27,18 @@ has no manifest, no route, no attempt identity, and nothing worth recording as
 a science outcome. Forcing it through that dispatch would mean either adding a
 fake workload class the route matrix has to carry forever, or short-circuiting
 `_run` before most of its own steps — both bend a single-purpose protocol
-around a caller it was never meant to serve. This module is therefore its own
-process entrypoint, run directly as
-`python -m pipeline.entrypoints.burst`,
-and a burst job definition's container command names this module rather than
-`job` with a `--burst` flag `job.py` has no branch for.
+around a caller it was never meant to serve.
+
+So the burst is a FLAG on that parser rather than a class — `--burst`,
+which `job.main` dispatches straight into this module's `main` before any
+of the attempt protocol runs. It is dispatched from there rather than
+being its own image entrypoint for a mechanical reason: on ECS-backed
+Batch a job definition's `command` is Docker CMD, which is APPENDED to
+the image's ENTRYPOINT (`python -m pipeline.entrypoints.job`) and cannot
+replace it, so every definition sharing the image reaches that parser
+whatever its command says. Running this module directly
+(`python -m pipeline.entrypoints.burst`) also works and is what a local
+check does.
 
 **Exit codes.** `DBUnavailable` from either connect — the retry horizon
 exhausted — exits `EXIT_UNRECORDABLE` (70), the SAME number
@@ -43,6 +50,15 @@ application failure. Any other unexpected exception also exits 70, for the
 same reason job.py's outermost handler does: there is no attempt record to
 carry a taxonomy category, so the only thing left to do is fail loud on the
 safety stream and return nonzero so Batch reports FAILED.
+
+**Where the endpoint comes from.** The pipeline parameter tree, read by
+`database_inputs` below — never the process environment. `connect()` will
+fall back to `DBSERVER`/`DBPORT`/`DBNAME` if handed neither endpoint nor
+credential, but a Batch job definition deliberately carries no such
+entries: the payload's endpoint is operational configuration that lives in
+the tree, and a credential in the environment would be visible to
+everything downstream. Proving the admission path against a differently
+resolved endpoint would prove a path production does not use.
 
 **Configuration shape.** Environment variables only
 (`RAPID_BURST_HOLD_S`, `RAPID_BURST_GAP_S`), no argv. `job.py`'s own
@@ -60,6 +76,7 @@ failure rather than silently coercing garbage to zero.
 """
 
 import datetime
+import json
 import os
 import sys
 
@@ -125,14 +142,82 @@ def _utc_now_iso(clock=datetime.datetime.utcnow) -> str:
     return clock().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _connect_kwargs(application_name: str) -> dict:
+def database_inputs():
+    """The endpoint and credential, from the pipeline parameter tree.
+
+    NOT from the environment, and this is the whole reason this function
+    exists. `connect()` falls back to reading `DBSERVER`/`DBPORT`/`DBNAME`
+    from the process environment when it is handed neither, and a Batch
+    job definition has no such entries — deliberately: the payload's
+    endpoint is operational configuration and lives in the tree, so
+    `job.py` reads it there and hands it down as a value rather than
+    letting a job definition carry it (and rather than letting a
+    plaintext password into the environment of everything downstream).
+
+    A burst job proving the admission path has to resolve its endpoint
+    the same way, or it is proving a path production does not use — and
+    it fails immediately at scale, which is exactly what happened on the
+    first submission: every child raised `DBSERVER is not set` before it
+    reached the pooler at all.
+    """
+    from database.modules.utils.rapid_db_connect import (
+        Credentials,
+        DBCredentialError,
+        Endpoint,
+    )
+    from submission.startup import fetch_parameters
+
+    parameters = fetch_parameters()
+    missing = [k for k in ("db/server", "db/port", "db/name", "db/secret-id")
+               if not parameters.get(k)]
+    if missing:
+        # DBCredentialError, not a bare RuntimeError: the module already
+        # has a type for exactly this — a configuration fault where the
+        # database may be perfectly healthy — and it carries the
+        # `config_invalid` category and the exit code with it. Both
+        # paths end in exit 70 here, but only this one says WHICH kind
+        # of failure it was in the log line an operator reads first.
+        raise DBCredentialError(
+            "the pipeline parameter tree does not carry the database "
+            "endpoint; missing: " + ", ".join(sorted(missing)))
+
+    endpoint = Endpoint(host=parameters["db/server"],
+                        port=parameters["db/port"],
+                        dbname=parameters["db/name"])
+
+    # The credential is fetched here under the job role and passed on as
+    # a value — the same shape job.py uses, for the same reason: it never
+    # enters the environment and is never logged. Its secret id is an
+    # identifier, so naming it in a failure is safe.
+    import boto3
+    from botocore.config import Config
+
+    secret_id = parameters["db/secret-id"]
+    # The same adaptive, >=10-attempt retry sizing the other start-up
+    # fetches carry: 3,000 containers hitting Secrets Manager within a
+    # few seconds is precisely the synchronized-throttling shape that
+    # killed 218 of 1,000 jobs on 2026-09-10, and a burst is that shape
+    # by construction.
+    client = boto3.client(
+        "secretsmanager",
+        config=Config(retries={"max_attempts": 10, "mode": "adaptive"}))
+    secret = client.get_secret_value(SecretId=secret_id)
+    payload = json.loads(secret["SecretString"])
+    return endpoint, Credentials(payload["username"], payload["password"])
+
+
+def _connect_kwargs(application_name: str, endpoint=None,
+                    credentials=None) -> dict:
     """The STARTUP retry policy, exactly as `job.py`'s own first connection
     uses it (see `pipeline.entrypoints.job._database`). Same lane, same
     horizon, same jittered backoff: a burst job is standing in for that
     connection at scale, so it has to retry on the identical policy or it
     would prove the wrong thing about the door it is hammering.
+
+    The endpoint and credential are passed explicitly for the same
+    reason job.py passes them — see `database_inputs` above.
     """
-    return dict(
+    kwargs = dict(
         lane=LANE_TRANSACTION,
         attempts=STARTUP_CONNECT_ATTEMPTS,
         backoff_initial=STARTUP_BACKOFF_INITIAL_S,
@@ -141,10 +226,15 @@ def _connect_kwargs(application_name: str) -> dict:
         horizon=STARTUP_HORIZON_S,
         jitter=True,
     )
+    if endpoint is not None:
+        kwargs["endpoint"] = endpoint
+    if credentials is not None:
+        kwargs["credentials"] = credentials
+    return kwargs
 
 
 def run(hold_s: float, gap_s: float, *, connect_fn=connection,
-        sleep=None, clock=None) -> int:
+        sleep=None, clock=None, inputs_fn=None) -> int:
     """The burst sequence. Returns the process exit code.
 
     `connect_fn` is `database.modules.utils.rapid_db_connect.connection` by
@@ -160,9 +250,17 @@ def run(hold_s: float, gap_s: float, *, connect_fn=connection,
 
     sleep = sleep or _time.sleep
     clock = clock or datetime.datetime.utcnow
+    # Resolved ONCE, before the first connect, and reused for the second.
+    # Re-reading the tree across the gap would make the reconnect a
+    # different operation from the first connect — and the reconnect is
+    # the half that has to survive a pooler outage, so it must not also
+    # depend on SSM and Secrets Manager being reachable at that moment.
+    inputs_fn = inputs_fn or database_inputs
 
     try:
-        with connect_fn("rapid-burst", **_connect_kwargs("rapid-burst")) as conn:
+        endpoint, credentials = inputs_fn()
+        kwargs = _connect_kwargs("rapid-burst", endpoint, credentials)
+        with connect_fn("rapid-burst", **kwargs) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
             _logger.info("burst: holding the connection for %.0fs", hold_s)
@@ -177,7 +275,7 @@ def run(hold_s: float, gap_s: float, *, connect_fn=connection,
 
         print(f"burst: reconnecting {_utc_now_iso(clock)}")
 
-        with connect_fn("rapid-burst", **_connect_kwargs("rapid-burst")) as conn:
+        with connect_fn("rapid-burst", **kwargs) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
     except DBUnavailable as exc:
