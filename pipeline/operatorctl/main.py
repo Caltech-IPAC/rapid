@@ -74,6 +74,27 @@ def _mutation_arguments(parser, scope_help):
     parser.set_defaults(_scope_help=scope_help)
 
 
+def _positive_int(text):
+    """An argparse type for a count or a duration that must exceed zero.
+
+    Used by the run-envelope flags (migration 122). `--retry-attempts 0` is
+    the mistake worth naming: it reads as "no retries", but one attempt IS
+    the first try, so the floor is 1 and zero would mean "never run this at
+    all". The database CHECK and `derived.create_run` both refuse it; refusing
+    it here too means the operator is told which value was wrong and why,
+    before a round trip, rather than reading a SQLSTATE back.
+    """
+    try:
+        value = int(text)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("%r is not an integer" % (text,))
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            "%d is not positive. One attempt is the first try, so the floor "
+            "is 1; 0 would mean the work never runs at all." % value)
+    return value
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="rapidctl",
@@ -233,6 +254,46 @@ def build_parser():
         "--input-generation", dest="input_generations", action="append",
         default=None, metavar="GENERATION",
         help="an admission generation this run consumed; repeatable")
+    # --- the run's execution envelope (migration 122) ----------------------
+    # Lane and size are attributes of a RUN, not constants of the deployment
+    # (Ben, 2026-09-13 13:02). Set once here, read by `run start`, carried
+    # into every submission, and recorded on every `submissions` row.
+    #
+    # Every one of the four defaults to None rather than to its value, so the
+    # default lives in `derived.create_run` alone. The help text states what
+    # the function will choose; it does not choose it here, because two homes
+    # for one number is how they come to disagree.
+    run_create.add_argument(
+        "--lane", choices=("bulk", "prompt"), default=None,
+        help="which Batch lane this run's submissions take unless `run "
+             "start --lane` overrides one. bulk (the DEFAULT) is the Spot "
+             "lane; prompt is the on-demand lane. The route matrix still "
+             "fixes which lanes a job type MAY run on -- this is the run's "
+             "choice among them")
+    run_create.add_argument(
+        "--retry-attempts", type=_positive_int, default=None,
+        help="how many attempts IN TOTAL a unit of this run may take for a "
+             "TRANSIENT application failure (default 3). Deterministic "
+             "failures are never retried and Spot reclaims are never counted "
+             "against this -- the 2026-09-13 ruling. Counted by the pipeline "
+             "from its own attempt rows, with the job definition's "
+             "retryStrategy (10) left in place as the outer bound reclaims "
+             "consume. 0 is refused: one attempt IS the first try, so the "
+             "floor is 1")
+    run_create.add_argument(
+        "--attempt-timeout-s", type=_positive_int, default=None,
+        help="how long ONE attempt may run before Batch kills it, sent as "
+             "timeout.attemptDurationSeconds on every submission. Defaults "
+             "to the lane's, read from the live job definitions: bulk 43200, "
+             "prompt 14400")
+    run_create.add_argument(
+        "--retry-wallclock-s", type=_positive_int, default=None,
+        help="the per-unit wall-clock budget: once a unit's elapsed time "
+             "since its FIRST submission exceeds this it is closed as an "
+             "exhausted unit rather than retried again, however few attempts "
+             "it has used. Defaults to 3 x the lane's attempt timeout (bulk "
+             "129600, prompt 43200). It exists because an attempt count "
+             "alone did not stop the 2026-09-13 run's five-hour retry tail")
     run_create.add_argument("--expect-absent", action="store_true",
                             help="refuse if a run of this name already "
                                  "exists, instead of reporting a no-op "
@@ -814,9 +875,24 @@ def _cmd_run_create(conn, args, out):
         config_hash=args.config_hash,
         input_generations=args.input_generations, reason=args.reason,
         expected_state=expected, dry_run=not args.apply,
-        policy_citation=args.policy_citation)
+        policy_citation=args.policy_citation,
+        lane=args.lane, retry_attempts=args.retry_attempts,
+        retry_wallclock_s=args.retry_wallclock_s,
+        attempt_timeout_s=args.attempt_timeout_s)
     print(render_plan("run_create", "runs:%s" % args.name, args.reason, key,
                       result, args.apply), file=out)
+    # THE ENVELOPE IS PRINTED FROM THE FUNCTION'S ANSWER, never from the
+    # arguments. Three of the four may be defaulted, and two of those are
+    # DERIVED from the lane, so what the operator asked for is not what the
+    # run got. `derived.create_run` returns all four in its result object for
+    # exactly this: the line below states what was recorded, and on a dry run
+    # what would be.
+    envelope = [result.get(field) for field in
+                ("lane", "retry_attempts", "retry_wallclock_s",
+                 "attempt_timeout_s")]
+    if any(value is not None for value in envelope):
+        print("  envelope: lane %s, %s attempts, wall-clock %ss, "
+              "attempt timeout %ss" % tuple(envelope), file=out)
     return EXIT_OK
 
 
@@ -905,6 +981,27 @@ def _cmd_run_status(conn, args, out):
     print("  purpose : %s" % run["purpose"], file=out)
     print("  branch  : %s" % run["branch"], file=out)
     print("  created : %s" % run["created_at"], file=out)
+    # THE EXECUTION ENVELOPE (migration 122), from the explicit run-column
+    # projection in `actions._RUN_ROW`. Printed in the header rather than in
+    # a panel of its own because it is what the run WILL do, not what it has
+    # done: an operator reading a run's status to decide whether to let it
+    # keep going needs the retry budget and the attempt timeout in front of
+    # them at the same moment as the failure count.
+    #
+    # READ WITH `.get`, AND THE LINE IS SKIPPED WHEN THE ENVELOPE IS ABSENT.
+    # `run status` is the command an operator reaches for when something is
+    # wrong, and a database that has not yet taken 122 is one of the things
+    # that can be wrong. Indexing would raise KeyError and take the whole
+    # status report down — the tally, the lifecycle breakdown, the walltime
+    # panel, all of it — over a header line. The same reasoning `_run_columns`
+    # records for `reference_set`: a column a later brief adds must not make
+    # this command unusable against a database that lacks it.
+    if run.get("lane") is not None:
+        print("  lane    : %s  (retries %s, wall-clock %ss, attempt "
+              "timeout %ss)"
+              % (run.get("lane"), run.get("retry_attempts"),
+                 run.get("retry_wallclock_s"),
+                 run.get("attempt_timeout_s")), file=out)
     print("", file=out)
     # WHICH READING, ALWAYS STATED (migration 121). A tally whose
     # population depends on whether the run has keyed attempts must say

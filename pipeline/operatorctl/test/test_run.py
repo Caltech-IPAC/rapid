@@ -3336,3 +3336,94 @@ class RunStateSqlstateClassificationTests(unittest.TestCase):
         # silently swallow a future code nobody has decided the remedy for.
         self.assertIsNone(self._classify("RA099"))
         self.assertIsNone(self._classify("23505"))
+
+
+class RunEnvelopeCliTests(unittest.TestCase):
+    """`run create` carries the run's execution envelope (migration 122).
+
+    Lane and size are attributes of a RUN, not constants of the deployment
+    (Ben, 2026-09-13 13:02). These tests pin the three properties that could
+    silently stop holding: the four values reach the database function AT ALL,
+    they reach it BY NAME rather than positionally, and a defaulted call sends
+    NULL so the function's own derivation runs rather than a second copy of it
+    here.
+    """
+
+    def _result(self, **overrides):
+        body = {"action": "run_create", "dry_run": False, "replayed": False,
+                "already_present": False, "rows_affected": 1, "audit_id": 9,
+                "idempotency_key": "k", "run_id": 42, "would_add": True,
+                "lane": "bulk", "retry_attempts": 3,
+                "retry_wallclock_s": 129600, "attempt_timeout_s": 43200}
+        body.update(overrides)
+        return body
+
+    def test_the_envelope_is_passed_by_name_not_positionally(self):
+        # THE REGRESSION THIS EXISTS FOR. `derived.create_run` carries
+        # `p_dispatcher` at position 14, between `p_policy_citation` and the
+        # envelope 122 appended at 15-18. A positional call would put the lane
+        # into `p_dispatcher` — a text parameter, so PostgreSQL would accept
+        # it silently, record "bulk" as the audit row's dispatcher, and leave
+        # the envelope at its defaults with no error anywhere.
+        conn = _FakeConn([self._result()])
+        actions.create_run(conn, "k", "envelope-probe", "rusholme",
+                           "campaign", reason="why", dry_run=False,
+                           lane="prompt", retry_attempts=2,
+                           retry_wallclock_s=100, attempt_timeout_s=50)
+        sql, params = conn.calls[0]
+        for name in ("p_lane =>", "p_retry_attempts =>",
+                     "p_retry_wallclock_s =>", "p_attempt_timeout_s =>"):
+            self.assertIn(name, sql)
+        self.assertEqual(["prompt", 2, 100, 50], list(params[-4:]))
+
+    def test_a_defaulted_call_sends_null_so_the_function_derives(self):
+        # The defaults live in `derived.create_run`, which derives the
+        # wall-clock from the lane. Restating them here would give one number
+        # two homes that could drift, so an omitted flag must arrive as NULL.
+        conn = _FakeConn([self._result()])
+        actions.create_run(conn, "k", "envelope-default", "rusholme",
+                           "campaign", reason="why", dry_run=False)
+        _, params = conn.calls[0]
+        self.assertEqual([None, None, None, None], list(params[-4:]))
+
+    def test_the_lane_derived_wallclock_is_printed_from_the_answer(self):
+        # Three of the four may be defaulted and two of those are DERIVED from
+        # the lane, so what the operator asked for is not what the run got.
+        # The printed line must come from the function's result object, never
+        # from the arguments.
+        conn = _FakeConn([self._result(lane="prompt", retry_wallclock_s=43200,
+                                       attempt_timeout_s=14400)])
+        args = argparse.Namespace(
+            name="envelope-print", owner="rusholme", kind="campaign",
+            purpose=None, branch=None, image_digest=None, config_hash=None,
+            input_generations=None, expect_absent=False, reason="why",
+            idempotency_key="k", apply=True, policy_citation=None,
+            lane="prompt", retry_attempts=None, retry_wallclock_s=None,
+            attempt_timeout_s=None)
+        out = io.StringIO()
+        operatorctl_main._cmd_run_create(conn, args, out)
+        text = out.getvalue()
+        self.assertIn("lane prompt", text)
+        # 3 x the prompt lane's 14400 s attempt timeout, derived by the
+        # function and echoed back — not computed in the CLI.
+        self.assertIn("wall-clock 43200s", text)
+        self.assertIn("attempt timeout 14400s", text)
+
+    def test_retry_attempts_zero_is_refused_by_the_parser(self):
+        # One attempt IS the first try, so the floor is 1 and 0 is a mistake
+        # rather than "no retries". The CHECK constraint and the function both
+        # refuse it; this pins that the operator is told so before a
+        # round trip.
+        parser = operatorctl_main.build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args([
+                "run", "create", "--name", "zero-retries", "--owner",
+                "rusholme", "--kind", "campaign", "--reason", "why",
+                "--retry-attempts", "0"])
+
+    def test_the_lane_choices_are_closed(self):
+        parser = operatorctl_main.build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args([
+                "run", "create", "--name", "bad-lane", "--owner", "rusholme",
+                "--kind", "campaign", "--reason", "why", "--lane", "urgent"])

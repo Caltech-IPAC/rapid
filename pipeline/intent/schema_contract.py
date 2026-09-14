@@ -197,6 +197,26 @@ REQUIRED_MIGRATIONS = (
      "pipeline/operatorctl/run.py's `start_run_audited` on every "
      "`run start --apply` and from pipeline/operatorctl/main.py's "
      "`run complete` command"),
+    ("122-runs-execution-envelope.sql",
+     "`runs.lane`/`retry_attempts`/`retry_wallclock_s`/`attempt_timeout_s` "
+     "and the same four, nullable, on `submissions` — the run's execution "
+     "envelope. Read by pipeline/operatorctl/actions.py's `_RUN_ROW`, which "
+     "is an EXPLICIT column projection rather than a `SELECT *`, so a "
+     "database without 122 fails every `run status` and every `run start` "
+     "that reads the run row, not merely the envelope-aware part of them. "
+     "Also `derived.create_run`'s four new parameters (the 14-argument "
+     "signature is dropped, so a database without 122 has no function "
+     "matching the call pipeline/operatorctl/actions.py's `create_run` "
+     "makes) and `derived.update_run_envelope`"),
+    ("123-attempts-retry-binding.sql",
+     "`public.resolve_attempt` binding a retry row's `work_unit_id` and "
+     "`scheduler_job_id` from its predecessor at creation, and refusing "
+     "with RA022 rather than creating an unbound retry beside an unbound "
+     "predecessor. Required because pipeline/reconciler/service.py's "
+     "`_reconcile_unresolved` now pairs a retry row through its bound job: "
+     "on a database without 123 those rows are created with a NULL work "
+     "unit, which is the shape that produced the 2026-09-13 orphan-attempt "
+     "tail and the 2026-09-14 phantom-FAILED rows"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than

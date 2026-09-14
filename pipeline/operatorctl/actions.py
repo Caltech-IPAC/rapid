@@ -86,7 +86,9 @@ def add_problem_category(conn, idempotency_key, category, description, reason,
 def create_run(conn, idempotency_key, name, owner, kind, purpose=None,
               branch=None, image_digest=None, config_hash=None,
               input_generations=None, reason=None, expected_state=None,
-              dry_run=True, policy_citation=None):
+              dry_run=True, policy_citation=None,
+              lane=None, retry_attempts=None, retry_wallclock_s=None,
+              attempt_timeout_s=None):
     """Record a run and its provenance (migration 109: ``derived.create_run``).
 
     ``expected_state`` is ``{"already_present": false}`` for the ordinary
@@ -95,6 +97,20 @@ def create_run(conn, idempotency_key, name, owner, kind, purpose=None,
     is FIRST, matching every DRAFT-047-shaped function; ``derived.create_run``
     has no unkeyed overload to fall back to (109's header: "these are new
     signatures with no pre-existing caller to stay compatible with").
+
+    THE EXECUTION ENVELOPE (migration 122). ``lane``, ``retry_attempts``,
+    ``retry_wallclock_s`` and ``attempt_timeout_s`` are the run's execution
+    envelope — what lane its submissions take, how many times a unit may be
+    retried for a transient failure, how long that unit may keep trying, and
+    how long one attempt may run. They go LAST so every existing positional
+    call site keeps working.
+
+    **Each defaults to None, not to the value.** The defaults belong to the
+    database function, which derives the wall-clock from the lane and is also
+    the boundary a caller reaching psql directly must cross. Restating them
+    here would give the same fact two homes that could drift; passing None
+    means "use the function's default", and the CLI prints what that will be
+    rather than deciding it.
     """
     return call_function(
         conn,
@@ -105,11 +121,32 @@ def create_run(conn, idempotency_key, name, owner, kind, purpose=None,
         # measured, not assumed — but this is the only array parameter in the
         # package and stating its type costs nothing, where discovering that
         # it matters would cost a failed operator command.
+        #
+        # The four envelope parameters carry explicit casts for a sharper
+        # version of the same reason: all four are optional and a caller
+        # taking the defaults binds four untyped NULLs at once, which is
+        # exactly the shape that produced "function create_run(unknown,
+        # unknown, ...) does not exist" for `resolve_attempt`
+        # (`observability/attempts.py`'s own comment records that incident).
+        #
+        # THE FOUR ENVELOPE ARGUMENTS ARE PASSED BY NAME, and that is not a
+        # style choice. `derived.create_run` carries `p_dispatcher` at
+        # position 14, between `p_policy_citation` and the envelope 122
+        # appended at 15-18. A positional call listing thirteen arguments and
+        # then four more would put `lane` into `p_dispatcher` — a text
+        # parameter, so PostgreSQL would accept it silently, write "bulk" as
+        # the audit row's dispatcher, and leave the envelope at its defaults
+        # with no error anywhere. Naming them makes that unrepresentable.
         "SELECT derived.create_run(%s, %s, %s, %s, %s, %s, %s, %s, "
-        "                          %s::text[], %s, %s::jsonb, %s, %s)",
+        "                          %s::text[], %s, %s::jsonb, %s, %s, "
+        "                          p_lane => %s::text, "
+        "                          p_retry_attempts => %s::integer, "
+        "                          p_retry_wallclock_s => %s::integer, "
+        "                          p_attempt_timeout_s => %s::integer)",
         (idempotency_key, name, owner, kind, purpose, branch, image_digest,
          config_hash, input_generations, reason, _json(expected_state),
-         dry_run, policy_citation))
+         dry_run, policy_citation,
+         lane, retry_attempts, retry_wallclock_s, attempt_timeout_s))
 
 
 def archive_run(conn, idempotency_key, name, reason, expected_state=None,
@@ -616,7 +653,8 @@ SELECT 'psfs', count(*) FROM psfs WHERE run_id LIKE %s
 _RUN_ROW = """
 SELECT run_id, name, owner, kind, purpose, branch, image_digest,
        config_hash, input_generations, state, created_at, started_at,
-       completed_at, archived_at
+       completed_at, archived_at,
+       lane, retry_attempts, retry_wallclock_s, attempt_timeout_s
   FROM runs WHERE name = %s
 """
 
