@@ -2268,3 +2268,233 @@ class RegisterRunSubmissionRoleTests(unittest.TestCase):
         seen, events = self._run(dry_run=True)
         self.assertEqual([], seen["at_call"])
         self.assertEqual([], events)
+
+
+class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
+    """`--job-definition-family` — the memory profile's measurement
+    override, driven end to end through `start_run_audited`'s DRY-RUN
+    branch exactly as `StartRunAuditedLaneResolutionTests` drives lanes,
+    and for the same reason: the override has to reach the real
+    `submission_env` -> `active_definition` resolution and come back with
+    the NAMED family's ARN, not merely round-trip a string through a stub.
+
+    The gate is the half that matters most. A production-kind run must be
+    REFUSED — its execution binding is not chosen on a command line — and
+    that refusal is proven against a `runs` row's stored `kind`, since
+    `run start` has no `--kind` flag to trust.
+    """
+
+    TREE = {
+        "batch/queue-bulk": "rapid-queue-bulk",
+        "batch/queue-prompt": "rapid-queue-prompt",
+        "batch/job-definition-bulk": "rapid-pipeline-bulk",
+        "batch/job-definition-science": "rapid-pipeline-science",
+    }
+
+    class _FakeBatch:
+        """One ACTIVE revision per family, with the family's own name in
+        the ARN — so a test can tell WHICH family was resolved, which is
+        the whole property here (unlike the lane tests, where any family
+        resolving at all was enough)."""
+
+        def describe_job_definitions(self, jobDefinitionName=None,
+                                     status=None):
+            return {"jobDefinitions": [
+                {"jobDefinitionName": jobDefinitionName,
+                 "jobDefinitionArn": "arn:aws:batch:us-east-1:ACCOUNT:"
+                                    "job-definition/%s:7" % jobDefinitionName,
+                 "revision": 7,
+                 "containerProperties": {"image": "repo@sha256:" + "2" * 64}},
+            ]}
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        self.run_mod = run_mod
+
+        import os
+        self._saved_env = {name: os.environ.get(name)
+                           for name in ("RAPID_IMAGE_DIGEST",
+                                        "RAPID_RELEASE_IDENTITY",
+                                        "RAPID_MANIFEST_BUCKET")}
+        os.environ["RAPID_IMAGE_DIGEST"] = "sha256:" + "0" * 64
+        os.environ["RAPID_RELEASE_IDENTITY"] = "memprofile-test"
+        os.environ["RAPID_MANIFEST_BUCKET"] = "rapid-manifests"
+
+        replay_patcher = mock.patch.object(
+            run_mod, "_replay_lookup", lambda *a, **k: None)
+        replay_patcher.start()
+        self.addCleanup(replay_patcher.stop)
+
+        gather_patcher = mock.patch.object(
+            run_mod, "gather_for_run",
+            lambda *a, **k: ("science", ["unit-a"]))
+        gather_patcher.start()
+        self.addCleanup(gather_patcher.stop)
+
+        self.audit_calls = []
+
+        def fake_record_external_action(conn, idempotency_key,
+                                        action_class, target_scope, reason,
+                                        dry_run=False, rows_affected=0,
+                                        detail=None, policy_citation=None):
+            self.audit_calls.append(
+                {"target_scope": target_scope, "detail": dict(detail or {})})
+            return {"rows_affected": rows_affected, "detail": detail}
+
+        audit_patcher = mock.patch.object(
+            run_mod, "record_external_action", fake_record_external_action)
+        audit_patcher.start()
+        self.addCleanup(audit_patcher.stop)
+
+        db_mod_patcher = mock.patch(
+            "database.modules.utils.rapid_db.RAPIDDB",
+            lambda: types.SimpleNamespace(exit_code=0))
+        db_mod_patcher.start()
+        self.addCleanup(db_mod_patcher.stop)
+
+        import submission.startup as startup_mod
+        fetch_patcher = mock.patch.object(
+            startup_mod, "fetch_parameters", lambda: dict(self.TREE))
+        fetch_patcher.start()
+        self.addCleanup(fetch_patcher.stop)
+
+        import pipeline.operator.submission as opsubmission_mod
+        batch_client_patcher = mock.patch.object(
+            opsubmission_mod.boto3, "client",
+            lambda service, **kw: (self._FakeBatch() if service == "batch"
+                                   else object()))
+        batch_client_patcher.start()
+        self.addCleanup(batch_client_patcher.stop)
+
+        import pipeline.operator.gathering as gathering_mod
+        coadd_patcher = mock.patch.object(
+            gathering_mod, "min_images_to_coadd", lambda: 3)
+        coadd_patcher.start()
+        self.addCleanup(coadd_patcher.stop)
+
+        # The registry row the gate reads. `run_row` is patched on the
+        # ACTIONS module, which is where `_check_job_definition_family`
+        # imports it from — the gate's whole point is that it consults the
+        # stored row rather than an argument.
+        self.run_kind = "campaign"
+        import pipeline.operatorctl.actions as actions_mod
+        row_patcher = mock.patch.object(
+            actions_mod, "run_row",
+            lambda conn, name: (None if self.run_kind is None
+                                else {"name": name, "kind": self.run_kind}))
+        row_patcher.start()
+        self.addCleanup(row_patcher.stop)
+
+    def tearDown(self):
+        import os
+        for name, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def _start(self, family="rapid-pipeline-science-probe32",
+               phase="science", key="family-key"):
+        return self.run_mod.start_run_audited(
+            conn=object(), idempotency_key=key,
+            name="memprofile-32g-20260913", phase=phase,
+            reason="job memory profile", dry_run=True, out=_null_out(),
+            window_start="2027-10-01 00:00:00",
+            window_end="2027-10-08 00:00:00",
+            job_definition_family=family)
+
+    def test_job_definition_family_reaches_the_resolved_arn(self):
+        # THE PROPERTY: the override must displace the parameter tree's
+        # `batch/job-definition-science` (rapid-pipeline-science) all the
+        # way down to `active_definition`, so the ARN names the PROBE
+        # family. Asserted on the resolved ARN, not on the argument.
+        self._start(family="rapid-pipeline-science-probe32")
+
+        detail = self.audit_calls[0]["detail"]
+        self.assertEqual(detail["job_definition_family"],
+                         "rapid-pipeline-science-probe32")
+        self.assertIn("rapid-pipeline-science-probe32",
+                      detail["job_definition_arn"])
+        self.assertNotIn("job-definition/rapid-pipeline-science:",
+                         detail["job_definition_arn"])
+
+    def test_job_definition_family_probe16_resolves_to_its_own_arn(self):
+        # The two probe families must not collapse onto one another: the
+        # cap run and the probe run differ ONLY in this string, so a bug
+        # that resolved both to the same definition would silently turn
+        # the whole measurement into one run done twice.
+        self._start(family="rapid-pipeline-science-probe16")
+        detail = self.audit_calls[0]["detail"]
+        self.assertIn("rapid-pipeline-science-probe16",
+                      detail["job_definition_arn"])
+
+    def test_job_definition_family_refused_for_a_production_kind_run(self):
+        # THE GATE. A production run is the published pipeline; pointing it
+        # at a measurement definition from a command line is exactly what
+        # this must make impossible.
+        self.run_kind = "production"
+
+        with self.assertRaises(
+                self.run_mod.RunStartEnvironmentError) as caught:
+            self._start()
+
+        message = str(caught.exception)
+        self.assertIn("production", message)
+        self.assertIn("campaign", message)
+        # Refused BEFORE anything was recorded: a rejected run leaves no
+        # audit row and gathers nothing.
+        self.assertEqual(self.audit_calls, [])
+
+    def test_job_definition_family_refused_when_the_run_is_not_declared(self):
+        self.run_kind = None
+
+        with self.assertRaises(self.run_mod.RunStartEnvironmentError):
+            self._start()
+
+        self.assertEqual(self.audit_calls, [])
+
+    def test_job_definition_family_refused_for_a_non_science_phase(self):
+        # The probe definitions are science-class; route validation in the
+        # container would reject any other job type against them anyway, so
+        # this turns a confusing late failure into a clear early one.
+        with self.assertRaises(
+                self.run_mod.RunStartEnvironmentError) as caught:
+            self._start(phase="reference")
+
+        self.assertIn("science", str(caught.exception))
+        self.assertEqual(self.audit_calls, [])
+
+    def test_job_definition_family_joins_the_audit_scope(self):
+        # Two runs over the same window and filters differing only in the
+        # definition are DIFFERENT actions. Were the family absent from the
+        # scope, the second would look like a replay of the first and
+        # submit nothing — which would quietly halve the measurement.
+        _result, scope = self._start(
+            family="rapid-pipeline-science-probe32")
+        self.assertIn("job-definition-family=rapid-pipeline-science-probe32",
+                      scope)
+        self.assertEqual(self.audit_calls[0]["target_scope"], scope)
+
+    def test_job_definition_family_gives_the_two_probes_different_scopes(self):
+        self._start(family="rapid-pipeline-science-probe16", key="k16")
+        cap_scope = self.audit_calls[-1]["target_scope"]
+        self._start(family="rapid-pipeline-science-probe32", key="k32")
+        probe_scope = self.audit_calls[-1]["target_scope"]
+        self.assertNotEqual(cap_scope, probe_scope)
+
+    def test_no_job_definition_family_leaves_the_tree_family_and_old_scope(self):
+        # Every caller before this brief. The scope string must be byte-for
+        # -byte what it was, so no historical idempotency key is stranded,
+        # and `detail` must not grow a key for an override nobody asked for.
+        self.run_mod.start_run_audited(
+            conn=object(), idempotency_key="no-override",
+            name="memprofile-32g-20260913", phase="science",
+            reason="no override", dry_run=True, out=_null_out(),
+            window_start="2027-10-01 00:00:00",
+            window_end="2027-10-08 00:00:00")
+
+        detail = self.audit_calls[0]["detail"]
+        self.assertNotIn("job_definition_family", detail)
+        self.assertNotIn("job_definition_arn", detail)
+        self.assertEqual(self.audit_calls[0]["target_scope"],
+                         "run:memprofile-32g-20260913:phase=science")

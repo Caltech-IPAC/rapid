@@ -82,6 +82,60 @@ def _phase_table():
 #: ever calling `_phase_table()`.
 _WINDOWED_PHASES = ("reference", "science")
 
+#: The only run kind that may name its own job-definition family. A
+#: campaign run is scoped to itself — its products are current only within
+#: the run and never published — so pointing one at a measurement
+#: definition changes nothing anybody else reads. A production run is the
+#: published pipeline, and choosing its execution binding on a command
+#: line is the exact class of thing that must not be possible by accident.
+_FAMILY_OVERRIDE_KIND = "campaign"
+
+#: The only phase it may be named for. The probe definitions are
+#: science-class; route validation in the container checks job type, class
+#: and queue, so any other phase would be rejected there anyway — refusing
+#: here turns a confusing late failure into a clear early one.
+_FAMILY_OVERRIDE_PHASE = "science"
+
+
+def _check_job_definition_family(conn, name, phase, job_definition_family):
+    """Refuse a job-definition-family override that is not permitted.
+
+    Reads `runs.kind` from the registry rather than trusting an argument:
+    `run start` has no `--kind` flag, and the stored row is the authority
+    on what a run IS. A run that does not exist is refused too — the
+    override has no meaning without a row to check, and `run start` needs
+    the run declared in any case.
+
+    Raises `RunStartEnvironmentError`, which `_cmd_run_start` renders as
+    `rapidctl: REFUSED — ...` and exits 64. Checked BEFORE the replay
+    lookup and before any gathering, so a refused run neither reads the
+    database for units nor records an action.
+    """
+    if job_definition_family is None:
+        return
+    if phase != _FAMILY_OVERRIDE_PHASE:
+        raise RunStartEnvironmentError(
+            "--job-definition-family is accepted only for --phase %s; got "
+            "%r. The probe definitions are science-class, and route "
+            "validation in the container would reject any other job type "
+            "against them." % (_FAMILY_OVERRIDE_PHASE, phase))
+
+    from pipeline.operatorctl.actions import run_row
+
+    run = run_row(conn, name)
+    if run is None:
+        raise RunStartEnvironmentError(
+            "run %r is not declared, so its kind cannot be checked and "
+            "--job-definition-family cannot be accepted; declare it with "
+            "`rapidctl run create --kind %s` first"
+            % (name, _FAMILY_OVERRIDE_KIND))
+    if run["kind"] != _FAMILY_OVERRIDE_KIND:
+        raise RunStartEnvironmentError(
+            "run %r is kind %r; --job-definition-family is accepted only "
+            "for a %s run. A production run is the published pipeline, and "
+            "its execution binding is not chosen on a command line."
+            % (name, run["kind"], _FAMILY_OVERRIDE_KIND))
+
 
 def _capped(units, cap):
     """The first `cap` units in gathering order — `live_w9_ramp._capped`'s
@@ -167,7 +221,7 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
     return job_type, units
 
 
-def _resolve_submission_env(job_type, lane=None):
+def _resolve_submission_env(job_type, lane=None, job_definition_family=None):
     """`submission_env(job_type, lane=lane)`, with its `exit(64)` refusals translated
     to `RunStartEnvironmentError` — the one place that translation happens
     (see `RunStartEnvironmentError`'s own docstring for why it cannot
@@ -187,7 +241,8 @@ def _resolve_submission_env(job_type, lane=None):
     from pipeline.operator.submission import submission_env
 
     try:
-        return submission_env(job_type, lane=lane)
+        return submission_env(job_type, lane=lane,
+                              job_definition_family=job_definition_family)
     except SystemExit as exc:
         # `submission_env` calls `exit(64)` on missing environment/tree keys
         # rather than raising — see the class docstring. A `SystemExit`
@@ -313,7 +368,8 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
                       proc_date=None, cap=None, dry_run=True,
                       policy_citation=None, out=None,
                       window_start=None, window_end=None, fids=None,
-                      work_unit_run_id=None, lane=None):
+                      work_unit_run_id=None, lane=None,
+                      job_definition_family=None):
     """Gather, (maybe) submit, and audit `run start`. Returns `(result,
     scope)` — the same shape `terminate_jobs_audited` returns, for the same
     reason: the CLI renders both through the identical `render_plan` call.
@@ -344,6 +400,34 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     argument help text for why a gather cannot be narrowed to a handful of
     fields at all.
 
+    `job_definition_family` submits this run under a NAMED Batch job
+    definition family instead of the one the parameter tree gives the
+    phase. It exists for measurement: the memory profile's two probe
+    definitions run the science code at a different memory ceiling under
+    an instrumented image, and reaching them by repointing
+    `batch/job-definition-science` would change production as a side
+    effect of taking a measurement.
+
+    **Two conditions, both refused loudly, checked HERE and nowhere else.**
+    The run's stored `kind` must be `campaign` and the phase must be
+    `science`. The kind check is the one that matters: a production run is
+    the published pipeline, and pointing it at a definition chosen on a
+    command line is exactly the class of thing that must not be possible
+    by accident. It reads `runs.kind` rather than trusting an argument —
+    `run start` has no `--kind`, and the registry row is the authority on
+    what a run IS. The phase check follows from what the probe definitions
+    are: science-class definitions, rejected by route validation for any
+    other job type, so allowing the flag elsewhere would only produce a
+    confusing failure later instead of a clear one now.
+
+    It is the FIRST run-level execution attribute carried at `run start`
+    that is not a gathering parameter — the run-envelope brief that follows
+    persists such attributes on `runs`; until then it lives in the audit
+    scope and detail below, and in the execution binding the attempt row
+    records. That binding is what makes provenance exact regardless: the
+    attempt carries the versioned ARN actually submitted, so what ran is
+    readable from the row without consulting this argument at all.
+
     `lane` is which Batch lane to submit to — `prompt` or `bulk`, None for
     the job type's default (bulk, since the two-lane change 2026-09-13).
     It reaches `submission_env` through `_resolve_submission_env`, which
@@ -365,6 +449,17 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     # the reader to infer it.
     if lane is not None:
         scope += ":lane=%s" % lane
+    # The overridden family joins the scope for the same reason the lane
+    # does: a run of the same name and phase submitted under a different
+    # job definition is a DIFFERENT action, and must not replay onto the
+    # one before it. The memory profile's whole design is two runs over
+    # the same window and filters differing only in the definition — if
+    # the family were absent from the scope, the second would look like a
+    # replay of the first and submit nothing.
+    if job_definition_family is not None:
+        scope += ":job-definition-family=%s" % job_definition_family
+
+    _check_job_definition_family(conn, name, phase, job_definition_family)
 
     replay = _replay_lookup(conn, idempotency_key, "run_start", scope)
     if replay is not None:
@@ -398,7 +493,9 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
         job_type_for_env = (routes.JOB_TYPE_REFERENCE_IMAGE
                             if phase == "reference"
                             else routes.JOB_TYPE_SCIENCE)
-        context = _resolve_submission_env(job_type_for_env, lane=lane)
+        context = _resolve_submission_env(
+            job_type_for_env, lane=lane,
+            job_definition_family=job_definition_family)
 
     try:
         job_type, units = gather_for_run(
@@ -424,6 +521,16 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     # exists to answer: which run's units did an UNUSUAL submission claim.
     if work_unit_run_id is not None and work_unit_run_id != name:
         detail["work_unit_run_id"] = work_unit_run_id
+    # Recorded whenever one was named, and the RESOLVED ARN beside it. The
+    # family is what the operator asked for; the ARN is what Batch actually
+    # bound, revision included. An audit row that carried only the family
+    # would leave a reader unable to say which revision ran, which is the
+    # whole reason the binding is resolved once and reused rather than
+    # re-read at submission.
+    if job_definition_family is not None:
+        detail["job_definition_family"] = job_definition_family
+        if context is not None:
+            detail["job_definition_arn"] = context["job_definition"]
 
     if dry_run:
         print("[dry-run] would gather %d unit(s) for phase=%s (job_type=%s)"

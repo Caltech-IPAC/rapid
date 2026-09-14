@@ -162,7 +162,7 @@ class SubmissionBinding:
 
 
 def submission_env(job_type, parameters=None, batch_client=None,
-                   s3_client=None, lane=None):
+                   s3_client=None, lane=None, job_definition_family=None):
 
     '''
     The queue, job definition, binding and clients one submission needs.
@@ -262,6 +262,28 @@ def submission_env(job_type, parameters=None, batch_client=None,
                       key, kind.replace("_", " "), job_type))
             exit(64)
         binding_names[kind] = value
+
+    # A MEASUREMENT OVERRIDE, and nothing else. `job_definition_family`
+    # replaces the tree's family for this one submission — the memory
+    # profile's two probe definitions (rapid-pipeline-science-probe16 and
+    # -probe32) run the science code at a different memory ceiling under
+    # their own instrumented image, so they cannot be reached through
+    # `batch/job-definition-science` without repointing that key and
+    # changing production as a side effect.
+    #
+    # THE GATE IS NOT HERE. This function takes the family it is given;
+    # `pipeline.operatorctl.run.start_run_audited` is what decides whether
+    # a caller may name one (campaign-kind runs, science phase only), and
+    # it is the only path that passes this argument. Placing the check at
+    # the audited entry point rather than here keeps it beside the run row
+    # whose `kind` it reads, and out of a function with no database handle.
+    #
+    # The queue is untouched: the probe definitions are science-class and
+    # run on the science route's queue, exactly as production science does.
+    # Only the definition differs, which is what makes the comparison a
+    # measurement of memory rather than of scheduling.
+    if job_definition_family:
+        binding_names["job_definition"] = job_definition_family
 
     if batch_client is None:
         batch_client = boto3.client('batch')

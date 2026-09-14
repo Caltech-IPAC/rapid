@@ -307,6 +307,26 @@ def build_parser():
              "attempt timeout and log group -- while defaulting to the "
              "bulk lane")
     run_start.add_argument(
+        "--job-definition-family", dest="job_definition_family", default=None,
+        metavar="FAMILY",
+        help="submit under a NAMED Batch job definition family instead of "
+             "the one the parameter tree gives the phase. FOR MEASUREMENT: "
+             "the memory profile's rapid-pipeline-science-probe16 and "
+             "-probe32 run the science code at a different memory ceiling "
+             "under an instrumented image, and reaching them by repointing "
+             "batch/job-definition-science would change production as a "
+             "side effect of taking a measurement. REFUSED unless the "
+             "named run's stored kind is campaign and --phase is science: "
+             "a production run is the published pipeline and its execution "
+             "binding is not chosen on a command line. The queue is "
+             "unaffected -- the probe definitions are science-class and run "
+             "the science route's queue, so what differs is the definition "
+             "and nothing else, which is what makes the comparison a "
+             "measurement of memory rather than of scheduling. The family "
+             "and the resolved ARN both go into the action's audit detail, "
+             "and the attempt row's execution binding records the versioned "
+             "ARN actually submitted")
+    run_start.add_argument(
         "--claim-work-units-of", dest="work_unit_run_id", default=None,
         metavar="RUN",
         help="claim ANOTHER run's work units instead of this run's own. "
@@ -795,7 +815,8 @@ def _cmd_run_start(conn, args, out):
             policy_citation=args.policy_citation, out=out,
             window_start=args.window_start, window_end=args.window_end,
             fids=args.fids, work_unit_run_id=args.work_unit_run_id,
-            lane=args.lane)
+            lane=args.lane,
+            job_definition_family=args.job_definition_family)
     except RunStartEnvironmentError as exc:
         print("rapidctl: REFUSED — %s" % exc, file=sys.stderr)
         return EXIT_USAGE
