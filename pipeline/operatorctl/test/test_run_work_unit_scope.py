@@ -208,11 +208,13 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         # which is the one thing they exist to do.
         def fake_submit_run(conn, name, job_type, units, reason,
                             context=None, work_unit_run_id=None, lane=None,
-                            run_key=None, submission_seq=None):
+                            run_key=None, submission_seq=None,
+                            envelope=None):
             self.submit_calls.append({
                 "name": name, "work_unit_run_id": work_unit_run_id,
                 "lane": lane, "run_key": run_key,
-                "submission_seq": submission_seq})
+                "submission_seq": submission_seq,
+                "envelope": envelope})
             submission = types.SimpleNamespace(job_id="job-1")
             return [(submission, ["attempt-1"])]
 

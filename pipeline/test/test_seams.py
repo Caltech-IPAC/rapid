@@ -456,6 +456,21 @@ class RecordingExecute:
             if submission_id in self.submissions_by_id:
                 self.submissions_by_id[submission_id]["run_key"] = run_key
             return 1
+        if statement.startswith("UPDATE submissions SET lane"):
+            # `pipeline.seams._set_submission_envelope` (122), modelled the
+            # same way as the registry key above and for the same reason: a
+            # test must be able to assert that the ROW carries what the
+            # submission actually sent, not merely that a statement ran.
+            (lane, retry_attempts, retry_wallclock_s, attempt_timeout_s,
+             submission_id) = params
+            if submission_id in self.submissions_by_id:
+                self.submissions_by_id[submission_id].update({
+                    "lane": lane,
+                    "retry_attempts": retry_attempts,
+                    "retry_wallclock_s": retry_wallclock_s,
+                    "attempt_timeout_s": attempt_timeout_s,
+                })
+            return 1
         if "INSERT INTO campaigns" in statement:
             # `CampaignWriter.create_campaign`'s `RETURNING campaign_id`.
             # THE STATEMENT THE OLD BLANKET `return 1` FALLTHROUGH WAS
@@ -2087,3 +2102,80 @@ class SubmissionOrdinalTests(unittest.TestCase):
             execute=self.execute, run_id="vpo-science-b1",
             now=utc(2026, 9, 14, 12, 0, 0))
         self.assertEqual(["vpo-science-b1"], self._batch_ids())
+
+
+class SubmissionEnvelopeTests(unittest.TestCase):
+    """The run's execution envelope reaches Batch and the `submissions` row.
+
+    Two different destinations, deliberately: `attempt_timeout_s` is CARRIED
+    to Batch as the submission's own `timeout`, while all four are RECORDED on
+    the row. The record is not a convenience — a run's envelope may be
+    corrected before it starts submitting, and `run start --lane` may override
+    the lane for one submission, so the run row alone cannot say what a job
+    already dispatched was actually given.
+    """
+
+    ENVELOPE = {"lane": "bulk", "retry_attempts": 3,
+                "retry_wallclock_s": 129600, "attempt_timeout_s": 43200}
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _submit(self, envelope=None, count=3):
+        return seams.submit_gathered(
+            units(count=count), job_type=JOB_TYPE_SCIENCE,
+            queue="rapid-queue-bulk",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="envelope-proof",
+            work_unit_run_id="envelope-proof", run_key=77,
+            submission_seq=0, envelope=envelope,
+            now=utc(2026, 9, 14, 12, 0, 0))
+
+    def test_the_submission_row_records_all_four_values(self):
+        self._submit(envelope=self.ENVELOPE)
+        rows = list(self.execute.submissions_by_id.values())
+        self.assertEqual(1, len(rows))
+        for field, expected in self.ENVELOPE.items():
+            self.assertEqual(expected, rows[0].get(field),
+                             "the submission row did not record %s" % field)
+
+    def test_the_attempt_timeout_reaches_batch(self):
+        # THE HALF THAT ACTUALLY CHANGES WHAT RUNS. Recording the envelope
+        # without sending the timeout would leave a row truthfully claiming a
+        # budget Batch was never told about.
+        self._submit(envelope=self.ENVELOPE)
+        kwargs = self.batch.kwargs
+        self.assertEqual({"attemptDurationSeconds": 43200},
+                         kwargs.get("timeout"))
+
+    def test_batch_is_never_sent_a_retry_strategy(self):
+        # The 2026-09-13 13:01 ruling: Batch's 10 is the outer bound reclaims
+        # consume, and the run's budget is the pipeline's own count.
+        self._submit(envelope=self.ENVELOPE)
+        self.assertNotIn("retryStrategy", self.batch.kwargs)
+
+    def test_no_envelope_writes_nothing_and_sends_no_timeout(self):
+        # A run row predating 122, or any caller with no run row at all. The
+        # columns stay NULL — which is what their own COMMENT says NULL means
+        # — and the job definition's own timeout applies, rather than being
+        # overridden with a null.
+        self._submit(envelope=None)
+        rows = list(self.execute.submissions_by_id.values())
+        self.assertIsNone(rows[0].get("lane"))
+        self.assertNotIn("timeout", self.batch.kwargs)
+        sqls = [s for s, _ in self.execute.statements]
+        self.assertFalse(
+            [s for s in sqls if s.startswith("UPDATE submissions SET lane")])
+
+    def test_every_batch_of_a_split_carries_the_same_envelope(self):
+        # The batches an array ceiling cuts are ONE submission split, not
+        # separate runs, so each must record the run's own four values.
+        self._submit(envelope=self.ENVELOPE, count=3)
+        for row in self.execute.submissions_by_id.values():
+            self.assertEqual("bulk", row.get("lane"))
+            self.assertEqual(43200, row.get("attempt_timeout_s"))

@@ -58,6 +58,7 @@ if "psycopg2" not in sys.modules:
 
 from pipeline.operatorctl import actions
 from pipeline.operatorctl import main as operatorctl_main
+from pipeline.operatorctl import run as operatorctl_run
 from pipeline.operatorctl.contract import render_plan
 
 
@@ -3237,7 +3238,8 @@ class RampStepTests(unittest.TestCase):
 
         def fake_submit_run(conn, name, job_type, units, reason,
                             context=None, work_unit_run_id=None, lane=None,
-                            run_key=None, submission_seq=None):
+                            run_key=None, submission_seq=None,
+                            envelope=None):
             # THE AUTHORISATION GATE, in miniature: a unit this run has
             # already claimed is skipped, exactly as
             # `seams._transition_or_defer` skips one whose work unit is
@@ -3427,3 +3429,52 @@ class RunEnvelopeCliTests(unittest.TestCase):
             parser.parse_args([
                 "run", "create", "--name", "bad-lane", "--owner", "rusholme",
                 "--kind", "campaign", "--reason", "why", "--lane", "urgent"])
+
+
+class RunStartLaneDefaultsToTheRunsTests(unittest.TestCase):
+    """`run start --lane` defaults to the run's stored lane, and the lane
+    actually chosen is what the submission records (migration 122).
+
+    Two verbs, deliberately different. `--lane` OVERRIDES where one
+    submission goes; `derived.update_run_envelope` CHANGES what the run is
+    set to. A flag on one command silently rewriting the run would make the
+    run row a record of the last command rather than of the run.
+    """
+
+    def _row(self, **overrides):
+        row = {"run_id": 42, "name": "lane-probe", "state": "running",
+               "kind": "campaign", "lane": "bulk", "retry_attempts": 3,
+               "retry_wallclock_s": 129600, "attempt_timeout_s": 43200}
+        row.update(overrides)
+        return row
+
+    def test_lane_absent_takes_the_runs_stored_lane(self):
+        envelope = operatorctl_run._run_envelope(self._row(lane="prompt"),
+                                                 lane=None)
+        self.assertEqual("prompt", envelope["lane"])
+
+    def test_lane_given_overrides_for_this_submission_only(self):
+        row = self._row(lane="bulk")
+        envelope = operatorctl_run._run_envelope(row, lane="prompt")
+        self.assertEqual("prompt", envelope["lane"])
+        # The run row itself is untouched: the override is per-submission.
+        self.assertEqual("bulk", row["lane"])
+
+    def test_an_overridden_lane_does_not_re_derive_the_timeout(self):
+        # A run created on the bulk lane carries bulk's 43200 s, and sending
+        # one batch to the prompt lane must not silently shorten it to 14400:
+        # the run's budget is what the operator set, and tightening it
+        # because a batch went somewhere faster could kill work the run was
+        # entitled to finish.
+        envelope = operatorctl_run._run_envelope(self._row(), lane="prompt")
+        self.assertEqual(43200, envelope["attempt_timeout_s"])
+        self.assertEqual(129600, envelope["retry_wallclock_s"])
+
+    def test_a_row_predating_the_migration_yields_no_envelope(self):
+        # Not an error: `run start` refusing a MISSING row is the
+        # run-identity brief's item, and a row that predates 122 is a
+        # different thing from a row that is absent. The job definition's own
+        # timeout and retry rows then apply.
+        self.assertIsNone(
+            operatorctl_run._run_envelope(self._row(lane=None)))
+        self.assertIsNone(operatorctl_run._run_envelope(None))

@@ -215,7 +215,9 @@ def publish_manifest(manifest: Manifest, store: ManifestStore) -> str:
 def build_submit_kwargs(batch: Batch, job_queue: str, job_definition: str,
                         manifest_uri: str,
                         environment: dict[str, str] | None = None,
-                        job_name: str | None = None) -> dict[str, Any]:
+                        job_name: str | None = None,
+                        attempt_timeout_s: int | None = None
+                        ) -> dict[str, Any]:
     """Construct the SubmitJob arguments for one batch.
 
     Split out from `submit_batch` so the argument shape — the part that
@@ -226,6 +228,25 @@ def build_submit_kwargs(batch: Batch, job_queue: str, job_definition: str,
     configuration rule (design/security.md): where the manifest is, which
     batch this is. Everything else the job needs it reads from the
     pipeline parameter tree at startup.
+
+    `attempt_timeout_s` is the RUN's attempt timeout (migration 122), sent
+    as `timeout.attemptDurationSeconds`. How long one attempt may run is an
+    attribute of the run, not of the deployment (Ben, 2026-09-13 13:02), so
+    a run that needs a fast answer is not held to the job definition's
+    twelve hours. Omitted (None) leaves the definition's own timeout in
+    force, which is what every pre-122 submission did.
+
+    **`retryStrategy` IS NOT OVERRIDDEN, AND THAT IS THE RULING, NOT AN
+    OVERSIGHT.** The 2026-09-13 13:01 ruling makes Batch's 10 the OUTER
+    bound that Spot reclaims consume, and the PIPELINE's own count — from
+    its attempt rows, in `pipeline.intent.retry_policy.
+    disposition_for_terminal_attempt` — the run's actual budget. Overriding
+    `retryStrategy` per submission would move the budget back into the
+    scheduler, where a reclaim and an application failure are
+    indistinguishable: Batch cannot tell "the container was taken from us"
+    from "the work failed", which is exactly the distinction the run's
+    budget is counted on. So the definition's rows apply unchanged and only
+    `timeout` is per-submission.
     """
     manifest = batch.manifest
     env = {
@@ -245,6 +266,8 @@ def build_submit_kwargs(batch: Batch, job_queue: str, job_definition: str,
                             for k, v in sorted(env.items())],
         },
     }
+    if attempt_timeout_s is not None:
+        kwargs["timeout"] = {"attemptDurationSeconds": attempt_timeout_s}
     # Batch rejects arraySize 1; a single-unit batch is a plain job whose
     # child resolves index 0 through the same startup path.
     if manifest.is_array:
@@ -256,7 +279,8 @@ def submit_batch(batch: Batch, job_queue: str, job_definition: str,
                  store: ManifestStore, client: Any,
                  environment: dict[str, str] | None = None,
                  job_name: str | None = None,
-                 manifest_uri: str | None = None) -> Submission:
+                 manifest_uri: str | None = None,
+                 attempt_timeout_s: int | None = None) -> Submission:
     """Publish a batch's manifest and submit it as one array job.
 
     Parameters
@@ -280,6 +304,11 @@ def submit_batch(batch: Batch, job_queue: str, job_definition: str,
         binding (review finding #2 — the rows must precede `SubmitJob`).
         Passing the URI in avoids a second, redundant publish of identical
         bytes. Absent, the manifest is published here as before.
+    attempt_timeout_s : int, optional
+        The run's attempt timeout (migration 122), forwarded to
+        `build_submit_kwargs` as `timeout.attemptDurationSeconds`. See that
+        function on why `retryStrategy` is deliberately not overridden
+        alongside it.
 
     Returns
     -------
@@ -289,7 +318,8 @@ def submit_batch(batch: Batch, job_queue: str, job_definition: str,
         manifest_uri = publish_manifest(batch.manifest, store)
     kwargs = build_submit_kwargs(batch, job_queue, job_definition,
                                  manifest_uri, environment=environment,
-                                 job_name=job_name)
+                                 job_name=job_name,
+                                 attempt_timeout_s=attempt_timeout_s)
     response = client.submit_job(**kwargs)
 
     submission = Submission(

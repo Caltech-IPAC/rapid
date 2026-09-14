@@ -148,8 +148,19 @@ def submit_units(units, job_type, queue, job_definition, binding,
                  manifest_bucket, manifest_prefix, s3_client, batch_client,
                  execute, run_id=None, reason="vpo", job_name=None,
                  now=None, reference_observation_window=None,
-                 protocol_commit=None, work_unit_run_id=None, run_key=None):
+                 protocol_commit=None, work_unit_run_id=None, run_key=None,
+                 envelope=None):
     """Submit one array job for `units`, with its attempt rows pre-created.
+
+    **`envelope` IS THE RUN'S EXECUTION ENVELOPE (migration 122)** — a
+    mapping with `lane`, `retry_attempts`, `retry_wallclock_s` and
+    `attempt_timeout_s`, or None where the caller has no run row to read one
+    from. Two things happen to it, and they are deliberately different:
+    `attempt_timeout_s` is CARRIED to Batch as the submission's
+    `timeout.attemptDurationSeconds`, while all four are RECORDED on the
+    `submissions` row. The record is not a convenience — a run's envelope can
+    be corrected before it starts submitting, so the run row alone cannot say
+    what a submission already dispatched actually carried.
 
     **`run_key` IS A THIRD FACT, SEPARATE FROM BOTH OF THE TWO ABOVE
     (migration 121).** `run_id` is this array job's textual identity;
@@ -419,15 +430,21 @@ def submit_units(units, job_type, queue, job_definition, binding,
         execute, batch=batch, job_name=job_name, queue=queue,
         job_definition=job_definition, manifest_uri=manifest_uri,
         binding=bound, attempt_ids=attempt_ids, moment=moment,
-        commit=protocol_commit, run_key=run_key)
+        commit=protocol_commit, run_key=run_key, envelope=envelope)
 
     # 3. Submit. A failure here leaves the rows as reconciliation cases, not
     #    orphans: they are correct, they simply never got a scheduler job.
     try:
+        # `attempt_timeout_s` is named EXPLICITLY rather than left to ride in
+        # on a **kwargs, for the reason the run-identity brief's own change to
+        # `LiveSubmitter.submit` records: a parameter absorbed by an
+        # `**_ignored` reaches nothing and reports no error, so a run's
+        # timeout would silently never leave this function.
         submission = submit_batch(
             batch=batch, job_queue=queue, job_definition=job_definition,
             store=store, client=batch_client, job_name=job_name,
-            manifest_uri=manifest_uri)
+            manifest_uri=manifest_uri,
+            attempt_timeout_s=(envelope or {}).get("attempt_timeout_s"))
     except Exception as exc:
         # THE CALL'S OUTCOME IS AMBIGUOUS, AND THAT IS NOW RECORDED rather
         # than inferred later from a NULL scheduler id and a stopwatch. The
@@ -486,8 +503,11 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
                     execute, run_id, max_batch_size=None, reason="vpo",
                     now=None, reference_observation_window=None,
                     protocol_commit=None, work_unit_run_id=None,
-                    run_key=None, submission_seq=None):
+                    run_key=None, submission_seq=None, envelope=None):
     """Batch a gathered unit list and submit every batch. The VPO's entry.
+
+    `envelope` is the run's execution envelope (migration 122), passed
+    unchanged to every batch this call cuts — see `submit_units`.
 
     **`submission_seq` MAKES A BATCH IDENTITY UNIQUE ACROSS A RUN'S WHOLE
     HISTORY, WHICH IS WHAT MAKES A RAMP POSSIBLE (migration 121's ruling).**
@@ -630,6 +650,12 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
             # `submit_units` call in the loop, never the per-batch suffixed
             # value computed just above.
             work_unit_run_id=work_unit_run_id,
+            # ONE ENVELOPE FOR EVERY BATCH THE CEILING CUTS, for the same
+            # reason as the registry key below: the batches are one
+            # submission split by the array size, not separate runs, so
+            # every one of them carries the run's own four values and
+            # `submissions` records them identically across the split.
+            envelope=envelope,
             # One run, one registry key, for every batch the ceiling cuts —
             # the same reasoning as `work_unit_run_id` directly above, and
             # unlike `batch_run_id`, which is deliberately per-batch.
@@ -1253,6 +1279,33 @@ def _set_submission_run_key(execute, submission_id, run_key):
            [run_key, submission_id])
 
 
+def _set_submission_envelope(execute, submission_id, envelope):
+    """Record the execution envelope this submission actually carried (122).
+
+    The same shape and the same reasoning as `_set_submission_run_key` above:
+    written here rather than as parameters on `protocol.prepare`, because
+    `submission.protocol` is the submission state machine and knows nothing
+    about the run registry — a run-model column does not belong in its INSERT.
+
+    **Why the row records the envelope at all, when `runs` already has it.**
+    A run's envelope may be corrected by `derived.update_run_envelope` before
+    it starts submitting, and `run start --lane` may override the lane for one
+    submission. So the run row says what the run is set to NOW; only the
+    submission row can say what this dispatched job was actually given. Read
+    back from the run row alone, a corrected envelope would silently
+    re-describe work that had already gone to Batch under the old one.
+    """
+    if submission_id is None or not envelope:
+        return
+    execute(
+        "UPDATE submissions SET lane = %s, retry_attempts = %s,"
+        "  retry_wallclock_s = %s, attempt_timeout_s = %s"
+        " WHERE submission_id = %s",
+        [envelope.get("lane"), envelope.get("retry_attempts"),
+         envelope.get("retry_wallclock_s"),
+         envelope.get("attempt_timeout_s"), submission_id])
+
+
 def _operational_class_for(job_type):
     """The operational class a work unit for this job type declares.
 
@@ -1303,7 +1356,7 @@ def operational_class_for(job_type):
 
 def _open_submission(execute, *, batch, job_name, queue, job_definition,
                      manifest_uri, binding, attempt_ids, moment, commit=None,
-                     run_key=None):
+                     run_key=None, envelope=None):
     """Open the submission record and mark it CALLING. Returns its id or None.
 
     Returns None — and does nothing at all — when DRAFT migration 044 is not
@@ -1413,6 +1466,12 @@ def _open_submission(execute, *, batch, job_name, queue, job_definition,
     # `_set_submission_run_key`.
     if run_key is not None:
         _set_submission_run_key(execute, submission_id, run_key)
+
+    # THE ENVELOPE, IN THE SAME TRANSACTION, for the same reason as the key
+    # above: a `submissions` row that committed `calling` without recording
+    # what it carried could never be told apart from a pre-122 row, and
+    # telling those apart is the whole point of the columns.
+    _set_submission_envelope(execute, submission_id, envelope)
 
     attached = protocol.attach_attempts(execute, submission_id, attempt_ids)
     if attached != len(attempt_ids):

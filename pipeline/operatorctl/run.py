@@ -402,8 +402,40 @@ def _resolve_submission_env(job_type, lane=None, job_definition_family=None):
             "cannot gather a binding without it") from exc
 
 
+def _run_envelope(run, lane=None):
+    """The run's execution envelope, with `--lane` applied (migration 122).
+
+    Returns a mapping of the four values, or None where the run row carries
+    no envelope at all — a row written before 122, against a database that
+    has not yet taken it.
+
+    **`lane` OVERRIDES, IT DOES NOT PERSIST.** `run start --lane` chooses
+    where THIS submission goes; it does not rewrite the run. The two are
+    deliberately different verbs: a flag on one command changing what every
+    later submission of the run does would make the run row a record of the
+    last command rather than of the run, and `derived.update_run_envelope` is
+    the thing that changes what a run is set to.
+
+    **The timeout is NOT re-derived when the lane is overridden.** A run
+    created on the bulk lane carries bulk's 43200 s, and sending one batch to
+    the prompt lane does not shorten it to 14400: the run's own budget is
+    what the operator set, and silently tightening it because a batch went
+    somewhere faster could kill work the run was entitled to finish. The lane
+    chooses the queue; the timeout stays the run's.
+    """
+    if run is None or run.get("lane") is None:
+        return None
+    return {
+        "lane": lane or run.get("lane"),
+        "retry_attempts": run.get("retry_attempts"),
+        "retry_wallclock_s": run.get("retry_wallclock_s"),
+        "attempt_timeout_s": run.get("attempt_timeout_s"),
+    }
+
+
 def submit_run(conn, name, job_type, units, reason, context=None,
               work_unit_run_id=None, lane=None, run_key=None,
+              envelope=None,
               submission_seq=None):
     """Submit `units` under `name`, through the SAME production path
     `live_w9_ramp` uses: `submission_env` for the binding, `pipeline.seams.
@@ -510,6 +542,7 @@ def submit_run(conn, name, job_type, units, reason, context=None,
             execute=executor.execute, run_id=name,
             reason=reason, work_unit_run_id=work_unit_run_id,
             run_key=run_key, submission_seq=submission_seq,
+            envelope=envelope,
             protocol_commit=conn.commit)
 
 
@@ -621,6 +654,24 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     run_key = run["run_id"]
     submission_seq = next_submission_seq(conn, run_key)
 
+    # THE RUN'S EXECUTION ENVELOPE (migration 122), read from the row just
+    # bound. `--lane` overrides the run's stored lane for THIS submission and
+    # nothing else: the run row is not rewritten, because the flag chooses
+    # where one batch goes, while `derived.update_run_envelope` is what
+    # changes what the run is set to.
+    #
+    # A run row without the columns falls back to the deployment defaults and
+    # SAYS SO in the audit reason, rather than failing: `run start` refusing a
+    # missing row is the run-identity brief's item, and a row that predates
+    # 122 is a different thing from a row that is absent.
+    envelope = _run_envelope(run, lane)
+    if envelope is None:
+        detail_envelope_note = (
+            "no envelope on the run row (predates migration 122); "
+            "the job definition's own timeout and retry rows apply")
+    else:
+        detail_envelope_note = None
+
     replay = _replay_lookup(conn, idempotency_key, "run_start", scope)
     if replay is not None:
         return replay, scope
@@ -680,6 +731,16 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
               # answerable from the ledger alone.
               "run_key": run_key, "submission_seq": submission_seq,
               "run_state_before": run["state"]}
+    # THE ENVELOPE THIS SUBMISSION CARRIED (migration 122), in the audit row
+    # as well as on `submissions`. The two answer different questions: the
+    # submission row says what one dispatched job was given, the audit row
+    # says what the operator's ACTION decided — including, when the run row
+    # carried no envelope, that it decided nothing and the job definition's
+    # own values applied.
+    if envelope is not None:
+        detail["envelope"] = dict(envelope)
+    elif detail_envelope_note is not None:
+        detail["envelope"] = detail_envelope_note
     # Only recorded when it differs from `name` -- an audit row naming a
     # work-unit scope that is just this run's own identity says nothing an
     # ordinary run start didn't already say via `scope` above, and
@@ -735,7 +796,8 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
 
     results = submit_run(conn, name, job_type, units, reason, context=context,
                          work_unit_run_id=work_unit_run_id, lane=lane,
-                         run_key=run_key, submission_seq=submission_seq)
+                         run_key=run_key, submission_seq=submission_seq,
+                         envelope=envelope)
     total_children = sum(len(attempt_ids) for _sub, attempt_ids in results)
     detail["batches"] = len(results)
     detail["children"] = total_children

@@ -230,3 +230,38 @@ def test_container_overrides_carry_environment_only(store, client):
     # place a job's shape is decided, competing with the job definition.
     submit_batch(make_batch(4), QUEUE, DEFINITION, store, client)
     assert set(client.calls[0]["containerOverrides"]) == {"environment"}
+
+
+# ---------------------------------------------------------------------------
+# The run's execution envelope (migration 122)
+# ---------------------------------------------------------------------------
+
+def test_the_attempt_timeout_is_sent_as_a_per_submission_override():
+    # How long one attempt may run is an attribute of the RUN, not of the
+    # deployment (Ben, 2026-09-13 13:02), so a run that needs a fast answer
+    # is not held to the bulk definition's twelve hours.
+    kwargs = build_submit_kwargs(make_batch(4), QUEUE, DEFINITION, "s3://m",
+                                 attempt_timeout_s=3600)
+    assert kwargs["timeout"] == {"attemptDurationSeconds": 3600}
+
+
+def test_no_timeout_is_sent_when_the_run_carries_none():
+    # A run row predating 122 has no envelope, and the job definition's own
+    # timeout must then apply — sending a null or a zero would override it
+    # with nonsense rather than leaving it alone.
+    kwargs = build_submit_kwargs(make_batch(4), QUEUE, DEFINITION, "s3://m")
+    assert "timeout" not in kwargs
+
+
+def test_retry_strategy_is_never_overridden_per_submission():
+    # THE RULING, NOT AN OVERSIGHT (2026-09-13 13:01). Batch's 10 is the
+    # OUTER bound that Spot reclaims consume; the run's actual budget is the
+    # pipeline's own count from its attempt rows. Overriding retryStrategy
+    # here would move the budget back into the scheduler, which cannot tell
+    # "the container was taken from us" from "the work failed" — the exact
+    # distinction the run's budget is counted on.
+    with_timeout = build_submit_kwargs(make_batch(4), QUEUE, DEFINITION,
+                                       "s3://m", attempt_timeout_s=3600)
+    without = build_submit_kwargs(make_batch(4), QUEUE, DEFINITION, "s3://m")
+    assert "retryStrategy" not in with_timeout
+    assert "retryStrategy" not in without
