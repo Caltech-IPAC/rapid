@@ -2556,3 +2556,735 @@ class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
         self.assertNotIn("job_definition_arn", detail)
         self.assertEqual(self.audit_calls[0]["target_scope"],
                          "run:memprofile-32g-20260913:phase=science")
+
+
+# ---------------------------------------------------------------------------
+# Migration 121: `run start` binds to the registry.
+# ---------------------------------------------------------------------------
+class RunStartRegistryBindingTests(unittest.TestCase):
+    """`_bind_registry_row` refuses the four runs `run start` may not submit
+    under, and accepts the two it may.
+
+    Driven against `_bind_registry_row` DIRECTLY rather than through
+    `start_run_audited`, because the property under test is which rows are
+    refused — not what a refusal does to the rest of the command. What a
+    refusal does to the rest of the command is `RunStartRefusalTests`
+    below, which asserts the two things a refusal must NOT do: gather, and
+    write an audit row.
+    """
+
+    def _bind(self, row):
+        from pipeline.operatorctl import run as run_mod
+        from pipeline.operatorctl import actions as actions_mod
+        with mock.patch.object(actions_mod, "run_row", lambda conn, n: row):
+            return run_mod._bind_registry_row(object(), "ramp-proof")
+
+    def _refusal(self, row):
+        from pipeline.operatorctl.run import RunStartRegistryError
+        with self.assertRaises(RunStartRegistryError) as caught:
+            self._bind(row)
+        return str(caught.exception)
+
+    def test_an_undeclared_run_is_refused_naming_run_create(self):
+        # THE RULING'S FIRST CLAUSE: "a campaign name without a `runs` row
+        # is refused". The message must name the command that fixes it —
+        # an operator whose submission was refused needs the next step,
+        # not only the diagnosis.
+        message = self._refusal(None)
+        self.assertIn("not declared", message)
+        self.assertIn("rapidctl run create", message)
+
+    def test_a_production_run_is_refused(self):
+        # Production's submissions are the VPO's, which resolves the
+        # production run's key for itself (`production_run_key`). An
+        # operator starting one by hand would submit production work from
+        # outside the operator service.
+        message = self._refusal(
+            {"run_id": 1, "kind": "production", "state": "running"})
+        self.assertIn("production", message)
+
+    def test_a_complete_run_is_refused_naming_its_state(self):
+        message = self._refusal(
+            {"run_id": 2, "kind": "campaign", "state": "complete"})
+        self.assertIn("complete", message)
+
+    def test_an_archived_run_is_refused_naming_its_state(self):
+        message = self._refusal(
+            {"run_id": 3, "kind": "campaign", "state": "archived"})
+        self.assertIn("archived", message)
+
+    def test_a_created_campaign_run_is_accepted(self):
+        row = {"run_id": 4, "kind": "campaign", "state": "created"}
+        self.assertEqual(self._bind(row)["run_id"], 4)
+
+    def test_a_running_campaign_run_is_accepted_which_is_what_a_ramp_needs(self):
+        # The ramp case: the SECOND `run start` of a run already under way
+        # must bind, not refuse. If this ever became a refusal, a ramp
+        # would be impossible and the only route back would be the fresh
+        # name plus `--claim-work-units-of` this ruling exists to retire.
+        row = {"run_id": 5, "kind": "campaign", "state": "running"}
+        self.assertEqual(self._bind(row)["run_id"], 5)
+
+
+class RunStartRefusalTests(unittest.TestCase):
+    """A refused `run start` gathers nothing and writes no audit row.
+
+    Both halves matter and neither implies the other. Gathering for a run
+    that will not submit is wasted work against the live database; writing
+    an audit row for it would put a mutation in the ledger that never
+    happened, which is the one thing the ledger must never contain.
+    """
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        self.run_mod = run_mod
+
+        self.gathers = []
+        gather_patcher = mock.patch.object(
+            run_mod, "gather_for_run",
+            lambda *a, **k: (self.gathers.append(1), ("science", ["u"]))[1])
+        gather_patcher.start()
+        self.addCleanup(gather_patcher.stop)
+
+        self.audits = []
+        audit_patcher = mock.patch.object(
+            run_mod, "record_external_action",
+            lambda *a, **k: (self.audits.append(1), {})[1])
+        audit_patcher.start()
+        self.addCleanup(audit_patcher.stop)
+
+        # Would be reached only if the binding did NOT refuse — its being
+        # untouched is part of what these tests assert.
+        self.replays = []
+        replay_patcher = mock.patch.object(
+            run_mod, "_replay_lookup",
+            lambda *a, **k: (self.replays.append(1), None)[1])
+        replay_patcher.start()
+        self.addCleanup(replay_patcher.stop)
+
+    def _start_against(self, row):
+        from pipeline.operatorctl import actions as actions_mod
+        from pipeline.operatorctl.run import RunStartRegistryError
+        with mock.patch.object(actions_mod, "run_row", lambda conn, n: row):
+            with self.assertRaises(RunStartRegistryError):
+                self.run_mod.start_run_audited(
+                    conn=object(), idempotency_key="k", name="no-such-run",
+                    phase="science", reason="refusal proof", dry_run=True,
+                    out=_null_out(), window_start="2027-10-01 00:00:00",
+                    window_end="2027-10-08 00:00:00")
+
+    def test_an_absent_row_refuses_before_gathering(self):
+        self._start_against(None)
+        self.assertEqual(self.gathers, [])
+
+    def test_an_absent_row_writes_no_audit_row(self):
+        # The live acceptance reads this same property off
+        # `derived.mutation_audit` after a real refused command.
+        self._start_against(None)
+        self.assertEqual(self.audits, [])
+
+    def test_the_refusal_precedes_the_replay_lookup(self):
+        # DELIBERATE ORDERING. A replayed idempotency key for a run that
+        # has since been completed must still refuse — returning the
+        # earlier success would report a submission that is not going to
+        # happen.
+        self._start_against(
+            {"run_id": 9, "kind": "campaign", "state": "complete"})
+        self.assertEqual(self.replays, [])
+
+
+class RunStartStateTransitionTests(unittest.TestCase):
+    """The registry transition: once on an apply, never on a dry run."""
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        self.run_mod = run_mod
+        self.row = {"run_id": 55, "name": "ramp-proof", "kind": "campaign",
+                    "state": "created"}
+
+        bind_patcher = mock.patch.object(
+            run_mod, "_bind_registry_row", lambda conn, n: self.row)
+        bind_patcher.start()
+        self.addCleanup(bind_patcher.stop)
+
+        seq_patcher = mock.patch.object(
+            run_mod, "next_submission_seq", lambda conn, k: 0)
+        seq_patcher.start()
+        self.addCleanup(seq_patcher.stop)
+
+        replay_patcher = mock.patch.object(
+            run_mod, "_replay_lookup", lambda *a, **k: None)
+        replay_patcher.start()
+        self.addCleanup(replay_patcher.stop)
+
+        gather_patcher = mock.patch.object(
+            run_mod, "gather_for_run", lambda *a, **k: ("science", ["u"]))
+        gather_patcher.start()
+        self.addCleanup(gather_patcher.stop)
+
+        # The science phase resolves a submission environment before it
+        # gathers (the reference path needs its s3 client at gather time).
+        # These tests are about the REGISTRY transition, not the binding,
+        # so the environment is a stub — otherwise every one of them would
+        # need RAPID_SW and a parameter tree to assert something neither
+        # is involved in.
+        env_patcher = mock.patch.object(
+            run_mod, "_resolve_submission_env",
+            lambda *a, **k: {"s3_client": object(),
+                             "manifest_bucket": "b",
+                             "queue": "q", "job_definition": "jd",
+                             "binding": object(), "manifest_prefix": "p",
+                             "batch_client": object()})
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
+        self.details = []
+        audit_patcher = mock.patch.object(
+            run_mod, "record_external_action",
+            lambda conn, key, cls, scope, reason, dry_run=False,
+            rows_affected=0, detail=None, policy_citation=None:
+            (self.details.append(dict(detail or {})), {})[1])
+        audit_patcher.start()
+        self.addCleanup(audit_patcher.stop)
+
+        submit_patcher = mock.patch.object(
+            run_mod, "submit_run",
+            lambda *a, **k: [(types.SimpleNamespace(job_id="j"), ["a"])])
+        submit_patcher.start()
+        self.addCleanup(submit_patcher.stop)
+
+        db_patcher = mock.patch(
+            "database.modules.utils.rapid_db.RAPIDDB",
+            lambda: types.SimpleNamespace(exit_code=0))
+        db_patcher.start()
+        self.addCleanup(db_patcher.stop)
+
+        # THE TRANSITION ITSELF, recorded per call so "once" and "never"
+        # are both assertable. Each call also MOVES the fixture row, so a
+        # second start in the same test sees `running`, exactly as a
+        # second start against the database would.
+        self.transitions = []
+
+        def fake_start_run(conn, key, name, reason, dry_run=True,
+                           policy_citation=None):
+            self.transitions.append(name)
+            self.row["state"] = "running"
+            return {"rows_affected": 1}
+
+        from pipeline.operatorctl import actions as actions_mod
+        state_patcher = mock.patch.object(actions_mod, "start_run",
+                                          fake_start_run)
+        state_patcher.start()
+        self.addCleanup(state_patcher.stop)
+
+    def _start(self, dry_run, key="k"):
+        # The non-windowed `statistics` phase, matching
+        # `StartRunAuditedWorkUnitScopeTests`: these tests are about the
+        # REGISTRY transition, and a windowed phase would additionally
+        # need RAPID_SW and a parameter tree to compute an MJD window
+        # nothing here asserts on.
+        return self.run_mod.start_run_audited(
+            conn=types.SimpleNamespace(commit=lambda: None),
+            idempotency_key=key, name="ramp-proof", phase="statistics",
+            reason="registry binding", dry_run=dry_run, out=_null_out())
+
+    def test_a_dry_run_transitions_nothing(self):
+        # `contract.py`'s rule: the plan shown is what the apply will act
+        # on, MINUS the writing. A rehearsal that moved the run to
+        # `running` would be a mutation performed by a command whose whole
+        # contract is that it performs none.
+        self._start(dry_run=True)
+        self.assertEqual(self.transitions, [])
+        self.assertEqual(self.row["state"], "created")
+
+    def test_an_apply_transitions_the_run_once(self):
+        self._start(dry_run=False)
+        self.assertEqual(self.transitions, ["ramp-proof"])
+        self.assertEqual(self.row["state"], "running")
+
+    def test_a_second_start_leaves_the_run_running(self):
+        # THE RAMP: `created` -> `running` on the first start, and the
+        # second start of the same run is a no-op on the row rather than a
+        # refusal. `derived.start_run` owns that idempotence; this pins
+        # that the CLI path keeps calling it rather than guarding it away.
+        self._start(dry_run=False, key="k1")
+        self._start(dry_run=False, key="k2")
+        self.assertEqual(self.transitions, ["ramp-proof", "ramp-proof"])
+        self.assertEqual(self.row["state"], "running")
+
+    def test_the_registry_facts_reach_the_audit_detail(self):
+        self._start(dry_run=False)
+        self.assertEqual(self.details[0]["run_key"], 55)
+        self.assertEqual(self.details[0]["submission_seq"], 0)
+        self.assertEqual(self.details[0]["run_state_before"], "created")
+
+
+class NextSubmissionSeqTests(unittest.TestCase):
+    """The ordinal is read from the run's own keyed submissions."""
+
+    class _Cursor:
+        def __init__(self, value, calls):
+            self._value = value
+            self._calls = calls
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self._calls.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return (self._value,)
+
+    class _Conn:
+        def __init__(self, value):
+            self.value = value
+            self.calls = []
+
+        def cursor(self):
+            return NextSubmissionSeqTests._Cursor(self.value, self.calls)
+
+    def test_a_run_with_no_keyed_submissions_starts_at_zero(self):
+        conn = self._Conn(None)
+        from pipeline.operatorctl.run import next_submission_seq
+        self.assertEqual(next_submission_seq(conn, 42), 0)
+
+    def test_the_next_ordinal_is_one_past_the_highest(self):
+        conn = self._Conn(1)
+        from pipeline.operatorctl.run import next_submission_seq
+        self.assertEqual(next_submission_seq(conn, 42), 2)
+
+    def test_no_key_reads_nothing_and_returns_zero(self):
+        conn = self._Conn(7)
+        from pipeline.operatorctl.run import next_submission_seq
+        self.assertEqual(next_submission_seq(conn, None), 0)
+        self.assertEqual(conn.calls, [])
+
+    def test_the_ordinal_is_read_by_key_never_by_prefix(self):
+        # READ BY KEY, NOT BY PREFIX, AND THAT IS THE POINT: a prefix read
+        # would match rows written under the same NAME before migration
+        # 121, which carry no ordinal to continue from (a pre-121 single
+        # batch is named `<name>` with no suffix at all).
+        conn = self._Conn(0)
+        from pipeline.operatorctl.run import next_submission_seq
+        next_submission_seq(conn, 42)
+        sql, params = conn.calls[0]
+        self.assertIn("run_key = %s", sql)
+        self.assertNotIn("LIKE", sql)
+        self.assertEqual(params, [42])
+
+
+class ProductionRunKeyTests(unittest.TestCase):
+    """The VPO's half: exactly one live production run, or None."""
+
+    class _Cursor:
+        def __init__(self, rows, calls):
+            self._rows = rows
+            self._calls = calls
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self._calls.append(" ".join(sql.split()))
+
+        def fetchall(self):
+            return self._rows
+
+    class _Conn:
+        def __init__(self, rows):
+            self.rows = rows
+            self.calls = []
+
+        def cursor(self):
+            return ProductionRunKeyTests._Cursor(self.rows, self.calls)
+
+    def _key(self, rows):
+        from pipeline.operatorctl.run import production_run_key
+        return production_run_key(self._Conn(rows))
+
+    def test_no_production_run_gives_none(self):
+        self.assertIsNone(self._key([]))
+
+    def test_exactly_one_production_run_gives_its_key(self):
+        self.assertEqual(self._key([(101,)]), 101)
+
+    def test_two_production_runs_give_none_rather_than_a_guess(self):
+        # AN AMBIGUOUS ANSWER IS REPORTED AS NO ANSWER. Picking the
+        # newest, or the lowest-numbered, would attribute production's
+        # work to a run by an arbitrary rule no operator ever stated.
+        self.assertIsNone(self._key([(101,), (102,)]))
+
+    def test_archived_production_runs_are_excluded_by_the_query(self):
+        conn = self._Conn([(101,)])
+        from pipeline.operatorctl.run import production_run_key
+        production_run_key(conn)
+        self.assertIn("state <> 'archived'", conn.calls[0])
+        self.assertIn("kind = 'production'", conn.calls[0])
+
+
+class RunKeyTallyTests(unittest.TestCase):
+    """`run status` reads by key where it can, by prefix where it must, and
+    always says which.
+    """
+
+    class _Conn:
+        """Answers each statement from a script keyed on a substring, so a
+        test states what the DATABASE says rather than in what order the
+        function asks.
+        """
+
+        def __init__(self, keyed_count, keyed=None, prefix=None):
+            self.keyed_count = keyed_count
+            self.keyed = keyed or {"total": 0, "failures": 0}
+            self.prefix = prefix or {"total": 0, "failures": 0}
+            self.sqls = []
+
+        def cursor(self):
+            return RunKeyTallyTests._Cursor(self)
+
+    class _Cursor:
+        def __init__(self, conn):
+            self._conn = conn
+            self._row = None
+            self._cols = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            flat = " ".join(sql.split())
+            self._conn.sqls.append(flat)
+            if "count(*) AS n" in flat:
+                self._cols = [("n",)]
+                self._row = (self._conn.keyed_count,)
+            elif "run_key =" in flat:
+                self._cols = [("total",), ("failures",)]
+                self._row = (self._conn.keyed["total"],
+                             self._conn.keyed["failures"])
+            else:
+                self._cols = [("total",), ("failures",)]
+                self._row = (self._conn.prefix["total"],
+                             self._conn.prefix["failures"])
+
+        @property
+        def description(self):
+            return self._cols
+
+        def fetchall(self):
+            return [self._row]
+
+    def test_a_run_with_no_keyed_attempts_is_counted_by_prefix(self):
+        # Every run that predates migration 121. The prefix is still the
+        # only reading available and the answer says so.
+        conn = self._Conn(keyed_count=0, prefix={"total": 9, "failures": 2})
+        result = actions.run_attempt_tally(conn, "old-run")
+        self.assertEqual(result["counted_by"], "name_prefix")
+        self.assertEqual(result["total"], 9)
+
+    def test_a_run_with_keyed_attempts_is_counted_by_key(self):
+        conn = self._Conn(keyed_count=20, keyed={"total": 20, "failures": 1},
+                          prefix={"total": 20, "failures": 1})
+        result = actions.run_attempt_tally(conn, "ramp-proof")
+        self.assertEqual(result["counted_by"], "run_key")
+        self.assertEqual(result["total"], 20)
+
+    def test_both_readings_are_returned_when_they_differ(self):
+        # THE TRANSITION SHAPE: the deployed reconciler creates retry rows
+        # with no key until the next repin, so the keyed reading is LOWER
+        # than the prefix reading. Both numbers are returned so `run
+        # status` can print the difference instead of hiding it.
+        conn = self._Conn(keyed_count=20, keyed={"total": 20, "failures": 1},
+                          prefix={"total": 23, "failures": 4})
+        result = actions.run_attempt_tally(conn, "ramp-proof")
+        self.assertEqual(result["total"], 20)
+        self.assertEqual(result["prefix_total"], 23)
+        self.assertEqual(result["prefix_failures"], 4)
+
+    def test_the_keyed_query_resolves_the_key_from_the_name(self):
+        conn = self._Conn(keyed_count=1, keyed={"total": 1, "failures": 0})
+        actions.run_attempt_tally(conn, "ramp-proof")
+        keyed_sql = [s for s in conn.sqls
+                     if "run_key =" in s and "count(*) AS n" not in s]
+        self.assertEqual(len(keyed_sql), 1)
+        self.assertIn("SELECT run_id FROM runs WHERE name = %s", keyed_sql[0])
+
+    def test_the_two_readings_share_one_failure_predicate(self):
+        # Written once, used twice — so the keyed and prefix readings can
+        # never drift into asking two different questions of the two
+        # populations.
+        self.assertIn(actions._RUN_FAILURE_PREDICATE,
+                      actions._RUN_ATTEMPT_TALLY)
+        self.assertIn(actions._RUN_FAILURE_PREDICATE,
+                      actions._RUN_ATTEMPT_TALLY_BY_KEY)
+
+
+class RunCompareProvenanceTests(unittest.TestCase):
+    """`run compare` prints provenance above its tallies, in a pinned shape.
+
+    Asserted on the RENDERED OUTPUT, not on the field list: the acceptance
+    greps this same output for `^run: `, `^tallies$` and one line per
+    field, so what a test must pin is what an operator actually sees.
+    """
+
+    def _render(self, columns=None):
+        from pipeline.operatorctl import main as main_mod
+        from pipeline.operatorctl import actions as actions_mod
+
+        rows = {
+            "run-a": {"run_id": 1, "name": "run-a", "kind": "campaign",
+                      "state": "complete", "branch": "smdc",
+                      "image_digest": "sha256:aaa", "config_hash": "cfg-a",
+                      "input_generations": ["g1"], "owner": "rusholme",
+                      "purpose": "p", "created_at": "t"},
+            "run-b": {"run_id": 2, "name": "run-b", "kind": "campaign",
+                      "state": "complete", "branch": "smdc",
+                      "image_digest": "sha256:bbb", "config_hash": "cfg-b",
+                      "input_generations": None, "owner": "rusholme",
+                      "purpose": "p", "created_at": "t"},
+        }
+        available = columns if columns is not None else {
+            "run_id", "name", "kind", "state", "branch", "image_digest",
+            "config_hash", "input_generations"}
+
+        args = argparse.Namespace(run_a="run-a", run_b="run-b")
+        out = io.StringIO()
+        with mock.patch.object(actions_mod, "run_row",
+                               lambda conn, n: rows[n]), \
+             mock.patch.object(actions_mod, "run_attempt_tally",
+                               lambda conn, n: {"total": 1, "failures": 0}), \
+             mock.patch.object(actions_mod, "run_stage_walltime",
+                               lambda conn, n: []), \
+             mock.patch.object(actions_mod, "run_product_counts",
+                               lambda conn, n: {}), \
+             mock.patch.object(main_mod, "_run_columns",
+                               lambda conn: available):
+            main_mod._cmd_run_compare(object(), args, out)
+        return out.getvalue()
+
+    def test_the_two_run_blocks_precede_the_tallies_line(self):
+        text = self._render()
+        lines = [ln for ln in text.splitlines()
+                 if ln.startswith("run: ") or ln == "tallies"]
+        self.assertEqual(lines, ["run: run-a", "run: run-b", "tallies"])
+
+    def test_every_provenance_field_appears_once_per_run(self):
+        text = self._render()
+        for field in ("run_id", "kind", "state", "branch", "image_digest",
+                      "config_hash", "input_generations", "reference_set"):
+            self.assertEqual(
+                len([ln for ln in text.splitlines()
+                     if ln.startswith("%s: " % field)]), 2,
+                "%s must appear once per run" % field)
+
+    def test_the_values_themselves_are_printed_not_merely_the_labels(self):
+        # A count of lines would pass against a block that printed every
+        # field as empty; the point of the block is the values.
+        text = self._render()
+        self.assertIn("image_digest: sha256:aaa", text)
+        self.assertIn("image_digest: sha256:bbb", text)
+        self.assertIn("config_hash: cfg-a", text)
+
+    def test_a_column_the_schema_lacks_prints_n_a_and_keeps_its_line(self):
+        # `reference_set` is added by a later brief. The line must exist
+        # either way, so a reader diffing two blocks lines them up.
+        text = self._render()
+        self.assertEqual(
+            len([ln for ln in text.splitlines()
+                 if ln == "reference_set: n/a"]), 2)
+
+    def test_a_null_value_prints_n_a_rather_than_none(self):
+        text = self._render()
+        self.assertIn("input_generations: n/a", text)
+
+
+class RunCompleteTests(unittest.TestCase):
+    """`run complete` goes through `derived.complete_run` on 109's own
+    keyed, audited path — the same one `run archive` beside it uses.
+    """
+
+    def test_the_idempotency_key_is_first_matching_109s_convention(self):
+        conn = _FakeConn([
+            {"action": "run_state_complete", "dry_run": True,
+             "replayed": False, "rows_affected": 0, "audit_id": 7,
+             "kind": "campaign", "prior_state": "running",
+             "counted_by": "run_key", "open_attempts": 0},
+        ])
+        actions.complete_run(conn, "complete-key-1", "ramp-proof",
+                             "run finished", dry_run=True)
+        self.assertEqual(len(conn.calls), 1)
+        sql, params = conn.calls[0]
+        self.assertIn("derived.complete_run", sql)
+        self.assertEqual(params[0], "complete-key-1")
+        self.assertEqual(params[1], "ramp-proof")
+
+    def test_a_dry_run_issues_exactly_one_statement_and_writes_nothing(self):
+        conn = _FakeConn([
+            {"action": "run_state_complete", "dry_run": True,
+             "replayed": False, "rows_affected": 0, "audit_id": 7,
+             "kind": "campaign", "prior_state": "running",
+             "counted_by": "run_key", "open_attempts": 3},
+        ])
+        result = actions.complete_run(conn, "k", "ramp-proof", "finished",
+                                      dry_run=True)
+        self.assertEqual(len(conn.calls), 1)
+        rendered = render_plan("run_complete", "runs:ramp-proof", "finished",
+                               "k", result, False)
+        self.assertIn("Nothing was changed", rendered)
+        self.assertIn("DRY RUN", rendered)
+
+    def test_the_dry_run_prints_the_open_attempt_count_that_would_block_it(self):
+        # An operator rehearsing a completion wants to know WHETHER it
+        # would be refused and BY HOW MUCH, not to find out by trying.
+        conn = _FakeConn([
+            {"action": "run_state_complete", "dry_run": True,
+             "replayed": False, "rows_affected": 0, "audit_id": 7,
+             "kind": "campaign", "prior_state": "running",
+             "counted_by": "run_key", "open_attempts": 4},
+        ])
+        args = argparse.Namespace(
+            name="ramp-proof", reason="finished", idempotency_key="k",
+            apply=False, policy_citation=None)
+        out = io.StringIO()
+        operatorctl_main._cmd_run_complete(conn, args, out)
+        text = out.getvalue()
+        self.assertIn("open attempts : 4", text)
+        self.assertIn("run_key", text)
+
+    def test_the_command_is_registered_under_run(self):
+        # The subcommand must actually be reachable: a handler defined but
+        # never wired to a parser is invisible to every operator.
+        parser = operatorctl_main.build_parser()
+        args = parser.parse_args(
+            ["run", "complete", "--name", "ramp-proof", "--reason", "done"])
+        self.assertIs(args.func, operatorctl_main._cmd_run_complete)
+        self.assertEqual(args.name, "ramp-proof")
+        self.assertFalse(args.apply)
+
+
+class RampStepTests(unittest.TestCase):
+    """A second `run start` of a running run is a ramp step.
+
+    No new mechanism: the work-unit authorisation gate in `seams.py`
+    already skips units the run has claimed or completed, and the ordinal
+    already gives the second step its own batch identity. What this pins
+    is that the two compose — that a second start of one run submits only
+    what the first did not hold, under a new identity.
+    """
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        self.run_mod = run_mod
+        self.row = {"run_id": 88, "name": "ramp-proof", "kind": "campaign",
+                    "state": "created"}
+        #: work_unit "state" per unit, as the fake authorisation reports
+        #: it. Half complete at the second start, which is the ramp shape.
+        self.claimed = set()
+
+        bind_patcher = mock.patch.object(
+            run_mod, "_bind_registry_row", lambda conn, n: self.row)
+        bind_patcher.start()
+        self.addCleanup(bind_patcher.stop)
+
+        replay_patcher = mock.patch.object(
+            run_mod, "_replay_lookup", lambda *a, **k: None)
+        replay_patcher.start()
+        self.addCleanup(replay_patcher.stop)
+
+        gather_patcher = mock.patch.object(
+            run_mod, "gather_for_run",
+            lambda *a, **k: ("statistics", ["u1", "u2", "u3", "u4"]))
+        gather_patcher.start()
+        self.addCleanup(gather_patcher.stop)
+
+        audit_patcher = mock.patch.object(
+            run_mod, "record_external_action", lambda *a, **k: {})
+        audit_patcher.start()
+        self.addCleanup(audit_patcher.stop)
+
+        db_patcher = mock.patch(
+            "database.modules.utils.rapid_db.RAPIDDB",
+            lambda: types.SimpleNamespace(exit_code=0))
+        db_patcher.start()
+        self.addCleanup(db_patcher.stop)
+
+        from pipeline.operatorctl import actions as actions_mod
+        state_patcher = mock.patch.object(
+            actions_mod, "start_run",
+            lambda conn, key, name, reason, dry_run=True,
+            policy_citation=None: self.row.update(state="running"))
+        state_patcher.start()
+        self.addCleanup(state_patcher.stop)
+
+        # The submission ordinal advances with each step, as the real
+        # reader would once the first step's submissions row exists.
+        self.seq = 0
+        seq_patcher = mock.patch.object(
+            run_mod, "next_submission_seq", lambda conn, k: self.seq)
+        seq_patcher.start()
+        self.addCleanup(seq_patcher.stop)
+
+        self.submissions = []
+
+        def fake_submit_run(conn, name, job_type, units, reason,
+                            context=None, work_unit_run_id=None, lane=None,
+                            run_key=None, submission_seq=None):
+            # THE AUTHORISATION GATE, in miniature: a unit this run has
+            # already claimed is skipped, exactly as
+            # `seams._transition_or_defer` skips one whose work unit is
+            # not `ready`.
+            fresh = [u for u in units if u not in self.claimed]
+            self.claimed.update(fresh)
+            self.submissions.append({
+                "batch_id": "%s-%d" % (name, submission_seq),
+                "units": fresh, "run_key": run_key})
+            self.seq = submission_seq + 1
+            return [(types.SimpleNamespace(job_id="j"), ["a"] * len(fresh))]
+
+        submit_patcher = mock.patch.object(run_mod, "submit_run",
+                                           fake_submit_run)
+        submit_patcher.start()
+        self.addCleanup(submit_patcher.stop)
+
+    def _start(self, key, cap=None):
+        return self.run_mod.start_run_audited(
+            conn=types.SimpleNamespace(commit=lambda: None),
+            idempotency_key=key, name="ramp-proof", phase="statistics",
+            reason="ramp step", dry_run=False, cap=cap, out=_null_out())
+
+    def test_the_second_step_submits_only_what_the_first_did_not_hold(self):
+        self.claimed.update({"u1", "u2"})       # step one holds half
+        self._start("k1")
+        self.assertEqual(self.submissions[0]["units"], ["u3", "u4"])
+
+    def test_the_second_step_gets_its_own_batch_identity(self):
+        self._start("k1")
+        self._start("k2")
+        self.assertEqual(
+            [s["batch_id"] for s in self.submissions],
+            ["ramp-proof-0", "ramp-proof-1"])
+
+    def test_the_second_step_repeats_no_unit_of_the_first(self):
+        # THE PROPERTY THE LIVE PROOF CHECKS TOO: no work unit appears
+        # under two of one run's submissions.
+        self._start("k1")
+        self._start("k2")
+        first = set(self.submissions[0]["units"])
+        second = set(self.submissions[1]["units"])
+        self.assertEqual(first & second, set())
+
+    def test_both_steps_carry_the_same_registry_key(self):
+        # A ramp is ONE run. Two steps under two keys would be two runs
+        # wearing one name, which is the state this whole ruling ends.
+        self._start("k1")
+        self._start("k2")
+        self.assertEqual([s["run_key"] for s in self.submissions], [88, 88])

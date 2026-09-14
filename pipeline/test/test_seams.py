@@ -317,7 +317,15 @@ class RecordingExecute:
             submission_id = self.next_submission_id
             self.next_submission_id += 1
             self.submissions_by_id[submission_id] = {
-                "state": "prepared", "attempt_ids": set()}
+                "state": "prepared", "attempt_ids": set(),
+                # `run_id` is this INSERT's FIRST bound parameter
+                # (`submission.protocol._INSERT_SQL`'s column order), read
+                # positionally the way this double already reads
+                # `array_index` off the attempts INSERT. Recorded since
+                # migration 121 so a test can assert which BATCH IDENTITY
+                # a submission was opened under — the ordinal's whole
+                # subject — rather than only that some submission existed.
+                "run_id": params[0] if params else None}
             return [(submission_id,)]
         if "UPDATE attempts SET submission_id" in statement:
             submission_id, attempt_ids = params
@@ -426,6 +434,27 @@ class RecordingExecute:
             work_unit_id, attempt_id = params
             if attempt_id in self.attempts_by_id:
                 self.attempts_by_id[attempt_id]["work_unit_id"] = work_unit_id
+            return 1
+        if statement.startswith("UPDATE attempts SET run_key"):
+            # `pipeline.seams._set_attempt_run_key` (migration 121):
+            # filling the registry key onto an attempt row that already
+            # exists, the same shape as the work-unit attachment above.
+            # Recorded onto `attempts_by_id` so a test can assert on the
+            # ROWS rather than only on the raw statement list — a test
+            # that only counted statements would pass against a seam that
+            # keyed the wrong attempt.
+            run_key, attempt_id = params
+            if attempt_id in self.attempts_by_id:
+                self.attempts_by_id[attempt_id]["run_key"] = run_key
+            return 1
+        if statement.startswith("UPDATE submissions SET run_key"):
+            # `pipeline.seams._set_submission_run_key` (121). Recorded
+            # onto `submissions_by_id` beside the state machine's own
+            # columns, so a test can assert the submission row carries the
+            # key at the same time it carries its state.
+            run_key, submission_id = params
+            if submission_id in self.submissions_by_id:
+                self.submissions_by_id[submission_id]["run_key"] = run_key
             return 1
         if "INSERT INTO campaigns" in statement:
             # `CampaignWriter.create_campaign`'s `RETURNING campaign_id`.
@@ -1917,3 +1946,144 @@ class RunRegistrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Migration 121: the registry key and the submission ordinal.
+# ---------------------------------------------------------------------------
+class RunKeyOnSubmittedRowsTests(unittest.TestCase):
+    """Every row the seam creates for a declared run carries `run_key`.
+
+    The submission row AND every attempt row — both halves, because they
+    are written by two different functions (`_open_submission` and
+    `_precreate`) and a seam that keyed one and not the other would leave
+    exactly the half-keyed population the column exists to make
+    impossible.
+    """
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _submit(self, run_key=None, submission_seq=None, count=3):
+        return seams.submit_gathered(
+            units(count=count), job_type=JOB_TYPE_SCIENCE,
+            queue="rapid-queue-bulk",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="ramp-proof",
+            work_unit_run_id="ramp-proof", run_key=run_key,
+            submission_seq=submission_seq,
+            now=utc(2026, 9, 14, 12, 0, 0))
+
+    def test_every_precreated_attempt_row_carries_the_key(self):
+        results = self._submit(run_key=77, submission_seq=0)
+        _submission, attempt_ids = results[0]
+        self.assertEqual(3, len(attempt_ids))
+        for attempt_id in attempt_ids:
+            self.assertEqual(
+                self.execute.attempts_by_id[attempt_id].get("run_key"), 77,
+                "attempt %s was created without the run's registry key"
+                % attempt_id)
+
+    def test_the_submission_row_carries_the_key(self):
+        self._submit(run_key=77, submission_seq=0)
+        rows = list(self.execute.submissions_by_id.values())
+        self.assertEqual(1, len(rows))
+        self.assertEqual(rows[0].get("run_key"), 77)
+
+    def test_the_submission_is_keyed_before_it_is_marked_calling(self):
+        # THE ORDERING THAT MATTERS: the `calling` marker is the one write
+        # whose durability timing is load-bearing (it commits before
+        # SubmitJob), so a row that committed `calling` with a NULL
+        # run_key would be durably indistinguishable from a pre-121 row.
+        self._submit(run_key=77, submission_seq=0)
+        sqls = [s for s, _ in self.execute.statements]
+        keyed = next(i for i, s in enumerate(sqls)
+                     if s.startswith("UPDATE submissions SET run_key"))
+        calling = next(i for i, s in enumerate(sqls)
+                       if "state = 'calling'" in s or "mark" in s.lower()
+                       and "calling" in s)
+        self.assertLess(keyed, calling)
+
+    def test_no_run_key_writes_no_key_at_all(self):
+        # Every caller with no declared run — the VPO's ordinary passes
+        # included. The columns stay NULL, which is exactly what their own
+        # COMMENT says NULL means, and NOT a write of a null value.
+        self._submit(run_key=None, submission_seq=None)
+        sqls = [s for s, _ in self.execute.statements]
+        self.assertEqual(
+            [], [s for s in sqls if "SET run_key" in s],
+            "a submission with no declared run must issue no key write")
+
+
+class SubmissionOrdinalTests(unittest.TestCase):
+    """Batch identities are unique across a run's whole history."""
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _submit(self, submission_seq, count=2, max_batch_size=None):
+        kwargs = {} if max_batch_size is None else {
+            "max_batch_size": max_batch_size}
+        return seams.submit_gathered(
+            units(count=count), job_type=JOB_TYPE_SCIENCE,
+            queue="rapid-queue-bulk",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="ramp-proof",
+            work_unit_run_id="ramp-proof", run_key=77,
+            submission_seq=submission_seq,
+            now=utc(2026, 9, 14, 12, 0, 0), **kwargs)
+
+    def _batch_ids(self):
+        return [row["run_id"] for _sid, row in sorted(
+            self.execute.submissions_by_id.items())]
+
+    def test_a_first_step_starts_at_the_ordinal_it_was_given(self):
+        self._submit(submission_seq=0)
+        self.assertEqual(["ramp-proof-0"], self._batch_ids())
+
+    def test_a_later_step_continues_the_numbering_rather_than_repeating(self):
+        # THE DEFECT THIS CLOSES. Before the ordinal, the second `run
+        # start` of one run minted the identities the first had already
+        # used, and the manifest store refused to republish a different
+        # unit list under an identity it had seen — so a ramp step was
+        # impossible.
+        self._submit(submission_seq=2)
+        self.assertEqual(["ramp-proof-2"], self._batch_ids())
+
+    def test_a_single_batch_is_suffixed_too_never_the_bare_run_name(self):
+        # UNCONDITIONAL SUFFIX. The bare name is the run's OWN identity —
+        # its work-unit scope and the prefix every reader matches on — so
+        # one string meaning both "the run" and "the run's first batch" is
+        # the ambiguity the ordinal exists to remove.
+        self._submit(submission_seq=0, count=1)
+        self.assertEqual(["ramp-proof-0"], self._batch_ids())
+        self.assertNotIn("ramp-proof", self._batch_ids())
+
+    def test_several_batches_of_one_step_number_consecutively(self):
+        self._submit(submission_seq=3, count=4, max_batch_size=2)
+        self.assertEqual(["ramp-proof-3", "ramp-proof-4"], self._batch_ids())
+
+    def test_no_ordinal_keeps_the_pre_121_naming(self):
+        # Every caller that has not opted in, the VPO included: its
+        # `run_id` is a synthesized `vpo-<class>-<batch id>` already
+        # unique per poll, and renumbering it would change every
+        # production submission identity for no gain.
+        seams.submit_gathered(
+            units(count=1), job_type=JOB_TYPE_SCIENCE,
+            queue="rapid-queue-bulk",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="vpo-science-b1",
+            now=utc(2026, 9, 14, 12, 0, 0))
+        self.assertEqual(["vpo-science-b1"], self._batch_ids())

@@ -666,3 +666,105 @@ class TestIdleServiceDoesNotExit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProductionPassesCarryTheirRunKey(unittest.TestCase):
+    """Migration 121: "production passes declare their run".
+
+    The operator service has no `--name` to read, so it resolves the
+    production run's key from the registry once per pass and carries it on
+    every submission. Without this, production's work would be the one
+    population in the system with no run row behind it.
+    """
+
+    class _RecordingSubmitter:
+        """Records the run_key each submission was given.
+
+        Names `run_key` EXPLICITLY rather than absorbing it into
+        `**kwargs`, for the same reason `LiveSubmitter.submit` does: a
+        double that swallowed it would keep passing against an operator
+        that stopped sending it, which is the one thing these tests exist
+        to catch.
+        """
+
+        can_submit = True
+
+        def __init__(self):
+            self.run_keys = []
+
+        def submit(self, units, operational_class, run_id=None,
+                   run_key=None, **kwargs):
+            self.run_keys.append(run_key)
+            return [("submission", [])]
+
+    class _Conn:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def cursor(self):
+            return TestProductionPassesCarryTheirRunKey._Cursor(self._rows)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            pass
+
+        def fetchall(self):
+            return self._rows
+
+    def _run(self, rows=None, connection_factory=None):
+        clock = FakeClock()
+        submitter = self._RecordingSubmitter()
+        prompt = opclasses.class_for(opclasses.PROMPT_PROCESSING)
+        if connection_factory is None and rows is not None:
+            connection_factory = lambda: self._Conn(rows)      # noqa: E731
+        operator = Operator(prompt, submitter, gather=lambda: [unit(1)],
+                            max_batch_size=60, max_wait_seconds=60,
+                            clock=clock,
+                            connection_factory=connection_factory)
+        # The registration pass at the end of `run_pass` takes the SAME
+        # connection factory, and these tests exist to pin what the
+        # SUBMISSION carries. Stubbed out so the doubles above only ever
+        # have to answer the one registry question under test, rather
+        # than also standing in for the registrar's own reads.
+        operator._register = lambda: None
+        operator.run_pass(force_cut=True)
+        return submitter.run_keys
+
+    def test_the_single_production_run_key_reaches_every_submission(self):
+        self.assertEqual(self._run(rows=[(101,)]), [101])
+
+    def test_no_production_run_submits_unkeyed_rather_than_refusing(self):
+        # THE VPO MUST KEEP PROCESSING PROMPT DATA. An unanswerable
+        # registry question is a reason to submit with a NULL key — the
+        # state every pre-121 row is already in — and warn, never a reason
+        # to stop the pass.
+        self.assertEqual(self._run(rows=[]), [None])
+
+    def test_two_production_runs_submit_unkeyed_rather_than_guessing(self):
+        self.assertEqual(self._run(rows=[(101,), (102,)]), [None])
+
+    def test_no_connection_at_all_submits_unkeyed(self):
+        # A rehearsal operator, which has no database to ask.
+        self.assertEqual(self._run(connection_factory=None), [None])
+
+    def test_a_registry_read_that_raises_does_not_fail_the_pass(self):
+        def exploding_factory():
+            raise RuntimeError("registry unreachable")
+
+        self.assertEqual(self._run(connection_factory=exploding_factory),
+                         [None])

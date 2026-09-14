@@ -143,6 +143,14 @@ class RequiredMigrationsFailsClosedOnNewEntriesTests(unittest.TestCase):
         self._assert_fails_closed_missing_only(
             "120-attempts-memory-accounting.sql")
 
+    def test_missing_121_runs_registry_key_fails_closed(self):
+        # 121's `run_key` columns are written by the submission seam on
+        # EVERY row it creates for a declared run, and its two `derived.*`
+        # functions are what `run start --apply` and `run complete` call
+        # — so a database without it fails a run's start, not merely a
+        # reader of its tally.
+        self._assert_fails_closed_missing_only("121-runs-registry-key.sql")
+
     def test_the_full_floor_passes_when_every_entry_is_present(self):
         # The complement of the five tests above: staging every required
         # migration (nothing withheld) must verify cleanly, so a future typo
