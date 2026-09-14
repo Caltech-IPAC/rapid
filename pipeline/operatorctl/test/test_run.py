@@ -292,6 +292,50 @@ class _RealPsycopg2SubstitutionConn:
                                                self._rows)
 
 
+def _stub_registry_binding(case, run_mod, kind="campaign", state="running",
+                           run_id=77, seq=0):
+    """Stub the registry reads `start_run_audited` gained at migration 121.
+
+    Every `start_run_audited` test in this file drives the function with a
+    `conn` that is not a database — `object()`, or a `SimpleNamespace` with
+    only `commit` — because each exists to pin what the function THREADS or
+    what it puts in the audit scope, not what the registry says. Since 121
+    the function reads the `runs` row and the run's submission ordinal
+    before gathering, so those two reads are stubbed here, in one place,
+    with an ordinary running campaign row.
+
+    A test that cares about the BINDING itself (an absent row, a production
+    kind, a completed run) does not use this helper — see
+    `RunStartRegistryBindingTests`, which drives `_bind_registry_row`
+    directly against a scripted `run_row`.
+    """
+    bind_patcher = mock.patch.object(
+        run_mod, "_bind_registry_row",
+        lambda conn, name: {"run_id": run_id, "name": name, "kind": kind,
+                            "state": state})
+    bind_patcher.start()
+    case.addCleanup(bind_patcher.stop)
+
+    seq_patcher = mock.patch.object(
+        run_mod, "next_submission_seq", lambda conn, run_key: seq)
+    seq_patcher.start()
+    case.addCleanup(seq_patcher.stop)
+
+    case.state_calls = []
+
+    def fake_start_run(conn, key, name, reason, dry_run=True,
+                       policy_citation=None):
+        case.state_calls.append({"name": name, "dry_run": dry_run,
+                                 "key": key})
+        return {"rows_affected": 1}
+
+    from pipeline.operatorctl import actions as actions_mod
+    state_patcher = mock.patch.object(actions_mod, "start_run",
+                                      fake_start_run)
+    state_patcher.start()
+    case.addCleanup(state_patcher.stop)
+
+
 class PsycopgEscapingTextInvariantTests(unittest.TestCase):
     """Every literal `%` in a query constant executed WITH parameters must
     be doubled -- the cheap, mechanical form of the same rule.
@@ -330,10 +374,20 @@ class PsycopgPlaceholderCountingCursorTests(unittest.TestCase):
     """
 
     def test_run_attempt_tally_does_not_raise_indexerror(self):
+        # `by_key=False` pins this to the PREFIX reading, which is what
+        # this test is about: the predicate's `%%` escaping against a
+        # cursor that counts placeholders the way psycopg2 does. The keyed
+        # reading (migration 121) is a different query with a different
+        # parameter and is exercised by `RunKeyTallyTests` below; forcing
+        # the reading here keeps this test asking its own question rather
+        # than also depending on how the reading is detected.
         conn = _RealPsycopg2SubstitutionConn(
             columns=["total", "failures"], rows=[(5, 2)])
-        result = actions.run_attempt_tally(conn, "w9-ramp-science-18")
-        self.assertEqual(result, {"total": 5, "failures": 2})
+        result = actions.run_attempt_tally(conn, "w9-ramp-science-18",
+                                           by_key=False)
+        self.assertEqual(result["total"], 5)
+        self.assertEqual(result["failures"], 2)
+        self.assertEqual(result["counted_by"], "name_prefix")
         sql, params = conn.calls[0]
         self.assertEqual(params, ("w9-ramp-science-18%",))
 
@@ -1385,6 +1439,8 @@ class StartRunAuditedLaneResolutionTests(unittest.TestCase):
         os.environ["RAPID_RELEASE_IDENTITY"] = "w9-test"
         os.environ["RAPID_MANIFEST_BUCKET"] = "rapid-manifests"
 
+        _stub_registry_binding(self, run_mod)
+
         replay_patcher = mock.patch.object(
             run_mod, "_replay_lookup", lambda *a, **k: None)
         replay_patcher.start()
@@ -2319,6 +2375,8 @@ class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
         os.environ["RAPID_IMAGE_DIGEST"] = "sha256:" + "0" * 64
         os.environ["RAPID_RELEASE_IDENTITY"] = "memprofile-test"
         os.environ["RAPID_MANIFEST_BUCKET"] = "rapid-manifests"
+
+        _stub_registry_binding(self, run_mod)
 
         replay_patcher = mock.patch.object(
             run_mod, "_replay_lookup", lambda *a, **k: None)

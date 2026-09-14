@@ -185,6 +185,18 @@ REQUIRED_MIGRATIONS = (
      "exists. Every one of the five is in the same UPDATE's SET clause, so "
      "a database without 120 fails the terminal write of EVERY attempt, "
      "not only a sampled one"),
+    ("121-runs-registry-key.sql",
+     "`submissions.run_key` and `attempts.run_key`, written by "
+     "pipeline/seams.py's `_set_submission_run_key` and "
+     "`_set_attempt_run_key` on every row the submission seam creates for "
+     "a declared run, and read by pipeline/operatorctl/actions.py's "
+     "`run_attempt_tally`/`run_keyed_attempt_count` (the keyed reading "
+     "`run status` prefers over the name prefix); also `derived.start_run` "
+     "and `derived.complete_run`, whose only callers are that module's "
+     "`start_run`/`complete_run` — invoked from "
+     "pipeline/operatorctl/run.py's `start_run_audited` on every "
+     "`run start --apply` and from pipeline/operatorctl/main.py's "
+     "`run complete` command"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than

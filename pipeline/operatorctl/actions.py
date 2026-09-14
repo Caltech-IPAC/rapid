@@ -128,6 +128,44 @@ def archive_run(conn, idempotency_key, name, reason, expected_state=None,
          policy_citation))
 
 
+def start_run(conn, idempotency_key, name, reason, expected_state=None,
+              dry_run=True, policy_citation=None):
+    """Move a declared run to ``running`` (migration 121:
+    ``derived.start_run``).
+
+    Idempotent from ``running``, which is what makes a ramp step legal: a
+    second ``run start`` on a run already under way is the SAME run
+    continuing, and stamps no new ``started_at`` — the first start is the
+    one the row records. Refuses ``complete``/``archived`` (RA012) and an
+    undeclared name (RA010).
+
+    ``expected_state`` is ``{"state": "..."}``, the same "the world hasn't
+    moved" shape ``archive_run`` beside it uses.
+    """
+    return call_function(
+        conn,
+        "SELECT derived.start_run(%s, %s, %s, %s::jsonb, %s, %s)",
+        (idempotency_key, name, reason, _json(expected_state), dry_run,
+         policy_citation))
+
+
+def complete_run(conn, idempotency_key, name, reason, expected_state=None,
+                 dry_run=True, policy_citation=None):
+    """Move a ``running`` run to ``complete`` (``derived.complete_run``).
+
+    Refuses (RA013) while any attempt of the run is in an open lifecycle
+    state — counted by ``run_key`` where the run has keyed attempts and by
+    the name prefix otherwise, so rows predating 121 and rows the deployed
+    reconciler creates until the next repin are still seen by the gate.
+    Refuses any other prior state (RA012).
+    """
+    return call_function(
+        conn,
+        "SELECT derived.complete_run(%s, %s, %s, %s::jsonb, %s, %s)",
+        (idempotency_key, name, reason, _json(expected_state), dry_run,
+         policy_citation))
+
+
 def repair_refused_outbox_rows(conn, idempotency_key, release_identity, reason,
                                expected_state=None, max_rows=200, dry_run=True,
                                policy_citation=None):
@@ -510,6 +548,27 @@ _RUN_ATTEMPT_TALLY = (
     " WHERE run_id LIKE %s"
 )
 
+# The SAME tally over the SAME predicate, read by the registry key instead
+# of the name prefix (migration 121). Two constants rather than one with a
+# swapped WHERE clause, so the failure predicate is written once and the
+# two readings can never drift into asking different questions of the two
+# populations. The key is resolved from the name by subquery rather than
+# taken as a bigint parameter, so every reader in this module keeps the
+# same one-argument (name) call shape.
+_RUN_ATTEMPT_TALLY_BY_KEY = (
+    "SELECT count(*) AS total,"
+    "       count(*) FILTER (WHERE " + _RUN_FAILURE_PREDICATE + ") AS failures"
+    "  FROM attempts"
+    " WHERE run_key = (SELECT run_id FROM runs WHERE name = %s)"
+)
+
+#: How many attempts carry this run's key at all — what decides which of
+#: the two readings above `run status` uses.
+_RUN_KEYED_ATTEMPT_COUNT = (
+    "SELECT count(*) AS n FROM attempts"
+    " WHERE run_key = (SELECT run_id FROM runs WHERE name = %s)"
+)
+
 _RUN_STATE_BREAKDOWN = """
 SELECT lifecycle_state, count(*)
   FROM attempts
@@ -591,13 +650,59 @@ def _run_prefix_pattern(name):
     return name + "%"
 
 
-def run_attempt_tally(conn, name):
-    """`{"total": n, "failures": n}` for every attempt whose run_id matches
-    `name` by prefix. See `_RUN_FAILURE_PREDICATE` for exactly what counts
-    as a failure and why it is two disjuncts, not one.
+def run_keyed_attempt_count(conn, name):
+    """How many attempts carry this run's REGISTRY KEY (migration 121).
+
+    Zero means one of two things, and the caller treats them alike: the
+    run predates 121 entirely, or it is a 121-era run none of whose
+    attempts have been written yet. Either way there is no keyed
+    population to count and the prefix is the only reading available.
     """
-    rows = _rows(conn, _RUN_ATTEMPT_TALLY, (_run_prefix_pattern(name),))
-    return rows[0] if rows else {"total": 0, "failures": 0}
+    rows = _rows(conn, _RUN_KEYED_ATTEMPT_COUNT, (name,))
+    return rows[0]["n"] if rows else 0
+
+
+def run_attempt_tally(conn, name, by_key=None):
+    """`{"total": n, "failures": n}` for a run's attempts, plus `counted_by`.
+
+    **TWO READINGS, AND THE ANSWER SAYS WHICH IT USED (migration 121).**
+    Before 121 a run's attempts could only be found by matching `name` as
+    a LIKE PREFIX against `attempts.run_id`; since 121 the submitter also
+    writes `attempts.run_key`, the registry row's own id. The two agree for
+    a run whose rows were all written by the submitter since 121, and
+    disagree for a run that has any of: rows written before 121, or rows
+    the DEPLOYED image's reconciler created on retry (that image predates
+    this column and this brief does not repin it, so those rows carry no
+    key until the next repin).
+
+    The key is preferred when the run has ANY keyed attempt, because a key
+    is a reference and a prefix is a string convention — but the prefix
+    reading is still computed and returned beside it, so `run status` can
+    print both when they differ rather than silently showing the smaller
+    number. See `_RUN_FAILURE_PREDICATE` for what counts as a failure.
+
+    `by_key` forces a reading rather than detecting one; `None` (the
+    default, and what every caller uses) detects.
+    """
+    prefix = _rows(conn, _RUN_ATTEMPT_TALLY, (_run_prefix_pattern(name),))
+    prefix_tally = prefix[0] if prefix else {"total": 0, "failures": 0}
+
+    if by_key is None:
+        by_key = run_keyed_attempt_count(conn, name) > 0
+    if not by_key:
+        return {"total": prefix_tally["total"],
+                "failures": prefix_tally["failures"],
+                "counted_by": "name_prefix",
+                "prefix_total": prefix_tally["total"],
+                "prefix_failures": prefix_tally["failures"]}
+
+    keyed = _rows(conn, _RUN_ATTEMPT_TALLY_BY_KEY, (name,))
+    keyed_tally = keyed[0] if keyed else {"total": 0, "failures": 0}
+    return {"total": keyed_tally["total"],
+            "failures": keyed_tally["failures"],
+            "counted_by": "run_key",
+            "prefix_total": prefix_tally["total"],
+            "prefix_failures": prefix_tally["failures"]}
 
 
 def run_state_breakdown(conn, name):

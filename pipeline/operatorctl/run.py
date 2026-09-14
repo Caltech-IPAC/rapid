@@ -31,6 +31,32 @@ from pipeline.operatorctl.session import submission_role
 # ---------------------------------------------------------------------------
 # `run start` — gather and submit a phase under a run, in-process.
 # ---------------------------------------------------------------------------
+class RunStartRegistryError(Exception):
+    """`run start` was asked to submit under a run the registry refuses.
+
+    Four cases, all refused BEFORE anything is gathered and before any
+    audit row is written, because each of them means this command has no
+    business submitting work at all (migration 121's ruling, "a campaign
+    name without a `runs` row is refused"):
+
+      * no `runs` row of this name — the run was never declared, so the
+        submission would carry a name nothing in the registry accounts
+        for, which is the pre-108 state the registry exists to end;
+      * the row is `kind = 'production'` — production's submissions are
+        the VPO's, which resolves the production run's key for itself
+        (`production_run_key`); an operator starting one by hand would
+        submit production work outside the operator service;
+      * the row is `complete` — the operator has declared the run
+        finished, and `completed_at` would become a lie;
+      * the row is `archived` — its products have been demoted out of
+        currency and new work under it would land beside them.
+
+    Rendered by `_cmd_run_start` as `rapidctl: REFUSED — ...` with exit
+    64, the same shape `RunStartEnvironmentError` already gets, so an
+    operator sees one refusal vocabulary rather than two.
+    """
+
+
 class RunStartEnvironmentError(Exception):
     """The environment `run start` needs to submit is not present.
 
@@ -135,6 +161,127 @@ def _check_job_definition_family(conn, name, phase, job_definition_family):
             "for a %s run. A production run is the published pipeline, and "
             "its execution binding is not chosen on a command line."
             % (name, run["kind"], _FAMILY_OVERRIDE_KIND))
+
+
+def production_run_key(conn):
+    """The `runs.run_id` of the one live production run, or None.
+
+    THE VPO'S HALF of migration 121's ruling that "production passes
+    declare their run": the operator service submits continuously and has
+    no `--name` to read, so it resolves the production run's key from the
+    registry itself, once per pass, and carries it on every submission it
+    makes. That is what stops production's work being the one population
+    with no run row behind it.
+
+    None in two DIFFERENT situations, both deliberately treated the same
+    way by the caller (a WARN and an unkeyed submission, never a refusal —
+    the VPO must keep processing prompt data whatever the registry says):
+
+      * NO non-archived production run exists. Nothing to point at.
+      * MORE THAN ONE exists. There is no basis in the registry for
+        choosing between them, and picking one — the newest, the
+        lowest-numbered — would attribute production's work to a run by an
+        arbitrary rule that no operator stated. An ambiguous answer is
+        reported as no answer.
+
+    `archived` is excluded rather than `complete`: a completed production
+    run whose successor has not yet been declared is still the run whose
+    products are current, and attributing today's work to it is more
+    truthful than attributing it to nothing.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT run_id FROM runs"
+            " WHERE kind = 'production' AND state <> 'archived'"
+            " ORDER BY run_id")
+        rows = cur.fetchall()
+    if len(rows) == 1:
+        return rows[0][0]
+    return None
+
+
+def _bind_registry_row(conn, name):
+    """The `runs` row `run start` is about to submit under, or refuse.
+
+    Returns the row (a dict, `actions.run_row`'s shape). Raises
+    `RunStartRegistryError` for each of the four refusals that type's own
+    docstring enumerates — the absent row, the production kind, and the
+    two terminal states — with a message naming what to do about it.
+
+    READ-ONLY. The transition to `running` is a separate, audited call
+    (`derived.start_run`) made only on an apply and only after gathering
+    has produced something to submit; this function's job is to decide
+    whether there is any point gathering at all.
+    """
+    from pipeline.operatorctl.actions import run_row
+
+    run = run_row(conn, name)
+    if run is None:
+        raise RunStartRegistryError(
+            "run %r is not declared: no row in the run registry. A run must "
+            "be declared before work can be submitted under it, so that "
+            "every submission has an owner, a purpose and a provenance — "
+            "declare it first with `rapidctl run create --name %s --owner "
+            "<who> --kind campaign --purpose <why> --reason <why> --apply`"
+            % (name, name))
+    if run["kind"] == "production":
+        raise RunStartRegistryError(
+            "run %r is kind 'production'; production's submissions are the "
+            "operator service's, which resolves the production run's key "
+            "for itself. Starting one by hand would submit production work "
+            "from outside the operator service" % name)
+    if run["state"] in ("complete", "archived"):
+        raise RunStartRegistryError(
+            "run %r is %s and accepts no further work%s. Declare a new run "
+            "for new work" % (
+                name, run["state"],
+                "; its products have been demoted out of currency"
+                if run["state"] == "archived"
+                else " — its completed_at has already been recorded"))
+    return run
+
+
+def next_submission_seq(conn, run_key):
+    """The next submission ORDINAL for the run keyed `run_key`.
+
+    `1 + max(seq)` over the run's prior `submissions` rows, or 0 when it
+    has none — where `seq` is the integer suffix of a row's `run_id`, the
+    `<name>-<n>` this ordinal itself produces. Read from the SUBMISSIONS
+    TABLE rather than counted in memory because a ramp's steps are
+    separate processes, minutes or hours apart: the only thing that knows
+    how many batches a run has already submitted is the database.
+
+    **READ BY KEY, NOT BY PREFIX, AND THAT IS THE POINT.** A prefix read
+    would also match a DIFFERENT run whose name this one's name is a
+    prefix of — which 108's own `create_run` refuses to create, so it
+    cannot happen today — but more importantly it would match rows written
+    before 121 under the same name with no key, and those are exactly the
+    rows whose ordinal this function must not inherit: a pre-121 run's
+    single batch is named `<name>` with no suffix at all, so there is no
+    ordinal in it to continue from. A run with no keyed submissions starts
+    at 0, which is the correct answer for the first step of a run started
+    through this code path.
+
+    `run_key is None` returns 0 for the same reason: nothing to read.
+    """
+    if run_key is None:
+        return 0
+    with conn.cursor() as cur:
+        # The suffix is parsed in SQL rather than by fetching every row and
+        # parsing in Python: a run with many batches would otherwise pull
+        # its whole submission history across the wire to compute one
+        # integer. `split_part(run_id, '-', ...)` cannot be used — a run
+        # NAME may itself contain hyphens (`ramp-proof-20260914`), so the
+        # ordinal is the segment after the LAST one.
+        cur.execute(
+            "SELECT max(NULLIF(regexp_replace(run_id, '^.*-', ''), '')"
+            "           ::bigint)"
+            "  FROM submissions"
+            " WHERE run_key = %s AND run_id ~ '-[0-9]+$'",
+            [run_key])
+        row = cur.fetchone()
+    highest = row[0] if row else None
+    return 0 if highest is None else int(highest) + 1
 
 
 def _capped(units, cap):
@@ -256,7 +403,8 @@ def _resolve_submission_env(job_type, lane=None, job_definition_family=None):
 
 
 def submit_run(conn, name, job_type, units, reason, context=None,
-              work_unit_run_id=None, lane=None):
+              work_unit_run_id=None, lane=None, run_key=None,
+              submission_seq=None):
     """Submit `units` under `name`, through the SAME production path
     `live_w9_ramp` uses: `submission_env` for the binding, `pipeline.seams.
     submit_gathered` for the submission itself. Nothing here reimplements
@@ -361,6 +509,7 @@ def submit_run(conn, name, job_type, units, reason, context=None,
             batch_client=context["batch_client"],
             execute=executor.execute, run_id=name,
             reason=reason, work_unit_run_id=work_unit_run_id,
+            run_key=run_key, submission_seq=submission_seq,
             protocol_commit=conn.commit)
 
 
@@ -461,6 +610,17 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
 
     _check_job_definition_family(conn, name, phase, job_definition_family)
 
+    # THE REGISTRY BINDING (migration 121's ruling), BEFORE THE REPLAY
+    # LOOKUP AND BEFORE ANY GATHERING. A run this command may not submit
+    # under is refused with no audit row at all — the refusal is not a
+    # mutation and must not look like one in the ledger. That is also why
+    # it sits ahead of `_replay_lookup`: a replayed key for a run that has
+    # since been completed must still refuse, rather than returning the
+    # earlier success and implying a submission that will not happen.
+    run = _bind_registry_row(conn, name)
+    run_key = run["run_id"]
+    submission_seq = next_submission_seq(conn, run_key)
+
     replay = _replay_lookup(conn, idempotency_key, "run_start", scope)
     if replay is not None:
         return replay, scope
@@ -513,7 +673,13 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
 
     detail = {"phase": phase, "job_type": job_type, "gathered": len(units),
               "cap": cap, "proc_date": proc_date,
-              "window_start": window_start, "window_end": window_end}
+              "window_start": window_start, "window_end": window_end,
+              # The registry facts this submission binds to, recorded on
+              # every run_start row so "which registry row did this
+              # submission belong to, and which step of it was it" is
+              # answerable from the ledger alone.
+              "run_key": run_key, "submission_seq": submission_seq,
+              "run_state_before": run["state"]}
     # Only recorded when it differs from `name` -- an audit row naming a
     # work-unit scope that is just this run's own identity says nothing an
     # ordinary run start didn't already say via `scope` above, and
@@ -535,14 +701,41 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     if dry_run:
         print("[dry-run] would gather %d unit(s) for phase=%s (job_type=%s)"
              % (len(units), phase, job_type), file=out)
+        # THE ROW IS REPORTED AND NOT TRANSITIONED. `contract.py`'s rule
+        # that the plan shown IS what the apply will act on, minus the
+        # writing — so the operator sees which registry row was bound, the
+        # state it is in NOW, and which batch identity the apply would
+        # mint, without the rehearsal moving the run to `running`.
+        print("[dry-run] run %s: run_id=%s state=%s, next batch would be "
+              "%s-%d" % (name, run_key, run["state"], name, submission_seq),
+              file=out)
         result = record_external_action(
             conn, idempotency_key, "run_start", scope, reason,
             dry_run=True, rows_affected=0, detail=detail,
             policy_citation=policy_citation)
         return result, scope
 
+    # `created`/`running` -> `running`, BEFORE the submission and in the
+    # same transaction as it (migration 121). Before, because a run whose
+    # first batch is in Batch while its row still says `created` is a run
+    # the registry is lying about; and in the same transaction, because
+    # `submit_run` runs under `ConnectionExecutor(conn,
+    # autocommit_each=False)` and commits only at `submit_units`'s own two
+    # protocol boundaries — so this write becomes durable exactly when the
+    # submission it accompanies does, and a submission that never happens
+    # leaves the row where it was.
+    #
+    # Idempotent from `running` by `derived.start_run`'s own contract,
+    # which is what makes a ramp step legal: the second step of a run is
+    # this same call on an already-`running` row, and it must be a no-op
+    # on the row rather than a refusal.
+    from pipeline.operatorctl.actions import start_run as _start_run_fn
+    _start_run_fn(conn, idempotency_key + ":state", name, reason,
+                  dry_run=False, policy_citation=policy_citation)
+
     results = submit_run(conn, name, job_type, units, reason, context=context,
-                         work_unit_run_id=work_unit_run_id, lane=lane)
+                         work_unit_run_id=work_unit_run_id, lane=lane,
+                         run_key=run_key, submission_seq=submission_seq)
     total_children = sum(len(attempt_ids) for _sub, attempt_ids in results)
     detail["batches"] = len(results)
     detail["children"] = total_children

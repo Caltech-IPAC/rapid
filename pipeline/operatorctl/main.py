@@ -336,7 +336,10 @@ def build_parser():
              "without this a new run finds none of the older run's units "
              "and creates fresh ones, leaving the released ones orphaned "
              "in ready. This run still authors its own attempts and "
-             "artifacts under its own --name")
+             "artifacts under its own --name. NOT NEEDED FOR A RAMP OF "
+             "ONE'S OWN RUN since migration 121: starting a running run "
+             "again is a new batch of the SAME run, which already claims "
+             "its own units and skips the ones it has completed")
     _mutation_arguments(run_start, "a run's gather-and-submit step")
     run_start.set_defaults(func=_cmd_run_start)
 
@@ -451,6 +454,24 @@ def build_parser():
     _mutation_arguments(run_reconcile, "a run's Batch-discovered stranded "
                                        "work units")
     run_reconcile.set_defaults(func=_cmd_run_reconcile_stranded)
+
+    run_complete = runsub.add_parser(
+        "complete", help="mark a run complete",
+        description="Move a running run to `complete` and stamp "
+                    "completed_at -- the operator's statement that this "
+                    "run is finished. REFUSED while any attempt of the run "
+                    "is still in an open lifecycle state, because a "
+                    "completed_at the rows go on changing after is not a "
+                    "summary of anything. The open attempts are counted by "
+                    "run_key where the run has keyed attempts and by the "
+                    "name prefix otherwise, so rows predating migration "
+                    "121 are still seen by the gate. The state stays the "
+                    "operator's summary: nothing moves a run to `complete` "
+                    "on its own.")
+    run_complete.add_argument("--name", required=True,
+                              help="the run's name")
+    _mutation_arguments(run_complete, "a run")
+    run_complete.set_defaults(func=_cmd_run_complete)
 
     run_archive = runsub.add_parser(
         "archive", help="archive a run",
@@ -806,6 +827,7 @@ def _cmd_run_start(conn, args, out):
     # for importing -- the same late-import discipline `_cmd_terminate_
     # batch` follows for boto3.
     from pipeline.operatorctl.run import (RunStartEnvironmentError,
+                                          RunStartRegistryError,
                                           start_run_audited)
     key = args.idempotency_key or new_idempotency_key("run-start")
     try:
@@ -817,11 +839,34 @@ def _cmd_run_start(conn, args, out):
             fids=args.fids, work_unit_run_id=args.work_unit_run_id,
             lane=args.lane,
             job_definition_family=args.job_definition_family)
-    except RunStartEnvironmentError as exc:
+    except (RunStartEnvironmentError, RunStartRegistryError) as exc:
+        # One refusal vocabulary for both: an operator whose `run start`
+        # was refused wants to know what to do about it, and whether the
+        # reason was the environment or the registry is visible in the
+        # message rather than in which of two output shapes it took.
         print("rapidctl: REFUSED — %s" % exc, file=sys.stderr)
         return EXIT_USAGE
     print(render_plan("run_start", scope, args.reason, key, result,
                       args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_run_complete(conn, args, out):
+    from pipeline.operatorctl import actions as _actions
+    key = args.idempotency_key or new_idempotency_key("run-complete")
+    result = _actions.complete_run(
+        conn, key, args.name, args.reason, dry_run=not args.apply,
+        policy_citation=args.policy_citation)
+    # THE OPEN-ATTEMPT COUNT IS PRINTED ON A DRY RUN, not only implied by
+    # whether the apply would raise. `derived.complete_run` computes it
+    # either way and returns it, so the rehearsal answers "would this be
+    # refused, and by how much" rather than making the operator find out
+    # by trying.
+    if isinstance(result, dict) and "open_attempts" in result:
+        print("  open attempts : %s  (counted by %s)" % (
+            result["open_attempts"], result.get("counted_by")), file=out)
+    print(render_plan("run_complete", "runs:%s" % args.name, args.reason,
+                      key, result, args.apply), file=out)
     return EXIT_OK
 
 
@@ -861,8 +906,27 @@ def _cmd_run_status(conn, args, out):
     print("  branch  : %s" % run["branch"], file=out)
     print("  created : %s" % run["created_at"], file=out)
     print("", file=out)
+    # WHICH READING, ALWAYS STATED (migration 121). A tally whose
+    # population depends on whether the run has keyed attempts must say
+    # which one it counted, or an operator comparing two runs' numbers is
+    # comparing two different questions without being told.
+    print("  counted by %s" % (
+        "run_key" if tally.get("counted_by") == "run_key"
+        else "name prefix"), file=out)
     print("  attempts total    : %s" % tally["total"], file=out)
     print("  attempts failures : %s" % tally["failures"], file=out)
+    # BOTH NUMBERS WHEN THEY DISAGREE, never the smaller one alone. A
+    # keyed reading that is lower than the prefix reading is the expected
+    # shape during the transition — rows written before 121, and retry
+    # rows the deployed reconciler creates until the next repin, carry no
+    # key — and hiding the difference would make those rows look like they
+    # do not exist rather than like they are not yet keyed.
+    if (tally.get("counted_by") == "run_key"
+            and tally.get("prefix_total") != tally["total"]):
+        print("  by name prefix    : %s total, %s failures  (the difference "
+              "is rows with no run_key: written before migration 121, or "
+              "created by the deployed reconciler on retry)" % (
+                  tally["prefix_total"], tally["prefix_failures"]), file=out)
     if breakdown:
         print("  by lifecycle_state:", file=out)
         for row in breakdown:
@@ -928,6 +992,34 @@ def _cmd_run_register(conn, args, out):
     return EXIT_OK
 
 
+#: The provenance block `run compare` prints above its tallies, in this
+#: order (migration 121's ruling). `run_id` and `kind`/`state` identify the
+#: registry row; `branch`, `image_digest` and `config_hash` are what
+#: produced the work; `input_generations` and `reference_set` are what it
+#: consumed. Order is fixed and a test reads it: an operator diffing two
+#: blocks side by side needs the same field on the same line for both runs.
+_PROVENANCE_FIELDS = ("run_id", "kind", "state", "branch", "image_digest",
+                      "config_hash", "input_generations", "reference_set")
+
+
+def _run_columns(conn):
+    """The column names `runs` actually has, read once.
+
+    `reference_set` is added by a LATER brief in this same campaign, so
+    this command must print a line for it against a database that has it
+    and against one that does not — `n/a` in the second case, never a
+    missing line (see `_cmd_run_compare`'s own comment on why the block's
+    length is fixed). Read from `information_schema` rather than inferred
+    from whether `run_row` returned the key, because `run_row`'s SELECT
+    list is itself written against the columns it expects.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name = 'runs' AND table_schema = 'public'")
+        return {row[0] for row in cur.fetchall()}
+
+
 def _cmd_run_compare(conn, args, out):
     from pipeline.operatorctl import actions as _actions
     rows = []
@@ -944,6 +1036,34 @@ def _cmd_run_compare(conn, args, out):
         })
 
     print("RUN COMPARE  %s  vs  %s" % (args.run_a, args.run_b), file=out)
+
+    # PROVENANCE FIRST, THEN THE TALLIES (migration 121's ruling). The
+    # numbers below are only interpretable against what produced them: two
+    # runs differing in image digest or configuration hash are not
+    # measuring the same thing, and a comparison that printed only counts
+    # invited exactly that mistake. `run_row` has always SELECTed these
+    # columns; nothing printed them.
+    #
+    # THE SHAPE IS PINNED AND A TEST READS IT: one `run: <name>` line per
+    # run, then one `<field>: <value>` line per field in `_PROVENANCE_
+    # FIELDS` order, then a bare `tallies` line before the counts. A
+    # missing column (`reference_set`, which a later brief adds) prints
+    # `n/a` rather than being omitted, so the field list is the same
+    # length for every run and a reader diffing two blocks lines them up.
+    available = _run_columns(conn)
+    for label, data in zip((args.run_a, args.run_b), rows):
+        print("", file=out)
+        print("run: %s" % label, file=out)
+        for field in _PROVENANCE_FIELDS:
+            if field not in available:
+                value = "n/a"
+            else:
+                value = data["run"].get(field)
+                value = "n/a" if value is None else value
+            print("%s: %s" % (field, value), file=out)
+
+    print("", file=out)
+    print("tallies", file=out)
     for label, data in zip((args.run_a, args.run_b), rows):
         print("", file=out)
         print("  %s  (state=%s, kind=%s)" % (

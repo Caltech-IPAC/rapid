@@ -142,8 +142,20 @@ class LiveSubmitter:
         self._max_batch_size = max_batch_size
 
     def submit(self, units, operational_class: OperationalClass,
-               run_id=None, reference_observation_window=None, **_ignored):
+               run_id=None, reference_observation_window=None, run_key=None,
+               **_ignored):
         """Submit these units as this class's route. Returns submissions.
+
+        **`run_key` IS NAMED EXPLICITLY, NOT LEFT TO `**_ignored`
+        (migration 121).** That catch-all exists so the rehearsal and live
+        submitters can share one call site, and it would have swallowed
+        this parameter silently — the operator would have passed the
+        production run's key on every pass, this method would have
+        discarded it, and every production attempt would have carried a
+        NULL `run_key` with nothing anywhere reporting a problem. A
+        parameter that must reach the seam is spelled out here so that
+        dropping it would be a visible change rather than an invisible
+        one.
 
         The import is INSIDE the method, and that is not laziness. It is
         what keeps `submit_gathered` out of the module namespace that
@@ -184,6 +196,7 @@ class LiveSubmitter:
                 batch_client=self._context["batch_client"],
                 execute=execute,
                 run_id=run_id,
+                run_key=run_key,
                 max_batch_size=self._max_batch_size,
                 reference_observation_window=reference_observation_window,
                 protocol_commit=protocol_commit)

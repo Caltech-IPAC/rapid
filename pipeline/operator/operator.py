@@ -146,6 +146,50 @@ class Operator:
             return explicit
         return f"vpo-{self.operational_class.name}-{batch.manifest.batch_id}"
 
+    def _production_run_key(self):
+        """The `runs.run_id` this pass's submissions belong to, or None.
+
+        Delegates the decision to `pipeline.operatorctl.run.
+        production_run_key`, the SAME function `run start`'s own path
+        uses to read the registry — one reader, so the operator service
+        and the operator's command line can never disagree about which
+        run is production's.
+
+        **NEVER RAISES, AND NEVER REFUSES A PASS.** The VPO's job is to
+        keep processing prompt data; an unanswerable registry question is
+        a reason to submit without a key (leaving `run_key` NULL, exactly
+        as every pre-121 row is) and say so once, not a reason to stop.
+        The three outcomes — no production run, more than one, or no
+        database connection at all (a rehearsal) — are all None, each with
+        its own WARN naming why, so an operator reading the log can tell
+        "nobody declared a production run" from "two are declared and I
+        cannot choose".
+        """
+        from pipeline.operatorctl.run import production_run_key
+
+        if self._connection_factory is None:
+            return None
+        try:
+            with self._connection_factory() as conn:
+                key = production_run_key(conn)
+        except Exception as exc:                          # noqa: BLE001
+            logger.warning(
+                "%s: could not read the production run from the registry, "
+                "submitting with no run_key (rows will carry NULL, as every "
+                "row written before migration 121 does): %s",
+                self.operational_class.name, exc)
+            return None
+        if key is None:
+            logger.warning(
+                "%s: no single non-archived production run is declared, so "
+                "this pass's submissions carry no run_key. Either none "
+                "exists or more than one does, and there is no basis in the "
+                "registry for choosing between two — declare exactly one "
+                "with `rapidctl run create --kind production` to give "
+                "production's work a run",
+                self.operational_class.name)
+        return key
+
     def run_pass(self, run_id=None, force_cut=False,
                  reference_observation_window=None):
         """Gather, accumulate, cut what the cadence says, submit, register.
@@ -155,6 +199,15 @@ class Operator:
         the age trigger to see its work go.
         """
         result = PassResult(self.operational_class)
+
+        # WHICH RUN THIS PASS'S WORK BELONGS TO (migration 121's ruling,
+        # "production passes declare their run"). Resolved ONCE per pass,
+        # before any batch is cut, and carried on every submission below —
+        # not per batch, because the batches of one pass are one pass's
+        # work and re-reading the registry between them could attribute
+        # two of them to different runs if an operator declared one in
+        # between.
+        run_key = self._production_run_key()
 
         units = list(self._gather())
         result.gathered = len(units)
@@ -174,6 +227,7 @@ class Operator:
                 batch.manifest.units,
                 self.operational_class,
                 run_id=self._run_id_for(batch, run_id),
+                run_key=run_key,
                 reference_observation_window=reference_observation_window)
             result.submitted.extend(submissions or [])
 

@@ -148,8 +148,18 @@ def submit_units(units, job_type, queue, job_definition, binding,
                  manifest_bucket, manifest_prefix, s3_client, batch_client,
                  execute, run_id=None, reason="vpo", job_name=None,
                  now=None, reference_observation_window=None,
-                 protocol_commit=None, work_unit_run_id=None):
+                 protocol_commit=None, work_unit_run_id=None, run_key=None):
     """Submit one array job for `units`, with its attempt rows pre-created.
+
+    **`run_key` IS A THIRD FACT, SEPARATE FROM BOTH OF THE TWO ABOVE
+    (migration 121).** `run_id` is this array job's textual identity;
+    `work_unit_run_id` is whose work units it claims; `run_key` is which
+    `runs` REGISTRY ROW the submission and its attempts belong to. It is
+    written onto the `submissions` row and onto every attempt row this
+    call creates, and it is the only one of the three that is a reference
+    rather than a string. `None` — every caller with no declared run, the
+    VPO's ordinary passes included — leaves both columns NULL, exactly as
+    they were before 121.
 
     **`run_id` vs. `work_unit_run_id` — TWO DIFFERENT FACTS (throughput-
     sitting ruling, 2026-09-11).** `run_id` here is this ARRAY JOB's own
@@ -392,7 +402,8 @@ def submit_units(units, job_type, queue, job_definition, binding,
     #    here rather than deciding again itself.
     writer = AttemptWriter(execute)
     attempt_ids = _precreate(writer, batch.manifest, run_id, bound, moment,
-                             execute=execute, work_unit_ids=work_unit_ids)
+                             execute=execute, work_unit_ids=work_unit_ids,
+                             run_key=run_key)
 
     # 2a. THE SUBMISSION RECORD (rule 7, brief C1). Opened `prepared` — the
     #     manifest exists and the rows exist, but nothing has been asked of
@@ -408,7 +419,7 @@ def submit_units(units, job_type, queue, job_definition, binding,
         execute, batch=batch, job_name=job_name, queue=queue,
         job_definition=job_definition, manifest_uri=manifest_uri,
         binding=bound, attempt_ids=attempt_ids, moment=moment,
-        commit=protocol_commit)
+        commit=protocol_commit, run_key=run_key)
 
     # 3. Submit. A failure here leaves the rows as reconciliation cases, not
     #    orphans: they are correct, they simply never got a scheduler job.
@@ -474,8 +485,44 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
                     manifest_bucket, manifest_prefix, s3_client, batch_client,
                     execute, run_id, max_batch_size=None, reason="vpo",
                     now=None, reference_observation_window=None,
-                    protocol_commit=None, work_unit_run_id=None):
+                    protocol_commit=None, work_unit_run_id=None,
+                    run_key=None, submission_seq=None):
     """Batch a gathered unit list and submit every batch. The VPO's entry.
+
+    **`submission_seq` MAKES A BATCH IDENTITY UNIQUE ACROSS A RUN'S WHOLE
+    HISTORY, WHICH IS WHAT MAKES A RAMP POSSIBLE (migration 121's ruling).**
+    Before it, this function named batches `<run_id>` for a single batch and
+    `<run_id>-<index>` from 0 otherwise — an identity derived only from THIS
+    call's own batch count, so a SECOND `run start` of the same run minted
+    the same identities as the first. The manifest store refuses to
+    republish a different unit list under an identity it has already seen
+    (`submission.submit.ManifestConflict`), so the second step of a ramp was
+    refused outright, and the only way to add a step was a fresh run name
+    plus `--claim-work-units-of` — which folds the new step's units into the
+    OLD run's scope while its attempts carry the NEW name, splitting one
+    piece of work across two run identities.
+
+    `submission_seq` is the run's next submission ORDINAL, read from the
+    `submissions` rows already recorded against the run's key (see
+    `pipeline.operatorctl.run.next_submission_seq`, which is where it is
+    computed — never here, because this function has no notion of a run
+    beyond the arguments it is handed). Batch `i` of this call is then
+    `<run_id>-<submission_seq + i>`, so the first step of a run yields
+    `<name>-0`, `<name>-1`, … and a second step starting after two prior
+    batches yields `<name>-2`, and no identity is ever reused.
+
+    `submission_seq=None` — every caller that has not opted in, the VPO's
+    ordinary passes included — keeps the PRE-121 naming exactly: the bare
+    `run_id` for one batch, `<run_id>-<index>` for several. That matters
+    because the VPO's `run_id` is a synthesized `vpo-<class>-<batch id>`
+    that is already unique per poll, and renumbering it would change every
+    production submission identity for no gain.
+
+    `run_key` is the registry row both the submission and its attempts
+    belong to, passed unchanged to every `submit_units` call in the loop —
+    one run, one key, however many batches the array ceiling cuts. See
+    `submit_units`'s own docstring for why it is a third fact and not a
+    re-spelling of either `run_id` or `work_unit_run_id`.
 
     **`work_unit_run_id` DEFAULTS TO `None`, INDEPENDENTLY OF `run_id`
     (throughput-sitting ruling, 2026-09-11) — READ THIS BEFORE CHANGING
@@ -551,7 +598,20 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
 
     results = []
     for index, batch in enumerate(batches):
-        batch_run_id = run_id if len(batches) == 1 else f"{run_id}-{index}"
+        if submission_seq is None:
+            # The pre-121 naming, kept verbatim for every caller that has
+            # not opted in — see this function's docstring for why the VPO
+            # must not be renumbered.
+            batch_run_id = run_id if len(batches) == 1 else f"{run_id}-{index}"
+        else:
+            # ALWAYS SUFFIXED, even for a single batch. A run whose first
+            # step cut one batch would otherwise be named `<name>` and its
+            # second step `<name>-1`, and `<name>` is also the run's own
+            # bare name — the `work_unit_run_id` and the prefix every
+            # reader matches on. One identity meaning both "the run" and
+            # "the run's first batch" is the ambiguity the ordinal exists
+            # to remove, so the suffix is unconditional here.
+            batch_run_id = f"{run_id}-{submission_seq + index}"
         submission, attempt_ids = submit_units(
             batch.manifest.units, job_type=job_type, queue=queue,
             job_definition=job_definition, binding=binding,
@@ -569,7 +629,11 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
             # the single `work_unit_run_id` passed unchanged to every
             # `submit_units` call in the loop, never the per-batch suffixed
             # value computed just above.
-            work_unit_run_id=work_unit_run_id)
+            work_unit_run_id=work_unit_run_id,
+            # One run, one registry key, for every batch the ceiling cuts —
+            # the same reasoning as `work_unit_run_id` directly above, and
+            # unlike `batch_run_id`, which is deliberately per-batch.
+            run_key=run_key)
         if submission is None:
             # This batch's units were all claimed by someone else between
             # gathering and submission (a stale gathered list, a second
@@ -612,7 +676,7 @@ def _admission_units_of(manifest):
 
 
 def _precreate(writer, manifest, run_id, binding, moment, execute=None,
-               work_unit_ids=None):
+               work_unit_ids=None, run_key=None):
     """One logical job and one attempt row per array child, before SubmitJob.
 
     The logical_job_id MUST be the id the runtime will resolve with — the
@@ -710,6 +774,17 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None,
     `work_unit_ids=None` (matching `execute=None`) skips attachment
     entirely — the caller had no intent-layer connection to authorize
     against in the first place, so there is nothing to attach.
+
+    **`run_key` IS THE REGISTRY KEY, WRITTEN BESIDE THE NAME (migration
+    121).** `AttemptIdentity.run_id` above carries the manifest's batch id
+    — `<name>-<seq>` — which is the historical, textual membership
+    mechanism and is unchanged. `run_key` is `runs.run_id` for the same
+    run, written onto every row this loop creates so membership is a
+    reference and not only a string convention. `None` (every caller with
+    no declared run, and every caller predating 121) leaves the column
+    NULL, which is what its COMMENT says NULL means: a row written before
+    this migration, or one the deployed image's reconciler created on
+    retry before the next repin.
     """
     from observability.attempts import AttemptIdentity
     from submission.subjects import attempt_identity_fields
@@ -744,6 +819,13 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None,
 
         if execute is not None and work_unit_ids is not None:
             _set_attempt_work_unit(execute, attempt_id, work_unit_ids[index])
+
+        # Independently of the work-unit attachment above: a caller can
+        # have a declared run without an intent-layer connection's
+        # authorization result, and the key is the fact this row must
+        # carry either way.
+        if execute is not None and run_key is not None:
+            _set_attempt_run_key(execute, attempt_id, run_key)
 
         attempt_ids.append(attempt_id)
     return attempt_ids
@@ -1126,6 +1208,51 @@ def _set_attempt_work_unit(execute, attempt_id, work_unit_id):
            [work_unit_id, attempt_id])
 
 
+def _set_attempt_run_key(execute, attempt_id, run_key):
+    """Attach `run_key` — the `runs.run_id` of the run this attempt belongs
+    to — to an already-created attempt row (migration 121).
+
+    THE SAME SHAPE, AND FOR THE SAME REASON, AS `_set_attempt_work_unit`
+    directly above: the column exists but no `AttemptWriter` method writes
+    it, because it is written exactly once, immediately after
+    `create_submitted` returns the row's id, and gaining a registry key is
+    not a lifecycle transition of the attempt — it is a fact being filled
+    in on a row that already exists. Adding it to `AttemptIdentity` instead
+    would put a column that is NULL for every historical row and for every
+    reconciler-created retry into the identity every writer must supply.
+
+    The caller passes `run_key=None` for every submission that has no
+    declared run to point at — an ordinary VPO poll with no production run
+    declared, or any caller predating 121 — and this function is then not
+    called at all, leaving the column NULL, which is exactly what the
+    column's own COMMENT says NULL means.
+    """
+    execute("UPDATE attempts SET run_key = %s WHERE attempt_id = %s",
+           [run_key, attempt_id])
+
+
+def _set_submission_run_key(execute, submission_id, run_key):
+    """Attach `run_key` to an already-opened `submissions` row (121).
+
+    Written here rather than as a column on `protocol.prepare`'s INSERT so
+    that `submission.protocol` — which is the submission state machine and
+    knows nothing about the run registry — does not grow a parameter for a
+    fact belonging to a different subsystem. It also keeps the write
+    conditional in one place: a submission with no run to point at simply
+    never reaches this function, rather than every caller of `prepare`
+    having to pass a `run_key=None` it has no opinion about.
+
+    `submission_id is None` (DRAFT 044 not applied, `_open_submission`'s
+    own degrade path) means there is no row to key, and is a no-op rather
+    than an error — the same posture `_open_submission` itself takes for
+    that case.
+    """
+    if submission_id is None:
+        return
+    execute("UPDATE submissions SET run_key = %s WHERE submission_id = %s",
+           [run_key, submission_id])
+
+
 def _operational_class_for(job_type):
     """The operational class a work unit for this job type declares.
 
@@ -1175,7 +1302,8 @@ def operational_class_for(job_type):
 
 
 def _open_submission(execute, *, batch, job_name, queue, job_definition,
-                     manifest_uri, binding, attempt_ids, moment, commit=None):
+                     manifest_uri, binding, attempt_ids, moment, commit=None,
+                     run_key=None):
     """Open the submission record and mark it CALLING. Returns its id or None.
 
     Returns None — and does nothing at all — when DRAFT migration 044 is not
@@ -1270,6 +1398,21 @@ def _open_submission(execute, *, batch, job_name, queue, job_definition,
         manifest_uri=manifest_uri,
         array_size=batch.manifest.array_size,
         now=moment)
+
+    # THE REGISTRY KEY, IN THE SAME TRANSACTION AS THE ROW IT KEYS
+    # (migration 121). Written here, immediately after `prepare` and well
+    # before the `mark_calling` commit below, so the `submissions` row is
+    # never durable without the key it is supposed to carry — a row that
+    # committed `calling` with a NULL `run_key` would be indistinguishable
+    # from a pre-121 row, and the whole point of the column is that a
+    # reader can tell those apart.
+    #
+    # Not a parameter on `protocol.prepare`: `submission.protocol` is the
+    # submission state machine and knows nothing about the run registry,
+    # so a run-model column does not belong in its INSERT. See
+    # `_set_submission_run_key`.
+    if run_key is not None:
+        _set_submission_run_key(execute, submission_id, run_key)
 
     attached = protocol.attach_attempts(execute, submission_id, attempt_ids)
     if attached != len(attempt_ids):

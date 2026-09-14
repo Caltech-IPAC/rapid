@@ -155,6 +155,41 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         replay_patcher.start()
         self.addCleanup(replay_patcher.stop)
 
+        # THE REGISTRY BINDING (migration 121), stubbed the same way every
+        # other database reach in this class is. These tests exist to pin
+        # what `start_run_audited` THREADS, not what the registry says, so
+        # the binding returns a plain running campaign row and the ordinal
+        # a fixed number — a run whose registry answers are uninteresting
+        # is exactly the fixture that keeps these assertions about
+        # threading.
+        bind_patcher = mock.patch.object(
+            run_mod, "_bind_registry_row",
+            lambda conn, name: {"run_id": 77, "name": name,
+                                "kind": "campaign", "state": "running"})
+        bind_patcher.start()
+        self.addCleanup(bind_patcher.stop)
+
+        seq_patcher = mock.patch.object(
+            run_mod, "next_submission_seq", lambda conn, run_key: 0)
+        seq_patcher.start()
+        self.addCleanup(seq_patcher.stop)
+
+        # `derived.start_run` on the apply path, reached through
+        # `actions.start_run`. Recorded rather than merely swallowed, so a
+        # test can assert the transition was attempted at all.
+        self.state_calls = []
+
+        def fake_start_run(conn, key, name, reason, dry_run=True,
+                           policy_citation=None):
+            self.state_calls.append({"name": name, "dry_run": dry_run})
+            return {"rows_affected": 1}
+
+        from pipeline.operatorctl import actions as actions_mod
+        state_patcher = mock.patch.object(
+            actions_mod, "start_run", fake_start_run)
+        state_patcher.start()
+        self.addCleanup(state_patcher.stop)
+
         gather_patcher = mock.patch.object(
             run_mod, "gather_for_run",
             lambda *a, **k: ("job-type-x", ["unit-a"]))
@@ -167,11 +202,17 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         # merely swallowed it with **kwargs would keep passing if the lane
         # stopped being threaded through at all, which is the one thing the
         # argument exists to do.
+        # `run_key` and `submission_seq` joined at migration 121 and are
+        # RECORDED for the same reason `lane` is: a stub swallowing them
+        # with **kwargs would keep passing if they stopped being threaded,
+        # which is the one thing they exist to do.
         def fake_submit_run(conn, name, job_type, units, reason,
-                            context=None, work_unit_run_id=None, lane=None):
+                            context=None, work_unit_run_id=None, lane=None,
+                            run_key=None, submission_seq=None):
             self.submit_calls.append({
                 "name": name, "work_unit_run_id": work_unit_run_id,
-                "lane": lane})
+                "lane": lane, "run_key": run_key,
+                "submission_seq": submission_seq})
             submission = types.SimpleNamespace(job_id="job-1")
             return [(submission, ["attempt-1"])]
 
