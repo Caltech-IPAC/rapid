@@ -1361,3 +1361,46 @@ def _column_param_index(sql, params, column):
     set_clause = sql.split(" WHERE ", 1)[0]
     before = set_clause.split(column + " = %s", 1)[0]
     return before.count("%s")
+
+
+class TheThreeExitCodes(unittest.TestCase):
+    """Three codes, and which Batch retry rule each one meets.
+
+    The codes are only meaningful against the job definition's rules, so these
+    tests pin both halves: the values themselves, and that they are distinct.
+    Collapsing 72 back into 70 is what spent a whole retry budget per unit on
+    2026-09-13 — `OnExitCode '70' -> RETRY` retried a lifecycle contradiction
+    that could never resolve, to Batch's ceiling: 16 exhausted units, 328
+    orphan attempt rows, five hours.
+    """
+
+    def test_the_lifecycle_contradiction_has_its_own_code(self):
+        self.assertEqual(72, termination.EXIT_LIFECYCLE_CONTRADICTION)
+
+    def test_seventy_stays_the_unrecordable_code(self):
+        # 70 keeps its meaning unchanged: the pooler refusal and every other
+        # path that could not write an account at all, where the work was
+        # never judged and retrying IS right.
+        self.assertEqual(70, termination.EXIT_UNRECORDABLE)
+
+    def test_a_recorded_attempt_still_exits_zero(self):
+        self.assertEqual(0, termination.EXIT_RECORDED)
+
+    def test_the_three_codes_are_distinct(self):
+        # The whole point: a contradiction must be distinguishable from an
+        # unrecordable failure, because the definition retries one and not the
+        # other. Equal values would make the retry rules unable to tell them
+        # apart however clearly the comments read.
+        codes = {termination.EXIT_RECORDED,
+                 termination.EXIT_UNRECORDABLE,
+                 termination.EXIT_LIFECYCLE_CONTRADICTION}
+        self.assertEqual(3, len(codes))
+
+    def test_seventy_two_is_not_a_code_the_definition_retries(self):
+        # `rapid-batch.yaml` carries `OnExitCode '70' -> RETRY`, `Host EC2* ->
+        # RETRY`, and `OnReason '*' -> EXIT`. 72 matches no RETRY rule, so the
+        # catch-all exits on it — non-retryable by construction rather than by
+        # an entry someone must remember to add. This pins the property that
+        # makes that true: 72 is not 70.
+        self.assertNotEqual(termination.EXIT_UNRECORDABLE,
+                            termination.EXIT_LIFECYCLE_CONTRADICTION)

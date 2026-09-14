@@ -220,3 +220,73 @@ class TestLifecycleReader(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAdoptionAtStartup(unittest.TestCase):
+    """A retry whose predecessor already succeeded does not redo the work.
+
+    The 2026-09-13 13:01 ruling: "retry only when the terminal record was not
+    written". Batch's reason for starting attempt N > 1 is its own — an exit
+    code, a reclaim, a host loss — and is not evidence that the work is
+    unfinished. Measured on the 2026-09-14 probe run: attempts 55044, 55045
+    and 55048 (units science/669/7, science/675/7, science/693/7) were retries
+    driven by phantom FAILED rows, and each of those units ALSO carried a
+    genuinely successful attempt. Three real re-executions of completed work.
+    """
+
+    def setUp(self):
+        self.executor = RecordingExecutor()
+        self.writer = AttemptWriter(self.executor)
+        self.executor.logical_jobs["batch-1:0"] = ["batch-1:0"]
+
+    def _resolve(self, reader, attempt_index=2):
+        from pipeline.runtime.ownership import resolve_ownership as _resolve
+        job_env = make_job_environment(attempt_index=attempt_index)
+        return _resolve(self.writer, job_env, run_id="run-1",
+                        logical_job_id="batch-1:0",
+                        predecessor_outcome_reader=reader)
+
+    def test_a_successful_predecessor_stops_the_retry(self):
+        from pipeline.runtime.ownership import AttemptAlreadySucceeded
+        with self.assertRaises(AttemptAlreadySucceeded):
+            self._resolve(lambda logical_job_id, index: "success")
+
+    def test_a_failed_predecessor_lets_the_retry_run(self):
+        # The case a retry EXISTS for. Adoption must not swallow it.
+        ownership = self._resolve(lambda logical_job_id, index: "failure")
+        self.assertEqual(2, ownership.attempt_index)
+
+    def test_no_predecessor_lets_the_retry_run(self):
+        ownership = self._resolve(lambda logical_job_id, index: None)
+        self.assertEqual(2, ownership.attempt_index)
+
+    def test_attempt_one_is_never_adopted(self):
+        # There is no lower index to have succeeded, and a first attempt that
+        # adopted itself would run nothing at all, ever.
+        called = []
+
+        def reader(logical_job_id, index):
+            called.append((logical_job_id, index))
+            return "success"
+
+        ownership = self._resolve(reader, attempt_index=1)
+        self.assertEqual(1, ownership.attempt_index)
+        self.assertEqual([], called,
+                         "attempt 1 consulted a predecessor it cannot have")
+
+    def test_a_reader_that_raises_does_not_adopt(self):
+        # "Do not know" is not "yes", and the conservative direction is to
+        # run: failing to adopt costs one redundant execution, while adopting
+        # on a bad read would report success for work that never ran.
+        def reader(logical_job_id, index):
+            raise RuntimeError("the database is unreachable")
+
+        ownership = self._resolve(reader)
+        self.assertEqual(2, ownership.attempt_index)
+
+    def test_no_reader_at_all_preserves_the_prior_behaviour(self):
+        from pipeline.runtime.ownership import resolve_ownership as _resolve
+        ownership = _resolve(self.writer,
+                             make_job_environment(attempt_index=2),
+                             run_id="run-1", logical_job_id="batch-1:0")
+        self.assertEqual(2, ownership.attempt_index)

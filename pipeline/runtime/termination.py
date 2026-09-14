@@ -91,6 +91,42 @@ APPLICATION_RECORD_SEQUENCE = 0
 EXIT_RECORDED = 0
 EXIT_UNRECORDABLE = 70
 
+# THE THREE EXIT CODES, AND WHICH BATCH RULE EACH ONE MEETS. Listed together
+# because the codes are only meaningful against the job definition's retry
+# rules, and a reader who knows one without the other cannot tell a retryable
+# failure from a terminal one:
+#
+#   0   EXIT_RECORDED               — the account was written. Done, whatever
+#                                     the scientific outcome was: a classified
+#                                     application failure still intends 0,
+#                                     because scheduler-SUCCEEDED with
+#                                     application-failure is the representable
+#                                     combination the schema was built for.
+#   70  EXIT_UNRECORDABLE           — `OnExitCode '70' -> RETRY`. The attempt
+#                                     could not write its account at all. The
+#                                     pooler-refusal code, and every other
+#                                     unrecordable path. Retrying is right:
+#                                     the work was not judged.
+#   72  EXIT_LIFECYCLE_CONTRADICTION — the `OnReason '*' -> EXIT` catch-all.
+#                                     NOT retried, and that is the point.
+#
+# 72 exists because 70 was doing two incompatible jobs. When
+# `mark_application_closed` raises `AttemptNotFound` for a row that has left
+# `started` — the reconciler having already classified it — the compare-and-set
+# has held and the row is someone else's now. The old code exited 70 for this,
+# which the definition RETRIES: so a job whose row had been (wrongly) declared
+# missing was restarted, hit the same contradiction, exited 70 again, and was
+# retried to Batch's ceiling. That is the mechanism behind the 2026-09-13
+# overnight tail — 16 exhausted units, 328 orphan attempt rows, five hours.
+#
+# Retrying a lifecycle contradiction can never help: the row will not return to
+# `started`, so every further attempt fails at exactly the same point. The
+# right answer is to stop and leave the contradiction visible, which is what
+# the catch-all's EXIT does. `rapid-batch.yaml` needs no edit — the `*` rule
+# already exits on any code without its own rule, so 72 is non-retryable by
+# construction rather than by a new entry someone must remember to add.
+EXIT_LIFECYCLE_CONTRADICTION = 72
+
 
 # ---------------------------------------------------------------------------
 # Key derivation

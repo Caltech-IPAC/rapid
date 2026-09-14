@@ -72,6 +72,32 @@ from pipeline.runtime.logging_setup import get_logger
 _logger = get_logger("ownership")
 
 
+class AttemptAlreadySucceeded(Exception):
+    """A predecessor attempt of this logical job already succeeded.
+
+    Not a failure, and deliberately not a `RuntimeErrorBase`: nothing went
+    wrong. It is the control-flow signal for adoption — the terminal record
+    was already written, so this retry exits 0 without running a stage (the
+    2026-09-13 13:01 ruling, "retry only when the terminal record was not
+    written").
+
+    Raised rather than returned because it must unwind the whole ownership
+    path: every caller of `resolve_ownership` goes straight on to persist a
+    snapshot and mark the row started, and a return value would have to be
+    checked at each of those steps to stop it.
+    """
+
+    def __init__(self, attempt_id, logical_job_id, index):
+        self.attempt_id = attempt_id
+        self.logical_job_id = logical_job_id
+        self.index = index
+        super().__init__(
+            "adopting attempt %s: terminal record already written for "
+            "logical job %s by a lower-indexed attempt; this is attempt %s "
+            "and it has nothing to do"
+            % (attempt_id, logical_job_id, index))
+
+
 def normalize_attempt_index(scheduler_value: Any) -> int:
     """Map `AWS_BATCH_JOB_ATTEMPT` onto the stored one-based convention.
 
@@ -124,7 +150,9 @@ def resolve_ownership(writer: Any, job_env: Any, run_id: str,
                       logical_job_id: str,
                       identity_extra: dict | None = None,
                       now: datetime.datetime | None = None,
-                      lifecycle_reader: Any = None) -> AttemptOwnership:
+                      lifecycle_reader: Any = None,
+                      predecessor_outcome_reader: Any = None
+                      ) -> AttemptOwnership:
     """Resolve this process's attempt row. Raises `RecordsError` on failure.
 
     `writer` is an `observability.attempts.AttemptWriter` over a live
@@ -138,6 +166,12 @@ def resolve_ownership(writer: Any, job_env: Any, run_id: str,
     here because this module has no SQL of its own — every statement in the
     ownership path belongs to W1's writer or to the caller's executor, so
     there is one place where the attempt tables' SQL lives.
+
+    `predecessor_outcome_reader(logical_job_id, index) -> str | None` answers
+    "did a lower-indexed attempt of this same logical job already finish
+    successfully", and is injected for the same reason. When it says yes, this
+    raises `AttemptAlreadySucceeded` and the entrypoint exits 0 without
+    running a stage — see the adoption block below.
     """
     from observability.attempts import AttemptIdentity
 
@@ -188,6 +222,35 @@ def resolve_ownership(writer: Any, job_env: Any, run_id: str,
     if lifecycle_reader is not None:
         _refuse_unusable_state(lifecycle_reader, attempt_id, logical_job_id,
                                job_env)
+
+    if index > 1 and predecessor_outcome_reader is not None:
+        # ADOPTION: THE TERMINAL RECORD WAS ALREADY WRITTEN, SO DO NOT REDO
+        # THE WORK (the 2026-09-13 13:01 ruling — "retry only when the
+        # terminal record was not written").
+        #
+        # A retry exists because Batch started attempt N > 1. Batch's reason
+        # for doing so is its own — an exit code, a reclaim, a host loss — and
+        # it is not evidence that the work is unfinished. When a PREDECESSOR
+        # row of this same logical job is terminal with `rapid_outcome =
+        # 'success'`, the science ran, its products were written and its
+        # record published: repeating it would spend a container recomputing
+        # an answer that already exists, and would write a second terminal
+        # record for one logical job.
+        #
+        # MEASURED, NOT HYPOTHETICAL. The memory-profile probe run of
+        # 2026-09-14 produced exactly this: attempts 55044, 55045 and 55048
+        # (units science/669/7, science/675/7, science/693/7) were retries
+        # driven by phantom FAILED rows, and each of those three units ALSO
+        # carried a genuinely successful attempt. Three real re-executions of
+        # completed work. The reconciler fix stops most such retries being
+        # started; this stops the ones that are started from redoing anything.
+        #
+        # Exit 0, not an error: the work IS done, and the correct report to
+        # Batch for a child whose logical job succeeded is success.
+        adopted = _adopt_if_already_succeeded(
+            predecessor_outcome_reader, attempt_id, logical_job_id, index)
+        if adopted:
+            raise AttemptAlreadySucceeded(attempt_id, logical_job_id, index)
 
     ownership = AttemptOwnership(
         attempt_id=attempt_id,
@@ -269,6 +332,72 @@ def lifecycle_reader_for(execute: Any) -> Any:
         rows = execute(
             "SELECT lifecycle_state FROM attempts WHERE attempt_id = %s",
             [attempt_id])
+        if not rows:
+            return None
+        first = rows[0]
+        if isinstance(first, (list, tuple)):
+            return first[0]
+        if isinstance(first, dict):
+            return next(iter(first.values()))
+        return first
+
+    return read
+
+
+def _adopt_if_already_succeeded(reader: Any, attempt_id: int,
+                                logical_job_id: str, index: int) -> bool:
+    """Did a lower-indexed attempt of this logical job already succeed?
+
+    A reader that raises is treated as "do not know", and the retry proceeds.
+    That is the conservative direction: failing to adopt costs one redundant
+    execution, while adopting on a bad read would report success for work that
+    never ran.
+    """
+    try:
+        outcome = reader(logical_job_id, index)
+    except Exception:  # noqa: BLE001 - "do not know" is not "no"
+        _logger.warning(
+            "could not read a predecessor outcome for logical job %s "
+            "(attempt %s, index %s); proceeding with the retry rather than "
+            "adopting on an unanswered question",
+            logical_job_id, attempt_id, index, exc_info=True)
+        return False
+    if outcome != "success":
+        return False
+    _logger.info(
+        "adopting attempt %s: terminal record already written",
+        attempt_id)
+    return True
+
+
+def predecessor_outcome_reader_for(execute: Any) -> Any:
+    """Build a `predecessor_outcome_reader` over an executor.
+
+    The one SELECT adoption needs, beside `lifecycle_reader_for` and built the
+    same way. Answers with the `rapid_outcome` of the newest TERMINAL
+    lower-indexed attempt of the same logical job, or None where there is
+    none.
+
+    `lifecycle_state LIKE 'terminal%'` and a non-NULL `rapid_outcome` are both
+    required: a row still running has no outcome to adopt, and a row flagged
+    `missing_or_contradictory` is precisely the one whose account is in
+    dispute — adopting from it would inherit the phantom-FAILED defect's own
+    conclusion.
+    """
+
+    def read(logical_job_id: str, index: int) -> Any:
+        rows = execute(
+            "SELECT rapid_outcome FROM attempts"
+            " WHERE logical_job_id = %s"
+            "   AND rapid_outcome IS NOT NULL"
+            "   AND lifecycle_state LIKE 'terminal%%'"
+            "   AND COALESCE(application_attempt_index,"
+            "                application_claim_index) < %s"
+            " ORDER BY COALESCE(application_attempt_index,"
+            "                   application_claim_index) DESC,"
+            "          attempt_id DESC"
+            " LIMIT 1",
+            [logical_job_id, index])
         if not rows:
             return None
         first = rows[0]

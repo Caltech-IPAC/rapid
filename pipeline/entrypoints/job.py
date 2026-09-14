@@ -44,6 +44,18 @@ attempt schema was built for, and the record says which it was. Nonzero is
 reserved for the unrecordable: the records path unreachable, or an exception
 escaping the protocol itself. Nothing here tests `>= 64`, writes a `.done`
 file, or greps a log.
+
+Nonzero is TWO codes, not one, and the difference is whether retrying could
+possibly help. **70** (`EXIT_UNRECORDABLE`) is the pooler refusal and every
+other path that could not write an account at all: the work was never judged,
+so the definition's `OnExitCode '70' -> RETRY` rule is right to retry it.
+**72** (`EXIT_LIFECYCLE_CONTRADICTION`) is `mark_application_closed` finding
+its row no longer in `started` — the compare-and-set holding, because another
+writer's account now stands. A retry hits the identical point, since the row
+will not return to `started`, so 72 takes the definition's `OnReason '*' ->
+EXIT` catch-all instead. Collapsing the two into 70 is what spent a whole
+retry budget per unit on 2026-09-13: 16 exhausted units, 328 orphan attempt
+rows, and a five-hour tail. See `pipeline.runtime.termination`.
 """
 
 import argparse
@@ -54,6 +66,7 @@ import os
 import sys
 import traceback
 
+from observability.attempts import AttemptNotFound
 from pipeline.registration.facts import unit_provenance
 from pipeline.runtime import environment, logging_setup, science_config
 from pipeline.runtime.boundaries import S3ObjectStore
@@ -63,12 +76,18 @@ from pipeline.runtime.errors import (
     RuntimeErrorBase,
     serialize_error,
 )
-from pipeline.runtime.ownership import lifecycle_reader_for, resolve_ownership
+from pipeline.runtime.ownership import (
+    AttemptAlreadySucceeded,
+    lifecycle_reader_for,
+    predecessor_outcome_reader_for,
+    resolve_ownership,
+)
 from pipeline.runtime.process import redact
 from pipeline.runtime.stages import StageRecorder, run_stage
 from pipeline.runtime.memory_sampler import MemorySampler
 from pipeline.runtime.termination import (
     EXIT_RECORDED,
+    EXIT_LIFECYCLE_CONTRADICTION,
     EXIT_UNRECORDABLE,
     persist_configuration_snapshot,
     start_attempt,
@@ -654,6 +673,45 @@ def main(argv=None) -> int:
         return _run(arguments.workload_class)
     except SystemExit:
         raise
+    except AttemptAlreadySucceeded as adopted:
+        # ADOPTION, AND IT EXITS 0 BECAUSE THE WORK IS DONE. A predecessor
+        # attempt of this logical job is terminal with a success outcome, so
+        # its products are written and its record published. Reporting
+        # anything but success for this child would contradict the account
+        # that already stands, and re-running the stages would recompute an
+        # answer that exists — three such re-executions were measured on the
+        # 2026-09-14 probe run before this branch existed.
+        _logger.info("%s", adopted)
+        return EXIT_RECORDED
+    except AttemptNotFound as exc:
+        # THE LIFECYCLE CONTRADICTION GETS ITS OWN, NON-RETRYABLE CODE.
+        #
+        # `mark_application_closed` is a compare-and-set on
+        # `lifecycle_state = 'started'`. `AttemptNotFound` from it means the
+        # row has LEFT that state — the reconciler classified it while this
+        # container was still running — so the compare-and-set has done its
+        # job and refused to overwrite another writer's account.
+        #
+        # This used to fall into the handler below and exit 70, which the job
+        # definition's `OnExitCode '70' -> RETRY` rule retries. The retry hit
+        # the identical contradiction, exited 70 again, and went round to
+        # Batch's ceiling: the 2026-09-13 tail's 16 exhausted units and 328
+        # orphan attempt rows. Retrying can never help — the row will not
+        # return to `started` — so 72 takes the `OnReason '*' -> EXIT`
+        # catch-all instead and the contradiction stays visible.
+        #
+        # 70 keeps its own meaning unchanged: the pooler refusal and every
+        # other path that could not write an account at all, where retrying IS
+        # the right answer because the work was never judged.
+        _logger.error(
+            "lifecycle contradiction: this attempt's row is no longer in "
+            "`started`, so its account could not be written and another "
+            "writer's stands (%s). Exiting %d, which the job definition's "
+            "catch-all does NOT retry: the row will not return to `started`, "
+            "so a retry would hit the same point and spend the whole retry "
+            "budget on it.",
+            exc, EXIT_LIFECYCLE_CONTRADICTION)
+        return EXIT_LIFECYCLE_CONTRADICTION
     except BaseException as exc:  # noqa: BLE001 - the last resort
         # Nothing below this point can record anything: either the attempt row
         # does not exist yet, or the records path itself failed. Fail loud on
@@ -797,7 +855,9 @@ def _run(workload_class: str) -> int:
             logical_job_id=unit.logical_job_key(manifest.batch_id,
                                                 manifest.job_type),
             identity_extra=_identity_extra(unit),
-            lifecycle_reader=lifecycle_reader_for(execute))
+            lifecycle_reader=lifecycle_reader_for(execute),
+            predecessor_outcome_reader=predecessor_outcome_reader_for(
+                execute))
 
         records_store = S3ObjectStore(records_bucket, client=s3_client)
         diagnostics_store = S3ObjectStore(diagnostics_bucket, client=s3_client)

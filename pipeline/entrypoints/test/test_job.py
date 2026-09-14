@@ -919,3 +919,51 @@ class TessellationProvenanceImportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExitCodeForEachEscapingFailure(unittest.TestCase):
+    """Which exit code each failure escaping the protocol produces.
+
+    `main`'s handlers are the whole mapping from "what went wrong" to "what
+    Batch is told", and Batch's retry rules read only the code. These tests
+    exercise `main` with `_run` replaced, so they pin the mapping itself
+    rather than any particular way of reaching it.
+    """
+
+    def _main_raising(self, exc):
+        with mock.patch.object(job, "_run", side_effect=exc), \
+                mock.patch.object(job.logging_setup, "configure"):
+            return job.main(["--class", "prompt"])
+
+    def test_a_lifecycle_contradiction_exits_seventy_two(self):
+        # `mark_application_closed` raising AttemptNotFound means the row has
+        # left `started` — the compare-and-set held and another writer's
+        # account stands. Exiting 70 here is what the definition RETRIES, and
+        # the retry hits the identical contradiction because the row will not
+        # return to `started`: the 2026-09-13 tail, 16 exhausted units and 328
+        # orphan rows. 72 takes the `OnReason '*' -> EXIT` catch-all instead.
+        from observability.attempts import AttemptNotFound
+        code = self._main_raising(
+            AttemptNotFound("mark_application_closed: no attempt row with "
+                            "attempt_id=1 in lifecycle state 'started'"))
+        self.assertEqual(job.EXIT_LIFECYCLE_CONTRADICTION, code)
+        self.assertEqual(72, code)
+
+    def test_an_unrecordable_failure_still_exits_seventy(self):
+        # 70 keeps its own meaning: the work was never judged, so retrying is
+        # right. Narrowing 72 out of it must not widen anything else.
+        code = self._main_raising(RuntimeError("the records path is gone"))
+        self.assertEqual(job.EXIT_UNRECORDABLE, code)
+        self.assertEqual(70, code)
+
+    def test_an_adopted_retry_exits_zero_without_running_a_stage(self):
+        # A predecessor attempt of this logical job is terminal with a success
+        # outcome, so the products are written and the record published.
+        # Reporting anything but success would contradict the account that
+        # already stands. Three real re-executions of completed work were
+        # measured on the 2026-09-14 probe run before this branch existed.
+        from pipeline.runtime.ownership import AttemptAlreadySucceeded
+        code = self._main_raising(
+            AttemptAlreadySucceeded(55044, "science/669/7", 2))
+        self.assertEqual(job.EXIT_RECORDED, code)
+        self.assertEqual(0, code)
