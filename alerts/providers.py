@@ -56,7 +56,7 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterator, Sequence, TypeAlias
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Sequence, TypeAlias
 from urllib.parse import urlparse
 
 import fitsio
@@ -313,6 +313,32 @@ class RefMatch:
     fwhm: float | None = None           # [arcsec]
     half_light_radius: float | None = None  # FLUX_RADIUS at 0.5 [arcsec]
     kron_radius: float | None = None    # Kron factor [units of A_IMAGE]
+
+
+@dataclass
+class NedMatch:
+    """One NED object near a detection, as a candidate host galaxy.
+
+    Built by match_nedcat() from a NED sky slice (see the NED cross-match
+    section below); becomes one entry of the alert's nedMatches array.
+    Only objects passing select_host_candidates() are matched, but each
+    match keeps its own ptype so consumers can re-cut.
+
+    NED has no stable numeric object id in this product, so `prefname` is
+    the identifier. It is NED's *preferred* name, which can in principle
+    be reassigned between NED releases -- treat it as a lookup key, not as
+    a permanent identifier for cross-release joins.
+    """
+    prefname: str        # NED preferred object name
+    ra: float            # NED position, ICRS [deg]
+    dec: float
+    sep: float           # angular separation from the detection [arcsec]
+    pa: float            # position angle detection -> object,
+                         # East of North [deg]
+    ptype: str | None = None    # NED preferred type; None = unclassified
+    z: float | None = None      # preferred redshift (frame as published)
+    zunc: float | None = None   # None on the astroquery path (no column)
+    zflag: str | None = None    # e.g. "SLS"; see select_host_candidates
 
 
 @dataclass
@@ -779,6 +805,317 @@ def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
 
 
 # ---------------------------------------------------------------------------
+# NED cross-match
+#
+# Associates each detection with candidate host galaxies from NED
+# (NASA/IPAC Extragalactic Database). Complements the reference-catalog
+# match above: that one answers "is there a source here in OUR reference
+# image", this one answers "is this a known extragalactic object, and what
+# is its redshift".
+#
+# Catalog access is behind the NedSliceReader callable rather than wired to
+# one backend: v1 queries the NED web service (astroquery, one cone per
+# chip), and a local HATS copy can be swapped in later without touching
+# this section. The matcher only ever sees column arrays. Geometry is
+# identical to the reference-catalog match.
+# ---------------------------------------------------------------------------
+
+# Maximum separation for a reported match. Larger than
+# REF_MATCH_RADIUS_ARCSEC because NED positions are heterogeneous (the
+# preferred position comes from whichever catalog supplied the preferred
+# name) and a transient sits at a physical offset from its host's
+# catalogued center. TODO: tune with the shifted-position null test (offset
+# every detection by +60" in Dec and count matches = the empirical
+# false-association rate); see alerts/scratch/ned-crossmatch-design-notes.md
+NED_MATCH_RADIUS_ARCSEC = 10.0
+
+# Keep at most this many matches, nearest first.
+NED_MATCH_NMAX = 3
+
+# Column names the matcher works in, independent of access path; a reader
+# maps its backend's names onto these (the NED web service and the HATS
+# object directory disagree: "Object Name" vs "prefname", "Redshift Flag"
+# vs "zflag"). Readers must deliver missing numerics as NaN and missing
+# strings as None. Only prefname/ra/dec are required; the rest are filled
+# with nulls when a backend lacks them -- the astroquery path has no
+# redshift-uncertainty column at all.
+NED_COLUMNS = ("prefname", "ra", "dec", "ptype", "z", "zunc", "zflag")
+NED_REQUIRED_COLUMNS = ("prefname", "ra", "dec")
+
+# A NED backend: (ra_deg, dec_deg, radius_arcsec) -> column arrays keyed by
+# NED_COLUMNS for every NED object in the cone, or None when the slice
+# could not be obtained (service unreachable, position outside a local
+# copy's coverage). Raising is treated the same as returning None. An
+# empty table is NOT None: it means "NED has nothing here", which matches
+# to [] rather than to "not run".
+NedSliceReader = Callable[[float, float, float], "dict[str, Any] | None"]
+
+# Numerical slack added to every query cone so a NED object exactly at the
+# match radius from the outermost detection is still inside the slice.
+NED_CONE_SLACK_ARCSEC = 1.0
+
+
+# ===========================================================================
+# HOST-CANDIDATE SELECTION -- the main tunable of this cross-match.
+# Change it in select_host_candidates() and nowhere else; the matcher, the
+# provider and the schema all route through that one function. Set
+# NED_SELECTION_ENABLED = False to match against all of NED.
+#
+# Why: NED's object directory is not a galaxy catalog, it is every source
+# every ingested survey reported. Measured on the HLTDS-like field
+# 2026-09-14 (3.88' cone, 566 objects): IrS 482 (85%), UvS 67 (12%),
+# G 12 (2%), RadioS 3, SN 2. Chance-coincidence rho*pi*r^2 per detection
+# at 10": 1.04 unselected (a spurious "host" on essentially every alert)
+# vs 0.022 selected -- ~47x purity. Matching that by radius instead would
+# need ~1.5", far too tight for host association. The two are not
+# interchangeable levers. The excluded rows are not worthless, but "a
+# survey detected something here" is already answered, from our own deeper
+# mosaic, by refGalaxyMatches.
+#
+# Every match still carries its own `type`, and the schema records that a
+# selection was applied, so consumers can re-cut downstream.
+#
+# NOT SETTLED: the access paths disagree about type -- astroquery typed all
+# 566 rows above, where HATS leaves ptype null for most of the same objects
+# (they arrive null, not as "IrS"). Untyped rows fail the type test and
+# fall through to the redshift test, so both work, but the EFFECTIVE cut
+# differs by backend. Re-measure when a HATS reader lands.
+# ===========================================================================
+
+# Set False to disable selection entirely and match against all of NED.
+NED_SELECTION_ENABLED = True
+
+# NED preferred types accepted as candidate hosts. Excludes GGroup/GClstr
+# (system centroids, degree-scale), PofG (a knot inside a galaxy that is
+# itself catalogued), stellar and "!"-prefixed Galactic types, and the
+# wavelength-domain types IrS/UvS/RadioS/XrayS/GammaS/VisS (position
+# uncertainties of 10"-1000").
+NED_HOST_TYPES = frozenset({"G", "GPair", "GTrpl", "G_Lens", "QSO"})
+
+# Escape hatch against the completeness cut: an untyped or IrS-typed entry
+# carrying a redshift is almost certainly a real galaxy NED has not
+# classified, and at Roman depth faint hosts are disproportionately the
+# unclassified ones. Cheap, because redshifts are rare among those rows.
+# Tighten to spectroscopic only by also requiring zflag[0] == "S".
+NED_KEEP_ANY_TYPE_WITH_REDSHIFT = True
+
+
+def select_host_candidates(ptype: Any, z: Any) -> np.ndarray:
+    """Boolean mask of NED rows to treat as candidate host galaxies.
+
+    The single point of change for which NED objects can become a match;
+    see the comment block above for the measurements behind it.
+
+    Parameters
+    ----------
+    ptype : array-like
+        NED preferred object type per row; None/"" for unclassified.
+    z : array-like
+        NED preferred redshift per row; NaN where absent.
+
+    Returns
+    -------
+    numpy.ndarray of bool
+        True for rows eligible to be matched. All True when
+        NED_SELECTION_ENABLED is False.
+    """
+    ptype = np.asarray(ptype, dtype=object)
+    z = np.asarray(z, dtype=float)
+
+    if not NED_SELECTION_ENABLED:
+        return np.ones(ptype.shape, dtype=bool)
+
+    # Explicit loop over a frozenset: row counts are hundreds, and `in`
+    # handles None/"" without the dtype games np.isin would need.
+    keep = np.array([p in NED_HOST_TYPES for p in ptype], dtype=bool)
+    if NED_KEEP_ANY_TYPE_WITH_REDSHIFT:
+        keep |= np.isfinite(z)
+    return keep
+
+
+def bounding_cone(ra: Any, dec: Any,
+                  pad_arcsec: float) -> tuple[float, float, float]:
+    """The smallest query cone that covers every match of a set of positions.
+
+    Centre is the normalized mean unit vector of the positions; radius is
+    the largest separation from that centre plus `pad_arcsec`. Any object
+    within `pad_arcsec` of any input position lies inside the cone. Used to
+    fetch one NED slice per chip instead of one per detection: a Roman SCA
+    is ~7.5' across, so the cone is ~5' and the slice a few hundred rows.
+
+    Parameters
+    ----------
+    ra, dec : array-like
+        Positions, ICRS [deg].
+    pad_arcsec : float
+        Added to the radius; the match radius plus slack.
+
+    Returns
+    -------
+    (ra_deg, dec_deg, radius_arcsec)
+    """
+    ra_r = np.radians(np.atleast_1d(np.asarray(ra, dtype=float)))
+    dec_r = np.radians(np.atleast_1d(np.asarray(dec, dtype=float)))
+    xyz = np.stack([np.cos(dec_r) * np.cos(ra_r),
+                    np.cos(dec_r) * np.sin(ra_r),
+                    np.sin(dec_r)])
+    mean = xyz.mean(axis=1)
+    mean /= np.linalg.norm(mean)
+    # largest angular distance from the centre to any position
+    cos_sep = np.clip(mean @ xyz, -1.0, 1.0)
+    max_sep_arcsec = float(np.degrees(np.arccos(cos_sep).max())) * 3600.0
+    ra0 = float(np.degrees(np.arctan2(mean[1], mean[0])) % 360.0)
+    dec0 = float(np.degrees(np.arcsin(mean[2])))
+    return ra0, dec0, max_sep_arcsec + pad_arcsec
+
+
+@dataclass
+class NedCatalog:
+    """One sky slice of NED, reduced to candidate hosts and ready to match.
+
+    Built by build_nedcat(). `columns` holds NED_COLUMNS over the KEPT rows
+    only -- selection is applied at build time, so the matcher never sees
+    the rest. `coords` is one astropy SkyCoord over those rows (astropy
+    caches the KD-tree on it, so every detection on a chip reuses one
+    tree), or None when no rows survived -- which matches to [] rather
+    than to "not run".
+    """
+    columns: dict[str, np.ndarray]
+    coords: Any                   # SkyCoord over the kept rows, or None
+    n_input: int = 0              # rows before selection, for logging
+
+
+def build_nedcat(table: dict[str, Any]) -> NedCatalog | None:
+    """Apply the host-candidate selection and build the match tree.
+
+    Parameters
+    ----------
+    table : dict
+        Column arrays keyed by NED_COLUMNS. prefname/ra/dec required;
+        ptype/z/zunc/zflag filled with nulls when the backend lacks them.
+
+    Returns
+    -------
+    NedCatalog or None
+        None (with a logged warning) when required columns are missing --
+        the cross-match then degrades to "not run", not to "no matches".
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    missing = [c for c in NED_REQUIRED_COLUMNS if c not in table]
+    if missing:
+        logger.warning("NED slice is missing required columns %s; "
+                       "cross-match skipped", missing)
+        return None
+
+    n_input = len(np.asarray(table["prefname"], dtype=object))
+    columns: dict[str, np.ndarray] = {}
+    for name in NED_COLUMNS:
+        numeric = name in ("ra", "dec", "z", "zunc")
+        if name in table:
+            values = table[name]
+        else:
+            values = np.full(n_input, np.nan if numeric else None,
+                             dtype=float if numeric else object)
+        columns[name] = np.asarray(values, dtype=float if numeric else object)
+
+    keep = select_host_candidates(columns["ptype"], columns["z"])
+    columns = {name: values[keep] for name, values in columns.items()}
+    n_kept = int(keep.sum())
+    logger.debug("NED slice: %d rows, %d candidate hosts kept",
+                 n_input, n_kept)
+
+    coords = (SkyCoord(columns["ra"] * u.deg, columns["dec"] * u.deg)
+              if n_kept else None)
+    return NedCatalog(columns=columns, coords=coords, n_input=n_input)
+
+
+def _ned_match_from_row(columns: dict[str, np.ndarray], row: int,
+                        sep: float, pa: float) -> NedMatch:
+    """Build one NedMatch from slice row `row` at the given sep/PA.
+
+    Absent values become None, not NaN or "": the alert schema types
+    z/zunc/type/zflag as nullable unions, and a NaN would serialize as a
+    number that is not one.
+    """
+    def text(name: str) -> str | None:
+        value = columns[name][row]
+        return (str(value).strip() or None) if value is not None else None
+
+    def number(name: str) -> float | None:
+        value = float(columns[name][row])
+        return value if np.isfinite(value) else None
+
+    return NedMatch(
+        prefname=str(columns["prefname"][row]),
+        ra=float(columns["ra"][row]), dec=float(columns["dec"][row]),
+        sep=sep, pa=pa,
+        ptype=text("ptype"), z=number("z"),
+        zunc=number("zunc"), zflag=text("zflag"),
+    )
+
+
+def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
+                 radius_arcsec: float = NED_MATCH_RADIUS_ARCSEC,
+                 n_max: int = NED_MATCH_NMAX,
+                 ) -> list[list[NedMatch]]:
+    """Match detection positions against a NED slice.
+
+    Same vectorized nearest-N strategy as match_refcat(), with one tree
+    instead of a star/galaxy pair: the nth-nearest candidate host of every
+    detection is queried for n = 1..n_max, then matches beyond
+    `radius_arcsec` are dropped -- nthneighbor always returns something, so
+    the radius is a mask on the result, not a query parameter. A result of
+    length n_max therefore means the neighborhood may extend beyond what is
+    reported.
+
+    Parameters
+    ----------
+    ra, dec : float or array-like
+        Detection position(s), ICRS [deg].
+    catalog : NedCatalog
+        The slice from build_nedcat().
+    radius_arcsec : float, optional
+        Maximum separation to report.
+    n_max : int, optional
+        Keep at most this many matches, nearest first.
+
+    Returns
+    -------
+    list of list of NedMatch
+        Per detection, in input order, nearest-first and at most `n_max`
+        long. An empty list means "no candidate host within the radius";
+        "could not run" is signalled by the provider, not here.
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    ra = np.atleast_1d(np.asarray(ra, dtype=float))
+    dec = np.atleast_1d(np.asarray(dec, dtype=float))
+    results: list[list[NedMatch]] = [[] for _ in range(ra.size)]
+
+    coords = catalog.coords
+    if coords is None:
+        return results  # no candidate hosts in this slice
+
+    src = SkyCoord(ra * u.deg, dec * u.deg)
+    n_rows = len(catalog.columns["prefname"])
+    # ascending nthneighbor keeps each result list nearest-first
+    for n in range(1, min(n_max, n_rows) + 1):
+        idx, sep2d, _ = src.match_to_catalog_sky(coords, nthneighbor=n)
+        pa = src.position_angle(coords[idx])
+        idx = np.atleast_1d(idx)
+        sep_arcsec = np.atleast_1d(sep2d.arcsec)
+        pa_deg = np.atleast_1d(pa.deg) % 360.0
+        for i in np.flatnonzero(sep_arcsec <= radius_arcsec):
+            results[i].append(_ned_match_from_row(
+                catalog.columns, int(idx[i]),
+                float(sep_arcsec[i]), float(pa_deg[i])))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # The alert data provider
 #
 # One provider. The RAPID database is effectively a fast index over the
@@ -802,7 +1139,8 @@ class AlertDataProvider:
     """
 
     def __init__(self, db: Any, kona_lookup: Any = None,
-                refcat: bool = True) -> None:
+                refcat: bool = True,
+                ned_reader: "NedSliceReader | None" = None) -> None:
         """
         Parameters
         ----------
@@ -821,6 +1159,12 @@ class AlertDataProvider:
             whenever a chip's catalog cannot be located/staged/parsed,
             matching reports "not run": refStarMatches and
             refGalaxyMatches stay null.
+        ned_reader : NedSliceReader, optional
+            ``(ra_deg, dec_deg, radius_arcsec) -> column arrays or None``,
+            fetching every NED object in a cone (see the NED cross-match
+            section). While None -- the KONA convention: no callable, no
+            matching -- get_ned_matches() reports "not run" and nedMatches
+            stays null.
 
         Notes
         -----
@@ -869,6 +1213,16 @@ class AlertDataProvider:
         self._refcat: RefCatalog | None = None
         self._chip_refmatches: dict[
             int, tuple[list[RefMatch], list[RefMatch]]] = {}
+        # NED cross-match state. One slice is fetched per chip (a cone over
+        # the chip's detections) and cached per pid, including a failed
+        # fetch, so an unreachable service is not retried per source;
+        # _chip_nedmatches holds the current chip's per-sid results from
+        # one match_nedcat() pass (see _match_chip_ned).
+        self.ned_reader = ned_reader
+        self.ned_enabled = ned_reader is not None
+        self._ned_pid: int | None = None
+        self._ned: NedCatalog | None = None
+        self._chip_nedmatches: dict[int, list[NedMatch]] = {}
 
     def close(self) -> None:
         """Remove locally staged S3 products.
@@ -880,6 +1234,8 @@ class AlertDataProvider:
         self._images_pid = None
         self._refcat = None
         self._chip_refmatches.clear()
+        self._ned = None
+        self._chip_nedmatches.clear()
         self._staging_tmp.cleanup()
 
     def __enter__(self) -> "AlertDataProvider":
@@ -1046,6 +1402,7 @@ class AlertDataProvider:
             sources.append(Source.from_row(row, strict=True))
         self._prefetch_chip(pid, sources)
         self._match_chip_refcat(pid, sources)
+        self._match_chip_ned(pid, sources)
         yield from sources
 
     def _prefetch_chip(self, pid: int, sources: list[Source],
@@ -1675,3 +2032,106 @@ class AlertDataProvider:
         if catalog is None:
             return None
         return match_refcat(detection.ra, detection.dec, catalog)[0]
+
+    # -- NED cross-match ----------------------------------------------------
+
+    def _fetch_nedcat(self, ra: Any, dec: Any) -> NedCatalog | None:
+        """Fetch the NED slice covering a set of positions and build its tree.
+
+        Parameters
+        ----------
+        ra, dec : array-like
+            Positions the slice must cover, ICRS [deg].
+
+        Returns
+        -------
+        NedCatalog or None
+            The selected, tree-built slice; None (with a logged warning)
+            when the reader returned None or raised -- the cross-match
+            then reports "not run". An empty slice is a NedCatalog with
+            coords=None, which matches to [].
+        """
+        assert self.ned_reader is not None
+        ra0, dec0, radius = bounding_cone(
+            ra, dec, NED_MATCH_RADIUS_ARCSEC + NED_CONE_SLACK_ARCSEC)
+        try:
+            table = self.ned_reader(ra0, dec0, radius)
+        except Exception:
+            logger.warning("NED query failed for cone (%.5f, %.5f) r=%.1f\"; "
+                           "NED matching not run", ra0, dec0, radius,
+                           exc_info=True)
+            return None
+        if table is None:
+            logger.warning("NED reader returned no slice for cone "
+                           "(%.5f, %.5f) r=%.1f\"; NED matching not run",
+                           ra0, dec0, radius)
+            return None
+        return build_nedcat(table)
+
+    def _nedcat_for_chip(self, pid: int,
+                         sources: list[Source]) -> NedCatalog | None:
+        """The (cached per pid) NED slice covering a chip's detections."""
+        if self._ned_pid == pid:
+            return self._ned
+        self._ned = None
+        self._ned_pid = pid
+        self._ned = self._fetch_nedcat(np.array([s.ra for s in sources]),
+                                       np.array([s.dec for s in sources]))
+        return self._ned
+
+    def _match_chip_ned(self, pid: int, sources: list[Source]) -> None:
+        """Cross-match every chip detection against NED.
+
+        One slice fetch and one vectorized match_nedcat() pass over the
+        whole chip; the per-sid results land in _chip_nedmatches, which
+        get_ned_matches() answers from. Left empty when matching is
+        disabled or the slice could not be fetched, so get_ned_matches()
+        reports "not run".
+
+        Parameters
+        ----------
+        pid : int
+            Processing ID of the chip (diffimages.pid).
+        sources : list of Source
+            Every detection on the chip (from iter_sources()).
+        """
+        self._chip_nedmatches = {}
+        if not self.ned_enabled or not sources:
+            return
+        catalog = self._nedcat_for_chip(pid, sources)
+        if catalog is None:
+            return
+        results = match_nedcat(np.array([s.ra for s in sources]),
+                               np.array([s.dec for s in sources]), catalog)
+        self._chip_nedmatches = dict(zip((s.sid for s in sources), results))
+
+    def get_ned_matches(self, detection: Source) -> list[NedMatch] | None:
+        """The nearest NED candidate host galaxies to a detection.
+
+        These become the alert's nedMatches array. In the batch flow the
+        whole chip was already matched in one pass (see _match_chip_ned);
+        the single-alert flow fetches a slice around just this detection.
+
+        Parameters
+        ----------
+        detection : Source
+            The triggering detection.
+
+        Returns
+        -------
+        list of NedMatch or None
+            Candidate hosts within NED_MATCH_RADIUS_ARCSEC (at most
+            NED_MATCH_NMAX, nearest first); an empty list when matching
+            ran and found nothing nearby; None when it could not run
+            (disabled, or NED could not be queried).
+        """
+        if not self.ned_enabled:
+            return None
+        # Batch flow: the chip's results (or the fact that matching could
+        # not run: sid absent) are already in memory.
+        if self._chip_pid is not None and self._chip_pid == detection.pid:
+            return self._chip_nedmatches.get(detection.sid)
+        catalog = self._fetch_nedcat(detection.ra, detection.dec)
+        if catalog is None:
+            return None
+        return match_nedcat(detection.ra, detection.dec, catalog)[0]

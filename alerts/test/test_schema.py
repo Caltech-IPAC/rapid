@@ -28,7 +28,7 @@ from alerts.param_registry import RECORDS, VERSION, Status
 from alerts.produce import (assemble_alert, build_dia_source,
                                   build_dia_forced_source, load_schema,
                                   serialize_alert)
-from alerts.providers import (Cutouts, ForcedPhot, ObjectRecord,
+from alerts.providers import (Cutouts, ForcedPhot, NedMatch, ObjectRecord,
                                     RefMatch, Source, SSMatch)
 
 
@@ -82,6 +82,15 @@ class MinimalProvider:
                           fwhm=0.8, half_light_radius=0.6, kron_radius=4.1)
         return [star], [galaxy]
 
+    def get_ned_matches(self, detection):
+        # nearest first; the second entry is a galaxy NED has no redshift
+        # for, so it exercises every nullable nedMatch field
+        return [NedMatch(prefname="2MASX J10002400+0212000", ra=150.1002,
+                         dec=2.2, sep=0.7, pa=90.0, ptype="G",
+                         z=0.0312, zunc=0.0001, zflag="SLS"),
+                NedMatch(prefname="SDSS J100024.10+021159.9", ra=150.1008,
+                         dec=2.2, sep=2.9, pa=90.0, ptype="G")]
+
     def get_cutouts(self, detection):
         return Cutouts(difference=b"FAKE_DIFF", science=b"FAKE_SCI",
                        template=None)
@@ -122,6 +131,14 @@ def test_assembled_alert_semantics(alert):
     assert alert["refStarMatches"][0]["sourceId"] == "42"
     assert alert["refStarMatches"][0]["classStar"] == pytest.approx(0.97)
     assert alert["refGalaxyMatches"][0]["magAuto"] == pytest.approx(21.2)
+    # NED cross-match: matched path, nearest first, nullable fields null
+    assert alert["nedMatches"][0]["prefName"] == "2MASX J10002400+0212000"
+    assert alert["nedMatches"][0]["z"] == pytest.approx(0.0312)
+    assert alert["nedMatches"][0]["zFlag"] == "SLS"
+    assert alert["nedMatches"][1]["type"] == "G"
+    assert alert["nedMatches"][1]["z"] is None
+    assert alert["nedMatches"][1]["zUnc"] is None
+    assert alert["nedMatches"][1]["zFlag"] is None
 
 
 def test_time_processed_stamped_at_assembly():
@@ -155,6 +172,21 @@ def test_ref_match_ran_clean_is_empty_not_null():
     alert = assemble_alert(provider, 9999)
     assert alert["refStarMatches"] == []
     assert alert["refGalaxyMatches"] == []
+
+
+def test_ned_match_not_run_stays_null():
+    """nedMatches = None must mean "not run" (disabled or NED unreachable)."""
+    provider = MinimalProvider()
+    provider.get_ned_matches = lambda detection: None
+    alert = assemble_alert(provider, 9999)
+    assert alert["nedMatches"] is None
+
+
+def test_ned_match_ran_clean_is_empty_not_null():
+    provider = MinimalProvider()
+    provider.get_ned_matches = lambda detection: []
+    alert = assemble_alert(provider, 9999)
+    assert alert["nedMatches"] == []
 
 
 def test_ss_association_not_run_stays_null():

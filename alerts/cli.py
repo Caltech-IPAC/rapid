@@ -70,7 +70,8 @@ def load_kona_predictions(path: str | Path) -> dict[int, dict]:
 
 
 def make_provider(db=None, kona_file: str | Path | None = None,
-                  refcat: bool = True) -> AlertDataProvider:
+                  refcat: bool = True,
+                  ned_reader=None) -> AlertDataProvider:
 
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
@@ -93,6 +94,11 @@ def make_provider(db=None, kona_file: str | Path | None = None,
         Cross-match detections against the field's reference-image
         catalog (on by default; see providers.get_ref_matches). When off,
         refStarMatches and refGalaxyMatches stay null.
+    ned_reader : providers.NedSliceReader, optional
+        NED backend, ``(ra_deg, dec_deg, radius_arcsec) -> column arrays
+        or None`` (see the NED cross-match section of providers.py).
+        While None -- the default until a reader ships -- NED matching is
+        off: nedMatches stays null.
 
     Returns
     -------
@@ -125,7 +131,8 @@ def make_provider(db=None, kona_file: str | Path | None = None,
                 "fallback), and that this machine can reach the DB (VPN up / "
                 "EC2 security group allows it)")
 
-    return AlertDataProvider(db, kona_lookup=kona_lookup, refcat=refcat)
+    return AlertDataProvider(db, kona_lookup=kona_lookup, refcat=refcat,
+                             ned_reader=ned_reader)
 
 
 def main(argv: list[str] | None = None) -> int:
