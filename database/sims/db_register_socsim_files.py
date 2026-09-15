@@ -1,5 +1,23 @@
-import boto3
 import os
+
+# INPUTBUCKET is required, and it is checked BEFORE the heavy imports below
+# (boto3, healpy, astropy, psycopg2 through rapid_db). A misconfigured run
+# then fails in milliseconds with the reason on stdout instead of after
+# seconds of imports, and the fail-closed regression test
+# (database/sims/test/test_db_register_socsim_files_env.py) can run this
+# script as a subprocess in any environment, including one where those
+# packages are not installed. There is no safe default bucket: a forgotten
+# -e INPUTBUCKET=... on an unattended run must not fall back to silently
+# admitting files from some other, unrelated dataset.
+
+bucket_name_input = os.getenv('INPUTBUCKET')
+
+if not bucket_name_input:
+
+    print("*** Error: Env. var. INPUTBUCKET not set; quitting...")
+    exit(64)
+
+import boto3
 import time
 import traceback
 import numpy as np
@@ -57,19 +75,11 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# Input S3 bucket, and optional key prefix within it (e.g. "g0001/" for a
-# single generation staged alongside others in a shared bucket).  There is
-# no safe default bucket: a forgotten -e INPUTBUCKET=... must not fall back
-# to silently admitting from some other, unrelated dataset, so this is
-# required.  The prefix stays optional -- a bucket-wide scan (no prefix) is
-# a legitimate scope.
-
-bucket_name_input = os.getenv('INPUTBUCKET')
-
-if not bucket_name_input:
-
-    print("*** Error: Env. var. INPUTBUCKET not set; quitting...")
-    exit(64)
+# Input S3 bucket (INPUTBUCKET, required; validated at the top of this file
+# before the heavy imports), and optional key prefix within it (e.g. "g0001/"
+# for a single generation staged alongside others in a shared bucket).  The
+# prefix stays optional -- a bucket-wide scan (no prefix) is a legitimate
+# scope.
 
 prefix_input = os.getenv('INPUTPREFIX')
 
