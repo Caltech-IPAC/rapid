@@ -151,7 +151,14 @@ jobs:
       # the run's own log as evidence: "record the revision used" is part of
       # the required outcome, and a run that cannot say which schema it tested
       # against has not demonstrated anything reproducible.
-      RAPID_SYSTEMS_REF: c805b82f193db6412b194d92cb67bcfda09cc198
+      #
+      # e1896658 is the merge of rapid_systems `smdc_add_refimmeta_20260915`
+      # into `main` — the commit that lands `128-refimmeta.sql`, which this
+      # branch's `REQUIRED_MIGRATIONS` requires. The previous pin (c805b82)
+      # predates it, so the schema-contract preflight refused every run on
+      # this branch with "the deployed schema is missing 1 migration(s) this
+      # build requires" — the cross-repo handshake working, not a defect.
+      RAPID_SYSTEMS_REF: e1896658d6cf1fe47f4664c74f2c0b7b95e97887
 
     steps:
       - name: check out rapid
@@ -299,7 +306,10 @@ jobs:
           # guaranteed to a `with:` input, and a ref that silently resolved
           # to empty would check out the default branch — testing against an
           # unpinned schema while claiming a pinned one.
-          ref: c805b82f193db6412b194d92cb67bcfda09cc198
+          #
+          # Moves with `RAPID_SYSTEMS_REF` above — the drift guard below
+          # fails the run if the two ever disagree.
+          ref: e1896658d6cf1fe47f4664c74f2c0b7b95e97887
           token: ${{ steps.rapid-systems-token.outputs.token }}
           path: rapid_systems
           persist-credentials: false
