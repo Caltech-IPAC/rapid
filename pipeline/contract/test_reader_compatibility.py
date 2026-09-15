@@ -74,6 +74,14 @@ def _columns(conn, table):
 #: migration 108, which appends it to both tables so per-run product
 #: currency can be a partial unique index rather than a convention — an
 #: index cannot join, so the run has to be on the row it indexes.
+#: `reference_set_id` is rapid_systems migration 126, appended to
+#: `refimages` only: a reference set is a named, first-class row and a
+#: refimage belongs to one, so current-ness is scoped per set rather than
+#: per run. Appended like the two before it, so the property this module
+#: asserts — nothing before `product_id` moved — is unaffected.
+TRAILING_COLUMNS_AFTER_PRODUCT_ID_BY_TABLE = {
+    "refimages": ("checksum_algorithm", "run_id", "reference_set_id"),
+}
 TRAILING_COLUMNS_AFTER_PRODUCT_ID = ("checksum_algorithm", "run_id")
 
 
@@ -98,7 +106,8 @@ def test_the_migration_added_exactly_one_column_and_it_is_last(conn, table):
     """
     _require_schema(conn)
     columns = _columns(conn, table)
-    expected_tail = ("product_id",) + TRAILING_COLUMNS_AFTER_PRODUCT_ID
+    expected_tail = ("product_id",) + TRAILING_COLUMNS_AFTER_PRODUCT_ID_BY_TABLE.get(
+        table, TRAILING_COLUMNS_AFTER_PRODUCT_ID)
     actual_tail = tuple(columns[-len(expected_tail):])
     assert actual_tail == expected_tail, (
         f"{table}'s trailing columns are {actual_tail}, not {expected_tail}; "
