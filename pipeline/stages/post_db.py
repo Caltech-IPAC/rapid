@@ -1080,27 +1080,66 @@ def compute_statistics(context) -> None:
         # children before the hold). astroobjectsmeta's real columns
         # (007-sources-family) are the ones the alert provider reads:
         # position/flux means and stdevs plus nsources.
+        # ONE LIGHTCURVE POINT PER (object, image, sign). Bulk COPY cannot
+        # enforce per-row uniqueness, so two sources close enough to hash to
+        # the same aid in the same difference image both land, and without
+        # this step both were averaged and counted (dev 3a4cbfc2 names the
+        # cause). DISTINCT ON (aid, pid, isdiffpos) keeps the best-fitting
+        # one — lowest qfit, sid as the deterministic tiebreak — and keeps
+        # isdiffpos in the key so a positive and a negative detection of one
+        # object in one image are never collapsed into each other. Dev
+        # 39ac5491 added exactly this and dev's own 0feead1b dropped it when
+        # it rewrote the query over enumerated children; restored here.
+        #
+        # Only detections on CURRENT, GOOD difference images enter: `vbest
+        # IN (1, 2)` — 1 current-best, 2 a locked pin — because a superseded
+        # image's sources stay in their child table until swept (dev
+        # 0feead1b); and `status > 0`, registration's good/bad QA flag on the
+        # image (006-core-tables: 'Good/bad difference image (1/0)'; written
+        # as 1 by pipeline/registration/products.py unless release content
+        # says otherwise), which is dev 00afb0d6's `status > 0` term applied
+        # to the image the source came from.
+        #
+        # Verified on PostgreSQL 18.6 (2026-09-15): a duplicate pair collapses
+        # to the lower-qfit row, a positive/negative pair on one image counts
+        # as two, an object whose only detection is on a demoted image gets
+        # no row.
         cursor.execute(
             sql.SQL(
                 "INSERT INTO {target} (aid, meanra, stdevra, meandec, "
                 "stdevdec, meanflux, stdevflux, nsources) "
-                "SELECT m.aid, avg(s.ra), coalesce(stddev_pop(s.ra), 0), "
-                "       avg(s.dec), coalesce(stddev_pop(s.dec), 0), "
-                "       avg(s.fluxfit), coalesce(stddev_pop(s.fluxfit), 0), "
+                "SELECT x.aid, avg(x.ra), coalesce(stddev_pop(x.ra), 0), "
+                "       avg(x.dec), coalesce(stddev_pop(x.dec), 0), "
+                "       avg(x.fluxfit), coalesce(stddev_pop(x.fluxfit), 0), "
                 "       count(*) "
-                "FROM {merges} AS m JOIN sources AS s ON s.sid = m.sid "
-                # Only detections on CURRENT difference images enter the
-                # statistics: a superseded image's sources stay in their
-                # child table until swept, and without this join they were
-                # averaged in with the current ones (dev 0feead1b,
-                # computeStatisticsForAstroObjects.py:540, the one term of
-                # the lightcurve-statistics rework this branch needed).
-                "JOIN diffimages AS d ON d.pid = s.pid "
-                "WHERE d.vbest > 0 "
-                "GROUP BY m.aid").format(
+                "FROM ("
+                "  SELECT DISTINCT ON (m.aid, s.pid, s.isdiffpos) "
+                "         m.aid, s.ra, s.dec, s.fluxfit "
+                "  FROM {merges} AS m JOIN sources AS s ON s.sid = m.sid "
+                "  JOIN diffimages AS d ON d.pid = s.pid "
+                "  WHERE d.vbest > 0 AND d.status > 0 "
+                "  ORDER BY m.aid, s.pid, s.isdiffpos, s.qfit ASC, s.sid ASC"
+                ") AS x "
+                "GROUP BY x.aid").format(
                     target=sql.Identifier(target),
                     merges=sql.Identifier(f"merges_{field}")))
         written = cursor.rowcount or 0
+
+        # OBJECTS WITH NO CURRENT DETECTION ARE PRUNED (dev's step 5,
+        # 39ac5491/0feead1b). An astroobjects_<field> row whose every merge
+        # points at a superseded or bad image yields no statistics row; left
+        # in place it is an object nothing can measure, and the currency
+        # join above makes that population GROW with each demotion. Same
+        # transaction, so the statistics and the object set commit together.
+        # The object's merge rows are the merge sweep's to remove: they are
+        # superseded by the same rule (their source's image is not current).
+        cursor.execute(
+            sql.SQL(
+                "DELETE FROM {objects} AS a WHERE NOT EXISTS ("
+                "  SELECT 1 FROM {target} AS x WHERE x.aid = a.aid)").format(
+                    objects=sql.Identifier(f"astroobjects_{field}"),
+                    target=sql.Identifier(target)))
+        orphans_removed = cursor.rowcount or 0
 
     # The table is wholesale-rebuilt (DELETE then repopulate in the same
     # transaction), so the post-commit expectation is `written` alone, not
@@ -1113,8 +1152,11 @@ def compute_statistics(context) -> None:
     context.produce("effect_outcome", outcome)
 
     context.record_effect(rows_written=written, rows_removed=removed,
-                          statistics_table=target)
-    context.logger.info("field %d statistics: %d row(s) rebuilt", field, written)
+                          statistics_table=target,
+                          orphan_objects_removed=orphans_removed)
+    context.logger.info("field %d statistics: %d row(s) rebuilt; %d object(s) "
+                        "with no current detection removed",
+                        field, written, orphans_removed)
 
 
 STATISTICS_SEQUENCE = (
