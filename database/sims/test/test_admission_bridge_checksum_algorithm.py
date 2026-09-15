@@ -16,6 +16,14 @@ The fix removes the default: `checksum_algorithm` is now a required keyword,
 so a caller that omits it fails loudly at the call, not with a confusing
 64-vs-32 message from deep inside identity normalization two frames later.
 
+2026-09-15: the same default lived on every layer BELOW the bridge --
+`AdmissionRepository.add_manifest_entry` / `admit_l2file`, the identity
+helpers `normalized_checksum` / `l2file_payload` / `l2file_identity`, and the
+bridge's own `enumerate_source` (as `algorithm`). The repository is reachable
+without the bridge (`backfill_g0001_admission.py` calls it directly), so a
+caller there would have met the identical silent mislabel. Those defaults are
+gone too, and the signature and call-site checks below cover the whole chain.
+
 Stub-tier: `admission_bridge` imports only from `pipeline.repositories`,
 which needs no psycopg2/boto3/live connection to exercise this signature
 check. The second test walks the repository with `ast`, the same shape as
@@ -29,20 +37,56 @@ from pathlib import Path
 
 import pytest
 
-from database.sims.admission_bridge import record_l2file_admission
+from database.sims.admission_bridge import (enumerate_source,
+                                            record_l2file_admission)
+from pipeline.repositories import admission_identity
+from pipeline.repositories.admission import AdmissionRepository
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 SKIP_DIR_NAMES = {".venv", ".git", "rapid_pipeline.egg-info"}
 
+#: Every function on the admission path that takes an algorithm, with the
+#: name it takes it under. A default on ANY of these is a place a caller can
+#: lean on without saying what it computed.
+ALGORITHM_PARAMETERS = {
+    "record_l2file_admission": (record_l2file_admission, "checksum_algorithm"),
+    "enumerate_source": (enumerate_source, "algorithm"),
+    "AdmissionRepository.add_manifest_entry": (
+        AdmissionRepository.add_manifest_entry, "checksum_algorithm"),
+    "AdmissionRepository.admit_l2file": (
+        AdmissionRepository.admit_l2file, "checksum_algorithm"),
+    "normalized_checksum": (admission_identity.normalized_checksum,
+                            "algorithm"),
+    "l2file_payload": (admission_identity.l2file_payload,
+                       "checksum_algorithm"),
+    "l2file_identity": (admission_identity.l2file_identity,
+                        "checksum_algorithm"),
+}
 
-def test_checksum_algorithm_is_a_required_keyword():
+#: The callables the repository-wide sweep checks, keyed by the call name as
+#: it appears in source, with the keyword each must be passed. The identity
+#: helpers are not swept: `normalized_checksum` takes its algorithm
+#: positionally and its only callers are the repository and its own tests.
+SWEPT_CALLS = {
+    "record_l2file_admission": "checksum_algorithm",
+    "admit_l2file": "checksum_algorithm",
+    "add_manifest_entry": "checksum_algorithm",
+    "enumerate_source": "algorithm",
+}
+
+
+@pytest.mark.parametrize("name", sorted(ALGORITHM_PARAMETERS))
+def test_checksum_algorithm_is_a_required_keyword(name):
     """No default: a caller that omits it must fail at the call site, not
     with a mismatched-digest-length error from inside identity
     normalization."""
-    params = inspect.signature(record_l2file_admission).parameters
-    assert "checksum_algorithm" in params
-    assert params["checksum_algorithm"].default is inspect.Parameter.empty
+    function, parameter = ALGORITHM_PARAMETERS[name]
+    params = inspect.signature(function).parameters
+    assert parameter in params, f"{name} no longer takes {parameter}"
+    assert params[parameter].default is inspect.Parameter.empty, (
+        f"{name} defaults {parameter} to {params[parameter].default!r}; "
+        f"the algorithm must be stated by the caller")
 
 
 def test_calling_without_checksum_algorithm_raises_type_error():
@@ -69,8 +113,8 @@ def _iter_repo_python_files():
 
 
 def _offending_calls(path):
-    """Calls in `path` to a function/method named `record_l2file_admission`
-    that pass no `checksum_algorithm` keyword argument."""
+    """Calls in `path` to any name in `SWEPT_CALLS` that pass neither the
+    required keyword nor a `**kwargs` splat that could carry it."""
     try:
         tree = ast.parse(path.read_text(), filename=str(path))
     except (SyntaxError, UnicodeDecodeError):
@@ -83,26 +127,27 @@ def _offending_calls(path):
         func = node.func
         name = func.attr if isinstance(func, ast.Attribute) else (
             func.id if isinstance(func, ast.Name) else None)
-        if name != "record_l2file_admission":
+        if name not in SWEPT_CALLS:
             continue
-        if any(kw.arg == "checksum_algorithm" for kw in node.keywords):
+        keyword = SWEPT_CALLS[name]
+        if any(kw.arg in (keyword, None) for kw in node.keywords):
             continue
-        offenders.append(node.lineno)
+        offenders.append(f"{node.lineno}:{name}")
     return offenders
 
 
 def test_every_call_site_passes_checksum_algorithm():
     violations = {}
     for path in _iter_repo_python_files():
-        # The function's own definition contains no call to itself.
+        # The functions' own definitions contain no calls to themselves.
         offenders = _offending_calls(path)
         if offenders:
             violations[str(path.relative_to(REPO_ROOT))] = offenders
 
     assert not violations, (
-        "record_l2file_admission() called without a checksum_algorithm "
-        "keyword -- the default that let this happen silently is gone, "
-        "so every call site must say what algorithm it computed:\n"
-        + "\n".join(f"  {file}:{','.join(map(str, lines))}"
+        "an admission-path function called without its algorithm keyword "
+        "-- the default that let this happen silently is gone, so every "
+        "call site must say what algorithm it computed:\n"
+        + "\n".join(f"  {file}:{','.join(lines)}"
                      for file, lines in sorted(violations.items()))
     )

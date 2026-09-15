@@ -271,6 +271,7 @@ def _sealed_manifest(repository, conn, release, cleanup, key_suffix,
             manifest.manifest_id, source_bucket="rapid-ingest-contract",
             source_key=f"{fixture.RUN_TAG}/{key_suffix}/{index}.fits",
             source_checksum=_checksum(f"{key_suffix}{index}"),
+            checksum_algorithm="sha256",
             source_version_id=f"v-{fixture.RUN_TAG}-{index}")
     sealed = repository.seal_manifest(manifest.manifest_id)
     conn.commit()
@@ -402,12 +403,14 @@ def test_admitting_one_l2_file_twice_does_not_re_version(admission_db):
     digest = _checksum("l2a")
     first = repository.admit_l2file(
         exposure=expid, sca=4, source_checksum=digest, rid=rid,
+        checksum_algorithm="sha256",
         facts=_facts(sca=4), release_identity=release)
     conn.commit()
     assert first.created is True
 
     second = repository.admit_l2file(
         exposure=expid, sca=4, source_checksum=digest, rid=rid,
+        checksum_algorithm="sha256",
         facts=_facts(sca=4), release_identity=release)
     conn.commit()
 
@@ -445,11 +448,13 @@ def test_the_checksum_case_does_not_split_one_l2_admission(admission_db):
     digest = _checksum("l2b")
     first = repository.admit_l2file(
         exposure=expid, sca=5, source_checksum=digest, rid=rid,
+        checksum_algorithm="sha256",
         facts=_facts(sca=5), release_identity=release)
     conn.commit()
 
     second = repository.admit_l2file(
         exposure=expid, sca=5, source_checksum=digest.upper(), rid=rid,
+        checksum_algorithm="sha256",
         facts=_facts(sca=5), release_identity=release)
     conn.commit()
 
@@ -546,6 +551,7 @@ def test_a_different_source_checksum_for_one_grain_is_refused(admission_db):
     assert original != arriving
 
     repository.admit_l2file(exposure=expid, sca=6, source_checksum=original,
+                            checksum_algorithm="sha256",
                             rid=rid, facts=_facts(sca=6),
                             release_identity=release)
     conn.commit()
@@ -553,6 +559,7 @@ def test_a_different_source_checksum_for_one_grain_is_refused(admission_db):
     with pytest.raises(AdmissionConflict) as caught:
         repository.admit_l2file(exposure=expid, sca=6,
                                 source_checksum=arriving, rid=rid,
+                                checksum_algorithm="sha256",
                                 facts=_facts(sca=6), release_identity=release)
 
     conflict = caught.value
@@ -798,6 +805,7 @@ def test_two_concurrent_l2_admissions_converge_on_one_admission(
             barrier.wait(timeout=30)
             admission = repo.admit_l2file(
                 exposure=expid, sca=8, source_checksum=digest, rid=rid,
+                checksum_algorithm="sha256",
                 facts=facts, release_identity=release)
             connection.commit()
             results[slot] = admission
@@ -933,6 +941,7 @@ def test_the_l2_admission_is_write_once_too(admission_db):
 
     admission = repository.admit_l2file(
         exposure=expid, sca=9, source_checksum=_checksum("l2wo"), rid=rid,
+        checksum_algorithm="sha256",
         facts=_facts(sca=9), release_identity=release)
     conn.commit()
 
@@ -989,7 +998,7 @@ def test_an_admission_citing_an_unsealed_manifest_is_refused(admission_db):
     repository.add_manifest_entry(
         manifest.manifest_id, source_bucket="rapid-ingest-contract",
         source_key=f"{fixture.RUN_TAG}/unsealed/0.fits",
-        source_checksum=_checksum("unsealed"),
+        source_checksum=_checksum("unsealed"), checksum_algorithm="sha256",
         source_version_id=f"v-{fixture.RUN_TAG}")
     conn.commit()
 
@@ -1103,7 +1112,7 @@ def test_a_sealed_manifest_refuses_further_entries(admission_db):
         repository.add_manifest_entry(
             manifest_id, source_bucket="rapid-ingest-contract",
             source_key=f"{fixture.RUN_TAG}/closed/late.fits",
-            source_checksum=_checksum("late"))
+            source_checksum=_checksum("late"), checksum_algorithm="sha256")
     assert "already SEALED" in str(caught.value)
     conn.rollback()
 
@@ -1148,7 +1157,7 @@ def test_opening_a_manifest_twice_returns_the_same_manifest(admission_db):
     repository.add_manifest_entry(
         first.manifest_id, source_bucket="rapid-ingest-contract",
         source_key=f"{fixture.RUN_TAG}/reopen/0.fits",
-        source_checksum=_checksum("reopen"))
+        source_checksum=_checksum("reopen"), checksum_algorithm="sha256")
     repository.seal_manifest(first.manifest_id)
     conn.commit()
 
@@ -1626,7 +1635,8 @@ def test_admission_refuses_outright_when_the_schema_is_absent(admission_db,
             manifest_key="nope", source_scope="nope",
             release_identity=release, byte_custody="none"),
         "add_manifest_entry": lambda: repository.add_manifest_entry(
-            1, "bucket", "key", _checksum("absent")),
+            1, "bucket", "key", _checksum("absent"),
+            checksum_algorithm="sha256"),
         "seal_manifest": lambda: repository.seal_manifest(1),
         "manifest_entries": lambda: repository.manifest_entries(1),
         "admit_exposure": lambda: repository.admit_exposure(
@@ -1634,6 +1644,7 @@ def test_admission_refuses_outright_when_the_schema_is_absent(admission_db,
             release_identity=release),
         "admit_l2file": lambda: repository.admit_l2file(
             exposure=1, sca=1, source_checksum=_checksum("absent"), rid=1,
+            checksum_algorithm="sha256",
             facts=_facts(), release_identity=release),
         "admissions_for_manifest": lambda:
             repository.admissions_for_manifest(1),

@@ -385,13 +385,20 @@ class AdmissionRepository:
         return ManifestRecord(row[0], row[1], row[2] is not None, row[3])
 
     def add_manifest_entry(self, manifest_id, source_bucket, source_key,
-                           source_checksum, source_version_id=None,
-                           checksum_algorithm="sha256", source_bytes=None):
+                           source_checksum, *, checksum_algorithm,
+                           source_version_id=None, source_bytes=None):
         """Enumerate one source object into an unsealed manifest.
 
         Refuses once the manifest is sealed: a sealed manifest's entry list is
         what its checksum was computed over, and appending afterwards would
         make the seal a statement about something else.
+
+        `checksum_algorithm` is a required keyword, as it is on the bridge's
+        `record_l2file_admission` (2026-09-09): the repository is reachable
+        without the bridge (`backfill_g0001_admission.py` goes straight to
+        it), so a default here would be the same silent mislabel one layer
+        down. The 051 column default of 'sha256' is never relied on; the
+        INSERT below always writes the column.
         """
         self._require_schema()
         digest, algorithm = identity.normalized_checksum(source_checksum,
@@ -572,10 +579,12 @@ class AdmissionRepository:
         row = rows[0]
         return Admission(row[0], row[1], row[2], row[3], created=bool(row[4]))
 
-    def admit_l2file(self, *, exposure, sca, source_checksum, rid, facts,
-                     release_identity, manifest_id=None,
-                     checksum_algorithm="sha256"):
+    def admit_l2file(self, *, exposure, sca, source_checksum,
+                     checksum_algorithm, rid, facts, release_identity,
+                     manifest_id=None):
         """Admit one L2 detector file, or return its existing admission.
+
+        `checksum_algorithm` is required: see `add_manifest_entry`.
 
         Identity is a content key over `(expid, sca)` plus the source
         checksum. The `(expid, sca)` UNIQUE in 051 is the natural key this
