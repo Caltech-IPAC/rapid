@@ -1199,6 +1199,19 @@ def _sfft_argv(context, sfft_code, science_image, crossconv_flag) -> list:
             for key in ("sfft_bsmask_value", "sfft_bsmask_radius",
                         "sfft_use_gainmatch_catalogs", "sfft_use_segmentation")}
 
+    if crossconv_flag and not sfftcmd.config_bool(sfft["sfft_use_segmentation"]):
+        # Dev 7d852692: SFFT derives its decorrelation background sigmas from
+        # the mask's background pixels and raises only when that set is
+        # EMPTY, not when it is wrong. Without segmentation the "background"
+        # is ~5000 dilation-disc pixels, so cross-convolution runs on
+        # source-dominated sigmas and silently loses ~20% of depth. Loud
+        # rather than fatal: the release chose both keys, and the digest
+        # records them; whether this should refuse is an open team item.
+        context.logger.warning(
+            "sfft: crossconv_flag is on but sfft_use_segmentation is off; "
+            "decorrelation sigmas will come from the dilation mask, not the "
+            "background (see [sfft] in cdf/science/pipeline.toml)")
+
     filename_scifile = context.product("science_image_bkg_subbed")
     filename_reffile = context.product("gainmatched_reference_image")
 
