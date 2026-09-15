@@ -57,19 +57,43 @@ def _run_name(label):
     return "runmodel-%s-%s" % (fixture.RUN_TAG, label)
 
 
-def _declare_run(conn, name, kind, owner="run-model-tests"):
+def _declare_run(conn, name, kind, owner="run-model-tests",
+                 reference_set_id=None):
     """Create a run for real (`--apply`) and return its `run_id`.
 
     Every test that needs a run in the registry goes through here rather
     than a bare INSERT, so the tests exercise `derived.create_run` itself
     (the prefix-overlap check lives there, not in a CHECK constraint) on
     every run they touch, not only the ones naming that function directly.
+
+    `reference_set_id` is the set this run differences against (migration
+    126's `runs.reference_set_id`), passed straight through to
+    `actions.create_run`. It defaults to None — which `derived.create_run`
+    resolves to production's default set and STORES — so every existing
+    caller is unaffected by its addition.
     """
     result = actions.create_run(
         conn, _key("declare-%s" % name), name, owner, kind,
-        reason="contract test fixture", dry_run=False)
+        reason="contract test fixture", dry_run=False,
+        reference_set_id=reference_set_id)
     assert result["rows_affected"] == 1
     return result["run_id"]
+
+
+def _declare_reference_set(conn, name, owner="run-model-tests"):
+    """Create a reference set for real (`--apply`) and return its id.
+
+    Goes through `actions.create_reference_set` — the same call path
+    `rapidctl refset create` uses — for the reason `_declare_run` goes
+    through `actions.create_run`: migration 127 put the set's validation
+    and its insert in one function, and a hand-written INSERT here would
+    assert against a schema the operator surface does not use.
+    """
+    result = actions.create_reference_set(
+        conn, _key("refset-%s" % name), name, owner,
+        "contract test fixture", dry_run=False)
+    assert result["rows_affected"] == 1
+    return result["reference_set_id"]
 
 
 def _make_run_scoped_diffimage(conn, run_id_name, field, ppid, sca=1):
@@ -95,7 +119,8 @@ def _make_run_scoped_diffimage(conn, run_id_name, field, ppid, sca=1):
     return pid
 
 
-def _make_run_scoped_refimage(conn, run_id_name, field, fid, ppid, tag):
+def _make_run_scoped_refimage(conn, run_id_name, field, fid, ppid, tag,
+                              reference_set_id=None):
     """A `refimages` row at `vbest=1` for `(field, fid, ppid)`, attributed to
     campaign run `run_id_name`. Returns its `rfid`.
 
@@ -103,6 +128,17 @@ def _make_run_scoped_refimage(conn, run_id_name, field, fid, ppid, tag):
     `fixture._diffimage_parents` uses for its own refimages row) rather than
     through a dedicated fixture helper, since none exists yet for a
     standalone, run-attributed reference image -- 108 predates one.
+
+    **THE SET NOW CARRIES THE SCOPING `run_id` USED TO.** Migration 126
+    dropped `refimages_vbest_current_per_run_unique` and keyed currency on
+    `(field, fid, ppid, reference_set_id)` instead, because a reference is
+    what a run differences AGAINST rather than something a run owns. `run_id`
+    stays on the row as provenance -- which run wrote it, and what
+    `derived.archive_run` demotes by -- but it is no longer what makes two
+    campaigns' references coexist. A caller wanting coexistence therefore
+    passes distinct `reference_set_id`s; passing none leaves the column to
+    126's `default_reference_set_id()` default, which puts the row in
+    production's default set.
 
     **`version` MUST BE MINTED, NOT HARDCODED.** `refimagespk UNIQUE (field,
     fid, ppid, version)` is a plain uniqueness constraint on the identity
@@ -120,11 +156,17 @@ def _make_run_scoped_refimage(conn, run_id_name, field, fid, ppid, tag):
             " WHERE field = %s AND fid = %s AND ppid = %s",
             [field, fid, ppid])
         version = cur.fetchone()[0]
+    columns = {"field": field, "fid": fid, "ppid": ppid, "version": version,
+               "vbest": 1, "run_id": run_id_name,
+               "filename": f"ref/{fixture.RUN_TAG}/{tag}.fits"}
+    # Only named when the caller supplies one, so a call that says nothing
+    # about sets still exercises 126's column DEFAULT rather than bypassing
+    # it with an explicit NULL -- which the column is NOT NULL against from
+    # 127 onward.
+    if reference_set_id is not None:
+        columns["reference_set_id"] = reference_set_id
     return fixture._insert_filling_required(
-        conn, "refimages", "rfid",
-        {"field": field, "fid": fid, "ppid": ppid, "version": version,
-         "vbest": 1, "run_id": run_id_name,
-         "filename": f"ref/{fixture.RUN_TAG}/{tag}.fits"})
+        conn, "refimages", "rfid", columns)
 
 
 def _first_filter_id(conn):
@@ -212,32 +254,55 @@ def test_two_campaign_runs_each_hold_a_current_diffimage_for_one_identity(
 
 def test_two_campaign_runs_each_hold_a_current_refimage_for_one_identity(
         conn):
-    """The same coexistence property, for `refimages` on `(field, fid, ppid)`.
+    """The same coexistence property, for `refimages` on `(field, fid, ppid)`,
+    at REFERENCE-SET granularity.
 
-    `refimages_vbest_current_per_run_unique` is the campaign half of 108's
-    second index pair; asserted separately from diffimages because it is a
-    DIFFERENT index guarding a DIFFERENT identity group, and a bug specific
-    to one table's index definition would not show up in the other's test.
+    Asserted separately from diffimages because it is a DIFFERENT index
+    guarding a DIFFERENT identity group, and a bug specific to one table's
+    index definition would not show up in the other's test.
+
+    **THE GRANULARITY MOVED; THE PROPERTY DID NOT.** Migration 126 DROPs
+    `refimages_vbest_current_per_run_unique` -- 108's campaign half, which
+    this test used to pin -- and creates
+    `refimages_vbest_current_per_set_unique ON (field, fid, ppid,
+    reference_set_id) WHERE vbest IN (1, 2)` in the same transaction. 126's
+    header calls that swap "currency-preserving rather than
+    currency-changing": a reference set is the unit of coexistence, and the
+    run-scoped form 108 built is now the special case where a set belongs to
+    one run. So the property asserted here is unchanged -- two current
+    references for one identity group, neither superseding the other -- and
+    only what separates them has changed, from the run to the set.
+
+    Each run is therefore given its OWN set, through
+    `actions.create_reference_set` and `actions.create_run`'s
+    `reference_set_id`, which is the same operator surface production binds a
+    run's set with. Two runs left in one set would collide, correctly: that
+    is 126's within-a-set uniqueness doing its job, and it is a different
+    property from this one.
     """
     run_a = _run_name("coexist-ref-a")
     run_b = _run_name("coexist-ref-b")
-    _declare_run(conn, run_a, "campaign")
-    _declare_run(conn, run_b, "campaign")
+    set_a = _declare_reference_set(conn, _run_name("set-ref-a"))
+    set_b = _declare_reference_set(conn, _run_name("set-ref-b"))
+    _declare_run(conn, run_a, "campaign", reference_set_id=set_a)
+    _declare_run(conn, run_b, "campaign", reference_set_id=set_b)
 
     field = 991002
     fid = _first_filter_id(conn)
     ppid = 12
 
     rfid_a = _make_run_scoped_refimage(conn, run_a, field, fid, ppid,
-                                       "coexist-ref-a")
+                                       "coexist-ref-a",
+                                       reference_set_id=set_a)
     conn.commit()
     rfid_b = _make_run_scoped_refimage(conn, run_b, field, fid, ppid,
-                                       "coexist-ref-b")
+                                       "coexist-ref-b",
+                                       reference_set_id=set_b)
     conn.commit()
 
     with conn.cursor() as cur:
-        cur.execute("SELECT rfid, run_id, vbest FROM refimages"
-                    " WHERE rfid IN (%s, %s) ORDER BY rfid",
+        cur.execute("SELECT rfid, run_id, vbest, reference_set_id"
+                    " FROM refimages WHERE rfid IN (%s, %s) ORDER BY rfid",
                     [rfid_a, rfid_b])
         rows = cur.fetchall()
 
@@ -245,6 +310,12 @@ def test_two_campaign_runs_each_hold_a_current_refimage_for_one_identity(
         "one of the two campaigns' reference images was not left at "
         "vbest=1; coexistence failed for refimages")
     assert {r[1] for r in rows} == {run_a, run_b}
+    # The set is what the surviving index keys on, so a test that did not
+    # read it back could pass with both rows in one set only because some
+    # other column happened to differ.
+    assert {r[3] for r in rows} == {set_a, set_b}, (
+        "each reference image must sit in its own run's reference set; that "
+        "is what `refimages_vbest_current_per_set_unique` separates them by")
 
 
 # Small helpers used only by the diffimages coexistence test above, to read

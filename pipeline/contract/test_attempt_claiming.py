@@ -136,6 +136,23 @@ def test_a_second_scheduler_attempt_is_a_new_attempt_row(conn):
     That refusal is the identity chain of rule 3 holding at the database
     boundary, and it is invisible to a fake resolver, which has no notion of
     which index means what.
+
+    **THE PREDECESSOR MUST CARRY A WORK UNIT (migration 125).** A retry
+    inherits `work_unit_id` from the newest lower-indexed row of its logical
+    job, and 125 REFUSES with `RA022` when there is nothing to inherit --
+    either no predecessor at all, or a predecessor that is itself unbound.
+    Its header records why: the unbound retry row that refusal prevents is
+    the shape that caused the 2026-09-13 orphan-attempt tail. So a retry
+    with no bound predecessor is refused BY DESIGN, and asserting rule 5
+    requires a genuine one.
+
+    `resolve_attempt` itself never binds a first attempt -- 125's INSERT
+    comment is explicit that `work_unit_id` is "NULL only for a genuine
+    first attempt ... the submission seam binds it". The fixture therefore
+    does what the seam does (`pipeline/seams.py`'s `_set_attempt_work_unit`:
+    a plain UPDATE on the row `create_submitted` just returned, deliberately
+    not an `AttemptWriter` method), so index 2 resolves against the same
+    bound shape production gives it.
     """
     logical_job_id, run_id = fixture.make_logical_job(conn, with_binding=True)
     conn.commit()
@@ -148,6 +165,13 @@ def test_a_second_scheduler_attempt_is_a_new_attempt_row(conn):
         identity, moment, moment,
         scheduler_job_id=_scheduler_job_id(logical_job_id),
         application_attempt_index=1, scheduler_attempt_index=1)
+    # The submission seam's binding step, reproduced: without it the
+    # predecessor is unbound and 125 refuses the retry below with RA022
+    # rather than creating the new row rule 5 is about.
+    work_unit_id = fixture.create_unit(conn, fixture.scope("second-attempt"))
+    with conn.cursor() as cur:
+        cur.execute("UPDATE attempts SET work_unit_id = %s"
+                    " WHERE attempt_id = %s", [work_unit_id, first])
     conn.commit()
 
     second = writer.resolve_attempt(
