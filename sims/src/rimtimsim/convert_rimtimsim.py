@@ -207,6 +207,16 @@ for input_fits_file in input_fits_files:
         print(f"*** Error: Unexpected filter = {filter}; quitting...")
         exit(64)
 
+    # Only F213 and F087 have known zero points (dev 2c891391). The other six
+    # filters (F184, F158, F129, F062, F106, F146) fall through with the 0.0
+    # placeholder, which dev wrote into the header silently; a zero AB zero
+    # point is not a missing value but a wrong one that downstream flux
+    # calibration will use. Loud until the six values are supplied (or this
+    # becomes an error) — an open team item.
+    if zptmag == 0.0:
+        print(f"*** Warning: no zeropoint is known for filter {filter}; " +
+              "writing the ZPTMAG = 0.0 placeholder, which downstream flux calibration cannot use")
+
     hdr["FILTER"] = translated_filter
 
 
