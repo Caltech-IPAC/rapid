@@ -2439,6 +2439,23 @@ def convert_mjd_to_jd(mjd):
 
 
 ########################################
+# Convert JD to MJD.
+########################################
+
+def convert_jd_to_mjd(jd):
+
+    # The inverse of convert_mjd_to_jd above, and here rather than written out
+    # at the one call site so the offset has a single home: the reference-image
+    # coadder works in JD (it is what the FITS keywords JDSTART/JDEND carry)
+    # while the RefImMeta database columns mjdobsmin/mjdobsmax are MJD, and a
+    # second copy of 2400000.5 is a second thing to get wrong.
+
+    mjd = jd - 2400000.5
+
+    return mjd
+
+
+########################################
 # Compute  both meat and standard deviation of (ra,dec) near poles and
 # 360-0 boundary and return mean_ra, mean_dec, stddev_ra, stddev_dec,
 # and sky_position_spread.

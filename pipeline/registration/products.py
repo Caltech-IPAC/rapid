@@ -8,6 +8,14 @@ per catalogue, `add_diffimage` then `update_diffimage`, then `register_diffimmet
 because those are the operations schema's contract and inventing a different
 one would be a schema change wearing a refactor's clothes.
 
+`register_refimmeta` is the one call in the reference body that is NOT a port:
+`refimmeta` was dropped by rapid_systems migration 038 as an unwritten table
+and reinstated by 128 precisely so this registration could write it, so there
+was no legacy body to port. Its placement is the legacy shape all the same —
+last, after the catalogues, because it describes the finished reference image
+rather than one of its files, which is where `register_diffimmeta` sits in the
+difference body.
+
 WHAT IS DELIBERATELY NOT PORTED is where the facts come from.
 
 The legacy bodies read a per-job product `.ini` that the job itself had
@@ -179,6 +187,10 @@ def register_reference_image(dbh, record, science, attempt_id=None,
     `work_units.run_id`'s convention: `None` for the production lane. It is
     keyword-only and required so no caller can omit it silently; production
     callers pass `None` explicitly.
+
+    THE `refimmeta` ROW is written last, from the measurements the
+    reference-image stages recorded — see `_refimmeta_measurements`, including
+    the one case in which it is skipped rather than written.
     """
     products = published(record, attempt_id)
     image = _product(products, "reference_image", attempt_id)
@@ -227,6 +239,24 @@ def register_reference_image(dbh, record, science, attempt_id=None,
                                        "rfcatid": dbh.rfcatid,
                                        "svid": dbh.svid})
 
+    # The reference image's own QA numbers (rapid_systems migration 128).
+    # Keyed by the rfid the insert returned, like the catalogues above, and
+    # written after them because it is the only call here that describes the
+    # finished reference image rather than one of its files — which is where
+    # `register_diffimmeta` sits in the difference body.
+    meta = _refimmeta_measurements(science, attempt_id)
+    if meta is None:
+        # The record predates the reference-metadata facts. See
+        # `_refimmeta_measurements` — this is the one narrow allowance, and
+        # it is why the rest of the registration is unaffected.
+        logger.info("attempt %s carries no reference-metadata facts; "
+                    "registering rfid=%s without a refimmeta row",
+                    attempt_id, rfid)
+    else:
+        dbh.register_refimmeta(rfid, fid, field, hp6, hp9, *meta)
+        _check(dbh, "register_refimmeta", attempt_id)
+        registered["refimmeta"] = True
+
     # THE IDENTITY MODEL (rule 10), written inside this same transaction.
     # Additive: everything above is unchanged and every legacy column stays
     # populated exactly as before, because the production reader set is
@@ -248,6 +278,78 @@ def register_reference_image(dbh, record, science, attempt_id=None,
                 "with %d catalog(s)", attempt_id, rfid, version,
                 len(registered["catalogs"]))
     return registered
+
+
+#: The `refimmeta` measurements, in the order `register_refimmeta` takes them
+#: AFTER its five identity arguments (rfid, fid, field, hp6, hp9). Each pair is
+#: (the column, the provenance key the stage that measured it recorded). The
+#: spellings differ on both sides of several rows and that is not tidiable
+#: here: the left is `refimmeta`'s column set (rapid_systems migration 128) and
+#: the right is the vocabulary `pipeline/stages/reference_image.py` records,
+#: which is the reference-image monolith's own. Mapping them in ONE table is
+#: what keeps a rename on either side from silently shifting an argument.
+REFIMMETA_MEASUREMENTS = (
+    ("nframes", "reference_nframes"),
+    ("mjdobsmin", "reference_mjdobsmin"),
+    ("mjdobsmax", "reference_mjdobsmax"),
+    ("npixnan", "reference_npixnan"),
+    ("clmean", "reference_avg"),
+    ("clstddev", "reference_std"),
+    ("clnoutliers", "reference_noutliers"),
+    ("gmedian", "reference_gmed"),
+    ("datascale", "reference_datascale"),
+    ("gmin", "reference_gmin"),
+    ("gmax", "reference_gmax"),
+    ("cov5percent", "reference_cov5percent"),
+    ("medncov", "reference_medncov"),
+    ("medpixunc", "reference_medpixunc"),
+    ("fwhmmedpix", "fwhm_ref_medpix"),
+    ("fwhmminpix", "fwhm_ref_minpix"),
+    ("fwhmmaxpix", "fwhm_ref_maxpix"),
+    ("nsxcatsources", "reference_sexcat_sources"),
+    ("npucatsources", "reference_psfcat_sources"),
+)
+
+#: The witness for "this attempt ran under an image that measures the
+#: reference metadata". See `_refimmeta_measurements`.
+REFIMMETA_WITNESS = "reference_psfcat_sources"
+
+
+def _refimmeta_measurements(science, attempt_id):
+    """The nineteen measurements `register_refimmeta` needs, or None.
+
+    None means the record was authored before the reference-image stages
+    recorded these facts, and is the ONE allowance this function makes. It is
+    shaped like `role_product`'s allowance for records predating the product
+    role binding, and for the same reason: an attempt that completed under the
+    previously pinned image carries an immutable record that no amount of
+    re-running can add a fact to, so refusing it would leave it a candidate
+    forever rather than registering the rows it CAN support. `refimmeta` is a
+    new table with no history — a reference image registered without its
+    metadata row is exactly the state every reference image was in before this
+    change, not a regression.
+
+    `REFIMMETA_WITNESS` is what distinguishes the two cases, and it is the
+    NEWEST of the facts rather than a convenient one: nothing before this
+    change recorded `reference_psfcat_sources`, and `psf_catalog` records it
+    unconditionally afterwards — zero where PhotUtils produced no catalogue,
+    because "it found nothing" is a measurement and the column is NOT NULL.
+    A record carrying it is therefore a record from an image that measures all
+    nineteen, which is what makes `_need` the right treatment for the other
+    eighteen: past the witness, an absent fact is a finding about the record,
+    not an old attempt, and none of these numbers has a defensible default.
+
+    THE PUBLISHED PRODUCTS ARE DELIBERATELY NOT CONSULTED here, even though
+    the caller has them in hand. The PhotUtils catalogue is REGISTERED only
+    where it was published — that is the legacy guard above — but its source
+    count is recorded either way, so deciding `npucatsources` from the
+    published list would make the row describe what reached the bucket rather
+    than what the fit measured.
+    """
+    if science.get(REFIMMETA_WITNESS) is None:
+        return None
+    return [_need(science, key, attempt_id, where="science_provenance")
+            for _column, key in REFIMMETA_MEASUREMENTS]
 
 
 def register_difference_image(dbh, record, science, attempt_id=None,

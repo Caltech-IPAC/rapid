@@ -199,8 +199,40 @@ def _public_methods(text):
 #: query text behind all three changed with them. The previous value, for
 #: the record, was
 #: `6d6beab99839d3e4a0f45ed8677626b02198ffc585629c9c39eb05e9d650044d`.
+#:
+#: **RE-RATIFICATION, 2026-09-15 — the reference-image metadata row.** The
+#: ratified decision cited is the owner's instruction of 2026-09-15: add the
+#: `refimmeta` table and populate a record in it each time a new reference
+#: image is generated. This is the `rapid_db.py` half of rapid_systems
+#: migration 128, which reinstates the table 038 dropped as unwritten — the
+#: paired change is what makes it written.
+#:
+#: WHAT THE NEW DIGEST ABSORBS: **no public method added and none removed.**
+#: `register_refimmeta` already existed on this class, carried forward from
+#: the pre-SMDC lineage and dead since 038 dropped the table it wrote. One
+#: signature change on it, and the query text behind it, to 128's column set:
+#: `npixsat` is gone (the reference-image stage still measures it and still
+#: records `reference_npixsat` in the attempt's provenance — it is simply not
+#: a column of this table), `nsexcatsources` is spelled `nsxcatsources`, and
+#: `npucatsources` is new. The body also moves off the `TEMPLATE_` regex
+#: substitution the W3 sweep removed everywhere else and onto bound
+#: parameters, which is the shape every other writer on this class already
+#: has.
+#:
+#: WHY THIS IS AN EDIT HERE AND NOT A CARVED REPOSITORY (rule 17's own
+#: instruction): the row must be written inside the SAME transaction as the
+#: `refimages` row and its catalogues — that is the registrar's contract —
+#: and the registrar holds one `RAPIDDB` on a borrowed connection for all of
+#: them. A repository owns its own connection, so writing this one row
+#: through one would put it outside the transaction the rest of the
+#: registration commits as a unit, which is a correctness change made to
+#: satisfy a packaging rule. The rule's target is NEW database access; this
+#: is an existing writer being pointed at the table it was always for.
+#:
+#: The previous value, for the record, was
+#: `ebcda29520b85fcc3ebe35175330d82c93b8568d2ffeefd6cf7cc44376eaa330`.
 RAPID_DB_BRANCH_POINT_SHA256 = (
-    "ebcda29520b85fcc3ebe35175330d82c93b8568d2ffeefd6cf7cc44376eaa330")
+    "1cc5f3949f9edf00d3e2bee8dcd728e633b9656fca5a160b3eed12b31369912b")
 
 
 def _file_digest(path):
