@@ -288,6 +288,12 @@ class TimedProvider:
         return self._timed("get_ref_matches", detection.sid,
                            lambda: self.inner.get_ref_matches(detection))
 
+    def get_ned_matches(self, detection):
+        # as get_ref_matches: the chip's one NED fetch + match pass is
+        # timed inside iter_sources_prefetch; this is the per-source lookup
+        return self._timed("get_ned_matches", detection.sid,
+                           lambda: self.inner.get_ned_matches(detection))
+
     def get_cutouts(self, detection):
         return self._timed("get_cutouts", detection.sid,
                            lambda: self.inner.get_cutouts(detection))
