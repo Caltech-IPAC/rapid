@@ -76,6 +76,39 @@ class AddTests(unittest.TestCase):
         self.assertEqual(conn.rollbacks, 1)
 
 
+class CastTests(unittest.TestCase):
+
+    def test_no_bounded_varchar_cast_can_truncate_a_value(self):
+        """An explicit `cast(x as character varying(255))` truncates silently
+        in PostgreSQL. The stored functions take unbounded varchar and
+        psfs.filename is text (migration 023), so the only bounded casts on
+        this path were the repository's own. Refuse them."""
+        from pipeline.repositories import psfs
+
+        for name in ("_ADD_SQL", "_UPDATE_SQL"):
+            with self.subTest(statement=name):
+                self.assertNotRegex(
+                    getattr(psfs, name), r"character varying\(\d+\)",
+                    f"{name} casts to a bounded varchar, which truncates a "
+                    "longer value silently instead of refusing it")
+
+
+class FilterNameTests(unittest.TestCase):
+
+    def test_returns_the_filters_rows_name(self):
+        conn = _Connection(rows=[("W146",)])
+        self.assertEqual(PsfRepository(conn).filter_name(8), "W146")
+        statement, params = conn.statements[0]
+        self.assertIn("from filters", statement)
+        self.assertEqual(params, (8,))
+
+    def test_an_unknown_fid_is_none_not_an_error(self):
+        # The registrar turns None into its own "fid is not in Filters"
+        # refusal, which names the argument the operator has to fix.
+        conn = _Connection(rows=[None])
+        self.assertIsNone(PsfRepository(conn).filter_name(99))
+
+
 class PromoteTests(unittest.TestCase):
 
     def test_reports_the_vbest_the_row_holds(self):

@@ -25,7 +25,16 @@ row at 0); the script reports the vbest each row actually holds after the call.
 The objects registered are the science PSFs of ONE filter, named by --filter (the
 token in the filename, e.g. f146) and identified by --fid; an object whose filename
 carries another filter's token is refused rather than registered under the wrong
-identity, since PSFs is keyed by (fid, sca).
+identity, since PSFs is keyed by (fid, sca).  --filter and --fid are also checked
+against each other: the Filters row for --fid must carry the same three-digit
+wavelength code as --filter (Filters names the bands W146, H158, Z087, ...; the PSF
+filenames say f146, f158, f087), so `--filter f146 --fid 7` is refused before any row
+is written instead of filing eighteen F146 PSFs under Z087.
+
+The seal check tells absence from failure: only a 404 on `_manifest.json` means the
+generation is unsealed.  Any other S3 error (AccessDenied, a throttled or failed
+request) stops the run with its own message, because "not sealed" is a statement
+about the generation and a permission problem is not.
 
 Every row lands in ONE transaction on the connection this script opens
 (database.modules.utils.rapid_db_connect, the sanctioned path; the writes go through
@@ -54,12 +63,13 @@ import re
 import sys
 import tempfile
 
-import database.modules.utils.rapid_db as db
-import database.modules.utils.rapid_db_connect as db_connect
-from pipeline.repositories.psfs import PsfRepository
+# The database modules (psycopg2 underneath) and boto3 are imported inside main(),
+# after argument checking and the dry run: the pure helpers above main() are what
+# database/scripts/test/test_db_register_sciimg_psfs.py exercises, and they import
+# anywhere that way -- no stub modules standing in for psycopg2's package tree.
 
 swname = "db_register_sciimg_psfs.py"
-swvers = "2.1"
+swvers = "2.2"
 
 #: One science PSF per detector: sciimage_psf_<filter>_sca<NN>.fits.
 PSF_OBJECT_PATTERN = re.compile(r"^sciimage_psf_(?P<filter>[a-z]\d{3})_sca(?P<sca>\d{2})\.fits$",
@@ -70,6 +80,15 @@ SCIENCE_PSF_DIRECTORY = "psfs"
 
 #: A generation's completeness marker, written last by the staging procedure.
 GENERATION_MANIFEST = "_manifest.json"
+
+#: The botocore error codes that mean "no such object" on a head_object, as
+#: pipeline/runtime/boundaries.py classifies them.  Everything else is a failure to
+#: find out, not a finding.
+NOT_FOUND_CODES = ("404", "NoSuchKey", "NotFound")
+
+#: The three-digit wavelength code shared by a Filters name (W146) and a PSF
+#: filename's filter token (f146).
+WAVELENGTH_CODE = re.compile(r"(\d{3})")
 
 
 def split_s3_prefix(prefix):
@@ -164,18 +183,64 @@ def list_keys(s3_client, bucket, key_prefix):
     return keys
 
 
+def s3_error_code(error):
+
+    """
+    The botocore error code carried by a ClientError ("404", "AccessDenied", ...),
+    or "" when the exception carries none.
+    """
+
+    response = getattr(error, "response", None)
+
+    if isinstance(response, dict):
+        return str(response.get("Error", {}).get("Code", ""))
+
+    return ""
+
+
 def generation_is_sealed(s3_client, bucket, manifest_key):
 
     """
     Whether the generation's completeness marker exists.
+
+    False only when S3 says the marker is absent (NOT_FOUND_CODES).  Any other
+    ClientError -- AccessDenied above all -- is re-raised: the caller could not find
+    out whether the generation is sealed, which is not the same as it being unsealed,
+    and reporting it as "abandoned or still being staged" would send an operator to
+    look at the wrong thing.
     """
 
     try:
         s3_client.head_object(Bucket=bucket, Key=manifest_key)
-    except s3_client.exceptions.ClientError:
-        return False
+    except s3_client.exceptions.ClientError as error:
+        if s3_error_code(error) in NOT_FOUND_CODES:
+            return False
+        raise
 
     return True
+
+
+def filter_codes_agree(filter_token, filters_name):
+
+    """
+    Whether a --filter token (f146) and a Filters-table name (W146) denote the same
+    band: both carry one three-digit wavelength code and the codes are equal.
+
+    Filters (rapid_systems 009-seed-data.sql) names the bands with Roman's letter
+    designations -- F184 H158 J129 K213 R062 Y106 Z087 W146 -- while the PSF filenames
+    carry f<nnn>, so the letter cannot be compared and the code is what identifies the
+    band in both spellings.  Either side without exactly one code is a disagreement.
+    """
+
+    codes = []
+
+    for value in (filter_token, filters_name):
+        found = WAVELENGTH_CODE.findall(value or "")
+        if len(found) != 1:
+            return False
+        codes.append(found[0])
+
+    return codes[0] == codes[1]
 
 
 def main(argv=None):
@@ -209,7 +274,15 @@ def main(argv=None):
     import boto3
     s3_client = boto3.client("s3")
 
-    if not generation_is_sealed(s3_client, bucket, manifest_key):
+    try:
+        sealed = generation_is_sealed(s3_client, bucket, manifest_key)
+    except s3_client.exceptions.ClientError as error:
+        print("*** Error: Could not check s3://{}/{} ({}); whether the generation is "
+              "sealed is unknown, not 'no'; quitting...".format(
+                  bucket, manifest_key, s3_error_code(error) or error))
+        return 66
+
+    if not sealed:
         print("*** Error: s3://{}/{} does not exist, so the generation is not complete "
               "(abandoned, or still being staged); quitting...".format(bucket, manifest_key))
         return 64
@@ -235,28 +308,33 @@ def main(argv=None):
         print("Dry run: nothing registered.")
         return 0
 
-    workdir = tempfile.mkdtemp(prefix="register_psfs_")
+    import database.modules.utils.rapid_db as db
+    import database.modules.utils.rapid_db_connect as db_connect
+    from pipeline.repositories.psfs import PsfRepository
 
 
     # Download and checksum every PSF before any row is written, so a bad object stops
-    # the run with the database untouched.
+    # the run with the database untouched.  The downloads are only needed for their
+    # checksums, so the directory is released as soon as those are in hand.
 
     rows = []
 
-    for key, sca in objects:
+    with tempfile.TemporaryDirectory(prefix="register_psfs_") as workdir:
 
-        filename = os.path.join(workdir, os.path.basename(key))
+        for key, sca in objects:
 
-        print("Downloading s3://{}/{} into {}...".format(bucket, key, filename))
-        s3_client.download_file(bucket, key, filename)
+            filename = os.path.join(workdir, os.path.basename(key))
 
-        checksum = db.compute_checksum(filename)
+            print("Downloading s3://{}/{} into {}...".format(bucket, key, filename))
+            s3_client.download_file(bucket, key, filename)
 
-        if not isinstance(checksum, str):
-            print("*** Error: Could not compute checksum of {} (code {}); quitting...".format(filename, checksum))
-            return 65
+            checksum = db.compute_checksum(filename)
 
-        rows.append((sca, "s3://{}/{}".format(bucket, key), checksum))
+            if not isinstance(checksum, str):
+                print("*** Error: Could not compute checksum of {} (code {}); quitting...".format(filename, checksum))
+                return 65
+
+            rows.append((sca, "s3://{}/{}".format(bucket, key), checksum))
 
 
     # One connection, one transaction: every row or none.
@@ -266,6 +344,21 @@ def main(argv=None):
     with db_connect.connection(swname) as conn:
 
         repo = PsfRepository(conn)
+
+
+        # --fid names the identity every row lands under; make sure it is the filter
+        # the files say they are, before the first write.
+
+        filters_name = repo.filter_name(args.fid)
+
+        if filters_name is None:
+            print("*** Error: fid = {} is not in the Filters table; quitting...".format(args.fid))
+            return 64
+
+        if not filter_codes_agree(args.filter, filters_name):
+            print("*** Error: --fid {} is {} in the Filters table, but --filter says {}; "
+                  "nothing registered; quitting...".format(args.fid, filters_name, args.filter))
+            return 64
 
         try:
 
