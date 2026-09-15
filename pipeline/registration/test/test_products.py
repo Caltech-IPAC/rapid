@@ -210,11 +210,52 @@ def _seed_identity(context, unit, job_type):
     context.record(**provenance)
 
 
-def reference_record(with_psfcat=False, **overrides):
-    """A reference-image record, authored the way production authors one."""
+#: The reference-image measurements, under the names
+#: `pipeline/stages/reference_image.py` records them and in the stage order it
+#: records them in: `build_reference_image`, then
+#: `coverage_and_uncertainty_statistics`, then `image_statistics`, then
+#: `measure_fwhm`, then `psf_catalog`. These are what `refimmeta` is written
+#: from, and the one test below that reads the stage module's source is what
+#: keeps this fixture honest if a stage ever renames one.
+#:
+#: The values are arbitrary but DISTINCT, so an argument landing in the wrong
+#: position fails an assertion rather than matching its neighbour.
+REFERENCE_MEASUREMENTS = {
+    "reference_nframes": 25,
+    "reference_mjdobsmin": 60000.5,
+    "reference_mjdobsmax": 60010.25,
+    "reference_npixnan": 17,
+    "reference_avg": 1.25,
+    "reference_std": 0.5,
+    "reference_noutliers": 42,
+    "reference_gmed": 1.2,
+    "reference_datascale": 0.33,
+    "reference_gmin": -0.9,
+    "reference_gmax": 9.9,
+    "reference_cov5percent": 87.5,
+    "reference_medncov": 12.0,
+    "reference_medpixunc": 0.04,
+    "fwhm_ref_medpix": 3.1,
+    "fwhm_ref_minpix": 2.0,
+    "fwhm_ref_maxpix": 8.4,
+    "reference_sexcat_sources": 1234,
+    "reference_psfcat_sources": 1100,
+}
+
+
+def reference_record(with_psfcat=False, with_refimmeta=True, **overrides):
+    """A reference-image record, authored the way production authors one.
+
+    `with_refimmeta=False` produces a record from BEFORE the reference-image
+    stages measured any of this — the shape every attempt that completed under
+    a previously pinned image carries, and the one the registrar is allowed to
+    register without a `refimmeta` row.
+    """
     unit = _reference_unit()
     context = _context(unit, "reference-image")
     _seed_identity(context, unit, "reference-image")
+    if with_refimmeta:
+        context.record(**REFERENCE_MEASUREMENTS)
 
     published = {
         "reference_image": {"uri": "s3://p/ref.fits", "checksum": "ref-sha"},
@@ -281,6 +322,46 @@ class RecordsProductionCanAuthorTests(unittest.TestCase):
         required = ["field", "fid"] + (["hp6", "hp9"] if HAS_HEALPY else [])
         for name in required:
             self.assertIn(name, science, f"{name} is not in science_provenance")
+
+    def test_the_reference_record_carries_every_refimmeta_measurement(self):
+        # The `refimmeta` columns, via the provenance keys the registrar maps
+        # them to. Asserted against the registrar's own table rather than a
+        # copy, so a column added there without a stage to measure it fails
+        # here.
+        science = reference_record()["science_provenance"]
+        for column, key in products.REFIMMETA_MEASUREMENTS:
+            self.assertIn(key, science,
+                          f"{key} (refimmeta.{column}) is not in "
+                          f"science_provenance")
+
+    def test_every_refimmeta_measurement_is_recorded_by_a_reference_stage(self):
+        """The fixture is not the authority — the stage module is.
+
+        This suite's whole premise is that a record it builds is a record
+        production could author, and for these nineteen facts that means
+        `pipeline/stages/reference_image.py` records every one of them. A
+        fixture supplying a key no stage writes would pass every test above
+        and fail on the first live attempt, which is the exact failure the
+        round-3 rewrite of this file was about. Source inspection is what
+        catches it without a FITS file and a coadder.
+        """
+        import inspect as _inspect
+
+        from pipeline.stages import reference_image as refstage
+
+        source = _inspect.getsource(refstage)
+        for column, key in products.REFIMMETA_MEASUREMENTS:
+            self.assertIn(f"{key}=", source,
+                          f"nothing in pipeline/stages/reference_image.py "
+                          f"records {key}, which the registrar reads for "
+                          f"refimmeta.{column}")
+
+    def test_the_fixture_supplies_exactly_the_measurements_read(self):
+        # Neither more nor fewer: a stale extra would suggest a column that no
+        # longer exists, and a missing one is caught above.
+        self.assertEqual(
+            sorted(REFERENCE_MEASUREMENTS),
+            sorted(key for _column, key in products.REFIMMETA_MEASUREMENTS))
 
     def test_the_difference_record_carries_every_fact_its_body_needs(self):
         # And these are the live `diffimmeta` columns: pid, nsexcatsources,
@@ -445,7 +526,7 @@ class ReferenceImageBodyTests(unittest.TestCase):
 
         self.assertEqual([name for name, _ in dbh.calls],
                          ["add_refimage", "update_refimage",
-                          "register_refimcatalog"])
+                          "register_refimcatalog", "register_refimmeta"])
         self.assertEqual(result["rfid"], 77)
 
     def test_the_uri_and_checksum_come_from_the_published_product(self):
@@ -524,6 +605,107 @@ class ReferenceImageBodyTests(unittest.TestCase):
         with self.assertRaises(products.RegistrationFailed):
             products.register_reference_image(
                 dbh, record, record["science_provenance"], 1, run_id=None)
+
+    def test_the_refimmeta_row_is_written_last_and_keyed_by_the_rfid(self):
+        # Last because it describes the finished reference image rather than
+        # one of its files — the place `register_diffimmeta` occupies in the
+        # difference body. Keyed by the rfid `add_refimage` returned, like the
+        # catalogues before it.
+        dbh = FakeDB()
+        record = reference_record()
+        science = record["science_provenance"]
+
+        result = products.register_reference_image(
+            dbh, record, science, 1, run_id=None)
+
+        name, args = dbh.calls[-1]
+        self.assertEqual("register_refimmeta", name)
+        self.assertEqual(77, args[0])
+        self.assertEqual((science["fid"], science["field"],
+                          science["hp6"], science["hp9"]), args[1:5])
+        self.assertTrue(result["refimmeta"])
+
+    def test_every_measurement_reaches_register_refimmeta_in_order(self):
+        # A positional call of twenty-four arguments is exactly where a
+        # reordering goes unnoticed, so assert the whole tail against the
+        # mapping the registrar declares — not a hand-copied list, which would
+        # drift with it.
+        dbh = FakeDB()
+        record = reference_record()
+        science = record["science_provenance"]
+
+        products.register_reference_image(dbh, record, science, 1, run_id=None)
+
+        _name, args = dbh.calls[-1]
+        expected = [science[key]
+                    for _column, key in products.REFIMMETA_MEASUREMENTS]
+        self.assertEqual(expected, list(args[5:]))
+        # And the values really are the stage's, not the fixture's defaults
+        # coinciding: cov5percent and the two catalogue counts, spot-checked.
+        self.assertEqual(87.5, args[5 + 11])
+        self.assertEqual(1234, args[5 + 17])
+        self.assertEqual(1100, args[5 + 18])
+
+    def test_a_record_predating_the_measurements_registers_without_a_row(self):
+        # An attempt that completed under a previously pinned image carries an
+        # immutable record no re-run can add a fact to. Refusing it would leave
+        # it a candidate forever; a reference image with no metadata row is the
+        # state every reference image was in before this change.
+        dbh = FakeDB()
+        record = reference_record(with_refimmeta=False)
+
+        result = products.register_reference_image(
+            dbh, record, record["science_provenance"], 1, run_id=None)
+
+        self.assertEqual([name for name, _ in dbh.calls],
+                         ["add_refimage", "update_refimage",
+                          "register_refimcatalog"])
+        self.assertEqual(77, result["rfid"])
+        self.assertNotIn("refimmeta", result)
+
+    def test_a_record_past_the_witness_missing_a_measurement_is_a_finding(self):
+        # The allowance is for records that carry NONE of these, not for one
+        # that carries the witness and then a hole: past the witness an absent
+        # fact is a finding about the record, and none of these numbers has a
+        # defensible default.
+        record = reference_record()
+        del record["science_provenance"]["reference_cov5percent"]
+
+        with self.assertRaises(products.MissingRecordFact) as caught:
+            products.register_reference_image(
+                FakeDB(), record, record["science_provenance"], 1, run_id=None)
+
+        self.assertEqual("reference_cov5percent", caught.exception.field)
+
+    def test_zero_photutils_sources_is_a_measurement_not_an_absence(self):
+        # `refimmeta.npucatsources` is NOT NULL and PhotUtils finding nothing
+        # is a result. A zero must reach the row rather than being read as a
+        # missing fact — which `_need`'s `is None` test is what makes true.
+        dbh = FakeDB()
+        record = reference_record()
+        record["science_provenance"]["reference_psfcat_sources"] = 0
+
+        products.register_reference_image(
+            dbh, record, record["science_provenance"], 1, run_id=None)
+
+        _name, args = dbh.calls[-1]
+        self.assertEqual(0, args[-1])
+
+    def test_the_photutils_count_does_not_depend_on_what_was_published(self):
+        # The catalogue is REGISTERED only where it was published, but the
+        # count is recorded either way. Reading the published list to decide
+        # the column's value would make the row describe what reached the
+        # bucket rather than what the fit measured.
+        without = FakeDB()
+        with_cat = FakeDB()
+        products.register_reference_image(
+            without, reference_record(),
+            reference_record()["science_provenance"], 1, run_id=None)
+        record = reference_record(with_psfcat=True)
+        products.register_reference_image(
+            with_cat, record, record["science_provenance"], 1, run_id=None)
+
+        self.assertEqual(without.calls[-1][1][-1], with_cat.calls[-1][1][-1])
 
     def test_run_id_reaches_both_add_refimage_and_update_refimage(self):
         # run_id is required and keyword-only precisely so it cannot be lost

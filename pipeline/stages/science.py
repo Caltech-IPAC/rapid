@@ -463,9 +463,15 @@ def _build_reference_image(context, awaicgen) -> None:
         mosaic_image_file, mosaic_uncert_image_file, reference_psf_file,
         psfcat_refimage)
 
+    # The trailing element is the catalog's source count, added with
+    # `refimmeta.npucatsources` (rapid_systems migration 128). This path
+    # registers no reference image — the coadd it builds is an input to the
+    # difference, and `register_reference_image` runs only for the
+    # reference-image job type — so the count is unpacked and not recorded:
+    # a fact nothing reads would be provenance nobody can check.
     (flag_psf_refimage_catalog, checksum_psf_refimage_catalog,
      checksum_psf_finder_refimage_catalog, filename_psf_refimage_catalog,
-     filename_psf_finder_refimage_catalog) = refimage_psfcat
+     filename_psf_finder_refimage_catalog, _psfcat_sources) = refimage_psfcat
 
     context.produce("reference_psfcat", filename_psf_refimage_catalog)
     context.produce("reference_psfcat_finder",

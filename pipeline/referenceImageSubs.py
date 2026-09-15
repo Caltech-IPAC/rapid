@@ -600,7 +600,31 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
         output_psfcat_filename = None
         output_psfcat_finder_filename = None
 
+
+        # No catalog was produced, so it holds no sources.  Zero and not None:
+        # the refimmeta column this feeds is NOT NULL, and "the PhotUtils
+        # catalog found nothing" is a measurement, not a missing one.
+
+        n_psfcat_sources = 0
+
     else:
+
+
+        # The source count of the PSF-fit catalog, read off the table the
+        # fit returned rather than by re-parsing the file that is written
+        # from it below.  It is refimmeta.npucatsources (rapid_systems
+        # migration 128), the PhotUtils counterpart to the SExtractor count
+        # the caller already derives from its own catalog -- the two are
+        # produced by different code over the same coadd, which is what
+        # makes carrying both worth the column.
+        #
+        # Guarded rather than a bare len(): compute_psf_catalog returns the
+        # flag and the table together, and a True flag beside a None table
+        # would otherwise raise here, inside a function whose whole contract
+        # is to return metadata about what it produced.
+
+        n_psfcat_sources = len(phot) if phot is not None else 0
+
 
 
         # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
@@ -702,5 +726,6 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
     generateReferenceImageCatalog_return_list.append(checksum_psfcat_finder_filename)
     generateReferenceImageCatalog_return_list.append(output_psfcat_filename)
     generateReferenceImageCatalog_return_list.append(output_psfcat_finder_filename)
+    generateReferenceImageCatalog_return_list.append(n_psfcat_sources)
 
     return generateReferenceImageCatalog_return_list

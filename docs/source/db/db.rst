@@ -113,8 +113,6 @@ The RefImMeta database table stores various QA measures for reference images.
 +--------------------+-----------------------------------------------------------------------------------+
 | mjdobsmax          | Maximum MJD of input images in stack                                              |
 +--------------------+-----------------------------------------------------------------------------------+
-| npixsat            | Number of saturated pixels in reference image                                     |
-+--------------------+-----------------------------------------------------------------------------------+
 | npixnan            | Number of NaN pixels in reference image                                           |
 +--------------------+-----------------------------------------------------------------------------------+
 | clmean             | Image pixel mean after 3-sigma data clipping [DN/s]                               |
@@ -143,8 +141,18 @@ The RefImMeta database table stores various QA measures for reference images.
 +--------------------+-----------------------------------------------------------------------------------+
 | fwhmmaxpix         | Maximum of FWHM_IMAGE values in RefImage SourceExtractor catalog [pixels]         |
 +--------------------+-----------------------------------------------------------------------------------+
-| nsexcatsources     | Number of sources in RefImage SourceExtractor catalog                             |
+| nsxcatsources      | Number of sources in RefImage SourceExtractor catalog                             |
 +--------------------+-----------------------------------------------------------------------------------+
+| npucatsources      | Number of sources in RefImage PhotUtils PSF-fit catalog                           |
++--------------------+-----------------------------------------------------------------------------------+
+
+One row per RefImages row, written by the reference-image registration each
+time a new reference image is generated.  ``npixsat`` (number of saturated
+pixels) is not a column of this table: the reference-image pipeline still
+measures it and still carries it in the attempt's provenance record, it is
+simply not stored here.  The two catalog counts are separate columns because
+the two catalogs are built by different code over the same coadd, and a
+disagreement between them is the signal worth having.
 
 The quality-assurance metric ``cov5percent``, given by FITS keyword ``COV5PERC``,
 is an absolute quantifier for the aggregate areal-depth coverage of a reference image at a

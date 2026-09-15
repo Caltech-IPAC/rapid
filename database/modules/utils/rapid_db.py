@@ -2993,6 +2993,149 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def register_refimmeta(self,
+                           rfid,
+                           fid,
+                           field,
+                           hp6,
+                           hp9,
+                           nframes,
+                           mjdobsmin,
+                           mjdobsmax,
+                           npixnan,
+                           clmean,
+                           clstddev,
+                           clnoutliers,
+                           gmedian,
+                           datascale,
+                           gmin,
+                           gmax,
+                           cov5percent,
+                           medncov,
+                           medpixunc,
+                           fwhmmedpix,
+                           fwhmminpix,
+                           fwhmmaxpix,
+                           nsxcatsources,
+                           npucatsources):
+
+        '''
+        Insert or update record in RefImMeta database table.
+
+        One row per RefImages row: the reference image's own quality-assurance
+        numbers -- the depth and epoch span of the stack it was coadded from,
+        the clipped and global pixel statistics of the coadd, the coverage
+        metric, and the size and seeing of the two catalogs built over it.
+        The stored function finds-or-inserts on rfid, so a replayed
+        registration corrects the row it already wrote rather than raising on
+        the primary key.
+
+        The argument order is the stored function's own (rapid_systems
+        migration 128), which is NOT the column order of the table: rfid, fid,
+        field, ... as registerRefImMeta declares them.
+
+        THE COLUMN SET IS 128's, NOT THE PRE-SMDC ONE.  npixsat is absent --
+        the reference-image stage still measures it and still records
+        reference_npixsat in the attempt's provenance, but it is not a column
+        of this table -- nsexcatsources is spelled nsxcatsources, and
+        npucatsources (the PhotUtils PSF-fit catalog's source count) is new
+        beside it.  Passing the old argument list would be a type error on the
+        two renamed positions and a silent shift on everything after npixsat,
+        which is why this method exists rather than the pre-SMDC one being
+        restored.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query =\
+            "select * from registerRefImMeta(" +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer));"
+
+
+        # Query database.
+
+        print('----> rfid = {}'.format(rfid))
+        print('----> fid = {}'.format(fid))
+        print('----> field = {}'.format(field))
+        print('----> hp6 = {}'.format(hp6))
+        print('----> hp9 = {}'.format(hp9))
+        print('----> nframes = {}'.format(nframes))
+        print('----> mjdobsmin = {}'.format(mjdobsmin))
+        print('----> mjdobsmax = {}'.format(mjdobsmax))
+        print('----> npixnan = {}'.format(npixnan))
+        print('----> clmean = {}'.format(clmean))
+        print('----> clstddev = {}'.format(clstddev))
+        print('----> clnoutliers = {}'.format(clnoutliers))
+        print('----> gmedian = {}'.format(gmedian))
+        print('----> datascale = {}'.format(datascale))
+        print('----> gmin = {}'.format(gmin))
+        print('----> gmax = {}'.format(gmax))
+        print('----> cov5percent = {}'.format(cov5percent))
+        print('----> medncov = {}'.format(medncov))
+        print('----> medpixunc = {}'.format(medpixunc))
+        print('----> fwhmmedpix = {}'.format(fwhmmedpix))
+        print('----> fwhmminpix = {}'.format(fwhmminpix))
+        print('----> fwhmmaxpix = {}'.format(fwhmmaxpix))
+        print('----> nsxcatsources = {}'.format(nsxcatsources))
+        print('----> npucatsources = {}'.format(npucatsources))
+
+
+        params = (rfid, fid, field, hp6, hp9, nframes, mjdobsmin, mjdobsmax,
+                  npixnan, clmean, clstddev, clnoutliers, gmedian, datascale,
+                  gmin, gmax, cov5percent, medncov, medpixunc, fwhmmedpix,
+                  fwhmminpix, fwhmmaxpix, nsxcatsources, npucatsources)
+
+        print('query = {}, params = {}'.format(query, params))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query, params)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error inserting or updating RefImMeta record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
     def register_diffimmeta(self,
                             pid,
                             fid,
@@ -3118,124 +3261,6 @@ class RAPIDDB:
             return
 
         return records
-
-
-########################################################################################################
-
-    def register_refimmeta(self,
-                           rfid,
-                           fid,
-                           field,
-                           hp6,
-                           hp9,
-                           nframes,
-                           mjdobsmin,
-                           mjdobsmax,
-                           npixsat,
-                           npixnan,
-                           clmean,
-                           clstddev,
-                           clnoutliers,
-                           gmedian,
-                           datascale,
-                           gmin,
-                           gmax,
-                           cov5percent,
-                           medncov,
-                           medpixunc,
-                           fwhmmedpix,
-                           fwhmminpix,
-                           fwhmmaxpix,
-                           nsexcatsources):
-
-        '''
-        Insert or update record in RefImMeta database table.
-        '''
-
-        self.exit_code = 0
-
-
-        # Define query template.
-
-        query =\
-            "select * from registerRefImMeta(" +\
-            "cast(%s as integer)," +\
-            "cast(%s as smallint)," +\
-            "cast(%s AS integer)," +\
-            "cast(%s AS integer)," +\
-            "cast(%s AS integer)," +\
-            "cast(%s AS smallint)," +\
-            "cast(%s AS double precision)," +\
-            "cast(%s AS double precision)," +\
-            "cast(%s AS integer)," +\
-            "cast(%s AS integer)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS integer)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS real)," +\
-            "cast(%s AS integer));"
-
-
-        # Query database.
-
-        print('----> rfid = {}'.format(rfid))
-        print('----> fid = {}'.format(fid))
-        print('----> field = {}'.format(field))
-        print('----> hp6 = {}'.format(hp6))
-        print('----> hp9 = {}'.format(hp9))
-        print('----> nframes = {}'.format(nframes))
-        print('----> mjdobsmin = {}'.format(mjdobsmin))
-        print('----> mjdobsmax = {}'.format(mjdobsmax))
-        print('----> npixsat = {}'.format(npixsat))
-        print('----> npixnan = {}'.format(npixnan))
-        print('----> clmean = {}'.format(clmean))
-        print('----> clstddev = {}'.format(clstddev))
-        print('----> clnoutliers = {}'.format(clnoutliers))
-        print('----> gmedian = {}'.format(gmedian))
-        print('----> datascale = {}'.format(datascale))
-        print('----> gmin = {}'.format(gmin))
-        print('----> gmax = {}'.format(gmax))
-        print('----> cov5percent = {}'.format(cov5percent))
-        print('----> medncov = {}'.format(medncov))
-        print('----> medpixunc = {}'.format(medpixunc))
-        print('----> fwhmmedpix = {}'.format(fwhmmedpix))
-        print('----> fwhmminpix = {}'.format(fwhmminpix))
-        print('----> fwhmmaxpix = {}'.format(fwhmmaxpix))
-        print('----> nsexcatsources = {}'.format(nsexcatsources))
-
-
-        params = (rfid, fid, field, hp6, hp9, nframes, mjdobsmin, mjdobsmax, npixsat, npixnan, clmean, clstddev, clnoutliers, gmedian, datascale, gmin, gmax, cov5percent, medncov, medpixunc, fwhmmedpix, fwhmminpix, fwhmmaxpix, nsexcatsources)
-
-        print('query = {}, params = {}'.format(query, params))
-
-
-        # Execute query.
-
-        try:
-            self.cur.execute(query, params)
-
-            try:
-                for record in self.cur:
-                    print(record)
-            except:
-                print("Nothing returned from database stored function; continuing...")
-
-        except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error inserting or updating RefImMeta record ({}); skipping...'.format(error))
-            self.exit_code = 67
-            return
-
-        if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
 
 
 ########################################################################################################

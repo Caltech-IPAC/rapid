@@ -846,5 +846,105 @@ class ReferenceSetLookupSemanticsTests(unittest.TestCase):
         self.assertIn("and reference_set_id = %s ", psf_text)
 
 
+class RegisterRefImMetaTests(unittest.TestCase):
+    """`register_refimmeta`, the writer for rapid_systems migration 128.
+
+    Twenty-four positional arguments reaching a stored function through a
+    parameter tuple is exactly the shape where a reordering or a dropped
+    argument survives review, so the argument ORDER is asserted against the
+    method's own signature rather than against a list copied out of it — a
+    copy would be renumbered along with the mistake.
+
+    The pre-SMDC ancestor of this method built its query by regex-substituting
+    `TEMPLATE_` placeholders into the SQL text, which is the pattern the W3
+    sweep this file exists for removed. This one is parameterized from the
+    start; the hostile-value test below is what says so.
+    """
+
+    #: The stored function's argument order (rapid_systems migration 128),
+    #: which is NOT the column order of the table.
+    SIGNATURE = ("rfid", "fid", "field", "hp6", "hp9", "nframes",
+                 "mjdobsmin", "mjdobsmax", "npixnan", "clmean", "clstddev",
+                 "clnoutliers", "gmedian", "datascale", "gmin", "gmax",
+                 "cov5percent", "medncov", "medpixunc", "fwhmmedpix",
+                 "fwhmminpix", "fwhmmaxpix", "nsxcatsources", "npucatsources")
+
+    def _call(self, db, **overrides):
+        values = {name: float(i) if "." in name else i
+                  for i, name in enumerate(self.SIGNATURE, start=1)}
+        values.update(overrides)
+        db.register_refimmeta(*[values[name] for name in self.SIGNATURE])
+        return values
+
+    def test_the_method_signature_is_the_stored_functions_argument_order(self):
+        import inspect as _inspect
+
+        params = list(_inspect.signature(RAPIDDB.register_refimmeta)
+                      .parameters)[1:]
+        self.assertEqual(list(self.SIGNATURE), params)
+
+    def test_every_value_travels_as_a_parameter_in_signature_order(self):
+        db = make_db()
+        values = self._call(db)
+
+        _query, params = db.cur.execute.call_args[0]
+        self.assertEqual(tuple(values[name] for name in self.SIGNATURE),
+                         params)
+
+    def test_the_query_binds_exactly_one_placeholder_per_argument(self):
+        db = make_db()
+        self._call(db)
+
+        query, params = db.cur.execute.call_args[0]
+        self.assertEqual(len(self.SIGNATURE), len(params))
+        self.assertEqual(len(params), literal_text(query).count("%s"))
+
+    def test_the_retired_columns_are_not_in_the_call_at_all(self):
+        # 128 dropped `npixsat` and renamed `nsexcatsources`. Passing either
+        # would be a silent argument shift against the deployed function, not
+        # an error — so the absence is asserted, not assumed.
+        db = make_db()
+        self._call(db)
+
+        query, _params = db.cur.execute.call_args[0]
+        text = literal_text(query).lower()
+        self.assertNotIn("npixsat", text)
+        self.assertNotIn("nsexcatsources", text)
+        self.assertNotIn("npixsat", list(self.SIGNATURE))
+        self.assertNotIn("nsexcatsources", list(self.SIGNATURE))
+
+    def test_a_hostile_value_never_reaches_the_query_text(self):
+        # Every one of these columns is numeric in the schema, so this is not
+        # a live attack path — it is the sweep's invariant, asserted here so a
+        # future edit cannot reintroduce the TEMPLATE_ substitution the
+        # ancestor used without failing.
+        db = make_db()
+        self._call(db, nframes=HOSTILE)
+
+        query, params = db.cur.execute.call_args[0]
+        self.assertNotIn(HOSTILE, literal_text(query))
+        self.assertIn(HOSTILE, params)
+
+    def test_success_commits_the_transaction(self):
+        db = make_db()
+        self._call(db)
+
+        self.assertEqual(0, db.exit_code)
+        db.conn.commit.assert_called_once_with()
+
+    def test_a_database_error_sets_exit_code_67_and_does_not_commit(self):
+        # 67 is what `_check` in the registrar turns into a RegistrationFailed,
+        # which leaves the attempt a candidate. A silent success here would
+        # advance the watermark over a row that was never written.
+        from psycopg2 import DatabaseError
+
+        db = make_db()
+        db.cur.execute.side_effect = DatabaseError("nope")
+        self._call(db)
+
+        self.assertEqual(67, db.exit_code)
+        db.conn.commit.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

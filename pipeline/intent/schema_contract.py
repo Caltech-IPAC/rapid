@@ -253,6 +253,18 @@ REQUIRED_MIGRATIONS = (
      "The demotion guard is the sharper half: a run-scoped guard under "
      "set-keyed currency demotes ACROSS the set boundary, silently "
      "superseding another set's current reference"),
+    ("128-refimmeta.sql",
+     "the `refimmeta` table and `registerrefimmeta()`, called by "
+     "database/modules/utils/rapid_db.py's `register_refimmeta` from "
+     "pipeline/registration/products.py's `register_reference_image` on every "
+     "reference-image registration. 038 dropped the table as unwritten and "
+     "this is the migration that reinstates it, so a database without 128 has "
+     "neither the table nor the function and the call fails outright — not a "
+     "missing column but a missing relation. In the unconditional floor "
+     "rather than `ROUTE_MIGRATIONS` for the same reason 115 and 018 are: the "
+     "registrar is not a route, it runs in the registration consumer over "
+     "whatever job types are candidates, and a per-route floor would never be "
+     "consulted on its behalf"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than

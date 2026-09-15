@@ -138,11 +138,23 @@ def build_reference_image(context) -> None:
     context.produce("reference_zeropoint", zprefimg)
     context.produce("reference_total_exptime", total_refimage_exptime)
 
+    # `reference_mjdobsmin`/`reference_mjdobsmax` are the same two instants as
+    # `reference_jdstart`/`reference_jdend`, in the units `refimmeta`'s
+    # `mjdobsmin`/`mjdobsmax` columns are declared in (rapid_systems migration
+    # 128). Converted HERE, beside the JD the coadder returned, rather than in
+    # the registrar: the registrar reads the attempt's record and writes rows
+    # from it, and a unit conversion performed there is a second place the
+    # meaning of these two numbers could drift from the stage that measured
+    # them. Both spellings are recorded — the JD pair is what the reference
+    # image's own FITS header carries (`JDSTART`/`JDEND`), and dropping it to
+    # avoid the duplication would make the record disagree with the product.
     context.record(reference_image_infobits=infobits_refimage,
                    reference_image_checksum=checksum_refimage,
                    reference_nframes=nframes,
                    reference_jdstart=jdstart,
                    reference_jdend=jdend,
+                   reference_mjdobsmin=util.convert_jd_to_mjd(jdstart),
+                   reference_mjdobsmax=util.convert_jd_to_mjd(jdend),
                    reference_zeropoint=zprefimg,
                    reference_total_exptime=total_refimage_exptime)
 
@@ -194,11 +206,21 @@ def psf_catalog(context) -> None:
         psfcat_refimage)
 
     (flag_psf_refimage_catalog, checksum_psf_refimage_catalog,
-     _checksum_finder, filename_psf_catalog, _filename_finder) = result
+     _checksum_finder, filename_psf_catalog, _filename_finder,
+     psfcat_sources) = result
 
+    # `reference_psfcat_sources` is `refimmeta.npucatsources` (rapid_systems
+    # migration 128), and it is recorded here for the same reason
+    # `measure_fwhm` records `reference_sexcat_sources`: the registrar reads
+    # the attempt's terminal record and nothing else, so a number the
+    # registration needs has to be recorded by the stage that measures it.
+    # Zero where no catalog was produced, which is what the generator
+    # returns — not an absent fact, because "PhotUtils found nothing" is a
+    # measurement and the column is NOT NULL.
     context.produce("reference_psfcat", filename_psf_catalog)
     context.record(reference_psfcat_ok=bool(flag_psf_refimage_catalog),
-                   reference_psfcat_checksum=checksum_psf_refimage_catalog)
+                   reference_psfcat_checksum=checksum_psf_refimage_catalog,
+                   reference_psfcat_sources=psfcat_sources)
 
 
 def image_statistics(context) -> None:
