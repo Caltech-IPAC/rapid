@@ -282,14 +282,73 @@ class Wraparound(unittest.TestCase):
                 sampled_tiles(w, 128)
                 - set(footprint(w, min_overlap_pixels=0.0)), set())
 
+    #: Centre declinations from "the pole is just inside the image" to "the
+    #: image is centred on it".  89.98 was the only value the original test
+    #: used, and it was 0.005 deg from failing: from 89.985 on, the boundary's
+    #: highest declination fell below the cap band and the cap was dropped.
+    POLE_DECS = (89.98, 89.985, 89.99, 89.999, 90.0 - 1e-9)
+
     def test_over_the_pole(self):
-        # The polar cap tiles (rtid 1 and NROWS) have full-RA boxes and
-        # are the special case the closed form deliberately does not
-        # special-case; assert they are reachable rather than assumed.
-        w = wcs(0.0, 89.98, 12.0)
-        self.assertIn(1, footprint(w, min_overlap_pixels=0.0))
-        w = wcs(0.0, -89.98, 12.0)
-        self.assertIn(tess.NROWS, footprint(w, min_overlap_pixels=0.0))
+        # The polar cap tiles (rtid 1 and NROWS) have full-RA boxes.  When a
+        # pole is INSIDE the image the boundary never reaches it, so the cap
+        # has to come from the interior test, not from the declination span.
+        for dec in self.POLE_DECS:
+            with self.subTest(dec=dec):
+                self.assertIn(1, footprint(wcs(0.0, dec, 12.0),
+                                           min_overlap_pixels=0.0))
+                self.assertIn(tess.NROWS, footprint(wcs(0.0, -dec, 12.0),
+                                                    min_overlap_pixels=0.0))
+
+    def test_an_image_containing_the_pole_omits_no_sampled_tile(self):
+        # The load-bearing subset invariant, restated where it used to fail:
+        # every pixel near the pole projects into SOME tile, and the whole
+        # of ring 1 surrounds the cap, so all of it must be present.
+        for dec in self.POLE_DECS:
+            for sign in (1.0, -1.0):
+                w = wcs(37.0, sign * dec, 123.0)
+                fp = set(footprint(w, min_overlap_pixels=0.0))
+                with self.subTest(dec=sign * dec):
+                    self.assertEqual(sampled_tiles(w, 64) - fp, set())
+                    ring = 1 if sign > 0 else tess.NRINGS
+                    whole_ring = {tess._OFFSET[ring] + k
+                                  for k in range(tess.nrabins(ring))}
+                    self.assertTrue(whole_ring <= fp,
+                                    "ring %d is not reported whole" % ring)
+
+    def test_the_pole_leaving_the_inset_rectangle_only_removes_tiles(self):
+        # Centre 0.06 deg (1964 px) from the pole.  At inset 0 the half-width
+        # is 2043 px, so the pole is inside whatever the rotation; at inset
+        # 1800 the rectangle (243 px half-width, 0.009 deg tall at this
+        # rotation) stays below the cap band, which starts 0.014 deg above
+        # the centre.  The two code paths meet here, and insetting may only
+        # ever remove tiles.
+        w = wcs(0.0, 89.94, 12.0)
+        wide = set(footprint(w, min_overlap_pixels=0.0))
+        self.assertIn(1, wide)
+        narrow = set(footprint(w, min_overlap_pixels=1800.0))
+        self.assertNotIn(1, narrow)
+        self.assertTrue(narrow <= wide)
+        self.assertEqual(sampled_tiles(w, 64) - wide, set())
+
+    def test_an_image_over_one_pole_does_not_claim_the_other(self):
+        # The same-side test admits the antipode of an interior point; the
+        # hemisphere check in `_contains` is what refuses it.  Without it a
+        # south-pole image took the north branch and reported the whole sky.
+        north = footprint(wcs(0.0, 89.99, 12.0), min_overlap_pixels=0.0)
+        south = footprint(wcs(0.0, -89.99, 12.0), min_overlap_pixels=0.0)
+        self.assertNotIn(tess.NROWS, north)
+        self.assertNotIn(1, south)
+        self.assertLess(len(north), 100)
+        self.assertLess(len(south), 100)
+
+    def test_an_image_beside_the_pole_is_unchanged(self):
+        # 0.2 deg from the pole is well clear of the detector's half-diagonal
+        # (0.089 deg): the pole is outside, so the interior path must not
+        # fire and the exact interval geometry answers as before.
+        w = wcs(0.0, 89.8, 12.0)
+        fp = footprint(w, min_overlap_pixels=0.0)
+        self.assertNotIn(1, fp)
+        self.assertEqual(sampled_tiles(w, 64) - set(fp), set())
 
 
 class Regressions(unittest.TestCase):
