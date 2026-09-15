@@ -178,8 +178,29 @@ def _public_methods(text):
 #: field, fid, run_id=None)` — and the query text behind it. The previous
 #: value, for the record, was
 #: `d7517bb3b4972a24a4965ab94671144875426233edc2bcaf0e719a0872523c89`.
+#:
+#: **RE-RATIFICATION, 2026-09-14 — the reference-set model.** The ratified
+#: decision cited is the owner's approval of the baseline audit's landing
+#: path, 2026-09-14 16:58 PDT ("proceed as you think best"), under which the
+#: `reference-sets` branch lands on `smdc`. A reference set is now a named,
+#: first-class row: a run declares the set it reads, and every reference
+#: lookup is scoped to that set instead of to an implicit production lane.
+#: This is the `rapid_db.py` half of rapid_systems migrations 126 and 127.
+#:
+#: WHAT THE NEW DIGEST ABSORBS: two public methods added —
+#: `get_default_reference_set()` and `get_reference_set_by_name(name)`, both
+#: plain named-record reads against the tables 126 creates. None removed.
+#: Three signature changes on existing methods, each taking the set to read:
+#: `get_best_psf(sca, fid, reference_set_id)`,
+#: `get_best_reference_image(ppid, field, fid, reference_set_id)` — which
+#: REPLACES the `run_id=None` parameter the 2026-09-12 re-ratification above
+#: added, the reference set now carrying the scoping that `run_id` stood in
+#: for — and `update_refimage(..., *, run_id, reference_set_id=None)`. The
+#: query text behind all three changed with them. The previous value, for
+#: the record, was
+#: `6d6beab99839d3e4a0f45ed8677626b02198ffc585629c9c39eb05e9d650044d`.
 RAPID_DB_BRANCH_POINT_SHA256 = (
-    "6d6beab99839d3e4a0f45ed8677626b02198ffc585629c9c39eb05e9d650044d")
+    "ebcda29520b85fcc3ebe35175330d82c93b8568d2ffeefd6cf7cc44376eaa330")
 
 
 def _file_digest(path):
