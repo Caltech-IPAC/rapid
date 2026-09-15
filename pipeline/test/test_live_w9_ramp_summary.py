@@ -118,13 +118,14 @@ class PhaseTableTests(unittest.TestCase):
                 self.assertIn(date_arg, (None, "proc_date"))
 
     def test_the_currency_sweeps_are_not_reachable_from_this_harness(self):
-        """The two defective F40 deletes must not be submittable by typo.
+        """The two currency sweeps must not be submittable by typo.
 
-        They are implemented, and the operator daemon's POST_DB_CHAIN carries
-        them, so `IMPLEMENTED_JOB_TYPES` alone does not exclude them. The
-        exclusion is this table's, and it is deliberate: `delete_superseded_rows`
-        joins `merges.sid` to image ids and "should not run on data anyone wants
-        to keep".
+        They are implemented and the route table's POST_DB_CHAIN carries them,
+        so `IMPLEMENTED_JOB_TYPES` alone does not exclude them. The exclusion
+        is this table's, and it stands until the team re-enables the sweeps:
+        they shipped joining `merges.sid` to image ids ("should not run on
+        data anyone wants to keep"); the predicates were corrected on
+        2026-09-15, the operator daemon's registry still leaves them out.
         """
         from pipeline.test import live_w9_ramp
         from submission import routes

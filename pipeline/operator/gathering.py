@@ -397,13 +397,17 @@ REGISTRY = (
     # used to sit here, between statistics and merge-dedup, and this
     # REGISTRY was the only live path that carried them: the daemon fans a
     # pass out over `job_types_for_class` below, which reads this tuple.
-    # They are the defective deletes — `delete_superseded_rows` joins
+    # They shipped as defective deletes — `delete_superseded_rows` joined
     # `merges.sid` to image ids (pipeline/stages/catalog_db.py) — that must
     # not run on data anyone wants to keep, and unregistering them here is
     # what disables them in code rather than leaving them to a deploy-time
-    # disposition. Their gatherers, sequences, routes and workflow
-    # definitions are intentionally left in place so the rewrite has
-    # something to come back to; nothing reaches them now. The post chain's
+    # disposition. The predicates were corrected on 2026-09-15
+    # (`catalog_db.delete_superseded_merge_rows` reaches the image through
+    # `sources`; `delete_superseded_source_rows` sweeps the sources children
+    # by field via the inheritance parent — verified on PostgreSQL). Their
+    # gatherers, sequences, routes and workflow definitions are in place;
+    # re-registering them here is the team's call, and nothing reaches them
+    # until it is made. The post chain's
     # only surface is `rapidctl run start --phase`, whose own phase table
     # (pipeline/operatorctl/run.py) has never listed the sweeps.
     _registry_row(JOB_TYPE_MERGE_DEDUP, opclasses.PROMPT_PROCESSING,

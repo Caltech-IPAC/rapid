@@ -322,6 +322,80 @@ def delete_superseded_rows(cursor, tablename: str, prototype: str,
     return removed
 
 
+def delete_superseded_merge_rows(cursor, tablename: str) -> int:
+    """Remove a field's merge rows whose SOURCE's difference image is not current.
+
+    **The identity spaces.** A `merges_<field>` row is `(aid, sid)`; `sid` is
+    a `sources` row's primary key, and the image it derives from is reached
+    through `sources.pid` -> `diffimages.pid`. The generic
+    `delete_superseded_rows` compares one column of the child with one
+    column of an identity table, which is the wrong model here: called with
+    `join_column="sid", identity_table="diffimages", identity_column="pid"`
+    it compares a source id with an image id — two unrelated sequences — and
+    deletes whichever rows happen to collide. Verified on PostgreSQL 18 with
+    colliding ids (2026-09-15): the one-hop form deleted a row under a
+    pinned image and a current row and KEPT the demoted one; this two-hop
+    form deleted exactly the demoted one, in either sweep order.
+
+    `sources` is the inheritance parent, so the join reaches every
+    `sources_<date>_<sca>` child. `vbest IN (1, 2)` is what "current" means
+    (1 current-best, 2 a locked operator pin). A merge whose source row has
+    itself been swept is superseded by the same rule and goes too.
+
+    Dev's `pruneNotBestMerges.py` (0d67e4ea) built a temporary table of
+    not-best sids from `sources JOIN diffimages ON pid` and deleted merges
+    by `sid IN (...)`; this is that intent as one statement.
+    """
+    validate_child_name(tablename, "merges")
+    require_table(cursor, tablename, "merges")
+
+    cursor.execute(
+        sql.SQL(
+            "DELETE FROM {child} AS m WHERE NOT EXISTS ("
+            "  SELECT 1 FROM sources AS s"
+            "  JOIN diffimages AS d ON d.pid = s.pid"
+            "  WHERE s.sid = m.sid AND d.vbest IN (1, 2))").format(
+                child=sql.Identifier(tablename)))
+    removed = cursor.rowcount or 0
+
+    logger.info("merge currency sweep on %s removed %d superseded row(s)",
+                tablename, removed)
+    return removed
+
+
+def delete_superseded_source_rows(cursor, field: int) -> int:
+    """Remove a field's SOURCE rows whose difference image is not current.
+
+    This is the sweep dev's `pruneNotBestSources.py` performed
+    (`DELETE FROM sources_<child> AS a USING diffimages AS b WHERE a.pid =
+    b.pid AND b.vbest = 0`, 0d67e4ea) and that nothing on smdc performed
+    until now: `sweep_source_currency` deleted from `merges_<field>` — the
+    same table as the merge sweep — through `merges.sid = l2files.rid`, two
+    unrelated identity spaces. On the same PostgreSQL check as above that
+    predicate deleted every row of the table.
+
+    The unit is per FIELD (`gather_source_currency_units`), and the sources
+    children are per (date, SCA), so the rows of one field live across many
+    children. The DELETE therefore targets the inheritance PARENT with a
+    `field` predicate; PostgreSQL routes it to every child (EXPLAIN shows a
+    Delete on each child), using the per-child `field` index migration 007
+    carries. `vbest IN (1, 2)` is what "current" means, as everywhere else.
+    """
+    field = int(field)
+
+    cursor.execute(
+        sql.SQL(
+            "DELETE FROM sources AS s WHERE s.field = %s AND NOT EXISTS ("
+            "  SELECT 1 FROM diffimages AS d"
+            "  WHERE d.pid = s.pid AND d.vbest IN (1, 2))"),
+        (field,))
+    removed = cursor.rowcount or 0
+
+    logger.info("source currency sweep for field %d removed %d superseded "
+                "row(s)", field, removed)
+    return removed
+
+
 def count_duplicate_groups(cursor, tablename: str, prototype: str) -> int:
     """How many duplicate identity groups a per-field table holds.
 

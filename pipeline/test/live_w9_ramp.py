@@ -70,11 +70,13 @@ logger = logging.getLogger("w9.ramp")
 # looked up as a pair, and an unknown phase is an error rather than a default.
 #
 # `merge-currency-sweep` and `source-currency-sweep` are deliberately ABSENT.
-# They are implemented and the operator daemon's POST_DB_CHAIN carries them,
-# but they are the defective F40 deletes (`delete_superseded_rows` joins
-# `merges.sid` to image ids) that "should not run on data anyone wants to
-# keep". Omitting them here means a ramp cannot submit one by typo; the run
-# that needs them has to add them back deliberately.
+# They are implemented and the route table's POST_DB_CHAIN carries them, but
+# the operator daemon's registry does not (project ruling 2026-09-12): they
+# shipped as the F40 deletes that joined `merges.sid` to image ids and
+# "should not run on data anyone wants to keep". The predicates have since
+# been corrected (`catalog_db.delete_superseded_merge_rows` /
+# `delete_superseded_source_rows`, 2026-09-15); re-enabling the sweeps is a
+# team decision, and until it is made a ramp still cannot submit one by typo.
 #
 # The two date-scoped gatherers take a processing date the others do not, so
 # the table records the calling convention alongside the pair rather than
