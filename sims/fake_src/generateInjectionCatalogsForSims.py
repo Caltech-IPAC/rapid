@@ -114,7 +114,8 @@ if __name__ == '__main__':
 
     '''
     Generate all fake-source injection catalogs with fixed sky positions for the fields covered
-    by the simulations and upload them to s3://rapid-pipeline-files/injection_catalogs_subdir.
+    by the simulations and upload them to s3://<job_info_s3_bucket_base>/<injection_catalogs_subdir>,
+    both from the .ini ([JOB_PARAMS] and [FAKE_SOURCES]).
     Field number is also known as rtid (Roman tessellation ID).
     '''
 
@@ -198,7 +199,8 @@ if __name__ == '__main__':
 
         # Find union using set operations
 
-        union_list = list(set(rtids_list).union(sciimg_overlapping_rtids))
+        # Sorted, so catalogues are generated in a deterministic order across runs.
+        union_list = sorted(set(rtids_list).union(sciimg_overlapping_rtids))
 
 
         # Compare lists.
