@@ -51,6 +51,7 @@ END = os.environ.get("W9_END", "2027-10-08 00:00:00")
 # side effects, so this script no longer needs to fake
 # STARTDATETIME/ENDDATETIME to satisfy `virtualPipelineOperator`'s old
 # module-scope startup before importing it.
+from pipeline.operator import gathering as operator_gathering
 from pipeline.operator.gathering import mjd_window, min_images_to_coadd
 from pipeline.operator.submission import submission_env
 
@@ -209,11 +210,17 @@ def main():
             dbh, START, END, start_mjdobs=start_mjd, end_mjdobs=end_mjd,
             min_images_to_coadd=min_coadd)
     elif date_arg == "proc_date":
-        # The processing date these units are scoped to. Defaults to the
-        # window start's date -- the socsim rerun processes one obsdate
-        # window -- and W9_PROC_DATE overrides it for a run whose products
-        # landed on another date.
-        proc_date = os.environ.get("W9_PROC_DATE", START[:10].replace("-", ""))
+        # The processing date these units are scoped to. The default is the
+        # operator's own rule, `processing_date_for`: the day this pass runs,
+        # UTC. It used to default to the OBSERVATION window's start date,
+        # which is the rule pipeline/operator/gathering.py records as refuted
+        # live — every fact the post-DB chain enumerates against is stamped
+        # with the day the pipeline did the work (`diffimages.created`), not
+        # the observation date, so the old default matched nothing, gathered
+        # zero units and exited 0 with "nothing ready". W9_PROC_DATE still
+        # overrides it for a run whose products landed on another day.
+        proc_date = os.environ.get(
+            "W9_PROC_DATE", operator_gathering.processing_date_for(None))
         print(f"    proc_date  {proc_date}")
         units = gatherer(dbh, proc_date)
     else:
@@ -243,6 +250,14 @@ def main():
     capped = _capped(units, cap)
     print(f"    gathered   {len(capped)} unit(s) (cap {cap})")
     if not capped:
+        if date_arg == "proc_date":
+            # A zero-unit gather for a date-scoped phase is either "not ready
+            # yet" (crossmatch before catalog-load completes -- legitimate,
+            # hence still exit 0) or a wrong processing date, which used to
+            # look identical. Name the date so the second case is visible.
+            print(f"    WARNING: no {phase} units for processing date "
+                  f"{proc_date}; if products exist for another day, set "
+                  f"W9_PROC_DATE=yyyymmdd")
         print(json.dumps({"run_id": run_id, "phase": phase, "cap": cap,
                           "submitted_units": 0, "batches": 0,
                           "note": "nothing ready in the window"}))
