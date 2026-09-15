@@ -525,6 +525,48 @@ def _diffimage_parents(conn, field, tag):
     return expid, rid, fid, rfid
 
 
+def make_refimage(conn, field, ppid=12):
+    """One `refimages` row, minimal but real. Returns `(rfid, fid)`.
+
+    Lighter than `_diffimage_parents` on purpose: `refimages` has no FK to
+    `exposures` or `l2files`, so a caller that only needs a reference image
+    should not mint an exposure and an L2 file to get one. `fid` is READ from
+    the seeded `filters` rather than invented, for the same reason as there —
+    a filter row this fixture made up would be in the catalogue the pipeline
+    reads.
+
+    `version` is max+1 over the identity group because `refimagespk` is UNIQUE
+    on `(field, fid, ppid, version)`, so a fixed version would make the SECOND
+    call in a suite collide with the first, and the failure would look like
+    the defect under test rather than like a fixture that repeated itself.
+
+    Everything else required — `svid`, `archivestatus`, `infobits`, and since
+    migration 126 `reference_set_id` — is filled from the catalog by
+    `_insert_filling_required`, which resolves the FK columns to real parents.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT fid FROM filters ORDER BY fid LIMIT 1")
+        row = cur.fetchone()
+        if row is None:
+            raise AssertionError(
+                "no rows in `filters`; 009-seed-data.sql seeds them, so an "
+                "empty table means the stream was not fully applied")
+        fid = row[0]
+
+        cur.execute(
+            "SELECT coalesce(max(version), 0) + 1 FROM refimages"
+            "  WHERE field = %s AND fid = %s AND ppid = %s",
+            [field, fid, ppid])
+        version = cur.fetchone()[0]
+
+    tag = uuid.uuid4().hex[:8]
+    rfid = _insert_filling_required(
+        conn, "refimages", "rfid",
+        {"field": field, "fid": fid, "ppid": ppid, "version": version,
+         "vbest": 1, "filename": f"ref/{RUN_TAG}/{tag}.fits"})
+    return rfid, fid
+
+
 def make_diffimage(conn, attempt_id, field, ppid, created=None, vbest=1,
                    sca=1):
     """One `diffimages` row, minimal but real, for the work-inventory tests.
