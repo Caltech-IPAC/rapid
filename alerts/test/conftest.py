@@ -106,6 +106,67 @@ def write_sextractor_refcat(path, entries):
     return str(path)
 
 
+def make_ned_table(entries):
+    """Column arrays keyed by providers.NED_COLUMNS from a list of dicts.
+
+    The in-memory stand-in for a NED slice, as a NedSliceReader would
+    return it: missing numerics are NaN, missing strings are None.
+
+    Parameters
+    ----------
+    entries : list of dict
+        One NED object each: requires "ra", "dec"; "prefname" defaults
+        to NED0001.., "ptype" to "G" (passes the host selection), "z" and
+        "zunc" to NaN, "zflag" to None.
+    """
+    n = len(entries)
+    return {
+        "prefname": np.array([e.get("prefname", f"NED{i:04d}")
+                              for i, e in enumerate(entries, start=1)],
+                             dtype=object),
+        "ra": np.array([e["ra"] for e in entries], dtype=float),
+        "dec": np.array([e["dec"] for e in entries], dtype=float),
+        "ptype": np.array([e.get("ptype", "G") for e in entries],
+                          dtype=object),
+        "z": np.array([e.get("z", np.nan) for e in entries], dtype=float),
+        "zunc": np.array([e.get("zunc", np.nan) for e in entries],
+                         dtype=float),
+        "zflag": np.array([e.get("zflag") for e in entries], dtype=object),
+    } if n else {k: np.array([], dtype=float if k in ("ra", "dec", "z", "zunc")
+                                     else object)
+                 for k in ("prefname", "ra", "dec", "ptype", "z", "zunc",
+                           "zflag")}
+
+
+def fake_ned_reader(table, coverage=True, log=None):
+    """A NedSliceReader over an in-memory make_ned_table() result.
+
+    Cone-filters the table exactly as a real backend would, so the
+    provider's bounding-cone arithmetic is exercised. With
+    ``coverage=False`` it returns None ("slice unavailable"), which the
+    provider must report as "not run". If ``log`` is a list, every
+    (ra, dec, radius_arcsec) request is appended to it.
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    cat = (SkyCoord(table["ra"] * u.deg, table["dec"] * u.deg)
+           if table["ra"].size else None)
+
+    def _read(ra_deg, dec_deg, radius_arcsec):
+        if log is not None:
+            log.append((ra_deg, dec_deg, radius_arcsec))
+        if not coverage:
+            return None
+        if cat is None:
+            return {k: v[:0] for k, v in table.items()}
+        sep = SkyCoord(ra_deg * u.deg, dec_deg * u.deg).separation(cat)
+        keep = sep.arcsec <= radius_arcsec
+        return {k: v[keep] for k, v in table.items()}
+
+    return _read
+
+
 @pytest.fixture(scope="session")
 def tpv_header():
     # Linear terms lifted from a real RAPID chip; distortion terms are
@@ -366,18 +427,20 @@ def chip_data(tpv_header, job_dir):
 def make_provider(chip_data):
     """Factory for independent AlertDataProviders over the same fake chip.
 
-    kona_lookup is passed through to the provider (see providers.py), so
-    tests can inject solar-system predictions for the fake chip's
-    exposure (expid 42) without any KONA machinery.
+    kona_lookup and ned_reader are passed through to the provider (see
+    providers.py), so tests can inject solar-system predictions for the
+    fake chip's exposure (expid 42) and a NED slice (fake_ned_reader)
+    without any KONA or network machinery.
     """
     from alerts.providers import AlertDataProvider
 
     providers = []
 
-    def _make(diff_flavor="sfft", kona_lookup=None, refcat=True):
+    def _make(diff_flavor="sfft", kona_lookup=None, refcat=True,
+              ned_reader=None):
         provider = AlertDataProvider(
             FakeDB(chip_data), diff_flavor=diff_flavor,
-            kona_lookup=kona_lookup, refcat=refcat)
+            kona_lookup=kona_lookup, refcat=refcat, ned_reader=ned_reader)
         providers.append(provider)
         return provider
 

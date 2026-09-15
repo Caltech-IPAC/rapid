@@ -23,14 +23,14 @@ from pathlib import Path
 # Support both `python -m alerts.cli` (module) and `python cli.py` (script).
 if __package__:
     from .produce import batch_produce, open_alert_archive, produce_alert
-    from .providers import AlertDataProvider
+    from .providers import AlertDataProvider, AstroqueryNedReader
 else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from alerts.produce import (batch_produce, open_alert_archive,
                                       produce_alert)
-    from alerts.providers import AlertDataProvider
+    from alerts.providers import AlertDataProvider, AstroqueryNedReader
 
 from database.modules.utils.rapid_db import RAPIDDB
 
@@ -62,7 +62,7 @@ def load_kona_predictions(path: str | Path) -> dict[int, dict]:
 def make_provider(diff_flavor: str = "sfft",
                   kona_file: str | Path | None = None,
                   refcat: bool = True,
-                  ned_reader=None) -> AlertDataProvider:
+                  ned: bool = True) -> AlertDataProvider:
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
 
@@ -78,11 +78,15 @@ def make_provider(diff_flavor: str = "sfft",
         Cross-match detections against the field's reference-image
         catalog (on by default; see providers.get_ref_matches). When off,
         refStarMatches and refGalaxyMatches stay null.
-    ned_reader : providers.NedSliceReader, optional
-        NED backend, ``(ra_deg, dec_deg, radius_arcsec) -> column arrays
-        or None`` (see the NED cross-match section of providers.py).
-        While None -- the default until a reader ships -- NED matching is
-        off: nedMatches stays null.
+    ned : bool, optional
+        Cross-match detections against NED over the web service
+        (providers.AstroqueryNedReader; one cone query per chip, ~3-12 s).
+        On by default, like refcat. It is a network dependency on a shared
+        external service, and astroquery is imported only when a query is
+        made -- so an image without it, or an unreachable NED, degrades
+        per chip to a logged warning and a null nedMatches rather than an
+        error. When off, nedMatches stays null. To use a different NED
+        backend, construct AlertDataProvider with ``ned_reader=`` directly.
 
     Returns
     -------
@@ -98,6 +102,12 @@ def make_provider(diff_flavor: str = "sfft",
     kona_lookup = None
     if kona_file is not None:
         kona_lookup = load_kona_predictions(kona_file).get
+
+    # astroquery is imported inside the reader's __call__, and a failure
+    # there is caught per chip by the provider -- so an environment without
+    # it degrades to a null nedMatches (with a warning) rather than failing
+    # at startup. NED is on by default; --no-ned turns it off.
+    ned_reader = AstroqueryNedReader() if ned else None
 
     # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
     repo_root = Path(__file__).resolve().parents[1]
@@ -169,6 +179,11 @@ def main(argv: list[str] | None = None) -> int:
                              "(refStarMatches/refGalaxyMatches stay null); "
                              "on by default, staging one mosaic catalog "
                              "per reference image from S3")
+    parser.add_argument("--no-ned", action="store_true",
+                        help="skip the NED cross-match (nedMatches stays "
+                             "null); on by default, one NED web-service "
+                             "cone query per chip (~3-12 s, needs network "
+                             "and astroquery)")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="diagnostic verbosity on stderr; quiet by "
@@ -191,7 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     # Make provider
     provider = make_provider(diff_flavor=args.diff_flavor,
                              kona_file=args.kona_file,
-                             refcat=not args.no_refcat)
+                             refcat=not args.no_refcat,
+                             ned=not args.no_ned)
 
     # Make producer, if kafka arg is True
     producer = None
