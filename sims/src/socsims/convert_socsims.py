@@ -60,12 +60,27 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 # Define input and output S3 buckets.
 
-#bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
-#bucket_name_output = "socsim-20260427-lite"
+# Both REQUIRED from the environment; there is no safe default bucket. A
+# forgotten -e INPUTBUCKET=... on an unattended run must not silently convert
+# some other, unrelated dataset — the rule database/sims/db_register_socsim_files.py
+# already applies (a5108ec7). The set names live in the run manifest, not
+# here; for the record, the current SOC-sim set (dev 3f22b1ba) is
+#   INPUTBUCKET  = socsims-fakesrc-asdf-20260807       written by inject_fake_sources_into_l2_asdf_files.py
+#   OUTPUTBUCKET = socsims-fakesrc-fits-20260807-lite  read by database/sims/db_register_socsim_files.py
+# and its injection catalogues are [FAKE_SOURCES] injection_catalogs_subdir =
+# injection_catalogs_20260811. Earlier sets: socsims-fakesrc-asdf-20260709 /
+# socsims-fakesrc-fits-20260709-lite, and before injection
+# stpubdata/roman/nexus/soc_simulations/r00340/l2 / socsim-20260427-lite.
 # The WCS correction has already been done by sims/src/socsims/inject_fake_sources_into_l2_asdf_files.py
-# Note the following new S3 buckets:
-bucket_name_input = "socsims-fakesrc-asdf-20260709"
-bucket_name_output = "socsims-fakesrc-fits-20260709-lite"
+
+bucket_name_input = os.getenv('INPUTBUCKET')
+bucket_name_output = os.getenv('OUTPUTBUCKET')
+
+for _env_name, _env_value in (('INPUTBUCKET', bucket_name_input),
+                              ('OUTPUTBUCKET', bucket_name_output)):
+    if not _env_value:
+        print(f"*** Error: Env. var. {_env_name} not set; quitting...")
+        exit(64)
 
 
 # Highest order of the TAN-SIP distortion polynomial fitted to the gWCS. Dev

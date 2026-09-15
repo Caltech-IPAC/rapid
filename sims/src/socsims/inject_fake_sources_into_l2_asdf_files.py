@@ -64,10 +64,22 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# Define input and output S3 buckets.
+# Define input and output S3 buckets. The input is the public SOC-simulation
+# release, a fixed upstream source. The output is one of OUR sets and is
+# REQUIRED from the environment; there is no safe default (the rule
+# database/sims/db_register_socsim_files.py applies, a5108ec7). For the run
+# manifest: the current set (dev c3cd5464) is
+#   OUTPUTBUCKET = socsims-fakesrc-asdf-20260807   read by convert_socsims.py
+# paired with [FAKE_SOURCES] injection_catalogs_subdir = injection_catalogs_20260811.
+# The earlier set was socsims-fakesrc-asdf-20260709.
 
 bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
-bucket_name_output = "socsims-fakesrc-asdf-20260709"
+bucket_name_output = os.getenv('OUTPUTBUCKET')
+
+if not bucket_name_output:
+
+    print("*** Error: Env. var. OUTPUTBUCKET not set; quitting...")
+    exit(64)
 
 
 # Create S3-client and S3-resource objects.

@@ -21,6 +21,7 @@ rimtimsim_lite/rimtimsim_WFI_F087_SCA02_000017675_lite.fits
 from astropy.io import fits
 import numpy as np
 import boto3
+import os
 import re
 from astropy.wcs import WCS
 
@@ -28,8 +29,21 @@ import modules.utils.rapid_pipeline_subs as util
 from pipeline.runtime.process import run_tool
 
 
-bucket_name_input = "rimtimsim-251210"
-bucket_name_output = "rimtimsim-20260401-lite"
+# Both REQUIRED from the environment; there is no safe default bucket (the
+# rule database/sims/db_register_socsim_files.py applies, a5108ec7). For the
+# run manifest: the current rimtimsim set (dev d3c23177, f2ce484c) is
+#   INPUTBUCKET  = rimtimsim-260622        the 2026-06-22 delivery
+#   OUTPUTBUCKET = rimtimsim-260622-lite   read by database/sims/db_register_rimtimsim_files.py
+# The earlier set was rimtimsim-251210 / rimtimsim-20260401-lite.
+
+bucket_name_input = os.getenv('INPUTBUCKET')
+bucket_name_output = os.getenv('OUTPUTBUCKET')
+
+for _env_name, _env_value in (('INPUTBUCKET', bucket_name_input),
+                              ('OUTPUTBUCKET', bucket_name_output)):
+    if not _env_value:
+        print(f"*** Error: Env. var. {_env_name} not set; quitting...")
+        exit(64)
 
 
 # Create S3 resource and client objects.
