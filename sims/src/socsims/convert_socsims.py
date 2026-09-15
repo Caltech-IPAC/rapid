@@ -68,6 +68,13 @@ bucket_name_input = "socsims-fakesrc-asdf-20260709"
 bucket_name_output = "socsims-fakesrc-fits-20260709-lite"
 
 
+# Highest order of the TAN-SIP distortion polynomial fitted to the gWCS. Dev
+# hoisted this to module scope in three commits (3f22b1ba, e09845b4, c58ef15d)
+# whose net effect is no change: the value briefly became 4 and went back to 5.
+
+sip_distortion_degree = 5
+
+
 # Create S3-client and S3-resource objects.
 
 s3_client = boto3.client('s3')
@@ -192,19 +199,17 @@ def run_single_core_job(asdf_files,index_thread):
 
 
             # Convert from ASDF format to FITS format, and add required FITS keywords.
-            # Define highest order for computing SIP distortion.
-
-            degree = 5
+            # The SIP distortion order is the module-level sip_distortion_degree.
 
             if num_cores == 1:
-                print(f"degree = {degree}\n")
+                print(f"sip_distortion_degree = {sip_distortion_degree}\n")
             else:
-                fh.write(f"degree = {degree}\n")
+                fh.write(f"sip_distortion_degree = {sip_distortion_degree}\n")
 
             asdf_to_fits(
                 input_asdf_file_gunzipped,
                 output_fits_file,
-                sip_degree=degree
+                sip_degree=sip_distortion_degree
                 )
 
 
@@ -589,6 +594,12 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     phot = getattr(dm.meta, "photometry", None)
     conv = getattr(phot, "conversion_megajanskys", None)
     pixarea = getattr(phot, "pixel_area", None)
+    # roman_datamodels carries these as astropy Quantities (MJy/sr and sr) in
+    # recent versions; float() on a dimensioned Quantity raises, and comparing
+    # one with 0 can too, which would send every such file to the nominal
+    # table below. Take the bare values in the units the formula assumes.
+    conv = getattr(conv, "value", conv)
+    pixarea = getattr(pixarea, "value", pixarea)
     if conv and pixarea and conv > 0 and pixarea > 0:
         zptmag = -2.5 * np.log10(float(conv) * 1.0e6 * float(pixarea) / 3631.0)
     else:
