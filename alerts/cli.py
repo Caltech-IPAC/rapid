@@ -33,14 +33,14 @@ from pathlib import Path
 # Support both `python -m alerts.cli` (module) and `python cli.py` (script).
 if __package__:
     from .produce import batch_produce, open_alert_archive, produce_alert
-    from .providers import AlertDataProvider
+    from .providers import AlertDataProvider, AstroqueryNedReader
 else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from alerts.produce import (batch_produce, open_alert_archive,
                                       produce_alert)
-    from alerts.providers import AlertDataProvider
+    from alerts.providers import AlertDataProvider, AstroqueryNedReader
 
 from database.modules.utils.rapid_db import RAPIDDB
 
@@ -70,7 +70,8 @@ def load_kona_predictions(path: str | Path) -> dict[int, dict]:
 
 
 def make_provider(db=None, kona_file: str | Path | None = None,
-                  refcat: bool = True) -> AlertDataProvider:
+                  refcat: bool = True,
+                  ned: bool = True) -> AlertDataProvider:
 
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
@@ -93,6 +94,15 @@ def make_provider(db=None, kona_file: str | Path | None = None,
         Cross-match detections against the field's reference-image
         catalog (on by default; see providers.get_ref_matches). When off,
         refStarMatches and refGalaxyMatches stay null.
+    ned : bool, optional
+        Cross-match detections against NED over the web service
+        (providers.AstroqueryNedReader; one cone query per chip, ~3-12 s).
+        On by default, like refcat. It is a network dependency on a shared
+        external service, and astroquery is imported only when a query is
+        made -- so an image without it, or an unreachable NED, degrades
+        per chip to a logged warning and a null nedMatches rather than an
+        error. When off, nedMatches stays null. To use a different NED
+        backend, construct AlertDataProvider with ``ned_reader=`` directly.
 
     Returns
     -------
@@ -111,6 +121,10 @@ def make_provider(db=None, kona_file: str | Path | None = None,
     if kona_file is not None:
         kona_lookup = load_kona_predictions(kona_file).get
 
+    # astroquery is imported inside the reader's __call__, so an image
+    # without it only fails if --ned is actually used
+    ned_reader = AstroqueryNedReader() if ned else None
+
     if db is None:
         # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
         repo_root = Path(__file__).resolve().parents[1]
@@ -125,7 +139,8 @@ def make_provider(db=None, kona_file: str | Path | None = None,
                 "fallback), and that this machine can reach the DB (VPN up / "
                 "EC2 security group allows it)")
 
-    return AlertDataProvider(db, kona_lookup=kona_lookup, refcat=refcat)
+    return AlertDataProvider(db, kona_lookup=kona_lookup, refcat=refcat,
+                             ned_reader=ned_reader)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -184,6 +199,11 @@ def main(argv: list[str] | None = None) -> int:
                              "(refStarMatches/refGalaxyMatches stay null); "
                              "on by default, staging one mosaic catalog "
                              "per reference image from S3")
+    parser.add_argument("--no-ned", action="store_true",
+                        help="skip the NED cross-match (nedMatches stays "
+                             "null); on by default, one NED web-service "
+                             "cone query per chip (~3-12 s, needs network "
+                             "and astroquery)")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="diagnostic verbosity on stderr; quiet by "
@@ -205,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Make provider
     provider = make_provider(kona_file=args.kona_file,
-                             refcat=not args.no_refcat)
+                             refcat=not args.no_refcat,
+                             ned=not args.no_ned)
 
     # NO SEND ROUTE EXISTS HERE ANY MORE (brief E2, rule 14). This CLI used to
     # construct a real producer and publish, which made it a SECOND way onto

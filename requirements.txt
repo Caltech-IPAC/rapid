@@ -11,3 +11,9 @@ boto3
 # made "registration works" depend on a fact no dependency list stated
 # (round-3 #2). 1.20.0 is what the deployed image carries.
 healpy
+# The alerts NED cross-match (providers.AstroqueryNedReader, on by default)
+# queries the NED web service through astroquery. The import is deferred to
+# query time, so without it every chip logs a warning and emits a null
+# nedMatches instead of failing -- but the deployed image must carry it for
+# the match to actually run there (rapid_systems environment-rapid.yml).
+astroquery>=0.4.7

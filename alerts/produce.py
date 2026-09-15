@@ -43,10 +43,10 @@ import fastavro.write
 from fastavro.types import Schema
 
 from .param_registry import (ALERT_PARAMS, DIA_FORCED_SOURCE_PARAMS, DIA_OBJECT_PARAMS,
-                     DIA_SOURCE_PARAMS, REF_MATCH_PARAMS, SS_MATCH_PARAMS,
-                     RECORDS, VERSION, Param, Status, is_nullable)
+                     DIA_SOURCE_PARAMS, NED_MATCH_PARAMS, REF_MATCH_PARAMS,
+                     SS_MATCH_PARAMS, RECORDS, VERSION, Param, Status, is_nullable)
 from .providers import (PRV_WINDOW_DAYS, AlertDataProvider, Source,
-                        ForcedPhot, ObjectRecord, RefMatch, SSMatch)
+                        ForcedPhot, NedMatch, ObjectRecord, RefMatch, SSMatch)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ BUILDER_DATA_CLASSES = {
     "diaObject": ObjectRecord,
     "ssMatch": SSMatch,
     "refMatch": RefMatch,
+    "nedMatch": NedMatch,
 }
 
 # Every match record ("ssMatch", "refMatch", future "gaiaMatch", ...) must
@@ -273,6 +274,22 @@ def build_ref_match(match: RefMatch) -> dict[str, Any]:
     return build_record(REF_MATCH_PARAMS, match)
 
 
+def build_ned_match(match: NedMatch) -> dict[str, Any]:
+    """Build a nedMatch record dict from a providers.NedMatch.
+
+    Parameters
+    ----------
+    match : providers.NedMatch
+        One NED candidate host galaxy matched near the detection.
+
+    Returns
+    -------
+    dict
+        nedMatch param name -> value, per the registry.
+    """
+    return build_record(NED_MATCH_PARAMS, match)
+
+
 # ---------------------------------------------------------------------------
 # Alert assembly
 # ---------------------------------------------------------------------------
@@ -356,6 +373,11 @@ def assemble_alert_for_source(provider: AlertDataProvider,
         ref_star_matches = [build_ref_match(m) for m in stars]
         ref_galaxy_matches = [build_ref_match(m) for m in galaxies]
 
+    # NED cross-match: None = matching could not run (disabled, or NED
+    # could not be queried); otherwise the nearest candidate host galaxies
+    # (see providers.select_host_candidates for what qualifies).
+    ned_matches = provider.get_ned_matches(source)
+
     cutouts = provider.get_cutouts(source)
 
     alert = {
@@ -370,6 +392,8 @@ def assemble_alert_for_source(provider: AlertDataProvider,
                       else [build_ss_match(m) for m in ss_matches]),
         "refStarMatches": ref_star_matches,
         "refGalaxyMatches": ref_galaxy_matches,
+        "nedMatches": (None if ned_matches is None
+                       else [build_ned_match(m) for m in ned_matches]),
         "cutoutDifference": cutouts.difference,
         "cutoutScience": cutouts.science,
         "cutoutReference": cutouts.template,

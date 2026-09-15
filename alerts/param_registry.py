@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeAlias
 
-VERSION = "00.03"
+VERSION = "00.04"
 
 # Keep for type checking and function hints
 AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
@@ -565,6 +565,53 @@ REF_MATCH_PARAMS = (
 
 
 # ---------------------------------------------------------------------------
+# nedMatch -- NED (NASA/IPAC Extragalactic Database) object near the
+# triggering source, built from providers.NedMatch. Follows the same
+# *Match envelope as refMatch above.
+#
+# Only objects passing providers.select_host_candidates() are matched, so
+# these are candidate host galaxies rather than every NED entry near the
+# position -- see that function for the selection and why it exists. Each
+# match carries its own `type` so consumers can re-cut.
+# ---------------------------------------------------------------------------
+
+_NED_SRC = ("computed at assembly from NED, restricted to candidate host "
+            "galaxies (providers.select_host_candidates)")
+
+NED_MATCH_PARAMS = (
+    Param("prefName",      "string",           "NED preferred object name; the key for any NED lookup "
+                                               "(NED has no stable numeric object id in this product)",
+                        IMPLEMENTED, _NED_SRC, attr="prefname"),
+    Param("ra",            "double",           "Right ascension of the NED object; ICRS [deg]",
+                        IMPLEMENTED, _NED_SRC),
+    Param("dec",           "double",           "Declination of the NED object; ICRS [deg]",
+                        IMPLEMENTED, _NED_SRC),
+    Param("sep",           "float",            "Angular separation from the triggering source position [arcsec]",
+                        IMPLEMENTED, _NED_SRC),
+    Param("pa",            "float",            "Position angle from the triggering source to the NED object, "
+                                               "East of North [deg]",
+                        IMPLEMENTED, _NED_SRC),
+    Param("type",          ["null", "string"], "NED preferred object type (G, GPair, QSO, ...); null when NED "
+                                               "has not classified the entry. The host-candidate selection "
+                                               "applied at match time is providers.select_host_candidates, "
+                                               "recorded here so consumers can re-cut",
+                        IMPLEMENTED, _NED_SRC, attr="ptype"),
+    Param("z",             ["null", "float"],  "NED preferred redshift; null when NED has none. Frame is as "
+                                               "published (assumed heliocentric, not CMB-corrected -- NED does "
+                                               "not document this); check zFlag before using",
+                        IMPLEMENTED, _NED_SRC),
+    Param("zUnc",          ["null", "float"],  "Uncertainty in z; null when NED gives none. Always null on the "
+                                               "astroquery access path, which returns no uncertainty column",
+                        IMPLEMENTED, _NED_SRC, attr="zunc"),
+    Param("zFlag",         ["null", "string"], "NED redshift code: technique (S = spectroscopic, P = "
+                                               "photometric, M = modelled) + 2-char method + optional '?' "
+                                               "(uncertain), e.g. 'SLS'. Require zFlag[0] == 'S' for a secure "
+                                               "host redshift; without this z is not interpretable",
+                        IMPLEMENTED, _NED_SRC, attr="zflag"),
+)
+
+
+# ---------------------------------------------------------------------------
 # alert (top level) -- structural params, filled by produce.assemble_alert(),
 # ---------------------------------------------------------------------------
 
@@ -612,6 +659,17 @@ ALERT_PARAMS = (
                                 "null/empty semantics as refStarMatches",
                         IMPLEMENTED, "produce.assemble_alert() via provider.get_ref_matches()"),
 
+    # --- External-catalog cross-match ---------------------------------------------
+    Param("nedMatches",         ["null", {"type": "array", "items": "@nedMatch"}],
+                                "Nearest NED candidate host galaxies (max 3, nearest first) within "
+                                "NED_MATCH_RADIUS_ARCSEC of the triggering source; null if matching "
+                                "was not run (disabled, or NED unavailable/unreachable), empty if "
+                                "none within the radius; a full array (3) means the neighborhood may "
+                                "extend beyond what is reported. Restricted to host candidates by "
+                                "providers.select_host_candidates -- an unrestricted NED match is "
+                                "~98% non-galaxy at this depth",
+                        IMPLEMENTED, "produce.assemble_alert() via provider.get_ned_matches()"),
+
     # --- Image cutouts ----------------------------------------------------------
     Param("cutoutDifference",   ["null", "bytes"],   "FITS cutout of difference image",
                         IMPLEMENTED, "provider get_cutouts()"),
@@ -638,6 +696,7 @@ RECORDS = (
     Record("diaObject",       "Astronomical object derived from DIASources",             DIA_OBJECT_PARAMS),
     Record("ssMatch",         "Known solar system object predicted near the triggering source (stub)", SS_MATCH_PARAMS),
     Record("refMatch",        "Reference-image catalog source near the triggering source",             REF_MATCH_PARAMS),
+    Record("nedMatch",        "NED candidate host galaxy near the triggering source",                  NED_MATCH_PARAMS),
     Record("alert",           "Top-level alert record",                                  ALERT_PARAMS),
 )
 
