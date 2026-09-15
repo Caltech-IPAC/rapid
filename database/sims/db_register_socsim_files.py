@@ -295,6 +295,11 @@ def run_single_core_job(fits_files,index_thread):
         except Exception as e:
             n_failed += 1
             fh.write(f"*** Error: Registration failed for {input_fits_file}: {e}\n")
+            # The traceback goes to the per-thread log too: print_exc() writes
+            # to stderr only, and fh is the artifact an operator reads after a
+            # ProcessPoolExecutor run (e578ecc5 promised the call site would be
+            # named "in the log" and delivered it only to stderr).
+            fh.write(traceback.format_exc())
             fh.flush()
             print(f"*** Error: Registration failed for {input_fits_file}: {e}")
             traceback.print_exc()
@@ -821,7 +826,7 @@ def register_l2file(dbh,header,wcs,file,expid,fid,local_file=None):
 
     # Compute the sky tiles the image OVERLAPS, not just the one holding its
     # centre.  `field` above is one tile chosen by one point; an SCA covers
-    # several (median 7), and rapid_systems migration 100 gives l2files a
+    # several (median 7), and rapid_systems migration 101 gives l2files a
     # column for the whole footprint.  Computed here from the same WCS values
     # about to be written to the row, so the footprint and the WCS it derives
     # from are always consistent — and from the header's own NAXIS1/NAXIS2

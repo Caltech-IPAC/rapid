@@ -454,7 +454,7 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
 
     # Compute the sky tiles the image OVERLAPS, not just the one holding its
     # centre.  `field` above is one tile chosen by one point; an SCA covers
-    # several (median 7), and rapid_systems migration 100 gives l2files a
+    # several (median 7), and rapid_systems migration 101 gives l2files a
     # column for the whole footprint.  Computed here from the same WCS values
     # about to be written to the row, so the footprint and the WCS it derives
     # from are always consistent — and from the header's own NAXIS1/NAXIS2
