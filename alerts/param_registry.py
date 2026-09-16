@@ -147,6 +147,14 @@ _PSF_FLAG_NONFINITE_FLUX = 1 << 10     # non-finite fitted flux
 
 # RAPID-defined semantics for the derived boolean flag params; keeps alert
 # consumers insulated from photutils bit-layout changes.
+#
+# NOTE (2026-09-16): alerts are produced only for sources with flags == 0 --
+# the population the cross-match associates; see providers.ALERTABLE_FLAGS
+# and the comment block above it. Both derived booleans below are therefore
+# ALWAYS False on the wire. They date from when flagged detections were
+# expected to be alertable. Keep them (a stable schema, and a future-proof
+# slot if the rule changes) or drop them at the next schema bump -- but do
+# it deliberately; do not let a consumer discover it.
 _CENTROID_FAIL_BITS = (_PSF_FLAG_POS_OUTSIDE_IMAGE | _PSF_FLAG_POS_AT_BOUND
                        | _PSF_FLAG_NONFINITE_POS)
 _PSFFLUX_FAIL_BITS = (_PSF_FLAG_NONPOS_FLUX | _PSF_FLAG_NO_CONVERGENCE

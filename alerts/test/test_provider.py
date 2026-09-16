@@ -31,10 +31,11 @@ import pytest
 
 from alerts.produce import (batch_produce, load_schema,
                                   open_alert_archive, produce_alert)
-from alerts.providers import (AlertDataProvider, AssociationError,
-                              CutoutStagingError)
+from alerts.providers import (ALERTABLE_FLAGS, AlertDataProvider,
+                              AssociationError, CutoutStagingError,
+                              FlaggedSourceError)
 
-from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB
+from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB, make_source_row
 from test_clips import clip_to_numpy
 
 
@@ -58,11 +59,12 @@ def test_resolve_pid_unknown_exposure_raises(make_provider):
 
 # ---------------------------------------------------------------------------
 # missing associations are fatal: source cross-matching creates an object
-# for every source, so by alert time every detection has a merges row by
-# definition. A missing merges_<field> partition (seen live: pid 339271 ->
-# merges_4686817) or a missing merges row means cross-matching did not run
-# or failed -- both flows must abort loudly (AssociationError) instead of
-# shipping object-less alerts.
+# for every flags = 0 source, and the alert path selects exactly that
+# population (providers.ALERTABLE_FLAGS), so by alert time every detection
+# it handles has a merges row by definition. A missing merges_<field>
+# partition (seen live: pid 339271 -> merges_4686817) or a missing merges
+# row means cross-matching did not run or failed -- both flows must abort
+# loudly (AssociationError) instead of shipping object-less alerts.
 # ---------------------------------------------------------------------------
 
 def test_missing_field_partition_aborts(make_provider, chip_data):
@@ -84,6 +86,44 @@ def test_missing_merges_row_aborts(make_provider, chip_data):
     trigger = next(s for s in sources if s.sid == 9003)
     with pytest.raises(AssociationError, match="sid=9003"):
         provider.get_object_for_source(trigger)
+
+
+# ---------------------------------------------------------------------------
+# flagged detections are not alertable. The cross-match associates only
+# flags = 0 sources (pipeline/crossMatchSources.py), so the alert path must
+# select the same population -- providers.ALERTABLE_FLAGS. Before this rule
+# was applied here, every live chip (21-26% flagged) aborted with
+# AssociationError at its first flagged source and no batch could complete.
+# ---------------------------------------------------------------------------
+
+def test_flagged_detections_are_skipped_by_the_batch_path(
+        make_provider, chip_data, tpv_header, caplog):
+    # a failed PSF fit (bit 4, non-positive fitted flux) that the
+    # cross-match never associated -- exactly what live chips carry
+    chip_data.sources.append(
+        make_source_row(9005, 50.0, 60.0, 60500.5, tpv_header, flags=4))
+    provider = make_provider()
+    with caplog.at_level("INFO", logger="alerts.providers"):
+        sids = [s.sid for s in provider.iter_sources(CHIP_PID)]
+
+    assert sids == [9001, 9002, 9003]                 # 9005 never yielded
+    assert "1 flagged detections" in caplog.text     # and it is accounted for
+    assert ALERTABLE_FLAGS == 0                       # the rule this pins
+
+
+def test_flagged_sid_is_refused_on_the_single_alert_path(
+        make_provider, chip_data, tpv_header):
+    chip_data.sources.append(
+        make_source_row(9005, 50.0, 60.0, 60500.5, tpv_header, flags=4))
+    provider = make_provider()
+    # the refusal names the sid, the flags, and the rule -- and is NOT an
+    # AssociationError, which would wrongly claim the database is broken
+    with pytest.raises(FlaggedSourceError, match=r"sid=9005 .*flags=4"):
+        provider.get_detection(9005)
+    with pytest.raises(FlaggedSourceError):
+        produce_alert(provider, 9005)
+    # an unflagged neighbour is unaffected
+    assert provider.get_detection(9001).sid == 9001
 
 
 # ---------------------------------------------------------------------------

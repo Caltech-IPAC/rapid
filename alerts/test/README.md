@@ -31,7 +31,7 @@ run is normal and not a failure.
 |------|--------|
 | `test_schema.py` | Schema-registry consistency, alert assembly semantics, stub/nullable enforcement, Avro round-trip. Uses a hand-rolled provider — no DB, no files. |
 | `test_clips.py` | Cutout clips: the 0-based/1-based indexing regression, the WCS/position-consistency invariant, edge padding, header whitelist, multi-HDU loading. |
-| `test_provider.py` | `DatabaseProvider` behavior over a fake DB + synthetic job directory: `resolve_pid`, flavor selection, the cutout-failure degradation ladder, batch/single byte-identity, and `--save` archive round-trip. |
+| `test_provider.py` | `DatabaseProvider` behavior over a fake DB + synthetic job directory: `resolve_pid`, flavor selection, the cutout-failure degradation ladder, batch/single byte-identity, `--save` archive round-trip, and the alertable-population rule — flagged (`flags != 0`) detections are skipped by `iter_sources` and refused with `FlaggedSourceError` on the single-alert path, because the cross-match associates only `flags = 0` sources (`providers.ALERTABLE_FLAGS`). |
 | `test_benchmark.py` | The benchmark harness itself: the timing/memory/size JSONL is well-formed and `TimedProvider` is transparent. |
 | `test_benchmark_forced_phot.py` | Offline pieces of the forced-photometry cost benchmark: footprint geometry (incl. RA wrap), FP stdout/lightcurve parsing, run selection, the cost fit, and the report path. |
 | `test_ss_match.py` | Solar-system (KONA) association: sep/PA geometry vs astropy, radius/nearest-3 selection, the `--kona-file` loader, and the three ssMatches states end-to-end over the fake chip. |

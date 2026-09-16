@@ -71,6 +71,48 @@ logger = logging.getLogger(__name__)
 
 PRV_WINDOW_DAYS = 365.25  # default look-back window for previous detections
 
+# ===========================================================================
+# WHICH DETECTIONS GET ALERTS: ONLY SOURCES WITH flags == 0.
+#
+# This is the pipeline's rule, not an alerts-side choice. Source cross-
+# matching -- pipeline/crossMatchSources.py, docstring "Cross-match only
+# sources with flags = 0"; every query that feeds association carries
+# `AND a.flags = 0` -- associates ONLY unflagged detections with
+# astroobjects. A flagged detection therefore has no merges_<field> row and
+# no object BY DESIGN, and an alert cannot be built for it.
+#
+# The alert path used to select every source on a chip regardless of flags
+# and then abort the whole chip with AssociationError at the first flagged
+# one. Measured 2026-09-16 on dev (pids 338173, 343575, 343577): 21-26% of
+# the sources on every chip are flagged, and `associated <=> flags == 0`
+# held EXACTLY, zero exceptions either way -- so no chip could complete a
+# batch. Ninety percent of the flagged carry only bit 4 (non-positive fitted
+# flux), a real PSF-fit failure even for negative detections, which are
+# fitted on the separately produced negative-image catalog.
+#
+# Both entry points now apply the cross-match's own rule:
+#   iter_sources(pid)   selects flags = ALERTABLE_FLAGS only; the flagged
+#                       detections on the chip are counted and logged,
+#                       never yielded.
+#   get_detection(sid)  refuses a flagged sid with FlaggedSourceError.
+# AssociationError keeps its meaning -- "this should never happen" --
+# because the two components now agree on what a source is.
+#
+# CONSEQUENCES A FUTURE DEVELOPER MUST KNOW:
+#   * The diaSource fit-failure booleans derived from `flags` in
+#     param_registry.py (_CENTROID_FAIL_BITS, _PSFFLUX_FAIL_BITS) are now
+#     always False on the wire; they date from when flagged detections were
+#     expected to be alertable. Keep or drop them deliberately.
+#   * If crossMatchSources.py ever changes its flags rule, change
+#     ALERTABLE_FLAGS in lockstep -- or AssociationError comes straight back
+#     on every chip.
+#   * Decided by Emily 2026-09-16 (option 1 of three; the alternatives were
+#     making the cross-match associate failed fits, or drop-and-continue in
+#     batch_produce). Design record: alerts/scratch/ned-crossmatch-design-
+#     notes.md (on Emily's Mac).
+# ===========================================================================
+ALERTABLE_FLAGS = 0   # the sources.flags value the cross-match associates
+
 # Cutout-image staging: backoff between attempts is
 # STAGE_BACKOFF_BASE_S * 2**(attempt-1). The attempt count is the `retries`
 # argument of _stage(), not a constant.
@@ -91,12 +133,27 @@ class CutoutStagingError(RuntimeError):
 class AssociationError(RuntimeError):
     """A detection reached alert assembly without an associated object.
 
-    Source cross-matching creates an object for every source it cannot
-    match, so by alert time every detection has a merges_<field> row by
-    definition. A missing association -- or a missing merges/astroobjects
-    partition -- means cross-matching did not run or failed for the field.
+    Source cross-matching creates an object for every source it processes
+    -- and it processes exactly the flags = 0 sources (ALERTABLE_FLAGS).
+    The alert path selects that same population, so by alert time every
+    detection it handles has a merges_<field> row by definition. A missing
+    association -- or a missing merges/astroobjects partition -- means
+    cross-matching did not run or failed for the field, or that the two
+    components' flags rules have drifted apart (see ALERTABLE_FLAGS).
     Raised loudly so the batch aborts instead of shipping alerts built
     from an inconsistent database state.
+    """
+
+
+class FlaggedSourceError(ValueError):
+    """A single alert was requested for a detection that is not alertable.
+
+    The cross-match associates only flags = 0 sources (ALERTABLE_FLAGS), so
+    a flagged detection has no object and no alert can be built for it. The
+    batch path never sees such detections (iter_sources filters them); the
+    single-alert path is handed a bare sid, so it has to refuse -- with the
+    reason, rather than an AssociationError that would wrongly claim the
+    database is inconsistent.
     """
 
 #: For pylance checking
@@ -1515,6 +1572,10 @@ class AlertDataProvider:
         ------
         ValueError
             If no source with this ID exists.
+        FlaggedSourceError
+            If the source has flags != ALERTABLE_FLAGS: the cross-match
+            never associated it, so it is not alertable (see the
+            ALERTABLE_FLAGS comment block).
         KeyError
             If the sources row is missing an expected column (renamed or
             dropped in storage).
@@ -1530,15 +1591,25 @@ class AlertDataProvider:
             raise ValueError(f"Source {sid} not found")
         row = rows[0]
         row["band"] = row.get("filter_name")
-        return Source.from_row(row, strict=True)
+        source = Source.from_row(row, strict=True)
+        # Same population rule as iter_sources(); see ALERTABLE_FLAGS.
+        if source.flags != ALERTABLE_FLAGS:
+            raise FlaggedSourceError(
+                f"sid={sid} has PSF-fit flags={source.flags}: the cross-match "
+                f"associates only flags = {ALERTABLE_FLAGS} sources, so it has "
+                f"no object and no alert is produced for it "
+                f"(providers.ALERTABLE_FLAGS)")
+        return source
 
     def iter_sources(self, pid: int) -> Iterator[Source]:
-        """Iterate over every detection on one difference image (chip).
+        """Iterate over every alertable detection on one difference image.
 
-        One SCA -> one difference image = one diffimages.pid. Fetches
-        every detection with a single query, then prefetches the
-        association and history rows. The per-source get_* calls then
-        fill the data.
+        One SCA -> one difference image = one diffimages.pid. Fetches the
+        chip's flags = ALERTABLE_FLAGS detections with a single query --
+        the same population the cross-match associated, see the
+        ALERTABLE_FLAGS comment block; flagged detections are counted and
+        logged, never yielded -- then prefetches the association and
+        history rows. The per-source get_* calls then fill the data.
 
         Parameters
         ----------
@@ -1548,16 +1619,26 @@ class AlertDataProvider:
         Yields
         ------
         Source
-            Each detection on the chip, in sid order.
+            Each alertable detection on the chip, in sid order.
         """
+        skipped = self._query("""
+            SELECT count(*) AS count FROM sources
+            WHERE pid = %s AND flags <> %s
+        """, (pid, ALERTABLE_FLAGS))
+        n_skipped = int(skipped[0]["count"]) if skipped else 0
+        if n_skipped:
+            logger.info(
+                "pid=%s: %d flagged detections (flags <> %d) skipped -- not "
+                "associated by the cross-match, not alertable "
+                "(providers.ALERTABLE_FLAGS)", pid, n_skipped, ALERTABLE_FLAGS)
         rows = self._query("""
             SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s
             JOIN filters f ON s.fid = f.fid
             JOIN exposures e ON s.expid = e.expid
-            WHERE s.pid = %s
+            WHERE s.pid = %s AND s.flags = %s
             ORDER BY s.sid
-        """, (pid,))
+        """, (pid, ALERTABLE_FLAGS))
         sources = []
         for row in rows:
             row["band"] = row.get("filter_name")

@@ -206,7 +206,8 @@ def job_dir(tmp_path, tpv_header, chip_image):
 # The fake chip: sources, objects, associations, history
 # ---------------------------------------------------------------------------
 
-def make_source_row(sid, xfit, yfit, mjdobs, tpv_header, pid=CHIP_PID):
+def make_source_row(sid, xfit, yfit, mjdobs, tpv_header, pid=CHIP_PID,
+                    flags=0):
     """One sources-table row with every column Source.from_row(strict=True)
     demands. ra/dec are computed from the TPV WCS at (xfit+1, yfit+1) --
     xfit/yfit are 0-based, the WCS is 1-based -- which is exactly the
@@ -218,7 +219,10 @@ def make_source_row(sid, xfit, yfit, mjdobs, tpv_header, pid=CHIP_PID):
         "ra": ra, "dec": dec, "xfit": xfit, "yfit": yfit,
         "filter_name": "F158",             # provider derives band from this
         "xerr": 0.01, "yerr": 0.02, "fluxfit": 1234.5, "fluxerr": 56.7,
-        "flags": 0, "field": CHIP_FIELD, "hp6": 123, "hp9": 4567,
+        # flags != 0 marks a failed PSF fit; the cross-match never
+        # associates those, and the provider never alerts on them
+        # (providers.ALERTABLE_FLAGS) -- tests pass flags= to make one
+        "flags": flags, "field": CHIP_FIELD, "hp6": 123, "hp9": 4567,
         "pid": pid, "isdiffpos": True, "qfit": 0.1, "cfit": 0.05,
         "redchi": 1.2, "npixfit": 25, "sharpness": 0.4,
         "roundness1": 0.1, "roundness2": -0.05, "peak": 321.0,
@@ -355,12 +359,19 @@ class FakeCursor:
         elif "FROM diffimages" in sql:
             self._rows = ([{"filename": d.diff_filename, "rfid": d.rfid}]
                           if d.diff_filename else [])
+        elif "flags <>" in sql:                       # iter_sources: skipped count
+            pid, flags = params
+            self._rows = [{"count": sum(1 for r in d.sources
+                                        if r["pid"] == pid
+                                        and r["flags"] != flags)}]
         elif "WHERE s.sid" in sql:                    # get_detection(sid)
             self._rows = [dict(r) for r in d._all_detections()
                           if r["sid"] == params[0]]
         elif "WHERE s.pid" in sql:                    # iter_sources(pid)
+            # mirrors the real query's `AND s.flags = %s` (ALERTABLE_FLAGS)
+            pid, flags = params
             self._rows = sorted((dict(r) for r in d.sources
-                                 if r["pid"] == params[0]),
+                                 if r["pid"] == pid and r["flags"] == flags),
                                 key=lambda r: r["sid"])
         elif "object_aid" in sql:                     # batch history prefetch
             aids, cutoff = params
