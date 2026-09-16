@@ -45,8 +45,9 @@ from fastavro.types import Schema
 from .param_registry import (ALERT_PARAMS, DIA_FORCED_SOURCE_PARAMS, DIA_OBJECT_PARAMS,
                      DIA_SOURCE_PARAMS, NED_MATCH_PARAMS, REF_MATCH_PARAMS,
                      SS_MATCH_PARAMS, RECORDS, VERSION, Param, Status, is_nullable)
-from .providers import (PRV_WINDOW_DAYS, AlertDataProvider, Source,
-                        ForcedPhot, NedMatch, ObjectRecord, RefMatch, SSMatch)
+from .providers import (PRV_WINDOW_DAYS, AlertDataProvider, AssociationError,
+                        Source, ForcedPhot, NedMatch, ObjectRecord, RefMatch,
+                        SSMatch)
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +334,9 @@ def assemble_alert_for_source(provider: AlertDataProvider,
     providers.AssociationError
         If the source has no associated object: cross-matching creates an
         object for every source, so this is an inconsistent database
-        state and the run aborts.
+        state. The single-alert path lets it propagate; batch_produce()
+        logs it, records it in its BatchStats, and moves on to the next
+        source.
     RuntimeError
         If the assembled packet's keys disagree with ALERT_PARAMS in
         param_registry.py (guards against registry drift).
@@ -619,15 +622,111 @@ def produce_alert(provider: AlertDataProvider, sid: int,
     return alert_bytes
 
 
+# The alert-level lists whose three states (null = could not run, empty =
+# ran and found nothing, populated) BatchStats tallies, and the cutouts it
+# counts as present. Both name top-level keys of the assembled alert dict.
+MATCH_FIELDS = ("ssMatches", "refStarMatches", "refGalaxyMatches",
+                "nedMatches")
+CUTOUT_FIELDS = ("cutoutDifference", "cutoutScience", "cutoutReference")
+
+
+@dataclasses.dataclass
+class BatchStats:
+    """What went into one chip's alert archive, plus what was dropped.
+
+    Filled by batch_produce(); a caller passes its own instance to keep
+    the numbers after the call (the stage script writes them out as a
+    per-chip JSON summary next to the archive). Every count is over the
+    alerts actually serialized; `failures` lists the sources that were
+    skipped, one entry per source, with the exception's text.
+    """
+
+    pid: int | None = None
+    n_alerts: int = 0
+    n_failed: int = 0
+    n_bytes: int = 0
+    n_with_prv: int = 0          # alerts carrying >= 1 prior detection
+    n_prv_total: int = 0         # prior detections summed over alerts
+    max_prv: int = 0
+    n_with_forced: int = 0       # alerts carrying forced photometry
+    # field -> {"null": n, "empty": n, "matched": n}
+    match_states: dict[str, dict[str, int]] = dataclasses.field(
+        default_factory=lambda: {f: {"null": 0, "empty": 0, "matched": 0}
+                                 for f in MATCH_FIELDS})
+    cutouts_present: dict[str, int] = dataclasses.field(
+        default_factory=lambda: {f: 0 for f in CUTOUT_FIELDS})
+    failures: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+
+    def record(self, alert: dict[str, Any], n_bytes: int) -> None:
+        """Tally one serialized alert."""
+        self.n_alerts += 1
+        self.n_bytes += n_bytes
+        prv = alert.get("prvDiaSources")
+        if prv:
+            self.n_with_prv += 1
+            self.n_prv_total += len(prv)
+            self.max_prv = max(self.max_prv, len(prv))
+        if alert.get("prvDiaForcedSources"):
+            self.n_with_forced += 1
+        for field in MATCH_FIELDS:
+            value = alert.get(field)
+            state = ("null" if value is None
+                     else "empty" if len(value) == 0 else "matched")
+            self.match_states[field][state] += 1
+        for field in CUTOUT_FIELDS:
+            if alert.get(field) is not None:
+                self.cutouts_present[field] += 1
+
+    def record_failure(self, sid: int, exc: BaseException) -> None:
+        """Note one source that produced no alert."""
+        self.n_failed += 1
+        self.failures.append({"sid": sid, "error": type(exc).__name__,
+                              "message": str(exc)})
+
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-ready copy of every field."""
+        return dataclasses.asdict(self)
+
+    def summary_lines(self) -> list[str]:
+        """Human-readable summary, one item per line."""
+        mean_prv = (self.n_prv_total / self.n_with_prv
+                    if self.n_with_prv else 0.0)
+        lines = [
+            f"pid={self.pid}: {self.n_alerts} alerts archived, "
+            f"{self.n_failed} sources dropped, {self.n_bytes} bytes",
+            f"  history: {self.n_with_prv} alerts with prior detections "
+            f"(mean {mean_prv:.1f}, max {self.max_prv}); "
+            f"{self.n_with_forced} with forced photometry",
+        ]
+        for field in MATCH_FIELDS:
+            s = self.match_states[field]
+            lines.append(f"  {field}: {s['matched']} matched, "
+                         f"{s['empty']} empty, {s['null']} null")
+        lines.append("  cutouts present: " + ", ".join(
+            f"{f}={n}" for f, n in self.cutouts_present.items()))
+        return lines
+
+    def log(self, level: int = logging.INFO) -> None:
+        """Write summary_lines() to this module's logger."""
+        for line in self.summary_lines():
+            logger.log(level, "%s", line)
+
+
 def batch_produce(provider: AlertDataProvider, pid: int,
                   producer: Any = None, topic: str = "alerts",
                   schema: Schema | None = None,
-                  archive: fastavro.write.Writer | None = None) -> int:
+                  archive: fastavro.write.Writer | None = None,
+                  stats: BatchStats | None = None) -> int:
     """Produce alerts for every source on one difference image.
 
     Batch counterpart of produce_alert(): the provider fetches the
     image's DB rows and pixels up front (see AlertDataProvider.iter_sources),
     and Kafka is flushed once at the end instead of per message.
+
+    A source with no associated object (providers.AssociationError) is
+    logged at WARNING, recorded in `stats`, and skipped -- the rest of the
+    chip is still produced. Anything else raised while building an alert
+    propagates and aborts the chip as before.
 
     Parameters
     ----------
@@ -643,6 +742,9 @@ def batch_produce(provider: AlertDataProvider, pid: int,
         Parsed fastavro schema; loaded via load_schema() if not provided.
     archive : fastavro.write.Writer, optional
         Alert writer; every alert of the run is appended to a container file.
+    stats : BatchStats, optional
+        Accumulator to fill; a private one is used (and logged at INFO)
+        when none is given.
 
     Returns
     -------
@@ -651,18 +753,26 @@ def batch_produce(provider: AlertDataProvider, pid: int,
     """
     if schema is None:
         schema = load_schema()
+    if stats is None:
+        stats = BatchStats()
+    stats.pid = pid
 
-    count = 0
     for source in provider.iter_sources(pid):
-        alert_dict = assemble_alert_for_source(provider, source)
+        try:
+            alert_dict = assemble_alert_for_source(provider, source)
+        except AssociationError as exc:
+            stats.record_failure(source.sid, exc)
+            logger.warning("pid=%s sid=%s: no alert produced (%s: %s)",
+                           pid, source.sid, type(exc).__name__, exc)
+            continue
         alert_bytes = serialize_alert(alert_dict, schema=schema)
         if producer is not None:
             publish_alert(alert_bytes, producer, topic=topic, flush=False)
         if archive is not None:
             archive.write(alert_dict)
-        count += 1
+        stats.record(alert_dict, len(alert_bytes))
 
     if producer is not None:
         producer.flush()
-    logger.info("pid=%s: %d alerts produced", pid, count)
-    return count
+    stats.log()
+    return stats.n_alerts

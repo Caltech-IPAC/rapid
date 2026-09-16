@@ -22,6 +22,7 @@ TODO (test plan, not yet implemented):
 """
 
 import io
+import json
 import os
 import shutil
 from pathlib import Path
@@ -29,8 +30,9 @@ from pathlib import Path
 import fastavro
 import pytest
 
-from alerts.produce import (batch_produce, load_schema,
-                                  open_alert_archive, produce_alert)
+from alerts.produce import (CUTOUT_FIELDS, MATCH_FIELDS, BatchStats,
+                            batch_produce, load_schema, open_alert_archive,
+                            produce_alert)
 from alerts.providers import (ALERTABLE_FLAGS, AlertDataProvider,
                               AssociationError, CutoutStagingError,
                               FlaggedSourceError)
@@ -58,13 +60,15 @@ def test_resolve_pid_unknown_exposure_raises(make_provider):
 
 
 # ---------------------------------------------------------------------------
-# missing associations are fatal: source cross-matching creates an object
-# for every flags = 0 source, and the alert path selects exactly that
-# population (providers.ALERTABLE_FLAGS), so by alert time every detection
-# it handles has a merges row by definition. A missing merges_<field>
-# partition (seen live: pid 339271 -> merges_4686817) or a missing merges
-# row means cross-matching did not run or failed -- both flows must abort
-# loudly (AssociationError) instead of shipping object-less alerts.
+# missing associations: source cross-matching creates an object for every
+# flags = 0 source, and the alert path selects exactly that population
+# (providers.ALERTABLE_FLAGS), so by alert time every detection it handles
+# has a merges row by definition. A missing merges_<field> partition (seen
+# live: pid 339271 -> merges_4686817) or a missing merges row means
+# cross-matching did not run or failed -- the provider raises
+# AssociationError in both flows instead of shipping an object-less alert.
+# A missing partition still aborts the chip (it fails in the prefetch); a
+# missing row is dropped per source by batch_produce(), see below.
 # ---------------------------------------------------------------------------
 
 def test_missing_field_partition_aborts(make_provider, chip_data):
@@ -86,6 +90,61 @@ def test_missing_merges_row_aborts(make_provider, chip_data):
     trigger = next(s for s in sources if s.sid == 9003)
     with pytest.raises(AssociationError, match="sid=9003"):
         provider.get_object_for_source(trigger)
+
+
+def test_missing_merges_row_is_dropped_by_batch_produce(make_provider,
+                                                       chip_data, tmp_path,
+                                                       caplog):
+    del chip_data.merges[9003]        # cross-matching missed one source
+    stats = BatchStats()
+    path = str(tmp_path / "alerts.avro")
+    with caplog.at_level("WARNING", logger="alerts.produce"):
+        with open_alert_archive(path) as archive:
+            count = batch_produce(make_provider(), CHIP_PID, archive=archive,
+                                  stats=stats)
+
+    # the other two sources still make it into the archive
+    assert count == 2
+    with open(path, "rb") as f:
+        assert [a["diaSourceId"] for a in fastavro.reader(f)] == [9001, 9002]
+    # and the drop is logged and recorded, naming the source and the reason
+    assert "sid=9003" in caplog.text
+    assert stats.n_alerts == 2 and stats.n_failed == 1
+    [failure] = stats.failures
+    assert failure["sid"] == 9003
+    assert failure["error"] == "AssociationError"
+    assert "sid=9003" in failure["message"]
+
+
+# ---------------------------------------------------------------------------
+# BatchStats: what batch_produce() reports about a chip's archive, at INFO,
+# so a run can be checked without decoding the Avro. Over the fake chip:
+# object 777 (sid 9001) has two prior detections inside the look-back
+# window, 888 and 999 have none; no provider fills forced photometry; no
+# KONA file, no reference catalog registered and no NED reader, so every
+# match list is null (= could not run) rather than empty.
+# ---------------------------------------------------------------------------
+
+def test_batch_stats_describe_the_archive(make_provider, chip_data, caplog):
+    stats = BatchStats()
+    with caplog.at_level("INFO", logger="alerts.produce"):
+        count = batch_produce(make_provider(), CHIP_PID, stats=stats)
+
+    assert stats.pid == CHIP_PID
+    assert stats.n_alerts == count == len(chip_data.sources) == 3
+    assert stats.n_failed == 0 and stats.failures == []
+    assert stats.n_bytes > 0
+    assert (stats.n_with_prv, stats.n_prv_total, stats.max_prv) == (1, 2, 2)
+    assert stats.n_with_forced == 0
+    assert stats.cutouts_present == {f: 3 for f in CUTOUT_FIELDS}
+    for field in MATCH_FIELDS:
+        assert stats.match_states[field] == {"null": 3, "empty": 0,
+                                             "matched": 0}, field
+    # the INFO summary carries the headline numbers
+    assert f"pid={CHIP_PID}: 3 alerts archived, 0 sources dropped" in caplog.text
+    assert "1 alerts with prior detections (mean 2.0, max 2)" in caplog.text
+    # and the whole thing is JSON-ready for the stage's summary files
+    json.loads(json.dumps(stats.as_dict()))
 
 
 # ---------------------------------------------------------------------------

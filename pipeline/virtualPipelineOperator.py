@@ -36,6 +36,7 @@ load_psfcat_into_db_sources_code = '/code/pipeline/loadPSFCatIntoDBSourcesTable.
 crossmatch_sources_code = '/code/pipeline/crossMatchSources.py'
 compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForAstroObjects.py'
 prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
+produce_alerts_code = '/code/pipeline/produceAlertsForProcDate.py'
 launch_reference_image_pipelines_code = '/code/pipeline/launchBunchOfReferenceImagePipelines.py'
 # Python script /code/pipeline/parallelRegisterCompletedJobsInDB.py is dual purposed to
 # handle both reference-image pipeline jobs and science pipeline jobs, with PIPEID as parameter.
@@ -182,6 +183,7 @@ print("launch_science_pipelines_code =", launch_science_pipelines_code)
 print("register_science_pipeline_jobs_code =", register_science_pipeline_jobs_code)
 print("launch_postproc_pipelines_code =", launch_postproc_pipelines_code)
 print("register_postproc_pipeline_jobs_code =", register_postproc_pipeline_jobs_code)
+print("produce_alerts_code =", produce_alerts_code)
 
 
 # Set signal hander.
@@ -756,6 +758,32 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("VPO Elapsed time in seconds after deleting not-best Merges database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Launch script to produce alert packets for all difference images processed on this date.
+        # It only reads the database products populated by the preceding stages, so unlike them
+        # a failure here is reported but does not abort the processing request.
+        #
+        # Environment variable JOBPROCDATE to specify processing date is required.
+
+        fname_out = "produce_alerts_code" + "_" + proc_date + ".out"
+        produce_alerts_cmd = [python_cmd,
+                              produce_alerts_code]
+
+        exitcode_from_produce_alerts_cmd = util.execute_command(produce_alerts_cmd,fname_out)
+
+        if exitcode_from_produce_alerts_cmd >= 64:
+            print(f"*** Error: {produce_alerts_cmd} returned exit code = {exitcode_from_produce_alerts_cmd}; continuing...")
+        elif exitcode_from_produce_alerts_cmd > 0:
+            print(f"*** Warning: {produce_alerts_cmd} returned exit code = {exitcode_from_produce_alerts_cmd}; continuing...")
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after producing alerts =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 

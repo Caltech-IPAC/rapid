@@ -140,8 +140,10 @@ class AssociationError(RuntimeError):
     association -- or a missing merges/astroobjects partition -- means
     cross-matching did not run or failed for the field, or that the two
     components' flags rules have drifted apart (see ALERTABLE_FLAGS).
-    Raised loudly so the batch aborts instead of shipping alerts built
-    from an inconsistent database state.
+    Raised loudly rather than shipping an object-less alert. The
+    single-alert path lets it propagate; produce.batch_produce() logs
+    the source, records it in its BatchStats, and continues with the
+    rest of the chip.
     """
 
 
