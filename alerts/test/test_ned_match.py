@@ -30,11 +30,12 @@ from astropy.table import MaskedColumn, Table
 
 from alerts import providers
 from alerts.produce import assemble_alert, load_schema, serialize_alert
-from alerts.providers import (NED_MATCH_NMAX, NED_MATCH_RADIUS_ARCSEC,
-                              bounding_cone, build_nedcat, match_nedcat,
+from alerts.providers import (NED_CONE_MAX_ARCSEC, NED_MATCH_NMAX,
+                              NED_MATCH_RADIUS_ARCSEC, bounding_cone,
+                              build_nedcat, chip_cone, match_nedcat,
                               match_ss_predictions, ned_table_to_columns,
                               select_host_candidates)
-from conftest import fake_ned_reader, make_ned_table
+from conftest import fake_ned_reader, make_ned_table, make_source_row
 
 
 def ra_offset(dec, sep_arcsec):
@@ -259,6 +260,58 @@ def test_bounding_cone_handles_ra_wrap():
     assert radius == pytest.approx(0.1 * 3600.0, rel=1e-6)
 
 
+def _chip_scatter(rng, ra0, dec0, n=30, half_arcmin=3.5):
+    """n positions scattered over a ~7' chip around (ra0, dec0)."""
+    ra = ra0 + rng.uniform(-half_arcmin, half_arcmin, n) / 60.0 \
+        / np.cos(np.radians(dec0))
+    dec = dec0 + rng.uniform(-half_arcmin, half_arcmin, n) / 60.0
+    return ra, dec
+
+
+def test_chip_cone_is_bounding_cone_when_the_chip_is_sane():
+    rng = np.random.default_rng(5)
+    ra, dec = _chip_scatter(rng, 268.09, -29.87)
+    want = bounding_cone(ra, dec, pad_arcsec=11.0)
+    cra, cdec, radius, inliers = chip_cone(ra, dec, pad_arcsec=11.0)
+    assert (cra, cdec, radius) == pytest.approx(want)
+    assert inliers.all()
+    assert radius < NED_CONE_MAX_ARCSEC
+
+
+def test_chip_cone_excludes_a_far_outlier_and_stays_chip_sized():
+    """The pid 338173 case: thousands of on-chip detections plus a couple
+    whose fitted positions are degrees away. The cone must not follow them."""
+    rng = np.random.default_rng(6)
+    ra, dec = _chip_scatter(rng, 268.09, -29.87, n=2000)
+    ra = np.append(ra, [268.44, 267.96])          # 1.6 deg and 0.5 deg off
+    dec = np.append(dec, [-28.26, -29.93])
+    cra, cdec, radius, inliers = chip_cone(ra, dec, pad_arcsec=11.0)
+
+    assert list(inliers[-2:]) == [False, False]
+    assert inliers[:-2].all()
+    assert radius <= NED_CONE_MAX_ARCSEC
+    # and the cone is the ordinary one for the on-chip detections
+    want = bounding_cone(ra[:-2], dec[:-2], pad_arcsec=11.0)
+    assert (cra, cdec, radius) == pytest.approx(want)
+
+
+def test_chip_cone_small_n_uses_a_centre_the_outlier_cannot_drag():
+    """Three real detections and one far one: a mean centre would sit far
+    enough toward the outlier to misclassify the real three as well."""
+    ra = np.array([268.090, 268.091, 268.089, 268.44])
+    dec = np.array([-29.870, -29.871, -29.869, -28.26])
+    cra, cdec, radius, inliers = chip_cone(ra, dec, pad_arcsec=11.0)
+    assert list(inliers) == [True, True, True, False]
+    assert radius <= NED_CONE_MAX_ARCSEC
+
+
+def test_chip_cone_nothing_survives_gives_all_false():
+    """Two detections a degree apart: neither is 'the chip'; no query."""
+    _, _, _, inliers = chip_cone([268.0, 269.0], [-29.0, -29.0],
+                                 pad_arcsec=11.0)
+    assert not inliers.any()
+
+
 # ---------------------------------------------------------------------------
 # End to end over the fake chip (real provider, injected reader)
 # ---------------------------------------------------------------------------
@@ -387,6 +440,36 @@ def test_e2e_chip_cone_covers_every_source(make_provider, trigger_positions):
     assert len(log) == 1
     _, _, radius = log[0]
     assert radius > NED_MATCH_RADIUS_ARCSEC
+
+
+def test_e2e_off_chip_detection_is_null_and_cone_stays_chip_sized(
+        make_provider, chip_data, tpv_header, trigger_positions, caplog):
+    """A detection fitted far off the array -- as PhotUtils off-image fits
+    are (pid 338173: xfit=22834, yfit=27838 on a 4088-pixel chip) -- must
+    not stretch the chip's NED cone to degrees. It is excluded and reported
+    null; the real detections still match; one warning names the count."""
+    outlier = make_source_row(9004, 22834.8, 27837.6, 60500.5, tpv_header)
+    chip_data.sources.append(outlier)
+    chip_data.merges[9004] = 1111
+    chip_data.objects[1111] = dict(chip_data.objects[777], aid=1111)
+
+    entries = [{"ra": ra + ra_offset(dec, 2.0), "dec": dec,
+                "prefname": f"HOST-{sid}", "ptype": "G"}
+               for sid, (ra, dec) in trigger_positions.items()]
+    log = []
+    reader = fake_ned_reader(make_ned_table(entries), log=log)
+    provider = make_provider(ned_reader=reader)
+    with caplog.at_level("WARNING", logger="alerts.providers"):
+        sources = list(provider.iter_sources(99))
+    assert len(sources) == 4
+
+    by_sid = {s.sid: provider.get_ned_matches(s) for s in sources}
+    assert by_sid[9004] is None                       # not run -- never []
+    for sid in (9001, 9002, 9003):
+        assert f"HOST-{sid}" in [m.prefname for m in by_sid[sid]]
+    (_, _, radius), = log
+    assert radius <= NED_CONE_MAX_ARCSEC
+    assert "1 of 4 detections" in caplog.text
 
 
 def test_e2e_slice_cached_per_chip_including_failure(make_provider,

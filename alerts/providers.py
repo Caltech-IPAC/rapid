@@ -837,6 +837,18 @@ NedSliceReader = Callable[[float, float, float], "dict[str, Any] | None"]
 # match radius from the outermost detection is still inside the slice.
 NED_CONE_SLACK_ARCSEC = 1.0
 
+# Largest query cone one chip may issue. A Roman SCA is ~7.5' across (half-
+# diagonal ~318"), so every detection that is actually on the chip lies
+# within ~330" of the chip centre; a position farther out belongs to a
+# detection whose fitted pixel position is off the array (PhotUtils off-image
+# fits, flags bit 2) with sky coordinates extrapolated through the WCS.
+# Measured 2026-09-15 on pid 338173: 2 of 25,836 detections sat 0.8-1.6 deg
+# off (xfit=22834, yfit=27838 on a 4088-pixel chip) and stretched the cone to
+# 98' -- a 1.6-degree NED query that timed out and cost every detection on
+# the chip its matches. Detections beyond this radius are excluded from the
+# cone and reported as "not run" (None), never as [].
+NED_CONE_MAX_ARCSEC = 400.0
+
 
 # ===========================================================================
 # HOST-CANDIDATE SELECTION -- the main tunable of this cross-match.
@@ -950,6 +962,70 @@ def bounding_cone(ra: Any, dec: Any,
     ra0 = float(np.degrees(np.arctan2(mean[1], mean[0])) % 360.0)
     dec0 = float(np.degrees(np.arcsin(mean[2])))
     return ra0, dec0, max_sep_arcsec + pad_arcsec
+
+
+def _sep_arcsec(ra: np.ndarray, dec: np.ndarray,
+                ra0: float, dec0: float) -> np.ndarray:
+    """Angular separation of positions from (ra0, dec0) [arcsec]."""
+    ra_r, dec_r = np.radians(ra), np.radians(dec)
+    ra0_r, dec0_r = np.radians(ra0), np.radians(dec0)
+    cos_sep = (np.sin(dec_r) * np.sin(dec0_r)
+               + np.cos(dec_r) * np.cos(dec0_r) * np.cos(ra_r - ra0_r))
+    return np.degrees(np.arccos(np.clip(cos_sep, -1.0, 1.0))) * 3600.0
+
+
+def chip_cone(ra: Any, dec: Any, pad_arcsec: float,
+              max_arcsec: float = NED_CONE_MAX_ARCSEC,
+              ) -> tuple[float, float, float, np.ndarray]:
+    """bounding_cone() with a limit on how far one chip's cone may reach.
+
+    A detection whose sky position is not on the chip (see
+    NED_CONE_MAX_ARCSEC) would otherwise stretch the cone to cover it, and
+    a single such row can turn a 5' query into a degree-scale one. When the
+    all-inclusive cone exceeds `max_arcsec`, positions farther than
+    ``max_arcsec - pad_arcsec`` from the chip centre are dropped and the
+    cone rebuilt from the rest. The centre used for that cut is a
+    componentwise-median unit vector, not the mean: with few detections a
+    mean is pulled toward the outlier far enough to misclassify the real
+    ones. Callers must treat dropped positions as "not run", never as
+    "no match".
+
+    Parameters
+    ----------
+    ra, dec : array-like
+        Detection positions, ICRS [deg].
+    pad_arcsec : float
+        Added to the radius; the match radius plus slack.
+    max_arcsec : float, optional
+        Radius above which the clamp engages.
+
+    Returns
+    -------
+    (ra_deg, dec_deg, radius_arcsec, inliers)
+        `inliers` is a boolean mask over the input positions; all True
+        when no clamping was needed, all False when no position survived
+        (nothing to query).
+    """
+    ra = np.atleast_1d(np.asarray(ra, dtype=float))
+    dec = np.atleast_1d(np.asarray(dec, dtype=float))
+    ra0, dec0, radius = bounding_cone(ra, dec, pad_arcsec)
+    inliers = np.ones(ra.size, dtype=bool)
+    if radius <= max_arcsec:
+        return ra0, dec0, radius, inliers
+
+    ra_r, dec_r = np.radians(ra), np.radians(dec)
+    xyz = np.stack([np.cos(dec_r) * np.cos(ra_r),
+                    np.cos(dec_r) * np.sin(ra_r),
+                    np.sin(dec_r)])
+    med = np.median(xyz, axis=1)
+    med /= np.linalg.norm(med)
+    med_ra = float(np.degrees(np.arctan2(med[1], med[0])) % 360.0)
+    med_dec = float(np.degrees(np.arcsin(med[2])))
+    inliers = _sep_arcsec(ra, dec, med_ra, med_dec) <= max_arcsec - pad_arcsec
+    if not inliers.any():
+        return ra0, dec0, radius, inliers
+    ra0, dec0, radius = bounding_cone(ra[inliers], dec[inliers], pad_arcsec)
+    return ra0, dec0, radius, inliers
 
 
 @dataclass
@@ -2051,13 +2127,16 @@ class AlertDataProvider:
 
     # -- NED cross-match ----------------------------------------------------
 
-    def _fetch_nedcat(self, ra: Any, dec: Any) -> NedCatalog | None:
-        """Fetch the NED slice covering a set of positions and build its tree.
+    def _fetch_nedcat(self, ra0: float, dec0: float,
+                      radius: float) -> NedCatalog | None:
+        """Fetch the NED slice for one query cone and build its tree.
 
         Parameters
         ----------
-        ra, dec : array-like
-            Positions the slice must cover, ICRS [deg].
+        ra0, dec0 : float
+            Cone centre, ICRS [deg].
+        radius : float
+            Cone radius [arcsec]; from chip_cone() or bounding_cone().
 
         Returns
         -------
@@ -2068,8 +2147,6 @@ class AlertDataProvider:
             coords=None, which matches to [].
         """
         assert self.ned_reader is not None
-        ra0, dec0, radius = bounding_cone(
-            ra, dec, NED_MATCH_RADIUS_ARCSEC + NED_CONE_SLACK_ARCSEC)
         try:
             table = self.ned_reader(ra0, dec0, radius)
         except Exception:
@@ -2084,15 +2161,14 @@ class AlertDataProvider:
             return None
         return build_nedcat(table)
 
-    def _nedcat_for_chip(self, pid: int,
-                         sources: list[Source]) -> NedCatalog | None:
-        """The (cached per pid) NED slice covering a chip's detections."""
+    def _nedcat_for_chip(self, pid: int, ra0: float, dec0: float,
+                         radius: float) -> NedCatalog | None:
+        """The (cached per pid) NED slice for a chip's query cone."""
         if self._ned_pid == pid:
             return self._ned
         self._ned = None
         self._ned_pid = pid
-        self._ned = self._fetch_nedcat(np.array([s.ra for s in sources]),
-                                       np.array([s.dec for s in sources]))
+        self._ned = self._fetch_nedcat(ra0, dec0, radius)
         return self._ned
 
     def _match_chip_ned(self, pid: int, sources: list[Source]) -> None:
@@ -2104,6 +2180,11 @@ class AlertDataProvider:
         disabled or the slice could not be fetched, so get_ned_matches()
         reports "not run".
 
+        Detections whose positions are not on the chip (see
+        NED_CONE_MAX_ARCSEC) are excluded from the query cone so they cannot
+        inflate it, and are left out of _chip_nedmatches -- so for them
+        get_ned_matches() also reports "not run", never "no match".
+
         Parameters
         ----------
         pid : int
@@ -2114,12 +2195,25 @@ class AlertDataProvider:
         self._chip_nedmatches = {}
         if not self.ned_enabled or not sources:
             return
-        catalog = self._nedcat_for_chip(pid, sources)
+        ra = np.array([s.ra for s in sources])
+        dec = np.array([s.dec for s in sources])
+        ra0, dec0, radius, inliers = chip_cone(
+            ra, dec, NED_MATCH_RADIUS_ARCSEC + NED_CONE_SLACK_ARCSEC)
+        n_out = int((~inliers).sum())
+        if n_out:
+            logger.warning(
+                "pid=%s: %d of %d detections lie more than %.0f\" from the "
+                "chip centre -- positions not on the chip (off-image PSF "
+                "fits?); excluded from the NED cone, nedMatches null for them",
+                pid, n_out, len(sources), NED_CONE_MAX_ARCSEC)
+            if not inliers.any():
+                return
+        catalog = self._nedcat_for_chip(pid, ra0, dec0, radius)
         if catalog is None:
             return
-        results = match_nedcat(np.array([s.ra for s in sources]),
-                               np.array([s.dec for s in sources]), catalog)
-        self._chip_nedmatches = dict(zip((s.sid for s in sources), results))
+        results = match_nedcat(ra[inliers], dec[inliers], catalog)
+        sids = [s.sid for s, ok in zip(sources, inliers) if ok]
+        self._chip_nedmatches = dict(zip(sids, results))
 
     def get_ned_matches(self, detection: Source) -> list[NedMatch] | None:
         """The nearest NED candidate host galaxies to a detection.
@@ -2147,7 +2241,10 @@ class AlertDataProvider:
         # not run: sid absent) are already in memory.
         if self._chip_pid is not None and self._chip_pid == detection.pid:
             return self._chip_nedmatches.get(detection.sid)
-        catalog = self._fetch_nedcat(detection.ra, detection.dec)
+        ra0, dec0, radius = bounding_cone(
+            detection.ra, detection.dec,
+            NED_MATCH_RADIUS_ARCSEC + NED_CONE_SLACK_ARCSEC)
+        catalog = self._fetch_nedcat(ra0, dec0, radius)
         if catalog is None:
             return None
         return match_nedcat(detection.ra, detection.dec, catalog)[0]
