@@ -78,7 +78,8 @@ DROP FUNCTION addL2File (
     paobsy_               real,
     pafpa_                real,
     zptmag_               real,
-    skymean_              real
+    skymean_              real,
+    overlapfields_        integer[]
 );
 
 
@@ -159,8 +160,10 @@ DROP FUNCTION addL2File (
     paobsy_               real,
     pafpa_                real,
     zptmag_               real,
-    skymean_              real
+    skymean_              real,
+    overlapfields_        integer[]
 );
+
 
 DROP FUNCTION updateL2File (
     rid_      integer,

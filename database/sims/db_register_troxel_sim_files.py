@@ -1,17 +1,16 @@
 import boto3
 import os
 import time
-import numpy as np
 from astropy.io import fits
 import re
 import subprocess
 import healpy as hp
-from astropy.io import fits
 from astropy.wcs import WCS
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
+from database.modules.utils.overlapping_fields import overlapping_fields
 
 
 # Input FILTERSTRING, such as 'J129' (needs to be uppercase as in the *.fits.gz filenames).
@@ -230,9 +229,6 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
     key = "MJD-OBS"
     mjdobs = get_keyword_value(header,key)
 
-    key = "FILTER"
-    filter = get_keyword_value(header,key)
-
     key = "EXPTIME"
     exptime = get_keyword_value(header,key)
 
@@ -417,7 +413,24 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
 
     # Insert record in L2Files database table.
 
-    dbh.add_l2file(expid,sca,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
+    # Compute the sky tiles the image OVERLAPS, not just the one holding its
+    # centre.  `field` above is one tile chosen by one point; an SCA covers
+    # several (median 7), and rapid_systems migration 100 gives l2files a
+    # column for the whole footprint.  Computed here from the same WCS values
+    # about to be written to the row, so the footprint and the WCS it derives
+    # from are always consistent — and from the header's own NAXIS1/NAXIS2
+    # rather than a configured detector size, which is the truest extent for
+    # this particular file.  `min_overlap_pixels` defaults to 25 px; see
+    # overlapping_fields.DEFAULT_MIN_OVERLAP_PIXELS for why that number and
+    # why it lives in exactly one place.
+
+    overlapfields = overlapping_fields(crval1,crval2,crpix1,crpix2,
+                                       cd11,cd12,cd21,cd22,
+                                       get_keyword_value(header,"NAXIS1"),
+                                       get_keyword_value(header,"NAXIS2"),
+                                       field=field)
+
+    dbh.add_l2file_fourth_order(expid,sca,field,overlapfields,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
         a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,b_0_2,b_0_3,
@@ -451,6 +464,9 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
     key = "SCA_NUM"
     sca = get_keyword_value(header,key)
 
+    key = "MJD-OBS"
+    mjdobs = get_keyword_value(header,key)
+
     sky0 = compute_center_sky_position(header,wcs)
     sky1,sky2,sky3,sky4 = compute_corner_sky_positions(header,wcs)
 
@@ -480,7 +496,7 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
 
     # Register record in database.
 
-    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9,fid,sca)
+    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9,fid,sca,mjdobs)
 
 
 def register_files():
