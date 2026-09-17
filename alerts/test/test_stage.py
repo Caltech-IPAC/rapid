@@ -61,6 +61,15 @@ def test_settings_are_read_from_the_alerts_section():
     assert s["archive_codec"] == "deflate"
 
 
+def test_donotuploadproducts_overrides_the_config(monkeypatch):
+    monkeypatch.delenv("DONOTUPLOADPRODUCTS", raising=False)
+    cfg = _config()
+    cfg["JOB_PARAMS"]["upload_to_s3_bucket"] = "True"
+    assert stage.read_alert_settings(cfg)["upload_to_s3_bucket"] is True
+    monkeypatch.setenv("DONOTUPLOADPRODUCTS", "1")      # any value, like Russ's scripts
+    assert stage.read_alert_settings(cfg)["upload_to_s3_bucket"] is False
+
+
 def test_kafka_publication_is_refused():
     with pytest.raises(NotImplementedError, match="publish_to_kafka"):
         _settings(publish_to_kafka="True")

@@ -29,6 +29,9 @@ cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini.
 Kafka publication is NOT implemented in this stage: alerts are archived to S3 only, and
 the stage refuses to start if publish_to_kafka is True in the config file.
 
+Set environment variable DONOTUPLOADPRODUCTS (as for the science pipeline) to keep the
+archives and summaries in RAPID_WORK instead of uploading them.
+
 Exit codes:
     0   Normal termination.
     7   No science-pipeline jobs with a best difference image for the processing date.
@@ -74,6 +77,10 @@ def read_alert_settings(config_input):
 
     Raises NotImplementedError if publish_to_kafka is True: this stage archives alerts to S3
     only, and must not silently run with publication switched on.
+
+    As in the science and reference-image pipelines, setting environment variable
+    DONOTUPLOADPRODUCTS (to any value) forces upload_to_s3_bucket to False, so archives and
+    summaries stay in RAPID_WORK; useful for test runs against a copy of the database.
     '''
 
     alerts = config_input['ALERTS']
@@ -98,6 +105,10 @@ def read_alert_settings(config_input):
         'upload_to_s3_bucket': job_params.getboolean('upload_to_s3_bucket', fallback=True),
         'product_s3_bucket_base': job_params['product_s3_bucket_base'],
     }
+
+    if os.getenv('DONOTUPLOADPRODUCTS') is not None:
+        print("Env. var. DONOTUPLOADPRODUCTS is set; alert archives will not be uploaded to S3.")
+        settings['upload_to_s3_bucket'] = False
 
     return settings
 

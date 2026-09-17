@@ -468,14 +468,14 @@ DIA_OBJECT_PARAMS = (
                         STUB, "in astroobjects_meta"),
     Param("meanDec",           ["null", "double"], "Mean declination of object centroid; ICRS [deg]",
                         STUB, "in astroobjects_meta"),
-    Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]", # TODO: on-sky error or std dev in degrees? Need cos(dec) factor if former
-                        IMPLEMENTED, "astroobjects_<field> stdevra", attr="stdevra"),
-    Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]",
-                        IMPLEMENTED, "astroobjects_<field> stdevdec", attr="stdevdec"),
+    Param("raSigma",         ["null", "float"],  "Standard deviation of associated right ascensions [deg]",
+                        IMPLEMENTED, "astroobjectsmeta_<field>.stdevra (null until statistics run)", attr="stdevra"),
+    Param("decSigma",        ["null", "float"],  "Standard deviation of associated declinations [deg]",
+                        IMPLEMENTED, "astroobjectsmeta_<field>.stdevdec (null until statistics run)", attr="stdevdec"),
 
     # --- Source history ----------------------------------------------------
     Param("nDiaSources",   "int",              "Total number of associated DIASources",
-                        IMPLEMENTED, "astroobjects_<field>.nsources", attr="nsources"),
+                        IMPLEMENTED, "astroobjectsmeta_<field>.nsources, else merges_<field> count", attr="nsources"),
     Param("firstDiaSourceMjd", ["null", "double"], "MJD of earliest associated diaSource (UTC scale) [MJD]",
                         IMPLEMENTED, "computed from source history", attr="first_mjd"),
     Param("lastDiaSourceMjd",  ["null", "double"], "MJD of latest associated diaSource (UTC scale) [MJD]",

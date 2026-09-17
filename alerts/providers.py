@@ -17,7 +17,7 @@ Data flow (DB table / job-dir file -> record -> schema record)::
         The triggering source is looked up by sid
     merges_<field>        -> (sid -> aid association)
         per-field table linking detections (sid) to persistent objects (aid)
-    astroobjects_<field>  -> ObjectRecord   -> diaObject
+    astroobjects_<field> + astroobjectsmeta_<field>  -> ObjectRecord -> diaObject
         one row per persistent object, keyed by aid
     diffimages.filename   -> full chip images -> Cutouts
         diff, science and template images are from the pipeline job directory
@@ -255,13 +255,22 @@ class Source:
 
 @dataclass
 class ObjectRecord:
-    """Persistent astronomical object (DB ``astroobjects_<field>`` row equivalent).
+    """Persistent astronomical object: an ``astroobjects_<field>`` row
+    joined with its ``astroobjectsmeta_<field>`` statistics row.
+
+    aid/ra0/dec0 come from astroobjects_<field> (the cross-match's
+    product). stdevra/stdevdec/nsources come from astroobjectsmeta_<field>
+    (the statistics stage's product, computed after cross-matching). When
+    that table or the aid's row does not exist yet the sigmas are None --
+    they map to the schema's nullable raSigma/decSigma -- and nsources,
+    which maps to the non-nullable nDiaSources, falls back to the aid's
+    merges_<field> row count (see AlertDataProvider._stats_sql).
     """
     aid: int
     ra0: float
     dec0: float
-    stdevra: float
-    stdevdec: float
+    stdevra: float | None
+    stdevdec: float | None
     nsources: int
     first_mjd: float | None = None
     last_mjd: float | None = None
@@ -1409,6 +1418,9 @@ class AlertDataProvider:
         self._chip_objects: dict[int, dict[str, Any]] = {}  # sid -> astroobjects row dict
         self._chip_history: dict[int, list[Source]] = {}    # aid -> [Source, ...], oldest first
         self._chip_window_days = 0.0  # look-back window the prefetch covers
+        # field -> whether astroobjectsmeta_<field> exists (see _stats_sql);
+        # one catalog lookup per field per provider, not per chip.
+        self._meta_exists: dict[int, bool] = {}
         # Full chip images for cutouts, loaded lazily by get_cutouts() and
         # held until a source from a different chip comes along. S3 files
         # are staged here before loading; constant product basenames mean
@@ -1511,6 +1523,58 @@ class AlertDataProvider:
             raise AssociationError(
                 f"merges_{int(field)} does not exist: source cross-matching "
                 f"has not run for field {field}")
+
+    def _stats_sql(self, field: int) -> tuple[str, str]:
+        """SELECT-list and JOIN fragments that attach an object's statistics.
+
+        The statistics stage (pipeline/computeStatisticsForAstroObjects.py)
+        runs after cross-matching and writes stdevra/stdevdec/nsources to
+        ``astroobjectsmeta_<field>``, a separate table from
+        ``astroobjects_<field>`` since 2026-07-29. It may not have run for
+        a field yet, and an object with no computed statistics is still a
+        valid association, so:
+
+        * table present: LEFT JOIN it as ``am``; a missing row gives NULL
+          sigmas and the merges count as nsources;
+        * table absent: NULL sigmas and the merges count, no join.
+
+        The merges count is the number of ``merges_<field>`` rows for the
+        aid -- what statistics itself counts as nsources.
+
+        Parameters
+        ----------
+        field : int
+            Roman field identifier; the caller has already checked that
+            the field's merges partition exists.
+
+        Returns
+        -------
+        (str, str)
+            ``(select_fragment, join_fragment)``. The select fragment
+            yields columns named stdevra, stdevdec, nsources and assumes
+            ``astroobjects_<field>`` is aliased ``a`` in the query.
+        """
+        field = int(field)
+        if field not in self._meta_exists:
+            rows = self._query("SELECT to_regclass(%s) AS reg",
+                               (f"astroobjectsmeta_{field}",))
+            self._meta_exists[field] = bool(rows) and rows[0]["reg"] is not None
+            if not self._meta_exists[field]:
+                logger.warning(
+                    "astroobjectsmeta_%d does not exist: statistics have not "
+                    "run for this field; raSigma/decSigma will be null and "
+                    "nDiaSources falls back to the merges count", field)
+        merges_count = (f"(SELECT count(*) FROM merges_{field} m2 "
+                        f"WHERE m2.aid = a.aid)::int")
+        if self._meta_exists[field]:
+            select = (f"am.stdevra, am.stdevdec, "
+                      f"COALESCE(am.nsources, {merges_count}) AS nsources")
+            join = f"LEFT JOIN astroobjectsmeta_{field} am ON am.aid = a.aid"
+        else:
+            select = (f"NULL::real AS stdevra, NULL::real AS stdevdec, "
+                      f"{merges_count} AS nsources")
+            join = ""
+        return select, join
 
     def resolve_pid(self, expid: int, sca: int) -> int:
         """Map (exposure, SCA) to the difference-image pid to alert on.
@@ -1674,11 +1738,13 @@ class AlertDataProvider:
         for field in sorted({s.field for s in sources}):
             self._require_partition(field)
             sids = [s.sid for s in sources if s.field == field]
+            stats_select, stats_join = self._stats_sql(field)
             object_rows = self._query(f"""
                 SELECT m.sid, a.aid, a.ra0, a.dec0,
-                       a.stdevra, a.stdevdec, a.nsources
+                       {stats_select}
                 FROM merges_{int(field)} m
                 JOIN astroobjects_{int(field)} a ON m.aid = a.aid
+                {stats_join}
                 WHERE m.sid = ANY(%s)
             """, (sids,))
             for row in object_rows:
@@ -1746,19 +1812,22 @@ class AlertDataProvider:
         # Single-alert flow: query for just this sid.
         field = int(detection.field)
         self._require_partition(field)
+        stats_select, stats_join = self._stats_sql(field)
         rows = self._query(f"""
-            SELECT m.aid, a.*
+            SELECT a.aid, a.ra0, a.dec0,
+                   {stats_select}
             FROM merges_{field} m
             JOIN astroobjects_{field} a ON m.aid = a.aid
+            {stats_join}
             WHERE m.sid = %s
         """, (detection.sid,))
         if not rows:
             raise AssociationError(
                 f"sid={detection.sid} has no merges_{field} row: source "
                 f"cross-matching missed it")
-        # from_row() keeps only the ObjectRecord columns. Available in the
-        # a.* row but currently unused: meanra/meandec (mean position),
-        # flux0/meanflux/stdevflux, hp6/hp9.
+        # Same columns as the batch prefetch, so both paths build identical
+        # records. Also available but unused: astroobjects flux0 and the
+        # meta table's meanra/meandec/meanflux/stdevflux.
         return ObjectRecord.from_row(rows[0], strict=True)
 
     def get_prv_detections(self, detection: Source, obj: ObjectRecord,

@@ -39,22 +39,22 @@
             "doc": "Mean declination of object centroid; ICRS [deg]"
         },
         {
-            "name": "raErr",
+            "name": "raSigma",
             "type": [
                 "null",
                 "float"
             ],
             "default": null,
-            "doc": "Uncertainty in ra [deg]"
+            "doc": "Standard deviation of associated right ascensions [deg]"
         },
         {
-            "name": "decErr",
+            "name": "decSigma",
             "type": [
                 "null",
                 "float"
             ],
             "default": null,
-            "doc": "Uncertainty in dec [deg]"
+            "doc": "Standard deviation of associated declinations [deg]"
         },
         {
             "name": "nDiaSources",
