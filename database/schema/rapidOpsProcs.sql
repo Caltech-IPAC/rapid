@@ -180,7 +180,8 @@ create function addL2File (
     paobsy_               real,
     pafpa_                real,
     zptmag_               real,
-    skymean_              real
+    skymean_              real,
+    overlapfields_        integer[] DEFAULT NULL
 )
     returns record as $$
 
@@ -223,7 +224,8 @@ create function addL2File (
              a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,
              b_0_2,b_0_3,b_0_4,b_1_1,b_1_2,b_1_3,b_2_0,b_2_1,
              b_2_2,b_3_0,b_3_1,b_4_0,equinox,ra,dec,paobsy,pafpa,
-             zptmag,skymean
+             zptmag,skymean,
+             overlapfields
             )
             values
             (expid_,sca_,version_,status_,vbest_,
@@ -234,7 +236,8 @@ create function addL2File (
              a_1_3_,a_2_0_,a_2_1_,a_2_2_,a_3_0_,a_3_1_,a_4_0_,b_order_,
              b_0_2_,b_0_3_,b_0_4_,b_1_1_,b_1_2_,b_1_3_,b_2_0_,b_2_1_,
              b_2_2_,b_3_0_,b_3_1_,b_4_0_,equinox_,ra_,dec_,paobsy_,pafpa_,
-             zptmag_,skymean_
+             zptmag_,skymean_,
+             coalesce(overlapfields_, '{}'::integer[])
             )
             returning rid into strict rid_;
             exception
@@ -330,7 +333,8 @@ create function addL2File (
     paobsy_               real,
     pafpa_                real,
     zptmag_               real,
-    skymean_              real
+    skymean_              real,
+    overlapfields_        integer[] DEFAULT NULL
 )
     returns record as $$
 
@@ -373,7 +377,8 @@ create function addL2File (
              a_1_3,a_1_4,a_2_0,a_2_1,a_2_2,a_2_3,a_3_0,a_3_1,a_3_2,a_4_0,a_4_1,a_5_0,b_order,
              b_0_1,b_0_2,b_0_3,b_0_4,b_0_5,b_1_0,b_1_1,b_1_2,b_1_3,b_1_4,b_2_0,b_2_1,
              b_2_2,b_2_3,b_3_0,b_3_1,b_3_2,b_4_0,b_4_1,b_5_0,equinox,ra,dec,paobsy,pafpa,
-             zptmag,skymean
+             zptmag,skymean,
+             overlapfields
             )
             values
             (expid_,sca_,version_,status_,vbest_,
@@ -384,7 +389,8 @@ create function addL2File (
              a_1_3_,a_1_4_,a_2_0_,a_2_1_,a_2_2_,a_2_3_,a_3_0_,a_3_1_,a_3_2_,a_4_0_,a_4_1_,a_5_0_,b_order_,
              b_0_1_,b_0_2_,b_0_3_,b_0_4_,b_0_5_,b_1_0_,b_1_1_,b_1_2_,b_1_3_,b_1_4_,b_2_0_,b_2_1_,
              b_2_2_,b_2_3_,b_3_0_,b_3_1_,b_3_2_,b_4_0_,b_4_1_,b_5_0_,equinox_,ra_,dec_,paobsy_,pafpa_,
-             zptmag_,skymean_
+             zptmag_,skymean_,
+             coalesce(overlapfields_, '{}'::integer[])
             )
             returning rid into strict rid_;
             exception

@@ -188,6 +188,7 @@ CREATE TABLE l2files (
     skymean real,                                        -- FITS-header keyword: SKY-MEAN
     created timestamp without time zone                  -- Timestamp of database record INSERT or last UPDATE
         DEFAULT now() NOT NULL,
+    overlapfields integer[] NOT NULL DEFAULT '{}'::integer[],
     CONSTRAINT l2files_vbest_check CHECK ((vbest = ANY (ARRAY[0, 1, 2]))),
     CONSTRAINT l2files_version_check CHECK ((version > 0)),
     CONSTRAINT l2files_ra_check CHECK (((ra >= 0.0) AND (ra < 360.0))),
@@ -228,6 +229,7 @@ CREATE INDEX l2files_status_idx ON l2files (status);
 CREATE INDEX l2files_vbest_idx ON l2files (vbest);
 CREATE INDEX l2files_mjdobs_idx ON l2files (mjdobs);
 CREATE INDEX l2files_dateobs_idx ON l2files (dateobs);
+CREATE INDEX l2files_overlapfields_idx ON l2files USING gin (overlapfields);
 
 -- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
 

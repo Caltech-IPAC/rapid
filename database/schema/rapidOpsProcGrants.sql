@@ -78,7 +78,8 @@ grant EXECUTE on FUNCTION addL2File (
     paobsy_               real,
     pafpa_                real,
     zptmag_               real,
-    skymean_              real
+    skymean_              real,
+    overlapfields_        integer[]
 ) to rapidporole;
 
 
@@ -159,7 +160,8 @@ grant EXECUTE on FUNCTION addL2File (
     paobsy_               real,
     pafpa_                real,
     zptmag_               real,
-    skymean_              real
+    skymean_              real,
+    overlapfields_        integer[]
 ) to rapidporole;
 
 
