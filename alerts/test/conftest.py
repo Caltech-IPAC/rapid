@@ -287,6 +287,14 @@ class ChipData:
         # test flips this (the real DB can lack a field's partitions;
         # the provider must then abort with AssociationError).
         self.partitions_exist = True
+        # The statistics stage (computeStatisticsForAstroObjects.py) runs
+        # after cross-matching and owns astroobjectsmeta_<field>, where
+        # stdevra/stdevdec/nsources live. It may not have run yet: flip
+        # meta_exists to drop the whole table, or list aids whose row is
+        # missing. The provider must then serve null sigmas and fall back
+        # to the merges count for nsources, not abort.
+        self.meta_exists = True
+        self.stats_missing_aids = set()
 
         # Prior detections (other sids of the same objects, earlier mjd,
         # different pid -- they belong to older chips). Object 777 has two,
@@ -304,14 +312,54 @@ class ChipData:
     def _aid_of(self, sid):
         return {**self.merges, **self.history_merges}.get(sid)
 
+    def _merges_count(self, aid):
+        """Rows of merges_<field> pointing at `aid` (the nsources fallback)."""
+        return sum(1 for a in {**self.merges, **self.history_merges}.values()
+                   if a == aid)
+
+    def _object_row(self, aid):
+        """The joined astroobjects + astroobjectsmeta row the provider
+        selects, with the statistics nulled and nsources replaced by the
+        merges count when the meta table or the aid's meta row is absent
+        -- mirroring the provider's LEFT JOIN + COALESCE."""
+        row = dict(self.objects[aid])
+        if not self.meta_exists or aid in self.stats_missing_aids:
+            for key in ("meanra", "stdevra", "meandec", "stdevdec",
+                        "meanflux", "stdevflux"):
+                row[key] = None
+            row["nsources"] = self._merges_count(aid)
+        return row
+
+
+def _split_top_level(text, sep):
+    """Split `text` on `sep` occurrences that are outside parentheses."""
+    parts, depth, start = [], 0, 0
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and text.startswith(sep, i):
+            parts.append(text[start:i])
+            start = i + len(sep)
+            i = start
+            continue
+        i += 1
+    parts.append(text[start:])
+    return parts
+
 
 def _selected_columns(sql):
     """The column names a query's SELECT list actually asks for, stripped
     of table aliases ("a.ra0" -> "ra0", "x AS y" -> "y"); None when the
-    list contains a '*' (no projection possible)."""
-    select_list = sql.split("FROM")[0].split("SELECT")[1]
+    list contains a '*' (no projection possible). Parenthesised
+    expressions -- COALESCE(...), scalar subqueries with their own FROM --
+    are kept whole, so their alias is what counts."""
+    select_list = _split_top_level(sql, "FROM")[0].split("SELECT", 1)[1]
     columns = []
-    for item in select_list.split(","):
+    for item in _split_top_level(select_list, ","):
         item = item.strip()
         if "*" in item:
             return None
@@ -342,8 +390,11 @@ class FakeCursor:
     # -- the dispatch table ------------------------------------------------
     def execute(self, sql, params):
         d = self.data
-        if "to_regclass" in sql:                      # _partition_exists(field)
-            self._rows = [{"reg": params[0] if d.partitions_exist else None}]
+        if "to_regclass" in sql:                      # partition existence
+            name = params[0]
+            exists = (d.meta_exists if name.startswith("astroobjectsmeta_")
+                      else d.partitions_exist)
+            self._rows = [{"reg": name if exists else None}]
         elif "vbest" in sql:                          # resolve_pid(expid, sca)
             expid, sca = params
             best = sorted((c for c in d.campaigns
@@ -381,11 +432,11 @@ class FakeCursor:
                  if d._aid_of(r["sid"]) in aids and r["mjdobs"] >= cutoff),
                 key=lambda r: r["mjdobs"])
         elif "m.sid = ANY" in sql:                    # batch object prefetch
-            self._rows = [{"sid": sid, **d.objects[d._aid_of(sid)]}
+            self._rows = [{"sid": sid, **d._object_row(d._aid_of(sid))}
                           for sid in params[0] if d._aid_of(sid) is not None]
         elif "WHERE m.sid" in sql:                    # single-alert object
             aid = d._aid_of(params[0])
-            self._rows = [dict(d.objects[aid])] if aid is not None else []
+            self._rows = [d._object_row(aid)] if aid is not None else []
         elif "m.aid = %s" in sql:                     # single-alert prv
             aid, trigger_sid, cutoff = params
             self._rows = sorted(

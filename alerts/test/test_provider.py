@@ -148,6 +148,59 @@ def test_batch_stats_describe_the_archive(make_provider, chip_data, caplog):
 
 
 # ---------------------------------------------------------------------------
+# object statistics live on astroobjectsmeta_<field>, not astroobjects_<field>
+# (Russ split them 2026-07-29; the first run against the current schema
+# failed every alert with "column a.stdevra does not exist"). Statistics
+# runs after cross-matching, so the meta table -- or one aid's row in it --
+# can legitimately be absent: the association still stands, the sigmas go
+# null (raSigma/decSigma are nullable) and nsources falls back to the
+# merges count, which is the very thing statistics counts.
+# ---------------------------------------------------------------------------
+
+def test_object_statistics_come_from_the_meta_table(make_provider, chip_data):
+    provider = make_provider()
+    obj = provider.get_object_for_source(provider.get_detection(9001))
+    expected = chip_data.objects[777]
+    assert (obj.aid, obj.ra0, obj.dec0) == (777, expected["ra0"], expected["dec0"])
+    assert (obj.stdevra, obj.stdevdec, obj.nsources) == (
+        expected["stdevra"], expected["stdevdec"], expected["nsources"])
+
+
+def test_missing_meta_table_gives_null_sigmas_and_merge_count(make_provider,
+                                                              chip_data):
+    chip_data.meta_exists = False              # statistics never ran here
+    schema = load_schema()
+
+    single = make_provider()
+    obj = single.get_object_for_source(single.get_detection(9001))
+    assert (obj.stdevra, obj.stdevdec) == (None, None)
+    assert obj.nsources == 3                   # 9001 + history 1001, 1002
+    # the alert still serializes: raSigma/decSigma are nullable
+    alert = fastavro.schemaless_reader(
+        io.BytesIO(produce_alert(single, 9001, schema=schema)), schema)
+    assert alert["diaObject"]["raSigma"] is None
+    assert alert["diaObject"]["nDiaSources"] == 3
+
+    # and the batch prefetch agrees with the single path
+    batch = make_provider()
+    sources = {s.sid: s for s in batch.iter_sources(CHIP_PID)}
+    assert batch.get_object_for_source(sources[9001]).nsources == 3
+    assert batch.get_object_for_source(sources[9002]).nsources == 1
+    assert batch.get_object_for_source(sources[9002]).stdevra is None
+
+
+def test_missing_meta_row_falls_back_for_that_object_only(make_provider,
+                                                          chip_data):
+    chip_data.stats_missing_aids = {888}       # 9002's object has no row
+    provider = make_provider()
+    sources = {s.sid: s for s in provider.iter_sources(CHIP_PID)}
+    with_stats = provider.get_object_for_source(sources[9001])
+    without = provider.get_object_for_source(sources[9002])
+    assert with_stats.stdevra == chip_data.objects[777]["stdevra"]
+    assert (without.stdevra, without.stdevdec, without.nsources) == (None, None, 1)
+
+
+# ---------------------------------------------------------------------------
 # flagged detections are not alertable. The cross-match associates only
 # flags = 0 sources (pipeline/crossMatchSources.py), so the alert path must
 # select the same population -- providers.ALERTABLE_FLAGS. Before this rule
