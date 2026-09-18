@@ -32,6 +32,9 @@ the stage refuses to start if publish_to_kafka is True in the config file.
 Set environment variable DONOTUPLOADPRODUCTS (as for the science pipeline) to keep the
 archives and summaries in RAPID_WORK instead of uploading them.
 
+Set environment variable ALERTSMAXCHIPS to a positive integer to process only that many
+chips (the lowest jids) of the processing date, for test runs.  Unset means all chips.
+
 Exit codes:
     0   Normal termination.
     7   No science-pipeline jobs with a best difference image for the processing date.
@@ -162,6 +165,26 @@ def lookup_chips_for_processing_date(dbh, proc_date, ppid):
                       'fid': job["fid"]})
 
     return chips
+
+
+def limit_chips(chips, max_chips):
+
+    '''
+    Keep only the first max_chips chips by ascending jid, for test runs (environment
+    variable ALERTSMAXCHIPS).  max_chips is the raw environment-variable value: None or
+    blank keeps every chip; anything else must parse as a positive integer, otherwise
+    ValueError is raised.
+    '''
+
+    if max_chips is None or str(max_chips).strip() == "":
+        return chips
+
+    n = int(max_chips)
+
+    if n <= 0:
+        raise ValueError(f"ALERTSMAXCHIPS must be a positive integer, got {max_chips!r}")
+
+    return sorted(chips, key=lambda c: c['jid'])[:n]
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -514,6 +537,21 @@ def main():
         return dbh.exit_code
 
     print("n_chips =", len(chips))
+
+
+    # Optionally restrict a test run to the first few chips.
+
+    max_chips = os.getenv('ALERTSMAXCHIPS')
+
+    if max_chips is not None:
+
+        try:
+            chips = limit_chips(chips, max_chips)
+        except ValueError as e:
+            print(f"*** Error: {e}; quitting...")
+            return EXIT_FATAL
+
+        print(f"Env. var. ALERTSMAXCHIPS = {max_chips}; n_chips after limit = {len(chips)}")
 
     if len(chips) == 0:
         print("*** Warning: No chips to produce alerts for; quitting...")

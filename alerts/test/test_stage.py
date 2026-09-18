@@ -118,6 +118,17 @@ def test_lookup_maps_normal_jobs_to_best_pids(capsys):
     assert "jid=3" in capsys.readouterr().out
 
 
+def test_limit_chips_keeps_the_lowest_jids():
+    chips = [_chip(7), _chip(5), _chip(6)]
+    assert stage.limit_chips(chips, None) == chips          # unset: untouched
+    assert stage.limit_chips(chips, "") == chips            # blank: untouched
+    assert [c["jid"] for c in stage.limit_chips(chips, "2")] == [5, 6]
+    assert [c["jid"] for c in stage.limit_chips(chips, "10")] == [5, 6, 7]
+    for bad in ("0", "-3", "two"):
+        with pytest.raises(ValueError):
+            stage.limit_chips(chips, bad)
+
+
 @pytest.mark.parametrize("fail_on", ["jids", "diffimage"])
 def test_lookup_raises_on_database_error(fail_on):
     with pytest.raises(RuntimeError, match="Error getting"):
