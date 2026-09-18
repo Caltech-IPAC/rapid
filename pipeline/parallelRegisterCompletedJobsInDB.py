@@ -664,7 +664,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                             refimage_input_mjdobs_list.append(refimage_input_mjdobs)
 
 
-                            # Insert record in RefImMeta database table for each input image.
+                            # Insert record in RefImImages database table for each input image.
 
                             dbh.register_refimimage(rfid,refim_input_rid)
 
