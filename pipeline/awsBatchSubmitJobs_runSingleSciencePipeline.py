@@ -881,6 +881,7 @@ if __name__ == '__main__':
                             '--mag_max',
                             injection_mag_max,
                             '--injections_by_field_flag',
+                            '--injections_by_image_flag',
                             '--field_catalogs_input_filename',
                             injection_catalog_list_filename,
                             science_image_filename]
