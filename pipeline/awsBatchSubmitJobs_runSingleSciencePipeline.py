@@ -866,6 +866,18 @@ if __name__ == '__main__':
         num_injections = fake_sources_dict['num_injections']
         injection_mag_min = fake_sources_dict['mag_min']
         injection_mag_max = fake_sources_dict['mag_max']
+        injection_by_field = fake_sources_dict['injection_by_field_flag']
+        injection_by_image = fake_sources_dict['injection_by_image_flag']
+
+        if injection_by_field:
+            injection_by_field_flag = '--injections_by_field_flag'
+        else:
+            injection_by_field_flag = ''
+
+        if injection_by_image:
+            injection_by_image_flag = '--injections_by_image_flag'
+        else:
+            injection_by_image_flag = ''
 
         python_cmd = '/usr/bin/python3.11'
         fake_sources_code = rapid_sw + '/modules/fake_src/rapid_source_injections.py'
@@ -880,8 +892,8 @@ if __name__ == '__main__':
                             injection_mag_min,
                             '--mag_max',
                             injection_mag_max,
-                            '--injections_by_field_flag',
-                            '--injections_by_image_flag',
+                            injection_by_field_flag,
+                            injection_by_image_flag,
                             '--field_catalogs_input_filename',
                             injection_catalog_list_filename,
                             science_image_filename]
