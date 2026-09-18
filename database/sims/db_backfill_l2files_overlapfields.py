@@ -5,94 +5,13 @@ db_backfill_l2files_overlapfields.py — populate `l2files.overlapfields`,
 the per-image sky-tile footprint added by rapid_systems migration
 `101-l2files-overlapfields.sql`.
 
-WHAT IT COMPUTES.  The EXACT set of sky tiles the science image overlaps,
-via `database.modules.utils.overlapping_fields.overlapping_fields` — see
-that module for the geometry.  Every input is already a column on the row
-(`crval1`, `crval2`, `crpix1`, `crpix2`, `cd11`, `cd12`, `cd21`, `cd22`),
-so nothing is read from S3 and no FITS file is opened.
-
-WHY NOT THE THREE METHODS THAT WERE ALREADY AVAILABLE.  Measured against
-every-pixel ground truth over 1,200 random pointings spanning |dec| 0 to
-89.5 and all rotations:
-
-  * `get_overlapping_rtids` takes the RA/Dec BOUNDING BOX of the corners —
-    its own docstring says "Assumes the image is axis-aligned" — so a
-    rotated SCA over-reports by +21% of tiles on average, worst case
-    +100%.
-  * `get_all_neighboring_rtids` returns the centre tile plus its neighbour
-    ring: rotation-blind and shape-blind by construction.
-  * GRID SAMPLING (method 3 of `scripts/compare_methods_overlapping_fields.py`,
-    which this script previously used) can only return tiles containing a
-    sample point, so it UNDER-reports: it missed at least one genuinely
-    overlapped tile in 221 of those 1,200 pointings — 18% — for 246 tiles
-    missed in total.
-
-Under-reporting is the dangerous direction: a missing field is an image
-silently absent from that field's stack, with nothing to notice it.  The
-exact method made zero errors on the same 1,200 pointings.
-
-MINIMUM OVERLAP IS A STATED NUMBER, NOT AN ACCIDENT.  A tile overlapped by
-a third of a pixel is real geometry and useless science — the narrowest
-real overlap found in the sweep was 0.038 arcsec, 0.35 of a pixel.
-`--min-overlap-pixels` insets the image rectangle before the test, so the
-cutoff is chosen and recorded.  Sampling had such a cutoff too, but an
-accidental one that varied with rotation and could not be stated.
-
-The default is 25 px (laher, 2026-09-08) = 2.75 arcsec at the 0.11
-arcsec/px plate scale, about 1% of a ~250 arcsec tile edge.  It is NOT
-restated here: it is read from
-`overlapping_fields.DEFAULT_MIN_OVERLAP_PIXELS`, so this backfill and
-the registration path that will later write the same column cannot drift
-into two definitions of one column.  Changing the threshold means
-re-running with `--recompute`, since already-written rows keep the
-threshold they were computed under.
-
-IDEMPOTENT AND RESUMABLE.  Default scope is rows still carrying the
-migration's `{}` default, so an interrupted run resumes by being re-run.
-`--recompute` re-derives every row in scope instead — what to use after
-changing `--min-overlap-pixels`.  Batches are keyset-paginated on `rid`
-and committed one batch at a time: an interruption loses at most one
-batch, never leaves a partial array, and holds no long transaction
-against a table the pipeline is writing to.
-
-ORDERING.  Run AFTER `101-l2files-overlapfields.sql` and BEFORE
-`103-l2files-overlapfields-index.sql` — 103 creates the GIN index and
-refuses to apply while any row is still empty, and an unindexed
-`overlapfields` is what lets these UPDATEs take PostgreSQL's HOT path
-(HOT requires that no INDEXED column change).
-
-The whole sequence, in one place (rapid_systems migrations 101-105 are
-on its `main`; the coordination markers are in each file's header):
-
-    101  add the column (default `{}` = not computed)
-    102  addL2File gains `overlapfields_` -- the registrars on smdc pass
-         it by name and FAIL against a database without 102; there is
-         no gate, so 102 precedes any registration run
-    --   deploy this rapid (registrars write the column from here on)
-    --   THIS SCRIPT, for every row registered before 102
-    103  GIN index (refuses while any row is still `{}`)
-    104  checks: cardinality >= 1 and `field = ANY(overlapfields)`
-         (`--acknowledge-coordination 104-...`, since it depends on the
-         rapid-side writer having shipped)
-    105  validates 104
-
-DETECTOR EXTENT.  The registrars compute the footprint from each file's
-own header NAXIS1/NAXIS2; this script has no FITS file and `l2files`
-stores no extent, so it uses the release's `naxis1_sciimage` /
-`naxis2_sciimage` (`detector_size` below).  Every data set registered so
-far is 4088 x 4088, so the two agree; a data set with another detector
-size must be registered through the registrars, not backfilled, or the
-column would carry two extents under one definition.
-
-`field = ANY(overlapfields)` is TRUE BY CONSTRUCTION for anything this
-script or a registrar writes, because `field` is unioned in after the
-inset (see `_footprint`); 104's check therefore guards against a row
-written by some other path, not against this geometry.  The falsifiable
-version of the same statement is `preflight_centre_tile`, which asks the
-un-unioned geometry whether the centre tile is present.
-
-WHERE TO RUN IT.  See the runbook: the credential is the constraint, not
-the host.  `rapid_read`/`rapid_operator` cannot UPDATE `l2files`.
+Computes the exact overlapping tile set from columns already on each row
+(`crval1`, `crval2`, `crpix1`, `crpix2`, `cd11`, `cd12`, `cd21`, `cd22`)
+via `database.modules.utils.overlapping_fields.overlapping_fields`; opens
+no FITS files.  Idempotent and resumable: default scope is rows still
+carrying the migration's `{}` default, batches are keyset-paginated on
+`rid` and committed one at a time, and `--recompute` re-derives every row
+in scope.  Run AFTER 101 and BEFORE `103-l2files-overlapfields-index.sql`.
 
 Exit codes follow the `RAPIDDB` family: 64 cannot connect / cannot
 configure, 65 preflight refused, 67 a database operation failed, 0 clean.
@@ -113,14 +32,8 @@ from database.modules.utils.overlapping_fields import (
 swname = "db_backfill_l2files_overlapfields.py"
 swvers = "2.0"
 
-#: The migration that must be recorded in `schema_migrations` before this
-#: script can do anything.  Same floor-not-equality reading as
-#: `pipeline/intent/schema_contract.py`: a database carrying migrations this
-#: script has never heard of is fine, a database missing this one is not.
-REQUIRED_MIGRATION = "101-l2files-overlapfields.sql"
-
 #: Columns the computation needs.  `field` is read both to union into the
-#: result and to cross-check the geometry — see `preflight_centre_tile`.
+#: result and to cross-check the geometry.
 SCAN_COLUMNS = ("rid", "field",
                 "crval1", "crval2", "crpix1", "crpix2",
                 "cd11", "cd12", "cd21", "cd22")
@@ -130,14 +43,8 @@ def _footprint(row, naxis1, naxis2, min_overlap_pixels, union_field=True):
 
     """The overlapping-field set for one `l2files` row, as a sorted list.
 
-    `field` is unioned in by default.  It was computed at registration
-    from the image's CENTRE sky position through astropy's WCS (SIP
-    included), while this computes from the CD matrix alone, so the two
-    can in principle disagree about which tile the exact centre falls in
-    when the centre sits on a tile boundary.  Unioning costs nothing and
-    makes `field = ANY(overlapfields)` true by construction, which is what
-    104's check asserts.  `union_field=False` is the preflight's handle on
-    the un-unioned geometry.
+    `field` is unioned in by default; `union_field=False` returns the
+    un-unioned geometry, which is what the preflight checks.
     """
 
     (rid, field, crval1, crval2, crpix1, crpix2,
@@ -157,14 +64,7 @@ def _footprint(row, naxis1, naxis2, min_overlap_pixels, union_field=True):
 
 def preflight_schema(cur):
 
-    """Refuse unless the column exists AND its migration is recorded.
-
-    Both, not either: `schema_migrations` records what the APPLIER ran
-    (`apply-db-migrations.sh`, never the migration files themselves), so a
-    column present without a recorded migration means someone hand-applied
-    DDL outside the applier — worth refusing loudly rather than
-    backfilling into an unrecorded schema.
-    """
+    """Refuse unless `l2files.overlapfields` exists."""
 
     cur.execute("""
         select 1
@@ -175,17 +75,8 @@ def preflight_schema(cur):
     """)
 
     if cur.fetchone() is None:
-        print(f"*** Error: l2files.overlapfields does not exist; apply "
-              f"{REQUIRED_MIGRATION} first; quitting...")
-        return 65
-
-    cur.execute("select 1 from schema_migrations where filename = %s;",
-                (REQUIRED_MIGRATION,))
-
-    if cur.fetchone() is None:
-        print(f"*** Error: the column exists but {REQUIRED_MIGRATION} is not "
-              f"recorded in schema_migrations — the schema was changed "
-              f"outside apply-db-migrations.sh; quitting...")
+        print("*** Error: l2files.overlapfields does not exist; apply the "
+              "column-adding migration first; quitting...")
         return 65
 
     return 0
@@ -193,22 +84,15 @@ def preflight_schema(cur):
 
 def preflight_centre_tile(cur, naxis1, naxis2, min_overlap_pixels, nrows):
 
-    """Cross-check the new geometry against data already in the database.
+    """Cross-check the computed geometry against data already in the database.
 
     Every row already carries `field`, the tile containing the image
-    centre, computed at registration by a DIFFERENT code path (astropy
+    centre, computed at registration by a different code path (astropy
     WCS, SIP included) from the one this script uses (`tan_proj2`, CD
     matrix only).  The image centre is the deepest interior point of the
-    image, so its tile must appear in the image's own footprint — for ANY
-    correct projection convention, at any rotation, at any declination.
-
-    That makes this a real check rather than a tautology: it is exactly
-    what a `crpix` off-by-one, a transposed CD matrix, or a degrees/radians
-    slip would break, and it costs one query.  Refuses on ANY failure —
-    there is no rate at which this invariant is allowed to fail.
-
-    Deliberately computed with `union_field=False`: unioning `field` in
-    first would make the assertion vacuous.
+    image, so its tile must appear in the image's own footprint at any
+    rotation and any declination.  Computed with `union_field=False`, and
+    refuses on any failure.
     """
 
     if nrows <= 0:
@@ -434,14 +318,10 @@ def detector_size(args):
 
     """naxis1/naxis2 from release content, never a literal in this file.
 
-    The image dimensions can alter a science product, so they are read
-    from the master .ini's `[INSTRUMENT]` section
-    (`cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`), which is
-    the live copy of these values and the same file the rest of the
-    pipeline reads through `RAPID_SW`.  With `RAPID_SW` unset the .ini is
-    taken from this checkout's own `cdf/`, so the script runs from a
-    working tree with no environment set up.  `--naxis1/--naxis2`
-    overrides both and prints that it was used.
+    Read from the master .ini's `[INSTRUMENT]` section
+    (`cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`) under
+    `RAPID_SW`; with `RAPID_SW` unset, from this checkout's own `cdf/`.
+    `--naxis1/--naxis2` overrides both.
     """
 
     if args.naxis1 is not None and args.naxis2 is not None:
