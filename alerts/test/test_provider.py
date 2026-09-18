@@ -201,6 +201,38 @@ def test_missing_meta_row_falls_back_for_that_object_only(make_provider,
 
 
 # ---------------------------------------------------------------------------
+# a failed query must not poison the connection. psycopg2 keeps a
+# connection whose statement failed in an aborted transaction until it is
+# rolled back; without that, every later query on the same connection
+# raises InFailedSqlTransaction. Live 2026-09-18: the stage's 18 workers
+# each hit one real error, and their remaining 7362 chips all failed with
+# exactly that. Reads only, so the provider rolls back after every query.
+# ---------------------------------------------------------------------------
+
+def test_failed_query_is_rolled_back_and_the_connection_stays_usable(
+        make_provider, monkeypatch):
+    provider = make_provider()
+    conn = provider.db.conn
+    from conftest import FakeCursor
+    real_execute = FakeCursor.execute
+    calls = {"n": 0}
+
+    def failing_once(self, sql, params):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("column a.stdevra does not exist")
+        return real_execute(self, sql, params)
+
+    monkeypatch.setattr(FakeCursor, "execute", failing_once)
+    with pytest.raises(RuntimeError, match="stdevra"):
+        provider.get_detection(9001)
+    assert conn.rollbacks == 1                     # the failed read was closed out
+    # the next query on the same connection works and is closed out too
+    assert provider.get_detection(9001).sid == 9001
+    assert conn.rollbacks == 2
+
+
+# ---------------------------------------------------------------------------
 # flagged detections are not alertable. The cross-match associates only
 # flags = 0 sources (pipeline/crossMatchSources.py), so the alert path must
 # select the same population -- providers.ALERTABLE_FLAGS. Before this rule

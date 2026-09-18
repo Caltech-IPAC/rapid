@@ -472,9 +472,13 @@ class FakeDB:
     class _Conn:
         def __init__(self, data):
             self._data = data
+            self.rollbacks = 0    # the provider must end every read with one
 
         def cursor(self):
             return FakeCursor(self._data)
+
+        def rollback(self):
+            self.rollbacks += 1
 
     def __init__(self, data):
         self.conn = self._Conn(data)

@@ -1493,14 +1493,33 @@ class AlertDataProvider:
         -------
         list of dict
             One ``{column_name: value}`` dict per result row.
+
+        Notes
+        -----
+        The provider only reads, so every query is closed out with a
+        rollback, on success and on failure alike. On failure this
+        matters: psycopg2 leaves a connection whose statement failed in an
+        aborted transaction, where every later statement raises
+        InFailedSqlTransaction -- seen live 2026-09-18, when one chip's
+        error failed all 7380 chips of a run because each worker reuses
+        one connection. On success it keeps the connection from sitting
+        "idle in transaction" between chips, which would hold back vacuum
+        on the tables being read.
         """
-        cur = self.db.conn.cursor()
+        conn = self.db.conn
+        cur = conn.cursor()
         try:
             cur.execute(sql, params)
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
         finally:
             cur.close()
+            rollback = getattr(conn, "rollback", None)
+            if rollback is not None:
+                try:
+                    rollback()
+                except Exception:   # a dead connection: the original error wins
+                    logger.debug("rollback after query failed", exc_info=True)
 
     def _require_partition(self, field: int) -> None:
         """Ensure a field's merges/astroobjects partitions exist.
