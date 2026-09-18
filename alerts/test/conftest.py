@@ -309,26 +309,48 @@ class ChipData:
     def _all_detections(self):
         return self.sources + self.history
 
+    def _merges_aids(self, sid):
+        """The aids of a sid's merges_<field> rows, lowest first. A merges
+        value may be one aid or a list of them (a source the cross-match
+        associated more than once, as seen live)."""
+        aid = {**self.merges, **self.history_merges}.get(sid)
+        if aid is None:
+            return []
+        return sorted(aid) if isinstance(aid, (list, tuple)) else [aid]
+
     def _aid_of(self, sid):
-        return {**self.merges, **self.history_merges}.get(sid)
+        """The aid the provider ends up using for a sid (the lowest)."""
+        aids = self._merges_aids(sid)
+        return aids[0] if aids else None
 
     def _merges_count(self, aid):
         """Rows of merges_<field> pointing at `aid` (the nsources fallback)."""
-        return sum(1 for a in {**self.merges, **self.history_merges}.values()
-                   if a == aid)
+        return sum(1 for sid in {**self.merges, **self.history_merges}
+                   for a in self._merges_aids(sid) if a == aid)
 
-    def _object_row(self, aid):
-        """The joined astroobjects + astroobjectsmeta row the provider
-        selects, with the statistics nulled and nsources replaced by the
-        merges count when the meta table or the aid's meta row is absent
-        -- mirroring the provider's LEFT JOIN + COALESCE."""
-        row = dict(self.objects[aid])
-        if not self.meta_exists or aid in self.stats_missing_aids:
-            for key in ("meanra", "stdevra", "meandec", "stdevdec",
-                        "meanflux", "stdevflux"):
-                row[key] = None
-            row["nsources"] = self._merges_count(aid)
-        return row
+    def _object_rows(self, sid):
+        """The rows the provider's LEFT JOIN of merges_<field> onto
+        astroobjects_<field> (+ astroobjectsmeta_<field>) returns for one
+        sid, ordered by merges aid: one per merges row. An aid missing
+        from `objects` gives the LEFT JOIN's null object columns (a
+        dangling association, as seen live); a missing meta table or meta
+        row gives null statistics and the merges count as nsources."""
+        rows = []
+        template = next(iter(self.objects.values()))
+        for aid in self._merges_aids(sid):
+            if aid in self.objects:
+                row = dict(self.objects[aid])
+                if not self.meta_exists or aid in self.stats_missing_aids:
+                    for key in ("meanra", "stdevra", "meandec", "stdevdec",
+                                "meanflux", "stdevflux"):
+                        row[key] = None
+                    row["nsources"] = self._merges_count(aid)
+            else:
+                row = {key: None for key in template}
+                row["nsources"] = self._merges_count(aid)
+            row["merges_aid"] = aid
+            rows.append(row)
+        return rows
 
 
 def _split_top_level(text, sep):
@@ -432,11 +454,12 @@ class FakeCursor:
                  if d._aid_of(r["sid"]) in aids and r["mjdobs"] >= cutoff),
                 key=lambda r: r["mjdobs"])
         elif "m.sid = ANY" in sql:                    # batch object prefetch
-            self._rows = [{"sid": sid, **d._object_row(d._aid_of(sid))}
-                          for sid in params[0] if d._aid_of(sid) is not None]
+            self._rows = sorted(({"sid": sid, **row}
+                                 for sid in params[0]
+                                 for row in d._object_rows(sid)),
+                                key=lambda r: (r["sid"], r["merges_aid"]))
         elif "WHERE m.sid" in sql:                    # single-alert object
-            aid = d._aid_of(params[0])
-            self._rows = [d._object_row(aid)] if aid is not None else []
+            self._rows = d._object_rows(params[0])
         elif "m.aid = %s" in sql:                     # single-alert prv
             aid, trigger_sid, cutoff = params
             self._rows = sorted(

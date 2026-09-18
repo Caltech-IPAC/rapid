@@ -308,3 +308,64 @@ def test_db_positions_match_wcs_at_xfit_plus_one(db_conn):
             f"AlertDataProvider.get_cutouts().")
     print(f"convention sentinel: worst offset {worst:.2f} mas "
           f"over {len(rows)} sources")
+
+
+# ---------------------------------------------------------------------------
+# Known upstream bug, kept visible until fixed. Found 2026-09-18 on the
+# socsimsdb data of the 2026-08-21 run: in merges_4715492, 358,801 of
+# 995,287 rows point at aids that have no astroobjects_4715492 row (the
+# objects were deleted after cross-matching -- the statistics table still
+# has them), and 63,580 sids there have more than one merges row. The
+# alert path reports such sources as dangling associations and drops them
+# (see AlertDataProvider._association_failure). The repair belongs in the
+# cross-match / statistics stages (pipeline/crossMatchSources.py,
+# pipeline/computeStatisticsForAstroObjects.py).
+#
+# strict=True: while the bug stands this is an expected failure, with the
+# current counts in the message; once the tables are consistent the test
+# passes, which strict xfail turns into a hard failure -- the signal to
+# delete this marker (and the note in alerts/test/README.md).
+# ---------------------------------------------------------------------------
+
+DANGLING_ASSOCIATION_FIELD = 4715492      # the field the numbers above were measured in
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="merges_<field> rows point at deleted astroobjects rows and some "
+           "sources have several merges rows (upstream cross-match/statistics "
+           "bug, found 2026-09-18); remove this marker once the tables are "
+           "repaired")
+def test_live_associations_reference_existing_objects(db_conn):
+    """Every merges row of the pinned field points at an existing object,
+    and no source there is associated more than once."""
+    field = DANGLING_ASSOCIATION_FIELD
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s), to_regclass(%s)",
+                    (f"merges_{field}", f"astroobjects_{field}"))
+        if any(reg is None for reg in cur.fetchone()):
+            pytest.skip(f"field {field} has no merges/astroobjects tables "
+                        f"in this database")
+        cur.execute(f"""
+            SELECT count(*) AS merges_rows,
+                   count(*) FILTER (WHERE a.aid IS NULL) AS dangling_rows
+            FROM merges_{field} m
+            LEFT JOIN astroobjects_{field} a ON a.aid = m.aid
+        """)
+        merges_rows, dangling_rows = cur.fetchone()
+        cur.execute(f"""
+            SELECT count(*) FROM (
+                SELECT sid FROM merges_{field} GROUP BY sid HAVING count(*) > 1
+            ) multi
+        """)
+        (multi_aid_sids,) = cur.fetchone()
+    print(f"field {field}: {merges_rows} merges rows, {dangling_rows} point "
+          f"at a missing astroobjects row, {multi_aid_sids} sids have more "
+          f"than one merges row")
+    assert dangling_rows == 0, (
+        f"field {field}: {dangling_rows} of {merges_rows} merges rows point "
+        f"at aids with no astroobjects_{field} row (objects deleted after "
+        f"cross-matching)")
+    assert multi_aid_sids == 0, (
+        f"field {field}: {multi_aid_sids} sids have more than one "
+        f"merges_{field} row")

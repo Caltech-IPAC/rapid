@@ -201,6 +201,74 @@ def test_missing_meta_row_falls_back_for_that_object_only(make_provider,
 
 
 # ---------------------------------------------------------------------------
+# dangling associations: live 2026-09-18, 36% of merges_4715492 rows pointed
+# at aids with no astroobjects_4715492 row (objects deleted after
+# cross-matching; the statistics table still had them), and 63580 sources
+# there had more than one merges row. A dangling row must be reported as
+# what it is, not as "no merges row"; a doubly-associated source must be
+# handled deterministically (lowest aid) and warned about once per chip.
+# ---------------------------------------------------------------------------
+
+def test_dangling_association_is_named_on_both_paths(make_provider, chip_data,
+                                                     tmp_path, caplog):
+    del chip_data.objects[999]           # 9003's merges row now dangles
+    stats = BatchStats()
+    with caplog.at_level("WARNING", logger="alerts.produce"):
+        count = batch_produce(make_provider(), CHIP_PID, stats=stats)
+    assert count == 2
+    [failure] = stats.failures
+    assert failure["sid"] == 9003 and failure["error"] == "AssociationError"
+    assert "points at aid=999" in failure["message"]
+    assert "no astroobjects_3 row" in failure["message"]
+    assert "cross-matching missed it" not in failure["message"]
+
+    single = make_provider()
+    with pytest.raises(AssociationError, match="points at aid=999"):
+        single.get_object_for_source(single.get_detection(9003))
+    # and a source with no merges row at all keeps the other message
+    del chip_data.merges[9002]
+    with pytest.raises(AssociationError, match="no merges_3 row"):
+        single.get_object_for_source(single.get_detection(9002))
+
+
+def test_doubly_associated_source_uses_lowest_aid_and_warns(make_provider,
+                                                            chip_data, caplog):
+    chip_data.merges[9002] = [999, 888]  # two merges rows for one source
+    with caplog.at_level("WARNING", logger="alerts.providers"):
+        batch = make_provider()
+        sources = {s.sid: s for s in batch.iter_sources(CHIP_PID)}
+        obj = batch.get_object_for_source(sources[9002])
+    assert obj.aid == 888
+    assert sum("more than one merges_3 row" in r.getMessage()
+               for r in caplog.records) == 1          # once per chip, not per source
+    single = make_provider()
+    assert single.get_object_for_source(single.get_detection(9002)).aid == 888
+    # a dangling row alongside a good one is not an error: the good one wins
+    chip_data.merges[9002] = [777, 12345]
+    fresh = make_provider()
+    assert fresh.get_object_for_source(fresh.get_detection(9002)).aid == 777
+
+
+def test_ned_failure_logs_one_line_with_traceback_at_debug(make_provider,
+                                                           caplog):
+    def broken_reader(ra, dec, radius):
+        raise TimeoutError("The read operation timed out")
+
+    provider = make_provider(ned_reader=broken_reader)
+    with caplog.at_level("DEBUG", logger="alerts.providers"):
+        matches = provider.get_ned_matches(provider.get_detection(9001))
+    assert matches is None                            # degraded to "not run"
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"
+                and "NED query failed" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "TimeoutError: The read operation timed out" in warnings[0].getMessage()
+    assert warnings[0].exc_info is None               # no traceback at WARNING
+    debug = [r for r in caplog.records if r.levelname == "DEBUG"
+             and r.exc_info is not None]
+    assert debug, "the traceback should be kept at DEBUG"
+
+
+# ---------------------------------------------------------------------------
 # a failed query must not poison the connection. psycopg2 keeps a
 # connection whose statement failed in an aborted transaction until it is
 # rolled back; without that, every later query on the same connection

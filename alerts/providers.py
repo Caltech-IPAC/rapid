@@ -1416,6 +1416,7 @@ class AlertDataProvider:
         # get_prv_detections() answer from these dicts.
         self._chip_pid: int | None = None
         self._chip_objects: dict[int, dict[str, Any]] = {}  # sid -> astroobjects row dict
+        self._chip_orphans: dict[int, list[int]] = {}       # sid -> merges aids with no astroobjects row
         self._chip_history: dict[int, list[Source]] = {}    # aid -> [Source, ...], oldest first
         self._chip_window_days = 0.0  # look-back window the prefetch covers
         # field -> whether astroobjectsmeta_<field> exists (see _stats_sql);
@@ -1750,6 +1751,7 @@ class AlertDataProvider:
             Look-back window for detection histories.
         """
         objects_by_sid = {}
+        orphans_by_sid: dict[int, list[int]] = {}
         history_by_aid = {}
         # merges/astroobjects are partitioned by Roman field, and sources
         # near a field boundary can land in different partitions, so group
@@ -1758,18 +1760,38 @@ class AlertDataProvider:
             self._require_partition(field)
             sids = [s.sid for s in sources if s.field == field]
             stats_select, stats_join = self._stats_sql(field)
+            # LEFT JOIN, not JOIN: a merges row whose aid has no
+            # astroobjects row (seen live 2026-09-18: 36% of merges_4715492,
+            # objects deleted after cross-matching) must be reported as
+            # such, not mistaken for a missing association. ORDER BY makes
+            # the pick deterministic when a source has several merges rows.
             object_rows = self._query(f"""
-                SELECT m.sid, a.aid, a.ra0, a.dec0,
+                SELECT m.sid, m.aid AS merges_aid, a.aid, a.ra0, a.dec0,
                        {stats_select}
                 FROM merges_{int(field)} m
-                JOIN astroobjects_{int(field)} a ON m.aid = a.aid
+                LEFT JOIN astroobjects_{int(field)} a ON m.aid = a.aid
                 {stats_join}
                 WHERE m.sid = ANY(%s)
+                ORDER BY m.sid, m.aid
             """, (sids,))
+            duplicated = set()
             for row in object_rows:
-                objects_by_sid[row["sid"]] = row
+                sid = row["sid"]
+                if row["aid"] is None:
+                    orphans_by_sid.setdefault(sid, []).append(row["merges_aid"])
+                    continue
+                if sid in objects_by_sid:
+                    duplicated.add(sid)      # keep the first (lowest aid)
+                    continue
+                objects_by_sid[sid] = row
+            if duplicated:
+                logger.warning(
+                    "pid=%s field=%d: %d sources have more than one merges_%d "
+                    "row (several aids each); the lowest aid is used",
+                    pid, int(field), len(duplicated), int(field))
 
-            aids = sorted({row["aid"] for row in object_rows})
+            aids = sorted({row["aid"] for row in objects_by_sid.values()
+                           if row["sid"] in sids})
             if not aids:
                 continue
             # All prior detections of every associated object, in one query.
@@ -1793,6 +1815,7 @@ class AlertDataProvider:
 
         self._chip_pid = pid
         self._chip_objects = objects_by_sid
+        self._chip_orphans = orphans_by_sid
         self._chip_history = history_by_aid
         self._chip_window_days = window_days
 
@@ -1818,36 +1841,61 @@ class AlertDataProvider:
             AssociationError.
         """
         # Batch flow: after iter_sources(pid), every association for the
-        # chip is already in memory. An sid absent from the prefetch means
-        # "no merges row" -- no fallback query needed.
+        # chip is already in memory. An sid absent from the prefetch has
+        # either no merges row, or merges rows whose objects are gone
+        # (_chip_orphans) -- no fallback query needed.
         if self._chip_pid is not None and self._chip_pid == detection.pid:
             row = self._chip_objects.get(detection.sid)
             if row is None:
-                raise AssociationError(
-                    f"sid={detection.sid} has no merges_{detection.field} "
-                    f"row: source cross-matching missed it")
+                raise AssociationError(self._association_failure(
+                    detection, self._chip_orphans.get(detection.sid, [])))
             return ObjectRecord.from_row(row, strict=True)
 
-        # Single-alert flow: query for just this sid.
+        # Single-alert flow: query for just this sid, with the same LEFT
+        # JOIN and ordering as the batch prefetch so both paths classify a
+        # failure identically and build identical records.
         field = int(detection.field)
         self._require_partition(field)
         stats_select, stats_join = self._stats_sql(field)
         rows = self._query(f"""
-            SELECT a.aid, a.ra0, a.dec0,
+            SELECT m.aid AS merges_aid, a.aid, a.ra0, a.dec0,
                    {stats_select}
             FROM merges_{field} m
-            JOIN astroobjects_{field} a ON m.aid = a.aid
+            LEFT JOIN astroobjects_{field} a ON m.aid = a.aid
             {stats_join}
             WHERE m.sid = %s
+            ORDER BY m.aid
         """, (detection.sid,))
-        if not rows:
-            raise AssociationError(
-                f"sid={detection.sid} has no merges_{field} row: source "
+        with_object = [r for r in rows if r["aid"] is not None]
+        if not with_object:
+            raise AssociationError(self._association_failure(
+                detection, [r["merges_aid"] for r in rows]))
+        if len(with_object) > 1:
+            logger.warning(
+                "sid=%s has %d merges_%d rows (several aids); the lowest "
+                "aid is used", detection.sid, len(with_object), field)
+        # Also available but unused: astroobjects flux0 and the meta
+        # table's meanra/meandec/meanflux/stdevflux.
+        return ObjectRecord.from_row(with_object[0], strict=True)
+
+    @staticmethod
+    def _association_failure(detection: Source, orphan_aids: list[int]) -> str:
+        """The AssociationError text for a source that has no usable object.
+
+        Two distinct database states end here and must not be confused:
+        no merges_<field> row at all (cross-matching missed the source),
+        or merges rows whose aid has no astroobjects_<field> row (the
+        object was deleted after cross-matching, e.g. by the statistics
+        stage's redundant-aid cleanup, leaving the association dangling).
+        """
+        field = int(detection.field)
+        if orphan_aids:
+            aids = ", ".join(str(a) for a in orphan_aids)
+            return (f"sid={detection.sid}: merges_{field} row points at "
+                    f"aid={aids}, which has no astroobjects_{field} row: the "
+                    f"object was deleted after cross-matching")
+        return (f"sid={detection.sid} has no merges_{field} row: source "
                 f"cross-matching missed it")
-        # Same columns as the batch prefetch, so both paths build identical
-        # records. Also available but unused: astroobjects flux0 and the
-        # meta table's meanra/meandec/meanflux/stdevflux.
-        return ObjectRecord.from_row(rows[0], strict=True)
 
     def get_prv_detections(self, detection: Source, obj: ObjectRecord,
                            window_days: float = PRV_WINDOW_DAYS) -> list[Source]:
@@ -2320,10 +2368,13 @@ class AlertDataProvider:
         assert self.ned_reader is not None
         try:
             table = self.ned_reader(ra0, dec0, radius)
-        except Exception:
-            logger.warning("NED query failed for cone (%.5f, %.5f) r=%.1f\"; "
-                           "NED matching not run", ra0, dec0, radius,
-                           exc_info=True)
+        except Exception as exc:
+            # One line at WARNING (the stage's thread logs carry one of
+            # these per chip when NED is down); the traceback only at DEBUG.
+            logger.warning("NED query failed for cone (%.5f, %.5f) r=%.1f\" "
+                           "(%s: %s); NED matching not run", ra0, dec0, radius,
+                           type(exc).__name__, str(exc).splitlines()[0] if str(exc) else "")
+            logger.debug("NED query failure traceback", exc_info=True)
             return None
         if table is None:
             logger.warning("NED reader returned no slice for cone "
