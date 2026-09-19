@@ -377,7 +377,6 @@ grant EXECUTE on FUNCTION registerRefImMeta (
     nframes_             smallint,
     mjdobsmin_           double precision,
     mjdobsmax_           double precision,
-    npixsat_             integer,
     npixnan_             integer,
     clmean_              real,
     clstddev_            real,
@@ -392,5 +391,6 @@ grant EXECUTE on FUNCTION registerRefImMeta (
     fwhmmedpix_          real,
     fwhmminpix_          real,
     fwhmmaxpix_          real,
-    nsexcatsources_      integer
+    nsxcatsources_       integer,
+    npucatsources_       integer
 ) to rapidporole;

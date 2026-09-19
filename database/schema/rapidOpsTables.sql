@@ -958,7 +958,6 @@ CREATE TABLE refimmeta (
     nframes smallint NOT NULL,             -- Number of images in stack
     mjdobsmin double precision NOT NULL,   -- Minimum MJD of input images in stack
     mjdobsmax double precision NOT NULL,   -- Maximum MJD of input images in stack
-    npixsat integer NOT NULL,              -- Number of saturated pixels in reference image
     npixnan integer NOT NULL,              -- Number of NaN pixels in reference image
     clmean real NOT NULL,                  -- Image pixel mean after data clipping
     clstddev real NOT NULL,                -- Image pixel standard deviation after data clipping and reinflating
@@ -973,7 +972,8 @@ CREATE TABLE refimmeta (
     fwhmmedpix real NOT NULL,              -- Median of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
     fwhmminpix real NOT NULL,              -- Minimum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
     fwhmmaxpix real NOT NULL,              -- Maximum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
-    nsexcatsources integer NOT NULL        -- Number of sources in reference-image SExtractor catalog
+    nsxcatsources integer NOT NULL,        -- Number of sources in reference-image SExtractor catalog
+    npucatsources integer NOT NULL         -- Number of sources in reference-image PhotUtils catalog
 );
 
 ALTER TABLE refimmeta OWNER TO rapidadminrole;

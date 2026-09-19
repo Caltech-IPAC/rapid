@@ -2022,7 +2022,6 @@ create function registerRefImMeta (
     nframes_             smallint,
     mjdobsmin_           double precision,
     mjdobsmax_           double precision,
-    npixsat_             integer,
     npixnan_             integer,
     clmean_              real,
     clstddev_            real,
@@ -2037,7 +2036,8 @@ create function registerRefImMeta (
     fwhmmedpix_          real,
     fwhmminpix_          real,
     fwhmmaxpix_          real,
-    nsexcatsources_      integer
+    nsxcatsources_       integer,
+    npucatsources_       integer
 )
     returns void as $$
 
@@ -2071,7 +2071,6 @@ create function registerRefImMeta (
                  nframes,
                  mjdobsmin,
                  mjdobsmax,
-                 npixsat,
                  npixnan,
                  clmean,
                  clstddev,
@@ -2086,7 +2085,8 @@ create function registerRefImMeta (
                  fwhmmedpix,
                  fwhmminpix,
                  fwhmmaxpix,
-                 nsexcatsources
+                 nsxcatsources,
+                 npucatsources
                 )
                 values
                 (rfid_,
@@ -2097,7 +2097,6 @@ create function registerRefImMeta (
                  nframes_,
                  mjdobsmin_,
                  mjdobsmax_,
-                 npixsat_,
                  npixnan_,
                  clmean_,
                  clstddev_,
@@ -2112,7 +2111,8 @@ create function registerRefImMeta (
                  fwhmmedpix_,
                  fwhmminpix_,
                  fwhmmaxpix_,
-                 nsexcatsources_
+                 nsxcatsources_,
+                 npucatsources_
                 );
                 exception
                     when no_data_found then
@@ -2134,7 +2134,6 @@ create function registerRefImMeta (
                 nframes = nframes_,
                 mjdobsmin = mjdobsmin_,
                 mjdobsmax = mjdobsmax_,
-                npixsat = npixsat_,
                 npixnan = npixnan_,
                 clmean = clmean_,
                 clstddev = clstddev_,
@@ -2149,7 +2148,8 @@ create function registerRefImMeta (
                 fwhmmedpix = fwhmmedpix_,
                 fwhmminpix = fwhmminpix_,
                 fwhmmaxpix = fwhmmaxpix_,
-                nsexcatsources = nsexcatsources_
+                nsxcatsources = nsxcatsources_,
+                npucatsources = npucatsources_
             where rfid = rfid_;
 
         end if;
