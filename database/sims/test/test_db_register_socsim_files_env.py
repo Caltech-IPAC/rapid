@@ -19,9 +19,14 @@ test process. This test instead runs it as a subprocess with
 process exits 64 with the expected error text on stdout -- never
 reaching the sqlite/Postgres code that would need live infrastructure.
 
-No stubbing is required: boto3, healpy, psycopg2 and friends are real
-dependencies of this environment's test extra, so the subprocess's own
-imports resolve unaided.
+No stubbing is required, and no third-party package needs to be
+installed in the subprocess's interpreter: the script validates
+INPUTBUCKET at the very top of the file, before it imports boto3, healpy,
+astropy or psycopg2, so the exit-64 path is reached with the standard
+library alone. (An earlier version of this docstring claimed those
+packages were part of the test extra; `pyproject.toml`'s `test` extra is
+pytest only, and the check then sat below the heavy imports, so these
+two tests failed everywhere the package was not pip-installed.)
 """
 
 import os

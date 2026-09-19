@@ -182,9 +182,13 @@ def source_checksum_from_head(head):
         f"be recorded as one")
 
 
-def enumerate_source(dbh, bucket, key, checksum, version_id=None,
-                     size=None, algorithm="sha256"):
+def enumerate_source(dbh, bucket, key, checksum, *, algorithm,
+                     version_id=None, size=None):
     """Record one source object in the run's UNSEALED manifest.
+
+    `algorithm` is required, matching `record_l2file_admission`: the
+    manifest entry and the admission it precedes must name the same
+    algorithm, and a default on one side lets them disagree silently.
 
     Called as each input is discovered, BEFORE its admission. The version
     reference is what lets a replay name the exact bytes rather than whatever

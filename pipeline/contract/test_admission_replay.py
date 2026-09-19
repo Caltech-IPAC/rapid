@@ -86,7 +86,7 @@ def sealed_manifest(conn, repo, release, tag):
                                   "external-versioned")
     repo.add_manifest_entry(
         manifest.manifest_id, "roman-rapid-inputs-gbtds-sim",
-        "sim/%s/file.fits" % tag, "a" * 64,
+        "sim/%s/file.fits" % tag, "a" * 64, checksum_algorithm="sha256",
         source_version_id="objver-%s" % tag, source_bytes=1024)
     repo.seal_manifest(manifest.manifest_id)
     conn.commit()
@@ -211,7 +211,7 @@ def test_an_unsealed_manifest_is_refused():
         manifest = repo.open_manifest("m-unsealed-%s" % tag, "socsim",
                                       release, "none")
         repo.add_manifest_entry(manifest.manifest_id, "b", "k-%s" % tag,
-                                "b" * 64)
+                                "b" * 64, checksum_algorithm="sha256")
         conn.commit()
 
         dateobs = _dateobs("2026-03-03", tag)

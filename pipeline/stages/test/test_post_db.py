@@ -910,6 +910,66 @@ class CurrencySweepTests(unittest.TestCase):
                 identity_table="diffimages", identity_column="pid")
 
 
+class CurrencySweepIdentitySpaceTests(unittest.TestCase):
+    """The sweeps reach the image through the identity space the row records.
+
+    A `merges_<field>` row is `(aid, sid)`; the image it derives from is
+    reached through `sources.pid`, never by comparing `sid` — a sources
+    sequence value — with `diffimages.pid` or `l2files.rid`. The one-hop form
+    the sweeps first shipped with did exactly that comparison, and on a real
+    PostgreSQL (18.6, 2026-09-15) with colliding ids it deleted a row under a
+    pinned image and a current row while keeping the demoted one; the
+    l2files form deleted every row. These tests pin the corrected shapes
+    against the same double the other sweep tests use, so a regression to a
+    one-hop predicate fails here rather than on data.
+    """
+
+    def test_the_merge_sweep_reaches_the_image_through_sources(self):
+        cursor = RecordingCursor(_merges_catalog())
+        catalog_db.create_child_table(cursor, "merges_7", "merges")
+        cursor.delete_rowcount = 3
+
+        removed = catalog_db.delete_superseded_merge_rows(cursor, "merges_7")
+
+        self.assertEqual(removed, 3)
+        deletes = [s for s in cursor.statements
+                   if s.upper().lstrip().startswith("DELETE")]
+        self.assertEqual(len(deletes), 1)
+        text = " ".join(deletes[0].split())
+        self.assertIn('DELETE FROM "merges_7" AS m', text)
+        self.assertIn("FROM sources AS s JOIN diffimages AS d ON d.pid = s.pid", text)
+        self.assertIn("s.sid = m.sid", text)
+        self.assertIn("vbest IN (1, 2)", text)
+        # The defect this replaces: a source id compared with an image id.
+        self.assertNotIn("d.pid = m.sid", text)
+        self.assertNotIn("l2files", text)
+
+    def test_the_merge_sweep_refuses_a_foreign_child(self):
+        cursor = RecordingCursor(_merges_catalog())
+        with self.assertRaises(InputError):
+            catalog_db.delete_superseded_merge_rows(cursor, "astroobjects_7")
+
+    def test_the_source_sweep_deletes_from_sources_by_field(self):
+        cursor = RecordingCursor(_merges_catalog())
+        cursor.delete_rowcount = 5
+
+        removed = catalog_db.delete_superseded_source_rows(cursor, "7")
+
+        self.assertEqual(removed, 5)
+        deletes = [s for s in cursor.statements
+                   if s.upper().lstrip().startswith("DELETE")]
+        self.assertEqual(len(deletes), 1)
+        text = " ".join(deletes[0].split())
+        # The inheritance PARENT, with a field predicate: the field's rows are
+        # spread across the per-(date, SCA) children.
+        self.assertIn("DELETE FROM sources AS s WHERE s.field = %s", text)
+        self.assertIn("FROM diffimages AS d WHERE d.pid = s.pid", text)
+        self.assertIn("vbest IN (1, 2)", text)
+        # Not the merge sweep's table, and not the l2files identity space.
+        self.assertNotIn("merges", text)
+        self.assertNotIn("l2files", text)
+
+
 class CopyNullTests(unittest.TestCase):
     """An absent value must reach COPY as its NULL marker (attempt 6774).
 
@@ -1097,7 +1157,53 @@ class StatisticsCurrencyTests(unittest.TestCase):
         source = inspect.getsource(post_db.compute_statistics)
         self.assertIn("JOIN diffimages AS d ON d.pid = s.pid", source)
         self.assertIn("WHERE d.vbest > 0", source)
-        self.assertLess(source.index("JOIN diffimages"), source.index("GROUP BY m.aid"))
+        self.assertLess(source.index("JOIN diffimages"), source.index("GROUP BY x.aid"))
+
+    def test_statistics_count_one_point_per_object_image_and_sign(self):
+        """Dev 39ac5491's dedup, which dev's own 0feead1b dropped.
+
+        Bulk COPY lets two sources that hash to one aid in one image both
+        land; without DISTINCT ON they are averaged and counted twice. The
+        key carries isdiffpos so a positive and a negative detection of one
+        object in one image stay two points; the best fit (lowest qfit, sid
+        as the tiebreak) is the one kept. Verified on PostgreSQL 18.6.
+        """
+        import inspect
+        from pipeline.stages import post_db
+
+        source = " ".join(inspect.getsource(post_db.compute_statistics).split())
+        self.assertIn("SELECT DISTINCT ON (m.aid, s.pid, s.isdiffpos)", source)
+        self.assertIn("ORDER BY m.aid, s.pid, s.isdiffpos, s.qfit ASC, s.sid ASC", source)
+        # The aggregate reads the deduplicated rows, not the raw join: the
+        # DISTINCT ON sits inside a derived table the GROUP BY runs over.
+        self.assertLess(source.index('"FROM ("'), source.index("SELECT DISTINCT ON"))
+        self.assertLess(source.index("SELECT DISTINCT ON"), source.index(") AS x"))
+        self.assertLess(source.index(") AS x"), source.index("GROUP BY x.aid"))
+
+    def test_statistics_exclude_images_registration_marked_bad(self):
+        """`diffimages.status` is registration's good/bad QA flag (006), written
+        as 1 unless release content says otherwise; dev 00afb0d6's
+        `status > 0` term, on the image the source came from."""
+        import inspect
+        from pipeline.stages import post_db
+
+        source = " ".join(inspect.getsource(post_db.compute_statistics).split())
+        self.assertIn("WHERE d.vbest > 0 AND d.status > 0", source)
+
+    def test_objects_with_no_current_detection_are_pruned_in_the_same_transaction(self):
+        """Dev's step 5: an astroobjects_<field> row with no statistics row is
+        an object nothing can measure, and the currency join makes that
+        population grow with every demotion."""
+        import inspect
+        from pipeline.stages import post_db
+
+        source = " ".join(inspect.getsource(post_db.compute_statistics).split())
+        self.assertIn("DELETE FROM {objects} AS a WHERE NOT EXISTS", source)
+        self.assertIn("SELECT 1 FROM {target} AS x WHERE x.aid = a.aid", source)
+        # Inside the writing transaction: the prune precedes the block's end,
+        # i.e. it appears before the post-commit verification.
+        self.assertLess(source.index("DELETE FROM {objects}"),
+                        source.index("_verify_effect("))
 
 
 if __name__ == "__main__":

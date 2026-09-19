@@ -262,9 +262,11 @@ def test_the_same_l2_components_give_the_same_identity():
     cannot pass by comparing an object with itself.
     """
     first, first_payload = l2file_identity(
-        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER)
+        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER,
+        checksum_algorithm="sha256")
     second, second_payload = l2file_identity(
-        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER)
+        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER,
+        checksum_algorithm="sha256")
 
     assert first == second
     assert first_payload == second_payload
@@ -283,9 +285,11 @@ def test_a_different_exposure_moves_the_l2_identity():
     into one admission.
     """
     baseline, _ = l2file_identity(exposure=EXPOSURE, sca=SCA,
-                                  source_checksum=CHECKSUM_LOWER)
+                                  source_checksum=CHECKSUM_LOWER,
+                                  checksum_algorithm="sha256")
     varied, _ = l2file_identity(exposure=EXPOSURE + 1, sca=SCA,
-                                source_checksum=CHECKSUM_LOWER)
+                                source_checksum=CHECKSUM_LOWER,
+                                checksum_algorithm="sha256")
     assert varied != baseline
 
 
@@ -298,9 +302,11 @@ def test_a_different_sca_moves_the_l2_identity():
     would then be the exposure grain wearing a checksum.
     """
     baseline, _ = l2file_identity(exposure=EXPOSURE, sca=SCA,
-                                  source_checksum=CHECKSUM_LOWER)
+                                  source_checksum=CHECKSUM_LOWER,
+                                  checksum_algorithm="sha256")
     varied, _ = l2file_identity(exposure=EXPOSURE, sca=SCA + 1,
-                                source_checksum=CHECKSUM_LOWER)
+                                source_checksum=CHECKSUM_LOWER,
+                                checksum_algorithm="sha256")
     assert varied != baseline
 
 
@@ -314,9 +320,11 @@ def test_a_different_source_checksum_moves_the_l2_identity():
     can only do that because the two identities differ HERE first.
     """
     baseline, _ = l2file_identity(exposure=EXPOSURE, sca=SCA,
-                                  source_checksum=CHECKSUM_LOWER)
+                                  source_checksum=CHECKSUM_LOWER,
+                                  checksum_algorithm="sha256")
     varied, _ = l2file_identity(exposure=EXPOSURE, sca=SCA,
-                                source_checksum=OTHER_CHECKSUM)
+                                source_checksum=OTHER_CHECKSUM,
+                                checksum_algorithm="sha256")
     assert varied != baseline
 
 
@@ -324,7 +332,8 @@ def test_the_l2_payload_names_its_components_and_no_others():
     """The L2 grain's key set, stated whole for the same reason the exposure
     grain's is: the failure is an addition, not a removal."""
     _identity, payload = l2file_identity(
-        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER)
+        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER,
+        checksum_algorithm="sha256")
 
     assert set(payload) == {"serialization_version", "admission_grain",
                             "exposure", "sca", "source_checksum",
@@ -347,9 +356,11 @@ def test_checksum_case_does_not_change_the_identity():
     otherwise a change of ingest tooling silently re-admits the entire survey.
     """
     lower, lower_payload = l2file_identity(
-        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER)
+        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER,
+        checksum_algorithm="sha256")
     upper, upper_payload = l2file_identity(
-        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_UPPER)
+        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_UPPER,
+        checksum_algorithm="sha256")
 
     assert lower == upper
     # And the STORED spelling is the lower-case one, so the payload — which is
@@ -371,13 +382,14 @@ def test_a_wrong_length_checksum_is_refused():
     share a prefix.
     """
     with pytest.raises(AdmissionIdentityError) as caught:
-        normalized_checksum(CHECKSUM_LOWER[:32])
+        normalized_checksum(CHECKSUM_LOWER[:32], "sha256")
     assert "64 hex characters" in str(caught.value)
 
     # And through the identity entry point, which is where a caller meets it.
     with pytest.raises(AdmissionIdentityError):
         l2file_identity(exposure=EXPOSURE, sca=SCA,
-                        source_checksum=CHECKSUM_LOWER[:32])
+                        source_checksum=CHECKSUM_LOWER[:32],
+                        checksum_algorithm="sha256")
 
     # An MD5-length value under the sha256 algorithm is the same mistake, and
     # is caught by length rather than by silently reinterpreting the algorithm.
@@ -395,7 +407,7 @@ def test_a_non_hexadecimal_checksum_is_refused():
     though it were content.
     """
     with pytest.raises(AdmissionIdentityError) as caught:
-        normalized_checksum("z" * 64)
+        normalized_checksum("z" * 64, "sha256")
     assert "hexadecimal" in str(caught.value)
 
 
@@ -478,7 +490,8 @@ def test_no_forbidden_input_appears_in_the_l2_payload():
     however convenient it would be.
     """
     _identity, payload = l2file_identity(
-        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER)
+        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER,
+        checksum_algorithm="sha256")
     _assert_no_forbidden_key(payload, "l2file")
 
 
@@ -563,7 +576,8 @@ def test_an_exposure_identity_and_an_l2_identity_never_collide():
     """
     exposure_id, exposure_side = exposure_identity(INSTANT_UTC)
     l2_id, l2_side = l2file_identity(exposure=EXPOSURE, sca=SCA,
-                                     source_checksum=CHECKSUM_LOWER)
+                                     source_checksum=CHECKSUM_LOWER,
+                                     checksum_algorithm="sha256")
 
     assert exposure_id != l2_id
     assert exposure_side != l2_side
@@ -580,7 +594,8 @@ def test_the_grain_is_inside_the_hashed_payload_at_both_grains():
     """
     _exposure_id, exposure_side = exposure_identity(INSTANT_UTC)
     _l2_id, l2_side = l2file_identity(exposure=EXPOSURE, sca=SCA,
-                                      source_checksum=CHECKSUM_LOWER)
+                                      source_checksum=CHECKSUM_LOWER,
+                                      checksum_algorithm="sha256")
 
     assert exposure_side["admission_grain"] == GRAIN_EXPOSURE
     assert l2_side["admission_grain"] == GRAIN_L2FILE
@@ -618,7 +633,8 @@ def test_the_canonical_serialization_is_construction_order_independent():
     for one observation.
     """
     _identity, payload = l2file_identity(
-        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER)
+        exposure=EXPOSURE, sca=SCA, source_checksum=CHECKSUM_LOWER,
+        checksum_algorithm="sha256")
     reversed_order = {key: payload[key] for key in reversed(list(payload))}
 
     assert canonical_json(reversed_order) == canonical_json(payload)
@@ -653,7 +669,7 @@ def test_a_missing_l2_component_raises_naming_the_component(kwargs, component):
     read a missing FITS card usually produces `''` rather than `None`.
     """
     with pytest.raises(AdmissionIdentityError) as caught:
-        l2file_identity(**kwargs)
+        l2file_identity(checksum_algorithm="sha256", **kwargs)
     assert component in str(caught.value)
 
 

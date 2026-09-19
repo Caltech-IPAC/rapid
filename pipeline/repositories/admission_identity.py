@@ -207,8 +207,13 @@ def canonical_dateobs(dateobs):
     return value.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def normalized_checksum(checksum, algorithm="sha256"):
+def normalized_checksum(checksum, algorithm):
     """A content checksum in one spelling, with its algorithm.
+
+    `algorithm` has no default. The 2026-09-09 D6 socsim admission run failed
+    every file because a default of "sha256" two frames up let md5 digests
+    from `compute_checksum` be labelled sha256; a caller that does not know
+    how its checksum was computed must fail at the call, not here.
 
     Lower-cased hex, because the same bytes hashed by two tools differ only in
     case and must not differ in identity. The algorithm travels WITH the value
@@ -266,7 +271,7 @@ def exposure_payload(dateobs):
     return _reject_forbidden(payload)
 
 
-def l2file_payload(exposure, sca, source_checksum, checksum_algorithm="sha256"):
+def l2file_payload(exposure, sca, source_checksum, checksum_algorithm):
     """The exact object an L2 admission identity is a digest of.
 
     `exposure` is the MISSION exposure identifier (`expid`), the survey's own
@@ -319,9 +324,13 @@ def exposure_identity(dateobs):
     return admission_identity(payload), payload
 
 
-def l2file_identity(*, exposure, sca, source_checksum,
-                    checksum_algorithm="sha256"):
-    """The admission identity for one L2 detector file, with its payload."""
+def l2file_identity(*, exposure, sca, source_checksum, checksum_algorithm):
+    """The admission identity for one L2 detector file, with its payload.
+
+    `checksum_algorithm` is required for the reason `normalized_checksum`
+    gives: the algorithm is part of the hashed payload, so a guessed value
+    would mint a wrong identity that looks exactly like a right one.
+    """
     payload = l2file_payload(exposure, sca, source_checksum,
                              checksum_algorithm)
     return admission_identity(payload), payload

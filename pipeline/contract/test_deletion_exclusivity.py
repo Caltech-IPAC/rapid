@@ -231,8 +231,35 @@ def _public_methods(text):
 #:
 #: The previous value, for the record, was
 #: `ebcda29520b85fcc3ebe35175330d82c93b8568d2ffeefd6cf7cc44376eaa330`.
+#:
+#: **RE-RATIFICATION, 2026-09-15 — three fixes to existing methods, no new
+#: capability.** Ratified by Emily Everetts for the smdc-port-followups
+#: branch on the strength of the 2026-09-09 diff-level audit of the
+#: reconcile merge (memory: ben-reconcile-audit-2026-09-09). The digest
+#: absorbs exactly:
+#:
+#:   * `_register_numpy_adapters` — the three numpy float types are
+#:     registered through psycopg2's `Float` adapter instead of
+#:     `AsIs(repr(float(value)))`. The latter (d4b7baa7) rendered NaN and
+#:     Infinity as the bare SQL tokens `nan`/`inf`; `numpy.float64` had
+#:     adapted correctly through the subclass fallback before that
+#:     registration overrode it. Reproduced and re-tested against the real
+#:     driver (`test_rapid_db_numpy_adapters_contract.py`).
+#:   * `execute_sql_queries` — the empty-list guard (6a2cce9a) returns
+#:     `None` like the query-failure path, not `[]`, which no caller could
+#:     tell from "found nothing"; the duplicated inner `records = []` is
+#:     removed (dev 0cad34b9 MOVED the line; 6a2cce9a added a second copy).
+#:   * `get_overlapping_l2files` — the docstring states the ordering the
+#:     query has had since 87156b56 (mjdobs, then distance) instead of
+#:     "ordered by distance from tile center".
+#:
+#: No public method is added, removed or re-signed. The branch-diff form of
+#: the second test below is expected to report "modified on this branch"
+#: until this lands on `smdc`; that is the deliberate friction working, not
+#: a defect to route around. The previous value, for the record, was
+#: `1cc5f3949f9edf00d3e2bee8dcd728e633b9656fca5a160b3eed12b31369912b`.
 RAPID_DB_BRANCH_POINT_SHA256 = (
-    "1cc5f3949f9edf00d3e2bee8dcd728e633b9656fca5a160b3eed12b31369912b")
+    "8d7dc0fc5038783f8cc2c74bdaf2225ab9b0af7497e82d47bee4dde1b0d3d376")
 
 
 def _file_digest(path):

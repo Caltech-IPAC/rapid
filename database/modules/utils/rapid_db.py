@@ -33,7 +33,7 @@ def _register_numpy_adapters():
         return
 
     try:
-        from psycopg2.extensions import AsIs, Boolean, register_adapter
+        from psycopg2.extensions import AsIs, Boolean, Float, register_adapter
     except (ImportError, AttributeError):
         # The stub tier (tests) installs a bare `psycopg2.extensions` module
         # without `register_adapter`/`AsIs`/`Boolean`. Nothing to register
@@ -49,8 +49,19 @@ def _register_numpy_adapters():
     for np_type in integer_types:
         register_adapter(np_type, lambda value: AsIs(int(value)))
 
+    # psycopg2's own float adapter, NOT AsIs(repr(float(value))): the latter
+    # renders NaN and Infinity as the bare SQL tokens `nan` / `inf` ("column
+    # nan does not exist"), where Float emits the typed literals 'NaN'::float
+    # and 'Infinity'::float that PostgreSQL accepts. numpy.float64 subclasses
+    # float and adapted correctly through psycopg2's subclass fallback before
+    # any registration; an exact-type registration overrides that fallback,
+    # so the registered adapter must be at least as good as the one it
+    # replaces. (Regression in d4b7baa7, found by the 2026-09-09 audit and
+    # reproduced: adapt(np.float64('nan')) gave b'nan' after importing this
+    # module.) float32/float16 do not subclass float and need the explicit
+    # registration either way.
     for np_type in float_types:
-        register_adapter(np_type, lambda value: AsIs(repr(float(value))))
+        register_adapter(np_type, lambda value: Float(float(value)))
 
     # `AsIs(bool(value))` would stringify as Python's "True"/"False", not
     # the SQL boolean literal psycopg2's own bool adapter produces
@@ -1486,7 +1497,9 @@ class RAPIDDB:
         Query database for RIDs and distances from tile center for all science images that
         overlap the sky tile associated with the input science image and its filter
         that were acquired before the input science image.
-        Returned list is ordered by distance from tile center.
+        Returned list is ordered by observation time (mjdobs), then by distance
+        from tile center as the tiebreak (dev ad9fa01e, ported by 87156b56); it
+        was ordered by distance alone before that.
 
         `rid` is the representative to EXCLUDE from the result, or None to
         exclude nothing. It is a query control, not a description of the
@@ -5275,7 +5288,10 @@ class RAPIDDB:
         if len(sql_queries) == 0:
             print("*** Error:  sql_queries is empty; returning...")
             self.exit_code = 64
-            return []
+            # None, like the query-failure path below — not [], which no
+            # caller can tell from "ran and found nothing" (the 15 call sites
+            # in this repo iterate the result without checking exit_code).
+            return None
 
         for i,query in enumerate(sql_queries):
 
@@ -5293,7 +5309,6 @@ class RAPIDDB:
                 self.cur.execute(query, params)
 
                 try:
-                    records = []
                     nrecs = 0
                     for record in self.cur:
                         if nrecs == 0:            # Print first record returned as a sanity check.

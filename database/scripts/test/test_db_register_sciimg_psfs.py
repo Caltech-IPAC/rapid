@@ -1,24 +1,16 @@
 """
 The pure parts of database/scripts/db_register_sciimg_psfs.py: which objects under
-a generation's psfs/ prefix are science PSFs, and how the prefix is split.  No S3, no
-database; psycopg2 and boto3 are stubbed if absent so the module imports anywhere.
+a generation's psfs/ prefix are science PSFs, how the prefix is split, how the seal
+check tells absence from failure, and how --filter is checked against the Filters
+row for --fid.  No S3, no database.  The script imports its database modules and
+boto3 inside main(), so this module needs no stand-ins for them.
 """
 
-import sys
-import types
 import unittest
 
-for name in ("psycopg2", "boto3"):
-    if name not in sys.modules:
-        try:
-            __import__(name)
-        except ImportError:
-            stub = types.ModuleType(name)
-            stub.DatabaseError = Exception
-            sys.modules[name] = stub
-
-from database.scripts.db_register_sciimg_psfs import (  # noqa: E402
-    PSF_OBJECT_PATTERN, generation_manifest_key, select_psf_objects, split_s3_prefix)
+from database.scripts.db_register_sciimg_psfs import (
+    NOT_FOUND_CODES, PSF_OBJECT_PATTERN, filter_codes_agree, generation_is_sealed,
+    generation_manifest_key, s3_error_code, select_psf_objects, split_s3_prefix)
 
 PREFIX = "g0006-psf-f146/psfs/"
 
@@ -89,6 +81,81 @@ class SelectPsfObjectsTests(unittest.TestCase):
         self.assertIn("f158", str(caught.exception))
         self.assertEqual(select_psf_objects(keys[:1], PREFIX, filter_name="F146"),
                          [(keys[0], 7)])
+
+
+class _ClientError(Exception):
+    """A botocore ClientError's shape: `response["Error"]["Code"]`."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.response = {"Error": {"Code": code, "Message": "stubbed"}}
+
+
+class _S3Client:
+    """head_object either succeeds or raises the configured error."""
+
+    class exceptions:
+        ClientError = _ClientError
+
+    def __init__(self, error_code=None):
+        self.error_code = error_code
+
+    def head_object(self, Bucket, Key):
+        if self.error_code is not None:
+            raise _ClientError(self.error_code)
+        return {}
+
+
+class SealCheckTests(unittest.TestCase):
+
+    def test_a_present_marker_is_sealed(self):
+        self.assertTrue(generation_is_sealed(_S3Client(), "b", "g/_manifest.json"))
+
+    def test_an_absent_marker_is_not_sealed(self):
+        for code in NOT_FOUND_CODES:
+            with self.subTest(code=code):
+                self.assertFalse(generation_is_sealed(_S3Client(code), "b",
+                                                      "g/_manifest.json"))
+
+    def test_a_permission_failure_is_not_reported_as_unsealed(self):
+        # The defect: every ClientError used to read as "the generation is not
+        # complete", so a missing read grant sent the operator to look for an
+        # abandoned staging run.  Not knowing is re-raised for main() to name.
+        for code in ("403", "AccessDenied", "SlowDown", "InternalError"):
+            with self.subTest(code=code):
+                with self.assertRaises(_ClientError):
+                    generation_is_sealed(_S3Client(code), "b", "g/_manifest.json")
+
+    def test_the_error_code_is_read_from_the_botocore_shape(self):
+        self.assertEqual(s3_error_code(_ClientError("AccessDenied")), "AccessDenied")
+        self.assertEqual(s3_error_code(RuntimeError("no response attribute")), "")
+
+
+class FilterFidAgreementTests(unittest.TestCase):
+
+    def test_the_same_band_in_both_spellings_agrees(self):
+        # Filters names the band with Roman's letter (W146); the filename says f146.
+        self.assertTrue(filter_codes_agree("f146", "W146"))
+        self.assertTrue(filter_codes_agree("F158", "H158"))
+        self.assertTrue(filter_codes_agree("f087", "Z087"))
+
+    def test_a_different_band_disagrees(self):
+        # --filter f146 --fid 7 would file eighteen F146 PSFs under Z087.
+        self.assertFalse(filter_codes_agree("f146", "Z087"))
+        self.assertFalse(filter_codes_agree("f158", "W146"))
+
+    def test_a_name_without_one_wavelength_code_never_agrees(self):
+        for token, name in (("f146", ""), ("f146", None), ("grism", "W146"),
+                            ("f146", "W146_146"), ("f14", "W146")):
+            with self.subTest(token=token, name=name):
+                self.assertFalse(filter_codes_agree(token, name))
+
+    def test_every_seeded_filters_name_carries_exactly_one_code(self):
+        # rapid_systems 009-seed-data.sql; if a band is ever added without a
+        # three-digit code the cross-check must be rethought, not bypassed.
+        for name in ("F184", "H158", "J129", "K213", "R062", "Y106", "Z087", "W146"):
+            with self.subTest(name=name):
+                self.assertTrue(filter_codes_agree("f" + name[1:], name))
 
 
 if __name__ == "__main__":

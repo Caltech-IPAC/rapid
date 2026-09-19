@@ -172,9 +172,10 @@ markers = [
 # CI job and the rapid-admin runner both select the tier explicitly with
 # `-m contract`.
 #
-# --import-mode=importlib (D5): `database/modules/utils/test/` is the only
-# `test/` directory in the tree carrying an `__init__.py` while its parents
-# (`database/`, `database/modules/`) deliberately carry none (PEP 420
+# --import-mode=importlib (D5): `database/modules/utils/test/` and
+# `database/sims/test/` are the only `test/` directories in the tree carrying
+# an `__init__.py` while their parents (`database/`, `database/modules/`,
+# `database/sims/`) deliberately carry none (PEP 420
 # namespace packages -- see the `[tool.setuptools]` comment above). Under the
 # default `prepend` import mode pytest cannot build a unique dotted module
 # path through an un-packaged parent, so it falls back to inserting

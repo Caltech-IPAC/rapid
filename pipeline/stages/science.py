@@ -982,8 +982,20 @@ def run_zogy(context) -> None:
     # unchanged, so enabling the key is the only thing that can change a
     # difference image. Both values are recorded so provenance shows which
     # source fed ZOGY.
+    #
+    # Two caveats carried from dev unchanged. (1) The maps were NaN-filled
+    # with these same clipped scatters in prepare_zogy_inputs, so on a
+    # NaN-heavy map the percentile partly re-imports the source-dominated
+    # bias this path exists to remove. (2) The reference map passed is the
+    # GAIN-MATCHED one, so scalefacref is deliberately not applied on the
+    # map path (zogyNoiseSubs applies it only on the historical path);
+    # passing the resampled map instead would be off by scalefacref. And
+    # Jacob's measurement enabled this together with the per-detector
+    # reference PSF set ([science] refimage_psf_filename): the ratio alone
+    # bought little.
     zogy_sn, zogy_sr = zogynoise.zogy_background_sigmas(
-        bool(context.science_value("zogy", "zogy_sn_sr_from_uncertainty_maps")),
+        sfftcmd.config_bool(
+            context.science_value("zogy", "zogy_sn_sr_from_uncertainty_maps")),
         context.product("science_uncert_image"),
         context.product("gainmatched_reference_uncert_image"),
         context.product("std_sci_img"),
@@ -1199,6 +1211,19 @@ def _sfft_argv(context, sfft_code, science_image, crossconv_flag) -> list:
             for key in ("sfft_bsmask_value", "sfft_bsmask_radius",
                         "sfft_use_gainmatch_catalogs", "sfft_use_segmentation")}
 
+    if crossconv_flag and not sfftcmd.config_bool(sfft["sfft_use_segmentation"]):
+        # Dev 7d852692: SFFT derives its decorrelation background sigmas from
+        # the mask's background pixels and raises only when that set is
+        # EMPTY, not when it is wrong. Without segmentation the "background"
+        # is ~5000 dilation-disc pixels, so cross-convolution runs on
+        # source-dominated sigmas and silently loses ~20% of depth. Loud
+        # rather than fatal: the release chose both keys, and the digest
+        # records them; whether this should refuse is an open team item.
+        context.logger.warning(
+            "sfft: crossconv_flag is on but sfft_use_segmentation is off; "
+            "decorrelation sigmas will come from the dilation mask, not the "
+            "background (see [sfft] in cdf/science/pipeline.toml)")
+
     filename_scifile = context.product("science_image_bkg_subbed")
     filename_reffile = context.product("gainmatched_reference_image")
 
@@ -1361,11 +1386,18 @@ def psf_catalog_for_difference_image(context, variant: str, image: str,
                       .replace("(", "").replace(")", "")
                       .replace(" ", "").split(","))
     aperture_radius = float(psfcat["aperture_radius"])
-    sharplo = float(psfcat["sharplo"])
-    sharphi = float(psfcat["sharphi"])
-    roundlo = float(psfcat["roundlo"])
-    roundhi = float(psfcat["roundhi"])
-    min_separation = float(psfcat["min_separation"])
+    # DAOStarFinder shape cuts and minimum separation (Russ Laher, dev 8f641045,
+    # ported by d0a2b794). Only min_separation changes behaviour: the helper's
+    # default is 0.0 and release content says 1.0 pixel, which suppresses the
+    # duplicate detections that hashed two nearby sources in one image to the
+    # same aid; the four shape cuts equal the helper's defaults. Read through
+    # the fail-loud accessor so a missing key is a named ConfigError rather
+    # than a KeyError from inside this function.
+    sharplo = float(context.science_value("psfcat_diffimage", "sharplo"))
+    sharphi = float(context.science_value("psfcat_diffimage", "sharphi"))
+    roundlo = float(context.science_value("psfcat_diffimage", "roundlo"))
+    roundhi = float(context.science_value("psfcat_diffimage", "roundhi"))
+    min_separation = float(context.science_value("psfcat_diffimage", "min_separation"))
 
     catalog_name = psfcat[f"output_{output_prefix}_psfcat_filename"]
     finder_name = psfcat[f"output_{output_prefix}_psfcat_finder_filename"]

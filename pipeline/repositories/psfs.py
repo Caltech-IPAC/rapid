@@ -19,20 +19,29 @@ import typing
 
 from pipeline.repositories.errors import RepositoryQueryFailed
 
+# The character-varying casts are UNBOUNDED on purpose. An explicit cast to
+# `character varying(255)` truncates a longer value silently in PostgreSQL;
+# the stored functions declare their `filename_` / `checksum_` parameters as
+# plain `character varying` (migrations 008, 026) and `psfs.filename` is text
+# since 023, so a bounded cast here was the only place a long URI could be
+# shortened without anyone hearing about it. Unbounded, an over-long value
+# reaches the column's own assignment cast and is REFUSED instead.
 _ADD_SQL = (
     "select * from addPSF("
     "cast(%s as smallint), cast(%s as smallint), "
-    "cast(%s as character varying(255)), cast(%s as character varying(32)), "
+    "cast(%s as character varying), cast(%s as character varying), "
     "cast(%s as smallint), cast(%s as bigint), cast(%s as integer)) "
     "as (psfid integer, version smallint);")
 
 _UPDATE_SQL = (
     "select * from updatePSF("
-    "cast(%s as integer), cast(%s as character varying(255)), "
-    "cast(%s as character varying(32)), cast(%s as smallint), "
+    "cast(%s as integer), cast(%s as character varying), "
+    "cast(%s as character varying), cast(%s as smallint), "
     "cast(%s as smallint), cast(%s as bigint), cast(%s as integer));")
 
 _VBEST_SQL = "select vbest from psfs where psfid = %s;"
+
+_FILTER_SQL = "select filter from filters where fid = %s;"
 
 
 class PsfRow(typing.NamedTuple):
@@ -83,6 +92,19 @@ class PsfRepository:
         if row is None:
             raise RepositoryQueryFailed("vbest", f"no PSFs row psfid={psfid}")
         return int(row[0])
+
+    def filter_name(self, fid):
+        """The Filters row's name for `fid` (e.g. 'W146'), or None if absent.
+
+        `PSFs` is keyed by (fid, sca) and nothing in `addPSF` checks that
+        the file being registered belongs to that filter, so the registrar
+        reads this back and compares it with the filename's own filter token
+        before it writes a row.
+        """
+        row = self._one("filter_name", _FILTER_SQL, (fid,))
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
 
     def _one(self, method, sql, params):
         try:

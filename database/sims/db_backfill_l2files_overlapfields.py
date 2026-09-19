@@ -61,6 +61,36 @@ refuses to apply while any row is still empty, and an unindexed
 `overlapfields` is what lets these UPDATEs take PostgreSQL's HOT path
 (HOT requires that no INDEXED column change).
 
+The whole sequence, in one place (rapid_systems migrations 101-105 are
+on its `main`; the coordination markers are in each file's header):
+
+    101  add the column (default `{}` = not computed)
+    102  addL2File gains `overlapfields_` -- the registrars on smdc pass
+         it by name and FAIL against a database without 102; there is
+         no gate, so 102 precedes any registration run
+    --   deploy this rapid (registrars write the column from here on)
+    --   THIS SCRIPT, for every row registered before 102
+    103  GIN index (refuses while any row is still `{}`)
+    104  checks: cardinality >= 1 and `field = ANY(overlapfields)`
+         (`--acknowledge-coordination 104-...`, since it depends on the
+         rapid-side writer having shipped)
+    105  validates 104
+
+DETECTOR EXTENT.  The registrars compute the footprint from each file's
+own header NAXIS1/NAXIS2; this script has no FITS file and `l2files`
+stores no extent, so it uses the release's `naxis1_sciimage` /
+`naxis2_sciimage` (`detector_size` below).  Every data set registered so
+far is 4088 x 4088, so the two agree; a data set with another detector
+size must be registered through the registrars, not backfilled, or the
+column would carry two extents under one definition.
+
+`field = ANY(overlapfields)` is TRUE BY CONSTRUCTION for anything this
+script or a registrar writes, because `field` is unioned in after the
+inset (see `_footprint`); 104's check therefore guards against a row
+written by some other path, not against this geometry.  The falsifiable
+version of the same statement is `preflight_centre_tile`, which asks the
+un-unioned geometry whether the centre tile is present.
+
 WHERE TO RUN IT.  See the runbook: the credential is the constraint, not
 the host.  `rapid_read`/`rapid_operator` cannot UPDATE `l2files`.
 

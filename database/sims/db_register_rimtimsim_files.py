@@ -22,7 +22,22 @@ from database.sims.admission_bridge import (begin_admission_run,
                                             source_checksum_from_head)
 
 
-bucket_name_input = "rimtimsim-20260401-lite"
+# INPUTBUCKET is REQUIRED, as in db_register_socsim_files.py (a5108ec7): a
+# forgotten -e INPUTBUCKET=... must not silently admit files from some other,
+# unrelated dataset. This registrar had a bare literal until now. For the
+# run manifest: the current set (dev f2ce484c) is
+#   INPUTBUCKET = rimtimsim-260622-lite   written by sims/src/rimtimsim/convert_rimtimsim.py
+# The earlier set was rimtimsim-20260401-lite.
+
+bucket_name_input = os.getenv('INPUTBUCKET')
+
+if not bucket_name_input:
+
+    print("*** Error: Env. var. INPUTBUCKET not set; quitting...")
+    exit(64)
+
+print("bucket_name_input =",bucket_name_input)
+
 subdir_work = "/work"
 
 # Global variables.
@@ -439,7 +454,7 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
 
     # Compute the sky tiles the image OVERLAPS, not just the one holding its
     # centre.  `field` above is one tile chosen by one point; an SCA covers
-    # several (median 7), and rapid_systems migration 100 gives l2files a
+    # several (median 7), and rapid_systems migration 101 gives l2files a
     # column for the whole footprint.  Computed here from the same WCS values
     # about to be written to the row, so the footprint and the WCS it derives
     # from are always consistent — and from the header's own NAXIS1/NAXIS2

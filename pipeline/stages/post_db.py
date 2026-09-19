@@ -25,7 +25,8 @@ False` — a database-effect job type, ruling 2's other half — and every
 non-product-producing job type now closes through the effect-confirmation
 boundary, not through the plain published/none split. Each stage here writes
 inside a transaction, then RE-QUERIES after that transaction commits
-(`_verify_effect`, `_verify_no_superseded_rows`) to confirm the write is
+(`_verify_effect`, `_verify_no_superseded_merges`,
+`_verify_no_superseded_sources`) to confirm the write is
 durably visible, and produces the result as the `effect_outcome` stage fact
 (`"confirmed"` or `"unconfirmed"`) the same way alert production's claim/
 confirm protocol does. `pipeline.entrypoints.job._execute` maps that fact to
@@ -140,33 +141,32 @@ def _verify_effect(conn, context, description: str, query, params,
     return EFFECT_OUTCOME_CONFIRMED
 
 
-def _verify_no_superseded_rows(conn, context, description: str,
-                               tablename: str, join_column: str,
-                               identity_table: str,
-                               identity_column: str) -> str:
-    """Confirm a currency sweep's DELETE landed: re-run its own predicate.
+def _verify_no_superseded_merges(conn, context, description: str,
+                                 tablename: str) -> str:
+    """Re-run `catalog_db.delete_superseded_merge_rows`' predicate as a count.
 
-    The same NOT-EXISTS shape `catalog_db.delete_superseded_rows` deletes
-    by (`vbest IN (1, 2)` is current), asked AFTER the deleting transaction
-    has committed, on a fresh cursor. A currency sweep's effect is not a row
-    count — a demotion after this sweep committed legitimately leaves new
-    superseded rows behind, and counting them would misread ordinary
-    ongoing operation as an unconfirmed effect. What confirms is that the
-    rows THIS sweep found superseded, at the moment it deleted them, are no
-    longer among the CURRENT set of superseded rows for that predicate
-    computed fresh — which a re-run of the identical predicate finding zero
-    (immediately after this sweep's own commit, before anything else could
-    have written a new demotion) verifies directly.
+    Same reasoning as `_verify_effect`'s callers: the predicate the sweep
+    deleted by, asked fresh after its commit, finding zero. The predicate
+    reaches the image THROUGH `sources` (`merges.sid` -> `sources.sid`,
+    `sources.pid` -> `diffimages.pid`), never `merges.sid` against an image id.
     """
     query = sql.SQL(
-        "SELECT count(*) FROM {child} WHERE NOT EXISTS ("
-        "  SELECT 1 FROM {identity} WHERE {identity}.{idcol} = "
-        "  {child}.{joincol} AND {identity}.vbest IN (1, 2))").format(
-            child=sql.Identifier(tablename),
-            identity=sql.Identifier(identity_table),
-            idcol=sql.Identifier(identity_column),
-            joincol=sql.Identifier(join_column))
+        "SELECT count(*) FROM {child} AS m WHERE NOT EXISTS ("
+        "  SELECT 1 FROM sources AS s"
+        "  JOIN diffimages AS d ON d.pid = s.pid"
+        "  WHERE s.sid = m.sid AND d.vbest IN (1, 2))").format(
+            child=sql.Identifier(tablename))
     return _verify_effect(conn, context, description, query, (), 0)
+
+
+def _verify_no_superseded_sources(conn, context, description: str,
+                                  field: int) -> str:
+    """Re-run `catalog_db.delete_superseded_source_rows`' predicate as a count."""
+    query = sql.SQL(
+        "SELECT count(*) FROM sources AS s WHERE s.field = %s AND NOT EXISTS ("
+        "  SELECT 1 FROM diffimages AS d"
+        "  WHERE d.pid = s.pid AND d.vbest IN (1, 2))")
+    return _verify_effect(conn, context, description, query, (int(field),), 0)
 
 
 def _table_count(cursor, tablename: str) -> int:
@@ -1080,27 +1080,66 @@ def compute_statistics(context) -> None:
         # children before the hold). astroobjectsmeta's real columns
         # (007-sources-family) are the ones the alert provider reads:
         # position/flux means and stdevs plus nsources.
+        # ONE LIGHTCURVE POINT PER (object, image, sign). Bulk COPY cannot
+        # enforce per-row uniqueness, so two sources close enough to hash to
+        # the same aid in the same difference image both land, and without
+        # this step both were averaged and counted (dev 3a4cbfc2 names the
+        # cause). DISTINCT ON (aid, pid, isdiffpos) keeps the best-fitting
+        # one — lowest qfit, sid as the deterministic tiebreak — and keeps
+        # isdiffpos in the key so a positive and a negative detection of one
+        # object in one image are never collapsed into each other. Dev
+        # 39ac5491 added exactly this and dev's own 0feead1b dropped it when
+        # it rewrote the query over enumerated children; restored here.
+        #
+        # Only detections on CURRENT, GOOD difference images enter: `vbest
+        # IN (1, 2)` — 1 current-best, 2 a locked pin — because a superseded
+        # image's sources stay in their child table until swept (dev
+        # 0feead1b); and `status > 0`, registration's good/bad QA flag on the
+        # image (006-core-tables: 'Good/bad difference image (1/0)'; written
+        # as 1 by pipeline/registration/products.py unless release content
+        # says otherwise), which is dev 00afb0d6's `status > 0` term applied
+        # to the image the source came from.
+        #
+        # Verified on PostgreSQL 18.6 (2026-09-15): a duplicate pair collapses
+        # to the lower-qfit row, a positive/negative pair on one image counts
+        # as two, an object whose only detection is on a demoted image gets
+        # no row.
         cursor.execute(
             sql.SQL(
                 "INSERT INTO {target} (aid, meanra, stdevra, meandec, "
                 "stdevdec, meanflux, stdevflux, nsources) "
-                "SELECT m.aid, avg(s.ra), coalesce(stddev_pop(s.ra), 0), "
-                "       avg(s.dec), coalesce(stddev_pop(s.dec), 0), "
-                "       avg(s.fluxfit), coalesce(stddev_pop(s.fluxfit), 0), "
+                "SELECT x.aid, avg(x.ra), coalesce(stddev_pop(x.ra), 0), "
+                "       avg(x.dec), coalesce(stddev_pop(x.dec), 0), "
+                "       avg(x.fluxfit), coalesce(stddev_pop(x.fluxfit), 0), "
                 "       count(*) "
-                "FROM {merges} AS m JOIN sources AS s ON s.sid = m.sid "
-                # Only detections on CURRENT difference images enter the
-                # statistics: a superseded image's sources stay in their
-                # child table until swept, and without this join they were
-                # averaged in with the current ones (dev 0feead1b,
-                # computeStatisticsForAstroObjects.py:540, the one term of
-                # the lightcurve-statistics rework this branch needed).
-                "JOIN diffimages AS d ON d.pid = s.pid "
-                "WHERE d.vbest > 0 "
-                "GROUP BY m.aid").format(
+                "FROM ("
+                "  SELECT DISTINCT ON (m.aid, s.pid, s.isdiffpos) "
+                "         m.aid, s.ra, s.dec, s.fluxfit "
+                "  FROM {merges} AS m JOIN sources AS s ON s.sid = m.sid "
+                "  JOIN diffimages AS d ON d.pid = s.pid "
+                "  WHERE d.vbest > 0 AND d.status > 0 "
+                "  ORDER BY m.aid, s.pid, s.isdiffpos, s.qfit ASC, s.sid ASC"
+                ") AS x "
+                "GROUP BY x.aid").format(
                     target=sql.Identifier(target),
                     merges=sql.Identifier(f"merges_{field}")))
         written = cursor.rowcount or 0
+
+        # OBJECTS WITH NO CURRENT DETECTION ARE PRUNED (dev's step 5,
+        # 39ac5491/0feead1b). An astroobjects_<field> row whose every merge
+        # points at a superseded or bad image yields no statistics row; left
+        # in place it is an object nothing can measure, and the currency
+        # join above makes that population GROW with each demotion. Same
+        # transaction, so the statistics and the object set commit together.
+        # The object's merge rows are the merge sweep's to remove: they are
+        # superseded by the same rule (their source's image is not current).
+        cursor.execute(
+            sql.SQL(
+                "DELETE FROM {objects} AS a WHERE NOT EXISTS ("
+                "  SELECT 1 FROM {target} AS x WHERE x.aid = a.aid)").format(
+                    objects=sql.Identifier(f"astroobjects_{field}"),
+                    target=sql.Identifier(target)))
+        orphans_removed = cursor.rowcount or 0
 
     # The table is wholesale-rebuilt (DELETE then repopulate in the same
     # transaction), so the post-commit expectation is `written` alone, not
@@ -1113,8 +1152,11 @@ def compute_statistics(context) -> None:
     context.produce("effect_outcome", outcome)
 
     context.record_effect(rows_written=written, rows_removed=removed,
-                          statistics_table=target)
-    context.logger.info("field %d statistics: %d row(s) rebuilt", field, written)
+                          statistics_table=target,
+                          orphan_objects_removed=orphans_removed)
+    context.logger.info("field %d statistics: %d row(s) rebuilt; %d object(s) "
+                        "with no current detection removed",
+                        field, written, orphans_removed)
 
 
 STATISTICS_SEQUENCE = (
@@ -1141,22 +1183,24 @@ def sweep_merge_currency(context) -> None:
 
     `pruneNotBestMerges.py` did this one row at a time: select every row, ask
     `SELECT vbest FROM diffimages WHERE pid = %s` for each, delete the ones
-    that came back 0. This is the same question as one join.
+    that came back 0. This is the same question as one join — through
+    `sources`, which is where a merge row's image is recorded
+    (`merges.sid` -> `sources.sid`, `sources.pid` -> `diffimages.pid`). The
+    first version here joined `merges.sid` straight to `diffimages.pid`,
+    two unrelated identity spaces (the project ruling of 2026-09-12 that
+    unregistered both sweeps from the operator daemon names exactly this);
+    see `catalog_db.delete_superseded_merge_rows` for the check that
+    demonstrated it and the corrected predicate.
     """
     conn = context.require_connection()
     field = int(_unit_field(context, "field"))
     table = f"merges_{field}"
 
     with transaction(conn) as cursor:
-        removed = catalog_db.delete_superseded_rows(
-            cursor, table, "merges",
-            join_column="sid", identity_table="diffimages",
-            identity_column="pid")
+        removed = catalog_db.delete_superseded_merge_rows(cursor, table)
 
-    outcome = _verify_no_superseded_rows(
-        conn, context, f"merge currency sweep {table}", table,
-        join_column="sid", identity_table="diffimages",
-        identity_column="pid")
+    outcome = _verify_no_superseded_merges(
+        conn, context, f"merge currency sweep {table}", table)
     context.produce("effect_outcome", outcome)
 
     context.record_effect(rows_removed=removed, swept_table=table)
@@ -1172,26 +1216,31 @@ def sweep_source_currency(context) -> None:
     alongside the four invoked scripts: they are the only maintainers of
     integrity properties the schema does not enforce". Being uninvoked was
     the defect, not the reason to leave it out.
+
+    **What it sweeps.** The field's rows in the `sources` children — dev's
+    `pruneNotBestSources.py` deleted from `sources_<child> USING diffimages
+    WHERE pid = pid AND vbest = 0`. The first version here deleted from
+    `merges_<field>` (the merge sweep's table) through `merges.sid =
+    l2files.rid`, two unrelated identity spaces; on a real PostgreSQL that
+    predicate removed every row of the table. The sources children are per
+    (date, SCA) while this unit is per field, so the DELETE targets the
+    inheritance parent with a `field` predicate and PostgreSQL routes it to
+    every child; see `catalog_db.delete_superseded_source_rows`.
     """
     conn = context.require_connection()
     field = int(_unit_field(context, "field"))
-    table = f"merges_{field}"
 
     with transaction(conn) as cursor:
-        removed = catalog_db.delete_superseded_rows(
-            cursor, table, "merges",
-            join_column="sid", identity_table="l2files",
-            identity_column="rid")
+        removed = catalog_db.delete_superseded_source_rows(cursor, field)
 
-    outcome = _verify_no_superseded_rows(
-        conn, context, f"source currency sweep {table}", table,
-        join_column="sid", identity_table="l2files",
-        identity_column="rid")
+    outcome = _verify_no_superseded_sources(
+        conn, context, f"source currency sweep field {field}", field)
     context.produce("effect_outcome", outcome)
 
-    context.record_effect(rows_removed=removed, swept_table=table)
-    context.logger.info("source currency sweep on %s: %d row(s) removed",
-                        table, removed)
+    swept = f"sources (field {field}, via the inheritance parent)"
+    context.record_effect(rows_removed=removed, swept_table=swept)
+    context.logger.info("source currency sweep for field %d: %d row(s) removed",
+                        field, removed)
 
 
 MERGE_CURRENCY_SEQUENCE = (

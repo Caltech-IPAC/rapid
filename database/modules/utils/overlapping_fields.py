@@ -66,6 +66,30 @@ None of this is folklore: the sweep is
 `RAPID_FOOTPRINT_SWEEP=1`, and re-running it reproduces every figure
 above.
 
+THE POLES (2026-09-15).  The declination span above is taken from the
+BOUNDARY — corners plus each edge's own extremum.  When a pole lies
+strictly INSIDE the image that span stops short of 90, so the cap tile
+(rtid 1 or NROWS) and any ring above the boundary's highest declination
+were skipped: measured at a 4088-px SCA centred on the pole, the cap was
+reported at |dec| = 89.98 and missed from 89.985 on.  The interior test
+now catches that case (`_contains`, the same-side test on the four edge
+planes), and when it fires the image is reported as the cap plus EVERY
+tile of every ring down to the boundary's lowest declination.  Rings the
+boundary passes through are thereby reported whole rather than by their
+exact RA interval — a handful of tiles OVER, never under, and only for an
+image that contains a pole.  Away from the poles nothing changes.  The
+`overlapfields` column comment in rapid_systems 101 says "EXACT"; read
+it as exact away from a pole and conservative over one.
+
+ONE COLUMN, TWO CALLERS.  The registrars (`database/sims/db_register_*`)
+pass each file's own header NAXIS1/NAXIS2; the backfill
+(`database/sims/db_backfill_l2files_overlapfields.py`) passes the
+release's `naxis1_sciimage`/`naxis2_sciimage`, because `l2files` stores
+no extent and the backfill opens no FITS file.  The two agree for every
+data set registered so far (4088 x 4088) and the column carries a single
+definition only as long as they keep agreeing; a data set with another
+detector size must be registered, not backfilled.
+
 SIP.  The edges are great circles for the CD-matrix WCS this evaluates.
 Real SIP coefficients bow an edge by up to a few pixels, which cannot
 change a whole-tile verdict (tiles are ~250 arcsec) but can flip a
@@ -153,6 +177,26 @@ def _cross_parallel(a, b, dec_deg):
     return out
 
 
+def _contains(V, p):
+    """Is unit vector `p` strictly inside the spherical quadrilateral `V`?
+
+    `V` holds the four corner vectors in boundary order.  `p` is inside
+    when it lies on the same side of all four edge planes — the sign of
+    `(Vi x Vi+1) . p` is the same for every edge — AND in the image's own
+    hemisphere.  The hemisphere test is not decoration: the same-side
+    test alone also admits the ANTIPODE of every interior point (all four
+    signs flip together), so without it an image over the south pole
+    reads as containing the north pole too.  Exact for a convex polygon
+    smaller than a hemisphere, which an SCA is; a point ON an edge is not
+    "inside" here, and is handled by the edge's own declination extremum
+    instead.
+    """
+    if float(np.dot(sum(V), p)) <= 0.0:
+        return False
+    signs = [float(np.dot(np.cross(V[i], V[(i + 1) % 4]), p)) for i in range(4)]
+    return all(s > 0.0 for s in signs) or all(s < 0.0 for s in signs)
+
+
 def _dec_extrema(a, b):
     """The arc's own max/min declination points — where RA turns around."""
     n = np.cross(a, b)
@@ -220,6 +264,31 @@ def overlapping_fields(crval1, crval2, crpix1, crpix2,
             dec_lo = min(dec_lo, d); dec_hi = max(dec_hi, d)
 
     out = set()
+
+    # A pole strictly inside the image: the boundary's span stops short of
+    # 90, so the cap and any ring above the boundary would be skipped, and
+    # the RA interval of a ring the boundary passes through is not an
+    # interval at all (the image surrounds the pole).  Report the cap and
+    # every tile of every ring down to the boundary's far edge -- whole
+    # rings, so a few tiles over near the pole and never one under.  See
+    # the module docstring, "THE POLES".
+    if _contains(V, np.array([0.0, 0.0, 1.0])):
+        out.add(1)
+        for i in range(1, min(tess.ring_of(dec_lo), tess.NRINGS) + 1):
+            for k in range(tess.nrabins(i)):
+                out.add(tess._OFFSET[i] + k)
+        if field is not None:
+            out.add(int(field))
+        return sorted(out)
+    if _contains(V, np.array([0.0, 0.0, -1.0])):
+        out.add(tess.NROWS)
+        for i in range(max(tess.ring_of(dec_hi), 1), tess.NRINGS + 1):
+            for k in range(tess.nrabins(i)):
+                out.add(tess._OFFSET[i] + k)
+        if field is not None:
+            out.add(int(field))
+        return sorted(out)
+
     top, bot = tess.ring_of(dec_hi), tess.ring_of(dec_lo)
     if top < 1:
         out.add(1); top = 1

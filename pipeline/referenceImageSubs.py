@@ -396,6 +396,11 @@ def generateSExtractorReferenceImageCatalog(filename_refimage_image,
                                             sextractor_refimage_dict):
 
 
+    # Code-timing benchmark (dev f07e1ce5): reference-catalogue generation is
+    # the dominant cost of the reference-image pipeline (8/13/26 rimtimsim test).
+    start_time_benchmark = time.time()
+
+
     # Compute SExtractor catalog for reference image.
 
     filename_refimage_catalog = filename_refimage_image.replace("image.fits","refimsexcat.txt")
@@ -433,6 +438,13 @@ def generateSExtractorReferenceImageCatalog(filename_refimage_image,
     generateReferenceImageCatalog_return_list = []
     generateReferenceImageCatalog_return_list.append(checksum_refimage_catalog)
     generateReferenceImageCatalog_return_list.append(filename_refimage_catalog)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("=====> Elapsed time in seconds just to generate reference-image SExtractor catalog =",
+        round(end_time_benchmark - start_time_benchmark,3))
 
     return generateReferenceImageCatalog_return_list
 
@@ -553,6 +565,10 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
                                            psfcat_refimage_dict):
 
 
+    # Code-timing benchmark (dev f07e1ce5).
+    start_time_benchmark = time.time()
+
+
     # Generate PSF-fit catalog for reference image using PhotUtils.
 
     n_clip_sigma = float(psfcat_refimage_dict["n_clip_sigma"])
@@ -563,6 +579,12 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
     fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
     aperture_radius = float(psfcat_refimage_dict["aperture_radius"])
 
+    # DAOStarFinder shape cuts and minimum separation from [psfcat_refimage]
+    # (Russ Laher, dev 4896bee9). Only min_separation (1.0 pixel vs the
+    # helper's 0.0 default) changes behaviour; see the science-stage twin in
+    # pipeline/stages/science.py. This function receives the section as a
+    # dict, so a missing key is a KeyError here; the caller validated the
+    # section through context.science_section.
     sharplo = float(psfcat_refimage_dict["sharplo"])
     sharphi = float(psfcat_refimage_dict["sharphi"])
     roundlo = float(psfcat_refimage_dict["roundlo"])
@@ -727,5 +749,12 @@ def generatePhotUtilsReferenceImageCatalog(filename_refimage_image,
     generateReferenceImageCatalog_return_list.append(output_psfcat_filename)
     generateReferenceImageCatalog_return_list.append(output_psfcat_finder_filename)
     generateReferenceImageCatalog_return_list.append(n_psfcat_sources)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("=====> Elapsed time in seconds just to generate reference-image PhotUtils catalog =",
+        round(end_time_benchmark - start_time_benchmark,3))
 
     return generateReferenceImageCatalog_return_list

@@ -64,10 +64,22 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# Define input and output S3 buckets.
+# Define input and output S3 buckets. The input is the public SOC-simulation
+# release, a fixed upstream source. The output is one of OUR sets and is
+# REQUIRED from the environment; there is no safe default (the rule
+# database/sims/db_register_socsim_files.py applies, a5108ec7). For the run
+# manifest: the current set (dev c3cd5464) is
+#   OUTPUTBUCKET = socsims-fakesrc-asdf-20260807   read by convert_socsims.py
+# paired with [FAKE_SOURCES] injection_catalogs_subdir = injection_catalogs_20260811.
+# The earlier set was socsims-fakesrc-asdf-20260709.
 
 bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
-bucket_name_output = "socsims-fakesrc-asdf-20260709"
+bucket_name_output = os.getenv('OUTPUTBUCKET')
+
+if not bucket_name_output:
+
+    print("*** Error: Env. var. OUTPUTBUCKET not set; quitting...")
+    exit(64)
 
 
 # Create S3-client and S3-resource objects.
@@ -364,8 +376,6 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
     # ------------------------------------------------------------------ #
     gwcs_obj   = dm.meta.wcs              # gwcs.WCS instance
 
-    dm.close()
-
 
     # Compute center of ASDF image.  Image pixel coordinates must be zero-based.
 
@@ -382,6 +392,17 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
         # Some gwcs objects return (lon, lat) arrays directly
         ra, dec = np.asarray(sky[0]), np.asarray(sky[1])
         fh.write(f"x,y,ra,dec = {x},{y},{ra},{dec}\n")
+
+
+    # Release the datamodels now that the science array and the WCS have been
+    # read and used. Dev 399d4ed3 (carried by 287b592a) closed dm immediately
+    # after reading dm.meta.wcs, i.e. BEFORE gwcs_obj.pixel_to_world above;
+    # it is closed here, after the last use, so nothing can touch a closed
+    # model. original_dm is the file-backed model and was never closed on
+    # either branch.
+
+    dm.close()
+    original_dm.close()
 
 
     # Compute field.
@@ -545,7 +566,9 @@ if __name__ == '__main__':
         #    break
 
     print(f"Total number of socsims = {i}")
-    print(f"Total number of socsims skipped = {j}")
+    # j is incremented on the append above, so it counts the files KEPT for
+    # processing; dev 399d4ed3 labelled this "skipped".
+    print(f"Total number of socsims to process = {j}")
 
 
     #########################################################################################

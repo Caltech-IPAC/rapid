@@ -43,5 +43,15 @@ def test_float32_adapts_as_plain_float():
     assert psycopg2.extensions.adapt(numpy.float32(1.5)).getquoted() == b"1.5"
 
 
+def test_non_finite_floats_adapt_as_typed_literals_not_bare_tokens():
+    # The regression d4b7baa7 introduced: registering numpy.float64 as
+    # AsIs(repr(float(value))) rendered NaN/Infinity as the bare SQL tokens
+    # `nan` / `inf`, where psycopg2's own float adapter (and numpy.float64's
+    # pre-registration subclass fallback) emits the typed literals.
+    assert psycopg2.extensions.adapt(numpy.float64("nan")).getquoted() == b"'NaN'::float"
+    assert psycopg2.extensions.adapt(numpy.float64("inf")).getquoted() == b"'Infinity'::float"
+    assert psycopg2.extensions.adapt(numpy.float32("nan")).getquoted() == b"'NaN'::float"
+
+
 def test_bool_adapts_as_plain_bool():
     assert psycopg2.extensions.adapt(numpy.bool_(True)).getquoted() == b"true"

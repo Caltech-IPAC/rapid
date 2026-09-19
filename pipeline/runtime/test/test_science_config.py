@@ -463,6 +463,26 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
         self.assertGreater(compared, 300,
                            "the round-trip compared implausibly few keys")
 
+    def test_the_science_reference_psf_template_round_trips_with_job_params(self):
+        """The one key `authored` exempts that DOES have a second home.
+
+        `[science]` is skipped by the round-trip above because the section was
+        relocated from SSM, not extracted from the .ini — true for
+        `min_images_to_coadd`, and false for `refimage_psf_filename`, which
+        36e49950 added beside it as the toml twin of `[JOB_PARAMS]
+        refimage_psf_filename` (forcedPhotometryForField.py still reads the
+        .ini copy). Two homes that no test bound: b2335bb2's own message notes
+        the .ini copy "was already on the per-detector value", i.e. the two
+        agreed by luck. A drift here silently changes which PSF every
+        difference is made with, so this pins them the way the `[ref_image]`
+        twin already is.
+        """
+        self.assertEqual(
+            self.toml["science"]["refimage_psf_filename"],
+            self.ini["JOB_PARAMS"]["refimage_psf_filename"].strip(),
+            "[science] refimage_psf_filename and .ini [JOB_PARAMS] "
+            "refimage_psf_filename are two homes of one template and must agree")
+
     def test_the_known_divergence_is_resolved(self):
         # THE DIVERGENCE IS GONE, and this test is what noticed.
         #

@@ -18,6 +18,8 @@ import romanisim.psf
 import romanisim.wcs
 from romanisim.image import inject_sources_into_l2
 
+from modules.fake_src.injectionLightCurveModels import SinusoidalLightCurve, GaussianLightCurve
+
 
 
 class GriddedEPSF:
@@ -222,75 +224,85 @@ def _evaluate_catalogs_at_mjd(catalog_list_file, image_mjdobs, image_size, image
         by using .invert() instead (see the commented-out numerical_inverse
         line in romanisim/wcs.py), but inject_sources_into_l2 does not.
     """
+    # Vectorised per catalogue (Russ Laher, dev f0630bae, "make the code execute
+    # faster"): one model call per light-curve type per catalogue instead of
+    # one Python call per source. Dev inlined the sinusoid and Gaussian maths
+    # here and dropped the injectionLightCurveModels import; that duplicated the
+    # photometric model and left GaussianLightCurve's time_bounds branch
+    # unreachable from this path. The model functions are already written over
+    # numpy arrays, so they are called with arrays instead — same speed-up, one
+    # source of truth. Results are identical to the per-source loop.
     with open(catalog_list_file, 'r') as fh:
         input_catalogs = [line.strip() for line in fh if line.strip()]
 
-    ra_parts, dec_parts, flux_parts, xpix_parts, ypix_parts = [], [], [], [], []
     ny, nx = image_size
+    ra_parts, dec_parts, flux_parts, xpix_parts, ypix_parts = [], [], [], [], []
 
     for catalog_path in input_catalogs:
         with open(catalog_path, 'r') as f:
-            catalog_sources = list(json.load(f).values())
+            catalog_sources_dict = json.load(f)
+        catalog_sources = list(catalog_sources_dict.values())
+        if not catalog_sources:
+            continue
 
-        ra_coords = np.array([s['ra'] for s in catalog_sources])
-        dec_coords = np.array([s['dec'] for s in catalog_sources])
+        ra_coords = np.array([s['ra'] for s in catalog_sources], dtype=np.float64)
+        dec_coords = np.array([s['dec'] for s in catalog_sources], dtype=np.float64)
 
         # Convert to pixel positions; keep sources within 50 px of the image edge
         xpos, ypos = image_wcs.toImage(ra_coords, dec_coords, units='deg')
+        xpos = np.asarray(xpos, dtype=np.float64)
+        ypos = np.asarray(ypos, dtype=np.float64)
         on_image = ((xpos >= -50.0) & (xpos < nx + 50.0) &
                     (ypos >= -50.0) & (ypos < ny + 50.0))
-
         if not np.any(on_image):
             continue
 
-        sources_on = [s for s, m in zip(catalog_sources, on_image) if m]
-        x_on = xpos[on_image]
-        y_on = ypos[on_image]
-        ra_on = ra_coords[on_image]
-        dec_on = dec_coords[on_image]
-
-        types = np.array([s['type'] for s in sources_on])
-        fluxes = np.empty(len(sources_on))
-
-        # Vectorize sinusoidal sources
+        kept = [s for s, keep in zip(catalog_sources, on_image) if keep]
+        types = np.array([s['type'] for s in kept])
         sin_mask = types == 'sinusoidal'
-        if np.any(sin_mask):
-            sin_src = [s for s, m in zip(sources_on, sin_mask) if m]
-            magnitudes = np.array([s['parameters']['magnitude'] for s in sin_src])
-            amplitudes = np.array([s['parameters']['amplitude'] for s in sin_src])
-            periods = np.array([s['parameters']['period'] for s in sin_src])
-            phases = np.array([s['parameters']['phase'] for s in sin_src])
-            mags = magnitudes + amplitudes * np.sin(2 * np.pi * (image_mjdobs / periods + phases))
-            fluxes[sin_mask] = 10**(-0.4 * mags)
-
-        # Vectorize gaussian sources
         gauss_mask = types == 'gaussian'
-        if np.any(gauss_mask):
-            gauss_src = [s for s, m in zip(sources_on, gauss_mask) if m]
-            magnitudes = np.array([s['parameters']['magnitude'] for s in gauss_src])
-            peak_amps = np.array([s['parameters']['peak_amplitude'] for s in gauss_src])
-            peak_times = np.array([s['parameters']['peak_time'] for s in gauss_src])
-            sigmas = np.array([s['parameters']['sigma'] for s in gauss_src])
-            static_flux = 10**(-0.4 * magnitudes)
-            peak_amplitude = static_flux * (10**(0.4 * peak_amps) - 1.0)
-            gauss_component = peak_amplitude * np.exp(-0.5 * ((image_mjdobs - peak_times) / sigmas) ** 2)
-            fluxes[gauss_mask] = static_flux + gauss_component
-
         unknown = ~(sin_mask | gauss_mask)
         if np.any(unknown):
             raise ValueError(f"Unknown light curve type: {types[unknown][0]}")
 
-        ra_parts.append(ra_on)
-        dec_parts.append(dec_on)
-        flux_parts.append(fluxes)
-        xpix_parts.append(x_on)
-        ypix_parts.append(y_on)
+        def param(name, mask):
+            return np.array([s['parameters'][name] for s, m in zip(kept, mask) if m],
+                            dtype=np.float64)
 
-    if ra_parts:
-        return (np.concatenate(ra_parts), np.concatenate(dec_parts),
-                np.concatenate(flux_parts), np.concatenate(xpix_parts),
-                np.concatenate(ypix_parts))
-    return (np.array([]), np.array([]), np.array([]), np.array([]), np.array([]))
+        flux_maggies = np.empty(len(kept), dtype=np.float64)
+
+        if np.any(sin_mask):
+            mags = SinusoidalLightCurve(
+                image_mjdobs,
+                param('magnitude', sin_mask),
+                param('amplitude', sin_mask),
+                param('period', sin_mask),
+                param('phase', sin_mask))
+            flux_maggies[sin_mask] = 10**(-0.4 * mags)
+
+        if np.any(gauss_mask):
+            static_flux = 10**(-0.4 * param('magnitude', gauss_mask))
+            peak_amplitude = static_flux * (10**(0.4 * param('peak_amplitude', gauss_mask)) - 1.0)
+            flux_maggies[gauss_mask] = GaussianLightCurve(
+                image_mjdobs,
+                param('peak_time', gauss_mask),
+                peak_amplitude,
+                param('sigma', gauss_mask),
+                static_flux)
+
+        ra_parts.append(ra_coords[on_image])
+        dec_parts.append(dec_coords[on_image])
+        flux_parts.append(flux_maggies)
+        xpix_parts.append(xpos[on_image])
+        ypix_parts.append(ypos[on_image])
+
+    if not ra_parts:
+        empty = np.array([], dtype=np.float64)
+        return empty, empty.copy(), empty.copy(), empty.copy(), empty.copy()
+
+    return (np.concatenate(ra_parts), np.concatenate(dec_parts), np.concatenate(flux_parts),
+            np.concatenate(xpix_parts), np.concatenate(ypix_parts))
+
 
 
 def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,
