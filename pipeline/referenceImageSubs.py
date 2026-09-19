@@ -739,21 +739,21 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
     print("psfcat_flag =",psfcat_flag)
 
+    checksum_psfcat_filename = None
+    checksum_psfcat_finder_filename = None
+    refimage_photutils_photometry_catalog_s3_bucket_object_name = None
+    refimage_photutils_finder_catalog_s3_bucket_object_name = None
+    refimage_photutils_photometry_catalog_uploaded_to_bucket = False
+    refimage_photutils_finder_catalog_uploaded_to_bucket = False
+    output_psfcat_parquet_filename = None
+    nrows = 0
+
     if not psfcat_flag:
 
-        checksum_psfcat_filename = None
-        checksum_psfcat_finder_filename = None
         output_psfcat_filename = None
         output_psfcat_finder_filename = None
-        refimage_photutils_photometry_catalog_s3_bucket_object_name = None
-        refimage_photutils_finder_catalog_s3_bucket_object_name = None
-        refimage_photutils_photometry_catalog_uploaded_to_bucket = False
-        refimage_photutils_finder_catalog_uploaded_to_bucket = False
 
     else:
-
-        refimage_photutils_photometry_catalog_uploaded_to_bucket = False
-        refimage_photutils_finder_catalog_uploaded_to_bucket = False
 
 
         # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
@@ -877,27 +877,29 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
         # Upload reference-image-catalog parquet file to S3 product bucket.
 
-        refimage_photutils_parquet_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
+        if output_psfcat_parquet_filename is not None:
 
-        if upload_to_s3_bucket:
+            refimage_photutils_parquet_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
 
-            uploaded_to_bucket = True
+            if upload_to_s3_bucket:
 
-            try:
-                response = s3_client.upload_file(output_psfcat_parquet_filename,
-                                                 product_s3_bucket,
-                                                 refimage_photutils_parquet_catalog_s3_bucket_object_name)
+                uploaded_to_bucket = True
 
-                print("response =",response)
+                try:
+                    response = s3_client.upload_file(output_psfcat_parquet_filename,
+                                                     product_s3_bucket,
+                                                     refimage_photutils_parquet_catalog_s3_bucket_object_name)
 
-            except ClientError as e:
-                print("*** Error: Failed to upload {} to s3://{}/{}"\
-                    .format(output_psfcat_parquet_filename,product_s3_bucket,refimage_photutils_parquet_catalog_s3_bucket_object_name))
-                uploaded_to_bucket = False
+                    print("response =",response)
 
-            if uploaded_to_bucket:
-                print("Successfully uploaded {} to s3://{}/{}"\
-                    .format(output_psfcat_parquet_filename,product_s3_bucket,refimage_photutils_parquet_catalog_s3_bucket_object_name))
+                except ClientError as e:
+                    print("*** Error: Failed to upload {} to s3://{}/{}"\
+                        .format(output_psfcat_parquet_filename,product_s3_bucket,refimage_photutils_parquet_catalog_s3_bucket_object_name))
+                    uploaded_to_bucket = False
+
+                if uploaded_to_bucket:
+                    print("Successfully uploaded {} to s3://{}/{}"\
+                        .format(output_psfcat_parquet_filename,product_s3_bucket,refimage_photutils_parquet_catalog_s3_bucket_object_name))
 
 
         # Compute MD5 checksum of reference-image PSF-fit photometry catalog.
@@ -938,5 +940,6 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
     generateReferenceImageCatalog_return_list.append(refimage_photutils_finder_catalog_s3_bucket_object_name)
     generateReferenceImageCatalog_return_list.append(refimage_photutils_photometry_catalog_uploaded_to_bucket)
     generateReferenceImageCatalog_return_list.append(refimage_photutils_finder_catalog_uploaded_to_bucket)
+    generateReferenceImageCatalog_return_list.append(nrows)
 
     return generateReferenceImageCatalog_return_list
