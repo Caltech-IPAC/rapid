@@ -598,7 +598,6 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     # Parse reference-image metadata.
 
                     nframes = product_config_input['REF_IMAGE']['nframes']
-                    npixsat = product_config_input['REF_IMAGE']['npixsat']
                     npixnan = product_config_input['REF_IMAGE']['npixnan']
                     clmean = product_config_input['REF_IMAGE']['clmean']
                     clstddev = product_config_input['REF_IMAGE']['clstddev']
@@ -614,6 +613,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     fwhmminpix = product_config_input['REF_IMAGE']['fwhmminpix']
                     fwhmmaxpix = product_config_input['REF_IMAGE']['fwhmmaxpix']
                     nsexcatsources = product_config_input['REF_IMAGE']['nsexcatsources']
+                    refimage_psf_catalog_nrows = product_config_input['REF_IMAGE']['npsfcatsources']
                     input_images_csv_name_for_download = product_config_input['REF_IMAGE']['input_images_csv_name_for_download']
 
 
@@ -688,7 +688,6 @@ def run_single_core_job(jids,log_fnames,index_thread):
                                            nframes,
                                            mjdobs_min,
                                            mjdobs_max,
-                                           npixsat,
                                            npixnan,
                                            clmean,
                                            clstddev,
@@ -703,7 +702,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
                                            fwhmmedpix,
                                            fwhmminpix,
                                            fwhmmaxpix,
-                                           nsexcatsources)
+                                           nsexcatsources,
+                                           refimage_psf_catalog_nrows)
 
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)

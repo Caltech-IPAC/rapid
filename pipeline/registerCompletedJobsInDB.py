@@ -543,7 +543,6 @@ if __name__ == '__main__':
                     # Parse reference-image metadata.
 
                     nframes = product_config_input['REF_IMAGE']['nframes']
-                    npixsat = product_config_input['REF_IMAGE']['npixsat']
                     npixnan = product_config_input['REF_IMAGE']['npixnan']
                     clmean = product_config_input['REF_IMAGE']['clmean']
                     clstddev = product_config_input['REF_IMAGE']['clstddev']
@@ -559,6 +558,7 @@ if __name__ == '__main__':
                     fwhmminpix = product_config_input['REF_IMAGE']['fwhmminpix']
                     fwhmmaxpix = product_config_input['REF_IMAGE']['fwhmmaxpix']
                     nsexcatsources = product_config_input['REF_IMAGE']['nsexcatsources']
+                    refimage_psf_catalog_nrows = product_config_input['REF_IMAGE']['npsfcatsources']
                     input_images_csv_name_for_download = product_config_input['REF_IMAGE']['input_images_csv_name_for_download']
 
 
@@ -633,7 +633,6 @@ if __name__ == '__main__':
                                            nframes,
                                            mjdobs_min,
                                            mjdobs_max,
-                                           npixsat,
                                            npixnan,
                                            clmean,
                                            clstddev,
@@ -648,7 +647,8 @@ if __name__ == '__main__':
                                            fwhmmedpix,
                                            fwhmminpix,
                                            fwhmmaxpix,
-                                           nsexcatsources)
+                                           nsexcatsources,
+                                           refimage_psf_catalog_nrows)
 
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)
