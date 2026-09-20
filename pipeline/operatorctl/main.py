@@ -2008,14 +2008,29 @@ def _cmd_run_delete(conn, args, out):
     key = args.idempotency_key or new_idempotency_key("run-delete")
     scope = "runs:%s" % args.name
 
-    # STEP 2 — THE FUNCTION CALL. Dry run: projects a count, mutates
-    # nothing. Apply: opens or resumes the plan and marks up to
-    # `--max-items` pending items `in-flight` (intent only -- no S3 access
-    # from SQL, per 131's header).
-    result = _actions.delete_run(
-        conn, key, args.name, args.reason, objects,
-        max_items=args.max_items, dry_run=not args.apply,
-        policy_citation=args.policy_citation)
+    # STEP 2 — THE FUNCTION CALL, UNDER `submission_role()` -- THE SAME
+    # IDENTITY DEFECT `register_run_audited` and `submit_run` close,
+    # reached through a further entry point. `derived.delete_run` is
+    # granted to `rapid_scratch` (130) and `rapid_admin` (131's own
+    # grants), never to `rapid_operator` -- and EXECUTE is checked at call
+    # time, before the function body runs, so even the DRY RUN needs it:
+    # `derived.delete_run`'s dry-run branch still IS a call to the same
+    # function, unlike `run register`'s dry run, which never reaches a
+    # privileged function at all. Measured live: `rapidctl run delete`
+    # failed `permission denied for function delete_run` on a bare dry
+    # run, under `rapid_operator` (2026-09-20 scratch demonstration) --
+    # `run delete` had never been exercised end to end against the live
+    # database before this. Widened for both branches, not only the apply.
+    #
+    # Dry run: projects a count, mutates nothing. Apply: opens or resumes
+    # the plan and marks up to `--max-items` pending items `in-flight`
+    # (intent only -- no S3 access from SQL, per 131's header).
+    from pipeline.operatorctl.session import submission_role
+    with submission_role(conn):
+        result = _actions.delete_run(
+            conn, key, args.name, args.reason, objects,
+            max_items=args.max_items, dry_run=not args.apply,
+            policy_citation=args.policy_citation)
 
     if not args.apply:
         print(render_plan("run_delete", scope, args.reason, key, result,
@@ -2062,11 +2077,13 @@ def _cmd_run_delete(conn, args, out):
         # Executor just resolved to `deleted`/`already-absent` and advance
         # the run to `deleted` once nothing is left `pending`/`in-flight`.
         # A fresh key: this is its own auditable mutation-API call, exactly
-        # as 131's header requires for a resumed call.
-        result = _actions.delete_run(
-            conn, new_idempotency_key("run-delete"), args.name, args.reason,
-            objects, max_items=args.max_items, dry_run=False,
-            policy_citation=args.policy_citation)
+        # as 131's header requires for a resumed call. Widened for the same
+        # reason step 2's call is -- this is the identical function.
+        with submission_role(conn):
+            result = _actions.delete_run(
+                conn, new_idempotency_key("run-delete"), args.name,
+                args.reason, objects, max_items=args.max_items,
+                dry_run=False, policy_citation=args.policy_citation)
         conn.commit()
 
         tally = {}
