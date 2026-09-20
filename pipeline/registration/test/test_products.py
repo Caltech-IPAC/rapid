@@ -1099,16 +1099,16 @@ class RegistrarDispatchTests(unittest.TestCase):
         add_kwargs = dict(dbh.kwargs[0][1])
         self.assertIsNone(add_kwargs["run_id"])
 
-    def test_the_campaign_run_wins_over_the_submission_batch_run(self):
-        # THE SPLIT-ACROSS-BATCHES HALF OF THE SAME DEFECT. A campaign run
+    def test_the_scratch_run_wins_over_the_submission_batch_run(self):
+        # THE SPLIT-ACROSS-BATCHES HALF OF THE SAME DEFECT. A scratch run
         # large enough to need several array jobs gets one `work_units.
         # run_id` (e.g. "accept-20260911") shared by every attempt in the
-        # campaign, but each attempt's OWN `attempts.run_id` carries its
+        # run, but each attempt's OWN `attempts.run_id` carries its
         # per-array submission-batch suffix (e.g. "accept-20260911-13" —
         # `pipeline.seams.submit_gathered`'s `-<index>` convention).
         # Registering under the batch-suffixed value would split one
-        # campaign's products across as many partitions as it had
-        # submission batches instead of sharing one campaign currency.
+        # scratch run's products across as many partitions as it had
+        # submission batches instead of sharing one scratch run currency.
         dbh = FakeDB()
         register = products.registrar(dbh, InMemoryObjectStore())
 

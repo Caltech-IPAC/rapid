@@ -1943,7 +1943,7 @@ class RAPIDDB:
         reintroduce the failure by the back door: a caller that forgot to
         pass one would silently read some set rather than fail, which is
         exactly the class of silence 126 exists to end. Callers resolve
-        the set from the run (campaign) or from `is_default` (production)
+        the set from the run (scratch) or from `is_default` (production)
         and pass it explicitly.
 
         The `ORDER BY rfid DESC` is kept from the run-scoped shape, for
@@ -1963,7 +1963,7 @@ class RAPIDDB:
         indexes for currency — `refimages_vbest_current_unique`
         (`run_id IS NULL`, the production lane) and
         `refimages_vbest_current_per_run_unique` (`run_id IS NOT NULL`).
-        A production current reference and a campaign run's own current
+        A production current reference and a scratch run's own current
         reference for the SAME (ppid, field, fid) therefore coexist
         legally, as two rows. This query used to carry NO run predicate
         and NO `ORDER BY`, read with `fetchone()`: the moment that second
@@ -1977,13 +1977,13 @@ class RAPIDDB:
         the behaviour every existing caller depends on: `run_id IS NULL`
         makes explicit what was implicitly true before migration 115, when
         no other kind of row could exist. It is not a new restriction on
-        the production caller; it is what stops a campaign's reference
-        from being handed to production now that campaign rows can exist.
+        the production caller; it is what stops a scratch's reference
+        from being handed to production now that scratch rows can exist.
 
         A run name RANKS the two acceptable lanes: the caller's OWN run
         first, the production lane as fallback, and NOTHING else. A run
         with no reference of its own falls back to production's, which is
-        what lets a campaign that builds no references work at all; a run
+        what lets a scratch that builds no references work at all; a run
         never receives a DIFFERENT run's reference, which is the
         cross-contamination this ranking exists to make unreachable.
 
@@ -2245,12 +2245,12 @@ class RAPIDDB:
         because there is no attempt for the row to be idempotent with respect
         to.
 
-        run_id is the campaign run this registration belongs to, matching
+        run_id is the scratch run this registration belongs to, matching
         work_units.run_id's convention: NULL for the production lane, a
-        run_id for a campaign registration. It is keyword-only and required
+        run_id for a scratch registration. It is keyword-only and required
         so no caller can silently write an unscoped row. updateRefImage uses
         it to scope the vBest demotion to the writer's own run, so a
-        campaign registration can never demote a production row.
+        scratch registration can never demote a production row.
         '''
 
         self.exit_code = 0
@@ -2320,12 +2320,12 @@ class RAPIDDB:
         '''
         Update record in RefImages database table.
 
-        run_id is the campaign run this registration belongs to, matching
+        run_id is the scratch run this registration belongs to, matching
         work_units.run_id's convention: NULL for the production lane, a
-        run_id for a campaign registration. It is keyword-only and required
+        run_id for a scratch registration. It is keyword-only and required
         so no caller can silently write an unscoped row. updateRefImage
         uses it to scope the vBest demotion to the writer's own run, so a
-        campaign registration can never demote a production row.
+        scratch registration can never demote a production row.
         '''
 
         self.exit_code = 0
@@ -2397,7 +2397,7 @@ class RAPIDDB:
         given a predicate to match, so from 115 until 126 it read
         whichever current PSF the planner emitted first across every
         lane — the same defect the reference reader was fixed for, left
-        open on the PSF side because nothing had yet written a campaign
+        open on the PSF side because nothing had yet written a scratch
         PSF row. Migration 126 keys `psfs` currency on
         `(fid, sca, reference_set_id)`, so two sets can legally hold a
         current PSF for one (sca, fid) and the predicate is now load-
@@ -2546,12 +2546,12 @@ class RAPIDDB:
         working.  Both optional, so callers that are not registering an
         attempt's products are unchanged.
 
-        run_id is the campaign run this registration belongs to, matching
+        run_id is the scratch run this registration belongs to, matching
         work_units.run_id's convention: NULL for the production lane, a
-        run_id for a campaign registration. It is keyword-only and required
+        run_id for a scratch registration. It is keyword-only and required
         so no caller can silently write an unscoped row. updateDiffImage
         uses it to scope the vBest demotion to the writer's own run, so a
-        campaign registration can never demote a production row.
+        scratch registration can never demote a production row.
         '''
 
         self.exit_code = 0
@@ -2626,12 +2626,12 @@ class RAPIDDB:
         '''
         Update record in DiffImages database table.
 
-        run_id is the campaign run this registration belongs to, matching
+        run_id is the scratch run this registration belongs to, matching
         work_units.run_id's convention: NULL for the production lane, a
-        run_id for a campaign registration. It is keyword-only and required
+        run_id for a scratch registration. It is keyword-only and required
         so no caller can silently write an unscoped row. updateDiffImage
         uses it to scope the vBest demotion to the writer's own run, so a
-        campaign registration can never demote a production row.
+        scratch registration can never demote a production row.
         '''
 
         self.exit_code = 0
@@ -2701,11 +2701,11 @@ class RAPIDDB:
         keeps working.  Both optional, so callers that are not registering an
         attempt's products are unchanged.
 
-        run_id is the campaign run this registration belongs to, matching
+        run_id is the scratch run this registration belongs to, matching
         work_units.run_id's convention: NULL for the production lane, a
-        run_id for a campaign registration. It is keyword-only and required
+        run_id for a scratch registration. It is keyword-only and required
         so no caller can silently write an unscoped row. updatePSF uses it
-        to scope the vBest demotion to the writer's own run, so a campaign
+        to scope the vBest demotion to the writer's own run, so a scratch
         registration can never demote a production row.
         '''
 
@@ -2771,11 +2771,11 @@ class RAPIDDB:
         '''
         Update record in PSFs database table.
 
-        run_id is the campaign run this registration belongs to, matching
+        run_id is the scratch run this registration belongs to, matching
         work_units.run_id's convention: NULL for the production lane, a
-        run_id for a campaign registration. It is keyword-only and required
+        run_id for a scratch registration. It is keyword-only and required
         so no caller can silently write an unscoped row. updatePSF uses it
-        to scope the vBest demotion to the writer's own run, so a campaign
+        to scope the vBest demotion to the writer's own run, so a scratch
         registration can never demote a production row.
         '''
 
@@ -4122,14 +4122,14 @@ class RAPIDDB:
         RUN-SCOPED, WHEN `run_id` IS GIVEN (throughput-sitting ruling,
         2026-09-11). Migration 108 made work-unit identity RUN-SCOPED
         (`work_units_current_identity_uq` keys on `(job_type, input_scope,
-        run_id) ... WHERE superseded_by_unit_id IS NULL`), so a campaign
+        run_id) ... WHERE superseded_by_unit_id IS NULL`), so a scratch
         run's work unit for a field production has already gathered is a
         DIFFERENT row from production's, legitimately coexisting. Before
         this parameter existed, the work-unit branch below blocked on ANY
         non-ready row for the (job_type, exposure, sca) regardless of whose
-        run it belonged to — so a campaign gather over a field production
+        run it belonged to — so a scratch gather over a field production
         had already completed (production's work unit: `state='complete'`,
-        `run_id IS NULL`) yielded ZERO units, even though the campaign's own
+        `run_id IS NULL`) yielded ZERO units, even though the scratch's own
         work had never been attempted. `run_id=None` (the default) keeps
         today's behaviour EXACTLY: the work-unit branch reads `wu.run_id IS
         NULL` (the production lane) and the Attempts branch is unscoped, as

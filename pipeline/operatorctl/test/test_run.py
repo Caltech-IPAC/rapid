@@ -293,7 +293,7 @@ class _RealPsycopg2SubstitutionConn:
                                                self._rows)
 
 
-def _stub_registry_binding(case, run_mod, kind="campaign", state="running",
+def _stub_registry_binding(case, run_mod, kind="scratch", state="running",
                            run_id=77, seq=0, reference_set_id=7,
                            psf_set_id=None, reference_set="set-alpha"):
     """Stub the registry reads `start_run_audited` gained at migration 121.
@@ -304,7 +304,7 @@ def _stub_registry_binding(case, run_mod, kind="campaign", state="running",
     what it puts in the audit scope, not what the registry says. Since 121
     the function reads the `runs` row and the run's submission ordinal
     before gathering, so those two reads are stubbed here, in one place,
-    with an ordinary running campaign row.
+    with an ordinary running scratch row.
 
     A test that cares about the BINDING itself (an absent row, a production
     kind, a completed run) does not use this helper — see
@@ -748,7 +748,7 @@ class ArchiveDryRunTests(unittest.TestCase):
         # `calls` list is what proves that, not the returned dict.
         conn = _FakeConn([
             {"action": "run_archive", "dry_run": True, "replayed": False,
-             "rows_affected": 1, "audit_id": 42, "kind": "campaign",
+             "rows_affected": 1, "audit_id": 42, "kind": "scratch",
              "prior_state": "complete", "refimages_demoted": 0,
              "diffimages_demoted": 0, "psfs_demoted": 0,
              "nothing_deleted": True},
@@ -787,7 +787,7 @@ class CreateRunKeyOrderingTests(unittest.TestCase):
              "run_id": None, "would_add": True},
         ])
         actions.create_run(
-            conn, "create-key-1", "w9-ramp-science-18-x", "ben", "campaign",
+            conn, "create-key-1", "w9-ramp-science-18-x", "ben", "scratch",
             reason="new ramp step", dry_run=True)
 
         self.assertEqual(len(conn.calls), 1)
@@ -799,7 +799,7 @@ class CreateRunKeyOrderingTests(unittest.TestCase):
             "p_idempotency_key-first signature"))
         self.assertEqual(params[1], "w9-ramp-science-18-x")
         self.assertEqual(params[2], "ben")
-        self.assertEqual(params[3], "campaign")
+        self.assertEqual(params[3], "scratch")
 
 
 # ---------------------------------------------------------------------------
@@ -2460,7 +2460,7 @@ class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
         # ACTIONS module, which is where `_check_job_definition_family`
         # imports it from — the gate's whole point is that it consults the
         # stored row rather than an argument.
-        self.run_kind = "campaign"
+        self.run_kind = "scratch"
         import pipeline.operatorctl.actions as actions_mod
         row_patcher = mock.patch.object(
             actions_mod, "run_row",
@@ -2524,7 +2524,7 @@ class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
 
         message = str(caught.exception)
         self.assertIn("production", message)
-        self.assertIn("campaign", message)
+        self.assertIn("scratch", message)
         # Refused BEFORE anything was recorded: a rejected run leaves no
         # audit row and gathers nothing.
         self.assertEqual(self.audit_calls, [])
@@ -2612,7 +2612,7 @@ class RunStartRegistryBindingTests(unittest.TestCase):
         return str(caught.exception)
 
     def test_an_undeclared_run_is_refused_naming_run_create(self):
-        # THE RULING'S FIRST CLAUSE: "a campaign name without a `runs` row
+        # THE RULING'S FIRST CLAUSE: "a scratch name without a `runs` row
         # is refused". The message must name the command that fixes it —
         # an operator whose submission was refused needs the next step,
         # not only the diagnosis.
@@ -2631,24 +2631,24 @@ class RunStartRegistryBindingTests(unittest.TestCase):
 
     def test_a_complete_run_is_refused_naming_its_state(self):
         message = self._refusal(
-            {"run_id": 2, "kind": "campaign", "state": "complete"})
+            {"run_id": 2, "kind": "scratch", "state": "complete"})
         self.assertIn("complete", message)
 
     def test_an_archived_run_is_refused_naming_its_state(self):
         message = self._refusal(
-            {"run_id": 3, "kind": "campaign", "state": "archived"})
+            {"run_id": 3, "kind": "scratch", "state": "archived"})
         self.assertIn("archived", message)
 
-    def test_a_created_campaign_run_is_accepted(self):
-        row = {"run_id": 4, "kind": "campaign", "state": "created"}
+    def test_a_created_scratch_run_is_accepted(self):
+        row = {"run_id": 4, "kind": "scratch", "state": "created"}
         self.assertEqual(self._bind(row)["run_id"], 4)
 
-    def test_a_running_campaign_run_is_accepted_which_is_what_a_ramp_needs(self):
+    def test_a_running_scratch_run_is_accepted_which_is_what_a_ramp_needs(self):
         # The ramp case: the SECOND `run start` of a run already under way
         # must bind, not refuse. If this ever became a refusal, a ramp
         # would be impossible and the only route back would be the fresh
         # name plus `--claim-work-units-of` this ruling exists to retire.
-        row = {"run_id": 5, "kind": "campaign", "state": "running"}
+        row = {"run_id": 5, "kind": "scratch", "state": "running"}
         self.assertEqual(self._bind(row)["run_id"], 5)
 
 
@@ -2715,7 +2715,7 @@ class RunStartRefusalTests(unittest.TestCase):
         # earlier success would report a submission that is not going to
         # happen.
         self._start_against(
-            {"run_id": 9, "kind": "campaign", "state": "complete"})
+            {"run_id": 9, "kind": "scratch", "state": "complete"})
         self.assertEqual(self.replays, [])
 
 
@@ -2725,7 +2725,7 @@ class RunStartStateTransitionTests(unittest.TestCase):
     def setUp(self):
         from pipeline.operatorctl import run as run_mod
         self.run_mod = run_mod
-        self.row = {"run_id": 55, "name": "ramp-proof", "kind": "campaign",
+        self.row = {"run_id": 55, "name": "ramp-proof", "kind": "scratch",
                     "state": "created"}
 
         bind_patcher = mock.patch.object(
@@ -3067,12 +3067,12 @@ class RunCompareProvenanceTests(unittest.TestCase):
         from pipeline.operatorctl import actions as actions_mod
 
         rows = {
-            "run-a": {"run_id": 1, "name": "run-a", "kind": "campaign",
+            "run-a": {"run_id": 1, "name": "run-a", "kind": "scratch",
                       "state": "complete", "branch": "smdc",
                       "image_digest": "sha256:aaa", "config_hash": "cfg-a",
                       "input_generations": ["g1"], "owner": "rusholme",
                       "purpose": "p", "created_at": "t"},
-            "run-b": {"run_id": 2, "name": "run-b", "kind": "campaign",
+            "run-b": {"run_id": 2, "name": "run-b", "kind": "scratch",
                       "state": "complete", "branch": "smdc",
                       "image_digest": "sha256:bbb", "config_hash": "cfg-b",
                       "input_generations": None, "owner": "rusholme",
@@ -3142,7 +3142,7 @@ class RunCompleteTests(unittest.TestCase):
         conn = _FakeConn([
             {"action": "run_state_complete", "dry_run": True,
              "replayed": False, "rows_affected": 0, "audit_id": 7,
-             "kind": "campaign", "prior_state": "running",
+             "kind": "scratch", "prior_state": "running",
              "counted_by": "run_key", "open_attempts": 0},
         ])
         actions.complete_run(conn, "complete-key-1", "ramp-proof",
@@ -3157,7 +3157,7 @@ class RunCompleteTests(unittest.TestCase):
         conn = _FakeConn([
             {"action": "run_state_complete", "dry_run": True,
              "replayed": False, "rows_affected": 0, "audit_id": 7,
-             "kind": "campaign", "prior_state": "running",
+             "kind": "scratch", "prior_state": "running",
              "counted_by": "run_key", "open_attempts": 3},
         ])
         result = actions.complete_run(conn, "k", "ramp-proof", "finished",
@@ -3174,7 +3174,7 @@ class RunCompleteTests(unittest.TestCase):
         conn = _FakeConn([
             {"action": "run_state_complete", "dry_run": True,
              "replayed": False, "rows_affected": 0, "audit_id": 7,
-             "kind": "campaign", "prior_state": "running",
+             "kind": "scratch", "prior_state": "running",
              "counted_by": "run_key", "open_attempts": 4},
         ])
         args = argparse.Namespace(
@@ -3210,7 +3210,7 @@ class RampStepTests(unittest.TestCase):
     def setUp(self):
         from pipeline.operatorctl import run as run_mod
         self.run_mod = run_mod
-        self.row = {"run_id": 88, "name": "ramp-proof", "kind": "campaign",
+        self.row = {"run_id": 88, "name": "ramp-proof", "kind": "scratch",
                     "state": "created"}
         #: work_unit "state" per unit, as the fake authorisation reports
         #: it. Half complete at the second start, which is the ramp shape.
@@ -3394,7 +3394,7 @@ class RunEnvelopeCliTests(unittest.TestCase):
         # the envelope at its defaults with no error anywhere.
         conn = _FakeConn([self._result()])
         actions.create_run(conn, "k", "envelope-probe", "rusholme",
-                           "campaign", reason="why", dry_run=False,
+                           "scratch", reason="why", dry_run=False,
                            lane="prompt", retry_attempts=2,
                            retry_wallclock_s=100, attempt_timeout_s=50)
         sql, params = conn.calls[0]
@@ -3417,7 +3417,7 @@ class RunEnvelopeCliTests(unittest.TestCase):
         # — an integer parameter PostgreSQL would accept silently.
         conn = _FakeConn([self._result()])
         actions.create_run(conn, "k", "refset-probe", "rusholme",
-                           "campaign", reason="why", dry_run=False,
+                           "scratch", reason="why", dry_run=False,
                            reference_set_id=7)
         sql, params = conn.calls[0]
         self.assertIn("p_reference_set_id =>", sql)
@@ -3431,7 +3431,7 @@ class RunEnvelopeCliTests(unittest.TestCase):
         # — and so the stored value is never "whatever is default later".
         conn = _FakeConn([self._result()])
         actions.create_run(conn, "k", "refset-default", "rusholme",
-                           "campaign", reason="why", dry_run=False)
+                           "scratch", reason="why", dry_run=False)
         sql, params = conn.calls[0]
         # THE SQL MUST NAME THE PARAMETER. Asserting only that the last bound
         # value is None passes against the pre-126 call too, where the last
@@ -3447,7 +3447,7 @@ class RunEnvelopeCliTests(unittest.TestCase):
         # two homes that could drift, so an omitted flag must arrive as NULL.
         conn = _FakeConn([self._result()])
         actions.create_run(conn, "k", "envelope-default", "rusholme",
-                           "campaign", reason="why", dry_run=False)
+                           "scratch", reason="why", dry_run=False)
         _, params = conn.calls[0]
         # `[-5:-1]`, not `[-4:]`: 126 appended `p_reference_set_id` after
         # the envelope. See the by-name test above.
@@ -3461,7 +3461,7 @@ class RunEnvelopeCliTests(unittest.TestCase):
         conn = _FakeConn([self._result(lane="prompt", retry_wallclock_s=43200,
                                        attempt_timeout_s=14400)])
         args = argparse.Namespace(
-            name="envelope-print", owner="rusholme", kind="campaign",
+            name="envelope-print", kind="scratch",
             purpose=None, branch=None, image_digest=None, config_hash=None,
             input_generations=None, expect_absent=False, reason="why",
             idempotency_key="k", apply=True, policy_citation=None,
@@ -3488,16 +3488,16 @@ class RunEnvelopeCliTests(unittest.TestCase):
         parser = operatorctl_main.build_parser()
         with self.assertRaises(SystemExit):
             parser.parse_args([
-                "run", "create", "--name", "zero-retries", "--owner",
-                "rusholme", "--kind", "campaign", "--reason", "why",
+                "run", "create", "--name", "zero-retries",
+                "--kind", "scratch", "--reason", "why",
                 "--retry-attempts", "0"])
 
     def test_the_lane_choices_are_closed(self):
         parser = operatorctl_main.build_parser()
         with self.assertRaises(SystemExit):
             parser.parse_args([
-                "run", "create", "--name", "bad-lane", "--owner", "rusholme",
-                "--kind", "campaign", "--reason", "why", "--lane", "urgent"])
+                "run", "create", "--name", "bad-lane",
+                "--kind", "scratch", "--reason", "why", "--lane", "urgent"])
 
 
 class RunStartLaneDefaultsToTheRunsTests(unittest.TestCase):
@@ -3512,7 +3512,7 @@ class RunStartLaneDefaultsToTheRunsTests(unittest.TestCase):
 
     def _row(self, **overrides):
         row = {"run_id": 42, "name": "lane-probe", "state": "running",
-               "kind": "campaign", "lane": "bulk", "retry_attempts": 3,
+               "kind": "scratch", "lane": "bulk", "retry_attempts": 3,
                "retry_wallclock_s": 129600, "attempt_timeout_s": 43200}
         row.update(overrides)
         return row
@@ -3573,7 +3573,7 @@ class ReferenceSetRunCreateAndStartTests(unittest.TestCase):
     later".
 
     THE START HALF. `start_run_audited` reads the run's stored set and
-    refuses a WINDOWED phase (reference/science) that has none. A campaign
+    refuses a WINDOWED phase (reference/science) that has none. A scratch
     run with no set is a DEFECT rather than a default: every run created
     since 127 stores one, so a NULL means the row predates it, and
     gathering against a guessed set is the silent substitution 126
@@ -3584,8 +3584,8 @@ class ReferenceSetRunCreateAndStartTests(unittest.TestCase):
     # --- the mutually exclusive group ------------------------------------
 
     def _run_create_argv(self, *extra):
-        return ["run", "create", "--name", "refset-probe", "--owner",
-                "rusholme", "--kind", "campaign", "--reason", "why"] + list(
+        return ["run", "create", "--name", "refset-probe",
+                "--kind", "scratch", "--reason", "why"] + list(
                     extra)
 
     def test_reference_set_and_build_reference_set_are_mutually_exclusive(
@@ -3638,7 +3638,7 @@ class ReferenceSetRunCreateAndStartTests(unittest.TestCase):
 
     def _args(self, **overrides):
         body = dict(
-            name="refset-probe", owner="rusholme", kind="campaign",
+            name="refset-probe", kind="scratch",
             purpose=None, branch=None, image_digest=None, config_hash=None,
             input_generations=None, expect_absent=False, reason="why",
             idempotency_key="k", apply=False, policy_citation=None,
@@ -3738,7 +3738,7 @@ class ReferenceSetRunCreateAndStartTests(unittest.TestCase):
         """
         run_mod = operatorctl_run
 
-        row = {"run_id": 77, "name": "w9-campaign-1", "kind": "campaign",
+        row = {"run_id": 77, "name": "w9-campaign-1", "kind": "scratch",
                "state": "running", "reference_set_id": reference_set_id,
                "psf_set_id": None, "reference_set": "set-alpha"}
 

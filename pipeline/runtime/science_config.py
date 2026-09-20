@@ -17,12 +17,33 @@ and it is why nothing here can fetch, override, or merge: a value that
 could be supplied from outside the image would break the identification
 the moment it were used.
 
-**No overrides, no defaults, no merge.** ``load()`` reads one file and
-returns what is in it. There is no environment override, no parameter-tree
-fallback, and no per-key default: each of those would let a science value
-differ from what the image digest says it is. A missing file or a missing
-key is a fault, raised as ``ConfigError``, not a silent default — the
-same fail-loud posture ``environment.py`` takes for the same reason.
+**No overrides, no defaults, no merge — except the one, explicit exception
+a scratch run needs.** ``load()`` reads one file and returns what is in
+it: no environment override, no parameter-tree fallback, no per-key
+default. Each of those would let a science value differ from what the
+image digest says it is while still claiming that digest, which is the
+one thing this module exists to prevent. A missing file or a missing key
+is a fault, raised as ``ConfigError``, not a silent default — the same
+fail-loud posture ``environment.py`` takes for the same reason.
+
+The sole exception is ``load_with_digest``'s ``overlay`` parameter, and it
+does not weaken the rule above — it is scoped so narrowly that the rule
+still holds everywhere production runs. A "scratch" run — personal,
+never published, never promoted to a community surface — may pass a
+mapping of science values to try without rebuilding the image, so a
+scientist can iterate on a parameter without waiting on a release. Three
+things keep this from becoming the silent-divergence hazard the rule
+above forbids: the caller must ask for it explicitly (``overlay=None`` is
+the only production behaviour — omitting the argument or passing ``None``
+reproduces today's read, cache, and digest exactly, byte for byte); the
+merge never touches the module's cached content, so the image's own
+`load()`/`load_with_digest()` behaviour for every other caller in the same
+process is untouched; and the returned digest is computed OVER THE MERGED
+CONTENT, never the image's own digest, so the recorded digest always
+identifies what the computation actually used rather than lying about it
+being the release's stock content. An overlaid run's provenance therefore
+never claims the image digest's identity for content the image did not
+supply — it gets its own, different, honestly-computed digest instead.
 
 **Why a content digest as well as the image digest.** The image digest
 identifies the file, but only to someone holding the image. The content
@@ -389,8 +410,33 @@ def _cached(resolved_path: str) -> tuple[dict[str, Any], str]:
     return content, digest(content)
 
 
+def _deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]
+                ) -> dict[str, Any]:
+    """`overlay` merged over `base`, recursively through nested tables.
+
+    Neither argument is mutated — every dict on the path from the root to
+    an overlaid leaf is freshly copied, so the caller's `overlay` and (via
+    `load_with_digest`'s copy-before-merge) the module's cached content are
+    both left exactly as they were. A key present only in `overlay` is
+    added; a key present in both is replaced by `overlay`'s value unless
+    both sides are themselves mappings, in which case the merge recurses
+    instead of one table clobbering the other whole. `overlay` is the
+    scratch author's explicit ask, so it always wins a conflict — there is
+    no third case where `base` wins.
+    """
+    merged = dict(base)
+    for key, overlay_value in overlay.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, Mapping) and isinstance(overlay_value, Mapping):
+            merged[key] = _deep_merge(base_value, overlay_value)
+        else:
+            merged[key] = overlay_value
+    return merged
+
+
 def load_with_digest(path: str | None = None,
-                     software_root: str | None = None
+                     software_root: str | None = None,
+                     overlay: Mapping[str, Any] | None = None
                      ) -> tuple[dict[str, Any], str]:
     """Load once per process and return (content, digest).
 
@@ -398,9 +444,64 @@ def load_with_digest(path: str | None = None,
     digest goes into provenance once per attempt; re-reading and
     re-hashing per stage would be pure waste and would open a window
     where two stages could disagree about what the release said.
+
+    Parameters
+    ----------
+    path, software_root : str, optional
+        As :func:`load`/:func:`config_path`.
+    overlay : Mapping, optional
+        A scratch run's per-key science overrides, deep-merged over the
+        loaded content before it is returned. ``None`` (the default) is
+        the ONLY production behaviour: this parameter did not exist before
+        the scratch run kind needed it, and every existing caller that
+        passes nothing gets exactly today's cached content and today's
+        digest, unchanged. A non-empty `overlay` is the one documented
+        exception in this module's docstring — see there for why it is
+        safe: the merge never reaches the cache (`overlay` is combined
+        with a byte-for-byte JSON round-trip COPY of the cached content,
+        the same copy every caller already gets to protect the cache from
+        mutation, so the cached dict itself never sees an overlay key),
+        the merged content is re-checked for native temporal values with
+        the identical refusal `load()` applies at read time (an overlay is
+        as capable of introducing the date/string digest collision as the
+        file is, so it gets the identical guard, naming the same key), and
+        the digest returned is computed over the MERGED content rather
+        than reused from the cache — an overlaid run's provenance must
+        never claim the image's own digest for content the image did not
+        supply.
+
+    Returns
+    -------
+    tuple
+        `(content, content_digest)`. Without `overlay`, `content_digest`
+        is the release's own digest, identical across every call in the
+        process. With a non-empty `overlay`, `content_digest` identifies
+        the merged content actually used by THIS call, and is not cached
+        or shared with any other caller.
     """
     resolved = path if path is not None else config_path(software_root)
     content, content_digest = _cached(resolved)
     # A copy per caller: the cache holds one dict, and a caller mutating
-    # it would silently change what every later stage reads.
-    return json.loads(json.dumps(content, default=str)), content_digest
+    # it would silently change what every later stage reads. This copy is
+    # also what keeps the overlay path below from poisoning the cache —
+    # the merge below is performed on this fresh copy, never on `content`
+    # itself, so `_cached`'s stored dict never gains an overlay key no
+    # matter how many overlaid calls follow it in the same process.
+    own_copy = json.loads(json.dumps(content, default=str))
+    if not overlay:
+        # The only production path, and it is unchanged: same object
+        # shape, same digest, same everything a caller before this
+        # parameter existed would have seen.
+        return own_copy, content_digest
+
+    merged = _deep_merge(own_copy, overlay)
+    # Same refusal `load()` applies to the file, applied again to the
+    # merged result: an overlay value is exactly as capable of being a
+    # native TOML-shaped date/time (a caller building the overlay from
+    # another parsed TOML document, say) as the file itself, and letting
+    # one slip through here would reopen the digest collision the module
+    # docstring's "Temporal values are strings" section exists to close —
+    # for overlaid content specifically, which the file-only check never
+    # sees.
+    _refuse_temporal_values(merged, f"{resolved} (with overlay)")
+    return merged, digest(merged)

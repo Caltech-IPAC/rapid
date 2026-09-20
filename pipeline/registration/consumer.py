@@ -202,7 +202,7 @@ _COLUMNS = (
 #: everywhere in this module (the submission-batch identity; see
 #: `_CANDIDATE_WHERE_SQL`'s own comment on the join for why the two must
 #: never be conflated). `pipeline.registration.products.registrar` reads
-#: `work_unit_run_id` to scope a product row to its campaign; `attempts.
+#: `work_unit_run_id` to scope a product row to its scratch run; `attempts.
 #: run_id` is the wrong source (see that module's `register` docstring).
 #: Not folded into `_COLUMNS` above: that tuple is the plain `attempts`
 #: columns `", ".join`ed verbatim into the SELECT list, and a joined,
@@ -235,7 +235,7 @@ _WORK_UNIT_RUN_ID_SELECT_SQL = (
 #: INNER JOIN would drop those rows from the candidate set entirely rather
 #: than surfacing them with `work_unit_run_id IS NULL`, which is what a
 #: unit-less attempt must register as (production's own convention: no
-#: work unit means no campaign scope, i.e. `None`, not "not a candidate").
+#: work unit means no scratch scope, i.e. `None`, not "not a candidate").
 _CANDIDATE_WHERE_SQL = (
     # EVERY `_COLUMNS` NAME IS QUALIFIED `attempts.`, because the LEFT JOIN
     # below puts `work_units` in scope and the two tables share column
@@ -274,14 +274,14 @@ _CANDIDATE_SQL = _CANDIDATE_WHERE_SQL + _CANDIDATE_ORDER_SQL
 #: predicate is specifically the SUBMISSION-BATCH `attempts.run_id` — see
 #: `candidates()`'s own docstring on `run_id_prefix` matching
 #: `submit_gathered`'s `-0`/`-1`/... suffixed child run_ids, which is that
-#: column's convention, not the campaign `work_units.run_id` the join adds.
+#: column's convention, not the scratch `work_units.run_id` the join adds.
 _RUN_ID_PREFIX_SQL = "attempts.run_id LIKE %s"
 _ATTEMPT_IDS_SQL = "attempts.attempt_id = ANY(%s)"
 
 #: THE 2026-09-11 INCIDENT GUARD, run-prefix scope only. A run-scoped
-#: registration is, by definition, registering a campaign run's products —
+#: registration is, by definition, registering a scratch run's products —
 #: that is the entire meaning of "scope this pass to `run_id_prefix`". But
-#: `pipeline.registration.products.registrar` reads the campaign run for the
+#: `pipeline.registration.products.registrar` reads the scratch run for the
 #: product write from `work_unit_run_id` (the LEFT JOINed `work_units.
 #: run_id`, above), never from `attempts.run_id` — see that module's own
 #: `register` docstring for why the join column is the right source for the
@@ -289,7 +289,7 @@ _ATTEMPT_IDS_SQL = "attempts.attempt_id = ANY(%s)"
 #: NULL` — pre-intent-layer, or held back by the definition-FK guard at
 #: submission time, `_COLUMNS`'s own comment on `work_unit_id`) therefore has
 #: `work_unit_run_id IS NULL` no matter what its `attempts.run_id` matches:
-#: it carries no campaign scope for the registrar to read. Letting such a row
+#: it carries no scratch scope for the registrar to read. Letting such a row
 #: through a run-scoped pass means the registrar writes it with `run_id=
 #: None` — the PRODUCTION lane — which is precisely NOT what the operator
 #: scoped the registration to, and is exactly how the live incident wrote
@@ -300,7 +300,7 @@ _ATTEMPT_IDS_SQL = "attempts.attempt_id = ANY(%s)"
 #:
 #: Deliberately NOT added to `_ATTEMPT_IDS_SQL`'s branch: an `attempt_ids`-
 #: only scope is the operator naming exact rows it already knows by id, an
-#: orthogonal scope from "this campaign run's products" — that caller has
+#: orthogonal scope from "this scratch run's products" — that caller has
 #: already made its own scoping decision about which attempts belong, and it
 #: is not this module's place to second-guess an explicit list. The
 #: unscoped production path is untouched by this constant entirely: it is

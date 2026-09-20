@@ -10,9 +10,9 @@ property below is asserted against the real migration stream and none of it
 would mean anything against a fake.
 
   * COEXISTENCE (property 1) is the reason this sitting exists at all: two
-    campaign runs holding a current product for the same identity group,
+    scratch runs holding a current product for the same identity group,
     neither superseding the other. Everything else here either protects that
-    property (production currency unchanged, campaigns and production never
+    property (production currency unchanged, scratch runs and production never
     collide) or protects the mechanisms it depends on (run-scoped work-unit
     identity, the prefix-overlap refusal that keeps a run's attempts
     findable, and archiving's demote-don't-delete contract).
@@ -97,7 +97,7 @@ def _declare_reference_set(conn, name, owner="run-model-tests"):
 
 
 def _make_run_scoped_diffimage(conn, run_id_name, field, ppid, sca=1):
-    """A `diffimages` row at `vbest=1`, attributed to campaign run
+    """A `diffimages` row at `vbest=1`, attributed to scratch run
     `run_id_name`.
 
     `fixture.make_diffimage` has no `run_id` parameter of its own -- it
@@ -122,7 +122,7 @@ def _make_run_scoped_diffimage(conn, run_id_name, field, ppid, sca=1):
 def _make_run_scoped_refimage(conn, run_id_name, field, fid, ppid, tag,
                               reference_set_id=None):
     """A `refimages` row at `vbest=1` for `(field, fid, ppid)`, attributed to
-    campaign run `run_id_name`. Returns its `rfid`.
+    scratch run `run_id_name`. Returns its `rfid`.
 
     Built directly with `_insert_filling_required` (the same helper
     `fixture._diffimage_parents` uses for its own refimages row) rather than
@@ -135,7 +135,7 @@ def _make_run_scoped_refimage(conn, run_id_name, field, fid, ppid, tag,
     what a run differences AGAINST rather than something a run owns. `run_id`
     stays on the row as provenance -- which run wrote it, and what
     `derived.archive_run` demotes by -- but it is no longer what makes two
-    campaigns' references coexist. A caller wanting coexistence therefore
+    scratch runs' references coexist. A caller wanting coexistence therefore
     passes distinct `reference_set_id`s; passing none leaves the column to
     126's `default_reference_set_id()` default, which puts the row in
     production's default set.
@@ -144,7 +144,7 @@ def _make_run_scoped_refimage(conn, run_id_name, field, fid, ppid, tag,
     fid, ppid, version)` is a plain uniqueness constraint on the identity
     group ALONE -- it has no `run_id` in it and no WHERE clause -- so it is
     checked before either of 108's two partial `vbest`-current indexes is
-    ever reached. Two campaigns sharing one `(field, fid, ppid)` (the whole
+    ever reached. Two scratch runs sharing one `(field, fid, ppid)` (the whole
     point of the coexistence property this fixture serves) therefore need
     two distinct `version`s to both insert at all, exactly as
     `fixture._diffimage_parents` already computes a fresh version per
@@ -180,33 +180,33 @@ def _first_filter_id(conn):
 
 
 # ---------------------------------------------------------------------------
-# Property 1 -- coexistence: two campaign runs, one identity group, both
+# Property 1 -- coexistence: two scratch runs, one identity group, both
 # current. THE test this whole migration pair exists to make possible.
 # ---------------------------------------------------------------------------
 
-def test_two_campaign_runs_each_hold_a_current_diffimage_for_one_identity(
+def test_two_scratch_runs_each_hold_a_current_diffimage_for_one_identity(
         conn):
-    """Two campaigns process the same (rid, ppid) at once; neither supersedes
-    the other.
+    """Two scratch runs process the same (rid, ppid) at once; neither
+    supersedes the other.
 
     Before 108, `diffimages_vbest_current_unique` was global on `(rid,
-    ppid)` alone, so the second campaign's insert at `vbest=1` would have
+    ppid)` alone, so the second scratch run's insert at `vbest=1` would have
     raised a unique violation on the first's row. Migration 108 replaces
-    that index with a pair whose campaign half also carries `run_id`, so two
-    campaigns' rows for the SAME `(rid, ppid)` no longer share a key. That
-    structural change -- not a convention either campaign's code has to
+    that index with a pair whose scratch half also carries `run_id`, so two
+    scratch runs' rows for the SAME `(rid, ppid)` no longer share a key. That
+    structural change -- not a convention either scratch's code has to
     honour -- is what is asserted here: both inserts succeed, and both rows
     are still `vbest=1` afterward.
     """
     run_a = _run_name("coexist-diff-a")
     run_b = _run_name("coexist-diff-b")
-    _declare_run(conn, run_a, "campaign")
-    _declare_run(conn, run_b, "campaign")
+    _declare_run(conn, run_a, "scratch")
+    _declare_run(conn, run_b, "scratch")
 
     field = 991001
     ppid = 15
 
-    # Both campaigns process the SAME field/ppid -- sharing `rid` is what
+    # Both scratch runs process the SAME field/ppid -- sharing `rid` is what
     # makes this the identity group the index guards, not two unrelated rows
     # that merely look alike.
     attempt_a = fixture.make_attempt(conn, lifecycle="terminal_without_start")
@@ -219,7 +219,7 @@ def test_two_campaign_runs_each_hold_a_current_diffimage_for_one_identity(
                     [run_a, pid_a])
     conn.commit()
 
-    # The second campaign's row for the SAME rid/ppid, at the SAME vbest.
+    # The second scratch's row for the SAME rid/ppid, at the SAME vbest.
     # `_insert_filling_required`'s version lookup would pick the next
     # version for this (rid, ppid) automatically; a second call to
     # `make_diffimage` does exactly that, so this row is a genuinely
@@ -246,13 +246,13 @@ def test_two_campaign_runs_each_hold_a_current_diffimage_for_one_identity(
         rows = cur.fetchall()
 
     assert [r[2] for r in rows] == [1, 1], (
-        "one of the two campaigns' rows was not left at vbest=1; "
+        "one of the two scratch runs' rows was not left at vbest=1; "
         "coexistence failed")
     assert {r[1] for r in rows} == {run_a, run_b}, (
-        "both rows must carry their own campaign's run_id")
+        "both rows must carry their own scratch run's run_id")
 
 
-def test_two_campaign_runs_each_hold_a_current_refimage_for_one_identity(
+def test_two_scratch_runs_each_hold_a_current_refimage_for_one_identity(
         conn):
     """The same coexistence property, for `refimages` on `(field, fid, ppid)`,
     at REFERENCE-SET granularity.
@@ -262,7 +262,7 @@ def test_two_campaign_runs_each_hold_a_current_refimage_for_one_identity(
     index definition would not show up in the other's test.
 
     **THE GRANULARITY MOVED; THE PROPERTY DID NOT.** Migration 126 DROPs
-    `refimages_vbest_current_per_run_unique` -- 108's campaign half, which
+    `refimages_vbest_current_per_run_unique` -- 108's scratch half, which
     this test used to pin -- and creates
     `refimages_vbest_current_per_set_unique ON (field, fid, ppid,
     reference_set_id) WHERE vbest IN (1, 2)` in the same transaction. 126's
@@ -284,8 +284,8 @@ def test_two_campaign_runs_each_hold_a_current_refimage_for_one_identity(
     run_b = _run_name("coexist-ref-b")
     set_a = _declare_reference_set(conn, _run_name("set-ref-a"))
     set_b = _declare_reference_set(conn, _run_name("set-ref-b"))
-    _declare_run(conn, run_a, "campaign", reference_set_id=set_a)
-    _declare_run(conn, run_b, "campaign", reference_set_id=set_b)
+    _declare_run(conn, run_a, "scratch", reference_set_id=set_a)
+    _declare_run(conn, run_b, "scratch", reference_set_id=set_b)
 
     field = 991002
     fid = _first_filter_id(conn)
@@ -307,7 +307,7 @@ def test_two_campaign_runs_each_hold_a_current_refimage_for_one_identity(
         rows = cur.fetchall()
 
     assert [r[2] for r in rows] == [1, 1], (
-        "one of the two campaigns' reference images was not left at "
+        "one of the two scratch runs' reference images was not left at "
         "vbest=1; coexistence failed for refimages")
     assert {r[1] for r in rows} == {run_a, run_b}
     # The set is what the surviving index keys on, so a test that did not
@@ -377,7 +377,7 @@ def test_two_production_diffimages_for_one_identity_still_collide(conn):
         rid, expid, fid, rfid = cur.fetchone()
 
     # Built through `_insert_filling_required` rather than a hand-written
-    # INSERT (as `test_a_campaign_and_a_production_diffimage_coexist_for_one_
+    # INSERT (as `test_a_scratch_and_a_production_diffimage_coexist_for_one_
     # identity` above also does for its second row) -- `diffimages` carries
     # several other NOT NULL columns with no default (`hp6`, `hp9`,
     # `infobitssci`, `infobitsref`, and `svid`, itself a foreign key to
@@ -428,18 +428,18 @@ def test_two_production_runs_for_one_work_unit_identity_still_collide(conn):
 
 
 # ---------------------------------------------------------------------------
-# Property 3 -- campaign and production never collide with each other.
+# Property 3 -- scratch and production never collide with each other.
 # ---------------------------------------------------------------------------
 
-def test_a_campaign_and_a_production_diffimage_coexist_for_one_identity(
+def test_a_scratch_and_a_production_diffimage_coexist_for_one_identity(
         conn):
-    """A campaign row and a production row for the same (rid, ppid) can both
+    """A scratch row and a production row for the same (rid, ppid) can both
     be current -- because the two indexes' predicates (`run_id IS NULL` vs
     `run_id IS NOT NULL`) are mutually exclusive, so no row is ever subject
     to both at once.
     """
     run_name = _run_name("mixed-diff")
-    _declare_run(conn, run_name, "campaign")
+    _declare_run(conn, run_name, "scratch")
 
     field = 991004
     ppid = 15
@@ -475,7 +475,7 @@ def test_a_campaign_and_a_production_diffimage_coexist_for_one_identity(
         rows = cur.fetchall()
 
     assert [r[2] for r in rows] == [1, 1], (
-        "the production and campaign rows for the same identity group did "
+        "the production and scratch rows for the same identity group did "
         "not both stay current")
     run_ids = {r[1] for r in rows}
     assert None in run_ids and run_name in run_ids
@@ -485,12 +485,12 @@ def test_a_campaign_and_a_production_diffimage_coexist_for_one_identity(
 # Property 4 -- work-unit identity is run-scoped.
 # ---------------------------------------------------------------------------
 
-def test_two_campaign_work_units_with_the_same_scope_coexist(conn):
+def test_two_scratch_work_units_with_the_same_scope_coexist(conn):
     """Two DIFFERENT non-null run_ids sharing (job_type, input_scope) both
-    live, non-superseded -- the mechanism that lets two campaigns claim the
+    live, non-superseded -- the mechanism that lets two scratch runs claim the
     same input independently.
     """
-    scope = fixture.scope("campaign-identity-coexists")
+    scope = fixture.scope("scratch-identity-coexists")
     run_a = _run_name("wu-a")
     run_b = _run_name("wu-b")
 
@@ -550,13 +550,13 @@ def test_create_run_refuses_a_name_that_is_a_prefix_of_an_existing_run(conn):
     would be indistinguishable to that match.
     """
     base = _run_name("alpha")
-    _declare_run(conn, base, "campaign")
+    _declare_run(conn, base, "scratch")
 
     overlapping = base + "-two"
     with pytest.raises(InvariantViolation):
         actions.create_run(
             conn, _key("overlap-fwd"), overlapping, "run-model-tests",
-            "campaign", reason="should be refused", dry_run=False)
+            "scratch", reason="should be refused", dry_run=False)
 
 
 def test_create_run_refuses_the_overlap_in_the_other_order_too(conn):
@@ -565,25 +565,25 @@ def test_create_run_refuses_the_overlap_in_the_other_order_too(conn):
     both directions, so this must refuse exactly like the forward case.
     """
     longer = _run_name("beta-two")
-    _declare_run(conn, longer, "campaign")
+    _declare_run(conn, longer, "scratch")
 
     shorter = _run_name("beta")
     with pytest.raises(InvariantViolation):
         actions.create_run(
-            conn, _key("overlap-rev"), shorter, "run-model-tests", "campaign",
+            conn, _key("overlap-rev"), shorter, "run-model-tests", "scratch",
             reason="should be refused", dry_run=False)
 
 
 # ---------------------------------------------------------------------------
 # Property 6 -- `derived.archive_run` deletes nothing and demotes only
-# campaign products.
+# scratch products.
 # ---------------------------------------------------------------------------
 
-def test_archiving_a_campaign_run_demotes_its_current_products_without_deleting(
+def test_archiving_a_scratch_run_demotes_its_current_products_without_deleting(
         conn):
     """vbest 1 -> 0, row count unchanged, run state becomes archived."""
-    run_name = _run_name("archive-campaign")
-    _declare_run(conn, run_name, "campaign")
+    run_name = _run_name("archive-scratch")
+    _declare_run(conn, run_name, "scratch")
 
     field = 991005
     ppid = 15
@@ -594,17 +594,17 @@ def test_archiving_a_campaign_run_demotes_its_current_products_without_deleting(
         count_before = cur.fetchone()[0]
 
     result = actions.archive_run(
-        conn, _key("archive-campaign"), run_name, reason="test archival",
+        conn, _key("archive-scratch"), run_name, reason="test archival",
         dry_run=False)
 
     assert result["dry_run"] is False
-    assert result["kind"] == "campaign"
+    assert result["kind"] == "scratch"
     assert result["diffimages_demoted"] == 1
     assert result["nothing_deleted"] is True
 
     with conn.cursor() as cur:
         cur.execute("SELECT vbest FROM diffimages WHERE pid = %s", [pid])
-        assert cur.fetchone()[0] == 0, "the campaign product was not demoted"
+        assert cur.fetchone()[0] == 0, "the scratch product was not demoted"
         cur.execute("SELECT count(*) FROM diffimages")
         count_after = cur.fetchone()[0]
 
@@ -646,12 +646,12 @@ def test_archiving_a_production_run_leaves_its_products_published(conn):
 
 
 def test_archiving_leaves_a_locked_best_row_alone_in_both_kinds(conn):
-    """`vbest = 2` (locked best) survives archiving, campaign or production --
+    """`vbest = 2` (locked best) survives archiving, scratch or production --
     an operator's explicit lock is not something an archive may overrule.
     """
-    campaign = _run_name("archive-locked-campaign")
+    scratch = _run_name("archive-locked-scratch")
     production = _run_name("archive-locked-production")
-    _declare_run(conn, campaign, "campaign")
+    _declare_run(conn, scratch, "scratch")
     _declare_run(conn, production, "production")
 
     field_camp = 991007
@@ -663,7 +663,7 @@ def test_archiving_leaves_a_locked_best_row_alone_in_both_kinds(conn):
                                       ppid=ppid, vbest=2)
     with conn.cursor() as cur:
         cur.execute("UPDATE diffimages SET run_id = %s WHERE pid = %s",
-                    [campaign, pid_camp])
+                    [scratch, pid_camp])
     conn.commit()
 
     attempt_prod = fixture.make_attempt(conn, lifecycle="terminal_without_start")
@@ -672,19 +672,19 @@ def test_archiving_leaves_a_locked_best_row_alone_in_both_kinds(conn):
     conn.commit()
 
     result_camp = actions.archive_run(
-        conn, _key("archive-locked-campaign"), campaign,
+        conn, _key("archive-locked-scratch"), scratch,
         reason="test archival", dry_run=False)
     result_prod = actions.archive_run(
         conn, _key("archive-locked-production"), production,
         reason="test archival", dry_run=False)
 
     assert result_camp["diffimages_demoted"] == 0, (
-        "a locked-best (vbest=2) campaign row was counted as demoted")
+        "a locked-best (vbest=2) scratch row was counted as demoted")
     assert result_prod["diffimages_demoted"] == 0
 
     with conn.cursor() as cur:
         cur.execute("SELECT vbest FROM diffimages WHERE pid = %s", [pid_camp])
-        assert cur.fetchone()[0] == 2, "archiving touched a locked campaign row"
+        assert cur.fetchone()[0] == 2, "archiving touched a locked scratch row"
         cur.execute("SELECT vbest FROM diffimages WHERE pid = %s", [pid_prod])
         assert cur.fetchone()[0] == 2, "archiving touched a locked production row"
 
@@ -699,7 +699,7 @@ def test_archive_run_dry_run_leaves_every_row_and_the_run_state_untouched(
     nothing at all -- not the products, not the run's own state.
     """
     run_name = _run_name("archive-dryrun")
-    _declare_run(conn, run_name, "campaign")
+    _declare_run(conn, run_name, "scratch")
 
     field = 991009
     ppid = 15

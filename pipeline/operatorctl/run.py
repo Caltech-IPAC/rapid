@@ -36,7 +36,7 @@ class RunStartRegistryError(Exception):
 
     Four cases, all refused BEFORE anything is gathered and before any
     audit row is written, because each of them means this command has no
-    business submitting work at all (migration 121's ruling, "a campaign
+    business submitting work at all (migration 121's ruling, "a scratch
     name without a `runs` row is refused"):
 
       * no `runs` row of this name — the run was never declared, so the
@@ -109,12 +109,12 @@ def _phase_table():
 _WINDOWED_PHASES = ("reference", "science")
 
 #: The only run kind that may name its own job-definition family. A
-#: campaign run is scoped to itself — its products are current only within
+#: scratch run is scoped to itself — its products are current only within
 #: the run and never published — so pointing one at a measurement
 #: definition changes nothing anybody else reads. A production run is the
 #: published pipeline, and choosing its execution binding on a command
 #: line is the exact class of thing that must not be possible by accident.
-_FAMILY_OVERRIDE_KIND = "campaign"
+_FAMILY_OVERRIDE_KIND = "scratch"
 
 #: The only phase it may be named for. The probe definitions are
 #: science-class; route validation in the container checks job type, class
@@ -221,8 +221,8 @@ def _bind_registry_row(conn, name):
             "run %r is not declared: no row in the run registry. A run must "
             "be declared before work can be submitted under it, so that "
             "every submission has an owner, a purpose and a provenance — "
-            "declare it first with `rapidctl run create --name %s --owner "
-            "<who> --kind campaign --purpose <why> --reason <why> --apply`"
+            "declare it first with `rapidctl run create --name %s "
+            "--kind scratch --purpose <why> --reason <why> --apply`"
             % (name, name))
     if run["kind"] == "production":
         raise RunStartRegistryError(
@@ -475,8 +475,8 @@ def submit_run(conn, name, job_type, units, reason, context=None,
     looks up work units with `run_id=None` regardless of which run called
     it, finds PRODUCTION's row for any (job_type, input_scope) production
     has already processed, and — because that row is `state='complete'`
-    — judges the campaign's own gathered units already claimed and submits
-    nothing (observed live 2026-09-11, campaign run
+    — judges the scratch run's own gathered units already claimed and submits
+    nothing (observed live 2026-09-11, scratch run
     `awaicgen54-proof-20260911`: GATHER returned 109 run-scoped units,
     submission created zero work_units rows).
 
@@ -600,7 +600,7 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     effect of taking a measurement.
 
     **Two conditions, both refused loudly, checked HERE and nowhere else.**
-    The run's stored `kind` must be `campaign` and the phase must be
+    The run's stored `kind` must be `scratch` and the phase must be
     `science`. The kind check is the one that matters: a production run is
     the published pipeline, and pointing it at a definition chosen on a
     command line is exactly the class of thing that must not be possible
@@ -728,7 +728,7 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     #
     # The refusal covers `reference` and `science` alone (`_WINDOWED_PHASES`);
     # the four post-database-chain phases read no reference and would be
-    # refused for a fact they never use. A campaign run with no set is a
+    # refused for a fact they never use. A scratch run with no set is a
     # DEFECT rather than a default: `derived.create_run` stores one on every
     # run it writes, so a NULL here means the row predates 127 or was written
     # around it, and gathering it against a guessed set would be exactly the
@@ -1061,8 +1061,8 @@ def release_dead_letters_audited(conn, idempotency_key, name, reason,
 
 
 # ---------------------------------------------------------------------------
-# `run reconcile-stranded` — Batch-discovery release for units a campaign's
-# array children died on before ever reaching the dead-letter shape
+# `run reconcile-stranded` — Batch-discovery release for units a scratch
+# run's array children died on before ever reaching the dead-letter shape
 # `release-dead-letters` looks for (`w.blocked_reason =
 # 'application_failure:internal_error'`, `a.started_at IS NULL`): a child
 # that died at container start never wrote that row at all.

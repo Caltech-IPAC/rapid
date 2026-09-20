@@ -237,14 +237,10 @@ def build_parser():
                                  "out rather than shown as punctuation "
                                  "because a literal %% would break "
                                  "argparse's own %%-formatted help text")
-    run_create.add_argument("--owner", required=True,
-                            help="who this run belongs to; mandatory -- a "
-                                 "run nobody owns is the state 108 exists "
-                                 "to remove")
     run_create.add_argument("--kind", required=True,
-                            choices=("production", "campaign"),
+                            choices=("production", "scratch"),
                             help="production keeps the global one-current-"
-                                 "product rule; campaign is current only "
+                                 "product rule; scratch is current only "
                                  "within the run, never published")
     run_create.add_argument("--purpose", default=None)
     run_create.add_argument("--branch", default=None)
@@ -355,7 +351,7 @@ def build_parser():
                                 "working submission environment -- see "
                                 "the ledger for the run-scoped resubmission-"
                                 "gate fix that makes gathering for them "
-                                "under a campaign run actually yield units)")
+                                "under a scratch run actually yield units)")
     run_start.add_argument("--proc-date", default=None,
                            help="processing date for catalog-load/"
                                 "crossmatch (YYYYMMDD); required by those "
@@ -405,7 +401,7 @@ def build_parser():
              "under an instrumented image, and reaching them by repointing "
              "batch/job-definition-science would change production as a "
              "side effect of taking a measurement. REFUSED unless the "
-             "named run's stored kind is campaign and --phase is science: "
+             "named run's stored kind is scratch and --phase is science: "
              "a production run is the published pipeline and its execution "
              "binding is not chosen on a command line. The queue is "
              "unaffected -- the probe definitions are science-class and run "
@@ -647,7 +643,7 @@ def build_parser():
     refset_archive = refsetsub.add_parser(
         "archive", help="stop offering a set for new work",
         description="Archiving a set DEMOTES NOTHING. Unlike archiving a "
-                    "run, which demotes that run's campaign products, "
+                    "run, which demotes that run's scratch products, "
                     "archiving a set leaves every row exactly as it is: a "
                     "run already declared on the set must keep reading "
                     "the references it has been reading. Archiving says "
@@ -679,7 +675,7 @@ def build_parser():
 
     run_archive = runsub.add_parser(
         "archive", help="archive a run",
-        description="Mark a run archived and demote its campaign products "
+        description="Mark a run archived and demote its scratch products "
                     "(vbest 1 -> 0; nothing is deleted). A production "
                     "run's products are left published, since nothing "
                     "would succeed them.")
@@ -1049,8 +1045,18 @@ def _resolve_reference_set_for_run(conn, args, out, key):
         return int(row[0])
 
     if args.build_reference_set:
+        # THE SET'S OWNER IS THE CREATOR TOO. `run create` no longer takes an
+        # `--owner`: a scratch run's owner is `session_user`, decided inside
+        # `derived.create_run`. A reference set built by that same command
+        # needs an owner of its own — `derived.create_reference_set` refuses a
+        # NULL one outright ("a set nobody owns is the state this table exists
+        # to remove", 127) — and the honest answer is the same person, read
+        # from the connection rather than taken from a flag, for the reason
+        # `_session_user` itself gives: a caller-supplied identity is a caller
+        # attesting to their own identity.
         built = _actions.create_reference_set(
-            conn, key + "-refset", args.build_reference_set, args.owner,
+            conn, key + "-refset", args.build_reference_set,
+            _session_user(conn),
             args.reason,
             purpose="references built by run %s" % args.name,
             psf_set=args.psf_set, image_digest=args.image_digest,
@@ -1079,7 +1085,7 @@ def _cmd_run_create(conn, args, out):
             "declares its own")
     reference_set_id = _resolve_reference_set_for_run(conn, args, out, key)
     result = _actions.create_run(
-        conn, key, args.name, args.owner, args.kind, purpose=args.purpose,
+        conn, key, args.name, None, args.kind, purpose=args.purpose,
         branch=args.branch, image_digest=args.image_digest,
         config_hash=args.config_hash,
         input_generations=args.input_generations, reason=args.reason,

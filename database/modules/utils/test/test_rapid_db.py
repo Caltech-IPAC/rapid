@@ -500,29 +500,29 @@ class RunScopedBlockingGateSemanticsTests(unittest.TestCase):
         rows = [("science", "5001/7", None, "complete")]
         self.assertEqual(self._blocked(rows, run_id=None), {"5001/7"})
 
-    def test_a_campaign_is_not_blocked_by_productions_completed_unit(self):
+    def test_a_scratch_run_is_not_blocked_by_productions_completed_unit(self):
         # THE DEFECT THIS FIXES, reproduced directly: production's own
         # work unit for this (job_type, input_scope) is 'complete' with
         # run_id IS NULL. Before this change, the unscoped query blocked on
-        # ANY non-ready row regardless of run, so a campaign gathering the
+        # ANY non-ready row regardless of run, so a scratch run gathering the
         # SAME field yielded nothing even though ITS OWN work unit (a
         # different row, by migration 108's run-scoped identity) had never
-        # been attempted. Scoped to the campaign's own run_id, this query
+        # been attempted. Scoped to the scratch run's own run_id, this query
         # must not see production's row at all.
         rows = [("science", "5001/7", None, "complete")]
         self.assertEqual(
             self._blocked(rows, run_id="w9-campaign-1"), set(),
-            "a campaign run must not be blocked by a production work "
+            "a scratch run must not be blocked by a production work "
             "unit's state -- migration 108 made work-unit identity "
             "run-scoped precisely so the two rows coexist independently")
 
-    def test_a_campaign_is_blocked_by_its_own_non_ready_unit(self):
+    def test_a_scratch_run_is_blocked_by_its_own_non_ready_unit(self):
         rows = [("science", "5001/7", "w9-campaign-1", "blocked")]
         self.assertEqual(
             self._blocked(rows, run_id="w9-campaign-1"), {"5001/7"})
 
-    def test_a_campaign_is_not_blocked_by_a_different_campaigns_unit(self):
-        # Two campaigns' work units for the same field are two different
+    def test_a_scratch_run_is_not_blocked_by_a_different_scratch_runs_unit(self):
+        # Two scratch runs' work units for the same field are two different
         # rows (run-scoped identity); one run's state must never leak into
         # another's gate.
         rows = [("science", "5001/7", "w9-campaign-2", "blocked")]

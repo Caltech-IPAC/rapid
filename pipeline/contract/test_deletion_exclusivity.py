@@ -167,7 +167,7 @@ def _public_methods(text):
 #: (the pre-Prove review's recommendation, campaign `handoff-2026-09-13`,
 #: `LEDGER-fix-reference-lookup.md`): `get_best_reference_image` gains a
 #: `run_id` parameter and an `ORDER BY`. Since rapid_systems migration 115 a
-#: production current reference and a campaign run's own current reference
+#: production current reference and a scratch run's own current reference
 #: for the same (ppid, field, fid) coexist legally, and the unscoped,
 #: unordered `fetchone()` handed a run whichever the planner emitted first.
 #: The fix ranks the caller's own run first, the production lane second, and

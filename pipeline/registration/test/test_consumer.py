@@ -67,10 +67,10 @@ class CandidateQueryTests(unittest.TestCase):
             "consumed_record_sequence < terminal_record_sequence",
             " ".join(consumer._CANDIDATE_SQL.split()))
 
-    def test_the_query_left_joins_work_units_for_the_campaign_run(self):
+    def test_the_query_left_joins_work_units_for_the_scratch_run(self):
         # THROUGHPUT-SITTING RULING, 2026-09-11: the candidate query must
         # join `work_units` under an unambiguous alias — `attempts.run_id`
-        # (the submission batch) and `work_units.run_id` (the campaign
+        # (the submission batch) and `work_units.run_id` (the scratch
         # scope) are different facts, and `products.register` now reads
         # the latter under this exact alias. A LEFT JOIN, not an INNER
         # JOIN: `attempts.work_unit_id` can be NULL and such a row must
@@ -92,9 +92,9 @@ class CandidateQueryTests(unittest.TestCase):
         self.assertEqual([1], [r["attempt_id"] for r in rows])
         self.assertIsNone(rows[0]["work_unit_run_id"])
 
-    def test_the_campaign_run_id_reaches_the_row_under_its_own_name(self):
+    def test_the_scratch_run_id_reaches_the_row_under_its_own_name(self):
         # The positive case alongside the NULL case above: a row whose work
-        # unit carries a campaign run surfaces it as `work_unit_run_id`,
+        # unit carries a scratch run surfaces it as `work_unit_run_id`,
         # distinct from and alongside the row's own `run_id` (the
         # submission-batch identity).
         conn = FakeConnection(rows=[
@@ -206,11 +206,11 @@ class CandidateScopingTests(unittest.TestCase):
 
     def test_a_run_scoped_query_requires_a_work_unit(self):
         # THE 2026-09-11 INCIDENT GUARD. A run-scoped registration is by
-        # definition registering a campaign run's products, and the
+        # definition registering a scratch run's products, and the
         # registrar (`pipeline.registration.products.registrar`) reads the
-        # campaign run from `work_unit_run_id` — the LEFT JOINed `work_units.
+        # scratch run from `work_unit_run_id` — the LEFT JOINed `work_units.
         # run_id` — never from `attempts.run_id` (see that module's own
-        # comment on why). An attempt with no work unit has no campaign
+        # comment on why). An attempt with no work unit has no scratch
         # scope: its `work_unit_run_id` is NULL, so registering it under a
         # run scope would write it to the production (`run_id IS NULL`) lane
         # — precisely NOT what the operator scoped the registration to. Such
@@ -228,7 +228,7 @@ class CandidateScopingTests(unittest.TestCase):
         # The behavioural half of the incident guard above: a run-prefix-
         # scoped call must not hand back an attempt whose `work_unit_id` is
         # NULL, even though it matches the run prefix and the reconciled-
-        # state gate — that attempt has no campaign scope to register under,
+        # state gate — that attempt has no scratch scope to register under,
         # and returning it is exactly how the 2026-09-11 incident wrote
         # 2,427 rows onto the production lane.
         conn = FakeConnection(rows=[
@@ -245,7 +245,7 @@ class CandidateScopingTests(unittest.TestCase):
         # ORTHOGONAL SCOPE, DELIBERATELY UNFILTERED. `attempt_ids` is the
         # operator naming exact rows by id — a caller who already knows
         # precisely which attempts it means, unlike `run_id_prefix`'s
-        # campaign framing. That scope must not gain the work-unit
+        # scratch framing. That scope must not gain the work-unit
         # requirement: only the run-prefix branch does.
         conn = FakeConnection(rows=[
             reconciled(1, run_id="run-a", work_unit_id=None),

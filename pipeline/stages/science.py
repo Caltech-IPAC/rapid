@@ -260,6 +260,38 @@ def download_inputs(context) -> None:
     context.logger.info("inputs: science=%s sci_psf=%s ref_psf=%s",
                         gz_name, sci_psf, ref_psf)
 
+    # THE OVERLAY'S EFFECT, MADE VISIBLE AT THE START OF THE DIFFERENCING
+    # WORK (scratch run kind, first milestone). `science_config.py` computes
+    # a merged-content digest when a scratch run's overlay is applied, so
+    # the ATTEMPT record already carries an honest identity for what ran —
+    # but a digest is not something a scientist reads at a glance while
+    # iterating. This is the human-readable twin: one line per key the
+    # overlay named, saying which of the two homes — the image's release
+    # content or the scratch overlay — the effective value actually came
+    # from. `download_inputs` is the sequence's first stage
+    # (`pipeline.stages.sequences.SCIENCE_SEQUENCE`), so this is the
+    # earliest point at which `context.science` already holds the merged
+    # content and every later stage's `science_value`/`science_section`
+    # read is already committed to what this line reports.
+    #
+    # Only the overlay's own keys are logged, not the whole release — this
+    # release ships ~20 sections and some run to hundreds of lines
+    # (`sextractor_diffimage` alone); logging all of it here would bury the
+    # one fact a scientist iterating on a scratch run actually wants (what
+    # did I just change) under noise the release TOML already states in one
+    # place. `job.py` records the overlay actually applied under the
+    # `science_overlay` provenance fact (empty/absent for every production
+    # run and any scratch run that named no overlay), so this loop is a
+    # no-op there — zero lines, not a placeholder line — and does nothing
+    # to change a production run's log output.
+    overlay = context.provenance.get("science_overlay") or {}
+    for section_name, overridden in overlay.items():
+        for key in overridden:
+            dotted = f"{section_name}.{key}"
+            effective = context.science_value(section_name, key)
+            context.logger.info("effective %s=%s source=overlay",
+                                dotted, effective)
+
 
 def gunzip_science_image(context) -> None:
     """Decompress the science image. (Monolith stage J, lines 775-785.)"""

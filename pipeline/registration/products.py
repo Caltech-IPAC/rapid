@@ -183,7 +183,7 @@ def register_reference_image(dbh, record, science, attempt_id=None,
     optional here only so a caller mid-port is not broken — production always
     has them, because the candidate query selects both columns.
 
-    `run_id` is the campaign run this registration belongs to, matching
+    `run_id` is the scratch run this registration belongs to, matching
     `work_units.run_id`'s convention: `None` for the production lane. It is
     keyword-only and required so no caller can omit it silently; production
     callers pass `None` explicitly.
@@ -373,7 +373,7 @@ def register_difference_image(dbh, record, science, attempt_id=None,
     was already registered — and it is only half the fix, because the rows and
     the watermark still have to commit together; see `registrar`.
 
-    `run_id` is the campaign run this registration belongs to, matching
+    `run_id` is the scratch run this registration belongs to, matching
     `work_units.run_id`'s convention: `None` for the production lane. It is
     keyword-only and required so no caller can omit it silently; production
     callers pass `None` explicitly.
@@ -636,13 +636,13 @@ def registrar(dbh, store, fallback_roles=None, identity_repository=None):
         record_sequence = row.get("terminal_record_sequence")
 
         # THE RUN COMES OFF THE WORK UNIT, NOT THE ATTEMPT (throughput-
-        # sitting ruling, 2026-09-11). `work_units.run_id` is the campaign
+        # sitting ruling, 2026-09-11). `work_units.run_id` is the scratch
         # scope migration 108's partial unique indexes are built on — NULL
         # for production. `attempts.run_id` is the submission-batch
         # identity (never NULL on the production path); reading it here
         # would move every production product row out of the `run_id IS
         # NULL` partition its currency index depends on, and split a
-        # campaign's products across as many partitions as it had
+        # scratch's products across as many partitions as it had
         # submission batches. `row["work_unit_run_id"]` is
         # `consumer._CANDIDATE_WHERE_SQL`'s `LEFT JOIN work_units` column.
         #
@@ -651,7 +651,7 @@ def registrar(dbh, store, fallback_roles=None, identity_repository=None):
         # reference SET rather than on the run — but nothing in this file
         # changes, and that is deliberate. `addRefImage`/`addPSF` resolve the
         # set from the `run_id_` they are already passed: the run's declared
-        # set for a campaign run, the default set when it is NULL. So the
+        # set for a scratch run, the default set when it is NULL. So the
         # registration path keeps passing exactly what it passed before, and
         # THE DEPLOYED PIPELINE IMAGE NEEDS NO REBUILD AND NO REPIN for
         # reference sets to work. Had the set been a new argument here, a

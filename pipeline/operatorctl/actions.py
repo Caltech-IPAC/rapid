@@ -237,7 +237,7 @@ def archive_reference_set(conn, idempotency_key, name, reason,
     ``derived.archive_reference_set``).
 
     DELIBERATELY NOT ``archive_run``'S SEMANTIC. Archiving a run demotes its
-    campaign products; archiving a SET demotes nothing at all, because a run
+    scratch products; archiving a SET demotes nothing at all, because a run
     already declared on it must keep reading exactly the references it has
     been reading. Archiving says only "do not choose this set for new work".
 
@@ -254,7 +254,7 @@ def archive_reference_set(conn, idempotency_key, name, reason,
 
 def archive_run(conn, idempotency_key, name, reason, expected_state=None,
                 dry_run=True, policy_citation=None):
-    """Archive a run and demote its campaign products (``derived.archive_run``).
+    """Archive a run and demote its scratch products (``derived.archive_run``).
 
     ``expected_state`` is ``{"state": "..."}`` — the run's state as the dry
     run showed it; the apply refuses if the run moved states since (RA001),

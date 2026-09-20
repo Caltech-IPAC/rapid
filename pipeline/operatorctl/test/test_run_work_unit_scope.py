@@ -158,14 +158,14 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         # THE REGISTRY BINDING (migration 121), stubbed the same way every
         # other database reach in this class is. These tests exist to pin
         # what `start_run_audited` THREADS, not what the registry says, so
-        # the binding returns a plain running campaign row and the ordinal
+        # the binding returns a plain running scratch row and the ordinal
         # a fixed number — a run whose registry answers are uninteresting
         # is exactly the fixture that keeps these assertions about
         # threading.
         bind_patcher = mock.patch.object(
             run_mod, "_bind_registry_row",
             lambda conn, name: {"run_id": 77, "name": name,
-                                "kind": "campaign", "state": "running"})
+                                "kind": "scratch", "state": "running"})
         bind_patcher.start()
         self.addCleanup(bind_patcher.stop)
 

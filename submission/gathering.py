@@ -1287,8 +1287,8 @@ def gather_reference_units(handle: UnitSource, start, end,
     passed straight through to the inner `gather_science_units` call as
     ITS `run_scope` — which run's work units and attempts the resubmission
     gate reads as blocking. `None` (the default) keeps gating unscoped,
-    exactly as before this parameter existed. A campaign run's `run start
-    --phase reference` passes the SAME string to both, because a campaign
+    exactly as before this parameter existed. A scratch run's `run start
+    --phase reference` passes the SAME string to both, because a scratch run
     both authors its own artifacts under its own name and wants to be
     gated only on its own prior work — but the two remain independently
     settable because they answer different questions.
