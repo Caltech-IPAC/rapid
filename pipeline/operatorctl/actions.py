@@ -753,6 +753,102 @@ UNION ALL
 SELECT 'psfs', count(*) FROM psfs WHERE run_id LIKE %s
 """
 
+# `run compare`'s BUILD PROVENANCE half — what actually ran, as opposed to
+# `_RUN_ROW`'s `branch`/`image_digest`/`config_hash`, which are the
+# registry's DECLARED intent for the run rather than a record of what any
+# attempt actually executed. The two can disagree (a job definition
+# repinned mid-run, a retry on a rebuilt image) and that disagreement is
+# exactly the thing an operator comparing two runs needs surfaced, not
+# hidden behind one declared-intent value.
+#
+# GROUPed on all four columns together, not counted per `container_digest`
+# alone: two attempts can share an image but disagree on `config_digest`
+# (a `--set` retry) or `source_sha` (a hotfix rebuild under the same image
+# tag), and collapsing those into one row would erase exactly the split a
+# reader needs to see. `count(*)` on each combination is what makes "every
+# attempt of this run shares one container_digest" a single, countable row
+# rather than something the operator has to tally by eye across many
+# attempt lines. NULLs (an attempt that predates these columns, or one
+# that never reached `mark_started`) group together under NULL like any
+# other value here — `count(*) FILTER` is not needed, since a row with
+# all-NULL provenance is itself the fact worth showing, not one to hide.
+#
+# Ordered by `n` descending so the dominant combination — the one the
+# comparison is actually about — sorts first; a tied secondary order on
+# the columns themselves keeps repeated runs of this query byte-identical
+# for the same data, which is what lets a test assert against the output.
+_RUN_BUILD_PROVENANCE = """
+SELECT source_sha, container_digest, config_digest, config_snapshot_key,
+       count(*) AS n
+  FROM attempts
+ WHERE run_id LIKE %s
+ GROUP BY source_sha, container_digest, config_digest, config_snapshot_key
+ ORDER BY n DESC, container_digest, config_digest, source_sha
+"""
+
+# The DISTINCT `container_digest` set alone, separate from the full
+# four-column breakdown above, because the single fact migration 121's
+# acceptance check reads — `count(distinct container_digest) = 1` across a
+# run — deserves to be answerable by eye from one line rather than summed
+# across however many `_RUN_BUILD_PROVENANCE` rows happen to share a
+# digest. `NULL` counts as one distinct value here, same as Postgres's own
+# `count(distinct ...)`, deliberately: a run whose attempts never recorded
+# a digest is a fact about that run, not a reason to hide the count.
+_RUN_CONTAINER_DIGEST_COUNT = """
+SELECT count(DISTINCT container_digest) AS n_distinct, count(*) AS n_attempts
+  FROM attempts
+ WHERE run_id LIKE %s
+"""
+
+# The run's declared scratch overlay (migration 112's `runs.config_overlay`,
+# jsonb) — read here rather than folded into `_RUN_ROW`, for the same
+# reason `run.py`'s own `config_overlay` read stays a separate one-column
+# query (see that file's comment on this exact column): `_RUN_ROW` is read
+# by every lightweight run subcommand (`status`, `compare`), and a
+# production run's row should not pay for selecting a column that is
+# always NULL for it. `run compare` is exactly the caller who wants it, so
+# it asks directly instead of asking `_RUN_ROW` to carry it for everyone.
+_RUN_CONFIG_OVERLAY = "SELECT config_overlay FROM runs WHERE run_id = %s"
+
+# The reference product key each of a run's difference images cites, and
+# the input identity — `(exposure_id, sca)` — of the attempt that produced
+# each one. Joins `diffimages` (this run's product rows, by the same
+# `run_id LIKE` prefix every other product reader uses) to `refimages` on
+# the legacy `rfid` FK the two tables have always shared (`pipeline.
+# repositories.diffimages._OVERLAP_SQL` joins the identical pair the same
+# way), then to `products` through `refimages.product_id` for the key
+# itself — the same path `pipeline.repositories.products._REFERENCE_KEY_
+# SQL` reads a single reference's key by, generalized here to every
+# reference a run's difference images cite rather than one `rfid` at a
+# time. `attempts` joins on `diffimages.run_id`/`attempt_id`... but
+# `diffimages` denormalizes `run_id` rather than carrying `attempt_id`
+# (108's product tables are attempt-agnostic by design), so the input
+# identity comes from `attempts` by the SAME `run_id LIKE` prefix, not by
+# joining the two tables to each other; a run's distinct `(exposure_id,
+# sca)` pairs are what the input side of a comparison means; which
+# attempt produced which diffimage is not a claim this query makes.
+#
+# `r.product_id` may be NULL (a reference registered before its product
+# row was linked — see `link_reference_image`'s own "binds without being"
+# comment), so the join to `products` is LEFT: a diffimage whose reference
+# has no product row yet still appears, with `product_key` NULL, rather
+# than being silently dropped from the count.
+_RUN_REFERENCE_PRODUCT_KEYS = """
+SELECT DISTINCT p.product_key
+  FROM diffimages d
+  JOIN refimages r ON r.rfid = d.rfid
+  LEFT JOIN products p ON p.product_id = r.product_id
+ WHERE d.run_id LIKE %s
+ ORDER BY p.product_key
+"""
+
+_RUN_INPUT_IDENTITIES = """
+SELECT DISTINCT exposure_id, sca
+  FROM attempts
+ WHERE run_id LIKE %s
+ ORDER BY exposure_id, sca
+"""
+
 _RUN_ROW = """
 SELECT r.run_id, r.name, r.owner, r.kind, r.purpose, r.branch,
        r.image_digest, r.config_hash, r.input_generations, r.state,
@@ -954,6 +1050,74 @@ def run_product_counts(conn, name):
     pattern = _run_prefix_pattern(name)
     rows = _rows(conn, _RUN_PRODUCT_COUNTS, (pattern, pattern, pattern))
     return {row["product"]: row["n"] for row in rows}
+
+
+def run_build_provenance(conn, name):
+    """The distinct `(source_sha, container_digest, config_digest,
+    config_snapshot_key)` combinations this run's attempts actually ran
+    under, each with how many attempts carried it — `run compare`'s
+    "what produced this" half, read by the same name-prefix convention
+    every other run reader here uses.
+
+    Ordered by count descending (see `_RUN_BUILD_PROVENANCE`'s own
+    comment): the first row is the dominant build, which for a healthy
+    run is usually the only one.
+    """
+    pattern = _run_prefix_pattern(name)
+    return _rows(conn, _RUN_BUILD_PROVENANCE, (pattern,))
+
+
+def run_container_digest_count(conn, name):
+    """`{"n_distinct": n, "n_attempts": n}` — the single fact behind
+    "every attempt of this run shares one image" (migration 121's
+    acceptance check), without making a reader sum it themselves out of
+    `run_build_provenance`'s full breakdown.
+    """
+    pattern = _run_prefix_pattern(name)
+    rows = _rows(conn, _RUN_CONTAINER_DIGEST_COUNT, (pattern,))
+    return rows[0] if rows else {"n_distinct": 0, "n_attempts": 0}
+
+
+def run_config_overlay(conn, run_id):
+    """This run's `config_overlay` (migration 112), or None.
+
+    Takes `run_id` (the registry's surrogate key), not `name` — the same
+    split `run.py`'s own read of this column uses, because the caller
+    already has a bound `run_row` result in hand (`_cmd_run_compare` does)
+    and re-resolving the name to an id a second time would be a wasted
+    round trip. `psycopg2` decodes the `jsonb` column straight to a dict
+    (or `None`), so nothing here calls `json.loads` on the result — see
+    `run.py`'s own comment on this column for why a second decode would
+    be wrong.
+    """
+    rows = _rows(conn, _RUN_CONFIG_OVERLAY, (int(run_id),))
+    return rows[0]["config_overlay"] if rows else None
+
+
+def run_reference_product_keys(conn, name):
+    """The distinct reference product keys this run's difference images
+    cite, oldest-`rfid`-independent — i.e. the SET of references the run's
+    science actually used, not one row per difference image.
+
+    A `None` entry in the returned list means at least one difference
+    image cites a reference that has no `products` row yet (see
+    `_RUN_REFERENCE_PRODUCT_KEYS`'s LEFT JOIN comment) — printed as `n/a`
+    by the caller, not filtered out, because a reference with no product
+    key yet is a fact about this run's provenance, not noise to hide.
+    """
+    pattern = _run_prefix_pattern(name)
+    rows = _rows(conn, _RUN_REFERENCE_PRODUCT_KEYS, (pattern,))
+    return [row["product_key"] for row in rows]
+
+
+def run_input_identities(conn, name):
+    """The distinct `(exposure_id, sca)` pairs this run's attempts were
+    submitted against — the input side of a comparison, as opposed to
+    `run_reference_product_keys`'s output side.
+    """
+    pattern = _run_prefix_pattern(name)
+    rows = _rows(conn, _RUN_INPUT_IDENTITIES, (pattern,))
+    return [(row["exposure_id"], row["sca"]) for row in rows]
 
 
 def recent_mutations(conn, limit=20, with_draft_columns=None):

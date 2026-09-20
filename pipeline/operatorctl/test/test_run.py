@@ -3597,6 +3597,19 @@ class RunCompareProvenanceTests(unittest.TestCase):
                                lambda conn, n: []), \
              mock.patch.object(actions_mod, "run_product_counts",
                                lambda conn, n: {}), \
+             mock.patch.object(
+                 actions_mod, "run_build_provenance", lambda conn, n: []), \
+             mock.patch.object(
+                 actions_mod, "run_container_digest_count",
+                 lambda conn, n: {"n_distinct": 0, "n_attempts": 0}), \
+             mock.patch.object(
+                 actions_mod, "run_config_overlay",
+                 lambda conn, run_id: None), \
+             mock.patch.object(
+                 actions_mod, "run_reference_product_keys",
+                 lambda conn, n: []), \
+             mock.patch.object(
+                 actions_mod, "run_input_identities", lambda conn, n: []), \
              mock.patch.object(main_mod, "_run_columns",
                                lambda conn: available):
             main_mod._cmd_run_compare(object(), args, out)

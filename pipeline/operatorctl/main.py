@@ -1641,6 +1641,12 @@ def _cmd_run_compare(conn, args, out):
             "tally": _actions.run_attempt_tally(conn, name),
             "walltime": _actions.run_stage_walltime(conn, name),
             "products": _actions.run_product_counts(conn, name),
+            "build": _actions.run_build_provenance(conn, name),
+            "digests": _actions.run_container_digest_count(conn, name),
+            "overlay": _actions.run_config_overlay(conn, run["run_id"]),
+            "reference_keys": _actions.run_reference_product_keys(
+                conn, name),
+            "inputs": _actions.run_input_identities(conn, name),
         })
 
     print("RUN COMPARE  %s  vs  %s" % (args.run_a, args.run_b), file=out)
@@ -1683,6 +1689,91 @@ def _cmd_run_compare(conn, args, out):
             print("    stage %-20s min/p50/p90/max ms = %s/%s/%s/%s (n=%s)"
                   % (stage["stage_name"], stage["min_ms"], stage["p50_ms"],
                      stage["p90_ms"], stage["max_ms"], stage["n"]), file=out)
+
+    # ATTEMPT-LEVEL PROVENANCE, BELOW THE TALLIES. `_PROVENANCE_FIELDS`
+    # above prints what the REGISTRY declares a run to be (`branch`,
+    # `image_digest`, `config_hash`); this block prints what its attempts
+    # actually RAN under, plus what they consumed and produced -- the
+    # difference matters because a job definition can be repinned or a
+    # `--set` overlay applied mid-run without the registry row itself
+    # changing, and that is exactly the mismatch an operator comparing two
+    # runs needs to see rather than infer from a rerun. One query per run
+    # per fact (see each `_actions.run_*` docstring) -- no per-attempt
+    # queries here, the same discipline the tallies above already follow.
+    print("", file=out)
+    print("provenance (attempts)", file=out)
+    for label, data in zip((args.run_a, args.run_b), rows):
+        print("", file=out)
+        print("  %s" % label, file=out)
+
+        # DISTINCT container_digest COUNT FIRST, ON ITS OWN LINE: this is
+        # the single number migration 121's acceptance check reads
+        # (`count(distinct container_digest) = 1` across a run), and an
+        # operator should be able to answer "did this run build cleanly"
+        # without reading the full breakdown below it.
+        digests = data["digests"]
+        print("    container_digest        : %s distinct across %s "
+              "attempt(s)" % (digests["n_distinct"], digests["n_attempts"]),
+              file=out)
+
+        # THE FULL BUILD BREAKDOWN, one line per DISTINCT (source_sha,
+        # container_digest, config_digest, config_snapshot_key)
+        # combination this run's attempts actually carried, dominant
+        # combination first (`run_build_provenance`'s own ORDER BY). A run
+        # with no attempts yet prints nothing here -- not a fabricated
+        # "n/a" row -- because there is no combination to report, which is
+        # a different fact than "every attempt agreed on one."
+        if not data["build"]:
+            print("    build                   : (no attempts)", file=out)
+        else:
+            for combo in data["build"]:
+                print("    build (n=%-4s)          : source_sha=%s "
+                      "container_digest=%s config_digest=%s "
+                      "config_snapshot_key=%s"
+                      % (combo["n"],
+                         combo["source_sha"] or "n/a",
+                         combo["container_digest"] or "n/a",
+                         combo["config_digest"] or "n/a",
+                         combo["config_snapshot_key"] or "n/a"), file=out)
+
+        # THE SCRATCH SCIENCE OVERLAY (migration 112), when this run has
+        # one. NULL for every production run and for a scratch run created
+        # without `--set` -- printed as a dash, not the Python "None" a
+        # bare `%s` would give a reader who has never seen a jsonb column
+        # decoded, and omitted entirely (not a "overlay: -" line) so a
+        # comparison between two ordinary runs is not padded with a field
+        # neither one used.
+        overlay = data["overlay"]
+        if overlay:
+            print("    config_overlay          : %s" % json.dumps(
+                overlay, sort_keys=True, separators=(",", ": ")), file=out)
+
+        # THE REFERENCE PRODUCT KEYS this run's difference images cite --
+        # the OUTPUT-side provenance question ("which reference set did
+        # this science actually use"), as opposed to the input identities
+        # just below. `n/a` for a reference with no product row yet (see
+        # `_RUN_REFERENCE_PRODUCT_KEYS`'s LEFT JOIN comment); "(none)" when
+        # the run has produced no difference images to cite one from --
+        # the two are different facts and print differently.
+        keys = data["reference_keys"]
+        if not keys:
+            print("    reference product keys  : (none)", file=out)
+        else:
+            print("    reference product keys  : %s" % ", ".join(
+                key or "n/a" for key in keys), file=out)
+
+        # THE INPUT IDENTITIES -- distinct (exposure_id, sca) pairs this
+        # run's attempts were submitted against. This is the run's INPUT
+        # side, read from `attempts` directly rather than through the
+        # product tables, so it is populated even for a run whose attempts
+        # have not yet produced anything to join to.
+        inputs = data["inputs"]
+        if not inputs:
+            print("    input (expid, sca)      : (none)", file=out)
+        else:
+            print("    input (expid, sca)      : %s" % ", ".join(
+                "(%s, %s)" % (expid, sca) for expid, sca in inputs),
+                file=out)
     return EXIT_OK
 
 
