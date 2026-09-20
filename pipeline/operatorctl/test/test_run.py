@@ -2767,6 +2767,34 @@ class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
                          "rapid-scratch-science")
         self.assertIn("rapid-scratch-science", detail["job_definition_arn"])
 
+    def test_a_scratch_run_at_phase_catalog_load_is_auto_routed_too(self):
+        # THE NON-WINDOWED TWIN of the test above. `catalog-load` (like
+        # `crossmatch`) never resolves `context` before this fix -- that
+        # only happened for `phase in _WINDOWED_PHASES` (`reference`,
+        # `science`) -- so `submit_run`'s own fallback resolution
+        # (`_resolve_submission_env(job_type, lane=lane)`, no
+        # `job_definition_family`) silently dropped the scratch auto-
+        # routing and would have submitted under the PRODUCTION
+        # `rapid-pipeline-bulk` definition. Measured live: AccessDenied on
+        # `batch:SubmitJob` against `rapid-pipeline-bulk:85` for a scratch
+        # run's `catalog-load` (2026-09-20 scratch demonstration).
+        gather_patcher = mock.patch.object(
+            self.run_mod, "gather_for_run",
+            lambda *a, **k: ("catalog-load", ["unit-a"]))
+        gather_patcher.start()
+        self.addCleanup(gather_patcher.stop)
+
+        self.run_mod.start_run_audited(
+            conn=object(), idempotency_key="catalog-load-key",
+            name="memprofile-32g-20260913", phase="catalog-load",
+            proc_date="20260920", reason="job memory profile",
+            dry_run=True, out=_null_out())
+
+        detail = self.audit_calls[0]["detail"]
+        self.assertEqual(detail["job_definition_family"],
+                         "rapid-scratch-bulk")
+        self.assertIn("rapid-scratch-bulk", detail["job_definition_arn"])
+
 
 class StartRunAuditedReferenceImageIdTests(unittest.TestCase):
     """`--reference-image-id` — pin every unit `run start` gathers to one

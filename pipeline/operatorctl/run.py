@@ -997,6 +997,30 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
             "unknown phase %r; run start knows %s" % (phase, ", ".join(table))
         ) from None
 
+    # THE NON-WINDOWED TWIN of the windowed branch's own pre-resolution
+    # above. `job_definition_family` (auto-set for a scratch run a few
+    # lines up, from `_SCRATCH_DEFINITIONS`) reaches Batch only through
+    # `context` -- `submit_run`'s OWN fallback (`if context is None:
+    # context = _resolve_submission_env(job_type, lane=lane)`) never
+    # receives it, because that call site was written before this
+    # function grew the auto-resolution and nothing threaded the new
+    # parameter through it. Measured live: `catalog-load` for a scratch
+    # run submitted under `rapid-pipeline-bulk` (the PRODUCTION
+    # definition) instead of `rapid-scratch-bulk` and was correctly
+    # refused by IAM -- AccessDeniedException on `batch:SubmitJob`
+    # against `rapid-pipeline-bulk:85` (2026-09-20 scratch demonstration,
+    # the first time either post-DB phase was ever submitted for a
+    # scratch run). Resolving `context` here, once `job_type` is known and
+    # before `submit_run` is ever called, closes the gap for BOTH
+    # non-windowed phases (`catalog-load`, `crossmatch`) without touching
+    # the windowed branch's own earlier resolution (which needs
+    # `s3_client`/`manifest_bucket` before gathering even starts, for
+    # `reference`'s coadd-input publish step -- a fact this phase class
+    # never has).
+    if context is None and job_definition_family is not None:
+        context = _resolve_submission_env(
+            job_type, lane=lane, job_definition_family=job_definition_family)
+
     detail = {"phase": phase, "job_type": job_type, "gathered": len(units),
               "cap": cap, "proc_date": proc_date,
               "window_start": window_start, "window_end": window_end,
