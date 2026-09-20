@@ -4551,6 +4551,27 @@ class RunCreateScienceOverlayTests(unittest.TestCase):
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         self.addCleanup(self._restore_env)
 
+        # `submission_role` is patched to a transparent pass-through, the
+        # `SubmitRunSubmissionRoleTests` idiom: the overlay write (139) is
+        # granted only to `rapid_scratch`/`rapid_scratch_write`, so this
+        # call site widens with `submission_role`, and the real SET
+        # ROLE/SAVEPOINT mechanics are covered against `_FakeConn` in
+        # `test_session.py`, not re-modeled here. Patched at its SOURCE
+        # module (`_cmd_run_create` imports it locally, unlike `run.py`'s
+        # module-scope import, so there is no `operatorctl_main.
+        # submission_role` attribute to patch).
+        import contextlib
+        from pipeline.operatorctl import session as session_mod
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            yield conn
+
+        role_patcher = mock.patch.object(
+            session_mod, "submission_role", fake_submission_role)
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
+
     def _restore_env(self):
         import os
         if self._saved_sw is None:

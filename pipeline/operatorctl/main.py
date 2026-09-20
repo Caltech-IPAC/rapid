@@ -1347,11 +1347,20 @@ def _cmd_run_create(conn, args, out):
         # cannot happen on this path (the `already_present`/`run_id is not
         # None` guard above already excludes a replay) but is handled
         # rather than assumed impossible.
+        # UNDER `submission_role` -- `derived.scratch_set_config_overlay`
+        # is ALSO granted only to `rapid_scratch`/`rapid_scratch_write`
+        # (139), never `rapid_operator`, the same identity defect this
+        # whole call site exists to close. Measured live: `permission
+        # denied for function scratch_set_config_overlay` the first time
+        # 139 actually reached a live call, immediately after 139 itself
+        # replaced the bare UPDATE (2026-09-20 scratch demonstration).
         from pipeline.operatorctl.contract import call_function
-        overlay_result = call_function(
-            conn,
-            "SELECT derived.scratch_set_config_overlay(%s, %s::jsonb)",
-            (result["run_id"], json.dumps(overlay)))
+        from pipeline.operatorctl.session import submission_role
+        with submission_role(conn):
+            overlay_result = call_function(
+                conn,
+                "SELECT derived.scratch_set_config_overlay(%s, %s::jsonb)",
+                (result["run_id"], json.dumps(overlay)))
         if not overlay_result:
             print("  WARNING: science overlay NOT recorded (run_id %s "
                   "already had one) -- config_hash %s was still computed "
