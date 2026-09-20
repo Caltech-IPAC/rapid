@@ -653,6 +653,30 @@ def candidates(conn, states=RECONCILED_STATES, run_id_prefix=None,
         names = [description[0] for description in cur.description]
         rows = [dict(zip(names, row)) for row in cur.fetchall()]
     conn.rollback()  # read-only; do not hold a transaction open
+    # THE WIDENED-ROLE GAP THIS BARE ROLLBACK LEFT OPEN. `pipeline.
+    # operatorctl.session.submission_role` widens `conn` to a submission-
+    # capable role for exactly the caller's block (`register_run_audited`
+    # wraps `run_scoped_registration`, which calls `resolve_scope` ->
+    # `candidates` -- this function -- FIRST, before any attempt's own
+    # `_transaction(conn)`). `rapid_db_connect.transaction()` re-applies the
+    # widening after every commit/rollback it performs (`_reassert_role`);
+    # this function's own `conn.rollback()` predates that mechanism and
+    # never learned to call it, so the FIRST caller after `submission_role`
+    # widened `conn` silently lost the widening right here -- measured
+    # live, 2026-09-20: `rapidctl run register --apply`'s first candidate
+    # attempt failed `permission denied for function
+    # scratch_mark_consumed` while every later attempt in the same batch
+    # (processed after ITS OWN `_transaction(conn)` reasserted the role on
+    # exit) succeeded. `candidates()` has two other, unaffected callers
+    # (`dispatch_registration`, `run_pass`) that never widen `conn` at all,
+    # so this reassert is a no-op for them -- `_WIDENED_ROLES` has nothing
+    # recorded for a connection `submission_role` never touched.
+    try:
+        from database.modules.utils.rapid_db_connect import _reassert_role
+    except ImportError:  # pragma: no cover - driver-less stub tier
+        pass
+    else:
+        _reassert_role(conn)
     return rows
 
 
