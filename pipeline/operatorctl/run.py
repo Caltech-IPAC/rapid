@@ -131,6 +131,12 @@ _FAMILY_OVERRIDE_KIND = "scratch"
 #: waiting scientist the whole iteration rather than a retry nobody watches.
 _SCRATCH_LANE = "prompt"
 
+#: The lane every non-scratch run takes when its driver names none — the
+#: value `run start --lane` carried as its own default until the tier
+#: policy above needed "unset" to be distinguishable from "bulk, please".
+#: Production's resolved lane is therefore unchanged by that policy.
+_DEFAULT_LANE = "bulk"
+
 _SCRATCH_DEFINITIONS = {
     "science": "rapid-scratch-science",
     "reference": "rapid-scratch-bulk",
@@ -803,8 +809,9 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     # deliberate choice; only `None` — what an in-process caller passes — is
     # filled in. Production never reaches this branch: its runs are not kind
     # `scratch`.
-    if lane is None and run["kind"] == _FAMILY_OVERRIDE_KIND:
-        lane = _SCRATCH_LANE
+    if lane is None:
+        lane = (_SCRATCH_LANE if run["kind"] == _FAMILY_OVERRIDE_KIND
+                else _DEFAULT_LANE)
         scope += ":lane=%s" % lane
 
     # THE RUN'S EXECUTION ENVELOPE (migration 122), read from the row just

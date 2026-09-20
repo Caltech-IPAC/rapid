@@ -466,8 +466,18 @@ def build_parser():
                            help="bound on units submitted; default is "
                                 "everything the gatherer returns")
     run_start.add_argument(
-        "--lane", choices=("bulk", "prompt"), default="bulk",
-        help="which Batch lane to submit to. bulk (the DEFAULT) is the "
+        # DEFAULT None, NOT "bulk". The lane a submission takes is resolved
+        # in `start_run_audited`, where the run's KIND is known: a scratch
+        # run takes the on-demand lane (Ben, 2026-09-20 — this tier does not
+        # run on Spot, after a reclamation cost a 40-minute job its whole
+        # iteration), and everything else takes bulk exactly as before.
+        # Carrying "bulk" here made that resolution unreachable: the flag
+        # always arrived set, so "unset" could never be told from "the
+        # driver asked for bulk".
+        "--lane", choices=("bulk", "prompt"), default=None,
+        help="which Batch lane to submit to. Unset lets the run's tier "
+             "choose: a scratch run takes prompt (on-demand), everything "
+             "else bulk. bulk is the "
              "Spot lane, ceilinged at the Spot vCPU quota; prompt is the "
              "on-demand lane, ceilinged at the on-demand quota. The two "
              "draw on different quotas and neither overflows into the "
