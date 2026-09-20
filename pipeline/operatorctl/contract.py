@@ -173,13 +173,42 @@ def call_function(conn, sql, params):
     # Imported here rather than at module import time: the stub tier puts a
     # fake psycopg2 into sys.modules, and a module-level import would bind
     # whichever object existed when this module was first imported.
+    # `_reassert_role`, likewise: driver-less in the stub tier, and this
+    # module has no other reason to import a psycopg2-adjacent helper at
+    # module scope.
+    try:
+        from database.modules.utils.rapid_db_connect import _reassert_role
+    except ImportError:  # pragma: no cover - driver-less stub tier
+        _reassert_role = None
     try:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             row = cur.fetchone()
         conn.commit()
+        # THE SAME GAP `pipeline.registration.consumer.candidates` closed
+        # (2026-09-20 scratch demonstration). `pipeline.operatorctl.session
+        # .submission_role` widens `conn` for one caller's block;
+        # `database.modules.utils.rapid_db_connect.transaction` re-applies
+        # that widening after every commit/rollback IT performs, but this
+        # bare `conn.commit()` predates that mechanism and never learned to
+        # call it -- so a caller issuing a SECOND statement on `conn` after
+        # THIS function's commit (e.g. `_cmd_run_create`'s follow-up
+        # `UPDATE runs SET config_overlay = ...` right after `create_run`
+        # returns) silently loses the widening. Measured live: `rapidctl
+        # run create --set ... --apply` reported success and an audit row,
+        # then the immediately-following overlay UPDATE raised
+        # `InsufficientPrivilege: permission denied for table runs` --
+        # `runs` is owned by `rapid_admin` (108), and the overlay UPDATE ran
+        # as the bare login. `call_function`'s own callers that never widen
+        # `conn` (the ordinary operate-tier path) are unaffected --
+        # `_WIDENED_ROLES` has nothing recorded for a connection
+        # `submission_role` never touched.
+        if _reassert_role is not None:
+            _reassert_role(conn)
     except psycopg2.Error as exc:
         conn.rollback()
+        if _reassert_role is not None:
+            _reassert_role(conn)
         typed = classify(exc)
         if typed is not None:
             raise typed from exc
