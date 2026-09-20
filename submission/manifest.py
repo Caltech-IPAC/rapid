@@ -64,6 +64,18 @@ alter a science product is reachable from the environment. Because the
 manifest and its checksum are bound into the attempt record, an override
 is recorded by construction, which is what lets a promotion gate refuse
 a product built under one.
+
+A second enumerated field, `science_overlay`, joined it for the scratch
+workflow: a scratch run's `--set SECTION.KEY=VALUE` overlay
+(`runs.config_overlay`) is a per-run override of the same science
+configuration `science_config` merges at release time, and the same
+"enumerated field, not an open dict" reasoning applies to it letter for
+letter — it is not a new kind of override, it is the second instance of
+the one kind this schema already names. It rides in the manifest for the
+same reason the window does: a scratch run's overlay must be recorded by
+construction so `has_science_override` catches it, which is what keeps a
+run built under one structurally ineligible for promotion without a
+promotion gate having to know the overlay's shape at all.
 """
 
 import dataclasses
@@ -100,7 +112,51 @@ MIN_ARRAY_SIZE = 2
 #: a manifest. Adding an override is a deliberate schema change reviewed as
 #: one.
 OVERRIDE_REFERENCE_WINDOW = "reference_observation_window"
-OVERRIDE_FIELDS = (OVERRIDE_REFERENCE_WINDOW,)
+#: The scratch workflow's `--set SECTION.KEY=VALUE` overlay
+#: (`runs.config_overlay`), carried into the manifest so a scratch run's
+#: science-config override is recorded by construction exactly as the
+#: reference window is. See the module docstring's "since O1" section for
+#: why this is the SECOND instance of the one enumerated-override kind
+#: rather than a new kind of its own.
+OVERRIDE_SCIENCE_OVERLAY = "science_overlay"
+OVERRIDE_FIELDS = (OVERRIDE_REFERENCE_WINDOW, OVERRIDE_SCIENCE_OVERLAY)
+
+
+def _validate_science_overlay(raw: Any) -> "dict[str, dict[str, Any]]":
+    """Check the overlay's shape: `{section: {key: scalar}}`, nothing else.
+
+    The same nested shape `science_config`'s merge and `runs.config_overlay`
+    already use — this does not invent a shape, it enforces the one that
+    exists everywhere else the overlay is carried. Raises `ValueError`
+    naming what was wrong, in the style of
+    `ReferenceObservationWindow.from_dict`'s own validation: a missing or
+    malformed overlay is refused here, at manifest construction, rather
+    than reaching a stage that expects the shape and fails less legibly.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"science_overlay must be a mapping of section name to a "
+            f"mapping of key to value; got {type(raw).__name__}")
+    for section, keys in raw.items():
+        if not isinstance(section, str):
+            raise ValueError(
+                f"science_overlay section names must be strings; got "
+                f"{section!r} ({type(section).__name__})")
+        if not isinstance(keys, dict):
+            raise ValueError(
+                f"science_overlay[{section!r}] must be a mapping of key to "
+                f"value; got {type(keys).__name__}")
+        for key, value in keys.items():
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"science_overlay[{section!r}] key names must be "
+                    f"strings; got {key!r} ({type(key).__name__})")
+            if isinstance(value, (dict, list)):
+                raise ValueError(
+                    f"science_overlay[{section!r}][{key!r}] must be a "
+                    f"scalar (str, number, bool); got "
+                    f"{type(value).__name__}")
+    return raw
 
 
 @dataclasses.dataclass(frozen=True)
@@ -447,7 +503,8 @@ class Manifest:
                  batch_id: str | None = None,
                  job_type: str = JOB_TYPE_SCIENCE,
                  reference_observation_window: (
-                     "ReferenceObservationWindow | None") = None):
+                     "ReferenceObservationWindow | None") = None,
+                 science_overlay: "dict[str, dict[str, Any]] | None" = None):
         self.units: tuple[ProcessingUnit, ...] = tuple(units)
         self.batch_id = batch_id
         # Validated at construction, so an invalid job type cannot reach
@@ -482,10 +539,14 @@ class Manifest:
                 + ". Rejected at manifest construction, before any attempt "
                 "is claimed, for a submission that cannot run.")
         self.job_type = job_type
-        # The sole enumerated science override. None means "no override":
+        # The two enumerated science overrides. None means "no override":
         # the window's authoritative value is release content, and the
-        # gathering layer reads it there.
+        # gathering layer reads it there; the overlay's authoritative value
+        # (absent an override) is the release's own science_config.
         self.reference_observation_window = reference_observation_window
+        self.science_overlay = (
+            _validate_science_overlay(science_overlay)
+            if science_overlay is not None else None)
         if not self.units:
             raise ValueError("a manifest needs at least one processing unit")
         if len(self.units) > MAX_ARRAY_SIZE:
@@ -537,7 +598,8 @@ class Manifest:
                 and self.batch_id == other.batch_id
                 and self.job_type == other.job_type
                 and (self.reference_observation_window
-                     == other.reference_observation_window))
+                     == other.reference_observation_window)
+                and self.science_overlay == other.science_overlay)
 
     @property
     def has_science_override(self) -> bool:
@@ -552,8 +614,12 @@ class Manifest:
     def overrides_to_dict(self) -> dict[str, Any]:
         """The enumerated overrides that are actually set, serializable."""
         window = self.reference_observation_window
-        return ({OVERRIDE_REFERENCE_WINDOW: window.to_dict()} if window
-                else {})
+        overrides: dict[str, Any] = {}
+        if window is not None:
+            overrides[OVERRIDE_REFERENCE_WINDOW] = window.to_dict()
+        if self.science_overlay is not None:
+            overrides[OVERRIDE_SCIENCE_OVERLAY] = self.science_overlay
+        return overrides
 
     @property
     def workload_class(self) -> str:
@@ -712,6 +778,9 @@ class Manifest:
         window_raw = raw_overrides.get(OVERRIDE_REFERENCE_WINDOW)
         window = (ReferenceObservationWindow.from_dict(window_raw)
                   if window_raw is not None else None)
+        overlay_raw = raw_overrides.get(OVERRIDE_SCIENCE_OVERLAY)
+        overlay = (_validate_science_overlay(overlay_raw)
+                  if overlay_raw is not None else None)
 
         # The job type is threaded into every unit's reconstruction: it
         # selects the payload type. A manifest names its job type once, for
@@ -721,7 +790,8 @@ class Manifest:
                         for u in raw["units"]),
                        batch_id=raw.get("batch_id"),
                        job_type=job_type,
-                       reference_observation_window=window)
+                       reference_observation_window=window,
+                       science_overlay=overlay)
         # The recorded size is checked against the reconstructed one: a
         # mismatch means the array was sized from something other than
         # the units actually listed.

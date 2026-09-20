@@ -116,6 +116,21 @@ _WINDOWED_PHASES = ("reference", "science")
 #: line is the exact class of thing that must not be possible by accident.
 _FAMILY_OVERRIDE_KIND = "scratch"
 
+#: The Batch job definitions a scratch run's phases submit to, by phase.
+#: `rapid-batch.yaml` defines exactly two, mirroring the two pipeline-image
+#: definitions' workload split: the science definition is prompt-class and
+#: the bulk one carries every bulk-class phase. A phase absent from this map
+#: falls through to the parameter tree, which is the right default for one
+#: this milestone does not route (`statistics`, `merge-dedup`) -- better a
+#: phase that submits to the tree's definition and is refused by IAM than one
+#: silently routed to a definition nobody checked.
+_SCRATCH_DEFINITIONS = {
+    "science": "rapid-scratch-science",
+    "reference": "rapid-scratch-bulk",
+    "catalog-load": "rapid-scratch-bulk",
+    "crossmatch": "rapid-scratch-bulk",
+}
+
 #: The only phase it may be named for. The probe definitions are
 #: science-class; route validation in the container checks job type, class
 #: and queue, so any other phase would be rejected there anyway — refusing
@@ -685,6 +700,50 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
         scope += ":reference-image-id=%s" % reference_image_id
 
     _check_job_definition_family(conn, name, phase, job_definition_family)
+
+    # A SCRATCH RUN ROUTES TO THE SCRATCH JOB DEFINITIONS, AUTOMATICALLY.
+    #
+    # A route names an SSM parameter path, not a definition name
+    # (`submission/routes.py`: `Route(JOB_TYPE_SCIENCE, ...,
+    # "batch/job-definition-science", ...)`), and
+    # `pipeline/operator/submission.py` reads the name out of the parameter
+    # tree at submit time. That tree is deployment-wide, so every run --
+    # production or scratch -- resolved to `rapid-pipeline-science` /
+    # `rapid-pipeline-bulk`. A scratch run submitting to production's
+    # definition is exactly what the scratch tier exists to prevent, and it
+    # is not a theoretical worry: the first live `run start --apply` under a
+    # scratch run tried to submit to
+    # `job-definition/rapid-pipeline-science:85` and was refused by the
+    # ScratchSubmitter policy, which scopes SubmitJob to `rapid-scratch-*`.
+    # The IAM fence caught the routing bug; this is the routing fix.
+    #
+    # REUSING THE FAMILY OVERRIDE RATHER THAN ADDING A MECHANISM.
+    # `submission.resolve_submission_binding` already accepts a
+    # `job_definition_family` that replaces the tree's value for one
+    # submission, and its gate already lives HERE, beside the run row whose
+    # `kind` it reads. Defaulting that family for a scratch run is therefore
+    # the same one-line substitution the probe definitions already use, and
+    # it leaves production's resolution byte-for-byte alone: a production run
+    # passes no family and reads the tree exactly as before.
+    #
+    # AN EXPLICIT --job-definition-family STILL WINS. `_check_job_definition_
+    # family` has already refused it for anything but a scratch science
+    # phase, so a caller who named one is a scratch run naming a probe
+    # definition deliberately; overriding their choice here would silently
+    # undo the measurement they asked for.
+    if job_definition_family is None:
+        from pipeline.operatorctl.actions import run_row
+
+        run = run_row(conn, name)
+        if run is not None and run["kind"] == _FAMILY_OVERRIDE_KIND:
+            # The workload class the route would have used. `science` is
+            # prompt-class and `reference` bulk-class (`submission/routes.py`
+            # header: "science is prompt-class ... the reference-image
+            # definition's command names the bulk class"), and the two
+            # scratch definitions mirror that split one for one.
+            job_definition_family = _SCRATCH_DEFINITIONS.get(phase)
+            if job_definition_family is not None:
+                scope += ":job-definition-family=%s" % job_definition_family
     # CHECKED HERE, before the registry binding and before anything is
     # gathered — the same placement `_check_job_definition_family` uses and
     # for the same reason: a refused `run start` writes no audit row at

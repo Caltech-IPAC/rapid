@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from submission.manifest import (MAX_ARRAY_SIZE, OVERRIDE_REFERENCE_WINDOW,
+                                 OVERRIDE_SCIENCE_OVERLAY,
                                  Manifest, ProcessingUnit,
                                  ReferenceObservationWindow)
 from submission.routes import JOB_TYPE_REFERENCE_IMAGE
@@ -291,4 +292,81 @@ def test_a_version_3_unit_shape_is_refused_even_at_the_current_version():
     raw = Manifest(units(3), batch_id="b").to_dict()
     raw["units"][0] = {"exposure": 90210, "sca": 1, "fields": {}}
     with pytest.raises(ValueError, match="payload"):
+        Manifest.from_dict(raw)
+
+
+# ---------------------------------------------------------------------------
+# The science_overlay override — the scratch workflow's second enumerated
+# field, joining reference_observation_window as an OVERRIDE_FIELDS member.
+# ---------------------------------------------------------------------------
+
+def test_the_science_overlay_round_trips():
+    overlay = {"differencing": {"threshold": 5.0}, "psf": {"oversample": 3}}
+    manifest = Manifest(units(4), batch_id="b", science_overlay=overlay)
+
+    restored = Manifest.from_json(manifest.to_json())
+
+    assert restored.science_overlay == overlay
+    assert restored.has_science_override is True
+    assert restored == manifest
+
+
+def test_the_science_overlay_is_serialized_under_its_enumerated_name():
+    overlay = {"differencing": {"threshold": 5.0}}
+    raw = Manifest(units(2), batch_id="b", science_overlay=overlay).to_dict()
+    assert raw["overrides"] == {OVERRIDE_SCIENCE_OVERLAY: overlay}
+
+
+def test_an_overlay_changes_the_checksum():
+    # Same property the reference window is pinned on: the override must be
+    # inside the checksum for "recorded by construction" to hold.
+    plain = Manifest(units(5), batch_id="b").checksum()
+    overridden = Manifest(
+        units(5), batch_id="b",
+        science_overlay={"differencing": {"threshold": 5.0}}).checksum()
+    assert overridden != plain
+
+
+def test_adding_a_science_overlay_sets_has_science_override():
+    # THE PROPERTY THE ENUMERATED FIELD EXISTS TO PRESERVE: has_science_
+    # override is `any(... for name in OVERRIDE_FIELDS)`, so a manifest
+    # carrying an overlay and NO reference-window override must still be
+    # structurally ineligible for promotion. A regression here would mean
+    # a scratch run's overlay silently produced a promotable-looking
+    # product.
+    plain = Manifest(units(3), batch_id="b")
+    assert plain.has_science_override is False
+
+    overlaid = Manifest(units(3), batch_id="b",
+                        science_overlay={"differencing": {"threshold": 5.0}})
+    assert overlaid.has_science_override is True
+    # And independently of the reference window: neither override field
+    # implies the other, they are both simply members of OVERRIDE_FIELDS.
+    assert overlaid.reference_observation_window is None
+
+
+def test_a_non_mapping_science_overlay_is_refused():
+    with pytest.raises(ValueError, match="science_overlay"):
+        Manifest(units(2), batch_id="b", science_overlay=["not", "a", "dict"])
+
+
+def test_a_science_overlay_with_a_non_mapping_section_is_refused():
+    with pytest.raises(ValueError, match="science_overlay"):
+        Manifest(units(2), batch_id="b",
+                 science_overlay={"differencing": 5.0})
+
+
+def test_a_science_overlay_with_a_nested_mapping_value_is_refused():
+    # The overlay is {section: {key: SCALAR}} — a nested mapping or list
+    # value is the open-dict shape rule 11 (and O1's own enumeration
+    # rationale) prohibits.
+    with pytest.raises(ValueError, match="scalar"):
+        Manifest(units(2), batch_id="b",
+                 science_overlay={"differencing": {"nested": {"a": 1}}})
+
+
+def test_an_invalid_science_overlay_from_the_wire_is_refused():
+    raw = Manifest(units(3), batch_id="b").to_dict()
+    raw["overrides"] = {OVERRIDE_SCIENCE_OVERLAY: {"differencing": 5.0}}
+    with pytest.raises(ValueError, match="science_overlay"):
         Manifest.from_dict(raw)
