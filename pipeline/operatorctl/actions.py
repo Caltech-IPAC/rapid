@@ -268,6 +268,35 @@ def archive_run(conn, idempotency_key, name, reason, expected_state=None,
          policy_citation))
 
 
+def delete_run(conn, idempotency_key, name, reason, objects, max_items=None,
+              expected_state=None, dry_run=True, policy_citation=None):
+    """Delete a scratch run's own scratch-prefix objects
+    (``derived.delete_run``, migration 131).
+
+    ``objects`` is the candidate object-version list the CLI enumerated
+    from S3 (S3 is not visible to Postgres): a list of
+    ``{"bucket", "key", "version_id", "size", "modified"}`` dicts, passed
+    through as the ``p_objects`` jsonb array. ``max_items`` bounds how many
+    PENDING items this call advances to a terminal outcome, leaving the
+    rest ``pending`` on the open plan for a resumed call against the SAME
+    ``name`` (found by the run's own key, not by idempotency key, since a
+    resumed call necessarily carries a fresh key each time).
+
+    Refuses a non-scratch run, refuses a caller who is neither the run's
+    owner nor a ``rapid_admin`` member, and refuses -- naming the
+    dependent run(s) -- while the run's own objects are still bound as
+    another run's current product version, still depended on by another
+    run's superseding work units, or while the run's own attempts are
+    still in flight.
+    """
+    return call_function(
+        conn,
+        "SELECT derived.delete_run(%s, %s, %s, %s::jsonb, %s::jsonb, %s, "
+        "                          %s, %s)",
+        (idempotency_key, name, reason, _json(objects),
+         _json(expected_state), max_items, dry_run, policy_citation))
+
+
 def start_run(conn, idempotency_key, name, reason, expected_state=None,
               dry_run=True, policy_citation=None):
     """Move a declared run to ``running`` (migration 121:

@@ -790,6 +790,39 @@ def build_parser():
     _mutation_arguments(run_archive, "a run")
     run_archive.set_defaults(func=_cmd_run_archive)
 
+    run_delete = runsub.add_parser(
+        "delete", help="delete a scratch run's own scratch-prefix objects",
+        description="Deletes a SCRATCH run's own objects under "
+                    "%s/<generation>/<phase>/<name>/... through 052's GC "
+                    "machinery (migration 131: `derived.delete_run`), and "
+                    "tombstones its products/artifacts rows (deleted_at "
+                    "set, key/URI/checksum kept -- nothing is DROPed). "
+                    "Refuses a non-scratch run, refuses a caller who is "
+                    "neither the run's owner nor a rapid_admin member, and "
+                    "refuses -- NAMING the dependent run(s) -- while the "
+                    "run's objects are still needed elsewhere. This "
+                    "process both enumerates S3 (`derived.delete_run` has "
+                    "no S3 access) and drives the deletion "
+                    "(`pipeline/gc/execute.py`'s `Executor`, the same "
+                    "engine `gc-execute-plan` drives) immediately after "
+                    "the plan is opened or resumed, so one command carries "
+                    "a scratch run's delete end to end rather than leaving "
+                    "the operator to chain gc-execute-plan by hand." %
+                    (_SCRATCH_BUCKET,))
+    run_delete.add_argument("--name", required=True, help="the run's name")
+    run_delete.add_argument(
+        "--max-items", type=int, default=None,
+        help="advance at most this many pending object-versions to a "
+             "terminal outcome, then stop -- the rest stay `pending` on "
+             "the open plan for a later `run delete` call against the "
+             "SAME name to resume. Demonstrates and exercises "
+             "interrupt/resume; omitted, the whole candidate list is "
+             "processed in one call")
+    run_delete.add_argument("--region", default=None)
+    run_delete.add_argument("--profile", default=None)
+    _mutation_arguments(run_delete, "a scratch run's own objects")
+    run_delete.set_defaults(func=_cmd_run_delete)
+
     # --- break-glass -------------------------------------------------------
     bg = sub.add_parser(
         "break-glass",
@@ -1834,6 +1867,209 @@ def _cmd_run_archive(conn, args, out):
     return EXIT_OK
 
 
+def _assert_scratch_bucket(bucket, where):
+    """Refuse loudly the instant anything but `_SCRATCH_BUCKET` is named.
+
+    Called before the S3 listing is even issued, and again on every plan
+    item immediately before its delete (`_cmd_run_delete`'s two call
+    sites). A scratch run's own objects can live in exactly one bucket;
+    this is the one guard standing between a bug elsewhere in this
+    function (a bad prefix filter, a plan row from a differently-scoped
+    GC path) and an out-of-scope delete, so it is asserted at both the
+    read side and the write side rather than trusted to have been checked
+    once upstream.
+    """
+    if bucket != _SCRATCH_BUCKET:
+        raise OperatorError(
+            "refusing to touch bucket %r (%s): a scratch run's own "
+            "objects live in %r and nowhere else" %
+            (bucket, where, _SCRATCH_BUCKET))
+
+
+def _enumerate_run_object_versions(s3_client, run_name):
+    """Every object VERSION under `_SCRATCH_BUCKET` that belongs to
+    `run_name`, as the `{"bucket", "key", "version_id", "size", "modified"}`
+    dicts `derived.delete_run`'s `p_objects` takes.
+
+    **WHY A FULL BUCKET LISTING, FILTERED IN PYTHON, RATHER THAN A
+    `Prefix=` SCOPED ONE.** A scratch run's products are keyed
+    `<generation>/<phase>/<run>/...` (measured against the bucket, not a
+    convention this package's Python encodes anywhere -- there is no
+    generation/phase registry to consult here the way `run start` has one
+    for phase gathering). The run name is the THIRD path segment, and
+    `ListObjectVersions`'s `Prefix` only ever anchors the FIRST -- there is
+    no S3-side wildcard for "any generation, any phase, this run". So
+    every version in the bucket is paged and each key's third segment is
+    compared against `run_name` exactly; this is the price of the run name
+    living three segments deep with two unconstrained segments ahead of
+    it, not a shortcut taken for convenience.
+
+    Delete markers are skipped: `derived.delete_run`'s gate is keyed
+    `(plan_id, bucket, object_key, version_id)` against real content
+    versions, and a marker is not a version of the object's bytes for GC's
+    exact-VersionId delete (`pipeline/gc/execute.py`) to act on -- it is
+    S3's own record that the CURRENT version is "no key", which plays no
+    part in this scratch run's own history of bytes.
+    """
+    candidates = []
+    paginator = s3_client.get_paginator("list_object_versions")
+    for page in paginator.paginate(Bucket=_SCRATCH_BUCKET):
+        for version in page.get("Versions", []):
+            key = version["Key"]
+            segments = key.split("/")
+            if len(segments) < 3 or segments[2] != run_name:
+                continue
+            candidates.append({
+                "bucket": _SCRATCH_BUCKET,
+                "key": key,
+                "version_id": version["VersionId"],
+                "size": version.get("Size"),
+                "modified": version["LastModified"].isoformat()
+                            if version.get("LastModified") else None,
+            })
+    return candidates
+
+
+def _cmd_run_delete(conn, args, out):
+    """`run delete` — enumerate, call `derived.delete_run`, execute, resume.
+
+    ONE COMMAND CARRIES THE WHOLE ARC end to end, deliberately unlike the
+    `gc-compute-plan` / `gc-execute-plan` split: a scratch run's own
+    deletion folds compute-and-approve into the single SQL call (131's own
+    header), so the CLI folds enumerate-and-execute around it the same
+    way, rather than making the operator chain `gc-execute-plan` by hand
+    against a `plan_id` this command already has in scope.
+
+    THE THREE STEPS, IN ORDER, every call (dry run or apply):
+
+      1. Enumerate this run's object versions in `_SCRATCH_BUCKET`
+         (`_enumerate_run_object_versions`) -- S3 is not visible to
+         Postgres, so this is always real, even for the dry run, matching
+         `contract.py`'s "the plan shown IS the answer the apply will act
+         on" rule.
+      2. Call `derived.delete_run` with that candidate list. On a dry run
+         this only projects a count and returns. On an apply it opens (or
+         RESUMES, by run name) the plan and marks up to `--max-items`
+         pending items `in-flight` -- intent only; see 131's header for
+         why the SQL side never touches S3 itself.
+      3. Drive `pipeline/gc/execute.py`'s `Executor` against the SAME
+         `plan_id` immediately after -- the identical engine
+         `gc-execute-plan` drives, never a second deleter -- bounded to
+         the same `--max-items` items, then call `derived.delete_run`
+         AGAIN so it can tombstone whatever the Executor resolved and
+         advance the run to `deleted` once every item is terminal.
+
+    RESUME AND IDEMPOTENCY. A `--max-items`-bounded call leaves the
+    remainder `pending` on the open plan; a later `run delete --name
+    <same>` call is found by `run_key`, not by idempotency key (131's own
+    resume rule -- each call mints a fresh key), and continues it. Once
+    every item is `deleted`/`already-absent` the run is `deleted` and the
+    plan is `COMPLETE`; a further call re-enumerates (finding nothing, or
+    only objects newer than the last pass), calls `derived.delete_run`
+    again (whose own item loop has nothing left `pending`/`in-flight` to
+    advance) and succeeds having changed nothing -- the SAME "call it
+    again under a fresh key and it either resumes or is a safe no-op"
+    contract 131's header describes for a fully resolved plan.
+    """
+    from pipeline.operatorctl import actions as _actions
+    from pipeline.gc.execute import Executor
+    from pipeline.gc.plans import GCPlanRepository
+    from pipeline.operatorctl.gc import s3_manifest_reader, still_referenced_check
+
+    import boto3
+    s3_client = boto3.Session(
+        region_name=args.region, profile_name=args.profile).client("s3")
+
+    # STEP 1 — ENUMERATE, ALWAYS, EVEN FOR THE DRY RUN. See the docstring
+    # above and `_enumerate_run_object_versions`'s own for why this cannot
+    # be scoped by an S3 `Prefix=`.
+    objects = _enumerate_run_object_versions(s3_client, args.name)
+    for obj in objects:
+        _assert_scratch_bucket(obj["bucket"], "enumerated object")
+
+    key = args.idempotency_key or new_idempotency_key("run-delete")
+    scope = "runs:%s" % args.name
+
+    # STEP 2 — THE FUNCTION CALL. Dry run: projects a count, mutates
+    # nothing. Apply: opens or resumes the plan and marks up to
+    # `--max-items` pending items `in-flight` (intent only -- no S3 access
+    # from SQL, per 131's header).
+    result = _actions.delete_run(
+        conn, key, args.name, args.reason, objects,
+        max_items=args.max_items, dry_run=not args.apply,
+        policy_citation=args.policy_citation)
+
+    if not args.apply:
+        print(render_plan("run_delete", scope, args.reason, key, result,
+                          args.apply), file=out)
+        return EXIT_OK
+
+    conn.commit()
+    plan_id = result.get("plan_id")
+
+    if plan_id is not None:
+        # STEP 3 — EXECUTE, BOUNDED TO THE SAME --max-items THE FUNCTION
+        # CALL JUST HONOURED. `Executor.execute` has no bound of its own --
+        # it resolves every `pending`/`in-flight` item for the plan in one
+        # pass, which is correct for `gc-execute-plan` (an already-approved
+        # plan an operator reviewed whole) but would defeat `--max-items`
+        # here: the SQL call above deliberately left the remainder
+        # `pending` so a SECOND call could resume it, and handing the
+        # Executor the whole plan would process that remainder in the same
+        # breath. So this calls the Executor's own per-item method
+        # directly, in the SAME package, over the SAME items the function
+        # call marked -- not a new deletion primitive, the existing one's
+        # inner loop capped from outside it the way the SQL side is capped
+        # from outside its own loop.
+        executor = Executor(conn, _S3Versions(s3_client),
+                            actor=_session_user(conn))
+        repo = GCPlanRepository(conn)
+        still_referenced = still_referenced_check(
+            _executor(conn), manifest_reader=s3_manifest_reader())
+
+        items = repo.unresolved_items(plan_id)
+        if args.max_items is not None:
+            items = items[:args.max_items]
+
+        for item in items:
+            _assert_scratch_bucket(item.bucket, "plan item %s" % item.item_id)
+
+        outcomes = []
+        for item in items:
+            outcome = executor._execute_item(item, still_referenced,
+                                             conn.commit)
+            outcomes.append(outcome)
+
+        # STEP 3b — RE-CALL THE FUNCTION so it can tombstone whatever the
+        # Executor just resolved to `deleted`/`already-absent` and advance
+        # the run to `deleted` once nothing is left `pending`/`in-flight`.
+        # A fresh key: this is its own auditable mutation-API call, exactly
+        # as 131's header requires for a resumed call.
+        result = _actions.delete_run(
+            conn, new_idempotency_key("run-delete"), args.name, args.reason,
+            objects, max_items=args.max_items, dry_run=False,
+            policy_citation=args.policy_citation)
+        conn.commit()
+
+        tally = {}
+        for outcome in outcomes:
+            tally[outcome.status] = tally.get(outcome.status, 0) + 1
+        print(render_plan("run_delete", scope, args.reason, key, result,
+                          args.apply), file=out)
+        print("", file=out)
+        print("  items by outcome (this call):", file=out)
+        for status in sorted(tally):
+            print("    %-22s %s" % (status, tally[status]), file=out)
+    else:
+        # A REPLAY, OR A CALL THAT OPENED NO NEW PLAN AND FOUND NOTHING
+        # UNRESOLVED (the fully-resumed, nothing-left-to-do case) --
+        # `derived.delete_run`'s own result carries no `plan_id` only when
+        # replaying, and a replay is nothing new to execute against.
+        print(render_plan("run_delete", scope, args.reason, key, result,
+                          args.apply), file=out)
+    return EXIT_OK
+
+
 def _cmd_bg_open(conn, args, out):
     with break_glass_role(conn) as bg_conn:
         audit_id = actions.break_glass_open(bg_conn, args.reason,
@@ -2174,6 +2410,14 @@ def _cmd_set_release(conn, args, out):
 #: buckets are OUT OF SCOPE and no plan may name them (brief H, "Out of
 #: scope"). Widening it is a later, separately argued change.
 DEFAULT_GC_BUCKETS = ("roman-rapid-products",)
+
+#: The ONE bucket a scratch run's own objects can ever live in. `run
+#: delete` asserts every candidate and every planned item against this
+#: exact bucket before enumerating or deleting anything (`_cmd_run_delete`,
+#: `_assert_scratch_bucket`) -- a scratch run's delete must never be able to
+#: reach `roman-rapid-products` or any other bucket this package touches,
+#: whatever a plan row or an S3 listing claims.
+_SCRATCH_BUCKET = "roman-rapid-scratch"
 
 
 def _read_inventory_file(path):

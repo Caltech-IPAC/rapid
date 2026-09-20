@@ -51,6 +51,15 @@ SQLSTATE_INVARIANT_VIOLATION = "RA011"
 # remedy applies, and both functions' messages say so explicitly.
 SQLSTATE_RUN_STATE_REFUSED = "RA012"
 SQLSTATE_RUN_HAS_OPEN_ATTEMPTS = "RA013"
+# Migration 129's own invariant code (also raised by 131's
+# `derived.delete_run`: wrong run kind, non-owner/non-admin caller, a
+# dependent run still needing this run's objects, or this run's own
+# attempts still in flight) -- classified with RA011 rather than given a
+# separate exception type for the same reason RA012/RA013 are: the
+# PRESENTATION is identical (a refusal, not a failure), and it is the
+# server's own message, not the exception's Python type, that tells the
+# operator which of 129/131's several distinct refusals this one is.
+SQLSTATE_SCRATCH_INVARIANT_VIOLATION = "RA021"
 
 
 class OperatorError(Exception):
@@ -133,7 +142,8 @@ def classify(exc):
         return IdempotencyConflict(_message_of(exc))
     if code in (SQLSTATE_INVARIANT_VIOLATION,
                 SQLSTATE_RUN_STATE_REFUSED,
-                SQLSTATE_RUN_HAS_OPEN_ATTEMPTS):
+                SQLSTATE_RUN_HAS_OPEN_ATTEMPTS,
+                SQLSTATE_SCRATCH_INVARIANT_VIOLATION):
         return InvariantViolation(_message_of(exc))
     return None
 
