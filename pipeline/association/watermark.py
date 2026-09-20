@@ -202,10 +202,27 @@ def advance(cursor, association_set, lane, proc_date, field):
     """
     proc_date = str(proc_date)
     field = int(field)
-    cursor.execute(_ADVANCE_SQL,
-                   (proc_date, field, int(association_set), int(lane),
-                    proc_date, field))
-    return cursor.rowcount == 1
+    # THROUGH THE FUNCTION, NOT THE RAW UPDATE (scratch run kind, first
+    # milestone). Migration 049 defines `derived.advance_association_
+    # watermark` for exactly this CAS — the same UPDATE, the same WHERE
+    # clause, the same "moved = 1" boolean — and this module has been
+    # issuing its own copy of the statement instead. Two consequences, one
+    # of them now blocking: the comparison lived twice and could drift, and
+    # the raw path needs a table-level UPDATE grant on
+    # `association_watermarks`, which the scratch-tier service identity
+    # (rapid_scratch_pipeline) deliberately does not have and must never be
+    # given. Calling the function is what lets a role with EXECUTE and no
+    # table write run the crossmatch phase at all.
+    #
+    # `_ADVANCE_SQL` is kept below as the documented statement the function
+    # mirrors — the module's own comment calls them "the same comparison
+    # written twice", and that is now a statement about a function and its
+    # transcription rather than about two live code paths.
+    cursor.execute(
+        "SELECT derived.advance_association_watermark(%s, %s, %s, %s)",
+        (int(association_set), int(lane), proc_date, field))
+    row = cursor.fetchone()
+    return bool(row[0]) if row is not None else False
 
 
 def is_ahead_of(watermark, proc_date, field):
