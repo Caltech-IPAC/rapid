@@ -4608,20 +4608,37 @@ class RunCreateScienceOverlayTests(unittest.TestCase):
         self.assertEqual(expected_digest, create_params[7])
 
     def test_set_writes_config_overlay_after_the_create_on_apply(self):
-        conn = _FakeConn([self._create_result(), None])
+        # `derived.scratch_set_config_overlay` (139), through
+        # `contract.call_function` -- NOT a bare `UPDATE runs`: `rapid_
+        # scratch` (130) holds no table-level UPDATE on `runs` (owned by
+        # `rapid_admin`, 108), so a bare UPDATE raised `permission denied
+        # for table runs` for a human login (measured live, 2026-09-20).
+        conn = _FakeConn([self._create_result(), True])
         out = io.StringIO()
         operatorctl_main._cmd_run_create(
             conn, self._args(overlay_pairs=["awaicgen.min_frames=5"]), out)
 
         self.assertEqual(2, len(conn.calls))
         update_sql, update_params = conn.calls[1]
-        self.assertIn("UPDATE runs SET config_overlay", update_sql)
+        self.assertIn("derived.scratch_set_config_overlay", update_sql)
         self.assertNotIn("config_overlay_key", update_sql)
-        overlay_json, run_id = update_params
+        run_id, overlay_json = update_params
         self.assertEqual(42, run_id)
         self.assertEqual({"awaicgen": {"min_frames": 5}},
                          json.loads(overlay_json))
         self.assertIn("science overlay recorded", out.getvalue())
+
+    def test_set_warns_when_the_wrapper_refuses_an_already_recorded_overlay(self):
+        # `derived.scratch_set_config_overlay` returns `false` rather than
+        # raising for a run that already has a recorded overlay -- handled
+        # here rather than assumed unreachable, though the `already_
+        # present`/`run_id is not None` guard above should prevent it.
+        conn = _FakeConn([self._create_result(), False])
+        out = io.StringIO()
+        operatorctl_main._cmd_run_create(
+            conn, self._args(overlay_pairs=["awaicgen.min_frames=5"]), out)
+
+        self.assertIn("NOT recorded", out.getvalue())
 
     def test_set_on_a_dry_run_writes_nothing(self):
         # The dry run gathers/validates for real (the digest is computed

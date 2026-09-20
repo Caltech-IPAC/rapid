@@ -1335,14 +1335,32 @@ def _cmd_run_create(conn, args, out):
     # it actually wrote.
     if overlay and args.apply and not result.get("already_present") \
             and result.get("run_id") is not None:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE runs SET config_overlay = %s::jsonb"
-                " WHERE run_id = %s",
-                (json.dumps(overlay), result["run_id"]))
-        conn.commit()
-        print("  science overlay recorded: %s (config_hash %s)"
-              % (overlay, config_hash), file=out)
+        # `derived.scratch_set_config_overlay` (139), NOT A BARE UPDATE.
+        # `runs` is owned by `rapid_admin` (108); `rapid_scratch` (130, the
+        # people tier a human login holds) carries no table-level UPDATE on
+        # it, so a bare `UPDATE runs SET config_overlay = ...` here raised
+        # `permission denied for table runs` for every person who ever
+        # passed `--set` (measured live, 2026-09-20). The wrapper is
+        # SECURITY DEFINER and re-applies the same kind=scratch fence
+        # `--set` already requires above; it returns `false` rather than
+        # raising for a run that already has a recorded overlay, which
+        # cannot happen on this path (the `already_present`/`run_id is not
+        # None` guard above already excludes a replay) but is handled
+        # rather than assumed impossible.
+        from pipeline.operatorctl.contract import call_function
+        overlay_result = call_function(
+            conn,
+            "SELECT derived.scratch_set_config_overlay(%s, %s::jsonb)",
+            (result["run_id"], json.dumps(overlay)))
+        if not overlay_result:
+            print("  WARNING: science overlay NOT recorded (run_id %s "
+                  "already had one) -- config_hash %s was still computed "
+                  "from the overlay you passed, but the row's own "
+                  "config_overlay was left unchanged" %
+                  (result["run_id"], config_hash), file=out)
+        else:
+            print("  science overlay recorded: %s (config_hash %s)"
+                  % (overlay, config_hash), file=out)
     elif overlay and not args.apply:
         print("  [dry-run] would record science overlay: %s "
               "(config_hash %s)" % (overlay, config_hash), file=out)
