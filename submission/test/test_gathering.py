@@ -102,6 +102,44 @@ class _StubAssociationRepository:
         return self._source.earliest_owed
 
 
+class _FakeSetKindCursor:
+    """The cursor `pipeline.association.sets.set_kind` opens via
+    `conn.cursor()` — a context manager, `execute`/`fetchone`, nothing else,
+    matching that function's own two calls exactly.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, sql, params):
+        self._conn.calls.append((" ".join(sql.split()), params))
+
+    def fetchone(self):
+        return (self._conn.kind,)
+
+
+class _FakeSetKindConn:
+    """A `.conn` double for `gather_crossmatch_units`' non-default
+    `association_set` path (rapid_systems migration 137): just enough to
+    answer `pipeline.association.sets.set_kind`'s single query, and record
+    the call so a test can assert it ran exactly once, scoped to the right
+    set, and not per-field.
+    """
+
+    def __init__(self, kind):
+        self.kind = kind
+        self.calls = []
+
+    def cursor(self):
+        return _FakeSetKindCursor(self)
+
+
 class _StubDataClasses:
     """A `DataClassRepository` stand-in that can also REFUSE.
 
@@ -1487,13 +1525,22 @@ class PostDbGatheringTests(unittest.TestCase):
                      gatherable_catalog_load=None, blocking_crossmatch=(),
                      blocking_per_field=(), watermark=None,
                      earliest_owed=None, watermark_failure=0,
-                     owed_failure=0):
+                     owed_failure=0, conn=None):
             self.scas = list(scas)
             self.fields = list(fields)
             self.per_field = list(per_field)
             self.failure = failure
             self.exit_code = 0
             self.asked_for = []
+            # Only set by the association-set scoping tests (rapid_systems
+            # migration 137): a non-default `association_set` passed to
+            # `gather_crossmatch_units` resolves the set's `kind` via
+            # `pipeline.association.sets.set_kind(handle.conn, ...)`, which
+            # opens `handle.conn.cursor()`. `None` here (every other test)
+            # means those tests never touch this attribute — the default
+            # `association_set=1` path resolves its kind without a lookup
+            # and must not require a `.conn` at all.
+            self.conn = conn
             # (pid, expid, sca, attempt_id, filename) per SCA — the loader's
             # re-source. Keyed by SCA because the real query is per-SCA, so a
             # gatherer that asked for the wrong one would get the wrong rows
@@ -1826,6 +1873,64 @@ class PostDbGatheringTests(unittest.TestCase):
 
         self.assertEqual(units[0].payload.target_tables,
                          ("astroobjects_101", "merges_101"))
+
+    def test_crossmatch_omitting_association_set_names_live_tables_unchanged(
+            self):
+        # ZERO REGRESSION (rapid_systems migration 137): a caller that does
+        # not pass `association_set` at all must get the exact literal
+        # names it always has -- this test passes no `conn` on the Source,
+        # so if the default path ever started resolving a kind via a
+        # lookup it did not need, this would raise AttributeError rather
+        # than silently pass.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101]), "20260808"))
+
+        self.assertEqual(units[0].payload.target_tables,
+                         ("astroobjects_101", "merges_101"))
+
+    def test_crossmatch_association_set_one_names_live_tables_with_no_lookup(
+            self):
+        # Explicitly passing `association_set=1` (the well-known live set)
+        # is the same as omitting it -- no `.conn` needed, because `1`'s
+        # kind is `KIND_LIVE_PROMPT` by the schema's singular-live-set
+        # invariant and is never looked up.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101]), "20260808", association_set=1))
+
+        self.assertEqual(units[0].payload.target_tables,
+                         ("astroobjects_101", "merges_101"))
+
+    def test_crossmatch_non_default_association_set_names_prefixed_tables(
+            self):
+        # THE GAP CLOSED: a scratch run's own set gets its OWN prefixed
+        # family -- `astroobjects_s2_101`/`merges_s2_101`, matching
+        # `derived.association_table_name`'s documented naming for any set
+        # but the live one, via `pipeline.association.sets.table_name`'s
+        # pure-Python mirror.
+        conn = _FakeSetKindConn(kind="reprocessing")
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101], conn=conn), "20260808",
+            association_set=2))
+
+        self.assertEqual(units[0].payload.target_tables,
+                         ("astroobjects_s2_101", "merges_s2_101"))
+        # The kind lookup ran exactly once, scoped to set 2, and not
+        # per-field: `_association_scope`'s own reasoning ("a set's kind
+        # cannot change between this pass's fields") applies here too.
+        self.assertEqual(conn.calls, [("SELECT kind FROM association_sets "
+                                       "WHERE association_set = %s", (2,))])
+
+    def test_crossmatch_multiple_fields_share_one_kind_lookup(self):
+        conn = _FakeSetKindConn(kind="reprocessing")
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101, 202], conn=conn), "20260808",
+            association_set=3))
+
+        self.assertEqual(
+            [u.payload.target_tables for u in units],
+            [("astroobjects_s3_101", "merges_s3_101"),
+             ("astroobjects_s3_202", "merges_s3_202")])
+        self.assertEqual(len(conn.calls), 1)
 
     def test_crossmatch_names_the_source_tables_for_every_completed_sca(self):
         # THE FIX ITSELF (2026-08-14): `source_tables` is built from the

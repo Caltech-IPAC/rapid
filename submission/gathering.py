@@ -46,6 +46,7 @@ import logging
 from typing import Any, Iterable, Iterator, Protocol, Sequence
 
 from database.modules.utils.checked import RapidDBCallFailed
+from pipeline.association import sets as association_sets
 from pipeline.repositories.association import AssociationRepository
 from pipeline.repositories.data_class import DataClassRepository
 from pipeline.repositories.errors import RepositoryQueryFailed
@@ -1960,9 +1961,32 @@ def _next_claimable_field(candidates: Sequence[int], proc_date: str,
     yield ready[0]
 
 
-def gather_crossmatch_units(handle: UnitSource, proc_date: str
+def gather_crossmatch_units(handle: UnitSource, proc_date: str,
+                            association_set: int = 1
                             ) -> Iterator[ProcessingUnit]:
     """Yield crossmatch units — one per (processing date, field).
+
+    `association_set` (rapid_systems migration 137) scopes the OUTPUT
+    tables this unit's crossmatch writes into — `target_tables` below —
+    and defaults to `1`, the well-known live prompt set, so every existing
+    production caller that does not pass it keeps today's exact unprefixed
+    names (`astroobjects_<field>`, `merges_<field>`) and, for `1`
+    specifically, no database round trip is added to resolve them: `1`
+    IS the live set by the schema's own singular-live-set invariant
+    (`association_sets_one_live`), so its kind needs no lookup. A caller
+    naming any other set (a scratch run's, via
+    `derived.scratch_create_association_set`) gets that set's OWN prefixed
+    family instead, computed the same way `pipeline.stages.post_db.
+    create_field_tables` already computes it for the identical two
+    prototypes: `pipeline.association.sets.table_name`, the pure-Python
+    mirror of `derived.association_table_name` this codebase already
+    settled on rather than a second SQL round trip per prototype.
+
+    **`source_tables` IS NOT SCOPED** and never will be by this parameter:
+    crossmatch always reads `sources_<date>_<sca>`, the live sources
+    tables, regardless of association set — DRAFT 049's own design comment
+    is "sources is closed; associations remains open". Only the
+    association OUTPUT tables (`target_tables`) are set-scoped.
 
     **DURABLE-STATE READINESS, NOT OPERATOR SEQUENCING** (co-design ruling 1;
     design/operations.md: "Crossmatch readiness is durable state, not
@@ -2102,14 +2126,36 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
         f"{int(sca[0] if isinstance(sca, (list, tuple)) else sca)}"
         for sca in completed or ())
 
+    # THE ASSOCIATION-SCOPED TARGET TABLES (rapid_systems migration 137,
+    # closing the isolation gap `association_set`'s own parameter doc
+    # above names). `1` is the well-known live set — no lookup needed, its
+    # kind is `KIND_LIVE_PROMPT` by the schema's singular-live-set
+    # invariant — so the default path takes the exact literal names it
+    # always has and adds no database round trip. Any other set's KIND is
+    # resolved ONCE here, outside the per-field loop below — a set's kind
+    # cannot change between this pass's fields, the same "read once,
+    # per-call not per-field" discipline `completed`/`source_tables` above
+    # already follow — via the same read `pipeline.stages.post_db.
+    # _association_scope` already makes for the identical two prototypes,
+    # then `association_sets.table_name` — the pure-Python mirror of
+    # `derived.association_table_name` this codebase already settled on —
+    # computes each field's family.
+    association_set = int(association_set)
+    set_kind = (association_sets.KIND_LIVE_PROMPT if association_set == 1
+               else association_sets.set_kind(handle.conn, association_set))
+
     for field in _next_claimable_field(candidates, proc_date, position,
                                        earliest_owed):
+        target_tables = (
+            association_sets.table_name(
+                "astroobjects", association_set, field, set_kind),
+            association_sets.table_name(
+                "merges", association_set, field, set_kind))
         yield ProcessingUnit(
             payload=payloads.build(
                 JOB_TYPE_CROSSMATCH,
                 proc_date=str(proc_date), field=field,
-                target_tables=(f"astroobjects_{field}",
-                               f"merges_{field}"),
+                target_tables=target_tables,
                 source_tables=source_tables))
 
 

@@ -330,7 +330,8 @@ def _capped(units, cap):
 def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
                    run_name=None, s3_client=None, job_bucket=None,
                    fids=None, reference_set_id=None, psf_set_id=None,
-                   reference_image_id=None):
+                   reference_image_id=None, association_set=None,
+                   run_kind=None):
     """Gather units for `phase`, capped, via the SAME `submission.gathering`
     functions the VPO and `live_w9_ramp` call. Returns `(job_type, units)`.
 
@@ -367,6 +368,26 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
     the `phase == "reference"` branch below has no use for it and is not
     given it; this is enforcement-by-omission of a check made once,
     upstream, not a second copy of that refusal.
+
+    `association_set`/`run_kind` (rapid_systems migration 137) serve ONLY
+    `phase == "crossmatch"`, and unlike `reference_set_id` the value is not
+    read off the `runs` row — a run declares no association set column,
+    only its `kind`. `run_kind` is `run["kind"]`, the SAME value
+    `start_run_audited` already reads via `_bind_registry_row` for the
+    job-definition-family check, passed through rather than re-queried.
+    When `run_kind == "scratch"`, this function resolves the run's OWN
+    scratch association set by calling
+    `derived.scratch_create_association_set(run_name)` — idempotent, safe
+    to call every time crossmatch is started for this run, and cheap: one
+    row lookup-or-insert, not a table scan. For any other kind (production,
+    or `run_kind` left `None` by every caller that predates this
+    parameter), the creator is NOT called at all, and
+    `gathering.gather_crossmatch_units` is invoked exactly as it always was
+    — its own `association_set=1` default resolves the live set with no
+    added database round trip, so the production crossmatch path is
+    byte-for-byte unchanged. `association_set`, if a caller passes one
+    explicitly, wins over resolving one from `run_kind` — mirroring
+    `lane`'s "an explicit value still wins" convention just above.
     """
     if phase in _WINDOWED_PHASES:
         from submission import gathering, routes
@@ -405,6 +426,46 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
         return job_type, units
 
     job_type, gatherer = _phase_table()[phase]
+    if phase == "crossmatch":
+        # SCRATCH ISOLATION (rapid_systems migration 137). Resolved HERE,
+        # not for the other three post-DB-chain phases: `catalog-load`,
+        # `statistics` and `merge-dedup` gather no association-set-scoped
+        # output tables at all, so threading `association_set` through them
+        # would be a parameter with nothing to do. An explicit
+        # `association_set` (a caller who already resolved one) wins over
+        # resolving one from `run_kind` — the same "an explicit value still
+        # wins" rule `lane` follows above.
+        resolved_set = association_set
+        if resolved_set is None and run_kind == _FAMILY_OVERRIDE_KIND:
+            # IDEMPOTENT: a second `run start --phase crossmatch` for the
+            # SAME run_name returns the set this run already created rather
+            # than creating a second one, so calling it on every crossmatch
+            # start (rather than once at `run create`) is safe and adds no
+            # new failure mode — a run's association set, once created, is
+            # stable for the run's lifetime by construction.
+            with dbh.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT derived.scratch_create_association_set(%s)",
+                    (run_name,))
+                resolved_set = cur.fetchone()[0]
+            dbh.conn.commit()
+        # PRODUCTION (`run_kind != "scratch"`, including every caller that
+        # predates this parameter and passes `run_kind=None`) never reaches
+        # the branch above, so `resolved_set` stays `None` here and
+        # `gather_crossmatch_units` is called exactly as it always was —
+        # its own default resolves the live set with no added round trip.
+        if proc_date is not None:
+            if resolved_set is not None:
+                units = list(gatherer(dbh, proc_date,
+                                      association_set=resolved_set))
+            else:
+                units = list(gatherer(dbh, proc_date))
+        else:
+            units = list(gatherer(dbh))
+        if cap is not None:
+            units = _capped(units, cap)
+        return job_type, units
+
     if proc_date is not None:
         units = list(gatherer(dbh, proc_date))
     else:
@@ -906,7 +967,14 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
             s3_client=context["s3_client"] if context else None,
             job_bucket=context["manifest_bucket"] if context else None,
             fids=fids, reference_set_id=reference_set_id,
-            psf_set_id=psf_set_id, reference_image_id=reference_image_id)
+            psf_set_id=psf_set_id, reference_image_id=reference_image_id,
+            # `run["kind"]` — the SAME field already read by
+            # `_bind_registry_row` above and checked at the
+            # job-definition-family/lane branches earlier in this
+            # function — passed through rather than re-queried, so
+            # `gather_for_run` can decide whether phase 'crossmatch' owes
+            # a scratch association set without a second `runs` lookup.
+            run_kind=run["kind"])
     except KeyError:
         table = ("catalog-load", "crossmatch", "statistics", "merge-dedup",
                  "reference", "science")

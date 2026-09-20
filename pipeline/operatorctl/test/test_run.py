@@ -1068,6 +1068,120 @@ class WindowedPhaseDispatchTests(unittest.TestCase):
                 dbh=object(), phase="not-a-real-phase")
 
 
+# ---------------------------------------------------------------------------
+# `run start --phase crossmatch` association-set scoping (rapid_systems
+# migration 137). `gather_for_run` must:
+#   * NOT call `derived.scratch_create_association_set` at all for a
+#     production run (or any caller that passes no `run_kind`) — the zero-
+#     regression requirement on the live crossmatch path;
+#   * call it, and pass the id it returns through to
+#     `gathering.gather_crossmatch_units` as `association_set`, for a
+#     `run_kind="scratch"` run;
+#   * let an explicit `association_set` argument win over resolving one
+#     from `run_kind`, mirroring `lane`'s "an explicit value still wins"
+#     rule elsewhere in this module.
+# `gathering.gather_crossmatch_units` itself is replaced by a fake that
+# records its kwargs — no database — matching `WindowedPhaseDispatchTests`
+# above.
+# ---------------------------------------------------------------------------
+class CrossmatchAssociationSetDispatchTests(unittest.TestCase):
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        from submission import gathering
+
+        self.run_mod = run_mod
+        self.calls = []
+
+        def fake_crossmatch(handle, proc_date, association_set=1):
+            self.calls.append({"proc_date": proc_date,
+                               "association_set": association_set})
+            return iter(())
+
+        patcher = mock.patch.object(
+            gathering, "gather_crossmatch_units", fake_crossmatch)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_production_run_never_calls_the_scratch_creator(self):
+        # `run_kind=None` is what every caller that predates this
+        # parameter passes (and what a production run's `run["kind"]`
+        # threads through as, since it is "production", not "scratch") --
+        # `dbh=object()` has no `.conn`, so touching it at all would raise
+        # AttributeError before the fake gatherer's assertion could fail.
+        job_type, units = self.run_mod.gather_for_run(
+            dbh=object(), phase="crossmatch", proc_date="20260808")
+
+        from submission import routes
+        self.assertEqual(job_type, routes.JOB_TYPE_CROSSMATCH)
+        self.assertEqual(list(units), [])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0]["association_set"], 1)
+
+    def test_a_production_run_kind_never_calls_the_scratch_creator(self):
+        # Same proof, but with `run_kind` explicitly "production" rather
+        # than omitted -- `dbh=object()` still has no `.conn`.
+        self.run_mod.gather_for_run(
+            dbh=object(), phase="crossmatch", proc_date="20260808",
+            run_kind="production")
+
+        self.assertEqual(self.calls[0]["association_set"], 1)
+
+    def test_a_scratch_run_creates_and_passes_its_own_association_set(self):
+        fake_conn = _FakeConn(script=[7])
+        fake_dbh = mock.Mock()
+        fake_dbh.conn = fake_conn
+
+        job_type, units = self.run_mod.gather_for_run(
+            fake_dbh, phase="crossmatch", proc_date="20260808",
+            run_name="scratch-ben-1", run_kind="scratch")
+
+        from submission import routes
+        self.assertEqual(job_type, routes.JOB_TYPE_CROSSMATCH)
+        self.assertEqual(list(units), [])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0]["association_set"], 7)
+        # The creator call itself: one statement, the run's own name, and
+        # the transaction committed -- SECURITY DEFINER but still a write,
+        # and `dbh.conn` here is not inside `start_run_audited`'s own
+        # `conn` transaction (a different connection entirely), so it must
+        # commit for itself.
+        self.assertEqual(len(fake_conn.calls), 1)
+        sql, params = fake_conn.calls[0]
+        self.assertIn("derived.scratch_create_association_set", sql)
+        self.assertEqual(params, ("scratch-ben-1",))
+        self.assertEqual(fake_conn.committed, 1)
+
+    def test_an_explicit_association_set_wins_over_run_kind(self):
+        # A caller that already resolved a set (or wants to force one)
+        # is not overridden by the run_kind-driven resolution -- the
+        # creator must not even be called, so `dbh=object()` (no `.conn`)
+        # proves it.
+        self.run_mod.gather_for_run(
+            dbh=object(), phase="crossmatch", proc_date="20260808",
+            run_name="scratch-ben-1", run_kind="scratch",
+            association_set=42)
+
+        self.assertEqual(self.calls[0]["association_set"], 42)
+
+    def test_other_post_db_chain_phases_ignore_run_kind_and_association_set(self):
+        # `catalog-load`/`statistics`/`merge-dedup` gather no
+        # association-scoped tables at all; a scratch `run_kind` must not
+        # make them try to reach a `.conn` that `dbh=object()` lacks.
+        from submission import gathering
+
+        with mock.patch.object(gathering, "gather_statistics_units",
+                               lambda handle: iter(())):
+            job_type, units = self.run_mod.gather_for_run(
+                dbh=object(), phase="statistics", run_kind="scratch",
+                run_name="scratch-ben-1")
+
+        from submission import routes
+        self.assertEqual(job_type, routes.JOB_TYPE_STATISTICS)
+        self.assertEqual(list(units), [])
+        self.assertEqual(self.calls, [])
+
+
 class SubmitRunSubmissionRoleTests(unittest.TestCase):
     """Stub-tier tests for the identity-fix ruling (2026-09-11):
     `submit_run` must perform its `seams.submit_gathered` call inside
