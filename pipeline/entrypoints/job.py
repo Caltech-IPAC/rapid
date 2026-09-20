@@ -786,7 +786,29 @@ def _run(workload_class: str) -> int:
     # 2-3. The manifest and the full route. Both before any row is touched: a
     # submission with an invalid route must not produce an attempt.
     manifest = load_manifest(job_env, s3_client)
-    parameters = fetch_parameters()
+    # WHICH TREE, NOT WHAT IS IN IT. `RAPID_PARAMETER_PATH` names the
+    # parameter tree this job reads; it does not carry any parameter.
+    # That distinction is what keeps this file's own rule intact -- the
+    # payload's operational configuration still lives in a tree and not in
+    # job-definition environment entries (see `database_connection_inputs`'s
+    # ConfigError) -- while letting the scratch tier have a tree of its own.
+    #
+    # WHY A SECOND TREE AT ALL. The scratch tier runs under its own database
+    # identity (`rapid_scratch_pipeline`, rapid_systems migration 132), and
+    # the secret id is a tree key. With one deployment-wide tree every job,
+    # scratch or production, resolved `rapid/db/service/pipeline`; a scratch
+    # job then asked for the production secret and its own role correctly
+    # refused it -- measured live 2026-09-20 on job a2f712d1. The scratch
+    # tree names the scratch secret instead, and the scratch job role is
+    # scoped to read only that subtree.
+    #
+    # UNSET IS THE PRODUCTION PATH, byte for byte: no variable, the default
+    # argument, the same single recursive call to `/rapid/pipeline` every
+    # production job has always made. A deployment that never sets this
+    # variable cannot tell this change happened.
+    parameter_path = os.environ.get("RAPID_PARAMETER_PATH") or None
+    parameters = (fetch_parameters(parameter_path) if parameter_path
+                  else fetch_parameters())
     route = validate_route(manifest, workload_class, job_env, parameters)
     unit = manifest.unit_for_index(job_env.array_index or 0)
 

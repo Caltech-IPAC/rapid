@@ -712,6 +712,29 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
 
     _check_job_definition_family(conn, name, phase, job_definition_family)
 
+    # CHECKED HERE, before the registry binding and before anything is
+    # gathered — the same placement `_check_job_definition_family` uses and
+    # for the same reason: a refused `run start` writes no audit row at
+    # all, and refusing after gathering has already run would make the
+    # refusal look like it cost something it did not.
+    if reference_image_id is not None and phase != "science":
+        raise RunStartEnvironmentError(
+            "--reference-image-id is accepted only for --phase science; "
+            "got %r. A %r phase's job is to BUILD a reference image, so it "
+            "cannot also be told to reuse one — one of the two would "
+            "silently be ignored" % (phase, phase))
+
+    # THE REGISTRY BINDING (migration 121's ruling), BEFORE THE REPLAY
+    # LOOKUP AND BEFORE ANY GATHERING. A run this command may not submit
+    # under is refused with no audit row at all — the refusal is not a
+    # mutation and must not look like one in the ledger. That is also why
+    # it sits ahead of `_replay_lookup`: a replayed key for a run that has
+    # since been completed must still refuse, rather than returning the
+    # earlier success and implying a submission that will not happen.
+    run = _bind_registry_row(conn, name)
+    run_key = run["run_id"]
+    submission_seq = next_submission_seq(conn, run_key)
+
     # A SCRATCH RUN ROUTES TO THE SCRATCH JOB DEFINITIONS, AUTOMATICALLY.
     #
     # A route names an SSM parameter path, not a definition name
@@ -742,41 +765,23 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     # phase, so a caller who named one is a scratch run naming a probe
     # definition deliberately; overriding their choice here would silently
     # undo the measurement they asked for.
-    if job_definition_family is None:
-        from pipeline.operatorctl.actions import run_row
-
-        run = run_row(conn, name)
-        if run is not None and run["kind"] == _FAMILY_OVERRIDE_KIND:
-            # The workload class the route would have used. `science` is
-            # prompt-class and `reference` bulk-class (`submission/routes.py`
-            # header: "science is prompt-class ... the reference-image
-            # definition's command names the bulk class"), and the two
-            # scratch definitions mirror that split one for one.
-            job_definition_family = _SCRATCH_DEFINITIONS.get(phase)
-            if job_definition_family is not None:
-                scope += ":job-definition-family=%s" % job_definition_family
-    # CHECKED HERE, before the registry binding and before anything is
-    # gathered — the same placement `_check_job_definition_family` uses and
-    # for the same reason: a refused `run start` writes no audit row at
-    # all, and refusing after gathering has already run would make the
-    # refusal look like it cost something it did not.
-    if reference_image_id is not None and phase != "science":
-        raise RunStartEnvironmentError(
-            "--reference-image-id is accepted only for --phase science; "
-            "got %r. A %r phase's job is to BUILD a reference image, so it "
-            "cannot also be told to reuse one — one of the two would "
-            "silently be ignored" % (phase, phase))
-
-    # THE REGISTRY BINDING (migration 121's ruling), BEFORE THE REPLAY
-    # LOOKUP AND BEFORE ANY GATHERING. A run this command may not submit
-    # under is refused with no audit row at all — the refusal is not a
-    # mutation and must not look like one in the ledger. That is also why
-    # it sits ahead of `_replay_lookup`: a replayed key for a run that has
-    # since been completed must still refuse, rather than returning the
-    # earlier success and implying a submission that will not happen.
-    run = _bind_registry_row(conn, name)
-    run_key = run["run_id"]
-    submission_seq = next_submission_seq(conn, run_key)
+    #
+    # READS `run["kind"]` OFF THE ROW `_bind_registry_row` JUST BOUND, not a
+    # second `run_row` query: that row IS this function's own return value
+    # (`actions.run_row`'s shape, validated), so re-fetching it here was a
+    # redundant read that also ran BEFORE the registry binding — reaching a
+    # live database a beat earlier than the function's own contract places
+    # its first read, and doing so unconditionally on every call that names
+    # no explicit family (i.e. almost every call, production included).
+    if job_definition_family is None and run["kind"] == _FAMILY_OVERRIDE_KIND:
+        # The workload class the route would have used. `science` is
+        # prompt-class and `reference` bulk-class (`submission/routes.py`
+        # header: "science is prompt-class ... the reference-image
+        # definition's command names the bulk class"), and the two
+        # scratch definitions mirror that split one for one.
+        job_definition_family = _SCRATCH_DEFINITIONS.get(phase)
+        if job_definition_family is not None:
+            scope += ":job-definition-family=%s" % job_definition_family
 
     # THE RUN'S EXECUTION ENVELOPE (migration 122), read from the row just
     # bound. `--lane` overrides the run's stored lane for THIS submission and

@@ -879,9 +879,15 @@ class RegisterRefImMetaTests(unittest.TestCase):
     def test_the_method_signature_is_the_stored_functions_argument_order(self):
         import inspect as _inspect
 
+        # `run_id`/`attempt_id` (rapid_systems migration 132, SCRATCH
+        # DISPATCH) are keyword-only and trail every positional parameter,
+        # so they carry no positional-order risk of their own -- they are
+        # excluded here rather than folded into SIGNATURE, which stays the
+        # stored function's own argument order and nothing else.
         params = list(_inspect.signature(RAPIDDB.register_refimmeta)
                       .parameters)[1:]
-        self.assertEqual(list(self.SIGNATURE), params)
+        self.assertEqual(list(self.SIGNATURE) + ["run_id", "attempt_id"],
+                         params)
 
     def test_every_value_travels_as_a_parameter_in_signature_order(self):
         db = make_db()

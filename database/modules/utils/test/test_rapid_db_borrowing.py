@@ -240,6 +240,20 @@ class BorrowingHandleTests(unittest.TestCase):
         # is what keeps this test able to catch a REAL slip — an argument
         # silently dropped or reordered — rather than being loosened until it
         # catches nothing.
+        #
+        # AMENDED AGAIN FOR SCRATCH DISPATCH (rapid_systems migration 132).
+        # A non-None run_id is no longer a plain parameter threaded into
+        # `addRefImage`/`addDiffImage` themselves -- it now selects an
+        # entirely different code path, straight to `derived.
+        # scratch_add_refimage`/`derived.scratch_add_diffimage`, which
+        # resolve and fence the run from `attempt_id` themselves and do not
+        # take `run_id` as a raw parameter at all. The invariant this test
+        # protects (the attempt identity arrives as the two trailing
+        # parameters) still holds, but the FUNCTION and the STATEMENT are
+        # now the scratch wrapper's, not the production one's, and the
+        # trailing pair is `(attempt_id, registered_record_sequence)` on
+        # both, since the wrapper hands them straight through to the
+        # production function unchanged (132 §4).
         real = FakeConnection()
         dbh = RAPIDDB.borrowing(real)
         corners = [float(n) for n in range(10)]
@@ -247,15 +261,14 @@ class BorrowingHandleTests(unittest.TestCase):
         dbh.add_refimage(1, 2, 3, 4, 5, 0, 1, "s3://b/ref.fits", "cksum",
                          42, 7, run_id="accept-20260911")
         ref_statement, ref_params = real.statements[-1]
-        self.assertIn("addRefImage", ref_statement)
-        self.assertEqual("accept-20260911", ref_params[-2])
-        self.assertIsNone(ref_params[-1])
+        self.assertIn("scratch_add_refimage", ref_statement)
+        self.assertEqual((42, 7), ref_params[-2:])
 
         dbh.add_diffimage(1, 2, 3, 0, 0, *corners, 1, "s3://b/diff.fits",
                           "cksum", 99, 4, run_id="accept-20260911")
         diff_statement, diff_params = real.statements[-1]
-        self.assertIn("addDiffImage", diff_statement)
-        self.assertEqual("accept-20260911", diff_params[-1])
+        self.assertIn("scratch_add_diffimage", diff_statement)
+        self.assertEqual((99, 4), diff_params[-2:])
 
     def test_the_placeholder_count_matches_the_parameter_count(self):
         # The two new `cast(%s as ...)` placeholders and the two new params

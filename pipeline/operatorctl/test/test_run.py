@@ -1600,11 +1600,21 @@ class StartRunAuditedLaneResolutionTests(unittest.TestCase):
         self.assertNotEqual(prompt_context["queue"], bulk_context["queue"])
 
     def test_lane_prompt_is_carried_on_the_audit_scope_string(self):
+        # This fixture's row is scratch-kind (`_stub_registry_binding`'s
+        # own default), so `phase="science"` with no explicit
+        # `--job-definition-family` is auto-routed to
+        # `rapid-scratch-science` (`_SCRATCH_DEFINITIONS`, rapid_systems
+        # migration 132) and that family joins the scope too, trailing
+        # the lane -- the same scope-growth rule this class's OWN sibling
+        # test below already states for the lane itself. This test is
+        # about the lane fragment specifically, not about suppressing the
+        # family fragment.
         _result, scope = self._start(lane="prompt",
                                      idempotency_key="lane-scope-key")
 
         self.assertEqual(scope,
-                         "run:w9-campaign-1:phase=science:lane=prompt")
+                         "run:w9-campaign-1:phase=science:lane=prompt:"
+                         "job-definition-family=rapid-scratch-science")
         self.assertEqual(self.audit_calls[0]["target_scope"], scope)
 
     def test_lane_bulk_is_also_carried_on_the_audit_scope_string(self):
@@ -1613,11 +1623,16 @@ class StartRunAuditedLaneResolutionTests(unittest.TestCase):
         # always names one (`--lane` defaults to `"bulk"`, never `None`),
         # so an ordinary `rapidctl run start` records which lane it chose
         # even when that lane is the default.
+        #
+        # AND the auto-routed family joins it too, same reasoning as the
+        # prompt-lane test above: this fixture's scratch-kind row gets
+        # `rapid-scratch-science` for `phase="science"` with no override.
         _result, scope = self._start(lane="bulk",
                                      idempotency_key="lane-scope-bulk-key")
 
         self.assertEqual(scope,
-                         "run:w9-campaign-1:phase=science:lane=bulk")
+                         "run:w9-campaign-1:phase=science:lane=bulk:"
+                         "job-definition-family=rapid-scratch-science")
 
 
 if __name__ == "__main__":
@@ -2570,21 +2585,47 @@ class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
         self.assertNotEqual(cap_scope, probe_scope)
 
     def test_no_job_definition_family_leaves_the_tree_family_and_old_scope(self):
-        # Every caller before this brief. The scope string must be byte-for
-        # -byte what it was, so no historical idempotency key is stranded,
-        # and `detail` must not grow a key for an override nobody asked for.
+        # Every caller before this brief, for a NON-WINDOWED phase --
+        # `statistics` is one of the four post-database-chain phases
+        # `_SCRATCH_DEFINITIONS` deliberately leaves unmapped (that map's
+        # own comment: "better a phase that submits to the tree's
+        # definition ... than one silently routed to a definition nobody
+        # checked"), so it is the one phase left where "no override" still
+        # means "no family at all", even for this fixture's scratch-kind
+        # row. `phase="science"` no longer demonstrates that: the
+        # scratch-auto-routing brief (rapid_systems migration 132) gives a
+        # scratch run's OWN science phase `rapid-scratch-science` with no
+        # override needed at all, which is exactly the behaviour
+        # `test_a_scratch_run_at_phase_science_is_auto_routed_with_no_
+        # override` below now asserts.
+        #
+        # The scope string must be byte-for-byte what it was, so no
+        # historical idempotency key is stranded, and `detail` must not
+        # grow a key for an override nobody asked for.
         self.run_mod.start_run_audited(
             conn=object(), idempotency_key="no-override",
-            name="memprofile-32g-20260913", phase="science",
-            reason="no override", dry_run=True, out=_null_out(),
-            window_start="2027-10-01 00:00:00",
-            window_end="2027-10-08 00:00:00")
+            name="memprofile-32g-20260913", phase="statistics",
+            reason="no override", dry_run=True, out=_null_out())
 
         detail = self.audit_calls[0]["detail"]
         self.assertNotIn("job_definition_family", detail)
         self.assertNotIn("job_definition_arn", detail)
         self.assertEqual(self.audit_calls[0]["target_scope"],
-                         "run:memprofile-32g-20260913:phase=science")
+                         "run:memprofile-32g-20260913:phase=statistics")
+
+    def test_a_scratch_run_at_phase_science_is_auto_routed_with_no_override(self):
+        # THE OTHER HALF of the invariant the test above used to assert
+        # whole: a scratch run's science phase, given no explicit
+        # `--job-definition-family`, is no longer left on the tree's family
+        # -- it is auto-routed to `rapid-scratch-science`
+        # (`_SCRATCH_DEFINITIONS`), exactly as if that family had been
+        # named explicitly, scope and all.
+        self._start(family=None)
+
+        detail = self.audit_calls[0]["detail"]
+        self.assertEqual(detail["job_definition_family"],
+                         "rapid-scratch-science")
+        self.assertIn("rapid-scratch-science", detail["job_definition_arn"])
 
 
 class StartRunAuditedReferenceImageIdTests(unittest.TestCase):
@@ -2773,9 +2814,17 @@ class StartRunAuditedReferenceImageIdTests(unittest.TestCase):
             self.audit_calls[0]["detail"]["reference_image_id"], 555)
 
     def test_no_reference_image_id_leaves_the_old_scope_and_detail(self):
-        # Every caller before this switch. Byte-for-byte unchanged, so no
-        # historical idempotency key is stranded and `detail` gains no key
-        # for an override nobody asked for.
+        # Every caller before this switch, for the REFERENCE-IMAGE-ID
+        # fragment specifically: `detail` gains no key for a pin nobody
+        # asked for, and the pin never reaches `gather_for_run`.
+        #
+        # The scope string is NOT otherwise byte-for-byte unchanged: this
+        # fixture's row is scratch-kind (`_stub_registry_binding`'s own
+        # default), so `phase="science"` with no explicit
+        # `--job-definition-family` is auto-routed to
+        # `rapid-scratch-science` (`_SCRATCH_DEFINITIONS`, rapid_systems
+        # migration 132) and that family joins the scope regardless of
+        # this test's own reference-image-id pin.
         self.run_mod.start_run_audited(
             conn=object(), idempotency_key="no-pin",
             name="pin-ref-run", phase="science",
@@ -2786,7 +2835,8 @@ class StartRunAuditedReferenceImageIdTests(unittest.TestCase):
         self.assertNotIn("reference_image_id",
                          self.audit_calls[0]["detail"])
         self.assertEqual(self.audit_calls[0]["target_scope"],
-                         "run:pin-ref-run:phase=science")
+                         "run:pin-ref-run:phase=science:"
+                         "job-definition-family=rapid-scratch-science")
         self.assertIsNone(self.gather_calls[-1]["reference_image_id"])
 
 
@@ -3009,6 +3059,25 @@ class RunStartStateTransitionTests(unittest.TestCase):
         state_patcher.start()
         self.addCleanup(state_patcher.stop)
 
+    class _Cursor:
+        # The science-overlay gate's one query (`run.py`'s `science_
+        # overlay` block): a scratch row, this fixture's `kind`, is queried
+        # for `config_overlay` unconditionally on the apply path. `None`
+        # here stands for "no row/no override", matching every one of
+        # these tests, which are about the REGISTRY transition and assert
+        # nothing about overlays.
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            pass
+
+        def fetchone(self):
+            return None
+
     def _start(self, dry_run, key="k"):
         # The non-windowed `statistics` phase, matching
         # `StartRunAuditedWorkUnitScopeTests`: these tests are about the
@@ -3016,7 +3085,8 @@ class RunStartStateTransitionTests(unittest.TestCase):
         # need RAPID_SW and a parameter tree to compute an MJD window
         # nothing here asserts on.
         return self.run_mod.start_run_audited(
-            conn=types.SimpleNamespace(commit=lambda: None),
+            conn=types.SimpleNamespace(commit=lambda: None,
+                                       cursor=lambda: self._Cursor()),
             idempotency_key=key, name="ramp-proof", phase="statistics",
             reason="registry binding", dry_run=dry_run, out=_null_out())
 
@@ -3049,6 +3119,221 @@ class RunStartStateTransitionTests(unittest.TestCase):
         self.assertEqual(self.details[0]["run_key"], 55)
         self.assertEqual(self.details[0]["submission_seq"], 0)
         self.assertEqual(self.details[0]["run_state_before"], "created")
+
+
+class StartRunAuditedScienceOverlayTests(unittest.TestCase):
+    """The scratch workflow's `science_overlay` gate in `start_run_audited`:
+    passed to `submit_run` (and, from there, unchanged to `seams.
+    submit_gathered` -- see `SubmitRunScienceOverlayTests` for that half)
+    ONLY for a `kind = 'scratch'` run whose row's `config_overlay` is
+    non-empty; a production run's path, and a scratch run with no `--set`
+    overlay at `run create`, must both submit `science_overlay=None`.
+
+    Modelled on `RunStartStateTransitionTests`, the one existing apply-path
+    (`dry_run=False`) fixture for this function, extended with a small
+    conn/cursor double for the one query this gate adds — `_check_job_
+    definition_family`'s own `run_row` read (a DIFFERENT function,
+    `actions.run_row`) is patched by every OTHER apply-path test in this
+    file, but that helper does not select `config_overlay` at all (checked
+    against `actions._RUN_ROW`'s column list), so this gate cannot reuse
+    it and reads the column directly -- exactly the extra query this
+    class exists to drive.
+    """
+
+    class _Cursor:
+        def __init__(self, overlay, calls):
+            self._overlay = overlay
+            self._calls = calls
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self._calls.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            # `None` stands in for "no row" as well as "row, NULL column" --
+            # this gate treats both the same way (see `submit_run`'s
+            # docstring for `science_overlay`), so no test here needs to
+            # tell them apart.
+            return None if self._overlay is None else (self._overlay,)
+
+    class _Conn:
+        def __init__(self, overlay):
+            self.overlay = overlay
+            self.calls = []
+            self.committed = False
+
+        def cursor(self):
+            return StartRunAuditedScienceOverlayTests._Cursor(
+                self.overlay, self.calls)
+
+        def commit(self):
+            self.committed = True
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        self.run_mod = run_mod
+        self.row = {"run_id": 55, "name": "ramp-proof", "kind": "scratch",
+                    "state": "created"}
+
+        bind_patcher = mock.patch.object(
+            run_mod, "_bind_registry_row", lambda conn, n: self.row)
+        bind_patcher.start()
+        self.addCleanup(bind_patcher.stop)
+
+        seq_patcher = mock.patch.object(
+            run_mod, "next_submission_seq", lambda conn, k: 0)
+        seq_patcher.start()
+        self.addCleanup(seq_patcher.stop)
+
+        replay_patcher = mock.patch.object(
+            run_mod, "_replay_lookup", lambda *a, **k: None)
+        replay_patcher.start()
+        self.addCleanup(replay_patcher.stop)
+
+        gather_patcher = mock.patch.object(
+            run_mod, "gather_for_run", lambda *a, **k: ("science", ["u"]))
+        gather_patcher.start()
+        self.addCleanup(gather_patcher.stop)
+
+        env_patcher = mock.patch.object(
+            run_mod, "_resolve_submission_env",
+            lambda *a, **k: {"s3_client": object(),
+                             "manifest_bucket": "b",
+                             "queue": "q", "job_definition": "jd",
+                             "binding": object(), "manifest_prefix": "p",
+                             "batch_client": object()})
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
+        audit_patcher = mock.patch.object(
+            run_mod, "record_external_action",
+            lambda conn, key, cls, scope, reason, dry_run=False,
+            rows_affected=0, detail=None, policy_citation=None: {})
+        audit_patcher.start()
+        self.addCleanup(audit_patcher.stop)
+
+        # THE UNRELATED `run_row` READ. `job_definition_family` defaults to
+        # `None`, so `start_run_audited`'s scratch-routing block (the
+        # `_SCRATCH_DEFINITIONS`/`job_definition_family` logic this brief
+        # is explicit is OUT of scope) always runs first and calls
+        # `actions.run_row` for its OWN kind check -- a real `_RUN_ROW`
+        # query this class's cursor double does not answer. Patched here,
+        # the same way every other apply-path test in this file patches
+        # it, so that block is a no-op (this class's `row["kind"]` stands
+        # in for `runs.kind` on both reads, which is what the real row
+        # would also be) and the ONLY query this class's `_Conn.calls`
+        # records is the `config_overlay` read the science-overlay gate
+        # itself issues.
+        from pipeline.operatorctl import actions as actions_mod
+        run_row_patcher = mock.patch.object(
+            actions_mod, "run_row",
+            lambda conn, n: dict(self.row))
+        run_row_patcher.start()
+        self.addCleanup(run_row_patcher.stop)
+
+        db_patcher = mock.patch(
+            "database.modules.utils.rapid_db.RAPIDDB",
+            lambda: types.SimpleNamespace(exit_code=0))
+        db_patcher.start()
+        self.addCleanup(db_patcher.stop)
+
+        def fake_start_run(conn, key, name, reason, dry_run=True,
+                           policy_citation=None):
+            self.row["state"] = "running"
+            return {"rows_affected": 1}
+
+        from pipeline.operatorctl import actions as actions_mod
+        state_patcher = mock.patch.object(actions_mod, "start_run",
+                                          fake_start_run)
+        state_patcher.start()
+        self.addCleanup(state_patcher.stop)
+
+        # `submission_role` is a real `SET ROLE`/restore block in
+        # production (see its own docstring); this class is about the
+        # OVERLAY VALUE `submit_run` is given, which is resolved before
+        # `submit_run` is ever called, so the role switch is stubbed
+        # transparent here exactly as `SubmitRunSubmissionRoleTests` stubs
+        # it for the same reason.
+        import contextlib
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            yield conn
+
+        role_patcher = mock.patch.object(
+            run_mod, "submission_role", fake_submission_role)
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
+
+        self.gathered_kwargs = []
+
+        def fake_submit_gathered(units, **kwargs):
+            self.gathered_kwargs.append(kwargs)
+            return [(types.SimpleNamespace(job_id="j"), ["a"])]
+
+        import pipeline.seams as seams_mod
+        seams_patcher = mock.patch.object(
+            seams_mod, "submit_gathered", fake_submit_gathered)
+        seams_patcher.start()
+        self.addCleanup(seams_patcher.stop)
+
+    def _start(self, overlay, kind="scratch", key="k"):
+        self.row["kind"] = kind
+        conn = self._Conn(overlay)
+        self.run_mod.start_run_audited(
+            conn=conn, idempotency_key=key, name="ramp-proof",
+            phase="statistics", reason="overlay gate", dry_run=False,
+            out=_null_out())
+        return conn
+
+    def test_a_scratch_runs_overlay_reaches_submit_gathered(self):
+        overlay = {"science_config": {"threshold": 5}}
+        self._start(overlay)
+        self.assertEqual(self.gathered_kwargs[0]["science_overlay"], overlay)
+
+    def test_a_scratch_run_with_no_overlay_column_passes_none(self):
+        # A scratch run is not, by itself, enough — `config_overlay` must
+        # also be non-empty, or `run create` with no `--set` would submit
+        # a phantom override on every scratch run's first batch.
+        self._start(None)
+        self.assertIsNone(self.gathered_kwargs[0]["science_overlay"])
+
+    def test_a_scratch_run_with_an_empty_overlay_passes_none(self):
+        # `{}` is "no override" (`manifest.py`'s own
+        # `_validate_science_overlay` treats an empty mapping the same
+        # way), not a real empty dict override recorded by construction.
+        self._start({})
+        self.assertIsNone(self.gathered_kwargs[0]["science_overlay"])
+
+    def test_a_production_run_never_passes_an_overlay(self):
+        # THE GATE THAT MATTERS. Even if `config_overlay` somehow carried
+        # content on a production row, kind is checked FIRST and the
+        # column is never even queried for one -- production's manifest
+        # must be untouched by this parameter's existence, full stop.
+        conn = self._start({"science_config": {"threshold": 5}},
+                           kind="production")
+        self.assertIsNone(self.gathered_kwargs[0]["science_overlay"])
+        self.assertEqual(conn.calls, [],
+                         "a production run must never query config_overlay "
+                         "at all")
+
+    def test_the_overlay_query_is_keyed_by_run_id_not_name(self):
+        overlay = {"science_config": {"threshold": 5}}
+        conn = self._start(overlay)
+        self.assertEqual(len(conn.calls), 1)
+        sql, params = conn.calls[0]
+        self.assertIn("config_overlay", sql)
+        self.assertIn("runs", sql)
+        # `run["run_id"]` (55, the registry key), never `run["name"]`
+        # (`"ramp-proof"`) -- `run_id` is the primary key `_RUN_ROW` and
+        # `next_submission_seq` both key by; `name` is only ever matched
+        # by prefix elsewhere in this module.
+        self.assertEqual(params, (55,))
 
 
 class NextSubmissionSeqTests(unittest.TestCase):
@@ -3470,7 +3755,7 @@ class RampStepTests(unittest.TestCase):
         def fake_submit_run(conn, name, job_type, units, reason,
                             context=None, work_unit_run_id=None, lane=None,
                             run_key=None, submission_seq=None,
-                            envelope=None):
+                            envelope=None, science_overlay=None):
             # THE AUTHORISATION GATE, in miniature: a unit this run has
             # already claimed is skipped, exactly as
             # `seams._transition_or_defer` skips one whose work unit is
@@ -3488,9 +3773,27 @@ class RampStepTests(unittest.TestCase):
         submit_patcher.start()
         self.addCleanup(submit_patcher.stop)
 
+    class _Cursor:
+        # The science-overlay gate's `config_overlay` read (`run.py`), hit
+        # unconditionally for this fixture's scratch-kind row on every
+        # apply. `None` stands for "no override" — this class is about the
+        # ramp, not the overlay.
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            pass
+
+        def fetchone(self):
+            return None
+
     def _start(self, key, cap=None):
         return self.run_mod.start_run_audited(
-            conn=types.SimpleNamespace(commit=lambda: None),
+            conn=types.SimpleNamespace(commit=lambda: None,
+                                       cursor=lambda: self._Cursor()),
             idempotency_key=key, name="ramp-proof", phase="statistics",
             reason="ramp step", dry_run=False, cap=cap, out=_null_out())
 
@@ -3985,9 +4288,21 @@ class ReferenceSetRunCreateAndStartTests(unittest.TestCase):
             mock.patch.object(run_mod, "_check_job_definition_family",
                               lambda *a, **k: None),
             mock.patch.object(db_mod, "RAPIDDB", _FakeHandle),
+            # `job_definition` is now read unconditionally whenever a
+            # family is named (`start_run_audited`'s audit-detail block),
+            # and a scratch run's own science/reference phase now names
+            # one BY DEFAULT with no override at all
+            # (`_SCRATCH_DEFINITIONS`, rapid_systems migration 132) -- this
+            # class's fixture row is scratch, so that default fires on
+            # every windowed `_start` here even though the class is about
+            # reference sets, not job definitions. Completed with a fake
+            # ARN rather than suppressing the default, since a real
+            # `_resolve_submission_env` always returns one.
             mock.patch.object(run_mod, "_resolve_submission_env",
                               lambda *a, **k: {"s3_client": "fake-s3",
-                                               "manifest_bucket": "bucket"}),
+                                               "manifest_bucket": "bucket",
+                                               "job_definition":
+                                                   "fake-job-definition-arn"}),
             # The audit write, faked the same way
             # `StartRunAuditedLaneResolutionTests` fakes it: this class is
             # about the set, not about what the ledger records.

@@ -209,7 +209,7 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         def fake_submit_run(conn, name, job_type, units, reason,
                             context=None, work_unit_run_id=None, lane=None,
                             run_key=None, submission_seq=None,
-                            envelope=None):
+                            envelope=None, science_overlay=None):
             self.submit_calls.append({
                 "name": name, "work_unit_run_id": work_unit_run_id,
                 "lane": lane, "run_key": run_key,
@@ -244,9 +244,31 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         db_mod_patcher.start()
         self.addCleanup(db_mod_patcher.stop)
 
+    class _Cursor:
+        # The science-overlay gate's `config_overlay` read (`run.py`'s
+        # `science_overlay` block), hit unconditionally for this fixture's
+        # scratch-kind row on every apply (`dry_run=False`, every test in
+        # this class). `None` stands for "no override" -- this class is
+        # about work-unit scope, not overlays.
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            pass
+
+        def fetchone(self):
+            return None
+
+    def _conn(self):
+        return types.SimpleNamespace(commit=lambda: None,
+                                     cursor=lambda: self._Cursor())
+
     def test_work_unit_run_id_is_threaded_through_to_submit_run(self):
         self.run_mod.start_run_audited(
-            conn=object(), idempotency_key="key-1", name="accept-20260911-release",
+            conn=self._conn(), idempotency_key="key-1", name="accept-20260911-release",
             phase="statistics", reason="release stranded units",
             dry_run=False, out=_null_out(),
             work_unit_run_id="accept-20260911")
@@ -259,7 +281,7 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
 
     def test_default_threads_none_through_to_submit_run(self):
         self.run_mod.start_run_audited(
-            conn=object(), idempotency_key="key-2", name="accept-20260911",
+            conn=self._conn(), idempotency_key="key-2", name="accept-20260911",
             phase="statistics", reason="ordinary run",
             dry_run=False, out=_null_out())
 
@@ -268,7 +290,7 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
 
     def test_audit_detail_names_the_scope_when_it_differs(self):
         self.run_mod.start_run_audited(
-            conn=object(), idempotency_key="key-3", name="accept-20260911-release",
+            conn=self._conn(), idempotency_key="key-3", name="accept-20260911-release",
             phase="statistics", reason="release stranded units",
             dry_run=False, out=_null_out(),
             work_unit_run_id="accept-20260911")
@@ -282,7 +304,7 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         # No override given at all -- must not invent a work_unit_run_id
         # entry for an ordinary run.
         self.run_mod.start_run_audited(
-            conn=object(), idempotency_key="key-4", name="accept-20260911",
+            conn=self._conn(), idempotency_key="key-4", name="accept-20260911",
             phase="statistics", reason="ordinary run",
             dry_run=False, out=_null_out())
 
@@ -294,7 +316,7 @@ class StartRunAuditedWorkUnitScopeTests(unittest.TestCase):
         # Given, but equal to `name` -- still not a "different scope"
         # fact worth recording.
         self.run_mod.start_run_audited(
-            conn=object(), idempotency_key="key-5", name="accept-20260911",
+            conn=self._conn(), idempotency_key="key-5", name="accept-20260911",
             phase="statistics", reason="ordinary run, explicit but equal",
             dry_run=False, out=_null_out(),
             work_unit_run_id="accept-20260911")
