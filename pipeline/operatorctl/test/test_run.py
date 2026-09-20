@@ -1103,6 +1103,24 @@ class CrossmatchAssociationSetDispatchTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        # `submission_role` is patched to a transparent pass-through, the
+        # same idiom `SubmitRunSubmissionRoleTests` uses: the real `SET
+        # ROLE`/SAVEPOINT mechanics are covered directly against
+        # `_FakeConn` in `test_session.py`, and this class's own point is
+        # that `derived.scratch_create_association_set` is called at all
+        # (and with the right SQL/params/commit), not the widening's own
+        # wire protocol.
+        import contextlib
+
+        @contextlib.contextmanager
+        def fake_submission_role(conn):
+            yield conn
+
+        role_patcher = mock.patch.object(
+            run_mod, "submission_role", fake_submission_role)
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
+
     def test_a_production_run_never_calls_the_scratch_creator(self):
         # `run_kind=None` is what every caller that predates this
         # parameter passes (and what a production run's `run["kind"]`

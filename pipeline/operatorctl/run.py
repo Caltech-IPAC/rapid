@@ -443,11 +443,26 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
             # start (rather than once at `run create`) is safe and adds no
             # new failure mode — a run's association set, once created, is
             # stable for the run's lifetime by construction.
-            with dbh.conn.cursor() as cur:
-                cur.execute(
-                    "SELECT derived.scratch_create_association_set(%s)",
-                    (run_name,))
-                resolved_set = cur.fetchone()[0]
+            #
+            # UNDER `submission_role`, the same identity defect
+            # `register_run_audited`/`submit_run`/`delete_run` close,
+            # reached through a further entry point: `derived.
+            # scratch_create_association_set` (137) is granted to
+            # `rapid_scratch` and `rapid_scratch_write`, never to
+            # `rapid_operator` -- the operate tier this function's caller
+            # (`start_run_audited`) runs under before `submit_run`'s own
+            # widening (deeper in the call chain, for the SUBMISSION, not
+            # the GATHER) ever takes effect. Without this, `run start
+            # --phase crossmatch` for a scratch run would fail `permission
+            # denied for function scratch_create_association_set` on
+            # every call, dry run included (EXECUTE is checked before the
+            # function body runs).
+            with submission_role(dbh.conn):
+                with dbh.conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT derived.scratch_create_association_set(%s)",
+                        (run_name,))
+                    resolved_set = cur.fetchone()[0]
             dbh.conn.commit()
         # PRODUCTION (`run_kind != "scratch"`, including every caller that
         # predates this parameter and passes `run_kind=None`) never reaches
