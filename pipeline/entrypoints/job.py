@@ -893,7 +893,16 @@ def _run(workload_class: str) -> int:
             identity_extra=_identity_extra(unit),
             lifecycle_reader=lifecycle_reader_for(execute),
             predecessor_outcome_reader=predecessor_outcome_reader_for(
-                execute))
+                execute),
+            # A JOB READING THE SCRATCH TREE IS A SCRATCH JOB. Only the two
+            # scratch Batch job definitions set RAPID_PARAMETER_PATH, so the
+            # same fact that chose this job's database identity also says
+            # which `resolve_attempt` it must use — `public.resolve_attempt`
+            # is invoker-rights and `rapid_scratch_pipeline` holds no table
+            # privilege, so a scratch attempt is created through migration
+            # 135's SECURITY DEFINER wrapper or not at all. No extra query,
+            # and the two answers cannot disagree.
+            is_scratch=bool(parameter_path))
 
         records_store = S3ObjectStore(records_bucket, client=s3_client)
         diagnostics_store = S3ObjectStore(diagnostics_bucket, client=s3_client)

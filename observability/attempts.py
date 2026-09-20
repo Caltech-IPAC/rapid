@@ -459,7 +459,8 @@ class AttemptWriter:
                         submitted_at: Any,
                         scheduler_job_id: str | None = None,
                         application_attempt_index: int | None = None,
-                        scheduler_attempt_index: int | None = None) -> int:
+                        scheduler_attempt_index: int | None = None,
+                        is_scratch: bool = False) -> int:
         """Claim-or-create this attempt's row atomically; return its attempt_id.
 
         The ONLY sanctioned way for the runtime or the reconciler to acquire an
@@ -495,8 +496,30 @@ class AttemptWriter:
         # does not exist", which is what this looked like live before the
         # casts. Casting here rather than adding a second overload keeps one
         # function with one signature.
+        # THE SCRATCH TIER CANNOT USE THE BARE FUNCTION (rapid_systems
+        # migration 135). `resolve_attempt` is invoker-rights, so it inserts
+        # into `attempts` with the CALLER's privileges — and
+        # `rapid_scratch_pipeline`, the identity a scratch Batch job runs as,
+        # deliberately holds no table privilege at all (migration 132). It
+        # was granted EXECUTE on the function by 133 and still failed one
+        # step later with "permission denied for table attempts", which is
+        # the whole reason 135 exists.
+        #
+        # `derived.scratch_resolve_attempt` is that function under SECURITY
+        # DEFINER, taking and returning exactly the same things, and fencing
+        # on the RUN rather than the attempt — there is no attempt to fence
+        # on until this call creates one. It refuses any run whose kind is
+        # not `scratch` or whose state is `deleting`/`deleted`.
+        #
+        # DECIDED FROM THE RUN, WHICH THE CALLER ALREADY HAS. `is_scratch`
+        # defaults to False, so every existing caller — the reconciler, the
+        # production runtime, every test — takes the identical statement it
+        # took before, with the identical casts. Only a caller that knows it
+        # is a scratch attempt opts in.
+        function = ("derived.scratch_resolve_attempt" if is_scratch
+                    else "resolve_attempt")
         sql = (
-            "SELECT resolve_attempt("
+            "SELECT " + function + "("
             "  %s::text, %s::text, %s::text,"
             "  %s::integer, %s::integer,"
             "  %s::timestamptz, %s::timestamptz,"

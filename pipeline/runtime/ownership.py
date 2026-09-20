@@ -152,7 +152,8 @@ def resolve_ownership(writer: Any, job_env: Any, run_id: str,
                       now: datetime.datetime | None = None,
                       lifecycle_reader: Any = None,
                       predecessor_outcome_reader: Any = None
-                      ) -> AttemptOwnership:
+                      ,
+                      is_scratch: bool = False) -> AttemptOwnership:
     """Resolve this process's attempt row. Raises `RecordsError` on failure.
 
     `writer` is an `observability.attempts.AttemptWriter` over a live
@@ -198,6 +199,14 @@ def resolve_ownership(writer: Any, job_env: Any, run_id: str,
             submitted_at=moment,
             scheduler_job_id=job_env.scheduler_job_id,
             application_attempt_index=index,
+            # A SCRATCH ATTEMPT IS CREATED THROUGH THE WRAPPER (rapid_systems
+            # migration 135). `public.resolve_attempt` is invoker-rights and
+            # inserts with the caller's own privileges, which
+            # `rapid_scratch_pipeline` deliberately does not have; the
+            # SECURITY DEFINER wrapper is the only route that works for it,
+            # and it refuses any run whose kind is not `scratch`. False --
+            # every production caller -- takes the statement unchanged.
+            is_scratch=is_scratch,
         )
     except Exception as exc:  # noqa: BLE001 - translated to the records category
         # Any failure here is the records path being unreachable before any
