@@ -221,11 +221,30 @@ ROUTES: tuple[Route, ...] = (
     Route(JOB_TYPE_REPROCESSING, CLASS_BULK,
           LANES_BULK_ONLY, "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=15),
+    # LANES_EITHER, not LANES_BULK_ONLY (2026-09-20): "every job of a
+    # scratch run -- science, catalog-load, crossmatch, reference build --
+    # submits to rapid-queue-prompt (on-demand), never the Spot lane" (Ben,
+    # 2026-09-20 00:19, ruled during the first scratch-workflow run after
+    # scratch routing sent a prompt-class science job to rapid-queue-bulk).
+    # `pipeline/operatorctl/run.py`'s `_SCRATCH_LANE = "prompt"` already
+    # resolves every scratch submission's default lane to prompt and passes
+    # it explicitly as `run start`'s own `--lane` value -- but a route this
+    # narrow refuses ANY prompt request regardless of who is asking, so a
+    # scratch run's own catalog-load/crossmatch could never reach that
+    # default: measured live, `RouteError: job type 'catalog-load' may not
+    # run on the prompt lane; it runs on: bulk` (2026-09-20 scratch
+    # demonstration, the first time either job type was ever submitted for
+    # a scratch run). `LANES_EITHER` keeps `bulk` FIRST -- unchanged default
+    # for every production caller, which is the overwhelming majority of
+    # `catalog-load`/`crossmatch` submissions and takes no `--lane` -- and
+    # admits `prompt` as the second, explicitly-requested option, exactly
+    # the shape `JOB_TYPE_REGISTRATION`'s route already uses for the same
+    # "mostly one lane, occasionally the other" reason.
     Route(JOB_TYPE_CATALOG_LOAD, CLASS_BULK,
-          LANES_BULK_ONLY, "batch/job-definition-bulk",
+          LANES_EITHER, "batch/job-definition-bulk",
           LANE_SESSION, ppid=None),
     Route(JOB_TYPE_CROSSMATCH, CLASS_BULK,
-          LANES_BULK_ONLY, "batch/job-definition-bulk",
+          LANES_EITHER, "batch/job-definition-bulk",
           LANE_SESSION, ppid=None),
     # The four remaining post-DB job types. All bulk class, all TRANSACTION
     # lane: the database design assigns the budgeted session lane by

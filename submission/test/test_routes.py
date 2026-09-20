@@ -298,10 +298,25 @@ def test_lane_alert_production_is_prompt_only():
 
 
 def test_lane_every_bulk_class_type_is_bulk_only():
+    # catalog-load and crossmatch are the one deliberate exception (Ben,
+    # 2026-09-20 00:19): "every job of a scratch run -- science,
+    # catalog-load, crossmatch, reference build -- submits to
+    # rapid-queue-prompt (on-demand), never the Spot lane". Bulk stays
+    # FIRST (unchanged default for every production caller, which is the
+    # overwhelming majority of submissions and takes no --lane); prompt is
+    # admitted as the explicitly-requested second option, the same shape
+    # JOB_TYPE_REGISTRATION already uses. Every OTHER bulk-class type keeps
+    # the invariant this test polices.
+    exceptions = {routes.JOB_TYPE_CATALOG_LOAD, routes.JOB_TYPE_CROSSMATCH}
     for route in routes.ROUTES:
         if route.workload_class == CLASS_BULK:
-            assert route.lanes == (routes.QUEUE_PARAM_BULK,), \
-                f"{route.job_type} is bulk class but names {route.lanes}"
+            if route.job_type in exceptions:
+                assert route.lanes == (
+                    routes.QUEUE_PARAM_BULK, routes.QUEUE_PARAM_PROMPT), \
+                    f"{route.job_type} is a named lane exception but names {route.lanes}"
+            else:
+                assert route.lanes == (routes.QUEUE_PARAM_BULK,), \
+                    f"{route.job_type} is bulk class but names {route.lanes}"
 
 
 def test_lane_is_not_the_workload_class():
