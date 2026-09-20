@@ -148,6 +148,7 @@ def submit_units(units, job_type, queue, job_definition, binding,
                  manifest_bucket, manifest_prefix, s3_client, batch_client,
                  execute, run_id=None, reason="vpo", job_name=None,
                  now=None, reference_observation_window=None,
+                 science_overlay=None,
                  protocol_commit=None, work_unit_run_id=None, run_key=None,
                  envelope=None):
     """Submit one array job for `units`, with its attempt rows pre-created.
@@ -224,6 +225,17 @@ def submit_units(units, job_type, queue, job_definition, binding,
     what "recorded by construction" means, and what lets a promotion gate
     refuse a product built under one. None means no override: the window's
     authoritative value is release content.
+
+    `science_overlay` is the second enumerated science override
+    (`submission/manifest.py`'s module docstring) — a scratch run's
+    `--set SECTION.KEY=VALUE` overlay (`runs.config_overlay`), carried into
+    the manifest for the same reason and by the same mechanism as
+    `reference_observation_window` just above: checksummed with it, bound
+    into every attempt row, and so recorded by construction rather than
+    trusted from an argument a later reader has no way to re-derive. None
+    means no override, which is every caller but a scratch `run start`
+    whose row carries one — production's manifest is untouched by this
+    parameter existing at all.
 
     `protocol_commit` is a zero-argument callable that COMMITS the caller's
     transaction, and it is called TWICE, at the two instants this function's
@@ -355,7 +367,8 @@ def submit_units(units, job_type, queue, job_definition, binding,
             return None, []
     manifest = Manifest(units=units, batch_id=run_id, job_type=job_type,
                         reference_observation_window=(
-                            reference_observation_window))
+                            reference_observation_window),
+                        science_overlay=science_overlay)
     batch = Batch(manifest=manifest, reason=reason)
 
     store = S3ManifestStore(manifest_bucket, prefix=manifest_prefix,
@@ -502,12 +515,20 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
                     manifest_bucket, manifest_prefix, s3_client, batch_client,
                     execute, run_id, max_batch_size=None, reason="vpo",
                     now=None, reference_observation_window=None,
+                    science_overlay=None,
                     protocol_commit=None, work_unit_run_id=None,
                     run_key=None, submission_seq=None, envelope=None):
     """Batch a gathered unit list and submit every batch. The VPO's entry.
 
     `envelope` is the run's execution envelope (migration 122), passed
     unchanged to every batch this call cuts — see `submit_units`.
+
+    `science_overlay` is passed unchanged to every batch this call cuts,
+    for the same reason `reference_observation_window` already is (see the
+    comment beside that argument in the loop below): the batches are one
+    submission split by the array ceiling, not separate runs, so every
+    batch of one gathering pass carries the same overlay. See
+    `submit_units`'s own docstring for what it is and where it comes from.
 
     **`submission_seq` MAKES A BATCH IDENTITY UNIQUE ACROSS A RUN'S WHOLE
     HISTORY, WHICH IS WHAT MAKES A RAMP POSSIBLE (migration 121's ruling).**
@@ -642,6 +663,9 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
             # they are one submission cut by the array ceiling, not runs
             # under different windows.
             reference_observation_window=reference_observation_window,
+            # Same reasoning, same mechanism, the second enumerated
+            # override: one overlay for every batch this call cuts.
+            science_overlay=science_overlay,
             protocol_commit=protocol_commit,
             # THE BARE RUN NAME, NOT `batch_run_id` (this function's own
             # docstring, "`work_unit_run_id` DEFAULTS TO `None`..."): every

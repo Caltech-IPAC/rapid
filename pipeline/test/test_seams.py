@@ -9,7 +9,7 @@ from pipeline.intent.errors import (FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION,
                                     FakePgError)
 from pipeline.reconciler.test.stubs import FakeConnection, attempt_row, utc
 from submission import submit
-from submission.manifest import ProcessingUnit
+from submission.manifest import Manifest, ProcessingUnit
 from submission.routes import (JOB_TYPE_CROSSMATCH, JOB_TYPE_REFERENCE_IMAGE,
                                JOB_TYPE_SCIENCE)
 from submission.test import payload_fixtures as fixtures
@@ -521,17 +521,19 @@ class SubmitUnitsTests(unittest.TestCase):
     def _commit(self):
         self.commits.append(self.clock.tick())
 
-    def _submit(self, count=2, protocol_commit=_MISSING):
+    def _submit(self, count=2, protocol_commit=_MISSING, run_id="run-1",
+               base=90000, **overrides):
         if protocol_commit is _MISSING:
             protocol_commit = self._commit
         return seams.submit_units(
-            units(count), job_type="science", queue="rapid-queue-prompt",
+            units(count, base=base), job_type="science",
+            queue="rapid-queue-prompt",
             job_definition="rapid-pipeline-science", binding=BINDING,
             manifest_bucket="bucket", manifest_prefix="submissions",
             s3_client=self.s3, batch_client=self.batch,
-            execute=self.execute, run_id="run-1",
+            execute=self.execute, run_id=run_id,
             now=utc(2026, 8, 6, 12, 0, 0),
-            protocol_commit=protocol_commit)
+            protocol_commit=protocol_commit, **overrides)
 
     def test_one_array_job_not_one_submit_per_unit(self):
         submission, _ = self._submit(count=3)
@@ -761,6 +763,80 @@ class SubmitUnitsTests(unittest.TestCase):
         self.assertEqual(1, len(self.commits),
                          "only the pre-Batch commit may have fired")
 
+    def test_production_manifest_is_byte_identical_to_before_science_overlay(self):
+        # THE PROPERTY THIS PARAMETER MUST NOT BREAK: adding `science_overlay`
+        # to `submit_units` must not change one byte of the manifest a
+        # PRODUCTION submission publishes — production never passes it, and
+        # the parameter defaults to `None` for exactly this reason. Proven
+        # two ways: (1) a call that never mentions the new kwarg at all
+        # (the exact call shape every production caller uses today) and (2)
+        # a call that passes `science_overlay=None` explicitly both publish
+        # the identical manifest bytes, and (3) that manifest carries no
+        # `science_overlay` override at all — so a caller that never opts in
+        # is byte-for-byte as if this parameter did not exist.
+        store = submit.S3ManifestStore("bucket", "submissions",
+                                       client=self.s3)
+
+        # DIFFERENT `base` per call (disjoint exposure/sca units), not just
+        # a different `run_id`: `_authorize_units`'s work-unit dedup is keyed
+        # by unit subject, and this stub shares one `RecordingExecute`
+        # (`self.execute`) across both calls in this one test, so the SAME
+        # units on the second call would be seen as already claimed by the
+        # first and `submit_units` would correctly return `(None, [])`
+        # rather than a manifest at all — that would make this test pass
+        # for the wrong reason (nothing to compare) rather than the right
+        # one (two real manifests, byte for byte identical).
+        self._submit(count=2, run_id="run-omitted", base=90000)
+        without_kwarg = self.s3.objects[
+            ("bucket", store.key_for("run-omitted"))]
+
+        self._submit(count=2, run_id="run-explicit-none", base=91000,
+                     science_overlay=None)
+        with_explicit_none = self.s3.objects[
+            ("bucket", store.key_for("run-explicit-none"))]
+
+        # Strip `batch_id` and the units themselves — the two fields the
+        # calls deliberately differ on (a distinct run id and a disjoint
+        # unit list, per the comment above) — and compare everything else,
+        # in particular `overrides`/`array_size`/`schema_version`, byte for
+        # byte.
+        omitted_manifest = Manifest.from_json(without_kwarg.decode("utf-8"))
+        explicit_manifest = Manifest.from_json(with_explicit_none.decode("utf-8"))
+        omitted_dict = omitted_manifest.to_dict()
+        explicit_dict = explicit_manifest.to_dict()
+        del omitted_dict["batch_id"], omitted_dict["units"]
+        del explicit_dict["batch_id"], explicit_dict["units"]
+        self.assertEqual(omitted_dict, explicit_dict)
+
+        # And the override this parameter exists to carry is simply absent
+        # from a call that never named it — `has_science_override` must be
+        # False, exactly as it was before this parameter existed.
+        self.assertFalse(omitted_manifest.has_science_override)
+        self.assertNotIn("overrides", omitted_dict)
+
+    def test_a_given_overlay_is_bound_into_the_published_manifest(self):
+        # The other half of the property above: a scratch run's overlay is
+        # not merely accepted, it is CHECKSUMMED WITH THE MANIFEST — the
+        # same "recorded by construction" mechanism `reference_observation_
+        # window` already uses (see `submit_units`'s docstring for both).
+        # Round-tripped through `Manifest.from_json` rather than inspected
+        # as a raw dict, so this test exercises the same reader a starting
+        # container would.
+        overlay = {"science_config": {"threshold": 5}}
+
+        self._submit(count=2, run_id="run-overlaid", science_overlay=overlay)
+
+        store = submit.S3ManifestStore("bucket", "submissions",
+                                       client=self.s3)
+        published = self.s3.objects[("bucket", store.key_for("run-overlaid"))]
+        manifest = Manifest.from_json(published.decode("utf-8"))
+
+        self.assertTrue(manifest.has_science_override)
+        self.assertEqual(overlay, manifest.science_overlay)
+        # And the window is untouched — the two override fields are
+        # independent, so naming one must not imply or exclude the other.
+        self.assertIsNone(manifest.reference_observation_window)
+
 
 class SubmitGatheredAllExcludedTests(unittest.TestCase):
     """`submit_gathered` must survive a batch whose units are ALL excluded
@@ -923,14 +999,14 @@ class SubmitGatheredJobTypeTests(unittest.TestCase):
         self.execute = RecordingExecute(clock=self.clock)
 
     def _submit_gathered(self, gathered_units, job_type, queue,
-                         job_definition):
+                         job_definition, run_id="run-1", **overrides):
         return seams.submit_gathered(
             gathered_units, job_type=job_type, queue=queue,
             job_definition=job_definition, binding=BINDING,
             manifest_bucket="bucket", manifest_prefix="submissions",
             s3_client=self.s3, batch_client=self.batch,
-            execute=self.execute, run_id="run-1",
-            now=utc(2026, 8, 6, 12, 0, 0))
+            execute=self.execute, run_id=run_id,
+            now=utc(2026, 8, 6, 12, 0, 0), **overrides)
 
     def test_reference_image_units_batch_as_reference_image_not_science(self):
         # Before the fix this raised SubjectError: "asked for a 'science'
@@ -961,6 +1037,26 @@ class SubmitGatheredJobTypeTests(unittest.TestCase):
         self.assertEqual(1, len(results))
         submission, attempt_ids = results[0]
         self.assertEqual(5, len(attempt_ids))
+
+    def test_science_overlay_reaches_the_manifest_through_submit_gathered(self):
+        # `submit_gathered` must forward `science_overlay` to `submit_units`
+        # unchanged, exactly as it already does for
+        # `reference_observation_window` (that parameter's own passthrough
+        # is exercised implicitly by every test in this module that gets a
+        # manifest back; this is the first test to check the SECOND
+        # enumerated override survives the same relay).
+        overlay = {"science_config": {"threshold": 5}}
+        science_units = units(count=3)
+
+        results = self._submit_gathered(
+            science_units, job_type=JOB_TYPE_SCIENCE,
+            queue="rapid-queue-prompt",
+            job_definition="rapid-pipeline-science",
+            run_id="run-gathered-overlay", science_overlay=overlay)
+
+        self.assertEqual(1, len(results))
+        submission, _attempt_ids = results[0]
+        self.assertEqual(overlay, submission.manifest.science_overlay)
 
 
 class FoundRecoveryTests(unittest.TestCase):

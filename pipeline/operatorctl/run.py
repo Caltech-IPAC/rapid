@@ -469,13 +469,24 @@ def _run_envelope(run, lane=None):
 def submit_run(conn, name, job_type, units, reason, context=None,
               work_unit_run_id=None, lane=None, run_key=None,
               envelope=None,
-              submission_seq=None):
+              submission_seq=None, science_overlay=None):
     """Submit `units` under `name`, through the SAME production path
     `live_w9_ramp` uses: `submission_env` for the binding, `pipeline.seams.
     submit_gathered` for the submission itself. Nothing here reimplements
     either — this is the in-process replacement the task ruling calls for,
     run under whatever role `rapidctl` itself already holds (`operator_
     session`'s `SET ROLE`), not a re-derived STS/podman launch.
+
+    `science_overlay`, when given, is passed straight through to
+    `seams.submit_gathered` — see that function's and `submit_units`'s own
+    docstrings for what it is and how it is bound into the manifest. This
+    function has no registry access of its own beyond `conn`; the decision
+    of WHETHER a run's overlay applies (kind `scratch`, row's
+    `config_overlay` non-empty) is the caller's — `start_run_audited`
+    already holds the bound row `_bind_registry_row` returned and resolves
+    it there rather than this function re-querying a row it was not
+    otherwise given. `None` (every caller but that one) submits exactly as
+    before this parameter existed.
 
     `context`, when given, is a `submission_env(job_type)` result the
     caller already resolved — `_cmd_run_start` passes the SAME context a
@@ -575,7 +586,7 @@ def submit_run(conn, name, job_type, units, reason, context=None,
             execute=executor.execute, run_id=name,
             reason=reason, work_unit_run_id=work_unit_run_id,
             run_key=run_key, submission_seq=submission_seq,
-            envelope=envelope,
+            envelope=envelope, science_overlay=science_overlay,
             protocol_commit=conn.commit)
 
 
@@ -945,10 +956,51 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     _start_run_fn(conn, idempotency_key + ":state", name, reason,
                   dry_run=False, policy_citation=policy_citation)
 
+    # THE OVERLAY IS PASSED ONLY FOR A SCRATCH RUN WHOSE ROW ACTUALLY
+    # CARRIES ONE — never for production, and never as an empty dict.
+    # `run["kind"]` comes from the row `_bind_registry_row` already bound
+    # above (`run`, `run_key = run["run_id"]`); reusing it here rather than
+    # re-querying is the same reasoning `_check_job_definition_family`
+    # already uses for the identical check just above in this file. Kind
+    # is the gate, not the overlay's presence, so that a scratch run with
+    # no `--set` at `run create` submits with `science_overlay=None` and a
+    # production run's manifest is untouched by this parameter existing at
+    # all, whatever `config_overlay` happens to hold on its row (which
+    # `_RUN_ROW` does not even select — production is never scratch, so
+    # this branch never reads it for one).
+    #
+    # `config_overlay` ITSELF IS A SEPARATE QUERY, not a field on `run`:
+    # `actions._RUN_ROW` does not select it (checked: its column list stops
+    # at the reference-set join), and this file's own repo-isolation rule
+    # keeps `actions.py` off limits to a `seams.py`/`run.py` change. One
+    # extra single-column read, gated the same way the parameter it feeds
+    # is, costs nothing a production run would ever pay.
+    science_overlay = None
+    if run["kind"] == _FAMILY_OVERRIDE_KIND:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT config_overlay FROM runs WHERE run_id = %s",
+                (run["run_id"],))
+            row = cur.fetchone()
+        # psycopg2 decodes a `jsonb` column to a Python object (dict, here)
+        # on read, exactly as `main.py` writes it with `%s::jsonb` and
+        # `json.dumps` on the way in — no `json.loads` anywhere in this
+        # codebase unpacks a jsonb column a second time (checked against
+        # every other `::jsonb` site in `actions.py`), so `overlay` below
+        # is already a `dict` or `None`, never a JSON string to parse.
+        overlay = row[0] if row else None
+        if overlay:
+            # Falsy (None or {}) stays None: an empty overlay is "no
+            # override" exactly as `manifest.py`'s own
+            # `_validate_science_overlay` treats it, and `submit_units`'s
+            # docstring is explicit that None is what "no override" means
+            # to the manifest it builds.
+            science_overlay = overlay
+
     results = submit_run(conn, name, job_type, units, reason, context=context,
                          work_unit_run_id=work_unit_run_id, lane=lane,
                          run_key=run_key, submission_seq=submission_seq,
-                         envelope=envelope)
+                         envelope=envelope, science_overlay=science_overlay)
     total_children = sum(len(attempt_ids) for _sub, attempt_ids in results)
     detail["batches"] = len(results)
     detail["children"] = total_children
