@@ -19,6 +19,8 @@ The safe call is the short one.
 """
 
 import argparse
+import datetime
+import json
 import os
 import sys
 
@@ -93,6 +95,71 @@ def _positive_int(text):
             "%d is not positive. One attempt is the first try, so the floor "
             "is 1; 0 would mean the work never runs at all." % value)
     return value
+
+
+def _parse_science_overlay(pairs):
+    """`--set SECTION.KEY=VALUE` pairs, as the nested `{section: {key:
+    value}}` mapping `science_config.load_with_digest`'s ``overlay``
+    parameter and `runs.config_overlay` both take.
+
+    Raises `SystemExit` naming the offending pair -- matching every other
+    argument-shape refusal in `_cmd_run_create`, which raises the same way
+    for `--psf-set` without `--build-reference-set` -- for three distinct
+    faults: no `=`, a key that is not `section.key`, and a value that
+    parses to a native date or time.
+
+    VALUES ARE PARSED AS TOML SCALARS, via `tomllib` itself rather than a
+    hand-rolled int/float/bool guess: `tomllib.loads(f"{key} = {value}")`
+    on a single synthetic assignment gives exactly the type the release
+    TOML would give the same literal, and it is `science_config` itself
+    that has to agree they're the same value once merged. A plain string
+    that fails to parse as any other scalar falls back to a quoted TOML
+    string, so `--set data.label=foo` needs no quoting on the command
+    line.
+
+    TEMPORAL VALUES ARE REFUSED HERE, matching `science_config.load`'s own
+    refusal (see its module docstring, "Temporal values are strings"):
+    `tomllib` parses an unquoted `2026-01-01` into a `datetime.date`, which
+    canonicalizes to the same digest as its quoted string twin and would
+    silently collapse two different configurations onto one recorded
+    identity. Caught here, before the value ever reaches the database, so
+    the operator sees which key was wrong rather than a refusal three
+    layers down inside `load_with_digest`.
+    """
+    import tomllib
+
+    overlay: dict = {}
+    for pair in pairs or ():
+        if "=" not in pair:
+            raise SystemExit(
+                "--set %r is not SECTION.KEY=VALUE (no '=')" % (pair,))
+        dotted, raw_value = pair.split("=", 1)
+        dotted = dotted.strip()
+        if dotted.count(".") != 1 or not all(dotted.split(".")):
+            raise SystemExit(
+                "--set key %r is not SECTION.KEY: the science TOML is a "
+                "table of sections, so a value is named by exactly one "
+                "section and one key, dot-separated" % (dotted,))
+        section_name, key = dotted.split(".", 1)
+        raw_value = raw_value.strip()
+        try:
+            parsed = tomllib.loads("v = %s" % raw_value)
+        except tomllib.TOMLDecodeError:
+            # Not a bare literal (int/float/bool/array/inline table) --
+            # fall back to a TOML string, so an unquoted plain word or path
+            # on the command line still parses rather than forcing the
+            # operator to shell-quote an embedded '"'.
+            parsed = {"v": raw_value}
+        value = parsed["v"]
+        if isinstance(value, (datetime.date, datetime.time)):
+            raise SystemExit(
+                "--set %s.%s=%s parses to a %s, which "
+                "`science_config.load` refuses (Temporal values are "
+                "strings): quote it, e.g. %s.%s='%s'"
+                % (section_name, key, raw_value, type(value).__name__,
+                   section_name, key, raw_value))
+        overlay.setdefault(section_name, {})[key] = value
+    return overlay
 
 
 def build_parser():
@@ -322,6 +389,26 @@ def build_parser():
                             help="refuse if a run of this name already "
                                  "exists, instead of reporting a no-op "
                                  "success")
+    # --- the run's science overlay (migration 112) -------------------------
+    # SCRATCH ONLY, and refused for every other kind in `_cmd_run_create`
+    # below (never merely defaulted away): production's science values are
+    # release content (`pipeline.runtime.science_config`'s own module
+    # docstring), identified by the image digest alone, and an overlay
+    # reaching a production run would let a science value differ from what
+    # that digest says it is while still claiming it. A scratch run is
+    # personal and never published, which is the one place the module
+    # accepts an explicit, narrowly-scoped exception.
+    run_create.add_argument(
+        "--set", dest="overlay_pairs", action="append", default=None,
+        metavar="SECTION.KEY=VALUE",
+        help="override one science-configuration value for this scratch "
+             "run; repeatable. SECTION.KEY is dotted -- the science TOML "
+             "is a table of sections, so a bare key names nothing. VALUE "
+             "is parsed as a TOML scalar (int/float/bool/string); a value "
+             "that parses to a date or time is refused, matching "
+             "`science_config.load`'s own refusal, since a native temporal "
+             "value and its quoted string twin collide under the digest "
+             "that identifies what a run actually used")
     _mutation_arguments(run_create, "a run")
     run_create.set_defaults(func=_cmd_run_create)
 
@@ -425,6 +512,16 @@ def build_parser():
              "ONE'S OWN RUN since migration 121: starting a running run "
              "again is a new batch of the SAME run, which already claims "
              "its own units and skips the ones it has completed")
+    run_start.add_argument(
+        "--reference-image-id", dest="reference_image_id", type=int,
+        default=None, metavar="RFID",
+        help="use THIS reference image (a `refimages.rfid`) for every unit "
+             "gathered, instead of the one each unit's own (field, filter) "
+             "would otherwise resolve to. REFUSED unless --phase science: "
+             "a reference-image phase's whole job is to BUILD a reference, "
+             "so a phase already building one cannot also be told to reuse "
+             "one -- accepting the flag there would silently mean one of "
+             "the two is ignored, and refusing early says which")
     _mutation_arguments(run_start, "a run's gather-and-submit step")
     run_start.set_defaults(func=_cmd_run_start)
 
@@ -1083,11 +1180,52 @@ def _cmd_run_create(conn, args, out):
             "--psf-set says which PSFs a NEW set reads, so it only means "
             "something with --build-reference-set; an existing set already "
             "declares its own")
+    # --set IS SCRATCH-ONLY (migration 112). Production's science values are
+    # release content -- identified by the image digest alone
+    # (`pipeline.runtime.science_config`'s module docstring) -- so a
+    # production run accepting a per-key override would let a value differ
+    # from what its own image digest claims it is. Checked on the ARGUMENT,
+    # before anything is read or written, the same way every other
+    # shape-of-arguments refusal in this function is.
+    overlay = None
+    config_hash = args.config_hash
+    if args.overlay_pairs:
+        if args.kind != "scratch":
+            raise SystemExit(
+                "--set is accepted only for --kind scratch: a production "
+                "run's science values are release content, identified by "
+                "the image digest alone, and an overlay would let a value "
+                "differ from what that digest claims it is")
+        if args.config_hash is not None:
+            raise SystemExit(
+                "--set and --config-hash both name the run's science "
+                "configuration digest; --set computes it FROM the merged "
+                "overlay, so an explicit --config-hash beside it would be "
+                "two conflicting answers to the same question. Pass one "
+                "or the other, not both")
+        overlay = _parse_science_overlay(args.overlay_pairs)
+        # THE REAL DIGEST, computed the SAME way an attempt under this run
+        # will compute it: `load_with_digest` reads the installed release
+        # TOML from RAPID_SW, deep-merges this overlay over a copy of it,
+        # refuses a merged native temporal value a second time (an overlay
+        # value neither `_parse_science_overlay` nor the file-only check
+        # above would catch, e.g. an inline TOML table naming one), and
+        # digests the MERGED content -- never the image's own digest, and
+        # never a hash computed here over the overlay alone, either of
+        # which would record an identity the run did not actually use.
+        from pipeline.runtime.errors import ConfigError
+        from pipeline.runtime.science_config import load_with_digest
+        try:
+            _merged, config_hash = load_with_digest(overlay=overlay)
+        except ConfigError as exc:
+            raise SystemExit(
+                "--set produced an overlay `load_with_digest` refuses: %s"
+                % exc) from exc
     reference_set_id = _resolve_reference_set_for_run(conn, args, out, key)
     result = _actions.create_run(
         conn, key, args.name, None, args.kind, purpose=args.purpose,
         branch=args.branch, image_digest=args.image_digest,
-        config_hash=args.config_hash,
+        config_hash=config_hash,
         input_generations=args.input_generations, reason=args.reason,
         expected_state=expected, dry_run=not args.apply,
         policy_citation=args.policy_citation,
@@ -1116,6 +1254,55 @@ def _cmd_run_create(conn, args, out):
     if any(value is not None for value in envelope):
         print("  envelope: lane %s, %s attempts, wall-clock %ss, "
               "attempt timeout %ss" % tuple(envelope), file=out)
+    # THE OVERLAY ITSELF, WRITTEN AFTER `create_run` RETURNS -- necessarily a
+    # SEPARATE statement, not "the same transaction as the create": every
+    # mutating call in this package goes through `contract.call_function`,
+    # which commits before returning (one function call is one transaction,
+    # by that helper's own design), so by the time `create_run`'s result is
+    # in hand its INSERT has already committed. `derived.create_run` itself
+    # has no parameter for the overlay (checked against the live migration
+    # 127 signature: `p_config_hash` exists, nothing to carry
+    # `config_overlay`/`config_overlay_key`), so this UPDATE is the only
+    # available carrier -- a second, immediately-following statement on the
+    # same connection and the same row, guarded exactly as the create was.
+    #
+    # GUARDED THE SAME WAY THE CREATE IS: only on a real apply
+    # (`args.apply`), and only when the create actually added a row this
+    # call is the author of. `result.get("run_id")` is `v_run_id` from
+    # migration 127's function, which is NULL on a dry run and NULL when
+    # `already_present` (the row predates this call, and this call did not
+    # create it) -- writing the overlay onto a pre-existing row this
+    # invocation did not create would attribute someone else's run's
+    # configuration to whichever operator happened to pass --set alongside
+    # an idempotent replay.
+    #
+    # `config_overlay_key` IS LEFT NULL, DELIBERATELY, though migration 112
+    # gives it a column too. Its comment describes an object stored under
+    # the run's own evidence prefix, with `config_overlay` denormalizing
+    # THAT object's contents -- "the object is the authoritative copy; the
+    # column says where to find it". This command has no object-storage
+    # write of its own (no S3 client is wired into `rapidctl run create`),
+    # so there is no object for a key to name. Inventing a key here would
+    # point a future reader at bytes that were never written, which is
+    # worse than the column's own documented NULL meaning ("this run used
+    # the release configuration unmodified") being technically wrong for
+    # one column while `config_overlay` still carries the truth in the
+    # other. If an evidence-store upload is added later, that is where
+    # `config_overlay_key` should start being populated, from the object
+    # it actually wrote.
+    if overlay and args.apply and not result.get("already_present") \
+            and result.get("run_id") is not None:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE runs SET config_overlay = %s::jsonb"
+                " WHERE run_id = %s",
+                (json.dumps(overlay), result["run_id"]))
+        conn.commit()
+        print("  science overlay recorded: %s (config_hash %s)"
+              % (overlay, config_hash), file=out)
+    elif overlay and not args.apply:
+        print("  [dry-run] would record science overlay: %s "
+              "(config_hash %s)" % (overlay, config_hash), file=out)
     return EXIT_OK
 
 
@@ -1137,7 +1324,8 @@ def _cmd_run_start(conn, args, out):
             window_start=args.window_start, window_end=args.window_end,
             fids=args.fids, work_unit_run_id=args.work_unit_run_id,
             lane=args.lane,
-            job_definition_family=args.job_definition_family)
+            job_definition_family=args.job_definition_family,
+            reference_image_id=args.reference_image_id)
     except (RunStartEnvironmentError, RunStartRegistryError) as exc:
         # One refusal vocabulary for both: an operator whose `run start`
         # was refused wants to know what to do about it, and whether the

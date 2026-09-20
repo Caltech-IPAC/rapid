@@ -35,6 +35,7 @@ chain reaches `pipeline.operatorctl.contract.call_function`, which needs
 
 import argparse
 import io
+import json
 import re
 import sqlite3
 import sys
@@ -916,7 +917,8 @@ class WindowedPhaseDispatchTests(unittest.TestCase):
         def fake_science(handle, start, end, start_mjdobs, end_mjdobs,
                          min_images_to_coadd, fids=None,
                          make_references=False, run_scope=None,
-                         reference_set_id=None, psf_set_id=None):
+                         reference_set_id=None, psf_set_id=None,
+                         reference_image_id=None):
             self.calls.append({
                 "gatherer": "science", "start": start, "end": end,
                 "start_mjdobs": start_mjdobs, "end_mjdobs": end_mjdobs,
@@ -924,7 +926,8 @@ class WindowedPhaseDispatchTests(unittest.TestCase):
                 "fids": fids, "make_references": make_references,
                 "run_scope": run_scope,
                 "reference_set_id": reference_set_id,
-                "psf_set_id": psf_set_id})
+                "psf_set_id": psf_set_id,
+                "reference_image_id": reference_image_id})
             return iter(())
 
         patcher_ref = mock.patch.object(
@@ -1031,7 +1034,7 @@ class WindowedPhaseDispatchTests(unittest.TestCase):
         def five_units(handle, start, end, start_mjdobs, end_mjdobs,
                        min_images_to_coadd, fids=None, make_references=False,
                        run_scope=None, reference_set_id=None,
-                       psf_set_id=None):
+                       psf_set_id=None, reference_image_id=None):
             return iter(range(5))
 
         with mock.patch.object(gathering, "gather_science_units",
@@ -2584,6 +2587,209 @@ class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
                          "run:memprofile-32g-20260913:phase=science")
 
 
+class StartRunAuditedReferenceImageIdTests(unittest.TestCase):
+    """`--reference-image-id` — pin every unit `run start` gathers to one
+    already-registered `refimages.rfid` instead of each resolving its own.
+
+    Unlike `--job-definition-family` this carries no `kind == scratch`
+    restriction (see `start_run_audited`'s docstring for why), so there is
+    no analogue of `test_job_definition_family_refused_for_a_production_
+    kind_run` here — the one gate is the phase, checked BEFORE the
+    registry row is even read (`_bind_registry_row` is never reached on
+    the refusal path, unlike the family check, which needs `runs.kind`).
+
+    Setup mirrors `StartRunAuditedJobDefinitionFamilyTests` almost exactly
+    — same windowed-phase path (`science`), same submission-environment
+    resolution reached along the way — with `gather_for_run` itself
+    replaced by a recording fake rather than driven all the way through
+    `gather_science_units`: this class is about what reaches
+    `gather_for_run`, not about the DB read inside it, which
+    `submission/test/test_gathering.py`'s `science_facts`/`_reference_by_
+    id` tests already cover directly.
+    """
+
+    TREE = {
+        "batch/queue-bulk": "rapid-queue-bulk",
+        "batch/queue-prompt": "rapid-queue-prompt",
+        "batch/job-definition-bulk": "rapid-pipeline-bulk",
+        "batch/job-definition-science": "rapid-pipeline-science",
+    }
+
+    class _FakeBatch:
+        def describe_job_definitions(self, jobDefinitionName=None,
+                                     status=None):
+            return {"jobDefinitions": [
+                {"jobDefinitionName": jobDefinitionName,
+                 "jobDefinitionArn": "arn:aws:batch:us-east-1:ACCOUNT:"
+                                    "job-definition/%s:7" % jobDefinitionName,
+                 "revision": 7,
+                 "containerProperties": {"image": "repo@sha256:" + "3" * 64}},
+            ]}
+
+    def setUp(self):
+        from pipeline.operatorctl import run as run_mod
+        self.run_mod = run_mod
+
+        import os
+        self._saved_env = {name: os.environ.get(name)
+                           for name in ("RAPID_IMAGE_DIGEST",
+                                        "RAPID_RELEASE_IDENTITY",
+                                        "RAPID_MANIFEST_BUCKET")}
+        os.environ["RAPID_IMAGE_DIGEST"] = "sha256:" + "1" * 64
+        os.environ["RAPID_RELEASE_IDENTITY"] = "pin-ref-test"
+        os.environ["RAPID_MANIFEST_BUCKET"] = "rapid-manifests"
+        self.addCleanup(self._restore_env)
+
+        _stub_registry_binding(self, run_mod)
+
+        replay_patcher = mock.patch.object(
+            run_mod, "_replay_lookup", lambda *a, **k: None)
+        replay_patcher.start()
+        self.addCleanup(replay_patcher.stop)
+
+        import submission.startup as startup_mod
+        fetch_patcher = mock.patch.object(
+            startup_mod, "fetch_parameters", lambda: dict(self.TREE))
+        fetch_patcher.start()
+        self.addCleanup(fetch_patcher.stop)
+
+        import pipeline.operator.submission as opsubmission_mod
+        batch_client_patcher = mock.patch.object(
+            opsubmission_mod.boto3, "client",
+            lambda service, **kw: (self._FakeBatch() if service == "batch"
+                                   else object()))
+        batch_client_patcher.start()
+        self.addCleanup(batch_client_patcher.stop)
+
+        # `science`/`reference` are windowed phases, and `start_run_audited`
+        # computes their MJD window via `pipeline.operator.gathering.
+        # mjd_window`/`min_images_to_coadd` BEFORE `gather_for_run` is
+        # reached — the latter reads the release's real science
+        # configuration (`RAPID_SW`), which this stub-tier test has no
+        # installed tree for. Patched the same way
+        # `StartRunAuditedJobDefinitionFamilyTests` patches it, since this
+        # class exercises the identical windowed-phase path for a
+        # different override.
+        import pipeline.operator.gathering as gathering_mod
+        coadd_patcher = mock.patch.object(
+            gathering_mod, "min_images_to_coadd", lambda: 3)
+        coadd_patcher.start()
+        self.addCleanup(coadd_patcher.stop)
+
+        self.gather_calls = []
+
+        def fake_gather_for_run(dbh, phase, **kwargs):
+            self.gather_calls.append(kwargs)
+            return "science", ["unit-a"]
+
+        gather_patcher = mock.patch.object(
+            run_mod, "gather_for_run", fake_gather_for_run)
+        gather_patcher.start()
+        self.addCleanup(gather_patcher.stop)
+
+        self.audit_calls = []
+
+        def fake_record_external_action(conn, idempotency_key,
+                                        action_class, target_scope, reason,
+                                        dry_run=False, rows_affected=0,
+                                        detail=None, policy_citation=None):
+            self.audit_calls.append(
+                {"target_scope": target_scope, "detail": dict(detail or {})})
+            return {"rows_affected": rows_affected, "detail": detail}
+
+        audit_patcher = mock.patch.object(
+            run_mod, "record_external_action", fake_record_external_action)
+        audit_patcher.start()
+        self.addCleanup(audit_patcher.stop)
+
+        db_mod_patcher = mock.patch(
+            "database.modules.utils.rapid_db.RAPIDDB",
+            lambda: types.SimpleNamespace(exit_code=0))
+        db_mod_patcher.start()
+        self.addCleanup(db_mod_patcher.stop)
+
+    def _restore_env(self):
+        import os
+        for name, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def _start(self, phase="science", reference_image_id=555,
+              key="rfid-key"):
+        # `window_start`/`window_end` are required for BOTH windowed phases
+        # (`science` and `reference`) before `start_run_audited` ever
+        # reaches the phase-mismatch check this class is testing, so every
+        # call supplies them -- including the `phase="reference"` refusal
+        # test, which must be refused for being the wrong PHASE, not for
+        # missing an unrelated argument.
+        return self.run_mod.start_run_audited(
+            conn=object(), idempotency_key=key,
+            name="pin-ref-run", phase=phase,
+            reason="reuse a known-good reference", dry_run=True,
+            out=_null_out(), window_start="2027-10-01 00:00:00",
+            window_end="2027-10-08 00:00:00",
+            reference_image_id=reference_image_id)
+
+    def test_reference_image_id_reaches_gather_for_run(self):
+        # THE PROPERTY: the id must reach `gather_for_run` unchanged, which
+        # is what threads it on into `gather_science_units` and, from
+        # there, `science_facts`'s pinned-reference branch.
+        self._start(reference_image_id=555)
+        self.assertEqual(self.gather_calls[-1]["reference_image_id"], 555)
+
+    def test_reference_image_id_refused_for_a_non_science_phase(self):
+        # A reference-image phase BUILDS a reference; it cannot also be
+        # told to reuse one. Refused before the registry row is read, so
+        # no audit row and no gather call result.
+        with self.assertRaises(
+                self.run_mod.RunStartEnvironmentError) as caught:
+            self._start(phase="reference")
+
+        message = str(caught.exception)
+        self.assertIn("science", message)
+        self.assertEqual(self.audit_calls, [])
+        self.assertEqual(self.gather_calls, [])
+
+    def test_reference_image_id_refused_for_a_post_db_chain_phase(self):
+        # The four post-DB-chain phases take no reference at all; naming
+        # one for them is exactly as meaningless as for `reference`.
+        with self.assertRaises(self.run_mod.RunStartEnvironmentError):
+            self._start(phase="catalog-load")
+        self.assertEqual(self.audit_calls, [])
+
+    def test_reference_image_id_joins_the_audit_scope(self):
+        # Two runs of the same name and phase, one pinned and one not (or
+        # pinned to a different rfid), are DIFFERENT actions and must not
+        # replay onto one another.
+        _result, scope = self._start(reference_image_id=555)
+        self.assertIn("reference-image-id=555", scope)
+        self.assertEqual(self.audit_calls[0]["target_scope"], scope)
+
+    def test_reference_image_id_recorded_in_audit_detail(self):
+        self._start(reference_image_id=555)
+        self.assertEqual(
+            self.audit_calls[0]["detail"]["reference_image_id"], 555)
+
+    def test_no_reference_image_id_leaves_the_old_scope_and_detail(self):
+        # Every caller before this switch. Byte-for-byte unchanged, so no
+        # historical idempotency key is stranded and `detail` gains no key
+        # for an override nobody asked for.
+        self.run_mod.start_run_audited(
+            conn=object(), idempotency_key="no-pin",
+            name="pin-ref-run", phase="science",
+            reason="no pin", dry_run=True, out=_null_out(),
+            window_start="2027-10-01 00:00:00",
+            window_end="2027-10-08 00:00:00")
+
+        self.assertNotIn("reference_image_id",
+                         self.audit_calls[0]["detail"])
+        self.assertEqual(self.audit_calls[0]["target_scope"],
+                         "run:pin-ref-run:phase=science")
+        self.assertIsNone(self.gather_calls[-1]["reference_image_id"])
+
+
 # ---------------------------------------------------------------------------
 # Migration 121: `run start` binds to the registry.
 # ---------------------------------------------------------------------------
@@ -3470,7 +3676,10 @@ class RunEnvelopeCliTests(unittest.TestCase):
             # The three flags migration 126 added. All absent here: this
             # test is about the envelope, and `_cmd_run_create` reads all
             # three before it prints anything.
-            reference_set=None, build_reference_set=None, psf_set=None)
+            reference_set=None, build_reference_set=None, psf_set=None,
+            # `--set` (migration 112). Absent here for the same reason: this
+            # test is about the envelope print, not the science overlay.
+            overlay_pairs=None)
         out = io.StringIO()
         operatorctl_main._cmd_run_create(conn, args, out)
         text = out.getvalue()
@@ -3644,7 +3853,12 @@ class ReferenceSetRunCreateAndStartTests(unittest.TestCase):
             idempotency_key="k", apply=False, policy_citation=None,
             lane=None, retry_attempts=None, retry_wallclock_s=None,
             attempt_timeout_s=None, reference_set=None,
-            build_reference_set=None, psf_set=None)
+            build_reference_set=None, psf_set=None,
+            # `--set` (migration 112's science overlay). `None` is the
+            # ordinary case -- every existing `_args()` caller in this
+            # class wants no overlay, matching how `reference_set`/
+            # `psf_set` above default to "not asked for" too.
+            overlay_pairs=None)
         body.update(overrides)
         return argparse.Namespace(**body)
 
@@ -3841,3 +4055,152 @@ class ReferenceSetRunCreateAndStartTests(unittest.TestCase):
         # so the reference set IS the PSF set.
         self._start("science", reference_set_id=7)
         self.assertEqual(7, self.gathers[0]["psf_set_id"])
+
+
+class RunCreateScienceOverlayTests(unittest.TestCase):
+    """`run create --set SECTION.KEY=VALUE` (migration 112).
+
+    SCRATCH ONLY, computing `config_hash` from the REAL merged release
+    configuration (`load_with_digest`), and writing `runs.config_overlay`
+    with a follow-up statement AFTER `derived.create_run`'s own INSERT has
+    already committed — `contract.call_function` commits per call, so
+    "the same transaction as the create" is not available and this is the
+    documented, deliberate alternative. `RAPID_SW` is set to this checkout
+    so `load_with_digest` reads the real `cdf/science/pipeline.toml`,
+    matching what an attempt under the run would read.
+    """
+
+    def setUp(self):
+        import os
+        self._saved_sw = os.environ.get("RAPID_SW")
+        os.environ["RAPID_SW"] = os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        self.addCleanup(self._restore_env)
+
+    def _restore_env(self):
+        import os
+        if self._saved_sw is None:
+            os.environ.pop("RAPID_SW", None)
+        else:
+            os.environ["RAPID_SW"] = self._saved_sw
+
+    def _args(self, **overrides):
+        body = dict(
+            name="overlay-probe", kind="scratch",
+            purpose=None, branch=None, image_digest=None, config_hash=None,
+            input_generations=None, expect_absent=False, reason="why",
+            idempotency_key="k", apply=True, policy_citation=None,
+            lane=None, retry_attempts=None, retry_wallclock_s=None,
+            attempt_timeout_s=None, reference_set=None,
+            build_reference_set=None, psf_set=None, overlay_pairs=None)
+        body.update(overrides)
+        return argparse.Namespace(**body)
+
+    def _create_result(self, **overrides):
+        body = {"action": "run_create", "dry_run": False, "replayed": False,
+                "already_present": False, "rows_affected": 1, "audit_id": 9,
+                "idempotency_key": "k", "run_id": 42, "would_add": True,
+                "lane": "bulk", "retry_attempts": 3,
+                "retry_wallclock_s": 129600, "attempt_timeout_s": 43200}
+        body.update(overrides)
+        return body
+
+    def test_set_is_refused_for_a_production_kind_run(self):
+        # Production's science values are release content, identified by
+        # the image digest alone; an overlay would let a value differ from
+        # what that digest claims it is. Refused BEFORE the connection is
+        # touched -- `object()` would raise on any attribute access.
+        with self.assertRaises(SystemExit) as caught:
+            operatorctl_main._cmd_run_create(
+                object(),
+                self._args(kind="production",
+                           overlay_pairs=["awaicgen.min_frames=5"]),
+                io.StringIO())
+        self.assertIn("--kind scratch", str(caught.exception))
+
+    def test_set_and_config_hash_together_are_refused(self):
+        # The two name the same fact by two different routes; accepting
+        # both would leave whichever the code happens to check last as the
+        # silent winner.
+        with self.assertRaises(SystemExit) as caught:
+            operatorctl_main._cmd_run_create(
+                object(),
+                self._args(config_hash="deadbeef",
+                           overlay_pairs=["awaicgen.min_frames=5"]),
+                io.StringIO())
+        self.assertIn("--config-hash", str(caught.exception))
+
+    def test_set_computes_the_real_merged_digest_and_passes_it_through(self):
+        # THE PROPERTY: `create_run`'s own `config_hash` argument must be
+        # the digest `load_with_digest` computes over base+overlay -- never
+        # a hash of the overlay alone, and never left as the file-only
+        # digest the caller supplied nothing to override.
+        from pipeline.runtime.science_config import load_with_digest
+        _merged, expected_digest = load_with_digest(
+            overlay={"awaicgen": {"min_frames": 5}})
+
+        conn = _FakeConn([self._create_result(), None])
+        out = io.StringIO()
+        code = operatorctl_main._cmd_run_create(
+            conn, self._args(overlay_pairs=["awaicgen.min_frames=5"]), out)
+
+        self.assertEqual(0, code)
+        create_sql, create_params = conn.calls[0]
+        self.assertIn("derived.create_run", create_sql)
+        # `config_hash` is the 8th positional parameter to `create_run`'s
+        # SQL (see `actions.create_run`'s own parameter tuple).
+        self.assertEqual(expected_digest, create_params[7])
+
+    def test_set_writes_config_overlay_after_the_create_on_apply(self):
+        conn = _FakeConn([self._create_result(), None])
+        out = io.StringIO()
+        operatorctl_main._cmd_run_create(
+            conn, self._args(overlay_pairs=["awaicgen.min_frames=5"]), out)
+
+        self.assertEqual(2, len(conn.calls))
+        update_sql, update_params = conn.calls[1]
+        self.assertIn("UPDATE runs SET config_overlay", update_sql)
+        self.assertNotIn("config_overlay_key", update_sql)
+        overlay_json, run_id = update_params
+        self.assertEqual(42, run_id)
+        self.assertEqual({"awaicgen": {"min_frames": 5}},
+                         json.loads(overlay_json))
+        self.assertIn("science overlay recorded", out.getvalue())
+
+    def test_set_on_a_dry_run_writes_nothing(self):
+        # The dry run gathers/validates for real (the digest is computed
+        # for real above `create_run`'s own call) but writes nothing --
+        # `contract.py`'s rule applied to the overlay's own follow-up
+        # statement, not only to `create_run` itself.
+        conn = _FakeConn([self._create_result(dry_run=True, run_id=None,
+                                              would_add=True)])
+        out = io.StringIO()
+        operatorctl_main._cmd_run_create(
+            conn, self._args(apply=False,
+                             overlay_pairs=["awaicgen.min_frames=5"]), out)
+
+        self.assertEqual(1, len(conn.calls))
+        self.assertIn("[dry-run] would record science overlay",
+                      out.getvalue())
+
+    def test_set_on_an_already_present_run_writes_nothing(self):
+        # A replay/no-op create did not author this row, so writing the
+        # overlay onto it would attribute this call's --set to a run it
+        # did not create.
+        conn = _FakeConn([self._create_result(already_present=True,
+                                              run_id=None, rows_affected=0)])
+        out = io.StringIO()
+        operatorctl_main._cmd_run_create(
+            conn, self._args(overlay_pairs=["awaicgen.min_frames=5"]), out)
+
+        self.assertEqual(1, len(conn.calls))
+
+    def test_no_set_leaves_run_create_exactly_as_before(self):
+        # Every caller before this switch: one statement, no overlay
+        # message, `config_hash` passed through unchanged (None here).
+        conn = _FakeConn([self._create_result()])
+        out = io.StringIO()
+        operatorctl_main._cmd_run_create(conn, self._args(), out)
+
+        self.assertEqual(1, len(conn.calls))
+        self.assertNotIn("science overlay", out.getvalue())

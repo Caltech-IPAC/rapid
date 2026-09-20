@@ -301,7 +301,8 @@ def _capped(units, cap):
 
 def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
                    run_name=None, s3_client=None, job_bucket=None,
-                   fids=None, reference_set_id=None, psf_set_id=None):
+                   fids=None, reference_set_id=None, psf_set_id=None,
+                   reference_image_id=None):
     """Gather units for `phase`, capped, via the SAME `submission.gathering`
     functions the VPO and `live_w9_ramp` call. Returns `(job_type, units)`.
 
@@ -331,6 +332,13 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
     derived from `run_name`, because the entire point of sets is that a run
     may read a set another run built. `psf_set_id` is that set's declared
     PSF source, resolved with it.
+
+    `reference_image_id` reaches `gathering.gather_science_units` ALONE,
+    never `gather_reference_units` — `start_run_audited` already refuses it
+    for any phase but `science` before this function is ever called, so
+    the `phase == "reference"` branch below has no use for it and is not
+    given it; this is enforcement-by-omission of a check made once,
+    upstream, not a second copy of that refusal.
     """
     if phase in _WINDOWED_PHASES:
         from submission import gathering, routes
@@ -359,7 +367,8 @@ def gather_for_run(dbh, phase, proc_date=None, cap=None, window=None,
                 dbh, start, end, start_mjdobs=start_mjd, end_mjdobs=end_mjd,
                 min_images_to_coadd=min_coadd, fids=fids,
                 run_scope=run_name,
-                reference_set_id=reference_set_id, psf_set_id=psf_set_id)
+                reference_set_id=reference_set_id, psf_set_id=psf_set_id,
+                reference_image_id=reference_image_id)
             job_type = routes.JOB_TYPE_SCIENCE
 
         units = list(units)
@@ -560,7 +569,8 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
                       policy_citation=None, out=None,
                       window_start=None, window_end=None, fids=None,
                       work_unit_run_id=None, lane=None,
-                      job_definition_family=None):
+                      job_definition_family=None,
+                      reference_image_id=None):
     """Gather, (maybe) submit, and audit `run start`. Returns `(result,
     scope)` — the same shape `terminate_jobs_audited` returns, for the same
     reason: the CLI renders both through the identical `render_plan` call.
@@ -628,6 +638,28 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     actions and must not replay onto one another. The run-envelope work
     persists it as a `runs` column; here it lives in the scope string and
     in the binding the submission records.
+
+    `reference_image_id` pins every unit this call gathers to ONE
+    `refimages.rfid` instead of each unit resolving its own (field,
+    filter)-scoped reference through `_best_reference`. **REFUSED unless
+    `phase == "science"`**, checked HERE, before anything is gathered and
+    before the registry binding below: a `reference` phase's whole job is
+    to BUILD a reference image, so a phase already building one cannot
+    also be told to reuse one — one of the two would silently be ignored,
+    and refusing early says which rather than leaving an operator to infer
+    it from which branch `resolve_reference_image` took. Unlike
+    `job_definition_family` this carries no `kind == scratch` restriction:
+    the task that names it is reusing a specific, already-built reference
+    across a run's units, which is exactly as legitimate for a production
+    run as for a scratch one, and nothing about pinning a reference lets a
+    run claim science content its image digest does not cover — the
+    reference itself is still a real, registered `refimages` row.
+
+    It joins the audit scope for the same reason `lane` and
+    `job_definition_family` do: a run of the same name and phase started
+    with a different pinned reference is a DIFFERENT action from one
+    started without the pin, or with a different one, and must not replay
+    onto either.
     """
     out = out or sys.stdout
     scope = "run:%s:phase=%s" % (name, phase)
@@ -649,8 +681,21 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
     # replay of the first and submit nothing.
     if job_definition_family is not None:
         scope += ":job-definition-family=%s" % job_definition_family
+    if reference_image_id is not None:
+        scope += ":reference-image-id=%s" % reference_image_id
 
     _check_job_definition_family(conn, name, phase, job_definition_family)
+    # CHECKED HERE, before the registry binding and before anything is
+    # gathered — the same placement `_check_job_definition_family` uses and
+    # for the same reason: a refused `run start` writes no audit row at
+    # all, and refusing after gathering has already run would make the
+    # refusal look like it cost something it did not.
+    if reference_image_id is not None and phase != "science":
+        raise RunStartEnvironmentError(
+            "--reference-image-id is accepted only for --phase science; "
+            "got %r. A %r phase's job is to BUILD a reference image, so it "
+            "cannot also be told to reuse one — one of the two would "
+            "silently be ignored" % (phase, phase))
 
     # THE REGISTRY BINDING (migration 121's ruling), BEFORE THE REPLAY
     # LOOKUP AND BEFORE ANY GATHERING. A run this command may not submit
@@ -755,7 +800,7 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
             s3_client=context["s3_client"] if context else None,
             job_bucket=context["manifest_bucket"] if context else None,
             fids=fids, reference_set_id=reference_set_id,
-            psf_set_id=psf_set_id)
+            psf_set_id=psf_set_id, reference_image_id=reference_image_id)
     except KeyError:
         table = ("catalog-load", "crossmatch", "statistics", "merge-dedup",
                  "reference", "science")
@@ -799,6 +844,12 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
         detail["job_definition_family"] = job_definition_family
         if context is not None:
             detail["job_definition_arn"] = context["job_definition"]
+    # Recorded whenever named, for the same reason the family override is:
+    # a reader of the ledger should see which units were pinned to a
+    # specific reference rather than having to re-derive it from the
+    # scope string.
+    if reference_image_id is not None:
+        detail["reference_image_id"] = reference_image_id
 
     if dry_run:
         print("[dry-run] would gather %d unit(s) for phase=%s (job_type=%s)"

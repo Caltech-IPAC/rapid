@@ -312,7 +312,8 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
                   science_ppid: int | None = None,
                   run_scope: str | None = None,
                   reference_set_id: int | None = None,
-                  psf_set_id: int | None = None) -> dict:
+                  psf_set_id: int | None = None,
+                  reference_image_id: int | None = None) -> dict:
     """Resolve one science unit's per-invocation facts.
 
     The fact set the deleted `awsBatchSubmitJobs_launchSingleSciencePipeline`
@@ -350,6 +351,17 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
     skipped rather than performed against some default — a silent default
     here would reintroduce exactly the "whatever is current now" behaviour
     sets exist to remove.
+
+    `reference_image_id`, WHEN GIVEN, REPLACES THE WHOLE (ppid, field, fid,
+    set)-SCOPED LOOKUP ABOVE WITH A DIRECT READ OF THAT ONE ROW
+    (`rapidctl run start --reference-image-id`). It is not a filter over
+    `_best_reference`'s candidates: the operator has already chosen a
+    specific, already-registered reference, so `reference_set_id` plays no
+    part in resolving it and every unit this call is asked for is pinned
+    to the SAME reference regardless of its own (field, fid) — that is
+    the point of the flag, not an edge case of it. `None` (the default)
+    is the only production behaviour and reproduces today's lookup
+    exactly, unchanged.
     """
     reference_ppid = (ppid_for(JOB_TYPE_REFERENCE_IMAGE)
                       if reference_ppid is None else reference_ppid)
@@ -431,9 +443,16 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
             facts["psfid"] = _maybe_int(psf[0])
             facts["psf_uri"] = _maybe_str(psf[1])
 
-    reference = _best_reference(handle, reference_ppid, science_ppid,
-                                field, fid,
-                                reference_set_id=reference_set_id)
+    if reference_image_id is not None:
+        # THE OPERATOR'S PIN, not a search: every unit sharing this call's
+        # (reference_set_id, ppid pair) would otherwise resolve its own
+        # (field, fid)-scoped reference independently, but a pinned
+        # reference is the SAME row for all of them, by construction.
+        reference = _reference_by_id(handle, reference_image_id)
+    else:
+        reference = _best_reference(handle, reference_ppid, science_ppid,
+                                    field, fid,
+                                    reference_set_id=reference_set_id)
     if reference is not None:
         facts["reference_image_id"] = _maybe_int(reference.get("rfid"))
         facts["reference_image_uri"] = _maybe_str(reference.get("filename"))
@@ -534,6 +553,79 @@ def _data_class_for_inputs(handle: UnitSource,
     return data_class_rules.most_restrictive(recorded)
 
 
+def _reference_by_id(handle: UnitSource, rfid: int) -> dict[str, Any]:
+    """One `RefImages` row, by `rfid`, in `_best_reference`'s own return
+    shape (`rfid`/`filename`/`infobits`/`ppid`) — the operator override for
+    `rapidctl run start --reference-image-id`, which names a SPECIFIC,
+    already-registered reference rather than asking `_best_reference` to
+    pick one by (ppid, field, fid, set).
+
+    **RAW SQL OVER `handle.conn`, THE CARVED PATH, NOT A NEW `UnitSource`/
+    `RAPIDDB` METHOD.** `RAPIDDB` is frozen (rule 17) and `UnitSource` is
+    the tested slice of it gathering uses; `get_best_reference_image` is
+    the only reference-image reader either exposes, and it is scoped by
+    (ppid, field, fid, reference_set_id) — there is no by-id accessor to
+    call. Adding one to `RAPIDDB` would repeat the mistake
+    `_data_class_repository`'s own docstring records being refused for
+    (the D, F and E workers each made it once): a query added straight to
+    the frozen class rather than reached over the connection it already
+    exposes. This function is that same carved path, reused rather than
+    reinvented, for a one-row read too small to warrant a repository class
+    of its own the way the data-class provenance read has one.
+
+    The query mirrors `RAPIDDB.get_best_reference_image`'s own SQL exactly
+    (`database/modules/utils/rapid_db.py`) with `ppid` added to the select
+    list — that method never returns the ppid it matched on either, and
+    `_best_reference` above folds it in the same way, from the ppid IT
+    already knows because it chose which one to query; this function reads
+    a SPECIFIC row instead of choosing one, so the ppid can only come from
+    the row itself.
+
+    `status > 0` is intentionally NOT checked here, unlike
+    `get_best_reference_image`'s `WHERE`. That predicate exists to keep an
+    unvetted or superseded coadd out of a search that is choosing AMONG
+    candidates; an operator naming an EXACT rfid has already made that
+    choice and is not searching, so re-applying the same filter would
+    silently turn "use rfid 12345" into "use rfid 12345, unless it fails a
+    check the operator was never told about" — a confusing, actionable-
+    only-by-reading-this-function's-source failure mode. A nonexistent
+    rfid is refused below with a clear message instead.
+
+    Raises
+    ------
+    GatheringError
+        The query failed, or no `RefImages` row has this `rfid` — the
+        second case named explicitly, since an operator's typo in an
+        integer id would otherwise surface many stages later as a missing
+        `reference_image_uri` fact with no mention of the id that was
+        asked for.
+    """
+    conn = getattr(handle, "conn", None)
+    if conn is None:
+        raise GatheringError(
+            "cannot resolve --reference-image-id %r: this gathering "
+            "handle exposes no database connection to query RefImages "
+            "with (the stub tier's test doubles have none by design)"
+            % (rfid,))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT rfid, filename, infobits, ppid"
+                "  FROM RefImages"
+                " WHERE rfid = %s",
+                (rfid,))
+            row = cur.fetchone()
+    except Exception as exc:                            # noqa: BLE001
+        raise GatheringError(
+            "reference lookup failed for rfid %s: %s" % (rfid, exc)) from exc
+    if row is None:
+        raise GatheringError(
+            "--reference-image-id %s names no row in RefImages; it must be "
+            "an existing reference image's rfid" % (rfid,))
+    return {"rfid": row[0], "filename": row[1], "infobits": row[2],
+           "ppid": row[3]}
+
+
 def _best_reference(handle: UnitSource, reference_ppid: int,
                     science_ppid: int, field: int,
                     fid: int,
@@ -593,7 +685,8 @@ def gather_science_units(handle: UnitSource, start, end,
                          make_references: bool = False,
                          run_scope: str | None = None,
                          reference_set_id: int | None = None,
-                         psf_set_id: int | None = None
+                         psf_set_id: int | None = None,
+                         reference_image_id: int | None = None
                          ) -> Iterator[ProcessingUnit]:
     """Yield the science (or reference-image) units ready in a window.
 
@@ -628,6 +721,13 @@ def gather_science_units(handle: UnitSource, start, end,
     see that method's own docstring for the exact semantics and why the
     work-unit branch is equality-matched while the Attempts branch is
     prefix-matched.
+
+    `reference_image_id`, when given, pins EVERY science unit gathered here
+    to that one `refimages.rfid` (`science_facts`'s own docstring has the
+    detail) instead of letting each resolve its own (field, fid)-scoped
+    reference. Ignored when `make_references` is true — see the call site
+    below for why: the units gathered in that branch are what a reference
+    gets BUILT from, so there is nothing to pin them to yet.
     """
     fids = range(1, N_FILTERS + 1) if fids is None else fids
     pairs: list[tuple[int, int]] = []
@@ -665,10 +765,25 @@ def gather_science_units(handle: UnitSource, start, end,
             # created. Both are passed, neither substitutes for the other —
             # a run can gather under its own scope while reading a set
             # another run built, which is what sets are for.
-            facts = science_facts(handle, rid, field, fid,
-                                  run_scope=run_scope,
-                                  reference_set_id=reference_set_id,
-                                  psf_set_id=psf_set_id)
+            #
+            # `reference_image_id` IS PASSED ONLY WHEN NOT BUILDING ONE.
+            # `make_references` selects the OTHER stage — the representative
+            # frame gathered here IS what a reference gets built from, so
+            # pinning it to an already-registered reference would be asking
+            # this call to both build a reference and reuse one at once.
+            # `gather_for_run` never calls this function with
+            # `make_references=True` and a `reference_image_id` together
+            # (`start_run_audited` refuses the flag outside `--phase
+            # science` before either gatherer is reached), but the guard
+            # lives here too so this function is correct called on its own,
+            # not only correct as `run start` happens to call it.
+            facts = science_facts(
+                handle, rid, field, fid,
+                run_scope=run_scope,
+                reference_set_id=reference_set_id,
+                psf_set_id=psf_set_id,
+                reference_image_id=(None if make_references
+                                    else reference_image_id))
             exposure = facts.get("expid")
             if exposure is None:
                 raise GatheringError(
