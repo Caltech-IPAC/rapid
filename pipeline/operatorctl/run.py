@@ -124,6 +124,13 @@ _FAMILY_OVERRIDE_KIND = "scratch"
 #: this milestone does not route (`statistics`, `merge-dedup`) -- better a
 #: phase that submits to the tree's definition and is refused by IAM than one
 #: silently routed to a definition nobody checked.
+#: The Batch lane a scratch run takes unless its driver names one. `prompt`
+#: is the ON-DEMAND compute environment (`rapid-ce-prompt`); `bulk` is Spot
+#: (`rapid-ce-bulk`, capacity-optimised). Ben's standing instruction,
+#: 2026-09-20: this tier runs on-demand, because a Spot reclamation costs a
+#: waiting scientist the whole iteration rather than a retry nobody watches.
+_SCRATCH_LANE = "prompt"
+
 _SCRATCH_DEFINITIONS = {
     "science": "rapid-scratch-science",
     "reference": "rapid-scratch-bulk",
@@ -782,6 +789,23 @@ def start_run_audited(conn, idempotency_key, name, phase, reason,
         job_definition_family = _SCRATCH_DEFINITIONS.get(phase)
         if job_definition_family is not None:
             scope += ":job-definition-family=%s" % job_definition_family
+
+    # A SCRATCH RUN GOES TO THE ON-DEMAND LANE (Ben, 2026-09-20). `bulk` is
+    # the Spot lane (`rapid-ce-bulk`, capacity-optimised) and `prompt` the
+    # on-demand one (`rapid-ce-prompt`). A scratch run is somebody sitting at
+    # a terminal waiting for an answer, and a Spot reclamation costs them the
+    # whole iteration rather than a retry nobody is watching. Standing policy
+    # for this tier, so it lives here as the tier's default rather than in
+    # whatever command line happens to be typed.
+    #
+    # AN EXPLICIT --lane STILL WINS. `run start --lane` defaults to "bulk" in
+    # the CLI, so a value arriving here is either that default or a driver's
+    # deliberate choice; only `None` — what an in-process caller passes — is
+    # filled in. Production never reaches this branch: its runs are not kind
+    # `scratch`.
+    if lane is None and run["kind"] == _FAMILY_OVERRIDE_KIND:
+        lane = _SCRATCH_LANE
+        scope += ":lane=%s" % lane
 
     # THE RUN'S EXECUTION ENVELOPE (migration 122), read from the row just
     # bound. `--lane` overrides the run's stored lane for THIS submission and

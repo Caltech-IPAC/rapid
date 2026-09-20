@@ -2610,8 +2610,16 @@ class StartRunAuditedJobDefinitionFamilyTests(unittest.TestCase):
         detail = self.audit_calls[0]["detail"]
         self.assertNotIn("job_definition_family", detail)
         self.assertNotIn("job_definition_arn", detail)
+        # The LANE is in the scope now, and legitimately: this fixture's row
+        # is scratch-kind, and a scratch run with no explicit `--lane`
+        # defaults to the on-demand lane (Ben, 2026-09-20 — this tier does
+        # not run on Spot). The assertion this test exists for is the
+        # job-definition family, which is still absent; the lane fragment is
+        # the tier default announcing itself, exactly as the family fragment
+        # does for a mapped phase.
         self.assertEqual(self.audit_calls[0]["target_scope"],
-                         "run:memprofile-32g-20260913:phase=statistics")
+                         "run:memprofile-32g-20260913:phase=statistics"
+                         ":lane=prompt")
 
     def test_a_scratch_run_at_phase_science_is_auto_routed_with_no_override(self):
         # THE OTHER HALF of the invariant the test above used to assert
@@ -2834,9 +2842,15 @@ class StartRunAuditedReferenceImageIdTests(unittest.TestCase):
 
         self.assertNotIn("reference_image_id",
                          self.audit_calls[0]["detail"])
+        # The lane fragment trails the family one, in the order
+        # `start_run_audited` appends them: a scratch run with no explicit
+        # `--lane` takes the on-demand lane (Ben, 2026-09-20). What this
+        # test asserts is the ABSENCE of a reference-image-id fragment, and
+        # that is still what it shows.
         self.assertEqual(self.audit_calls[0]["target_scope"],
                          "run:pin-ref-run:phase=science:"
-                         "job-definition-family=rapid-scratch-science")
+                         "job-definition-family=rapid-scratch-science"
+                         ":lane=prompt")
         self.assertIsNone(self.gather_calls[-1]["reference_image_id"])
 
 
