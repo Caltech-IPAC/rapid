@@ -514,8 +514,16 @@ def load_sources(context) -> None:
 
     with transaction(conn) as cursor:
         before = _table_count(cursor, table)
+        # `attempt_id` passed unconditionally (scratch run kind,
+        # rapid_systems migration 132): `load_through_staging` itself
+        # decides, from the attempt's own run, whether this connection can
+        # reach `sources_<date>_<sca>` directly (production, unchanged) or
+        # only through `derived.scratch_load_sources_staged` (a scratch
+        # identity holds no table-level write grant anywhere). A production
+        # attempt pays one extra SELECT to learn what it already is.
         result = catalog_db.load_through_staging(
-            cursor, csv_path, table, "sources", SOURCES_COLUMNS)
+            cursor, csv_path, table, "sources", SOURCES_COLUMNS,
+            attempt_id=context.attempt_id)
 
     outcome = _verify_effect(
         conn, context, f"catalog load {table}",
@@ -790,8 +798,18 @@ def _advance_association_watermark(cursor, context, association_set, lane,
             field, proc_date, position)
         return False
 
+    # `attempt_id` passed unconditionally (scratch run kind, rapid_systems
+    # migration 132): `advance` itself decides, from the attempt's own run,
+    # whether this connection can reach `derived.advance_association_
+    # watermark` directly (production, unchanged — that function is
+    # invoker-rights and `rapid_pipeline`'s own table grant is what makes
+    # the call work today) or only through `derived.scratch_advance_
+    # association_watermark` (a scratch identity holds no table grant on
+    # `association_watermarks` anywhere). A production attempt pays one
+    # extra SELECT to learn what it already is.
     advanced = association_watermark.advance(
-        cursor, association_set, lane, proc_date, field)
+        cursor, association_set, lane, proc_date, field,
+        attempt_id=context.attempt_id)
     if not advanced:
         context.logger.info(
             "field %d of %s lost the watermark CAS for set %d lane %d; a "
@@ -875,6 +893,23 @@ def crossmatch_sources(context) -> None:
             cursor, context, field, proc_date, float(radius),
             astroobjects, objects_csv, merges_csv)
 
+        # NOT WIRED TO SCRATCH (rapid_systems migration 132's own gap, not
+        # this pass's). `derived.scratch_load_associations_staged` takes
+        # BOTH staging tables and BOTH targets and upserts them together in
+        # one call/transaction — the astroobjects and merges rows for one
+        # field are one atomic unit to it, matching this function's own
+        # single `transaction(conn)` block. `load_through_staging` is called
+        # once PER TABLE, below, so neither call has the other table's name
+        # in hand to offer the wrapper the pair it requires. Passing
+        # `attempt_id` to either call in isolation would be wrong twice
+        # over: it would either invoke a two-table wrapper with only one
+        # table's staging/target names (a shape `scratch_load_
+        # associations_staged` does not have), or split what the migration
+        # deliberately made one call into two, losing the atomicity the
+        # wrapper exists to keep. Making a scratch run's crossmatch phase
+        # work needs `load_through_staging` (or this call site) restructured
+        # to hand both pairs to one wrapper call together — a real code
+        # change, correctly left to whoever wires this path, not forced here.
         objects_result = catalog_db.load_through_staging(
             cursor, objects_csv, astroobjects, "astroobjects",
             ASTROOBJECTS_COLUMNS)

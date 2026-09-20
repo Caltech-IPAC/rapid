@@ -84,6 +84,44 @@ CONFLICT_TARGETS = {
 _FIELD_NAME = re.compile(r"^[a-z][a-z0-9]*_[0-9]+$")
 _DATE_SCA_NAME = re.compile(r"^[a-z][a-z0-9]*_[0-9]{8}_[0-9]+$")
 
+# The same attempt-to-run join rapid_systems migration 132's
+# `derived.scratch_run_for_attempt` documents and applies server-side
+# (`attempts.run_id` is TEXT and is the run's NAME, possibly with a
+# split-pass `-<n>` suffix — 108's own comment, 131's own resolution logic
+# in the reverse direction). Read here, client-side, for the ONE thing SQL
+# cannot decide for Python: which of two entirely different call paths to
+# take BEFORE any statement is issued — call the invoker-rights function a
+# production attempt has always called, unchanged, or call migration 132's
+# `derived.scratch_*` wrapper, which is the only thing a scratch attempt's
+# identity (`rapid_scratch_pipeline`, no table-level grant anywhere) is
+# privileged to call at all. The wrapper re-derives and re-fences the same
+# run from the same attempt_id independently once called — this probe is
+# Python's own dispatch decision, not a substitute for that fence.
+_SCRATCH_RUN_PROBE = (
+    "SELECT r.kind FROM public.attempts a"
+    " JOIN public.runs r ON a.run_id LIKE r.name || '%%'"
+    " WHERE a.attempt_id = %s"
+)
+
+
+def is_scratch_attempt(cursor, attempt_id) -> bool:
+    """Does `attempt_id` belong to a `kind = 'scratch'` run?
+
+    False for a production attempt in BOTH the ways that can happen: no
+    `runs` row matches at all (the ordinary case — a run exists only as a
+    string prefix on `attempts.run_id` for every production attempt and the
+    301 historical run identifiers that predate the registry, 108's own
+    header), or a `runs` row matches with `kind = 'production'`. Either way
+    the caller takes today's unchanged code path. Only an exact
+    `kind = 'scratch'` match routes to a `derived.scratch_*` wrapper.
+
+    One attempt can only ever belong to one run, so at most one row can
+    match; `fetchone()` is enough.
+    """
+    cursor.execute(_SCRATCH_RUN_PROBE, (attempt_id,))
+    row = cursor.fetchone()
+    return row is not None and row[0] == "scratch"
+
 
 def validate_child_name(tablename: str, prototype: str) -> str:
     """Check a child table's name before it is composed into DDL.
@@ -191,7 +229,7 @@ def create_child_table(cursor, tablename: str, prototype: str,
 
 
 def load_through_staging(cursor, csv_path: str, tablename: str,
-                         prototype: str, columns) -> dict:
+                         prototype: str, columns, attempt_id=None) -> dict:
     """Bulk-load a CSV into a child table through a staging table and an
     upsert. Returns `{"rows_staged", "rows_written", "seconds", "rate"}`.
 
@@ -221,6 +259,33 @@ def load_through_staging(cursor, csv_path: str, tablename: str,
     and never appears in `pg_tables` for a sweep to find. It is deliberately
     UNCONSTRAINED: staging is where duplicates are allowed to arrive, and the
     upsert is where they are resolved.
+
+    `attempt_id`, SCRATCH DISPATCH (rapid_systems migration 132). `None` —
+    every existing caller before this parameter existed, and every
+    production caller from here on — takes exactly today's path: this
+    connection authenticates as `rapid_pipeline`, which holds a direct
+    table INSERT grant, so the raw upsert below runs as it always has, byte
+    for byte. Only `prototype == "sources"` has a matching wrapper
+    (`derived.scratch_load_sources_staged` takes one already-populated
+    staging table and one target, which is exactly this function's own
+    grain); passed a non-None `attempt_id` for that prototype, the CREATE
+    TEMP TABLE and COPY above still run exactly as for production — a SQL
+    function cannot open a local CSV or drive `COPY FROM STDIN` (132's file
+    header) — and only the final INSERT...SELECT...ON CONFLICT is replaced
+    by the wrapper call, which re-derives and re-fences the run from
+    `attempt_id` itself before touching the target table.
+
+    `prototype in ("astroobjects", "merges")` has NO per-call match: the
+    migration's sibling wrapper, `derived.scratch_load_associations_staged`,
+    takes BOTH staging tables and BOTH targets and writes them together in
+    one transaction, because a scratch identity with no table grant can only
+    reach the shared tables through a function call, and this function is
+    called once PER TABLE by `crossmatch_sources` (`post_db.py`). Forcing a
+    two-table-atomic wrapper into a one-table-at-a-time call here would
+    either drop the atomicity the wrapper exists to keep or require this
+    function to know about its sibling call — both worse than leaving the
+    mismatch visible. `crossmatch_sources` is therefore NOT wired to scratch
+    by this change; see its own call sites for the same note.
     """
     validate_child_name(tablename, prototype)
 
@@ -233,6 +298,12 @@ def load_through_staging(cursor, csv_path: str, tablename: str,
     # constraints. Staging must accept whatever the CSV holds — resolving
     # what is duplicate is the upsert's job, and a constraint here would
     # abort the COPY instead, which is the behaviour being replaced.
+    #
+    # Unconditional, scratch or production: a SQL function cannot open the
+    # local CSV or drive a client-side `COPY FROM STDIN` (132's file
+    # header), so the caller does this step itself either way — only the
+    # THIRD step below (the shared-table write) is what a scratch identity
+    # cannot do directly and needs the wrapper for.
     cursor.execute(
         sql.SQL("CREATE TEMP TABLE {staging} "
                 "(LIKE {target} INCLUDING DEFAULTS) ON COMMIT DROP").format(
@@ -244,27 +315,42 @@ def load_through_staging(cursor, csv_path: str, tablename: str,
                          columns=tuple(columns))
     rows_staged = cursor.rowcount
 
-    column_list = sql.SQL(", ").join(sql.Identifier(c) for c in columns)
-    if conflict:
-        statement = sql.SQL(
-            "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging} "
-            "ON CONFLICT ({conflict}) DO NOTHING").format(
-                target=sql.Identifier(tablename), cols=column_list,
-                staging=sql.Identifier(staging),
-                conflict=sql.SQL(", ").join(
-                    sql.Identifier(c) for c in conflict))
+    if (attempt_id is not None and prototype == "sources"
+            and is_scratch_attempt(cursor, attempt_id)):
+        # THROUGH THE WRAPPER, NOT THE RAW UPSERT (scratch run kind).
+        # `derived.scratch_load_sources_staged` re-validates p_target's own
+        # shape and re-confirms p_staging is a TEMP relation visible in this
+        # session before it runs the identical `INSERT ... ON CONFLICT (pid,
+        # id, isdiffpos) DO NOTHING` this branch's production sibling issues
+        # directly below — see 132 §5. `rows_written` is its own return
+        # value (ROW_COUNT off the same statement), not re-derived here.
+        cursor.execute(
+            "SELECT derived.scratch_load_sources_staged(%s, %s, %s)",
+            (attempt_id, staging, tablename))
+        rows_written = cursor.fetchone()[0]
     else:
-        # No unique index on this prototype, so there is no conflict to
-        # resolve and no target to name. `ON CONFLICT` with no target would
-        # silently swallow a violation of ANY constraint, including one a
-        # later migration adds for a reason this code knows nothing about.
-        statement = sql.SQL(
-            "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging}"
-        ).format(target=sql.Identifier(tablename), cols=column_list,
-                 staging=sql.Identifier(staging))
+        column_list = sql.SQL(", ").join(sql.Identifier(c) for c in columns)
+        if conflict:
+            statement = sql.SQL(
+                "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging} "
+                "ON CONFLICT ({conflict}) DO NOTHING").format(
+                    target=sql.Identifier(tablename), cols=column_list,
+                    staging=sql.Identifier(staging),
+                    conflict=sql.SQL(", ").join(
+                        sql.Identifier(c) for c in conflict))
+        else:
+            # No unique index on this prototype, so there is no conflict to
+            # resolve and no target to name. `ON CONFLICT` with no target
+            # would silently swallow a violation of ANY constraint,
+            # including one a later migration adds for a reason this code
+            # knows nothing about.
+            statement = sql.SQL(
+                "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging}"
+            ).format(target=sql.Identifier(tablename), cols=column_list,
+                     staging=sql.Identifier(staging))
 
-    cursor.execute(statement)
-    rows_written = cursor.rowcount
+        cursor.execute(statement)
+        rows_written = cursor.rowcount
 
     elapsed = time.monotonic() - started
     rate = (rows_written / elapsed) if elapsed > 0 else 0.0

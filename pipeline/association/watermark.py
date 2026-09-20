@@ -27,6 +27,16 @@ separate locks.
 
 import logging
 
+# The scratch-attempt probe is shared with `pipeline.stages.catalog_db`
+# rather than re-implemented here: it is the identical attempt-to-run join
+# rapid_systems migration 132's `derived.scratch_run_for_attempt` documents
+# and applies server-side, and a second, independently-drifting copy of that
+# join is exactly the liability this module's own docstring warns against
+# for "how does a watermark advance safely" ("a second, differently shaped
+# answer ... would be a liability") — the same reasoning applies to how a
+# scratch attempt is recognized in the first place.
+from pipeline.stages.catalog_db import is_scratch_attempt as _is_scratch_attempt
+
 logger = logging.getLogger("rapid.association.watermark")
 
 #: The association lane's advisory-lock namespace for `pg_advisory_xact_lock`'s
@@ -178,7 +188,7 @@ def read_watermark(cursor, association_set, lane):
             None if field is None else int(field))
 
 
-def advance(cursor, association_set, lane, proc_date, field):
+def advance(cursor, association_set, lane, proc_date, field, attempt_id=None):
     """Advance this lane's watermark to `(proc_date, field)`. CAS-guarded.
 
     Returns True when the watermark moved, False when the guard refused.
@@ -199,6 +209,19 @@ def advance(cursor, association_set, lane, proc_date, field):
     to guess, because "refused because someone else did it" and "refused
     because I am stale" are the same row-count from here and are told apart by
     the re-read the caller already holds.
+
+    `attempt_id`, SCRATCH DISPATCH (rapid_systems migration 132). `None` —
+    every call site before this parameter existed, and every production
+    call site from here on — takes exactly today's path below, unchanged:
+    this connection authenticates as `rapid_pipeline`, whose own direct
+    table UPDATE on `association_watermarks` is what lets it reach
+    `derived.advance_association_watermark` (itself invoker-rights; 049's
+    own header) at all. Only when `attempt_id` resolves to a `kind =
+    'scratch'` run does this call through `derived.scratch_advance_
+    association_watermark` instead — the actual privilege-boundary move for
+    a service identity with no table grant anywhere (132 §6), which
+    re-derives and re-fences the same run from `attempt_id` on its own
+    before calling through to the exact function below.
     """
     proc_date = str(proc_date)
     field = int(field)
@@ -218,9 +241,15 @@ def advance(cursor, association_set, lane, proc_date, field):
     # mirrors — the module's own comment calls them "the same comparison
     # written twice", and that is now a statement about a function and its
     # transcription rather than about two live code paths.
-    cursor.execute(
-        "SELECT derived.advance_association_watermark(%s, %s, %s, %s)",
-        (int(association_set), int(lane), proc_date, field))
+    if attempt_id is not None and _is_scratch_attempt(cursor, attempt_id):
+        cursor.execute(
+            "SELECT derived.scratch_advance_association_watermark("
+            "%s, %s, %s, %s, %s)",
+            (attempt_id, int(association_set), int(lane), proc_date, field))
+    else:
+        cursor.execute(
+            "SELECT derived.advance_association_watermark(%s, %s, %s, %s)",
+            (int(association_set), int(lane), proc_date, field))
     row = cursor.fetchone()
     return bool(row[0]) if row is not None else False
 

@@ -680,7 +680,7 @@ _RECORD_OUTCOME_SQL = (
 
 
 def record_registration_outcome(attempt_id, outcome, record_sequence,
-                                cursor=None):
+                                cursor=None, is_scratch=False):
     """Append this registration's account to the attempt's outcome document.
 
     Migration 024 created `registration_outcome` and deliberately left the
@@ -692,6 +692,15 @@ def record_registration_outcome(attempt_id, outcome, record_sequence,
     `diffimages` cannot also grow this document on every pass. A body that
     returned nothing structured (the reference path today) writes no event
     and only advances the high-water mark.
+
+    `is_scratch`, SCRATCH DISPATCH (rapid_systems migration 132), same
+    source and reasoning as `mark_registered`'s: the caller reads
+    `row["work_unit_run_id"]` once and passes the answer down rather than
+    this function looking it up again. `False` reissues `_RECORD_OUTCOME_
+    SQL` exactly as today; `True` routes through `derived.scratch_record_
+    registration_outcome`, which takes the SAME already-built `event`
+    document this function constructs below and reissues the identical
+    jsonb_build_object UPDATE server-side (132 §7).
     """
     if cursor is None or not isinstance(outcome, dict):
         return None
@@ -702,6 +711,12 @@ def record_registration_outcome(attempt_id, outcome, record_sequence,
              "product": outcome.get("product"),
              "role_resolved_from": outcome.get("role_resolved_from"),
              "sequence": sequence}
+    if is_scratch:
+        cursor.execute(
+            "SELECT derived.scratch_record_registration_outcome("
+            "%s, %s, %s)",
+            (attempt_id, json.dumps(event, sort_keys=True), sequence))
+        return event
     cursor.execute(_RECORD_OUTCOME_SQL,
                    {"event": json.dumps(event, sort_keys=True),
                     "sequence": sequence, "attempt_id": attempt_id})
@@ -745,7 +760,7 @@ _L2_CREATED_SQL = (
 )
 
 
-def record_l2_available(attempt_id, row, cursor=None):
+def record_l2_available(attempt_id, row, cursor=None, is_scratch=False):
     """The `l2_available` milestone, written in the acceptance transaction.
 
     **WHY IT MOVED HERE** (conformance rule 8, brief C2). This was
@@ -805,6 +820,20 @@ def record_l2_available(attempt_id, row, cursor=None):
     proxy timestamp is unavailable, and a NULL `reached_at` is refused by the
     schema anyway. The fallback is logged so a milestone carrying an
     acceptance time rather than a source time is visible as such.
+
+    `is_scratch`, SCRATCH DISPATCH (rapid_systems migration 132), same
+    source and reasoning as `mark_registered`'s: the caller reads
+    `row["work_unit_run_id"]` once. `False` takes every statement below
+    exactly as today. `True` skips only the find-before-write guard and the
+    INSERT — `_L2_AVAILABLE_EXISTS_SQL`/`_RECORD_L2_AVAILABLE_SQL`, both bare
+    `milestones` statements a scratch identity has no table grant for — and
+    routes them through `derived.scratch_record_l2_available` instead, which
+    folds the identical guard-then-insert into one call server-side (132
+    §7) and returns the same True/False this function already returns.
+    `reached_at`'s OWN resolution (`_L2_CREATED_SQL`, `public.L2Files`, plus
+    the acceptance-time fallback) is NOT part of that wrapper — it reads a
+    different table the wrapper does not touch — so it stays exactly as it
+    is below, run once, for both branches.
     """
     if cursor is None:
         return False
@@ -819,9 +848,10 @@ def record_l2_available(attempt_id, row, cursor=None):
         # chain) legitimately has neither; it has no L2 input to be available.
         return False
 
-    cursor.execute(_L2_AVAILABLE_EXISTS_SQL, (int(exposure_id), int(sca)))
-    if cursor.fetchone() is not None:
-        return False
+    if not is_scratch:
+        cursor.execute(_L2_AVAILABLE_EXISTS_SQL, (int(exposure_id), int(sca)))
+        if cursor.fetchone() is not None:
+            return False
 
     cursor.execute(_L2_CREATED_SQL, (int(exposure_id), int(sca)))
     found = cursor.fetchone()
@@ -832,6 +862,17 @@ def record_l2_available(attempt_id, row, cursor=None):
             "no current L2Files row for %s/%s; the l2_available milestone "
             "carries the acceptance time rather than the source proxy",
             exposure_id, sca)
+
+    if is_scratch:
+        cursor.execute(
+            "SELECT derived.scratch_record_l2_available(%s, %s, %s, %s)",
+            (attempt_id, int(exposure_id), int(sca), reached_at))
+        recorded = bool(cursor.fetchone()[0])
+        if recorded:
+            logger.info(
+                "l2_available milestone recorded for %s/%s at acceptance "
+                "(attempt %s)", exposure_id, sca, attempt_id)
+        return recorded
 
     cursor.execute(_RECORD_L2_AVAILABLE_SQL,
                    (int(exposure_id), int(sca), reached_at, attempt_id))
@@ -1246,7 +1287,8 @@ def record_validation_rejection(attempt_id, error, record_key, record_sequence,
     return event
 
 
-def mark_registered(conn, attempt_id, record_sequence, now=None, cursor=None):
+def mark_registered(conn, attempt_id, record_sequence, now=None, cursor=None,
+                    is_scratch=False):
     """Record that this attempt was registered at `record_sequence`.
 
     The watermark write (review finding #5). Guarded so a replay or a
@@ -1280,20 +1322,42 @@ def mark_registered(conn, attempt_id, record_sequence, now=None, cursor=None):
     already yielded, rather than opening a second one on the same connection.
     Either works — cursors on one connection share its transaction — but
     reusing it keeps the whole unit of work visibly on one cursor.
+
+    `is_scratch`, SCRATCH DISPATCH (rapid_systems migration 132). `False` —
+    every call site before this parameter existed, and every production call
+    site from here on — takes exactly the path below, unchanged: this
+    connection authenticates as `rapid_pipeline`, whose own direct table
+    UPDATE on `attempts` is what makes `_MARK_REGISTERED_SQL` work today.
+    The caller decides this from `row["work_unit_run_id"]` (`consumer.
+    _CANDIDATE_WHERE_SQL`'s LEFT JOIN column, already read once per attempt
+    and NOT NULL only for a scratch run's own work unit) rather than this
+    function issuing a second lookup for a fact its caller already has. True
+    routes through `derived.scratch_mark_registered`, which re-derives and
+    re-fences the run from `attempt_id` on its own and then reissues this
+    exact statement server-side (132 §7) — a scratch identity holds no
+    table-level UPDATE on `attempts` anywhere.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
     sequence = int(record_sequence if record_sequence is not None else 1)
+    # `moment` is passed through explicitly in both branches below rather
+    # than left to the wrapper's own `DEFAULT now()` — a caller that
+    # supplied `now` (the replay/backfill path) must see that same moment
+    # recorded under scratch exactly as it would under production, not a
+    # fresh moment the wrapper mints at call time.
+    statement = ("SELECT derived.scratch_mark_registered(%s, %s, %s)"
+                if is_scratch else _MARK_REGISTERED_SQL)
+    params = ((attempt_id, sequence, moment) if is_scratch else
+             (moment, sequence, sequence, attempt_id, sequence))
     if cursor is not None:
-        cursor.execute(_MARK_REGISTERED_SQL,
-                       (moment, sequence, sequence, attempt_id, sequence))
+        cursor.execute(statement, params)
         return sequence
     with conn.cursor() as cur:
-        cur.execute(_MARK_REGISTERED_SQL,
-                    (moment, sequence, sequence, attempt_id, sequence))
+        cur.execute(statement, params)
     return sequence
 
 
-def mark_consumed(conn, attempt_id, record_sequence, cursor=None):
+def mark_consumed(conn, attempt_id, record_sequence, cursor=None,
+                  is_scratch=False):
     """Record that this attempt's terminal SKIP verdict CONSUMED `record_
     sequence`, without accepting a result (ruling R1 / migration 075).
 
@@ -1313,8 +1377,18 @@ def mark_consumed(conn, attempt_id, record_sequence, cursor=None):
     lease, and there is no legitimate caller reaching it any other way (see
     `register_batch`'s SKIP handling for why: ruling R1 moved SKIP under the
     same lock discipline REGISTER already had).
+
+    `is_scratch` — same dispatch as `mark_registered`'s, same source
+    (`row["work_unit_run_id"] is not None`): `False` is today's unchanged
+    `_MARK_CONSUMED_SQL`, `True` routes through `derived.scratch_mark_
+    consumed` (132 §7).
     """
     sequence = int(record_sequence if record_sequence is not None else 1)
+    if is_scratch:
+        cursor.execute(
+            "SELECT derived.scratch_mark_consumed(%s, %s)",
+            (attempt_id, sequence))
+        return sequence
     cursor.execute(_MARK_CONSUMED_SQL, (sequence, attempt_id, sequence))
     return sequence
 
@@ -1687,8 +1761,16 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False,
                         verdict.attempt_id, row.get("work_unit_id"),
                         row.get("product_disposition"),
                         row.get("rapid_outcome"), cur)
+                    # `row["work_unit_run_id"]` (scratch run kind, migration
+                    # 132): the same LEFT JOINed fact `products.registrar`
+                    # reads for the identical question — NOT NULL only for a
+                    # scratch run's own work unit — read once here rather
+                    # than `mark_consumed` issuing its own lookup for what
+                    # this row already carries.
                     mark_consumed(conn, verdict.attempt_id, target_sequence,
-                                 cursor=cur)
+                                 cursor=cur,
+                                 is_scratch=row.get("work_unit_run_id")
+                                 is not None)
             except Exception:  # noqa: BLE001 - counted, not swallowed
                 run.failed += 1
                 logger.exception(
@@ -1881,6 +1963,15 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False,
                         rejection)
                     continue
 
+                # `row["work_unit_run_id"]` (scratch run kind, migration
+                # 132): read once here, the same LEFT JOINed fact
+                # `products.registrar` already reads for the identical
+                # question (`register()`'s own `run_id = row.get(
+                # "work_unit_run_id")`, just above via `register(row,
+                # verdict)`), and passed to all three calls below rather
+                # than each issuing its own lookup.
+                is_scratch = row.get("work_unit_run_id") is not None
+
                 # THE REGISTRATION OUTCOME, inside the same envelope as the
                 # product rows and the watermark (migration 024 left the
                 # column with its write site owed: "column first, writer
@@ -1889,10 +1980,11 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False,
                 # no account, and this way the three land or none do.
                 record_registration_outcome(
                     verdict.attempt_id, outcome,
-                    row.get("terminal_record_sequence"), cursor=cur)
+                    row.get("terminal_record_sequence"), cursor=cur,
+                    is_scratch=is_scratch)
                 mark_registered(conn, verdict.attempt_id,
                                 row.get("terminal_record_sequence"),
-                                cursor=cur)
+                                cursor=cur, is_scratch=is_scratch)
                 # THE `l2_available` MILESTONE, IN THIS TRANSACTION (rule 8,
                 # brief C2). It used to be written by the science stage's
                 # `download_inputs` on the worker's borrowed connection —
@@ -1904,7 +1996,8 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False,
                 # system can reach: there is one commit, and the milestone is
                 # inside it. See `record_l2_available` for the timing change
                 # this implies and why nothing observes it.
-                record_l2_available(verdict.attempt_id, row, cursor=cur)
+                record_l2_available(verdict.attempt_id, row, cursor=cur,
+                                    is_scratch=is_scratch)
                 # THE WORK UNIT'S OWN `submitted -> complete` (FINDING 7),
                 # LAST and in the SAME envelope as everything above. The
                 # reconciler no longer completes a unit on a bare

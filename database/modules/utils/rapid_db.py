@@ -2251,6 +2251,26 @@ class RAPIDDB:
         so no caller can silently write an unscoped row. updateRefImage uses
         it to scope the vBest demotion to the writer's own run, so a
         scratch registration can never demote a production row.
+
+        SCRATCH DISPATCH (rapid_systems migration 132). `run_id is not
+        None` is the same fact that already selects the run-scoped
+        `run_id_` argument above -- `work_units.run_id`'s own convention,
+        read once by the caller and threaded down to here, never re-derived
+        by a query of this method's own. `run_id is None` (production)
+        takes the path below exactly as it always has: this connection
+        authenticates as `rapid_pipeline`, whose direct table INSERT is
+        what makes `addRefImage` reachable at all -- addRefImage itself is
+        unchanged, untouched, and not SECURITY DEFINER. `run_id is not
+        None` (scratch) instead calls `derived.scratch_add_refimage`, which
+        resolves and fences the SAME run from `attempt_id` on its own
+        before calling addRefImage exactly as below -- a scratch identity
+        holds no table-level INSERT on refimages anywhere, and the wrapper
+        is the only way it reaches addRefImage's own privileges at all
+        (132's file header). `attempt_id` is therefore REQUIRED, not
+        optional as it is for production, in this one branch: it is what
+        the wrapper resolves and fences the run from, and every live caller
+        of a scratch registration already carries a real attempt_id (it is
+        registering that exact attempt's own products).
         '''
 
         self.exit_code = 0
@@ -2276,6 +2296,23 @@ class RAPIDDB:
             "(rfid integer," +\
             " version smallint);"
 
+        scratch_query =\
+            "select * from derived.scratch_add_refimage(" +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)) as " +\
+            "(rfid integer," +\
+            " version smallint);"
+
 
         # Query database.
 
@@ -2287,12 +2324,30 @@ class RAPIDDB:
         print('----> run_id = {}'.format(run_id))
 
 
-        # `reference_set_id` is normally None: the SQL function resolves the
-        # set server-side from `run_id`, which is what keeps the deployed
-        # pipeline image out of this change entirely (migration 127). It is
-        # passed only by the operator tooling, which knows the set directly.
-        params = (field, hp6, hp9, fid, ppid, infobits, filename, checksum, status,
-                  attempt_id, registered_record_sequence, run_id, reference_set_id)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "add_refimage: a scratch registration (run_id={!r}) "
+                    "must carry the attempt_id derived.scratch_add_refimage "
+                    "resolves and fences the run from".format(run_id))
+            query = scratch_query
+            params = (attempt_id, field, hp6, hp9, fid, ppid, infobits,
+                      filename, checksum, status, attempt_id,
+                      registered_record_sequence)
+        else:
+            # `reference_set_id` is normally None: the SQL function resolves
+            # the set server-side from `run_id`, which is what keeps the
+            # deployed pipeline image out of this change entirely (migration
+            # 127). It is passed only by the operator tooling, which knows
+            # the set directly. `derived.scratch_add_refimage` (132) has no
+            # `reference_set_id` argument at all -- a scratch run's
+            # reference set is resolved the same server-side way inside the
+            # addRefImage call the wrapper makes, and the wrapper's whole
+            # existence already requires `run_id_` to resolve to a scratch
+            # run, so there is nothing here for an explicit set override to
+            # disambiguate.
+            params = (field, hp6, hp9, fid, ppid, infobits, filename, checksum, status,
+                      attempt_id, registered_record_sequence, run_id, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2315,7 +2370,8 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_refimage(self,rfid,filename,checksum,status,version,*,run_id,reference_set_id=None):
+    def update_refimage(self,rfid,filename,checksum,status,version,*,run_id,
+        reference_set_id=None,attempt_id=None):
 
         '''
         Update record in RefImages database table.
@@ -2326,6 +2382,17 @@ class RAPIDDB:
         so no caller can silently write an unscoped row. updateRefImage
         uses it to scope the vBest demotion to the writer's own run, so a
         scratch registration can never demote a production row.
+
+        attempt_id, SCRATCH DISPATCH (rapid_systems migration 132), is a
+        NEW keyword-only argument, unrelated to updateRefImage's own column
+        set: `run_id is not None` selects `derived.scratch_update_refimage`,
+        which resolves and fences the run from attempt_id (REQUIRED in that
+        branch) before calling updateRefImage itself, unchanged, with no
+        `reference_set_id` argument at all -- the wrapper has none (132 §3),
+        matching updateRefImage's own vBest-demotion scoping to the ROW's
+        set rather than an override. `run_id is None` is production,
+        unaffected; `attempt_id` defaults to None and every existing caller
+        that never passes it is unaffected.
         '''
 
         self.exit_code = 0
@@ -2343,6 +2410,15 @@ class RAPIDDB:
             "cast(%s as text)," +\
             "cast(%s as bigint));"
 
+        scratch_query =\
+            "select derived.scratch_update_refimage(" +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s AS smallint));"
+
 
         # Query database.
 
@@ -2355,11 +2431,21 @@ class RAPIDDB:
         print('----> reference_set_id = {}'.format(reference_set_id))
 
 
-        # Normally None: updateRefImage scopes its vBest demotion to the set
-        # the ROW already carries (migration 127), so an ordinary
-        # registration needs to say nothing. Passed only by the operator
-        # tooling, which knows the set directly.
-        params = (rfid, filename, checksum, status, version, run_id, reference_set_id)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "update_refimage: a scratch registration (run_id={!r}) "
+                    "must carry the attempt_id derived.scratch_update_"
+                    "refimage resolves and fences the run from"
+                    .format(run_id))
+            query = scratch_query
+            params = (attempt_id, rfid, filename, checksum, status, version)
+        else:
+            # Normally None: updateRefImage scopes its vBest demotion to the
+            # set the ROW already carries (migration 127), so an ordinary
+            # registration needs to say nothing. Passed only by the operator
+            # tooling, which knows the set directly.
+            params = (rfid, filename, checksum, status, version, run_id, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2552,6 +2638,12 @@ class RAPIDDB:
         so no caller can silently write an unscoped row. updateDiffImage
         uses it to scope the vBest demotion to the writer's own run, so a
         scratch registration can never demote a production row.
+
+        SCRATCH DISPATCH (rapid_systems migration 132), same reasoning as
+        add_refimage: `run_id is not None` selects `derived.
+        scratch_add_diffimage`, which resolves and fences the run from a
+        REQUIRED `attempt_id` before calling addDiffImage itself, unchanged.
+        `run_id is None` is production, unaffected.
         '''
 
         self.exit_code = 0
@@ -2585,6 +2677,32 @@ class RAPIDDB:
             "(pid integer," +\
             " version smallint);"
 
+        scratch_query =\
+            "select * from derived.scratch_add_diffimage(" +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)) as " +\
+            "(pid integer," +\
+            " version smallint);"
+
 
         # Query database.
 
@@ -2597,8 +2715,20 @@ class RAPIDDB:
         print('----> run_id = {}'.format(run_id))
 
 
-        params = (rid, ppid, rfid, infobitssci, infobitsref, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4, filename, checksum, status,
-                  attempt_id, registered_record_sequence, run_id)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "add_diffimage: a scratch registration (run_id={!r}) "
+                    "must carry the attempt_id derived.scratch_add_diffimage "
+                    "resolves and fences the run from".format(run_id))
+            query = scratch_query
+            params = (attempt_id, rid, ppid, rfid, infobitssci, infobitsref,
+                      ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4,
+                      filename, checksum, status, attempt_id,
+                      registered_record_sequence)
+        else:
+            params = (rid, ppid, rfid, infobitssci, infobitsref, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4, filename, checksum, status,
+                      attempt_id, registered_record_sequence, run_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2621,7 +2751,8 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_diffimage(self,pid,filename,checksum,status,version,*,run_id):
+    def update_diffimage(self,pid,filename,checksum,status,version,*,run_id,
+        attempt_id=None):
 
         '''
         Update record in DiffImages database table.
@@ -2632,6 +2763,14 @@ class RAPIDDB:
         so no caller can silently write an unscoped row. updateDiffImage
         uses it to scope the vBest demotion to the writer's own run, so a
         scratch registration can never demote a production row.
+
+        attempt_id, SCRATCH DISPATCH (rapid_systems migration 132), is a
+        NEW keyword-only argument: `run_id is not None` selects `derived.
+        scratch_update_diffimage`, which resolves and fences the run from
+        attempt_id (REQUIRED in that branch) before calling updateDiffImage
+        itself, unchanged. `run_id is None` is production, unaffected;
+        `attempt_id` defaults to None and every existing caller is
+        unaffected.
         '''
 
         self.exit_code = 0
@@ -2648,6 +2787,15 @@ class RAPIDDB:
             "cast(%s AS smallint)," +\
             "cast(%s as text));"
 
+        scratch_query =\
+            "select derived.scratch_update_diffimage(" +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s AS smallint));"
+
 
         # Query database.
 
@@ -2659,7 +2807,17 @@ class RAPIDDB:
         print('----> run_id = {}'.format(run_id))
 
 
-        params = (pid, filename, checksum, status, version, run_id)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "update_diffimage: a scratch registration (run_id={!r}) "
+                    "must carry the attempt_id derived.scratch_update_"
+                    "diffimage resolves and fences the run from"
+                    .format(run_id))
+            query = scratch_query
+            params = (attempt_id, pid, filename, checksum, status, version)
+        else:
+            params = (pid, filename, checksum, status, version, run_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2707,6 +2865,15 @@ class RAPIDDB:
         so no caller can silently write an unscoped row. updatePSF uses it
         to scope the vBest demotion to the writer's own run, so a scratch
         registration can never demote a production row.
+
+        SCRATCH DISPATCH (rapid_systems migration 132), same reasoning as
+        add_refimage: `run_id is not None` selects `derived.scratch_add_psf`,
+        which resolves and fences the run from a REQUIRED `attempt_id`
+        before calling addPSF itself, unchanged. `run_id is None` is
+        production, unaffected. NO LIVE CALLER EXISTS for add_psf itself
+        today (this docstring's own header already said so before this
+        change) -- wired for parity, per rapid_systems migration 132's own
+        note that its wrapper is "provided for parity" for the same reason.
         '''
 
         self.exit_code = 0
@@ -2728,6 +2895,19 @@ class RAPIDDB:
             "(psfid integer," +\
             " version smallint);"
 
+        scratch_query =\
+            "select * from derived.scratch_add_psf(" +\
+            "cast(%s as bigint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)) as " +\
+            "(psfid integer," +\
+            " version smallint);"
+
 
         # Query database.
 
@@ -2739,10 +2919,20 @@ class RAPIDDB:
         print('----> run_id = {}'.format(run_id))
 
 
-        # Normally None: addPSF resolves the set server-side from run_id
-        # (migration 127). Passed only by the operator tooling.
-        params = (fid, sca, filename, checksum, status,
-                  attempt_id, registered_record_sequence, run_id, reference_set_id)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "add_psf: a scratch registration (run_id={!r}) must "
+                    "carry the attempt_id derived.scratch_add_psf resolves "
+                    "and fences the run from".format(run_id))
+            query = scratch_query
+            params = (attempt_id, fid, sca, filename, checksum, status,
+                      attempt_id, registered_record_sequence)
+        else:
+            # Normally None: addPSF resolves the set server-side from run_id
+            # (migration 127). Passed only by the operator tooling.
+            params = (fid, sca, filename, checksum, status,
+                      attempt_id, registered_record_sequence, run_id, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2777,6 +2967,15 @@ class RAPIDDB:
         so no caller can silently write an unscoped row. updatePSF uses it
         to scope the vBest demotion to the writer's own run, so a scratch
         registration can never demote a production row.
+
+        SCRATCH DISPATCH (rapid_systems migration 132), same reasoning as
+        add_refimage: `run_id is not None` selects `derived.
+        scratch_update_psf`, which resolves and fences the run from a
+        REQUIRED `attempt_id` before calling updatePSF itself, unchanged,
+        with no `reference_set_id` argument -- the wrapper has none (132
+        §3). `run_id is None` is production, unaffected. NO LIVE CALLER
+        EXISTS for update_psf itself today -- wired for parity, matching
+        the migration's own note for its wrapper.
         '''
 
         self.exit_code = 0
@@ -2796,6 +2995,17 @@ class RAPIDDB:
             "cast(%s as text)," +\
             "cast(%s as bigint));"
 
+        scratch_query =\
+            "select derived.scratch_update_psf(" +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer));"
+
 
         # Query database.
 
@@ -2810,11 +3020,21 @@ class RAPIDDB:
         print('----> reference_set_id = {}'.format(reference_set_id))
 
 
-        # Normally None: updatePSF scopes its vBest demotion to the set the
-        # ROW already carries (migration 127). Passed only by the operator
-        # tooling, which knows the set directly.
-        params = (psfid, filename, checksum, status, version,
-                  attempt_id, registered_record_sequence, run_id, reference_set_id)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "update_psf: a scratch registration (run_id={!r}) must "
+                    "carry the attempt_id derived.scratch_update_psf "
+                    "resolves and fences the run from".format(run_id))
+            query = scratch_query
+            params = (attempt_id, psfid, filename, checksum, status, version,
+                      attempt_id, registered_record_sequence)
+        else:
+            # Normally None: updatePSF scopes its vBest demotion to the set
+            # the ROW already carries (migration 127). Passed only by the
+            # operator tooling, which knows the set directly.
+            params = (psfid, filename, checksum, status, version,
+                      attempt_id, registered_record_sequence, run_id, reference_set_id)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -2947,10 +3167,28 @@ class RAPIDDB:
                               fid,
                               status,
                               filename,
-                              checksum):
+                              checksum,
+                              *,
+                              run_id=None,
+                              attempt_id=None):
 
         '''
         Add or update record in RefImCatalogs database table.
+
+        run_id/attempt_id, SCRATCH DISPATCH (rapid_systems migration 132).
+        Both NEW and both default to None, so every existing caller (there
+        was no run_id/attempt_id concept on this method before) is
+        unaffected and takes the path below exactly as it always has --
+        this connection authenticates as `rapid_pipeline`, whose direct
+        table INSERT/UPDATE is what makes registerRefImCatalog reachable at
+        all; registerRefImCatalog itself is unchanged and not SECURITY
+        DEFINER. `run_id is not None` (scratch) instead calls `derived.
+        scratch_register_refimcatalog`, which resolves and fences the run
+        from a REQUIRED `attempt_id`, additionally confirms rfid belongs to
+        THAT run's own refimages row (never a different run's or
+        production's), and only then calls registerRefImCatalog itself
+        (132 §4) -- a scratch identity holds no table-level grant on
+        refimcatalogs anywhere.
         '''
 
         self.exit_code = 0
@@ -2960,6 +3198,22 @@ class RAPIDDB:
 
         query =\
             "select * from registerRefImCatalog(" +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)) as " +\
+            "(rfcatid integer," +\
+            " svid smallint);"
+
+        scratch_query =\
+            "select * from derived.scratch_register_refimcatalog(" +\
+            "cast(%s as bigint)," +\
             "cast(%s as integer)," +\
             "cast(%s as smallint)," +\
             "cast(%s as smallint)," +\
@@ -2983,7 +3237,18 @@ class RAPIDDB:
         print('----> filename = {}'.format(filename))
 
 
-        params = (rfid, ppid, cattype, field, hp6, hp9, fid, filename, checksum, status)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "register_refimcatalog: a scratch registration "
+                    "(run_id={!r}) must carry the attempt_id derived."
+                    "scratch_register_refimcatalog resolves and fences the "
+                    "run from".format(run_id))
+            query = scratch_query
+            params = (attempt_id, rfid, ppid, cattype, field, hp6, hp9, fid,
+                      filename, checksum, status)
+        else:
+            params = (rfid, ppid, cattype, field, hp6, hp9, fid, filename, checksum, status)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -3030,7 +3295,10 @@ class RAPIDDB:
                            fwhmminpix,
                            fwhmmaxpix,
                            nsxcatsources,
-                           npucatsources):
+                           npucatsources,
+                           *,
+                           run_id=None,
+                           attempt_id=None):
 
         '''
         Insert or update record in RefImMeta database table.
@@ -3056,6 +3324,14 @@ class RAPIDDB:
         two renamed positions and a silent shift on everything after npixsat,
         which is why this method exists rather than the pre-SMDC one being
         restored.
+
+        run_id/attempt_id, SCRATCH DISPATCH (rapid_systems migration 132).
+        Both NEW and both default to None; every existing caller is
+        unaffected. `run_id is not None` (scratch) calls `derived.
+        scratch_register_refimmeta` instead, which resolves and fences the
+        run from a REQUIRED `attempt_id`, additionally confirms rfid belongs
+        to THAT run's own refimages row, and only then calls
+        registerRefImMeta itself, in the SAME argument order (132 §4).
         '''
 
         self.exit_code = 0
@@ -3065,6 +3341,34 @@ class RAPIDDB:
 
         query =\
             "select * from registerRefImMeta(" +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer));"
+
+        scratch_query =\
+            "select derived.scratch_register_refimmeta(" +\
+            "cast(%s as bigint)," +\
             "cast(%s as integer)," +\
             "cast(%s as smallint)," +\
             "cast(%s as integer)," +\
@@ -3119,10 +3423,24 @@ class RAPIDDB:
         print('----> npucatsources = {}'.format(npucatsources))
 
 
-        params = (rfid, fid, field, hp6, hp9, nframes, mjdobsmin, mjdobsmax,
-                  npixnan, clmean, clstddev, clnoutliers, gmedian, datascale,
-                  gmin, gmax, cov5percent, medncov, medpixunc, fwhmmedpix,
-                  fwhmminpix, fwhmmaxpix, nsxcatsources, npucatsources)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "register_refimmeta: a scratch registration "
+                    "(run_id={!r}) must carry the attempt_id derived."
+                    "scratch_register_refimmeta resolves and fences the "
+                    "run from".format(run_id))
+            query = scratch_query
+            params = (attempt_id, rfid, fid, field, hp6, hp9, nframes,
+                      mjdobsmin, mjdobsmax, npixnan, clmean, clstddev,
+                      clnoutliers, gmedian, datascale, gmin, gmax,
+                      cov5percent, medncov, medpixunc, fwhmmedpix,
+                      fwhmminpix, fwhmmaxpix, nsxcatsources, npucatsources)
+        else:
+            params = (rfid, fid, field, hp6, hp9, nframes, mjdobsmin, mjdobsmax,
+                      npixnan, clmean, clstddev, clnoutliers, gmedian, datascale,
+                      gmin, gmax, cov5percent, medncov, medpixunc, fwhmmedpix,
+                      fwhmminpix, fwhmmaxpix, nsxcatsources, npucatsources)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -3161,10 +3479,21 @@ class RAPIDDB:
                             dxrmsfin,
                             dyrmsfin,
                             dxmedianfin,
-                            dymedianfin):
+                            dymedianfin,
+                            *,
+                            run_id=None,
+                            attempt_id=None):
 
         '''
         Insert or update record in DiffImMeta database table.
+
+        run_id/attempt_id, SCRATCH DISPATCH (rapid_systems migration 132).
+        Both NEW and both default to None; every existing caller is
+        unaffected. `run_id is not None` (scratch) calls `derived.
+        scratch_register_diffimmeta` instead, which resolves and fences the
+        run from a REQUIRED `attempt_id`, additionally confirms pid belongs
+        to THAT run's own diffimages row, and only then calls
+        registerDiffImMeta itself, in the SAME argument order (132 §4).
         '''
 
         self.exit_code = 0
@@ -3174,6 +3503,22 @@ class RAPIDDB:
 
         query =\
             "select * from registerDiffImMeta(" +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real));"
+
+        scratch_query =\
+            "select derived.scratch_register_diffimmeta(" +\
+            "cast(%s as bigint)," +\
             "cast(%s as integer)," +\
             "cast(%s as smallint)," +\
             "cast(%s as smallint)," +\
@@ -3204,7 +3549,19 @@ class RAPIDDB:
         print('----> dymedianfin = {}'.format(dymedianfin))
 
 
-        params = (pid, fid, sca, field, hp6, hp9, nsexcatsources, scalefacref, dxrmsfin, dyrmsfin, dxmedianfin, dymedianfin)
+        if run_id is not None:
+            if attempt_id is None:
+                raise ValueError(
+                    "register_diffimmeta: a scratch registration "
+                    "(run_id={!r}) must carry the attempt_id derived."
+                    "scratch_register_diffimmeta resolves and fences the "
+                    "run from".format(run_id))
+            query = scratch_query
+            params = (attempt_id, pid, fid, sca, field, hp6, hp9,
+                      nsexcatsources, scalefacref, dxrmsfin, dyrmsfin,
+                      dxmedianfin, dymedianfin)
+        else:
+            params = (pid, fid, sca, field, hp6, hp9, nsexcatsources, scalefacref, dxrmsfin, dyrmsfin, dxmedianfin, dymedianfin)
 
         print('query = {}, params = {}'.format(query, params))
 

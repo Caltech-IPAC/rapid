@@ -213,8 +213,17 @@ def register_reference_image(dbh, record, science, attempt_id=None,
 
     # Finalize, so vbest points at this version. Filename, checksum, infobits
     # and status are unchanged — the legacy comment says exactly this.
+    #
+    # `attempt_id` passed unconditionally (scratch run kind, rapid_systems
+    # migration 132): `update_refimage` itself decides, from `run_id`,
+    # whether it needs it — required only in the scratch branch, where it
+    # is what `derived.scratch_update_refimage` resolves and fences the run
+    # from. This function's own `attempt_id` parameter defaults to None
+    # only for a caller mid-port (this docstring's own note); the live
+    # path — `registrar()` — always supplies a real one, the same value
+    # `add_refimage` just used above.
     dbh.update_refimage(rfid, image["uri"], image["checksum"], status, version,
-                        run_id=run_id)
+                        run_id=run_id, attempt_id=attempt_id)
     _check(dbh, "update_refimage", attempt_id)
 
     registered = {"rfid": rfid, "version": version, "catalogs": []}
@@ -231,9 +240,15 @@ def register_reference_image(dbh, record, science, attempt_id=None,
             logger.info("attempt %s published no %s; not registering one",
                         attempt_id, name)
             continue
+        # `run_id`/`attempt_id` passed unconditionally (scratch run kind,
+        # rapid_systems migration 132): `register_refimcatalog` decides
+        # from `run_id` whether to route through `derived.scratch_
+        # register_refimcatalog`, which also confirms rfid belongs to
+        # THIS run before registering against it.
         dbh.register_refimcatalog(
             rfid, ppid, cattype, field, hp6, hp9, fid,
-            science.get(f"{name}_status", 1), entry["uri"], entry["checksum"])
+            science.get(f"{name}_status", 1), entry["uri"], entry["checksum"],
+            run_id=run_id, attempt_id=attempt_id)
         _check(dbh, "register_refimcatalog", attempt_id)
         registered["catalogs"].append({"cattype": cattype,
                                        "rfcatid": dbh.rfcatid,
@@ -253,7 +268,11 @@ def register_reference_image(dbh, record, science, attempt_id=None,
                     "registering rfid=%s without a refimmeta row",
                     attempt_id, rfid)
     else:
-        dbh.register_refimmeta(rfid, fid, field, hp6, hp9, *meta)
+        # `run_id`/`attempt_id` passed unconditionally (scratch run kind,
+        # rapid_systems migration 132) — same reasoning as
+        # register_refimcatalog just above.
+        dbh.register_refimmeta(rfid, fid, field, hp6, hp9, *meta,
+                               run_id=run_id, attempt_id=attempt_id)
         _check(dbh, "register_refimmeta", attempt_id)
         registered["refimmeta"] = True
 
@@ -420,8 +439,11 @@ def register_difference_image(dbh, record, science, attempt_id=None,
     pid = dbh.pid
     version = dbh.version
 
+    # `attempt_id` passed unconditionally (scratch run kind, rapid_systems
+    # migration 132) — same reasoning as register_reference_image's
+    # update_refimage call.
     dbh.update_diffimage(pid, difference["uri"], difference["checksum"],
-                         status, version, run_id=run_id)
+                         status, version, run_id=run_id, attempt_id=attempt_id)
     _check(dbh, "update_diffimage", attempt_id)
 
     # The ZOGY measurements. Every one is a value the science stages computed
@@ -431,7 +453,14 @@ def register_difference_image(dbh, record, science, attempt_id=None,
             for name in ("nsexcatsources", "scalefacref", "dxrmsfin",
                          "dyrmsfin", "dxmedianfin", "dymedianfin")]
 
-    dbh.register_diffimmeta(pid, fid, sca, field, hp6, hp9, *meta)
+    # `run_id`/`attempt_id` passed unconditionally (scratch run kind,
+    # rapid_systems migration 132) — same reasoning as
+    # register_reference_image's register_refimcatalog/register_refimmeta
+    # calls: `register_diffimmeta` decides from `run_id` whether to route
+    # through `derived.scratch_register_diffimmeta`, which also confirms
+    # pid belongs to THIS run before registering against it.
+    dbh.register_diffimmeta(pid, fid, sca, field, hp6, hp9, *meta,
+                            run_id=run_id, attempt_id=attempt_id)
     _check(dbh, "register_diffimmeta", attempt_id)
 
     # The product that filled the role is logged and returned, not just the
