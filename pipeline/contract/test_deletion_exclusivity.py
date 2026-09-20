@@ -260,10 +260,19 @@ def _public_methods(text):
 #: `1cc5f3949f9edf00d3e2bee8dcd728e633b9656fca5a160b3eed12b31369912b`.
 #:
 #: **RE-RATIFICATION, 2026-09-20 — the scratch tier's constrained writes, no
-#: new capability.** Ratified by Ben through the launching session across
-#: 21:48, 22:03, 23:13 and 01:03 PDT, each widening recorded in the run
-#: ledger with its scope. The digest absorbs exactly ONE change, applied to
-#: nine EXISTING methods:
+#: new capability. PROVISIONAL.** Ratified by a named ruling of the
+#: launching session under Ben's yolo, 2026-09-20 01:18 PDT, on the basis
+#: that the rule this freeze protects is intact (see below); Ben confirms or
+#: reverses it at the morning outcome screen, and until he does this entry
+#: is provisional.
+#:
+#: The edit itself was inside the scratch brief's own write boundary
+#: (`database/modules/**`, "only where the scratch identity's constrained
+#: write path requires"). That is NOT what reopens a freeze: a ratified
+#: freeze reopens on a ruling that names it, never by inference from an
+#: adjacent approval. The ruling above is that naming.
+#:
+#: The digest absorbs exactly ONE change, applied to nine EXISTING methods:
 #:
 #:   * `add_refimage`, `update_refimage`, `add_diffimage`,
 #:     `update_diffimage`, `add_psf`, `update_psf`,

@@ -71,7 +71,17 @@ def _declare_run(conn, name, kind, owner="run-model-tests",
     `actions.create_run`. It defaults to None — which `derived.create_run`
     resolves to production's default set and STORES — so every existing
     caller is unaffected by its addition.
+    A SCRATCH RUN'S OWNER IS ITS CREATOR, so the fixture must not supply
+    one (rapid_systems migration 129): `derived.create_run` takes the owner
+    from `session_user` for `kind = 'scratch'` and REFUSES a mismatched
+    argument rather than overwriting it — "a scratch run's owner is its
+    creator (postgres), not an argument; got owner=run-model-tests" is what
+    these tests saw before this line existed. Passing None is what the CLI
+    itself now passes, so the fixture exercises the real path. A production
+    run still needs the argument and still gets the default.
     """
+    if kind == "scratch":
+        owner = None
     result = actions.create_run(
         conn, _key("declare-%s" % name), name, owner, kind,
         reason="contract test fixture", dry_run=False,
@@ -555,7 +565,7 @@ def test_create_run_refuses_a_name_that_is_a_prefix_of_an_existing_run(conn):
     overlapping = base + "-two"
     with pytest.raises(InvariantViolation):
         actions.create_run(
-            conn, _key("overlap-fwd"), overlapping, "run-model-tests",
+            conn, _key("overlap-fwd"), overlapping, None,
             "scratch", reason="should be refused", dry_run=False)
 
 
@@ -570,7 +580,7 @@ def test_create_run_refuses_the_overlap_in_the_other_order_too(conn):
     shorter = _run_name("beta")
     with pytest.raises(InvariantViolation):
         actions.create_run(
-            conn, _key("overlap-rev"), shorter, "run-model-tests", "scratch",
+            conn, _key("overlap-rev"), shorter, None, "scratch",
             reason="should be refused", dry_run=False)
 
 
