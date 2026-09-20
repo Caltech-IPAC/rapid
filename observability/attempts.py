@@ -708,7 +708,8 @@ class AttemptWriter:
                      scheduler_job_id: str | None = None,
                      application_attempt_index: int | None = None,
                      config_snapshot_key: str | None = None,
-                     retry_policy_version: int | None = RETRY_POLICY_VERSION
+                     retry_policy_version: int | None = RETRY_POLICY_VERSION,
+                     is_scratch: bool = False
                      ) -> None:
         """Advance a row to `started`. A real compare-and-set.
 
@@ -770,28 +771,72 @@ class AttemptWriter:
         # and the column the DDL requires at `started` carries the
         # authoritative revision rather than a second, independently
         # maintained copy of it that could disagree.
-        sql = (
-            "UPDATE attempts SET lifecycle_state = %s, started_at = %s,"
-            "  source_sha = %s, container_digest = %s,"
-            "  job_definition_rev = COALESCE("
-            "    %s, binding_job_definition_rev::text),"
-            "  config_digest = %s,"
-            "  config_snapshot_key = %s,"
-            "  retry_policy_version = %s,"
-            "  scheduler_job_id = COALESCE(%s, scheduler_job_id),"
-            "  application_attempt_index = COALESCE("
-            "    %s, application_claim_index, application_attempt_index)"
-            " WHERE attempt_id = %s AND lifecycle_state = %s"
-        )
-        result = self._execute(sql, [
-            LifecycleState.STARTED.value, started_at,
-            provenance.source_sha, provenance.container_digest,
-            provenance.job_definition_rev, provenance.config_digest,
-            config_snapshot_key, retry_policy_version,
-            scheduler_job_id, application_attempt_index, attempt_id,
-            LifecycleState.SUBMITTED.value,
-        ])
-        _require_one_row(result, "mark_started", attempt_id,
+        #
+        # THE SCRATCH TIER CANNOT ISSUE THE BARE UPDATE (rapid_systems
+        # migration 136, mirroring 135's `resolve_attempt` treatment).
+        # `rapid_scratch_pipeline` holds no table privilege at all, so a
+        # scratch job's `UPDATE attempts` fails with "permission denied for
+        # table attempts" the same way its bare INSERT did before 135.
+        # `derived.scratch_mark_started` is this statement under SECURITY
+        # DEFINER, taking the same arguments in the same order and returning
+        # the same thing. `is_scratch` defaults to False, so every existing
+        # caller takes the identical UPDATE statement it took before.
+        #
+        # **THE CAS CONTRACT MOVES WITH IT.** This is a compare-and-set: the
+        # WHERE clause requires `lifecycle_state = 'submitted'`, and the
+        # caller (`_require_one_row`) reads the affected-row count to tell
+        # "this writer won the CAS" from "another writer already advanced
+        # this row" — the whole point of finding #10's fix. A
+        # `SELECT function(...)` call always returns exactly one row, so
+        # reading `_rowcount` off it the way the bare UPDATE's result is
+        # read would always report "1 row matched" and silently defeat the
+        # guard. The wrapper does the same CAS internally and returns the
+        # actual affected-row count (0 or 1) as its scalar value, so
+        # `_single_value` here pulls out the same count the bare UPDATE's
+        # `cursor.rowcount` would have reported, and `_require_one_row` is
+        # handed that count directly — same check, same exception, same
+        # message, whichever statement ran.
+        if is_scratch:
+            sql = (
+                "SELECT derived.scratch_mark_started("
+                "  %s,"
+                "  %s, %s, %s,"
+                "  %s, %s, %s, %s,"
+                "  %s, %s"
+                ")"
+            )
+            result = self._execute(sql, [
+                attempt_id,
+                started_at, provenance.source_sha, provenance.container_digest,
+                provenance.job_definition_rev, provenance.config_digest,
+                config_snapshot_key, retry_policy_version,
+                scheduler_job_id, application_attempt_index,
+            ])
+            count = _single_value(result)
+        else:
+            sql = (
+                "UPDATE attempts SET lifecycle_state = %s, started_at = %s,"
+                "  source_sha = %s, container_digest = %s,"
+                "  job_definition_rev = COALESCE("
+                "    %s, binding_job_definition_rev::text),"
+                "  config_digest = %s,"
+                "  config_snapshot_key = %s,"
+                "  retry_policy_version = %s,"
+                "  scheduler_job_id = COALESCE(%s, scheduler_job_id),"
+                "  application_attempt_index = COALESCE("
+                "    %s, application_claim_index, application_attempt_index)"
+                " WHERE attempt_id = %s AND lifecycle_state = %s"
+            )
+            result = self._execute(sql, [
+                LifecycleState.STARTED.value, started_at,
+                provenance.source_sha, provenance.container_digest,
+                provenance.job_definition_rev, provenance.config_digest,
+                config_snapshot_key, retry_policy_version,
+                scheduler_job_id, application_attempt_index, attempt_id,
+                LifecycleState.SUBMITTED.value,
+            ])
+            count = _rowcount(result, "mark_started")
+        _require_one_row(count, "mark_started", attempt_id,
                          expected_state=LifecycleState.SUBMITTED.value)
         logger.info("attempt %s started (snapshot %s)",
                     attempt_id, config_snapshot_key)
@@ -812,7 +857,8 @@ class AttemptWriter:
                                 file_peak_bytes: int | None = None,
                                 memory_events_max: int | None = None,
                                 memory_events_oom_kill: int | None = None,
-                                memory_sample_count: int | None = None) -> None:
+                                memory_sample_count: int | None = None,
+                                is_scratch: bool = False) -> None:
         """Close the application-authored half of an attempt.
 
         The termination protocol's final database step
@@ -894,30 +940,68 @@ class AttemptWriter:
         # APPLICATION's category, copied verbatim from the record.
         _validate_application_error_category(error_category)
 
-        sql = (
-            "UPDATE attempts SET lifecycle_state = %s, ended_at = %s,"
-            "  application_intended_exit = %s, rapid_outcome = %s,"
-            "  product_disposition = %s, error_category = %s,"
-            "  terminal_record_key = %s, terminal_record_sequence = %s,"
-            "  terminal_record_checksum = %s, reconciler_materialized = %s,"
-            "  peak_rss_kb = %s, cpu_seconds = %s, cgroup_peak_bytes = %s,"
-            "  anon_peak_bytes = %s, file_peak_bytes = %s,"
-            "  memory_events_max = %s, memory_events_oom_kill = %s,"
-            "  memory_sample_count = %s"
-            " WHERE attempt_id = %s AND lifecycle_state = %s"
-        )
-        result = self._execute(sql, [
-            LifecycleState.APPLICATION_CLOSED.value, ended_at,
-            application_intended_exit, _value(rapid_outcome),
-            _value(product_disposition), error_category,
-            terminal_record_key, terminal_record_sequence,
-            terminal_record_checksum, reconciler_materialized,
-            peak_rss_kb, cpu_seconds, cgroup_peak_bytes,
-            anon_peak_bytes, file_peak_bytes, memory_events_max,
-            memory_events_oom_kill, memory_sample_count, attempt_id,
-            LifecycleState.STARTED.value,
-        ])
-        _require_one_row(result, "mark_application_closed", attempt_id,
+        # THE SCRATCH TIER CANNOT ISSUE THE BARE UPDATE (rapid_systems
+        # migration 136). Same reasoning as `mark_started` above:
+        # `rapid_scratch_pipeline` holds no table privilege, so this
+        # compare-and-set — WHERE requires `lifecycle_state = 'started'` —
+        # goes through `derived.scratch_mark_application_closed` under
+        # SECURITY DEFINER for a scratch attempt, taking the same arguments
+        # in the same order and returning the affected-row count as its
+        # scalar value so `_require_one_row`'s CAS check reads the same
+        # thing off either statement (see `mark_started`'s comment for why
+        # the count, not the row-list length, is what has to be compared).
+        if is_scratch:
+            sql = (
+                "SELECT derived.scratch_mark_application_closed("
+                "  %s,"
+                "  %s, %s, %s,"
+                "  %s, %s,"
+                "  %s, %s,"
+                "  %s, %s,"
+                "  %s, %s, %s,"
+                "  %s, %s,"
+                "  %s, %s,"
+                "  %s"
+                ")"
+            )
+            result = self._execute(sql, [
+                attempt_id,
+                ended_at, application_intended_exit, _value(rapid_outcome),
+                _value(product_disposition), error_category,
+                terminal_record_key, terminal_record_sequence,
+                terminal_record_checksum, reconciler_materialized,
+                peak_rss_kb, cpu_seconds, cgroup_peak_bytes,
+                anon_peak_bytes, file_peak_bytes,
+                memory_events_max, memory_events_oom_kill,
+                memory_sample_count,
+            ])
+            count = _single_value(result)
+        else:
+            sql = (
+                "UPDATE attempts SET lifecycle_state = %s, ended_at = %s,"
+                "  application_intended_exit = %s, rapid_outcome = %s,"
+                "  product_disposition = %s, error_category = %s,"
+                "  terminal_record_key = %s, terminal_record_sequence = %s,"
+                "  terminal_record_checksum = %s, reconciler_materialized = %s,"
+                "  peak_rss_kb = %s, cpu_seconds = %s, cgroup_peak_bytes = %s,"
+                "  anon_peak_bytes = %s, file_peak_bytes = %s,"
+                "  memory_events_max = %s, memory_events_oom_kill = %s,"
+                "  memory_sample_count = %s"
+                " WHERE attempt_id = %s AND lifecycle_state = %s"
+            )
+            result = self._execute(sql, [
+                LifecycleState.APPLICATION_CLOSED.value, ended_at,
+                application_intended_exit, _value(rapid_outcome),
+                _value(product_disposition), error_category,
+                terminal_record_key, terminal_record_sequence,
+                terminal_record_checksum, reconciler_materialized,
+                peak_rss_kb, cpu_seconds, cgroup_peak_bytes,
+                anon_peak_bytes, file_peak_bytes, memory_events_max,
+                memory_events_oom_kill, memory_sample_count, attempt_id,
+                LifecycleState.STARTED.value,
+            ])
+            count = _rowcount(result, "mark_application_closed")
+        _require_one_row(count, "mark_application_closed", attempt_id,
                          expected_state=LifecycleState.STARTED.value)
         logger.info(
             "attempt %s application-closed (intended exit %s, outcome %s, "
@@ -1224,20 +1308,41 @@ class AttemptWriter:
 
     # -- stages and milestones ----------------------------------------------
 
-    def record_stage(self, attempt_id: int, stage: Stage) -> None:
-        """Append one completed stage span. Written once, never updated."""
-        sql = (
-            "INSERT INTO attempt_stages ("
-            "  attempt_id, stage_name, started_at, duration_ms, outcome"
-            ") VALUES (%s, %s, %s, %s, %s)"
-        )
+    def record_stage(self, attempt_id: int, stage: Stage,
+                     is_scratch: bool = False) -> None:
+        """Append one completed stage span. Written once, never updated.
+
+        THE SCRATCH TIER CANNOT ISSUE THE BARE INSERT (rapid_systems
+        migration 136). `rapid_scratch_pipeline` holds no table privilege on
+        `attempt_stages` either, so a scratch job's stage-span write fails
+        the same way its attempt writes do. `derived.scratch_record_stage`
+        is this statement under SECURITY DEFINER, taking the same arguments
+        in the same order. There is no CAS or row-count contract here to
+        preserve — a plain INSERT with no caller-visible return value either
+        way — so the conversion is only the statement text and the params.
+        `is_scratch` defaults to False, so every existing caller takes the
+        identical INSERT it took before.
+        """
+        if is_scratch:
+            sql = (
+                "SELECT derived.scratch_record_stage("
+                "  %s, %s, %s, %s, %s"
+                ")"
+            )
+        else:
+            sql = (
+                "INSERT INTO attempt_stages ("
+                "  attempt_id, stage_name, started_at, duration_ms, outcome"
+                ") VALUES (%s, %s, %s, %s, %s)"
+            )
         self._execute(sql, [attempt_id, stage.stage_name, stage.started_at,
                             stage.duration_ms, _value(stage.outcome)])
 
-    def record_stages(self, attempt_id: int, stages: Iterable[Stage]) -> int:
+    def record_stages(self, attempt_id: int, stages: Iterable[Stage],
+                      is_scratch: bool = False) -> int:
         count = 0
         for stage in stages:
-            self.record_stage(attempt_id, stage)
+            self.record_stage(attempt_id, stage, is_scratch=is_scratch)
             count += 1
         return count
 

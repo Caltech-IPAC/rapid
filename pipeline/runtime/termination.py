@@ -271,7 +271,8 @@ def start_attempt(writer: Any, attempt_id: Any, provenance: Any,
                   config_digest: str, snapshot_key_value: str,
                   scheduler_job_id: str | None = None,
                   application_attempt_index: int | None = None,
-                  now: datetime.datetime | None = None) -> StartupResult:
+                  now: datetime.datetime | None = None,
+                  is_scratch: bool = False) -> StartupResult:
     """Mark the attempt started, binding the configuration digest.
 
     "The attempt→snapshot binding is a single database write: the same
@@ -284,6 +285,12 @@ def start_attempt(writer: Any, attempt_id: Any, provenance: Any,
     unreferenced (harmless, content-addressed, and reused by the retry that
     resolves the same configuration), the row never left `submitted`, and no
     work occurred by construction.
+
+    `is_scratch` is passed straight through to `AttemptWriter.mark_started`
+    (rapid_systems migration 136) — the same fact `job.py` already derives
+    from `RAPID_PARAMETER_PATH` for `resolve_ownership`'s `is_scratch`, since
+    a scratch job's restricted database role cannot issue the bare
+    `UPDATE attempts` either.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
     if provenance.config_digest != config_digest:
@@ -307,7 +314,8 @@ def start_attempt(writer: Any, attempt_id: Any, provenance: Any,
             attempt_id, started_at=moment, provenance=provenance,
             scheduler_job_id=scheduler_job_id,
             application_attempt_index=application_attempt_index,
-            config_snapshot_key=snapshot_key_value)
+            config_snapshot_key=snapshot_key_value,
+            is_scratch=is_scratch)
     except Exception as exc:  # noqa: BLE001 - translated
         raise RecordsError(
             f"could not mark attempt {attempt_id} started: {exc}",
@@ -959,7 +967,8 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
               science_provenance: dict | None = None,
               products: dict | None = None,
               job_type: str | None = None,
-              memory_sampler: Any = None) -> TerminationResult:
+              memory_sampler: Any = None,
+              is_scratch: bool = False) -> TerminationResult:
     """Run the ordered closing sequence. Raises `RecordsError` if any step fails.
 
     `store` receives the diagnostics bundle; `record_store` receives the
@@ -987,6 +996,10 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
     this attempt produced, and both stores receive it in the two writes that
     follow. Splitting it into a third write would create a state — disposition
     recorded, nothing else — that no recovery rule covers.
+
+    `is_scratch` is passed straight through to `AttemptWriter.
+    mark_application_closed` (rapid_systems migration 136) — same fact,
+    same reason as `start_attempt`'s.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
     records = record_store if record_store is not None else store
@@ -1074,6 +1087,7 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
             memory_events_max=usage["memory_events_max"],
             memory_events_oom_kill=usage["memory_events_oom_kill"],
             memory_sample_count=usage["memory_sample_count"],
+            is_scratch=is_scratch,
         )
     except Exception as exc:  # noqa: BLE001 - translated
         # The record is already durable and valid; only the row transition

@@ -280,7 +280,7 @@ def run_sequence(context, job_type: str, recorder) -> None:
                   logger=context.logger)
 
 
-def stage_writer_for(writer, attempt_id, logger):
+def stage_writer_for(writer, attempt_id, logger, is_scratch=False):
     """The StageRecorder's live write callback (review finding #17).
 
     Every completed stage becomes an `attempt_stages` row as it finishes, so
@@ -295,11 +295,16 @@ def stage_writer_for(writer, attempt_id, logger):
     log and nothing more, and raising here would turn a recording problem
     into a science failure. The spans still reach the terminal record at
     termination, so a lost row is not a lost fact.
+
+    `is_scratch` is the same fact `resolve_ownership` already took (rapid_
+    systems migration 136): a scratch job's restricted database role cannot
+    issue `record_stage`'s bare INSERT either.
     """
 
     def write(record):
         try:
-            writer.record_stage(attempt_id, _stage_of(record))
+            writer.record_stage(attempt_id, _stage_of(record),
+                                is_scratch=is_scratch)
         except Exception:  # noqa: BLE001 - diagnostic, never fatal
             logger.warning(
                 "could not write the stage span for %s; the span still "
@@ -913,11 +918,17 @@ def _run(workload_class: str) -> int:
             records_store, records_prefix, parameters)
 
         # 6. Started, binding the digest in the same compare-and-set.
+        #
+        # `is_scratch` is the same `bool(parameter_path)` fact `resolve_
+        # ownership` above already used: a scratch job's restricted role
+        # cannot issue the bare `UPDATE attempts` `mark_started` otherwise
+        # runs (rapid_systems migration 136).
         startup = start_attempt(
             writer, ownership.attempt_id, provenance, digest,
             snapshot_key_value,
             scheduler_job_id=job_env.scheduler_job_id,
-            application_attempt_index=ownership.attempt_index)
+            application_attempt_index=ownership.attempt_index,
+            is_scratch=bool(parameter_path))
 
         # 7. The stage recorder, WITH ITS WRITE CALLBACK (review finding #17).
         #    Constructed bare, the recorder silently returns from `_write` and
@@ -926,7 +937,8 @@ def _run(workload_class: str) -> int:
         #    the reconciler (which does not parse the safety stream) could not
         #    tell which stage began or completed.
         recorder = StageRecorder(
-            write=stage_writer_for(writer, ownership.attempt_id, logger))
+            write=stage_writer_for(writer, ownership.attempt_id, logger,
+                                   is_scratch=bool(parameter_path)))
 
         # The release content and its DIGEST (review finding #13). The reader
         # can return one and the entrypoint called plain `load()`, so the
@@ -1033,7 +1045,11 @@ def _run(workload_class: str) -> int:
             job_type=manifest.job_type,
             # Stopped inside `terminate`, before the bundle is built, and
             # read for the memory-accounting columns at the closing write.
-            memory_sampler=sampler)
+            memory_sampler=sampler,
+            # Same `bool(parameter_path)` fact as `resolve_ownership` and
+            # `start_attempt` above — `terminate`'s `mark_application_closed`
+            # call needs it for the same reason (migration 136).
+            is_scratch=bool(parameter_path))
 
     logger.info("terminated: outcome=%s disposition=%s record=%s exit=%d",
                 result.outcome, result.product_disposition,
