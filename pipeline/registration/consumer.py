@@ -888,8 +888,21 @@ def record_l2_available(attempt_id, row, cursor=None, is_scratch=False):
             exposure_id, sca)
 
     if is_scratch:
+        # `p_sca` IS `smallint` (132), and psycopg2 sends a plain Python
+        # `int` as `integer` with no explicit cast -- PostgreSQL does not
+        # implicitly narrow `integer` to `smallint` for overload resolution,
+        # so the bare call raised `UndefinedFunction: function derived.
+        # scratch_record_l2_available(integer, integer, integer,
+        # timestamp with time zone) does not exist` on its first live call
+        # (2026-09-20 scratch demonstration, attempt 55896 -- migration 132
+        # added this function but nothing had reached this call path before).
+        # Explicit casts, matching this repo's own convention for calling a
+        # scratch wrapper (`database.modules.utils.rapid_db`'s
+        # `cast(%s as smallint)`).
         cursor.execute(
-            "SELECT derived.scratch_record_l2_available(%s, %s, %s, %s)",
+            "SELECT derived.scratch_record_l2_available("
+            "cast(%s as bigint), cast(%s as integer), "
+            "cast(%s as smallint), cast(%s as timestamptz))",
             (attempt_id, int(exposure_id), int(sca), reached_at))
         recorded = bool(cursor.fetchone()[0])
         if recorded:
