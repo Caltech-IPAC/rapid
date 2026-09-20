@@ -318,7 +318,7 @@ jobs:
           #
           # Moves with `RAPID_SYSTEMS_REF` above — the drift guard below
           # fails the run if the two ever disagree.
-          ref: e1896658d6cf1fe47f4664c74f2c0b7b95e97887
+          ref: 9b3b4185fa015a51e816f976b892c965c24b0ef7
           token: ${{ steps.rapid-systems-token.outputs.token }}
           path: rapid_systems
           persist-credentials: false
