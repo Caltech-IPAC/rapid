@@ -152,13 +152,22 @@ jobs:
       # the required outcome, and a run that cannot say which schema it tested
       # against has not demonstrated anything reproducible.
       #
-      # e1896658 is the merge of rapid_systems `smdc_add_refimmeta_20260915`
-      # into `main` — the commit that lands `128-refimmeta.sql`, which this
-      # branch's `REQUIRED_MIGRATIONS` requires. The previous pin (c805b82)
-      # predates it, so the schema-contract preflight refused every run on
-      # this branch with "the deployed schema is missing 1 migration(s) this
-      # build requires" — the cross-repo handshake working, not a defect.
-      RAPID_SYSTEMS_REF: e1896658d6cf1fe47f4664c74f2c0b7b95e97887
+      # 9b3b4185 is rapid_systems `main` carrying migrations 129-136 — the
+      # scratch run kind and its constrained-write layer. The previous pin
+      # (e1896658) lands 128 and stops there, so CI built a database whose
+      # `runs_kind_ck` still read ('production','campaign') and every
+      # scratch-run contract test failed with
+      # `RaiseException: kind must be production or campaign`. Same
+      # cross-repo handshake as the bump before it, one migration set later:
+      # the pin has to move when the branch depends on schema that is newer
+      # than it.
+      #
+      # e1896658 was the merge of `smdc_add_refimmeta_20260915` into `main`,
+      # landing `128-refimmeta.sql`; c805b82 before that predated 128 and
+      # produced "the deployed schema is missing 1 migration(s) this build
+      # requires". The pattern is worth naming: a red contract tier on a
+      # branch that changed the schema usually means this line, not the code.
+      RAPID_SYSTEMS_REF: 9b3b4185fa015a51e816f976b892c965c24b0ef7
 
     steps:
       - name: check out rapid

@@ -258,8 +258,36 @@ def _public_methods(text):
 #: until this lands on `smdc`; that is the deliberate friction working, not
 #: a defect to route around. The previous value, for the record, was
 #: `1cc5f3949f9edf00d3e2bee8dcd728e633b9656fca5a160b3eed12b31369912b`.
+#:
+#: **RE-RATIFICATION, 2026-09-20 — the scratch tier's constrained writes, no
+#: new capability.** Ratified by Ben through the launching session across
+#: 21:48, 22:03, 23:13 and 01:03 PDT, each widening recorded in the run
+#: ledger with its scope. The digest absorbs exactly ONE change, applied to
+#: nine EXISTING methods:
+#:
+#:   * `add_refimage`, `update_refimage`, `add_diffimage`,
+#:     `update_diffimage`, `add_psf`, `update_psf`,
+#:     `register_refimcatalog`, `register_refimmeta`,
+#:     `register_diffimmeta` — each selects
+#:     `derived.scratch_<name>` instead of the bare function when the write
+#:     belongs to a scratch run, and each gained the trailing keyword
+#:     arguments that dispatch needs. The bare functions are
+#:     INVOKER-RIGHTS, so the scratch service identity — which holds no
+#:     table privilege at all (rapid_systems migration 132) — cannot use
+#:     them; the SECURITY DEFINER wrappers are the only route that works
+#:     for it, and each refuses a run whose kind is not `scratch`.
+#:
+#: The rule this freeze protects is that NEW database access becomes a
+#: carved repository rather than another RAPIDDB method. That rule is
+#: intact: verified mechanically against the branch point e566af94, this
+#: branch adds NO public method and removes none. The production path is
+#: byte-for-byte what it was — same statement text, same casts, same
+#: parameter order — because every dispatch defaults to it.
+#:
+#: The previous value, for the record, was
+#: `8d7dc0fc5038783f8cc2c74bdaf2225ab9b0af7497e82d47bee4dde1b0d3d376`.
 RAPID_DB_BRANCH_POINT_SHA256 = (
-    "8d7dc0fc5038783f8cc2c74bdaf2225ab9b0af7497e82d47bee4dde1b0d3d376")
+    "5627340ca5679f8c3071b06d265f1e191f843f8b4d005c74bd3f228182af305d")
 
 
 def _file_digest(path):
