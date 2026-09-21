@@ -357,21 +357,35 @@ jobs:
         # evidence this step exists to produce is exactly what goes
         # missing when it is needed most.
         #
-        # Runs against a CLONE of the prior step's already-migrated
-        # database (`CREATE DATABASE ... TEMPLATE`), not that database
-        # itself: these test modules key fixture rows on fixed literals
-        # (field numbers, reference-set identity) that the prior step's
-        # own run of the SAME files already inserted, so re-running them
-        # in place collided on unique constraints (CI run 35570145762) --
-        # a database the prior step already fully migrated, cloned in
-        # place, costs one CREATE DATABASE, not a second 144-migration
-        # apply. Nothing else in this workflow changes.
+        # Runs against its OWN freshly migrated database (`rapid_cases`),
+        # not the prior step's `rapid`: these test modules key fixture
+        # rows on fixed literals (field numbers, reference-set identity),
+        # so a database that already carries the prior step's own run of
+        # the SAME files collides on unique constraints on the second run
+        # -- true whether that database is `rapid` itself (CI run
+        # 35570145762) or a post-hoc TEMPLATE clone of it, which inherits
+        # the same leftover rows (CI run 35570437169: `CREATE DATABASE`
+        # succeeded but the clone still carried the prior step's fixture
+        # rows, same collisions). Re-applying the migration stream is
+        # cheap (~3s per the prior step's own BRIEF-B-APPLY timing) and
+        # is exactly what `run-contract-tests.sh` already does, so this
+        # step calls it too, pointed at the new database, to get a
+        # migrated-but-untested database before pytest runs. Nothing
+        # else in this workflow changes.
         if: always()
         env:
           PGDATABASE: rapid_cases
         run: |
           PGDATABASE=postgres psql -v ON_ERROR_STOP=1 -c \
-            "CREATE DATABASE rapid_cases TEMPLATE rapid"
+            "CREATE DATABASE rapid_cases"
+          # Reuses run-contract-tests.sh for its migration-apply phase only
+          # (`-k __unmatched__` selects zero tests, so pytest's own "no
+          # tests collected" exit is expected and ignored with `|| true`);
+          # this leaves `rapid_cases` migrated but untouched by any test.
+          CONTRACT_LOG=/tmp/brief-b-contract-cases.log \
+            scripts/run-contract-tests.sh \
+            rapid_systems/cloudformation/db-migrations \
+            -k __unmatched_by_any_test__ || true
           python3 -m pytest -q -rA -m '' \
             pipeline/contract/test_run_delete_evidence_envelope.py \
             pipeline/contract/test_run_delete_restored_cases.py \
