@@ -102,17 +102,12 @@ user must construct a URL, knowing the filename in advance, like the following::
 
     https://rapid-product-files.s3.us-west-2.amazonaws.com/20260520/jid90828/awaicgen_output_mosaic_cov_map.fits
 
-For a listing of the latest product files from the ``Open Universe sims``, download the following text file:
+A full listing of product files is not committed to this repository; it is
+produced on demand from the bucket with the ``aws s3 ls`` command shown
+above. Redirect that command's output to a file to get the same per-date
+listing that was previously distributed as a static download, for example::
 
-:download:`rapid-product-files_20260520.txt <rapid-product-files_20260520.txt>`
-
-For a listing of the latest product files from the ``rimtimsims``, download the following text file:
-
-:download:`rapid-product-files_20260813.txt <rapid-product-files_20260813.txt>`
-
-For a listing of the latest product files from the ``SOC sims``, download the following text file:
-
-:download:`rapid-product-files_20260821.txt <rapid-product-files_20260821.txt>`
+    aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd> > rapid-product-files_<yyyymmdd>.txt
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
