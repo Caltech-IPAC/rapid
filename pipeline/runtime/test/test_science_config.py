@@ -130,6 +130,62 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(science_config.digest(content), expected)
 
 
+class LoadWithDigestOverlayTests(unittest.TestCase):
+    """`load_with_digest(overlay=...)` — the scratch run kind's one path.
+
+    `job.py` passes `manifest.science_overlay` straight through to this
+    parameter; these tests exercise the merge and digest behaviour the
+    entrypoint's wiring depends on, real content in and real content out,
+    with no mocking of `science_config` itself.
+    """
+
+    def test_no_overlay_is_byte_identical_to_todays_behaviour(self):
+        # `None` (the default) must remain the only production behaviour:
+        # every caller that passes nothing gets exactly what `load_with_
+        # digest` returned before this parameter existed.
+        path = write_config(MINIMAL)
+        without_arg = science_config.load_with_digest(path=path)
+        with_none = science_config.load_with_digest(path=path, overlay=None)
+        self.assertEqual(without_arg, with_none)
+
+    def test_overlay_changes_the_effective_value(self):
+        path = write_config(MINIMAL)
+        content, _digest = science_config.load_with_digest(
+            path=path, overlay={"science": {"min_images_to_coadd": 8}})
+        self.assertEqual(content["science"]["min_images_to_coadd"], 8)
+        # Everything the overlay did not name is untouched.
+        self.assertEqual(content["sfft"]["run_sfft"], True)
+
+    def test_overlay_changes_the_digest(self):
+        path = write_config(MINIMAL)
+        _content, base_digest = science_config.load_with_digest(path=path)
+        _overlaid, overlaid_digest = science_config.load_with_digest(
+            path=path, overlay={"science": {"min_images_to_coadd": 8}})
+        # The returned digest must identify the MERGED content actually
+        # used by this call, not the release's own cached digest — a
+        # scratch attempt's record has to be able to tell its content
+        # apart from an unoverlaid run's.
+        self.assertNotEqual(base_digest, overlaid_digest)
+        self.assertEqual(overlaid_digest, science_config.digest(_overlaid))
+
+    def test_the_release_cache_is_not_poisoned_by_an_overlaid_call(self):
+        # `own_copy` is a fresh JSON round-trip per call specifically so the
+        # overlay merge never reaches the `functools.lru_cache`-held
+        # content; a plain call for the same path after an overlaid one
+        # must still see the unoverlaid value.
+        path = write_config(MINIMAL)
+        science_config.load_with_digest(
+            path=path, overlay={"science": {"min_images_to_coadd": 8}})
+        content, _digest = science_config.load_with_digest(path=path)
+        self.assertEqual(content["science"]["min_images_to_coadd"], 3)
+
+    def test_empty_overlay_is_treated_as_no_overlay(self):
+        path = write_config(MINIMAL)
+        without_arg = science_config.load_with_digest(path=path)
+        with_empty = science_config.load_with_digest(path=path, overlay={})
+        self.assertEqual(without_arg, with_empty)
+
+
 class AccessorTests(unittest.TestCase):
 
     def setUp(self):

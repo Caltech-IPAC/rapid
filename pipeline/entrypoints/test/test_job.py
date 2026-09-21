@@ -261,6 +261,48 @@ class ManifestFetchClientConfigTests(unittest.TestCase):
         self.assertIn('"max_attempts": 10', source)
 
 
+class ScienceOverlayWiringTests(unittest.TestCase):
+    """The scratch run kind's overlay actually reaches the computation.
+
+    `_run` is the same untestable-without-standing-up-the-orchestrator
+    function `ManifestFetchClientConfigTests` above already reads by
+    source rather than by call — the manifest, database, and S3 objects
+    it needs are exactly what the module docstring's `sys.modules` stub
+    exists to avoid importing. `science_config.load_with_digest` itself
+    (including what an `overlay` argument does to the merge and the
+    digest) is exercised for real in
+    `pipeline/runtime/test/test_science_config.py`; what belongs here is
+    only the wiring — that `_run` passes the manifest's overlay to that
+    call and records it where `pipeline/stages/science.py`'s
+    `download_inputs` reads it back.
+    """
+
+    def test_load_with_digest_is_called_with_the_manifest_overlay(self):
+        import inspect
+        source = inspect.getsource(job._run)
+        self.assertIn(
+            "science_config.load_with_digest(\n"
+            "            overlay=manifest.science_overlay)", source, (
+                "_run must pass overlay=manifest.science_overlay to "
+                "load_with_digest, so a scratch run's per-run science "
+                "override reaches the content every stage reads, and a "
+                "production manifest's None reaches it unchanged."))
+
+    def test_the_overlay_is_recorded_under_the_key_science_py_reads(self):
+        import inspect
+        source = inspect.getsource(job._run)
+        # `pipeline/stages/science.py`'s `download_inputs` reads
+        # `context.provenance.get("science_overlay")` to log which keys a
+        # scratch run overrode; `context.record` writes its keyword
+        # arguments straight into `context.provenance`, so the keyword
+        # here has to be spelled exactly `science_overlay`.
+        self.assertIn("science_overlay=manifest.science_overlay or {}",
+                      source, (
+                "_run must record science_overlay=manifest.science_overlay "
+                "or {} on the context, or science.py's download_inputs "
+                "has nothing to read back."))
+
+
 class LoadManifestTests(unittest.TestCase):
 
     def test_checksum_mismatch_raises_configerror(self):

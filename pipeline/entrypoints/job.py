@@ -944,7 +944,22 @@ def _run(workload_class: str) -> int:
         # can return one and the entrypoint called plain `load()`, so the
         # release science TOML could change while keeping the same shape and
         # no attempt record could identify or reject the different content.
-        science, science_digest = science_config.load_with_digest()
+        #
+        # `overlay=manifest.science_overlay` is the scratch run kind's per-run
+        # override, carried in the manifest rather than the release image so a
+        # scientist iterating on one section does not need a new release to
+        # try a new number. A production manifest never carries one — the
+        # submitter that builds a production manifest has no code path that
+        # sets `science_overlay` — so `manifest.science_overlay` is `None`
+        # there and `load_with_digest` documents `None` as the one input that
+        # reproduces today's behaviour exactly: same cached content, same
+        # digest, byte-identical to before this call took an argument. For a
+        # scratch run, the returned digest identifies the MERGED content —
+        # release plus overlay — because that merged content, not the
+        # unmodified release, is what every later stage actually reads
+        # through `context.science`.
+        science, science_digest = science_config.load_with_digest(
+            overlay=manifest.science_overlay)
 
         context = StageContext(
             workdir=workdir, unit=unit, job_type=manifest.job_type,
@@ -973,6 +988,20 @@ def _run(workload_class: str) -> int:
         # the role exactly as the original attempt did, forever.
         context.record(release_content_digest=science_digest,
                        product_roles=science_config.product_roles(science),
+                       # THE OVERLAY ITSELF, not just its effect on the
+                       # digest above. `science.py`'s `download_inputs`
+                       # reads this exact key (`context.provenance.get(
+                       # "science_overlay")`) to log which keys a scratch
+                       # run actually overrode and what the merged value
+                       # came out to — a digest is the right thing for the
+                       # record to carry forever, but it is not something a
+                       # scientist iterating on a scratch run can read at a
+                       # glance. `{}` rather than `None` for a production
+                       # manifest (whose `science_overlay` is always `None`)
+                       # so that loop is a plain no-op, zero lines, rather
+                       # than a `None`-guard the production path would
+                       # carry for a case it can never hit.
+                       science_overlay=manifest.science_overlay or {},
                        **tessellation_provenance(parameters, science, logger))
 
         # THE PROCESS SPECIFICATION'S OTHER HALF (rule 10). A product key
