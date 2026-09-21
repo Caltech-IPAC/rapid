@@ -43,11 +43,31 @@ def _run_name(label):
     return "rundel-rc-%s-%s" % (fixture.RUN_TAG, label)
 
 
+def _declare_reference_set(conn, label):
+    """A fresh, uniquely-named reference set for one test's run.
+
+    `test_run_model.py`'s established pattern: `refimages_vbest_current_
+    per_set_unique` (migration 126) is keyed on `(field, fid, ppid,
+    reference_set_id)` at `vbest IN (1, 2)`, not on `version` — so two runs
+    realizing the SAME reference identity (same field/fid/ppid, both at
+    vbest=1, exactly what `rc-executed-preserves-sibling` needs) collide on
+    that index unless each lands in its own set.
+    """
+    result = actions.create_reference_set(
+        conn, _key("refset-%s" % label), _run_name("refset-%s" % label),
+        "rc contract fixture", "rc contract fixture", dry_run=False)
+    assert result["rows_affected"] == 1
+    conn.commit()
+    return result["reference_set_id"]
+
+
 def _declare_scratch_run(conn, label, owner=None):
     name = _run_name(label)
+    reference_set_id = _declare_reference_set(conn, label)
     result = actions.create_run(
         conn, _key("declare-%s" % label), name, owner, "scratch",
-        reason="rc contract fixture", dry_run=False)
+        reason="rc contract fixture", dry_run=False,
+        reference_set_id=reference_set_id)
     assert result["rows_affected"] == 1
     conn.commit()
     return name, result["run_id"]
@@ -226,7 +246,18 @@ def test_rc_executed_preserves_sibling(conn):
     field = 991200
 
     def _refimage(run_name, tag):
+        # `refimages_vbest_current_per_set_unique` (migration 126) is keyed
+        # on `(field, fid, ppid, reference_set_id)` at vbest IN (1, 2) — not
+        # on `version` — and BOTH run_a and run_b deliberately realize the
+        # SAME (field, fid, ppid) at vbest=1 here (that shared realization
+        # is the whole point of the sibling test). Each run's own
+        # `reference_set_id` (from `_declare_scratch_run`) is threaded onto
+        # its refimage row so the two inserts land in different sets and
+        # never collide on that index.
         with conn.cursor() as cur:
+            cur.execute("SELECT reference_set_id FROM runs WHERE name = %s",
+                       [run_name])
+            reference_set_id = cur.fetchone()[0]
             cur.execute(
                 "SELECT coalesce(max(version), 0) + 1 FROM refimages"
                 " WHERE field = %s AND fid = %s AND ppid = %s",
@@ -236,6 +267,7 @@ def test_rc_executed_preserves_sibling(conn):
             conn, "refimages", "rfid",
             {"field": field, "fid": fid, "ppid": ppid, "version": version,
              "vbest": 1, "run_id": run_name,
+             "reference_set_id": reference_set_id,
              "filename": "ref/%s/%s.fits" % (fixture.RUN_TAG, tag)})
         conn.commit()
         return rfid

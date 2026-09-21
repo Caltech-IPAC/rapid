@@ -57,15 +57,38 @@ def _run_name(label):
     return "rundel-%s-%s" % (fixture.RUN_TAG, label)
 
 
+def _declare_reference_set(conn, label):
+    """A fresh, uniquely-named reference set for one test's run.
+
+    `test_run_model.py`'s established pattern (`_declare_reference_set`):
+    `refimages_vbest_current_per_set_unique` (migration 126) is keyed on
+    `(field, fid, ppid, reference_set_id)` at `vbest IN (1, 2)` — NOT on
+    `version` — so any two runs this suite realizes the SAME reference
+    identity for (same field/fid/ppid, both at vbest=1) collide on that
+    index unless each lands in its own set. Giving every declared run its
+    own set here sidesteps the whole collision class uniformly rather than
+    reasoning per-test about which pairs happen to share a field number.
+    """
+    result = actions.create_reference_set(
+        conn, _key("refset-%s" % label), _run_name("refset-%s" % label),
+        "rd-contract-tests", "rd contract fixture", dry_run=False)
+    assert result["rows_affected"] == 1
+    conn.commit()
+    return result["reference_set_id"]
+
+
 def _declare_scratch_run(conn, label):
     """A fresh scratch run, owned by the connected session (129's own rule:
     a scratch run's owner is its creator, so `owner=None` is REQUIRED, not
-    merely permitted — passing anything else is refused).
+    merely permitted — passing anything else is refused), differencing
+    against its OWN fresh reference set (see `_declare_reference_set`).
     """
     name = _run_name(label)
+    reference_set_id = _declare_reference_set(conn, label)
     result = actions.create_run(
         conn, _key("declare-%s" % label), name, None, "scratch",
-        reason="rd contract fixture", dry_run=False)
+        reason="rd contract fixture", dry_run=False,
+        reference_set_id=reference_set_id)
     assert result["rows_affected"] == 1
     conn.commit()
     return name, result["run_id"]
@@ -103,10 +126,22 @@ def _make_run_diffimage(conn, run_name, field, ppid=15, sca=1):
     return pid, rfid
 
 
-def _make_run_refimage(conn, run_name, field, fid, ppid, tag):
+def _make_run_refimage(conn, run_name, field, fid, ppid, tag,
+                       reference_set_id=None):
     """A `refimages` row at `vbest=1`, attributed to `run_name`. Returns
-    `rfid`. `version` is minted fresh so two calls for the same
-    (field, fid, ppid) never collide on `refimagespk`.
+    `rfid`.
+
+    `version` is minted fresh so two calls for the same (field, fid, ppid)
+    never collide on the plain `refimagespk UNIQUE (field, fid, ppid,
+    version)` — but that index has no WHERE clause and is checked BEFORE
+    `refimages_vbest_current_per_set_unique` (migration 126), which is what
+    actually governs coexistence at `vbest=1`: it is keyed on `(field, fid,
+    ppid, reference_set_id)`, not `version`. So `reference_set_id` is
+    threaded through explicitly here (`test_run_model.py`'s
+    `_make_run_scoped_refimage` pattern) — a caller wanting two runs to
+    coexist at the SAME (field, fid, ppid) passes each its own set (see
+    `_declare_reference_set`); passing none leaves the column to 126's
+    default.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -114,13 +149,30 @@ def _make_run_refimage(conn, run_name, field, fid, ppid, tag):
             " WHERE field = %s AND fid = %s AND ppid = %s",
             [field, fid, ppid])
         version = cur.fetchone()[0]
+    columns = {"field": field, "fid": fid, "ppid": ppid, "version": version,
+              "vbest": 1, "run_id": run_name,
+              "filename": "ref/%s/%s.fits" % (fixture.RUN_TAG, tag)}
+    if reference_set_id is not None:
+        columns["reference_set_id"] = reference_set_id
     rfid = fixture._insert_filling_required(
-        conn, "refimages", "rfid",
-        {"field": field, "fid": fid, "ppid": ppid, "version": version,
-         "vbest": 1, "run_id": run_name,
-         "filename": "ref/%s/%s.fits" % (fixture.RUN_TAG, tag)})
+        conn, "refimages", "rfid", columns)
     conn.commit()
     return rfid
+
+
+def _run_reference_set_id(conn, run_name):
+    """The `reference_set_id` `_declare_scratch_run` gave this run.
+
+    Looked up from `runs` rather than threaded through `_declare_scratch_
+    run`'s return tuple: several existing callers already destructure that
+    tuple's second element as `run_key` (rd-12, rd-17), so widening it to a
+    3-tuple would touch every call site instead of only the two (rd-02,
+    rd-04) that need coexisting reference images at one field.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT reference_set_id FROM runs WHERE name = %s",
+                    [run_name])
+        return cur.fetchone()[0]
 
 
 def _first_filter_id(conn):
@@ -309,9 +361,13 @@ def test_rd_02_shared_identity_not_a_dependency_projects_not_refuses(conn):
         process_family=ppid)
 
     rfid_a = _make_run_refimage(conn, run_a, field=991102, fid=fid,
-                                ppid=ppid, tag="rd02-a")
+                                ppid=ppid, tag="rd02-a",
+                                reference_set_id=_run_reference_set_id(
+                                    conn, run_a))
     rfid_b = _make_run_refimage(conn, run_b, field=991102, fid=fid,
-                                ppid=ppid, tag="rd02-b")
+                                ppid=ppid, tag="rd02-b",
+                                reference_set_id=_run_reference_set_id(
+                                    conn, run_b))
 
     attempt_a = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     artifact_a = repo.upsert_artifact(
@@ -364,7 +420,9 @@ def test_rd_04_published_product_cites_other_run_projects_not_refuses(conn):
 
     # THIS run realizes the reference too (shared identity).
     this_rfid = _make_run_refimage(conn, this_run, field=991104, fid=fid,
-                                   ppid=ppid, tag="rd04-this-ref")
+                                   ppid=ppid, tag="rd04-this-ref",
+                                   reference_set_id=_run_reference_set_id(
+                                       conn, this_run))
     this_attempt = fixture.make_attempt(conn,
                                         lifecycle="terminal_without_start")
     this_artifact = repo.upsert_artifact(
@@ -378,7 +436,9 @@ def test_rd_04_published_product_cites_other_run_projects_not_refuses(conn):
     # current -- superseding THIS run's binding, matching 131's old
     # refusal shape (which is exactly what 142 must not act on here).
     other_rfid = _make_run_refimage(conn, other_run, field=991104, fid=fid,
-                                    ppid=ppid, tag="rd04-other-ref")
+                                    ppid=ppid, tag="rd04-other-ref",
+                                    reference_set_id=_run_reference_set_id(
+                                        conn, other_run))
     other_ref_attempt = fixture.make_attempt(
         conn, lifecycle="terminal_without_start")
     other_ref_artifact = repo.upsert_artifact(
@@ -455,13 +515,26 @@ def _make_foreign_in_flight_submission(conn, foreign_run_name,
             [logical_job_id, foreign_run_name])
         cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
         schema_version = cur.fetchone()[0]
+        # `attempts_state_submitted_check` (migration 013) requires the
+        # binding triple (job-definition ARN, image digest, manifest
+        # checksum) on a `submitted` row once `schema_version >= 2` — read
+        # fresh above, so it reflects whatever the shared database already
+        # holds, not merely this test's own prior rows. Supplying the triple
+        # unconditionally (fixture.make_pending_attempt's own pattern) keeps
+        # this insert valid regardless of which schema_version is current.
+        tag = uuid.uuid4().hex[:8]
         cur.execute(
             "INSERT INTO attempts"
             " (run_id, run_key, schema_version, logical_job_id,"
-            "  lifecycle_state, created_at, submitted_at, submission_id)"
-            " VALUES (%s, %s, %s, %s, 'submitted', now(), now(), %s)",
+            "  lifecycle_state, created_at, submitted_at, submission_id,"
+            "  binding_job_definition_arn, binding_image_digest,"
+            "  binding_manifest_checksum)"
+            " VALUES (%s, %s, %s, %s, 'submitted', now(), now(), %s,"
+            "         %s, 'sha256:' || %s, 'sha256:' || %s)",
             [foreign_run_name, run_key, schema_version, logical_job_id,
-             submission_id])
+             submission_id,
+             "arn:aws:batch:us-east-1:account:job-definition/%s:1" % tag,
+             tag, tag])
     conn.commit()
     return submission_id, checksum
 
@@ -478,7 +551,7 @@ def test_rd_05_inflight_manifest_references_refused(conn):
     """
     require_run_delete_schema(conn)
     this_run, _ = _declare_scratch_run(conn, "rd05")
-    foreign_run, _ = _declare_scratch_run(conn, "rd05-foreign")
+    foreign_run, _ = _declare_scratch_run(conn, "foreign-rd05")
     submission_id, checksum = _make_foreign_in_flight_submission(
         conn, foreign_run)
 
@@ -500,7 +573,7 @@ def test_rd_06_inflight_evidence_absent_refused(conn):
     """
     require_run_delete_schema(conn)
     this_run, _ = _declare_scratch_run(conn, "rd06")
-    foreign_run, _ = _declare_scratch_run(conn, "rd06-foreign")
+    foreign_run, _ = _declare_scratch_run(conn, "foreign-rd06")
     _make_foreign_in_flight_submission(conn, foreign_run)
 
     with pytest.raises(InvariantViolation) as caught:
@@ -514,7 +587,7 @@ def test_rd_07_inflight_unreadable_refused(conn):
     """
     require_run_delete_schema(conn)
     this_run, _ = _declare_scratch_run(conn, "rd07")
-    foreign_run, _ = _declare_scratch_run(conn, "rd07-foreign")
+    foreign_run, _ = _declare_scratch_run(conn, "foreign-rd07")
     submission_id, checksum = _make_foreign_in_flight_submission(
         conn, foreign_run)
 
@@ -539,7 +612,7 @@ def test_rd_08_inflight_checksum_mismatch_refused(conn):
     """
     require_run_delete_schema(conn)
     this_run, _ = _declare_scratch_run(conn, "rd08")
-    foreign_run, _ = _declare_scratch_run(conn, "rd08-foreign")
+    foreign_run, _ = _declare_scratch_run(conn, "foreign-rd08")
     submission_id, real_checksum = _make_foreign_in_flight_submission(
         conn, foreign_run)
 
@@ -563,7 +636,7 @@ def test_rd_09_inflight_evidence_clear_projects_not_refuses(conn):
     """
     require_run_delete_schema(conn)
     this_run, _ = _declare_scratch_run(conn, "rd09")
-    foreign_run, _ = _declare_scratch_run(conn, "rd09-foreign")
+    foreign_run, _ = _declare_scratch_run(conn, "foreign-rd09")
     submission_id, checksum = _make_foreign_in_flight_submission(
         conn, foreign_run)
 
@@ -626,12 +699,22 @@ def test_rd_12_own_inflight_attempt_refused(conn):
             [logical_job_id, this_run])
         cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
         schema_version = cur.fetchone()[0]
+        # `attempts_state_submitted_check` (migration 013) requires the
+        # binding triple once schema_version >= 2, read fresh above from
+        # whatever the shared database currently holds — so it is supplied
+        # unconditionally, matching fixture.make_pending_attempt's pattern.
+        tag = uuid.uuid4().hex[:8]
         cur.execute(
             "INSERT INTO attempts"
             " (run_id, run_key, schema_version, logical_job_id,"
-            "  lifecycle_state, created_at, submitted_at)"
-            " VALUES (%s, %s, %s, %s, 'submitted', now(), now())",
-            [this_run, run_key, schema_version, logical_job_id])
+            "  lifecycle_state, created_at, submitted_at,"
+            "  binding_job_definition_arn, binding_image_digest,"
+            "  binding_manifest_checksum)"
+            " VALUES (%s, %s, %s, %s, 'submitted', now(), now(),"
+            "         %s, 'sha256:' || %s, 'sha256:' || %s)",
+            [this_run, run_key, schema_version, logical_job_id,
+             "arn:aws:batch:us-east-1:account:job-definition/%s:1" % tag,
+             tag, tag])
     conn.commit()
 
     with pytest.raises(InvariantViolation) as caught:
@@ -657,13 +740,22 @@ def test_rd_13_supersession_edge_refused(conn):
     superseding_id = fixture.create_unit(
         conn, fixture.scope("rd13-superseding"))
     with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE work_units SET run_id = %s WHERE work_unit_id = %s",
-            [other_run, superseded_id])
+        # THE SUPERSEDED unit belongs to `other_run` and points at the
+        # superseding unit. THE SUPERSEDING unit belongs to `this_run`.
+        # Both UPDATEs must target DIFFERENT work_unit_ids -- a prior
+        # version of this fixture set `run_id = this_run` on the SAME row
+        # (`superseded_id`) that the first statement had just set to
+        # `other_run`, so the second UPDATE silently clobbered the first
+        # and left BOTH units belonging to `this_run`: no run-crossing edge
+        # existed at all, which is why `derived.delete_run` correctly did
+        # not refuse -- there was nothing to refuse.
         cur.execute(
             "UPDATE work_units SET run_id = %s, superseded_by_unit_id = %s"
             " WHERE work_unit_id = %s",
-            [this_run, superseding_id, superseded_id])
+            [other_run, superseding_id, superseded_id])
+        cur.execute(
+            "UPDATE work_units SET run_id = %s WHERE work_unit_id = %s",
+            [this_run, superseding_id])
     conn.commit()
 
     with pytest.raises(InvariantViolation) as caught:
@@ -676,13 +768,40 @@ def test_rd_13_supersession_edge_refused(conn):
 # ---------------------------------------------------------------------------
 def _make_association_family_row(conn, prototype, table_name, field,
                                   pid_producing_run_pid, sid=None):
-    """A `<prototype>_<suffix>` child table (created via
-    `derived.create_child_table`) with one row keyed to `pid` — the sources
-    chain 142's association-edge clause reads.
+    """A `<prototype>_<suffix>` child table with one row keyed to `pid` —
+    the sources chain 142's association-edge clause reads.
+
+    **CREATED UNDER A PLAIN PER-FIELD NAME, THEN RENAMED.**
+    `derived.create_child_table`'s own name-shape validator (migration 145,
+    mirroring `catalog_db.py`'s `validate_child_name`) accepts only
+    `<prototype>_<field>` or `<prototype>_<yyyymmdd>_<sca>` — it has no
+    notion of an association set at all, so it unconditionally refuses
+    `<prototype>_s<set>_<field>` (RA001) even though that IS 049's own
+    production naming for a non-live set (`derived.association_table_name`,
+    `pipeline.association.sets.table_name`) and the EXACT shape 142's own
+    inheritance-scan regex (`^merges_s([0-9]+)_[0-9]+$`) expects to find.
+    That gap is between `create_child_table` and `association_table_name`
+    themselves — real production code hits it too (`post_db.py`'s
+    `_association_scope` composes a `_s<set>_` name and hands it straight to
+    `catalog_db.create_child_table`, which runs the identical validator) —
+    and fixing it is outside this task's scope (test fixtures only; see the
+    task's own restriction on touching implementation files).
+    So the child is created here under a name `create_child_table` DOES
+    accept, then renamed to the set-scoped shape with a plain `ALTER TABLE`
+    — a fixture-only route to the exact catalog state 142's regex reads,
+    without asking the validator to accept a shape it structurally refuses.
+    `INHERITS` (needed for 142's inheritance-tree scan to see the row
+    through the `merges`/`sources` prototype at all) survives the rename
+    unaffected, since a rename does not touch `pg_inherits`.
     """
+    plain_name = "%s_%d" % (prototype, field)
     with conn.cursor() as cur:
         cur.execute("SELECT derived.create_child_table(%s, %s, %s)",
-                    [table_name, prototype, prototype == "sources"])
+                    [plain_name, prototype, True])
+        if plain_name != table_name:
+            cur.execute("DROP TABLE IF EXISTS public.%s" % table_name)
+            cur.execute("ALTER TABLE public.%s RENAME TO %s"
+                       % (plain_name, table_name))
     conn.commit()
     if prototype == "sources":
         with conn.cursor() as cur:
@@ -823,12 +942,23 @@ def test_rd_17_split_batch_attribution_own_inflight_fence_fires(conn):
         # predating the run_key column), which is the specific attribution
         # rd-17 exists to prove -- a run_key-only test would not exercise
         # the regex fallback at all.
+        #
+        # The binding triple IS still required regardless of run_key:
+        # `attempts_state_submitted_check` (migration 013) requires it on
+        # any `submitted` row once schema_version >= 2 (read fresh above),
+        # unconditionally, matching fixture.make_pending_attempt's pattern.
+        tag = uuid.uuid4().hex[:8]
         cur.execute(
             "INSERT INTO attempts"
             " (run_id, schema_version, logical_job_id,"
-            "  lifecycle_state, created_at, submitted_at)"
-            " VALUES (%s, %s, %s, 'submitted', now(), now())",
-            [split_batch_id, schema_version, logical_job_id])
+            "  lifecycle_state, created_at, submitted_at,"
+            "  binding_job_definition_arn, binding_image_digest,"
+            "  binding_manifest_checksum)"
+            " VALUES (%s, %s, %s, 'submitted', now(), now(),"
+            "         %s, 'sha256:' || %s, 'sha256:' || %s)",
+            [split_batch_id, schema_version, logical_job_id,
+             "arn:aws:batch:us-east-1:account:job-definition/%s:1" % tag,
+             tag, tag])
     conn.commit()
 
     with pytest.raises(InvariantViolation) as caught:
