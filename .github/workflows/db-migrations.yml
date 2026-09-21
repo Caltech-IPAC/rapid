@@ -1,0 +1,129 @@
+# db-migrations: applies database/migrations/*.sql to a fresh PostgreSQL
+# and exercises the applier's idempotence and drift-refusal guarantees.
+#
+# PostgreSQL 18 with Q3C, matching the smdc branch's contract-tests.yml
+# (.github/workflows/contract-tests.yml there) and the fleet it tests
+# against: the deployed database is PostgreSQL 18 with the Q3C
+# spherical-indexing extension, and 000-baseline.sql assumes Q3C is
+# available. Testing against a PostgreSQL version nobody deploys would
+# make every result here a statement about a database nobody runs. Q3C is
+# installed into the stock postgres:18 service container from the same
+# PGDG repository that image already has configured, rather than pulled
+# from a private registry — this workflow holds no cloud credentials.
+name: db-migrations
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-migrations-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: throwaway-ci-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      # Throwaway password, this job's service container only — never a
+      # real credential, never used outside this ephemeral database.
+      PGPASSWORD: throwaway-ci-password
+
+    steps:
+      - name: check out rapid
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+
+      - name: install Q3C into the service container
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "ancestor=postgres:18" --format '{{.ID}}' | head -1)
+          if [ -z "$cid" ]; then
+            cid=$(docker ps --format '{{.ID}} {{.Image}}' | grep -i postgres | head -1 | cut -d' ' -f1)
+          fi
+          docker exec "$cid" apt-get update -qq
+          docker exec "$cid" apt-get install -y --no-install-recommends postgresql-18-q3c
+
+      - name: install postgresql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: create the empty target database
+        run: |
+          PGDATABASE=postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE rapid"
+
+      - name: apply the migration stream to an empty database (must succeed)
+        env:
+          PGDATABASE: rapid
+        run: |
+          database/apply-migrations.sh
+
+      - name: count schema_migrations rows after the first apply
+        env:
+          PGDATABASE: rapid
+        run: |
+          set -euo pipefail
+          count=$(psql -X -tA -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migrations;")
+          echo "rows after first apply: $count"
+          echo "FIRST_APPLY_COUNT=$count" >> "$GITHUB_ENV"
+          if [ "$count" -lt 1 ]; then
+            echo "!! schema_migrations has no rows after applying the migration stream" >&2
+            exit 1
+          fi
+
+      - name: re-run the applier (must be a no-op)
+        env:
+          PGDATABASE: rapid
+        run: |
+          set -euo pipefail
+          database/apply-migrations.sh
+          count=$(psql -X -tA -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migrations;")
+          echo "rows after second apply: $count"
+          if [ "$count" != "$FIRST_APPLY_COUNT" ]; then
+            echo "!! schema_migrations row count changed on a re-run ($FIRST_APPLY_COUNT -> $count) — the applier is not idempotent" >&2
+            exit 1
+          fi
+
+      - name: run --status
+        env:
+          PGDATABASE: rapid
+        run: |
+          database/apply-migrations.sh --status
+
+      - name: drift check — a modified already-applied file must be refused
+        env:
+          PGDATABASE: rapid
+        run: |
+          set -euo pipefail
+          drift_dir=$(mktemp -d)
+          cp database/migrations/*.sql "$drift_dir/"
+          # Modify the baseline (000, always applied by this point) in the
+          # copy only — the committed file is untouched.
+          printf '\n-- drift check: this line must never be applied\n' >> "$drift_dir/000-baseline.sql"
+          if database/apply-migrations.sh "$drift_dir"; then
+            echo "!! applier accepted a modified already-applied migration instead of refusing it" >&2
+            exit 1
+          fi
+          echo ">> applier correctly refused the modified file"
