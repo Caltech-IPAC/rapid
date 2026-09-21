@@ -37,7 +37,15 @@ def require_create_child_table(conn):
 
 
 def _tag():
-    return uuid.uuid4().hex[:8]
+    """An 8-digit numeric tag for `<prototype>_<field>` child names.
+
+    `derived.create_child_table`'s own validator requires the field
+    segment to be numeric (`<prototype>_<field>` or
+    `<prototype>_<yyyymmdd>_<sca>`); a hex UUID slice fails that shape
+    whenever it contains a letter (roughly 19 times in 20 calls), which
+    is what CI run 35569893770 caught.
+    """
+    return "%08d" % (uuid.uuid4().int % 100000000)
 
 
 def _drop_if_exists(conn, table_name):
