@@ -138,8 +138,20 @@ printf '%s\n' "$files" | while IFS= read -r f; do
   fi
 
   echo ">> applying $fn"
-  psql -X -v ON_ERROR_STOP=1 --single-transaction -f "$f" \
-    -c "INSERT INTO schema_migrations (filename, sha256) VALUES ('$fn', '$current_sha');"
+  # Explicit exit-status check, not reliance on `set -e` propagating out of
+  # this loop: the loop body runs inside a `while` that is itself piped
+  # from `printf` and wrapped in `|| exit_status=$?` below, and bash
+  # suspends `-e` for every command that is part of such a conditional
+  # list -- including commands inside a loop that IS that list's last
+  # element. A failing psql here would otherwise fall through silently to
+  # the "applied" echo and the next iteration (found live: a deliberately
+  # broken CREATE INDEX printed ">> applied ... " and left
+  # schema_migrations with zero rows, exit 0 throughout).
+  if ! psql -X -v ON_ERROR_STOP=1 --single-transaction -f "$f" \
+    -c "INSERT INTO schema_migrations (filename, sha256) VALUES ('$fn', '$current_sha');"; then
+    echo "!! applying $fn failed — see the psql error above; nothing from this file was committed (--single-transaction)" >&2
+    exit 1
+  fi
   echo ">> applied $fn (sha256 $current_sha)"
 done || exit_status=$?
 
