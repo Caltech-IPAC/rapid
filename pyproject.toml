@@ -1,0 +1,30 @@
+# Project and build configuration for the RAPID pipeline repository.
+#
+# requirements.txt stays the dependency authority: Dockerfiles install
+# from it, and this file does not restate or replace it. This file exists
+# so the repository is installable (pip install -e .) and packaged for
+# distribution; the CI/lint configuration is a separate concern this file
+# does not take on.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rapid-pipeline"
+version = "0.1.0"
+description = "RAPID -- Roman Alerts Promptly from Image Differencing"
+requires-python = ">=3.11"
+license = {text = "BSD-3-Clause"}
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools]
+# Explicit package list, not auto-discovery: this tree also has docs, c,
+# cdf, sims, soc and docker directories that are not importable packages,
+# and setuptools' flat-layout auto-discovery refuses to guess among them.
+packages.find = {include = [
+    "pipeline*", "modules*", "database*", "alerts*", "aws*",
+]}
