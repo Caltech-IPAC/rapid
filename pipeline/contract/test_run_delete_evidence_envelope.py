@@ -330,7 +330,10 @@ def test_rd_03_published_product_cites_candidate_refused(conn):
 
     with pytest.raises(InvariantViolation) as caught:
         _dry_run_delete(conn, producer)
-    assert "cite" in str(caught.value).lower() or "RA021" in str(caught.value)
+    # classified by exception type, not text (see rd-01's identical note);
+    # RA021 is the SQLSTATE and is never embedded in the message text.
+    assert "reference images" in str(caught.value) or \
+        "diffimages.rfid" in str(caught.value)
 
 
 # ---------------------------------------------------------------------------

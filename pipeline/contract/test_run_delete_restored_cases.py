@@ -142,8 +142,14 @@ def test_rc_companion_unbound_is_not_a_refusal(conn):
 
     attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     with conn.cursor() as cur:
-        cur.execute("UPDATE attempts SET run_key = %s WHERE attempt_id = %s",
-                    [run_key, attempt_id])
+        # Both run_key (registry attribution) and run_id (the provenance
+        # string 142's reader resolves against this_run/<this_run>-<n>)
+        # must be set, or the attempt is unresolved provenance rather than
+        # this run's own unbound companion (see
+        # test_rc_unresolved_provenance_fails_closed's identical note).
+        cur.execute(
+            "UPDATE attempts SET run_key = %s, run_id = %s"
+            " WHERE attempt_id = %s", [run_key, this_run, attempt_id])
         cur.execute(
             "INSERT INTO artifacts"
             " (attempt_id, record_sequence, published_name, uri,"
