@@ -1,66 +1,363 @@
-"""One connection path to the run-model tables: environment only, autocommit off.
+"""One connection path to the run-model tables.
 
 Reads the standard ``PG*`` variables -- ``PGHOST``, ``PGPORT``, ``PGDATABASE``,
 ``PGUSER``, ``PGPASSWORD`` -- exactly as ``database/apply-migrations.sh``
-does, and nothing else: no Secrets Manager lookup, no account-specific
-configuration, no connection pooling. Those belong to deployment and are
-out of scope for this PR; the smdc branch's
-``database/modules/utils/rapid_db_connect.py`` is the reference for pooling,
-credential fetch and dead-peer detection when that work lands.
+does, when a caller passes neither ``endpoint=`` nor ``credentials=``.
+A caller holding either already -- the CLI having just read a parameter
+tree, a launcher having just resolved a secret under its own role --
+passes it explicitly instead, per the environment policy: the
+environment is not an in-process transport, so this module never writes
+it for a downstream reader to read back, only reads its own at the
+boundary.
+
+No connection pooling, no pooler-specific configuration: pgbouncer (or
+any pooler) is server-side infrastructure that ``rapid_systems``
+provisions and configures, and does not belong in this repository (see
+the specification's "Repositories" table). This module only ever asks
+the pooler's (or the database's) own listening port for one connection
+at a time.
 
 This module provides persistence only: it does not import ``rapidpipe.runs``
 or any stage module, matching ``rapidpipe.db``'s package contract.
+
+Ported, trimmed and adapted from the smdc branch's
+``database/modules/utils/rapid_db_connect.py`` (kept: explicit
+endpoint/credentials interface, Secrets Manager resolution, connect
+timeout, ``application_name``, bounded retry with backoff and jitter,
+TCP keepalives; dropped: the two named pooler "lanes", the SET ROLE
+widening/reassert bookkeeping, ``ConnectionExecutor``, and the
+STARTUP_* fleet-restart-horizon constants -- all pooler- or
+operator-role-specific and out of scope for a repository that carries
+no pooler code).
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
+import logging
 import os
-from typing import Iterator
+import random
+import time
+from dataclasses import dataclass
+from typing import Any, Iterator
 
 import psycopg2
 import psycopg2.extensions
 
+logger = logging.getLogger(__name__)
+
 _REQUIRED_VARS = ("PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD")
+
+# Starting values, replaceable by evidence without re-ratification: the
+# stage contract and the specification state the shape (timeout, bounded
+# retry, backoff) but not the numbers.
+DEFAULT_CONNECT_TIMEOUT_S = 10
+DEFAULT_CONNECT_ATTEMPTS = 5
+DEFAULT_BACKOFF_INITIAL_S = 0.5
+DEFAULT_BACKOFF_MULTIPLIER = 2.0
+DEFAULT_BACKOFF_CAP_S = 8.0
+
+# TCP keepalives. The incident this closes (condensed from the smdc
+# branch's pooler_client_idle_timeout.rst / rapid_db_connect.py
+# docstring): on 2026-09-12 a long-lived connection's peer was replaced
+# by a host roll mid-poll. No RST or FIN arrives for a socket whose peer
+# has simply vanished, so without keepalives the connection sat believed
+# healthy for over two hours -- the kernel's own default idle time
+# (7200s) plus nine probes 75s apart -- before psycopg2 finally reported
+# a timeout. These settings bring detection down to about a minute:
+# KEEPALIVES_IDLE_S before the first probe, then up to KEEPALIVES_COUNT
+# probes KEEPALIVES_INTERVAL_S apart (30 + 3*10 = 60s), with
+# TCP_USER_TIMEOUT_MS as a second, kernel-enforced backstop on the same
+# budget. This is socket-level dead-peer detection only: it does not
+# retry a statement that was in flight when the peer vanished, it only
+# bounds how long a now-useless connection is believed healthy.
+KEEPALIVES = 1
+KEEPALIVES_IDLE_S = 30
+KEEPALIVES_INTERVAL_S = 10
+KEEPALIVES_COUNT = 3
+TCP_USER_TIMEOUT_MS = 60000
 
 
 class ConnectionConfigError(RuntimeError):
-    """A required ``PG*`` environment variable is missing."""
+    """A required ``PG*`` environment variable is missing, or an explicit
+    endpoint/credential was passed incomplete."""
 
 
-def _read_env() -> dict[str, str]:
-    missing = [name for name in _REQUIRED_VARS if not os.environ.get(name)]
+class ConnectionUnavailable(RuntimeError):
+    """Connecting failed on every attempt within the retry budget."""
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    """Where the database is: host, port, dbname -- passed explicitly.
+
+    A dataclass rather than a bare tuple so a caller cannot half-populate
+    one and have the missing field silently fall back to an environment
+    read; :func:`connect` only reads the environment when ``endpoint`` is
+    ``None`` altogether, never field-by-field.
+    """
+
+    host: str
+    port: str
+    dbname: str
+
+    def __post_init__(self) -> None:
+        missing = [name for name, value in (
+            ("host", self.host), ("port", self.port), ("dbname", self.dbname),
+        ) if value is None or str(value) == ""]
+        if missing:
+            raise ConnectionConfigError(
+                "an explicit Endpoint is incomplete; missing: "
+                + ", ".join(missing))
+
+
+@dataclass(frozen=True)
+class Credentials:
+    """A resolved database credential, passed explicitly.
+
+    ``__repr__`` is overridden so the password never prints into a log
+    line, traceback frame, or the ``repr()`` of a containing structure.
+    """
+
+    user: str
+    password: str
+
+    def __post_init__(self) -> None:
+        if not self.user or not self.password:
+            raise ConnectionConfigError(
+                "an explicit Credentials needs both a user and a password")
+
+    def __repr__(self) -> str:
+        return f"Credentials(user={self.user!r}, password=<redacted>)"
+
+
+def _read_env(names: tuple[str, ...]) -> dict[str, str]:
+    missing = [name for name in names if not os.environ.get(name)]
     if missing:
         raise ConnectionConfigError(
             "missing required environment variable(s): "
             f"{', '.join(missing)}; rapidpipe.db.connection reads only "
             f"{', '.join(_REQUIRED_VARS)}")
-    return {name: os.environ[name] for name in _REQUIRED_VARS}
+    return {name: os.environ[name] for name in names}
+
+
+def _endpoint_from_environment() -> Endpoint:
+    env = _read_env(("PGHOST", "PGPORT", "PGDATABASE"))
+    return Endpoint(host=env["PGHOST"], port=env["PGPORT"], dbname=env["PGDATABASE"])
+
+
+def _credentials_from_environment() -> Credentials:
+    env = _read_env(("PGUSER", "PGPASSWORD"))
+    return Credentials(user=env["PGUSER"], password=env["PGPASSWORD"])
+
+
+def credentials_from_secret(secret_id: str) -> Credentials:
+    """Resolve a database credential from an AWS Secrets Manager secret.
+
+    Reads a JSON secret with ``username``/``password`` keys via boto3.
+    boto3 is imported lazily, here, so this module -- and every caller
+    that never resolves a secret -- imports without boto3 installed;
+    boto3 is not a dependency of this repository (see requirements.txt)
+    and belongs to whatever deployment environment actually calls this
+    function.
+
+    Raises :class:`ConnectionConfigError` if boto3 is unavailable, the
+    secret cannot be fetched, or its JSON body is missing either key.
+    Never returns a partial credential and never prints or logs the
+    password.
+    """
+    try:
+        import boto3
+    except ImportError as exc:
+        raise ConnectionConfigError(
+            "credentials_from_secret requires boto3, which is not "
+            "installed in this environment") from exc
+
+    try:
+        client = boto3.client("secretsmanager")
+        response = client.get_secret_value(SecretId=secret_id)
+        secret = json.loads(response["SecretString"])
+        user = secret["username"]
+        password = secret["password"]
+    except ConnectionConfigError:
+        raise
+    except Exception as exc:
+        raise ConnectionConfigError(
+            f"could not resolve database credentials from Secrets Manager "
+            f"secret {secret_id!r}: {exc}") from exc
+
+    return Credentials(user=user, password=password)
+
+
+def _resolve_endpoint(endpoint: Endpoint | None) -> Endpoint:
+    if endpoint is None:
+        return _endpoint_from_environment()
+    if isinstance(endpoint, Endpoint):
+        return endpoint
+    return Endpoint(**endpoint) if hasattr(endpoint, "keys") else Endpoint(*endpoint)
+
+
+def _resolve_credentials(credentials: Credentials | None) -> Credentials:
+    if credentials is not None:
+        if isinstance(credentials, Credentials):
+            return credentials
+        return Credentials(*credentials)
+
+    secret_id = os.environ.get("RAPID_DB_SECRET_ID")
+    if secret_id:
+        return credentials_from_secret(secret_id)
+    return _credentials_from_environment()
+
+
+def _connect_with_retry(
+    *,
+    endpoint: Endpoint,
+    credentials: Credentials,
+    application_name: str,
+    connect_timeout: int,
+    attempts: int,
+    backoff_initial: float,
+    backoff_multiplier: float,
+    backoff_cap: float,
+    keepalives: int,
+    keepalives_idle: int,
+    keepalives_interval: int,
+    keepalives_count: int,
+    tcp_user_timeout: int,
+    jitter: bool,
+    sleep,
+    connect_fn,
+    random_func,
+) -> psycopg2.extensions.connection:
+    if attempts < 1:
+        raise ValueError(f"attempts must be >= 1; got {attempts}")
+
+    # PostgreSQL truncates application_name at NAMEDATALEN-1 (63 bytes)
+    # and would silently lose the tail of a long component name; trimmed
+    # here where the truncation is visible rather than server-side where
+    # it is not.
+    composed_name = application_name[:63]
+
+    delay = backoff_initial
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return connect_fn(
+                host=endpoint.host,
+                port=endpoint.port,
+                dbname=endpoint.dbname,
+                user=credentials.user,
+                password=credentials.password,
+                connect_timeout=connect_timeout,
+                application_name=composed_name,
+                keepalives=keepalives,
+                keepalives_idle=keepalives_idle,
+                keepalives_interval=keepalives_interval,
+                keepalives_count=keepalives_count,
+                tcp_user_timeout=tcp_user_timeout,
+            )
+        except psycopg2.OperationalError as exc:
+            last_exc = exc
+            if attempt == attempts:
+                break
+            wait = random_func(0, delay) if jitter else delay
+            logger.warning(
+                "database connect attempt %d/%d failed (%s); retrying in %.1fs",
+                attempt, attempts, exc, wait)
+            sleep(wait)
+            delay = min(delay * backoff_multiplier, backoff_cap)
+            continue
+
+    raise ConnectionUnavailable(
+        f"could not connect to {endpoint.host}:{endpoint.port}/{endpoint.dbname} "
+        f"as {credentials.user} after {attempts} attempt(s): {last_exc}"
+    ) from last_exc
 
 
 @contextlib.contextmanager
-def connect() -> Iterator[psycopg2.extensions.connection]:
+def connect(
+    *,
+    endpoint: Endpoint | None = None,
+    credentials: Credentials | None = None,
+    application_name: str = "rapidpipe",
+    connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_S,
+    attempts: int = DEFAULT_CONNECT_ATTEMPTS,
+    backoff_initial: float = DEFAULT_BACKOFF_INITIAL_S,
+    backoff_multiplier: float = DEFAULT_BACKOFF_MULTIPLIER,
+    backoff_cap: float = DEFAULT_BACKOFF_CAP_S,
+    keepalives: int = KEEPALIVES,
+    keepalives_idle: int = KEEPALIVES_IDLE_S,
+    keepalives_interval: int = KEEPALIVES_INTERVAL_S,
+    keepalives_count: int = KEEPALIVES_COUNT,
+    tcp_user_timeout: int = TCP_USER_TIMEOUT_MS,
+    jitter: bool = False,
+    sleep=time.sleep,
+    connect_fn=None,
+    random_func=random.uniform,
+) -> Iterator[psycopg2.extensions.connection]:
     """Yield one connection with autocommit off.
 
-    A plain context manager, not a pool: opens one connection from the
-    ``PG*`` environment variables, yields it, and closes it on exit. The
-    connection's autocommit is left at psycopg2's default (off), so every
-    statement runs inside an implicit transaction that the caller must
-    commit or roll back -- ``transaction()`` below is the common case of
-    "one transaction per call", which every ``rapidpipe.runs.repository``
-    function needs (each is documented as a single transaction).
+    A plain context manager, not a pool: opens one connection, yields
+    it, and closes it on exit. The connection's autocommit is left at
+    psycopg2's default (off), so every statement runs inside an implicit
+    transaction that the caller must commit or roll back --
+    ``transaction()`` below is the common case of "one transaction per
+    call", which every ``rapidpipe.runs.repository`` function needs
+    (each is documented as a single transaction).
+
+    ``endpoint`` and ``credentials`` are the explicit parameter
+    interface: a caller holding either passes it here. What is not
+    passed falls back to the ``PG*`` environment -- ``PGHOST``,
+    ``PGPORT``, ``PGDATABASE`` for the endpoint, ``PGUSER``/``PGPASSWORD``
+    for credentials unless ``RAPID_DB_SECRET_ID`` is set, in which case
+    the credential is resolved from that Secrets Manager secret instead
+    (see :func:`credentials_from_secret`). This is a boundary read, not
+    an in-process transport: nothing in this module writes the
+    environment for a downstream reader.
+
+    Connecting retries up to ``attempts`` times (default
+    :data:`DEFAULT_CONNECT_ATTEMPTS`) on ``psycopg2.OperationalError``,
+    with exponential backoff from ``backoff_initial`` up to
+    ``backoff_cap``, doubling by ``backoff_multiplier`` each time.
+    ``jitter=True`` applies full jitter (a random duration in
+    ``[0, delay]`` in place of ``delay`` itself) so many callers retrying
+    off the same event do not stay synchronized. All of these are
+    ordinary keyword arguments a caller overrides the same way it
+    overrides ``connect_timeout``. ``sleep``, ``connect_fn`` and
+    ``random_func`` are injection points for tests; nothing in
+    production passes them.
+
+    ``keepalives``/``keepalives_idle``/``keepalives_interval``/
+    ``keepalives_count``/``tcp_user_timeout`` set TCP-level dead-peer
+    detection on every connection this opens (see the module docstring
+    for the incident and the arithmetic behind the defaults).
 
     Does not swallow errors: connection failures and query errors raise;
     nothing here calls ``exit()`` or returns a sentinel in place of
-    raising.
+    raising. Exhausting the retry budget raises
+    :class:`ConnectionUnavailable`.
     """
-    params = _read_env()
-    conn = psycopg2.connect(
-        host=params["PGHOST"],
-        port=params["PGPORT"],
-        dbname=params["PGDATABASE"],
-        user=params["PGUSER"],
-        password=params["PGPASSWORD"],
+    resolved_endpoint = _resolve_endpoint(endpoint)
+    resolved_credentials = _resolve_credentials(credentials)
+    conn = _connect_with_retry(
+        endpoint=resolved_endpoint,
+        credentials=resolved_credentials,
+        application_name=application_name,
+        connect_timeout=connect_timeout,
+        attempts=attempts,
+        backoff_initial=backoff_initial,
+        backoff_multiplier=backoff_multiplier,
+        backoff_cap=backoff_cap,
+        keepalives=keepalives,
+        keepalives_idle=keepalives_idle,
+        keepalives_interval=keepalives_interval,
+        keepalives_count=keepalives_count,
+        tcp_user_timeout=tcp_user_timeout,
+        jitter=jitter,
+        sleep=sleep,
+        connect_fn=connect_fn or psycopg2.connect,
+        random_func=random_func,
     )
     try:
         conn.autocommit = False
@@ -70,21 +367,25 @@ def connect() -> Iterator[psycopg2.extensions.connection]:
 
 
 @contextlib.contextmanager
-def transaction() -> Iterator[psycopg2.extensions.connection]:
+def transaction(**kwargs: Any) -> Iterator[psycopg2.extensions.connection]:
     """Yield one connection inside one transaction: commit on success, rollback on error.
 
-    Equivalent to ``with connect() as conn:`` followed by an explicit
-    commit/rollback, spelled once here so every repository function opens
-    with the same one-line pattern:
+    Equivalent to ``with connect(**kwargs) as conn:`` followed by an
+    explicit commit/rollback, spelled once here so every repository
+    function opens with the same one-line pattern:
 
         with transaction() as conn:
             with conn.cursor() as cur:
                 ...
 
+    Accepts every keyword :func:`connect` does (``endpoint=``,
+    ``credentials=``, ``application_name=``, retry and keepalive
+    tuning) and passes them straight through.
+
     On an exception the transaction is rolled back and the exception
     re-raised unchanged; on normal exit it is committed.
     """
-    with connect() as conn:
+    with connect(**kwargs) as conn:
         try:
             yield conn
         except BaseException:
