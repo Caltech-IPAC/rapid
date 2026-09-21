@@ -21,10 +21,13 @@ dynamic = ["dependencies"]
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
+[project.scripts]
+rapidpipe = "rapidpipe.cli.main:main"
+
 [tool.setuptools]
 # Explicit package list, not auto-discovery: this tree also has docs, c,
 # cdf, sims, soc and docker directories that are not importable packages,
 # and setuptools' flat-layout auto-discovery refuses to guess among them.
 packages.find = {include = [
-    "pipeline*", "modules*", "database*", "alerts*", "aws*",
+    "pipeline*", "modules*", "database*", "alerts*", "aws*", "rapidpipe*",
 ]}
