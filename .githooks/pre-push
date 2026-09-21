@@ -1,0 +1,34 @@
+#!/bin/bash
+#
+# pre-push: block internal identifiers from reaching the public remote.
+# Install with `git config core.hooksPath .githooks` (see README.md).
+#
+# Ported from the smdc branch's .githooks/pre-push for the rebuilt
+# pipeline repository (this repo is now the sole `rapid` repository; the
+# smdc/dev two-branch arrangement ends with the rebuild per the
+# specification). The scan patterns and allowlist live in
+# scripts/check-public-safety.sh, which this hook calls for each pushed
+# ref's tree so the hook and CI scan the same thing one way.
+#
+# stdin (from git): <local ref> <local sha> <remote ref> <remote sha>
+
+set -u
+
+ZERO=0000000000000000000000000000000000000000
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+CHECK="$HOOK_DIR/../scripts/check-public-safety.sh"
+
+fail=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$ZERO" ] && continue    # ref deletion: nothing to scan
+    if ! "$CHECK" "$local_sha"; then
+        echo "pre-push: refusing to push $local_ref ($local_sha)" >&2
+        fail=1
+    fi
+done
+
+if [ "$fail" -ne 0 ]; then
+    echo "pre-push: push blocked — remove the identifiers above or extend the allowlist in scripts/check-public-safety.sh" >&2
+    exit 1
+fi
+exit 0
