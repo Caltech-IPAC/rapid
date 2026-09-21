@@ -352,7 +352,13 @@ jobs:
         # case map (evidence/case-map-*.txt) needs a passing result line per
         # mapped case, so this step runs the new modules directly under
         # pytest -rA against the same service database the prior step just
-        # migrated. Nothing else in this workflow changes.
+        # migrated. `if: always()` is scoped to only this step (the prior
+        # step's own pass/fail still gates the job as before) — without it,
+        # a red contract suite skips this step entirely, so the per-case
+        # evidence this step exists to produce is exactly what goes
+        # missing when it is needed most. Nothing else in this workflow
+        # changes.
+        if: always()
         run: |
           python3 -m pytest -q -rA -m '' \
             pipeline/contract/test_run_delete_evidence_envelope.py \
