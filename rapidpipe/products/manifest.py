@@ -1,12 +1,18 @@
 """The completion manifest: dataclasses, JSON I/O, and validation.
 
 A stage publishes this manifest only after its outputs are complete (stage
-contract, "The manifest"). It records: the manifest's own schema version;
-the run, unit, stage and attempt identifiers; a reference to the execution
-record kept by ``rapidpipe.runs``; a reference to the input manifest the
-stage read and to any database result sets it read; and each output's
-identity, kind, format version and location, with byte size and SHA-256 for
-file outputs.
+contract, "The manifest"). Its shape is fixed by the products page's "A
+complete manifest" example, which is this module's authority:
+https://roman-rapid.readthedocs.io/en/latest/system/products.html
+
+The manifest records: its own schema version; the run, unit, stage and
+attempt identifiers; a reference to the execution record kept by
+``rapidpipe.runs``; the input manifest this attempt read and the upstream
+product and database-result-set instances it consumed; and each output's
+kind, format version, instance id, logical key, member files (with byte
+size and SHA-256 per file), and registration metadata. A database result
+set is an output with no members and no primary -- its members list is
+always empty (products page, "Database result sets": "rows, not files").
 
 This module imports only the standard library and ``rapidpipe.products.ids``:
 no ``rapidpipe.runs``, ``rapidpipe.db`` or stage module.
@@ -16,13 +22,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 #: The schema version this module reads and writes. Bumped when the
 #: manifest's field set or semantics change.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = "1"
+
+#: The four units of work a stage may declare (stage contract, "Declaration").
+UNIT_KINDS = ("exposure", "detector-image", "field", "processing-date")
+
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 _READ_CHUNK = 1024 * 1024
 
@@ -31,139 +45,300 @@ class ManifestError(ValueError):
     """A manifest failed validation."""
 
 
-@dataclass(frozen=True)
-class OutputEntry:
-    """One product a stage wrote.
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ManifestError(message)
 
-    ``byte_size`` and ``sha256`` are required for file outputs (``location``
-    a path or S3 key) and absent for a database result set (``location``
-    identifies the result set some other way, e.g. a table/run-scoped name);
-    ``validate`` enforces that pairing.
+
+def _is_relative_and_contained(path: str) -> bool:
+    """True if ``path`` is relative and never escapes its base via ``..``."""
+    if not path or path.startswith("/"):
+        return False
+    pure = PurePosixPath(path)
+    if pure.is_absolute():
+        return False
+    return ".." not in pure.parts
+
+
+@dataclass(frozen=True)
+class Member:
+    """One file belonging to an output entry.
+
+    ``role`` distinguishes members of a bundle (e.g. ``difference``,
+    ``uncertainty``, ``significance``); ``path`` is relative to the
+    attempt's output location and must not escape it.
     """
 
-    identity: str
-    kind: str
-    format_version: str
-    location: str
-    byte_size: int | None = None
-    sha256: str | None = None
-
-    def is_file(self) -> bool:
-        return self.byte_size is not None or self.sha256 is not None
+    role: str
+    path: str
+    bytes: int
+    sha256: str
 
     def validate(self) -> None:
-        for attr in ("identity", "kind", "format_version", "location"):
-            if not getattr(self, attr):
-                raise ManifestError(f"output entry missing required field {attr!r}")
-        if self.is_file():
-            if self.byte_size is None or self.byte_size < 0:
-                raise ManifestError(
-                    f"output {self.identity!r} has sha256 but no valid byte_size")
-            if not self.sha256:
-                raise ManifestError(
-                    f"output {self.identity!r} has byte_size but no sha256")
+        _require(bool(self.role), "member missing required field 'role'")
+        _require(bool(self.path), "member missing required field 'path'")
+        _require(
+            _is_relative_and_contained(self.path),
+            f"member path {self.path!r} must be relative to the attempt's "
+            "output location, with no leading '/' and no '..' segment")
+        _require(
+            isinstance(self.bytes, int) and not isinstance(self.bytes, bool)
+            and self.bytes >= 0,
+            f"member {self.path!r} has an invalid 'bytes' value: {self.bytes!r}")
+        _require(
+            bool(self.sha256) and _SHA256_RE.match(self.sha256) is not None,
+            f"member {self.path!r} has an invalid 'sha256' value: "
+            f"{self.sha256!r}; expected 'sha256:' followed by 64 hex digits")
 
     def to_dict(self) -> dict[str, Any]:
-        d = {
-            "identity": self.identity,
-            "kind": self.kind,
-            "format_version": self.format_version,
-            "location": self.location,
+        return {
+            "role": self.role,
+            "path": self.path,
+            "bytes": self.bytes,
+            "sha256": self.sha256,
         }
-        if self.byte_size is not None:
-            d["byte_size"] = self.byte_size
-        if self.sha256 is not None:
-            d["sha256"] = self.sha256
-        return d
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "OutputEntry":
+    def from_dict(cls, d: dict[str, Any]) -> "Member":
         known = {f.name for f in fields(cls)}
         unknown = set(d) - known
         if unknown:
-            raise ManifestError(f"output entry has unknown fields: {sorted(unknown)}")
+            raise ManifestError(f"member has unknown fields: {sorted(unknown)}")
         return cls(**d)
 
 
 @dataclass(frozen=True)
-class CompletionManifest:
-    """A stage's record of what it read and what it wrote.
+class OutputEntry:
+    """One product a stage wrote: a file (bundle) or a database result set.
 
-    ``db_result_sets_read`` lists the named, completed database result sets
-    (per the contract, for ``crossmatch``, ``statistics`` and ``prune``)
-    this attempt read; transform stages that declare no database access
-    leave it empty.
+    A file product has one or more ``members`` and a ``primary`` naming
+    which member is the product's main file; a database result set has no
+    members (an empty tuple) and no ``primary`` (products page, "Database
+    result sets": completion lives on the result-set record, not a file).
+    ``key`` is the logical key identifying what this output replaces or
+    selects (products page, "Identity"); ``registration`` is the metadata
+    ``register`` needs to write rows without reading the product.
     """
 
-    run_id: str
-    unit_id: str
+    kind: str
+    format_version: str
+    instance: str
+    key: dict[str, Any]
+    members: tuple[Member, ...] = field(default_factory=tuple)
+    primary: str | None = None
+    registration: dict[str, Any] = field(default_factory=dict)
+
+    def is_result_set(self) -> bool:
+        return not self.members
+
+    def validate(self) -> None:
+        for attr in ("kind", "format_version", "instance"):
+            _require(
+                bool(getattr(self, attr)),
+                f"output entry missing required field {attr!r}")
+        _require(
+            isinstance(self.key, dict) and bool(self.key),
+            f"output {self.instance!r} has an empty or invalid 'key'")
+
+        for member in self.members:
+            member.validate()
+
+        member_paths = {m.path for m in self.members}
+        _require(
+            len(member_paths) == len(self.members),
+            f"output {self.instance!r} has duplicate member paths")
+
+        if self.members:
+            _require(
+                self.primary is not None,
+                f"output {self.instance!r} has members but no 'primary'")
+            _require(
+                self.primary in member_paths,
+                f"output {self.instance!r}: primary {self.primary!r} is "
+                "not one of its member paths")
+        else:
+            _require(
+                self.primary is None,
+                f"output {self.instance!r} is a result set (no members) "
+                "but declares a 'primary'")
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "kind": self.kind,
+            "format_version": self.format_version,
+            "instance": self.instance,
+            "key": dict(self.key),
+            "primary": self.primary,
+            "members": [m.to_dict() for m in self.members],
+            "registration": dict(self.registration),
+        }
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "OutputEntry":
+        d = dict(d)
+        members = tuple(Member.from_dict(m) for m in d.pop("members", []))
+        known = {f.name for f in fields(cls)} - {"members"}
+        unknown = set(d) - known
+        if unknown:
+            raise ManifestError(f"output entry has unknown fields: {sorted(unknown)}")
+        d.setdefault("primary", None)
+        d.setdefault("registration", {})
+        return cls(members=members, **d)
+
+
+@dataclass(frozen=True)
+class Unit:
+    """The unit of work this manifest's attempt processed."""
+
+    kind: str
+    id: str
+
+    def validate(self) -> None:
+        _require(bool(self.id), "unit missing required field 'id'")
+        _require(
+            self.kind in UNIT_KINDS,
+            f"unit has unknown kind {self.kind!r}; expected one of {UNIT_KINDS}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": self.kind, "id": self.id}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Unit":
+        known = {f.name for f in fields(cls)}
+        unknown = set(d) - known
+        if unknown:
+            raise ManifestError(f"unit has unknown fields: {sorted(unknown)}")
+        return cls(**d)
+
+
+@dataclass(frozen=True)
+class Inputs:
+    """What this attempt read: its input manifest, products, result sets.
+
+    ``products`` maps a consumed product kind to the upstream instance id
+    the stage read (products page, "Identity": downstream stages reference
+    an instance id, never a bare logical key). ``result_sets`` lists the
+    database result-set instance ids read, for the stages the stage
+    contract names (``crossmatch``, ``statistics``, ``prune``); transform
+    stages that declare no database access leave it empty.
+    """
+
+    manifest: str
+    products: dict[str, str] = field(default_factory=dict)
+    result_sets: tuple[str, ...] = field(default_factory=tuple)
+
+    def validate(self) -> None:
+        _require(bool(self.manifest), "inputs missing required field 'manifest'")
+        for kind, instance in self.products.items():
+            _require(
+                bool(instance),
+                f"inputs.products[{kind!r}] must be a non-empty instance id")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "manifest": self.manifest,
+            "products": dict(self.products),
+            "result_sets": list(self.result_sets),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Inputs":
+        d = dict(d)
+        result_sets = tuple(d.pop("result_sets", []))
+        known = {f.name for f in fields(cls)} - {"result_sets"}
+        unknown = set(d) - known
+        if unknown:
+            raise ManifestError(f"inputs has unknown fields: {sorted(unknown)}")
+        d.setdefault("products", {})
+        return cls(result_sets=result_sets, **d)
+
+
+@dataclass(frozen=True)
+class Manifest:
+    """A stage's record of what it read and what it wrote.
+
+    Matches the products page's "A complete manifest" example field for
+    field: ``schema_version``, ``run``, ``unit``, ``stage``, ``attempt``,
+    ``execution_record``, ``inputs``, ``outputs``.
+    """
+
+    run: str
+    unit: Unit
     stage: str
-    attempt_id: str
-    execution_record_ref: str
-    input_manifest_ref: str
+    attempt: str
+    execution_record: str
+    inputs: Inputs
     outputs: tuple[OutputEntry, ...] = field(default_factory=tuple)
-    db_result_sets_read: tuple[str, ...] = field(default_factory=tuple)
-    schema_version: int = SCHEMA_VERSION
+    schema_version: str = SCHEMA_VERSION
 
     def validate(self) -> None:
         required = {
-            "run_id": self.run_id,
-            "unit_id": self.unit_id,
+            "run": self.run,
             "stage": self.stage,
-            "attempt_id": self.attempt_id,
-            "execution_record_ref": self.execution_record_ref,
-            "input_manifest_ref": self.input_manifest_ref,
+            "attempt": self.attempt,
+            "execution_record": self.execution_record,
         }
         for name, value in required.items():
-            if not value:
-                raise ManifestError(f"manifest missing required field {name!r}")
-        if self.schema_version != SCHEMA_VERSION:
-            raise ManifestError(
-                f"unsupported manifest schema_version {self.schema_version!r}; "
-                f"expected {SCHEMA_VERSION!r}")
+            _require(bool(value), f"manifest missing required field {name!r}")
+        _require(
+            self.schema_version == SCHEMA_VERSION,
+            f"unsupported manifest schema_version {self.schema_version!r}; "
+            f"expected {SCHEMA_VERSION!r}")
 
-        seen_identities: set[str] = set()
+        self.unit.validate()
+        self.inputs.validate()
+
+        seen_instances: set[str] = set()
         for output in self.outputs:
             output.validate()
-            if output.identity in seen_identities:
-                raise ManifestError(
-                    f"duplicate output identity {output.identity!r}")
-            seen_identities.add(output.identity)
+            _require(
+                output.instance not in seen_instances,
+                f"duplicate output instance {output.instance!r}")
+            seen_instances.add(output.instance)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
-            "run_id": self.run_id,
-            "unit_id": self.unit_id,
+            "run": self.run,
+            "unit": self.unit.to_dict(),
             "stage": self.stage,
-            "attempt_id": self.attempt_id,
-            "execution_record_ref": self.execution_record_ref,
-            "input_manifest_ref": self.input_manifest_ref,
-            "db_result_sets_read": list(self.db_result_sets_read),
+            "attempt": self.attempt,
+            "execution_record": self.execution_record,
+            "inputs": self.inputs.to_dict(),
             "outputs": [o.to_dict() for o in self.outputs],
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "CompletionManifest":
+    def from_dict(cls, d: dict[str, Any]) -> "Manifest":
         d = dict(d)
+        unit = Unit.from_dict(d.pop("unit"))
+        inputs = Inputs.from_dict(d.pop("inputs"))
         outputs = tuple(OutputEntry.from_dict(o) for o in d.pop("outputs", []))
-        db_result_sets_read = tuple(d.pop("db_result_sets_read", []))
-        known = {f.name for f in fields(cls)} - {"outputs", "db_result_sets_read"}
+        known = {f.name for f in fields(cls)} - {"unit", "inputs", "outputs"}
         unknown = set(d) - known
         if unknown:
             raise ManifestError(f"manifest has unknown fields: {sorted(unknown)}")
-        return cls(outputs=outputs, db_result_sets_read=db_result_sets_read, **d)
+        d.setdefault("schema_version", SCHEMA_VERSION)
+        return cls(unit=unit, inputs=inputs, outputs=outputs, **d)
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
     def write(self, path: str | Path) -> None:
-        """Validate, then write this manifest as JSON to ``path``."""
+        """Validate, then write this manifest as JSON to ``path``, atomically.
+
+        Writes to a temp file in the same directory and renames it into
+        place, so a reader never observes a partially written manifest.
+        """
         self.validate()
-        Path(path).write_text(self.to_json())
+        path = Path(path)
+        tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+        tmp_path.write_text(self.to_json())
+        os.replace(tmp_path, path)
 
     @classmethod
-    def read(cls, path: str | Path) -> "CompletionManifest":
+    def read(cls, path: str | Path) -> "Manifest":
         """Read and validate a manifest from ``path``."""
         try:
             raw = json.loads(Path(path).read_text())
@@ -176,11 +351,19 @@ class CompletionManifest:
         return manifest
 
 
+#: Backwards-compatible alias: the products page and the stage contract
+#: call this type "the manifest"; ``CompletionManifest`` was this module's
+#: working name before the shape was pinned to the products page.
+CompletionManifest = Manifest
+
+
 def hash_file(path: str | Path) -> tuple[int, str]:
     """Return ``(byte_size, sha256_hex)`` for the file at ``path``.
 
     Reads in fixed-size chunks so an arbitrarily large product file is
-    hashed without loading it whole into memory.
+    hashed without loading it whole into memory. ``sha256_hex`` has no
+    ``sha256:`` prefix; use :func:`member_for_file` to build a
+    manifest-ready :class:`Member`.
     """
     p = Path(path)
     digest = hashlib.sha256()
@@ -195,19 +378,14 @@ def hash_file(path: str | Path) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
-def output_entry_for_file(
-    identity: str,
-    kind: str,
-    format_version: str,
-    path: str | Path,
-) -> OutputEntry:
-    """Build an :class:`OutputEntry` for a local file, computing its hash."""
-    byte_size, sha256 = hash_file(path)
-    return OutputEntry(
-        identity=identity,
-        kind=kind,
-        format_version=format_version,
-        location=str(path),
-        byte_size=byte_size,
-        sha256=sha256,
-    )
+def member_for_file(role: str, path: str | Path, *, relative_to: str | Path) -> Member:
+    """Build a :class:`Member` for a local file, computing its size and hash.
+
+    ``path`` is the file to hash; the member's ``path`` field is recorded
+    relative to ``relative_to`` (the attempt's output location), matching
+    what :meth:`Member.validate` requires.
+    """
+    byte_size, sha256_hex = hash_file(path)
+    rel = os.path.relpath(str(path), start=str(relative_to))
+    rel = rel.replace(os.sep, "/")
+    return Member(role=role, path=rel, bytes=byte_size, sha256=f"sha256:{sha256_hex}")
