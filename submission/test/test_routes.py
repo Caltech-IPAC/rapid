@@ -298,16 +298,17 @@ def test_lane_alert_production_is_prompt_only():
 
 
 def test_lane_every_bulk_class_type_is_bulk_only():
-    # catalog-load and crossmatch are the one deliberate exception (Ben,
-    # 2026-09-20 00:19): "every job of a scratch run -- science,
-    # catalog-load, crossmatch, reference build -- submits to
+    # catalog-load, crossmatch, and reference-image are the deliberate
+    # exceptions (Ben, 2026-09-20 00:19): "every job of a scratch run --
+    # science, catalog-load, crossmatch, reference build -- submits to
     # rapid-queue-prompt (on-demand), never the Spot lane". Bulk stays
     # FIRST (unchanged default for every production caller, which is the
     # overwhelming majority of submissions and takes no --lane); prompt is
     # admitted as the explicitly-requested second option, the same shape
     # JOB_TYPE_REGISTRATION already uses. Every OTHER bulk-class type keeps
     # the invariant this test polices.
-    exceptions = {routes.JOB_TYPE_CATALOG_LOAD, routes.JOB_TYPE_CROSSMATCH}
+    exceptions = {routes.JOB_TYPE_CATALOG_LOAD, routes.JOB_TYPE_CROSSMATCH,
+                  routes.JOB_TYPE_REFERENCE_IMAGE}
     for route in routes.ROUTES:
         if route.workload_class == CLASS_BULK:
             if route.job_type in exceptions:
@@ -317,6 +318,44 @@ def test_lane_every_bulk_class_type_is_bulk_only():
             else:
                 assert route.lanes == (routes.QUEUE_PARAM_BULK,), \
                     f"{route.job_type} is bulk class but names {route.lanes}"
+
+
+def test_lane_reference_image_may_run_on_either():
+    # The third named job type from the 2026-09-20 ruling, completed
+    # 2026-09-21: a scratch run's reference build now reaches the prompt
+    # lane the same way catalog-load and crossmatch already do.
+    assert set(routes.route_for("reference-image").lanes) == {
+        routes.QUEUE_PARAM_BULK, routes.QUEUE_PARAM_PROMPT}
+
+
+def test_lane_reference_image_validates_on_either_lane():
+    for queue_name in ("rapid-queue-bulk", "rapid-queue-prompt"):
+        route = routes.validate_route("reference-image", CLASS_BULK,
+                                      queue_name=queue_name,
+                                      queue_names=QUEUE_NAMES)
+        assert route.job_type == "reference-image"
+
+
+def test_lane_reference_image_still_defaults_to_bulk():
+    # Production default unchanged: a submission naming no lane still
+    # resolves to rapid-queue-bulk.
+    assert routes.queue_parameter_for_lane("reference-image", None) == \
+        routes.QUEUE_PARAM_BULK
+    assert routes.queue_parameter_for_lane("reference-image", "bulk") == \
+        routes.QUEUE_PARAM_BULK
+    assert routes.queue_parameter_for_lane("reference-image", "prompt") == \
+        routes.QUEUE_PARAM_PROMPT
+
+
+def test_lane_reference_image_class_definition_and_ppid_are_unchanged():
+    # The lane is the only axis this change touches: the widening must not
+    # move the workload class, the job definition, or the pipeline
+    # identifier reference-image rows carry.
+    route = routes.route_for("reference-image")
+    assert route.workload_class == CLASS_BULK
+    assert route.definition_parameter == "batch/job-definition-bulk"
+    assert route.db_lane == LANE_TRANSACTION
+    assert route.ppid == 12
 
 
 def test_lane_is_not_the_workload_class():

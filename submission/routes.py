@@ -212,8 +212,24 @@ ROUTES: tuple[Route, ...] = (
     Route(JOB_TYPE_SCIENCE, CLASS_PROMPT,
           LANES_EITHER, "batch/job-definition-science",
           LANE_TRANSACTION, ppid=15),
+    # LANES_EITHER, not LANES_BULK_ONLY (2026-09-21): the 2026-09-20 ruling
+    # quoted above names "reference build" in the same breath as
+    # catalog-load and crossmatch -- "every job of a scratch run --
+    # science, catalog-load, crossmatch, reference build -- submits to
+    # rapid-queue-prompt (on-demand), never the Spot lane" -- but the change
+    # that followed it widened only the two post-DB routes, leaving this one
+    # still `LANES_BULK_ONLY`: a scratch run's reference build was refused
+    # with `RouteError: job type 'reference-image' may not run on the
+    # prompt lane; it runs on: bulk`, the same failure shape the
+    # catalog-load/crossmatch widening fixed for its two job types. This
+    # completes that ruling for the third named job type. `bulk` stays
+    # FIRST, so every production caller -- which takes no `--lane` and is
+    # the overwhelming majority of `reference-image` submissions -- is
+    # unchanged. The workload class stays `CLASS_BULK`: the lane is not the
+    # workload class, so the job definition, its attempt timeout, and its
+    # log group are all unaffected by which lane a submission chooses.
     Route(JOB_TYPE_REFERENCE_IMAGE, CLASS_BULK,
-          LANES_BULK_ONLY, "batch/job-definition-bulk",
+          LANES_EITHER, "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=12),
     Route(JOB_TYPE_REGISTRATION, CLASS_PROMPT,
           LANES_EITHER, "batch/job-definition-science",
