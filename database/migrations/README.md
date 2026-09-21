@@ -9,15 +9,27 @@ together by CI (`.github/workflows/db-migrations.yml`).
 
 ## Rules
 
-- **Numbered files**: `NNN-short-name.sql`, three digits, filename order.
+- **Date-prefixed files**: `YYYYMMDD-NN-short-name.sql` — an 8-digit date,
+  a 2-digit same-day sequence starting at `01`, a lowercase/digit/hyphen
+  name. Filename order is apply order. Three-digit numbering (`NNN-`) was
+  tried first and dropped: Roman has fuel for roughly 22 years and the
+  `smdc` branch alone produced 146 migrations in three months, so a
+  three-digit space was going to run out. The date makes the space
+  effectively unbounded and says when the change was made without having
+  to open the file. Example, two migrations landed the same day:
+  `20260921-01-baseline.sql`, `20260921-02-add-run-records.sql`.
 - **One change per file** — don't bundle unrelated schema changes.
 - **Never edit a file once it has been applied anywhere.** The applier
   records each applied file's sha256 and refuses to proceed if a recorded
-  file's hash no longer matches disk. A correction is a new, later-numbered
-  file, not an edit in place.
-- **`000-baseline.sql` is the floor**: the team's schema as of the rebuild,
-  taken from `database/schema/`. Every later migration assumes it applied.
-  See its own header for what was stripped and why (nothing
+  file's hash no longer matches disk. A correction is a new, later-dated
+  (or later-sequenced, same day) file, not an edit in place.
+- **Same-day collisions**: if two pull requests both add `NN` for the same
+  date, whichever merges second is renamed to the next free `NN` before
+  merge — the same resolution any conflicting sequence assignment gets,
+  nothing migration-specific.
+- **`20260921-01-baseline.sql` is the floor**: the team's schema as of the
+  rebuild, taken from `database/schema/`. Every later migration assumes it
+  applied. See its own header for what was stripped and why (nothing
   account-specific may be committed to this public repo).
 - **A schema change and its code change are one pull request.** CI applies
   the full stream to a fresh PostgreSQL and runs the test suite against it.
@@ -45,8 +57,8 @@ non-zero, naming the file.
 
 ## Adding a migration
 
-1. Write `database/migrations/NNN-short-name.sql`, one past the highest
-   existing number.
+1. Write `database/migrations/YYYYMMDD-NN-short-name.sql`, today's date and
+   the next unused `NN` for that date (`01` if none exist yet today).
 2. Test it locally against a throwaway PostgreSQL with Q3C.
 3. Include its code change, if any, in the same pull request.
 4. CI applies the whole stream from empty, re-applies to confirm a no-op,

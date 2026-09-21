@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------------------------------------------------
--- 000-baseline.sql
+-- 20260921-01-baseline.sql
 --
 -- The team's current schema, taken as one idempotent-enough migration so
 -- that "apply the migrations directory to an empty database" and "run
