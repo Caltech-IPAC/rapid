@@ -6,3 +6,8 @@ astropy>=6.0
 # nedMatches instead of failing -- but whatever environment runs alert
 # production must carry it for the match to actually run.
 astroquery>=0.4.7
+# rapidpipe.db and rapidpipe.runs import psycopg2 unconditionally
+# (connection.py, ids.py's caller in runs/repository.py); psycopg2-binary
+# is the wheel-distributed build, matching what the db-migrations and
+# unit-tests CI workflows already install by hand.
+psycopg2-binary>=2.9
