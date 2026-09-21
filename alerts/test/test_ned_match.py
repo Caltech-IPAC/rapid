@@ -38,6 +38,20 @@ from alerts.providers import (NED_CONE_MAX_ARCSEC, NED_MATCH_NMAX,
 from conftest import fake_ned_reader, make_ned_table, make_source_row
 
 
+@pytest.fixture(autouse=True)
+def selection_on(monkeypatch):
+    """Run this file with host-candidate selection ENABLED.
+
+    The rule itself is what these tests specify (allowlist, redshift
+    escape hatch, ordering after selection, the empty-vs-null contract),
+    so they must not depend on the production default. That default was
+    switched OFF on 2026-09-18 pending a rewrite against the local HATS
+    copy of NED -- see the NED_SELECTION_ENABLED comment in providers.py;
+    test_provider.py pins the default itself.
+    """
+    monkeypatch.setattr(providers, "NED_SELECTION_ENABLED", True)
+
+
 def ra_offset(dec, sep_arcsec):
     """Degrees of RA giving `sep_arcsec` of separation at declination dec."""
     return sep_arcsec / 3600.0 / math.cos(math.radians(dec))

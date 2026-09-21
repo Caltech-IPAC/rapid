@@ -946,7 +946,19 @@ NED_CONE_MAX_ARCSEC = 400.0
 # ===========================================================================
 
 # Set False to disable selection entirely and match against all of NED.
-NED_SELECTION_ENABLED = True
+#
+# DISABLED 2026-09-18 (Emily), pending a re-evaluation against the local
+# HATS copy of NED (release 36.1_20260527_v2): in the two leaf files
+# inspected, 96-99% of rows carry an empty ptype, so the allowlist-or-
+# redshift rule keeps only 0.2-2.5% of NED. That is the same cut the rule
+# made on the astroquery path (566 -> 12 on the HLTDS field), where the
+# excluded rows arrived typed IrS/UvS instead of empty -- but the rule is
+# to be rewritten rather than trusted as is. Cost while off, measured
+# 2026-09-14: ~1 chance-coincidence match per detection at 10", so
+# nedMatches is populated on essentially every alert and the emitted
+# `type` is what tells a host from a catalogue detection. NED_MATCH_NMAX
+# (3) caps the volume.
+NED_SELECTION_ENABLED = False
 
 # NED preferred types accepted as candidate hosts. Excludes GGroup/GClstr
 # (system centroids, degree-scale), PofG (a knot inside a galaxy that is

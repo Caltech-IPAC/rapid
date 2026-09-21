@@ -249,6 +249,18 @@ def test_doubly_associated_source_uses_lowest_aid_and_warns(make_provider,
     assert fresh.get_object_for_source(fresh.get_detection(9002)).aid == 777
 
 
+def test_ned_host_selection_is_off_by_default():
+    # Decision 2026-09-18 (Emily): match against all of NED until the
+    # allowlist-or-redshift rule is re-evaluated on the local HATS copy,
+    # where 96-99% of rows carry an empty ptype. test_ned_match.py turns
+    # selection on explicitly to test the rule; this pins the default.
+    from alerts import providers
+    assert providers.NED_SELECTION_ENABLED is False
+    keep = providers.select_host_candidates(["G", "IrS", "", None],
+                                            [float("nan")] * 4)
+    assert list(keep) == [True, True, True, True]
+
+
 def test_ned_failure_logs_one_line_with_traceback_at_debug(make_provider,
                                                            caplog):
     def broken_reader(ra, dec, radius):
