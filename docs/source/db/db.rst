@@ -49,6 +49,12 @@ There are multiple provisions for indexing on sky position:
 * Healpix level-9 index (hp9), with an approximate resolution of 0.11 degrees (almost the width of a Roman SCA).
   There are 3,145,728 level-9 indices.
 
+
+The L2Files database table has the ``overlapfields`` int[] column for storing lists of field numbers that a given
+Roman SCA image, with its unique orientation on the sky, for fields that it overlaps.  The algorithm that computes
+the overlapping fields omits fields with less than 25 pixels of overlap.
+
+
 Record Versioning
 ************************************
 
@@ -277,3 +283,8 @@ statistics for ~90 million AstroObjects.
 Because reprocessing generates new product versions (usually latest is best), there are
 separate processes that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
 and then explicitly clusters, vacuums, and analyzes these database tables.
+
+The Sources database table has the ``rb`` float column for storing real-bogus scores,
+computed from a Machine-Learning algorithm that is optimized for Roman WFI data,
+which is a fractional number in the [0.0, 1.0] range that corresponds to the likelihood
+that a source is real (as opposed to bogus).
