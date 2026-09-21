@@ -103,6 +103,10 @@ config_input_filename = cfg_path + "/" + cfg_filename_only
 config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
+# AWS_BATCH ARNs in the ini carry the placeholder token ${AWS_ACCOUNT_ID}
+# instead of a committed account id; expand it here from the environment.
+config_input = util.expand_account_id(config_input)
+
 verbose = int(config_input['JOB_PARAMS']['verbose'])
 debug = int(config_input['JOB_PARAMS']['debug'])
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']

@@ -35,6 +35,28 @@ def utc_to_local(utc_dt):
     return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 
 
+def expand_account_id(config_input):
+
+    '''
+    Expand the ${AWS_ACCOUNT_ID} placeholder token in every value of a
+    configparser.ConfigParser already loaded from an .ini file (for
+    example the AWS_BATCH section's job-queue and job-definition ARNs).
+    The account id itself is never committed to the repository; it is
+    read here from the AWS_ACCOUNT_ID environment variable and
+    substituted in place. Call this once, right after config_input.read(...),
+    before reading any AWS_BATCH values out of config_input.
+    '''
+
+    aws_account_id = os.environ.get("AWS_ACCOUNT_ID", "")
+
+    for section in config_input.sections():
+        for key, value in config_input.items(section):
+            if "${AWS_ACCOUNT_ID}" in value:
+                config_input.set(section, key, value.replace("${AWS_ACCOUNT_ID}", aws_account_id))
+
+    return config_input
+
+
 def execute_command(code_to_execute_args,fname_out=None):
 
     '''
