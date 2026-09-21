@@ -671,6 +671,229 @@ class StagingUpsertTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 2b. Child-table name validation, including the scratch set-prefixed shape
+# ---------------------------------------------------------------------------
+
+class ChildNameValidationTests(unittest.TestCase):
+    """`validate_child_name` accepts exactly the three shapes the chain
+    creates and still enforces that a name belongs to its claimed prototype,
+    now that a THIRD shape (`<prototype>_s<set>_<field>`, scratch-only) is
+    in the mix alongside the per-field and per-date-sca shapes.
+    """
+
+    def test_set_prefixed_name_is_accepted(self):
+        # A scratch run's own association family: astroobjects_s3_7 for
+        # association_set=3, field=7.
+        self.assertEqual(
+            catalog_db.validate_child_name("astroobjects_s3_7",
+                                           "astroobjects"),
+            "astroobjects_s3_7")
+        self.assertEqual(
+            catalog_db.validate_child_name("merges_s3_7", "merges"),
+            "merges_s3_7")
+
+    def test_malformed_set_prefixed_name_is_rejected(self):
+        # Missing the field segment, and a non-numeric set -- neither
+        # matches _SET_FIELD_NAME's <prototype>_s<set>_<field> shape.
+        with self.assertRaises(InputError):
+            catalog_db.validate_child_name("astroobjects_s3", "astroobjects")
+        with self.assertRaises(InputError):
+            catalog_db.validate_child_name(
+                "astroobjects_sX_7", "astroobjects")
+
+    def test_set_prefixed_name_still_enforces_the_belonging_check(self):
+        # A well-formed set-prefixed name for the WRONG prototype must still
+        # be refused -- the belonging check runs unchanged, after the shape
+        # check.
+        with self.assertRaises(InputError):
+            catalog_db.validate_child_name("merges_s3_7", "astroobjects")
+
+    def test_the_two_pre_existing_shapes_are_unaffected(self):
+        self.assertEqual(
+            catalog_db.validate_child_name("merges_7", "merges"), "merges_7")
+        self.assertEqual(
+            catalog_db.validate_child_name(
+                "sources_20260809_7", "sources"), "sources_20260809_7")
+        with self.assertRaises(InputError):
+            catalog_db.validate_child_name("merges_not_a_number", "merges")
+
+
+# ---------------------------------------------------------------------------
+# 2c. The scratch association loader: one wrapper call vs. two raw upserts
+# ---------------------------------------------------------------------------
+
+class _ScratchDispatchCursor(RecordingCursor):
+    """`RecordingCursor` plus the two SQL shapes scratch dispatch needs:
+    the `is_scratch_attempt` run-kind probe, and
+    `derived.scratch_load_associations_staged` itself.
+
+    Kept separate from `RecordingCursor` rather than folded into it: those
+    statements are about run/attempt bookkeeping, not the table/column/
+    unique-index catalog `RecordingCursor` models, and the base class's
+    other tests have no reason to carry this fixture's weight.
+    """
+
+    def __init__(self, catalog=None, tablespaces=(), scratch_attempt_ids=()):
+        super().__init__(catalog=catalog, tablespaces=tablespaces)
+        self.scratch_attempt_ids = set(scratch_attempt_ids)
+        self.wrapper_calls = []
+
+    def execute(self, statement, params=None):
+        text = self._record(statement)
+        lowered = " ".join(text.lower().split())
+
+        if "join public.runs r" in lowered:
+            # is_scratch_attempt's probe.
+            attempt_id = params[0] if params else None
+            kind = "scratch" if attempt_id in self.scratch_attempt_ids \
+                else None
+            self._result = [(kind,)] if kind else []
+            self.rowcount = len(self._result)
+            return None
+        if "derived.scratch_load_associations_staged" in lowered:
+            attempt_id = params[0]
+            if attempt_id not in self.scratch_attempt_ids:
+                raise CursorRefusal(
+                    f"attempt {attempt_id} does not belong to an active "
+                    f"scratch run")
+            (_, association_set, field, objects_staging, astroobjects,
+             merges_staging, merges) = params
+            self.wrapper_calls.append(params)
+            # The real function upserts from each staging table into its
+            # target ON CONFLICT DO NOTHING -- reuse the base class's own
+            # `_insert` refusal/convergence logic against BOTH pairs, inside
+            # this one call, which is exactly the atomicity under test.
+            objects_written = self._upsert_association(
+                objects_staging, astroobjects)
+            merges_written = self._upsert_association(
+                merges_staging, merges)
+            self._result = [({"astroobjects_rows_written": objects_written,
+                             "merges_rows_written": merges_written},)]
+            self.rowcount = 1
+            return None
+        return super().execute(statement, params)
+
+    def _upsert_association(self, staging, target):
+        template = self.catalog[target]
+        unique = template["unique"]
+        existing = {_key_of(row, template["columns"], unique)
+                   for row in template["rows"]} if unique else set()
+        written = 0
+        for row in self.catalog[staging]["rows"]:
+            key = _key_of(row, template["columns"], unique) if unique \
+                else None
+            if unique and key in existing:
+                continue
+            template["rows"].append(row)
+            if unique:
+                existing.add(key)
+            written += 1
+        return written
+
+
+class ScratchAssociationLoadTests(unittest.TestCase):
+    """`load_associations_through_staging` issues ONE `derived.scratch_
+    load_associations_staged` call carrying both pairs; a non-scratch
+    attempt's production path (two `load_through_staging` calls) is
+    unchanged. This is `crossmatch_sources`'s own dispatch, exercised
+    directly against `catalog_db` here rather than through the stage.
+    """
+
+    ATTEMPT_ID = 4242
+
+    def setUp(self):
+        self.cursor = _ScratchDispatchCursor(
+            _merges_catalog(), scratch_attempt_ids={self.ATTEMPT_ID})
+        catalog_db.create_child_table(
+            self.cursor, "astroobjects_s3_7", "astroobjects")
+        catalog_db.create_child_table(self.cursor, "merges_s3_7", "merges")
+
+    def _csv(self, rows):
+        path = os.path.join(
+            os.environ.get("TMPDIR", "/tmp"), f"assoc-{id(rows)}.csv")
+        with open(path, "w") as handle:
+            for row in rows:
+                handle.write(",".join(str(value) for value in row) + "\n")
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        return path
+
+    def test_scratch_attempt_issues_one_wrapper_call_with_both_pairs(self):
+        objects_csv = self._csv([(1, 1.0, 2.0, 3.0)])
+        merges_csv = self._csv([(1, 10)])
+
+        objects_result, merges_result = (
+            catalog_db.load_associations_through_staging(
+                self.cursor, self.ATTEMPT_ID, 3, 7,
+                objects_csv, "astroobjects_s3_7", ("aid", "ra0", "dec0", "flux0"),
+                merges_csv, "merges_s3_7", ("aid", "sid")))
+
+        self.assertEqual(len(self.cursor.wrapper_calls), 1)
+        called_attempt, called_set, called_field = \
+            self.cursor.wrapper_calls[0][:3]
+        self.assertEqual((called_attempt, called_set, called_field),
+                         (self.ATTEMPT_ID, 3, 7))
+        self.assertEqual(objects_result["rows_written"], 1)
+        self.assertEqual(merges_result["rows_written"], 1)
+        # Neither raw upsert this attempt's data could otherwise land
+        # through was issued -- the wrapper is the ONLY write.
+        self.assertNotIn("INSERT INTO", self.cursor.sql_text.upper())
+
+    def test_scratch_rerun_converges_through_the_same_single_call(self):
+        objects_csv = self._csv([(1, 1.0, 2.0, 3.0)])
+        merges_csv = self._csv([(1, 10)])
+        catalog_db.load_associations_through_staging(
+            self.cursor, self.ATTEMPT_ID, 3, 7,
+            objects_csv, "astroobjects_s3_7", ("aid", "ra0", "dec0", "flux0"),
+            merges_csv, "merges_s3_7", ("aid", "sid"))
+        self.cursor.commit()
+
+        objects_result, merges_result = (
+            catalog_db.load_associations_through_staging(
+                self.cursor, self.ATTEMPT_ID, 3, 7,
+                objects_csv, "astroobjects_s3_7", ("aid", "ra0", "dec0", "flux0"),
+                merges_csv, "merges_s3_7", ("aid", "sid")))
+
+        self.assertEqual(objects_result["rows_written"], 0)
+        self.assertEqual(merges_result["rows_written"], 0)
+        self.assertEqual(len(self.cursor.wrapper_calls), 2)
+
+    def test_a_non_scratch_attempt_is_refused_by_the_wrapper(self):
+        # The double's teeth: an attempt this cursor does not know as
+        # scratch cannot reach the wrapper either -- mirrors migration
+        # 132's own `scratch_require_active_scratch_run` fence.
+        objects_csv = self._csv([(1, 1.0, 2.0, 3.0)])
+        merges_csv = self._csv([(1, 10)])
+        with self.assertRaises(CursorRefusal):
+            catalog_db.load_associations_through_staging(
+                self.cursor, 9999, 3, 7,
+                objects_csv, "astroobjects_s3_7", ("aid", "ra0", "dec0", "flux0"),
+                merges_csv, "merges_s3_7", ("aid", "sid"))
+
+    def test_production_path_issues_two_unchanged_calls_not_the_wrapper(self):
+        # crossmatch_sources's own dispatch: is_scratch_attempt false means
+        # the two load_through_staging calls run exactly as before -- this
+        # test exercises that branch's ingredients directly against
+        # catalog_db, mirroring what post_db.py's `else` branch calls.
+        catalog_db.create_child_table(self.cursor, "astroobjects_9", "astroobjects")
+        catalog_db.create_child_table(self.cursor, "merges_9", "merges")
+        objects_csv = self._csv([(2, 1.0, 2.0, 3.0)])
+        merges_csv = self._csv([(2, 20)])
+
+        self.assertFalse(
+            catalog_db.is_scratch_attempt(self.cursor, 9999))
+
+        objects_result = catalog_db.load_through_staging(
+            self.cursor, objects_csv, "astroobjects_9", "astroobjects",
+            ("aid", "ra0", "dec0", "flux0"))
+        merges_result = catalog_db.load_through_staging(
+            self.cursor, merges_csv, "merges_9", "merges", ("aid", "sid"))
+
+        self.assertEqual(objects_result["rows_written"], 1)
+        self.assertEqual(merges_result["rows_written"], 1)
+        self.assertEqual(len(self.cursor.wrapper_calls), 0)
+
+
+# ---------------------------------------------------------------------------
 # 3. No UNLOGGED anywhere in the operational path
 # ---------------------------------------------------------------------------
 

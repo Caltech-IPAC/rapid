@@ -84,6 +84,16 @@ CONFLICT_TARGETS = {
 _FIELD_NAME = re.compile(r"^[a-z][a-z0-9]*_[0-9]+$")
 _DATE_SCA_NAME = re.compile(r"^[a-z][a-z0-9]*_[0-9]{8}_[0-9]+$")
 
+# A THIRD shape, `<prototype>_s<set>_<field>`, scratch-only. A scratch run's
+# association family is scoped to its own association set — this is what
+# lets a scratch run's `astroobjects_s<set>_<field>` / `merges_s<set>_<field>`
+# coexist with production's `astroobjects_<field>` / `merges_<field>` and
+# with another scratch run's own set-scoped family, rather than colliding on
+# the plain per-field name every production run already owns. The database
+# side of the same shape is `derived.association_table_name` (rapid_systems
+# migration 132's companion change to `derived.create_child_table`).
+_SET_FIELD_NAME = re.compile(r"^[a-z][a-z0-9]*_s[0-9]+_[0-9]+$")
+
 # The same attempt-to-run join rapid_systems migration 132's
 # `derived.scratch_run_for_attempt` documents and applies server-side
 # (`attempts.run_id` is TEXT and is the run's NAME, possibly with a
@@ -134,10 +144,12 @@ def validate_child_name(tablename: str, prototype: str) -> str:
         than a config fault: the name comes from the manifest, so a bad one
         means the submission described a unit that does not exist.
     """
-    if not (_FIELD_NAME.match(tablename) or _DATE_SCA_NAME.match(tablename)):
+    if not (_FIELD_NAME.match(tablename) or _DATE_SCA_NAME.match(tablename)
+             or _SET_FIELD_NAME.match(tablename)):
         raise InputError(
-            f"{tablename!r} is not a per-field or per-date child table name; "
-            f"expected <prototype>_<field> or <prototype>_<yyyymmdd>_<sca>")
+            f"{tablename!r} is not a per-field, per-date, or per-set child "
+            f"table name; expected <prototype>_<field>, "
+            f"<prototype>_<yyyymmdd>_<sca>, or <prototype>_s<set>_<field>")
     if not tablename.startswith(prototype + "_"):
         raise InputError(
             f"child table {tablename!r} does not belong to prototype "
@@ -275,17 +287,20 @@ def load_through_staging(cursor, csv_path: str, tablename: str,
     by the wrapper call, which re-derives and re-fences the run from
     `attempt_id` itself before touching the target table.
 
-    `prototype in ("astroobjects", "merges")` has NO per-call match: the
+    `prototype in ("astroobjects", "merges")` has NO per-call match HERE: the
     migration's sibling wrapper, `derived.scratch_load_associations_staged`,
     takes BOTH staging tables and BOTH targets and writes them together in
     one transaction, because a scratch identity with no table grant can only
-    reach the shared tables through a function call, and this function is
-    called once PER TABLE by `crossmatch_sources` (`post_db.py`). Forcing a
-    two-table-atomic wrapper into a one-table-at-a-time call here would
-    either drop the atomicity the wrapper exists to keep or require this
-    function to know about its sibling call — both worse than leaving the
-    mismatch visible. `crossmatch_sources` is therefore NOT wired to scratch
-    by this change; see its own call sites for the same note.
+    reach the shared tables through a function call — but this function is
+    called once PER TABLE by `crossmatch_sources` (`post_db.py`), so neither
+    call has the other table's name in hand to offer the wrapper the pair it
+    requires. Forcing a two-table-atomic wrapper into a one-table-at-a-time
+    call here would either drop the atomicity the wrapper exists to keep or
+    require this function to know about its sibling call — both worse than
+    leaving the mismatch visible in this function's own contract. The pair
+    is instead assembled one level up, in `load_associations_through_
+    staging` below, which `crossmatch_sources` calls directly for a scratch
+    attempt instead of two `load_through_staging` calls.
     """
     validate_child_name(tablename, prototype)
 
@@ -360,6 +375,89 @@ def load_through_staging(cursor, csv_path: str, tablename: str,
 
     return {"rows_staged": rows_staged, "rows_written": rows_written,
             "seconds": round(elapsed, 3), "rate": round(rate, 1)}
+
+
+def load_associations_through_staging(
+        cursor, attempt_id, association_set: int, field: int,
+        objects_csv_path: str, astroobjects: str, astroobjects_columns,
+        merges_csv_path: str, merges: str, merges_columns) -> tuple:
+    """Bulk-load `crossmatch_sources`'s two association tables for a
+    SCRATCH attempt, in the one atomic call `derived.
+    scratch_load_associations_staged` (rapid_systems migration 132) exists
+    for. Returns `(objects_result, merges_result)`, each shaped exactly like
+    `load_through_staging`'s own return so the caller's downstream
+    `_verify_effect`/`record_effect` contract does not need to know which
+    path ran.
+
+    **Why this is one function and not two calls to `load_through_staging`
+    with `attempt_id` passed through.** `derived.scratch_load_associations_
+    staged` takes BOTH staging tables and BOTH targets and upserts them in
+    ONE transaction — a scratch identity holds no table-level grant on
+    `public` at all (132's file header), so the astroobjects and merges rows
+    for one field can only reach their tables through this single function
+    call, matching `crossmatch_sources`'s own single `transaction(conn)`
+    block. `load_through_staging` is (and stays) a call-once-per-table
+    primitive; the pairing this wrapper requires has to be assembled at the
+    call site that already holds both table names, which is here.
+
+    The CREATE TEMP TABLE + COPY steps still run exactly as `load_through_
+    staging` runs them — a SQL function cannot open a local CSV or drive a
+    client-side `COPY FROM STDIN` (132's file header again) — only the final
+    write is handed to the wrapper instead of composed as a raw upsert.
+    """
+    def _stage(csv_path, tablename, columns):
+        staging = f"staging_{tablename}"
+        cursor.execute(
+            sql.SQL("CREATE TEMP TABLE {staging} "
+                    "(LIKE {target} INCLUDING DEFAULTS) ON COMMIT DROP"
+                    ).format(staging=sql.Identifier(staging),
+                             target=sql.Identifier(tablename)))
+        with open(csv_path, "r") as handle:
+            cursor.copy_from(handle, staging, sep=",", null="\\N",
+                             columns=tuple(columns))
+        return staging, cursor.rowcount
+
+    started = time.monotonic()
+
+    objects_staging, objects_staged = _stage(
+        objects_csv_path, astroobjects, astroobjects_columns)
+    merges_staging, merges_staged = _stage(
+        merges_csv_path, merges, merges_columns)
+
+    # ONE call, BOTH pairs — this is the atomicity the wrapper exists to
+    # keep. `derived.scratch_load_associations_staged` re-derives both
+    # target names from `(association_set, field)` via `derived.
+    # association_table_name` and compares them against what is passed
+    # here for exact equality; it does not trust that `astroobjects` and
+    # `merges` (the caller's own names) actually agree with the set/field
+    # pair, which is why both are passed rather than assumed.
+    cursor.execute(
+        "SELECT derived.scratch_load_associations_staged("
+        "%s, %s, %s, %s, %s, %s, %s)",
+        (attempt_id, association_set, field,
+         objects_staging, astroobjects, merges_staging, merges))
+    counts = cursor.fetchone()[0]
+    objects_written = counts["astroobjects_rows_written"]
+    merges_written = counts["merges_rows_written"]
+
+    elapsed = time.monotonic() - started
+    objects_rate = (objects_written / elapsed) if elapsed > 0 else 0.0
+    merges_rate = (merges_written / elapsed) if elapsed > 0 else 0.0
+
+    logger.info(
+        "scratch-loaded %s: %d staged, %d written; %s: %d staged, %d "
+        "written; %.2fs total", astroobjects, objects_staged,
+        objects_written, merges, merges_staged, merges_written, elapsed)
+
+    objects_result = {"rows_staged": objects_staged,
+                      "rows_written": objects_written,
+                      "seconds": round(elapsed, 3),
+                      "rate": round(objects_rate, 1)}
+    merges_result = {"rows_staged": merges_staged,
+                     "rows_written": merges_written,
+                     "seconds": round(elapsed, 3),
+                     "rate": round(merges_rate, 1)}
+    return objects_result, merges_result
 
 
 def delete_superseded_rows(cursor, tablename: str, prototype: str,

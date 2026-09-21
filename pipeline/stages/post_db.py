@@ -893,28 +893,35 @@ def crossmatch_sources(context) -> None:
             cursor, context, field, proc_date, float(radius),
             astroobjects, objects_csv, merges_csv)
 
-        # NOT WIRED TO SCRATCH (rapid_systems migration 132's own gap, not
-        # this pass's). `derived.scratch_load_associations_staged` takes
-        # BOTH staging tables and BOTH targets and upserts them together in
-        # one call/transaction — the astroobjects and merges rows for one
-        # field are one atomic unit to it, matching this function's own
-        # single `transaction(conn)` block. `load_through_staging` is called
-        # once PER TABLE, below, so neither call has the other table's name
-        # in hand to offer the wrapper the pair it requires. Passing
-        # `attempt_id` to either call in isolation would be wrong twice
-        # over: it would either invoke a two-table wrapper with only one
-        # table's staging/target names (a shape `scratch_load_
-        # associations_staged` does not have), or split what the migration
-        # deliberately made one call into two, losing the atomicity the
-        # wrapper exists to keep. Making a scratch run's crossmatch phase
-        # work needs `load_through_staging` (or this call site) restructured
-        # to hand both pairs to one wrapper call together — a real code
-        # change, correctly left to whoever wires this path, not forced here.
-        objects_result = catalog_db.load_through_staging(
-            cursor, objects_csv, astroobjects, "astroobjects",
-            ASTROOBJECTS_COLUMNS)
-        merges_result = catalog_db.load_through_staging(
-            cursor, merges_csv, merges, "merges", MERGES_COLUMNS)
+        # SCRATCH DISPATCH (rapid_systems migration 132), same probe
+        # `load_through_staging` uses for the single-table `sources` case
+        # (`catalog_db.is_scratch_attempt`). Here the dispatch is at THIS
+        # call site rather than inside `load_through_staging` itself,
+        # because the two-table wrapper `derived.scratch_load_
+        # associations_staged` needs both staging/target pairs in one call
+        # — a shape `load_through_staging`'s own one-table-at-a-time
+        # contract cannot offer without either losing the wrapper's
+        # atomicity or coupling it to a sibling call. `crossmatch_sources`
+        # is the one place both pairs are already in hand, so the pairing
+        # is assembled here and handed to `catalog_db.
+        # load_associations_through_staging`, which runs the CREATE TEMP
+        # TABLE + COPY steps exactly as `load_through_staging` does and
+        # then issues the single wrapper call in place of the two raw
+        # upserts below. A production attempt pays one extra SELECT
+        # (`is_scratch_attempt`) to learn what it already is, same as the
+        # `sources` load above.
+        if catalog_db.is_scratch_attempt(cursor, context.attempt_id):
+            objects_result, merges_result = (
+                catalog_db.load_associations_through_staging(
+                    cursor, context.attempt_id, association_set, field,
+                    objects_csv, astroobjects, ASTROOBJECTS_COLUMNS,
+                    merges_csv, merges, MERGES_COLUMNS))
+        else:
+            objects_result = catalog_db.load_through_staging(
+                cursor, objects_csv, astroobjects, "astroobjects",
+                ASTROOBJECTS_COLUMNS)
+            merges_result = catalog_db.load_through_staging(
+                cursor, merges_csv, merges, "merges", MERGES_COLUMNS)
 
         advanced = _advance_association_watermark(
             cursor, context, association_set, lane, position, proc_date, field)
