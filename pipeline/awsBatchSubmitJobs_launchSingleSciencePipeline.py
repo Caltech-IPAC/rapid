@@ -148,11 +148,7 @@ config_input.read(config_input_filename)
 # instead of a committed account id (see cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini).
 # Expand it here from the environment; this is the only substitution the
 # ini's raw values need.
-_aws_account_id = os.environ.get("AWS_ACCOUNT_ID", "")
-for _section in config_input.sections():
-    for _key, _value in config_input.items(_section):
-        if "${AWS_ACCOUNT_ID}" in _value:
-            config_input.set(_section, _key, _value.replace("${AWS_ACCOUNT_ID}", _aws_account_id))
+config_input = util.expand_account_id(config_input)
 
 verbose = int(config_input['JOB_PARAMS']['verbose'])
 debug = int(config_input['JOB_PARAMS']['debug'])
