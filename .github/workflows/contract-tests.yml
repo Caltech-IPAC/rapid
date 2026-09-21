@@ -167,7 +167,7 @@ jobs:
       # produced "the deployed schema is missing 1 migration(s) this build
       # requires". The pattern is worth naming: a red contract tier on a
       # branch that changed the schema usually means this line, not the code.
-      RAPID_SYSTEMS_REF: 9b3b4185fa015a51e816f976b892c965c24b0ef7
+      RAPID_SYSTEMS_REF: 788cfd0ac8ccd3dbd60a413f7055cb632477dfaa
 
     steps:
       - name: check out rapid
@@ -318,7 +318,7 @@ jobs:
           #
           # Moves with `RAPID_SYSTEMS_REF` above — the drift guard below
           # fails the run if the two ever disagree.
-          ref: 9b3b4185fa015a51e816f976b892c965c24b0ef7
+          ref: 788cfd0ac8ccd3dbd60a413f7055cb632477dfaa
           token: ${{ steps.rapid-systems-token.outputs.token }}
           path: rapid_systems
           persist-credentials: false
@@ -345,6 +345,21 @@ jobs:
       - name: run the contract suite against the applied stream
         run: |
           scripts/run-contract-tests.sh rapid_systems/cloudformation/db-migrations
+
+      - name: run the delete_run case-map tests with one result line per case
+        # The existing runners (run-contract-tests.sh, run-operational-tests.sh)
+        # print module-level counts and suite summaries only; this stage's
+        # case map (evidence/case-map-*.txt) needs a passing result line per
+        # mapped case, so this step runs the new modules directly under
+        # pytest -rA against the same service database the prior step just
+        # migrated. Nothing else in this workflow changes.
+        run: |
+          python3 -m pytest -q -rA -m '' \
+            pipeline/contract/test_run_delete_evidence_envelope.py \
+            pipeline/contract/test_run_delete_restored_cases.py \
+            pipeline/contract/test_child_table_placement.py \
+            pipeline/gc/test/test_execute_recovery_reference_check.py \
+            pipeline/operatorctl/test/test_run_delete_cli.py
 
       # ---------------------------------------------------------------------
       # RED/GREEN INTO THE PLACE THE TEAM LOOKS (2026-09-04). GitHub's own
