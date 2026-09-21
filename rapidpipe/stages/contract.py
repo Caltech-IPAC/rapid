@@ -19,6 +19,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from rapidpipe.log import stage_log_context
 from rapidpipe.products.manifest import CompletionManifest, ManifestError
 from rapidpipe.stages.settings import SettingsError, canonical_hash, resolve_settings
 
@@ -165,7 +166,7 @@ class StageContext:
     settings_hash: str
     input_manifest: dict[str, Any]
     dry_run: bool
-    logger: logging.Logger
+    logger: logging.Logger | logging.LoggerAdapter
 
 
 def _build_parser(declaration: StageDeclaration) -> argparse.ArgumentParser:
@@ -216,6 +217,9 @@ def run_stage(
     if ``body`` raises, no manifest is written.
     """
     declaration.validate()
+    # Before argv is parsed there is no run/attempt id yet; a plain logger
+    # (still under the rapidpipe.* hierarchy, still caught by
+    # rapidpipe.log's identity filter once configured) covers that window.
     logger = logging.getLogger(f"rapidpipe.stages.{declaration.name}")
 
     try:
@@ -228,6 +232,12 @@ def run_stage(
             logger.info(
                 "stage=%s exit=%s reason=argparse", declaration.name, ExitCode.USAGE)
             return int(ExitCode.USAGE) if exc.code != 0 else int(ExitCode.SUCCESS)
+
+        # Now that --run and --attempt are known, switch to the identified
+        # logger so every remaining line (including the "start" line below)
+        # carries them, per the contract's "wire it into run_stage so every
+        # stage logs its start, its exit code and its manifest path".
+        logger = stage_log_context(declaration.name, args.run_id, args.attempt_id)
 
         if _is_s3(args.outputs):
             raise UsageError(
