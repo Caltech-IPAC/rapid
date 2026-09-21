@@ -9,7 +9,7 @@
 #
 
 #--------Configure build environment--------------------------
-setenv RAPID_SW /Users/laher/git/rapid
+setenv RAPID_SW /path/to/rapid
 # A well-defined path is essential.
 setenv PATH /opt/homebrew/bin:/bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
 

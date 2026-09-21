@@ -470,9 +470,9 @@ glitch, with the following error:
 .. code-block::
 
     CannotPullContainerError: failed to resolve ref
-    public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+    public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
     for schema1 conversion: failed to do request:
-    Head "https://public.ecr.aws/v2/y9b1s7h8/rapid_science_pipeline/manifests/latest":
+    Head "https://public.ecr.aws/v2/<ecr-public-alias>/rapid_science_pipeline/manifests/latest":
     dial tcp 75.2.101.78:443: i/o timeout
 
 This caused the database-registration code to quit early (hence the 205 pipeline instances

@@ -412,7 +412,7 @@ Note that the RAPID-pipeline image has already been registered at
 
 .. code-block::
 
-   public.ecr.aws/y9b1s7h8/rapid_science_pipeline
+   public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline
 
 and so this step involves simply updating the Docker image in the registry.
 
@@ -420,7 +420,7 @@ Authenticate your Docker client to the registry as follows:
 
 .. code-block::
 
-   aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/y9b1s7h8
+   aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/<ecr-public-alias>
 
 Now get the Docker image ID as follows:
 
@@ -439,8 +439,8 @@ Tag the Docker image with "latest" and push to ECR with these two commands:
 
 .. code-block::
 
-   docker tag a76b1373bfe2 public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
-   docker push public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+   docker tag a76b1373bfe2 public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
+   docker push public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
 
 
 Running an Instance of the RAPID Science Pipeline under AWS Batch
@@ -464,12 +464,12 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
    docker stop russ-test-jobsubmit
    docker rm russ-test-jobsubmit
 
-   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250314:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250314:/work public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
 
    export DBPORT=5432
    export DBNAME=rapidopsdb
    export DBUSER=rapidporuss
-   export DBSERVER=35.165.53.98
+   export DBSERVER=???
    export DBPASS="????"
    export AWS_DEFAULT_REGION=us-west-2
    export AWS_SECRET_ACCESS_KEY=????

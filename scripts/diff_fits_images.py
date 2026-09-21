@@ -6,8 +6,10 @@
 import numpy as np
 from astropy.io import fits
 
-input_file_1 = "/Users/laher/git/rapid/c/common/awaicgen/awaicgen-5.2/output.fits"
-input_file_2 = "/Users/laher/git/rapid/c/common/awaicgen/awaicgen-5.2/output2.fits"
+# Repository-relative paths to the two awaicgen test outputs; run this
+# script from a checkout of this repository.
+input_file_1 = "c/common/awaicgen/awaicgen-5.2/output.fits"
+input_file_2 = "c/common/awaicgen/awaicgen-5.2/output2.fits"
 
 output_diff_file = "diff_image.fits"
 

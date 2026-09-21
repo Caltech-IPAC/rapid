@@ -8,7 +8,10 @@ my %fids = ("184" => 1, "158" => 2,"129" => 3,"213" => 4,"062" => 5,"106" => 6,"
 my $sqlfile = "psfs.sql";
 open(OUT, ">$sqlfile");
 
-opendir(THISDIR, "/Users/laher/Folks/rapid/psfs/PSFs");
+# Input directory of PSF FITS files; set via environment variable, no
+# personal path committed here.
+my $psf_dir = $ENV{'PSF_DIR'} or die "Set PSF_DIR to the PSF input directory\n";
+opendir(THISDIR, $psf_dir);
 my @files=sort readdir THISDIR;
 closedir THISDIR;
 

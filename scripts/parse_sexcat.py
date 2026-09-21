@@ -1,8 +1,11 @@
+import os
 import numpy as np
 import modules.utils.rapid_pipeline_subs as util
 
-datafile="/Users/laher/Folks/rapid/sfftdiffimage_masked.txt";
-paramsfile="/Users/laher/git/rapid/cdf/rapidSexParamsDiffImage.inp";
+# datafile is set via environment variable; paramsfile defaults to the
+# repository-relative config. No personal path is committed here.
+datafile = os.environ["SEXCAT_DATA_FILE"]
+paramsfile = "cdf/rapidSexParamsDiffImage.inp";
 
 params_to_get = ["NUMBER",
                  "FLAGS",

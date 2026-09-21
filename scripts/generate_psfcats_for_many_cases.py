@@ -19,6 +19,10 @@ import time
 swname = "generate_psfcats_for_many_cases.py"
 swvers = "1.1"
 
+# Repository root, derived from this script's own location so the sibling
+# scripts below can be invoked without a personal path.
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 print("swname =", swname)
 print("swvers =", swvers)
 
@@ -55,7 +59,9 @@ os.environ['DISPLAYPLOT'] = "False"
 directory_paths = os.listdir('.')
 #print(directory_paths)
 
-main_path = "/Users/laher/Folks/rapid/download_files_20250927"
+# Input directory of downloaded case files; set via environment variable,
+# no personal path committed here.
+main_path = os.environ["CASES_DOWNLOAD_DIR"]
 
 nsources_sexcat_list = []
 ns_true_list = []
@@ -135,7 +141,7 @@ for directory_path in directory_paths:
             if not os.path.exists(new_path):
                 print("Generating PhotUtils catalog...")
                 try:
-                    code_to_execute_object = subprocess.run(['python', '/Users/laher/git/rapid/scripts/generate_psfcat.py'], capture_output=True, text=True, check=True)
+                    code_to_execute_object = subprocess.run(['python', os.path.join(_repo_root, 'scripts', 'generate_psfcat.py')], capture_output=True, text=True, check=True)
 
                     returncode = code_to_execute_object.returncode
                     print("returncode =",returncode)
@@ -190,7 +196,7 @@ for directory_path in directory_paths:
 
             try:
                 print("Performing source matching and scoring...")
-                code_to_execute_object = subprocess.run(['python', '/Users/laher/git/rapid/scripts/plot_detections.py'], capture_output=True, text=True, check=True)
+                code_to_execute_object = subprocess.run(['python', os.path.join(_repo_root, 'scripts', 'plot_detections.py')], capture_output=True, text=True, check=True)
 
                 returncode = code_to_execute_object.returncode
                 print("returncode =",returncode)

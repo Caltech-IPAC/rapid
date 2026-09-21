@@ -1,8 +1,9 @@
 """
 Terminate AWS Batch jobs in specified states.
 
-Example command:
-python /Users/laher/git/rapid/aws/terminate_batch_jobs.py --queue arn:aws:batch:us-west-2:891377127831:job-queue/getting-started-wizard-job-queue --states SUBMITTED PENDING RUNNABLE STARTING RUNNING --profile RussLaherRapidAWS --dry-run
+Example command (run from a checkout of this repository; substitute your
+own AWS account id and profile):
+python aws/terminate_batch_jobs.py --queue arn:aws:batch:us-west-2:${AWS_ACCOUNT_ID}:job-queue/getting-started-wizard-job-queue --states SUBMITTED PENDING RUNNABLE STARTING RUNNING --profile <your-aws-profile> --dry-run
 """
 
 import argparse

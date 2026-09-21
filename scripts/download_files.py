@@ -5,7 +5,10 @@ import re
 s3_client = boto3.client('s3')
 product_s3_bucket = "rapid-product-files"
 
-product_listing = "/Users/laher/Folks/rapid/rapid-product-files_20250927.txt"
+# Path to a product listing generated with the aws s3 ls command
+# documented in docs/source/prod/products.rst; set via environment
+# variable, no personal path committed here.
+product_listing = os.environ["PRODUCT_LISTING_FILE"]
 
 filename_diffimage_sextractor_catalog = "diffimage_masked.txt"
 

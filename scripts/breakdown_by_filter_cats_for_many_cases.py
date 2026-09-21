@@ -19,7 +19,9 @@ from astropy.io import fits
 
 start_time_benchmark_at_start = time.time()
 
-main_path = "/Users/laher/Folks/rapid/download_files_20250927"
+# Input directory of downloaded case files; set via environment variable,
+# no personal path committed here.
+main_path = os.environ["CASES_DOWNLOAD_DIR"]
 input_fits_file = "diffimage_masked.fits"
 
 case_list = ["ZTF","AL1","A2","PU1","PU2","PU3","PU4","PU5","PU6","PU7","PU8","PU9","PU10"]
