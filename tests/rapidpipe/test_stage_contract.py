@@ -12,12 +12,13 @@ import json
 
 import pytest
 
-from rapidpipe.products.manifest import CompletionManifest, OutputEntry
+from rapidpipe.products.manifest import Inputs, Manifest, Member, OutputEntry, Unit
 from rapidpipe.stages.contract import (
     ExitCode,
     InputRejected,
     StageDeclaration,
     StageError,
+    StageResult,
     TransientFailure,
     UsageError,
     run_stage,
@@ -35,22 +36,37 @@ DECLARATION = StageDeclaration(
 
 
 def _success_body(context):
-    return CompletionManifest(
-        run_id=context.run_id,
-        unit_id=context.unit_id,
-        stage=context.declaration.name,
-        attempt_id=context.attempt_id,
-        execution_record_ref="exec:1",
-        input_manifest_ref="in:1",
-        outputs=(OutputEntry("out1", "exposure", "1", "run-scoped:out1"),),
+    return StageResult(
+        outputs=(
+            OutputEntry(
+                kind="exposure",
+                format_version="1",
+                instance="pi-exp-1",
+                key={"exposure": context.unit_id},
+                primary="out1.fits",
+                members=(Member("image", "out1.fits", 3, "sha256:" + "a" * 64),),
+            ),
+        ),
     )
+
+
+def _upstream_manifest_json() -> str:
+    upstream = Manifest(
+        run="r0",
+        unit=Unit(kind="exposure", id="u0"),
+        stage="admit",
+        attempt="a0",
+        execution_record="exec/a0.json",
+        inputs=Inputs(manifest="s3://bucket/root/manifest.json"),
+    )
+    return upstream.to_json()
 
 
 @pytest.fixture
 def inputs_dir(tmp_path):
     inputs = tmp_path / "inputs"
     inputs.mkdir()
-    (inputs / "manifest.json").write_text(json.dumps({"inputs": []}))
+    (inputs / "manifest.json").write_text(_upstream_manifest_json())
     return inputs
 
 
@@ -68,10 +84,46 @@ def test_success_publishes_manifest(inputs_dir, tmp_path):
     assert rc == int(ExitCode.SUCCESS)
     manifest_path = outputs_dir / "manifest.json"
     assert manifest_path.exists()
-    restored = CompletionManifest.read(manifest_path)
-    assert restored.run_id == "r1"
-    assert restored.unit_id == "u1"
-    assert restored.attempt_id == "a1"
+    restored = Manifest.read(manifest_path)
+    assert restored.run == "r1"
+    assert restored.unit == Unit(kind=DECLARATION.unit, id="u1")
+    assert restored.attempt == "a1"
+    assert restored.stage == DECLARATION.name
+    assert restored.inputs.manifest == str(inputs_dir / "manifest.json")
+
+
+def test_success_writes_execution_record(inputs_dir, tmp_path):
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, _success_body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+    restored = Manifest.read(outputs_dir / "manifest.json")
+    execution_record_path = outputs_dir / restored.execution_record
+    assert execution_record_path.exists()
+    record = json.loads(execution_record_path.read_text())
+    assert "settings_hash" in record
+    assert "source_revision" in record
+    assert "image_digest" in record
+
+
+def test_products_read_and_result_sets_read_reach_the_manifest(inputs_dir, tmp_path):
+    def body(context):
+        return StageResult(
+            outputs=(
+                OutputEntry(
+                    kind="association-set", format_version="1",
+                    instance="pi-assoc-1", key={"field": "f1"}),
+            ),
+            products_read={"l2-image": "pi-l2-9"},
+            result_sets_read=("pi-source-1", "pi-source-2"),
+        )
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+    restored = Manifest.read(outputs_dir / "manifest.json")
+    assert restored.inputs.products == {"l2-image": "pi-l2-9"}
+    assert restored.inputs.result_sets == ("pi-source-1", "pi-source-2")
+    assert restored.outputs[0].is_result_set()
 
 
 def test_dry_run_publishes_nothing_and_exits_zero(inputs_dir, tmp_path):
