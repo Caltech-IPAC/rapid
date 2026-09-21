@@ -89,10 +89,36 @@ recorded_sha256_for() {
 
 # Collect migration files in filename order. No arrays-with-negative-index
 # or mapfile use, for bash 3.2 portability.
-files=$(find "$dir" -maxdepth 1 -type f -name '[0-9][0-9][0-9]-*.sql' | sort)
+#
+# Filenames are YYYYMMDD-NN-short-name.sql: an 8-digit date, a 2-digit
+# same-day sequence starting at 01, a lowercase/digit/hyphen name. Every
+# *.sql file in the directory is checked against this shape (not just
+# globbed loosely) so a misnamed file is refused with a clear message
+# rather than silently skipped or silently accepted in the wrong sort
+# position -- `find -name` globbing alone cannot distinguish "8 digits"
+# from "9 digits" or catch an uppercase letter, so validation is a
+# separate pass with a real regex.
+all_sql=$(find "$dir" -maxdepth 1 -type f -name '*.sql' | sort)
+name_re='^[0-9]{8}-[0-9]{2}-[a-z0-9-]+\.sql$'
+if [ -n "$all_sql" ]; then
+  # This loop is a plain statement (not part of an if/&&/||/while-exit-status
+  # test), so `set -e` aborts the whole script the instant it returns
+  # non-zero -- unlike the applier's earlier bug (see the psql-exit-status
+  # comment further down), there is nothing here for `-e` to suspend.
+  # Verified with a standalone repro before relying on it.
+  printf '%s\n' "$all_sql" | while IFS= read -r f; do
+    fn=$(basename "$f")
+    if ! printf '%s' "$fn" | grep -Eq "$name_re"; then
+      echo "!! $fn does not match the required migration filename shape YYYYMMDD-NN-short-name.sql (8-digit date, 2-digit same-day sequence, lowercase/digit/hyphen name)" >&2
+      exit 1
+    fi
+  done
+fi
+
+files="$all_sql"
 
 if [ -z "$files" ]; then
-  echo "!! no NNN-*.sql files found in $dir" >&2
+  echo "!! no YYYYMMDD-NN-short-name.sql files found in $dir" >&2
   exit 1
 fi
 
