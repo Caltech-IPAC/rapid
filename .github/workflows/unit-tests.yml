@@ -6,6 +6,13 @@
 # import and pass on their own, and stays fast; a stage that needs those
 # runtime dependencies pulls them in when it is added.
 #
+# rapidpipe.db and rapidpipe.runs import psycopg2 unconditionally
+# (mocked, never connected to, in tests/rapidpipe -- the database-backed
+# tests are tests/rapidpipe_db, run by db-migrations.yml against a real
+# PostgreSQL), so this job installs psycopg2-binary by hand rather than
+# widening --no-deps, matching the module the tests import and the
+# install db-migrations.yml already does.
+#
 # actions/checkout is pinned by SHA per this repo's existing convention
 # (see .github/workflows/public-safety.yml); actions/setup-python is
 # pinned the same way.
@@ -38,8 +45,8 @@ jobs:
       - name: install rapidpipe
         run: pip install -e . --no-deps
 
-      - name: install pytest
-        run: pip install pytest
+      - name: install pytest and psycopg2-binary
+        run: pip install pytest psycopg2-binary
 
       - name: run rapidpipe unit tests
         run: python -m pytest tests/rapidpipe -q
