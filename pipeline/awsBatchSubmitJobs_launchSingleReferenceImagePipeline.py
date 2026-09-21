@@ -363,21 +363,16 @@ if __name__ == '__main__':
         exit(64)
 
 
-    # Get sky positions of center and four corners of sky tile.
+    # Get sky position of center of sky tile.
+    #
+    # The four corners of the sky tile are no longer needed, since
+    # dbh.get_overlapping_l2files now selects overlapping science images via the
+    # L2Files.overlapfields column, rather than via a corner-polygon search.
 
     rtid = field
     roman_tessellation_db.get_center_sky_position(rtid)
     ra0_field = roman_tessellation_db.ra0
     dec0_field = roman_tessellation_db.dec0
-    roman_tessellation_db.get_corner_sky_positions(rtid)
-    ra1_field = roman_tessellation_db.ra1
-    dec1_field = roman_tessellation_db.dec1
-    ra2_field = roman_tessellation_db.ra2
-    dec2_field = roman_tessellation_db.dec2
-    ra3_field = roman_tessellation_db.ra3
-    dec3_field = roman_tessellation_db.dec3
-    ra4_field = roman_tessellation_db.ra4
-    dec4_field = roman_tessellation_db.dec4
 
 
     # Compute the sky positions of the four corners of the reference.
@@ -495,8 +490,10 @@ if __name__ == '__main__':
     # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field
     # and distance from tile center (degrees) for all best science images in the
     # L2Files database table that overlap the sky tile associated with the input science image
-    # and its filter.  Use radius_of_initial_cone_search = 0.18 degrees.
-    # Returned list is ordered by distance from tile center.
+    # and its filter.  An image overlaps the sky tile if the tile is listed in the
+    # L2Files.overlapfields column of the image.
+    #
+    # Returned list is ordered by mjdobs, and then by distance from tile center.
     #
     # If environment variables STARTREFIMMJDOBS and ENDREFIMMJDOBS are set, these
     # will be included as qualifiers in the database query (retrieved from the environment
@@ -504,7 +501,6 @@ if __name__ == '__main__':
 
 
     rid = 'null'
-    radius_of_initial_cone_search = 0.18
     # mjdobs defines the end MJD covered by the database query.
     # MJD of 999999.9 converts to May 11, 4692, at approximately 21:36:00 UTC.
     # Method dbh.get_overlapping_l2files will use this MJD as ending MJD (and the
@@ -513,13 +509,9 @@ if __name__ == '__main__':
     mjdobs = 999999.9
     overlapping_images = dbh.get_overlapping_l2files(rid,
                                                      fid,
-                                                     mjdobs,
+                                                     field,
                                                      ra0_field,dec0_field,
-                                                     ra1_field,dec1_field,
-                                                     ra2_field,dec2_field,
-                                                     ra3_field,dec3_field,
-                                                     ra4_field,dec4_field,
-                                                     radius_of_initial_cone_search)
+                                                     mjdobs)
 
     if dbh.exit_code >= 64:
         print(f"*** Error from dbh.get_overlapping_l2files (dbh.exit_code = {dbh.exit_code}); quitting...")
@@ -550,7 +542,7 @@ if __name__ == '__main__':
         ra4_refimage_input = image_meta[9]
         dec4_refimage_input = image_meta[10]
         field_from_get_overlapping_l2files = image_meta[11]
-        cone_search_dist_refimage_input = image_meta[12]
+        dist_from_tile_center_refimage_input = image_meta[12]
 
         image_info = dbh.get_info_for_l2file(rid_refimage_input)
 

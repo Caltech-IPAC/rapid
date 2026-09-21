@@ -56,7 +56,8 @@ CREATE TABLE sources (
     expid integer NOT NULL,                    -- Exposures primary key
     fid smallint NOT NULL,                     -- Filter ID
     sca smallint NOT NULL,                     -- SCA number (1...18)
-    mjdobs double precision NOT NULL           -- MJD OBS of exposure
+    mjdobs double precision NOT NULL,          -- MJD OBS of exposure
+    rb real                                    -- Null means realbogus not executed
 );
 
 -- Sources table must be owned by rapidporole for inheritance.
@@ -338,7 +339,8 @@ CREATE TABLE xsources (
     expid integer NOT NULL,                    -- Exposures primary key
     fid smallint NOT NULL,                     -- Filter ID
     sca smallint NOT NULL,                     -- SCA number (1...18)
-    mjdobs double precision NOT NULL           -- MJD OBS of exposure
+    mjdobs double precision NOT NULL,          -- MJD OBS of exposure
+    rb real                                    -- Null means realbogus not executed
 );
 
 -- XSources table must be owned by rapidporole for inheritance.

@@ -556,6 +556,7 @@ if __name__ == '__main__':
         refimage_psf_finder_catalog_s3_bucket_object_name = refimgpsfcat_return_list[6]
         refimage_psf_catalog_uploaded_to_bucket = refimgpsfcat_return_list[7]
         refimage_psf_finder_catalog_uploaded_to_bucket = refimgpsfcat_return_list[8]
+        refimage_psf_catalog_nrows = refimgpsfcat_return_list[9]
 
 
         # Code-timing benchmark.
@@ -717,6 +718,7 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['fwhmminpix'] = str(fwhm_ref_minpix)
         product_config['REF_IMAGE']['fwhmmaxpix'] = str(fwhm_ref_maxpix)
         product_config['REF_IMAGE']['nsexcatsources'] = str(nsexcatsources_refimage)
+        product_config['REF_IMAGE']['npsfcatsources'] = str(refimage_psf_catalog_nrows)
         product_config['REF_IMAGE']['input_images_csv_name_for_download'] = input_images_csv_name_for_download
 
 

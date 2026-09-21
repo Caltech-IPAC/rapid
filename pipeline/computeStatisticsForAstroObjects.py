@@ -9,7 +9,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
-import database.modules.utils.roman_tessellation_db as sqlite
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "computeStatisticsForAstroObjects.py"
@@ -41,16 +40,6 @@ proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
 print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
-
-
-# Ensure sqlite database that defines the Roman sky tessellation is available.
-
-roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
-
-if roman_tessellation_dbname is None:
-
-    print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
-    exit(64)
 
 
 # JOBPROCDATE of RAPID science-pipeline jobs that already ran.
@@ -103,9 +92,6 @@ product_config_filename_base = config_input['JOB_PARAMS']['product_config_filena
 
 output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_filename'])
 output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_finder_filename'])
-
-naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
-naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
@@ -175,9 +161,7 @@ def run_single_core_job(fields,index_thread):
         raise
 
 
-    # Open database connections.
-
-    roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
+    # Open database connection.
 
     dbh = db.RAPIDDB()
 
@@ -245,7 +229,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -253,7 +236,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         for record in records:
@@ -286,7 +268,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -294,7 +275,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         aids_list = []
@@ -330,7 +310,6 @@ def run_single_core_job(fields,index_thread):
                 fh.flush()
                 fh.close()
                 dbh.close()
-                roman_tessellation_db.close()
                 raise
 
             if dbh.exit_code >= 64:
@@ -338,7 +317,6 @@ def run_single_core_job(fields,index_thread):
                 fh.flush()
                 fh.close()
                 dbh.close()
-                roman_tessellation_db.close()
                 raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
             for record in records:
@@ -355,51 +333,19 @@ def run_single_core_job(fields,index_thread):
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # For the current field, query for adjacent fields, and then query
-        # the L2Files table for all records that overlap these fields to get
-        # <obs_date> and <sca>, in order to generate a finite list of Sources child
+        # For the current field, query the L2Files table for all records that contain
+        # the current field in the L2Files.overlapfields column (meaning that any
+        # returned science image overlaps the current field), in order to get
+        # <obs_date> and <sca> for generation of a finite list of Sources child
         # database table to join (and avoid joining with the Sources parent table).
 
-
-        # This method does not get all overlapping fields for corners that stick out
-        # on a science image with field associated with ra0,dec0 of science image.
-        '''
-        neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
-
-        sciimg_overlapping_rtids = [str(field)]
-        for neighboring_rtid in neighboring_rtids:
-            sciimg_overlapping_rtids.append(neighboring_rtid)
-        '''
-
-        # This method may be slower, but it does a better job of finding all overlapping fields.
-        # Distortion is ignored as a simplification.
-
-        neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
-
-        single_ring_rtids = [field]
-        double_ring_rtids_dict = {}
-        double_ring_rtids_dict[field] = 1
-        for neighboring_rtid in neighboring_rtids:
-            single_ring_rtids.append(neighboring_rtid)
-            double_ring_rtids_dict[neighboring_rtid] = 1
-            nested_neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(neighboring_rtid)
-            for nested_neighboring_rtid in nested_neighboring_rtids:
-                double_ring_rtids_dict[nested_neighboring_rtid] = 1
-
-        double_ring_rtids = list(double_ring_rtids_dict.keys())
-
         fh.write(f"field = {field}\n")
-        fh.write(f"neighboring_rtids = {neighboring_rtids}\n")
-        fh.write(f"single_ring_rtids = {single_ring_rtids}\n")
-        fh.write(f"double_ring_rtids = {double_ring_rtids}\n")
 
-        double_ring_rtids_comma_separated_string = ",".join(str(r) for r in double_ring_rtids)
-
-        query = f"SELECT crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,cast(dateobs as date),sca " +\
+        query = f"SELECT cast(dateobs as date),sca " +\
                 f"FROM l2files " +\
                 f"WHERE vbest > 0 " +\
                 f"AND status > 0 " +\
-                f"AND field IN ({double_ring_rtids_comma_separated_string});"
+                f"AND overlapfields @> ARRAY[cast({field} as integer)];"
 
         sql_queries = [query]
 
@@ -411,7 +357,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -419,49 +364,17 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         sources_child_tables_to_check_existence_dict = {}
 
-        x_list = [*range(0,naxis1,500)]
-        y_list = [*range(0,naxis2,500)]
-        x_list.append(naxis1 - 1)
-        y_list.append(naxis2 - 1)
-
         for record in records:
 
-            crval1 = record[0]
-            crval2 = record[1]
-            crpix1 = record[2]
-            crpix2 = record[3]
-            cd11 = record[4]
-            cd12 = record[5]
-            cd21 = record[6]
-            cd22 = record[7]
+            obs_date = str(record[0]).replace("-","")
+            sca = str(record[1])
 
-            rtid_dict = {}
-
-            for y in y_list:
-                for x in x_list:
-
-                    # x,y,crpix1,crpix2 must be zero-based.
-                    ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd11,cd12,cd21,cd22)
-
-                    roman_tessellation_db.get_rtid(ra,dec)
-                    rtid = roman_tessellation_db.rtid
-
-                    if rtid:
-                        rtid_dict[rtid] = 1
-
-            sciimg_overlapping_rtids = list(rtid_dict.keys())
-            intersection_result = list(set(single_ring_rtids) & set(sciimg_overlapping_rtids))
-
-            if intersection_result:
-                obs_date = str(record[8]).replace("-","")
-                sca = str(record[9])
-                sources_tablename = f"sources_{obs_date}_{sca}"
-                sources_child_tables_to_check_existence_dict[sources_tablename] = 1
+            sources_tablename = f"sources_{obs_date}_{sca}"
+            sources_child_tables_to_check_existence_dict[sources_tablename] = 1
 
         sources_child_tables_to_check_existence = list(sources_child_tables_to_check_existence_dict.keys())
 
@@ -487,7 +400,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -495,7 +407,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         sources_child_tables = []
@@ -557,7 +468,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -565,7 +475,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         fh.write(f"Total records from UNION ALL query = {len(all_records)}\n")
@@ -608,7 +517,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -616,7 +524,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         not_best_aids = [str(record[0]) for record in all_aids_records if record[0] not in best_aids]
@@ -639,7 +546,6 @@ def run_single_core_job(fields,index_thread):
                 fh.flush()
                 fh.close()
                 dbh.close()
-                roman_tessellation_db.close()
                 raise
 
             if dbh.exit_code >= 64:
@@ -647,7 +553,6 @@ def run_single_core_job(fields,index_thread):
                 fh.flush()
                 fh.close()
                 dbh.close()
-                roman_tessellation_db.close()
                 raise RuntimeError(f"*** Error from dbh.execute_sql_queries (sql_queries={sql_queries}); quitting...")
 
 
@@ -696,7 +601,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -705,7 +609,6 @@ def run_single_core_job(fields,index_thread):
             fh.flush()
             fh.close()
             dbh.close()
-            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
                                f"into specified database table ({astroobjectsmeta_tablename}); quitting...")
 
@@ -740,9 +643,7 @@ def run_single_core_job(fields,index_thread):
                 fh.flush()
 
 
-    # Close database connections.
-
-    roman_tessellation_db.close()
+    # Close database connection.
 
     dbh.close()
 

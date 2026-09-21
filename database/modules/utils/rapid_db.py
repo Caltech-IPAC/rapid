@@ -1215,91 +1215,84 @@ class RAPIDDB:
     def get_overlapping_l2files(self,
                                 rid,
                                 fid,
-                                mjdobs,
+                                field,
                                 field_ra0,field_dec0,
-                                field_ra1,field_dec1,
-                                field_ra2,field_dec2,
-                                field_ra3,field_dec3,
-                                field_ra4,field_dec4,
-                                radius_of_initial_cone_search=None):
+                                mjdobs):
 
         '''
         Query database for RIDs and distances from tile center for all science images that
         overlap the sky tile associated with the input science image and its filter
-        that were acquired before the input science image.
-        Returned list is ordered by distance from tile center.
+        in the mjdobs range of interest (STARTREFIMMJDOBS and ENDREFIMMJDOBS override the default range).
+
+        Returned list is ordered by mjdobs and distance from tile center.
         '''
 
         self.exit_code = 0
 
 
-        # Radius of initial cone search, in angular degrees.
-
-        if radius_of_initial_cone_search is None:
-            radius_of_initial_cone_search = 0.18
-
-
         # Define query template.
-
-        # TODO: This query will not actually give all overlapping images (however small a chance this may be).
-        #       For example, an image corner may overlap on a sky tile that does not cover a tile center or corner.
 
         query_template =\
             "select a.rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field, " +\
             "q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
             "from L2FileMeta a, L2Files b " +\
             "where a.rid = b.rid " +\
-            "and a.fid = TEMPLATE_FID " +\
-            "and status > 0 " +\
-            "and vbest > 0 " +\
-            "and q3c_radial_query(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision), cast(TEMPLATE_RADIUS as double precision)) " +\
-            "and (q3c_poly_query(ra1, dec1, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                                 "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                                 "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                                 "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra2, dec2, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra3, dec3, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra4, dec4, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra0, dec0, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)])) " +\
-            "and a.mjdobs >= TEMPLATE_STARTMJDOBS " +\
-            "and a.mjdobs < TEMPLATE_ENDMJDOBS "
+            "and b.fid = TEMPLATE_FID " +\
+            "and b.status > 0 " +\
+            "and b.vbest > 0 " +\
+            "and b.overlapfields @> ARRAY[cast(TEMPLATE_FIELD as integer)] " +\
+            "and b.mjdobs >= TEMPLATE_STARTMJDOBS " +\
+            "and b.mjdobs < TEMPLATE_ENDMJDOBS "
+
+        # An rid of 'null' means no science image is to be excluded (the reference-image
+        # pipeline queries for a sky tile, rather than for a specific input science image).
 
         if rid == 'null':
-            query_template += "and a.rid is not TEMPLATE_RID " +\
-                              "order by a.mjdobs, dist; "
+            query_template += "order by b.mjdobs, dist; "
         else:
-            query_template += "and a.rid != TEMPLATE_RID " +\
-                              "order by a.mjdobs, dist; "
+            query_template += "and b.rid != TEMPLATE_RID " +\
+                              "order by b.mjdobs, dist; "
 
 
         # Special logic for generating reference image from inputs observed within a certain observation date range.
         # If STARTREFIMMJDOBS is set, then so must ENDREFIMMJDOBS.
 
+        # Test for a non-empty value, since an env. var. that is declared but left empty
+        # (which can happen in an AWS Batch job definition) is returned as an empty string.
+
         start_refimage_mjdobs = os.getenv('STARTREFIMMJDOBS')
 
-        if start_refimage_mjdobs is not None:
+        if start_refimage_mjdobs:
 
             end_refimage_mjdobs = os.getenv('ENDREFIMMJDOBS')
 
-            if end_refimage_mjdobs is None:
+            if not end_refimage_mjdobs:
 
-                print("*** Error: Env. var. ENDREFIMMJDOBS not set; quitting...")
-                exit(64)
+                print("*** Error: Env. var. ENDREFIMMJDOBS not set; returning...")
+                self.exit_code = 64
+                return []
 
-            start_mjdobs = start_refimage_mjdobs
-            end_mjdobs = end_refimage_mjdobs
+
+            # Convert to float so that a malformed value is reported here, rather than as
+            # an obscure SQL syntax error after substitution into the query template.
+
+            try:
+                start_mjdobs = float(start_refimage_mjdobs)
+                end_mjdobs = float(end_refimage_mjdobs)
+
+            except ValueError:
+
+                print("*** Error: Env. vars. STARTREFIMMJDOBS,ENDREFIMMJDOBS = {},{} are not numbers; returning...".\
+                      format(start_refimage_mjdobs,end_refimage_mjdobs))
+                self.exit_code = 64
+                return []
+
+            if start_mjdobs >= end_mjdobs:
+
+                print("*** Error: Env. var. STARTREFIMMJDOBS ({}) is not less than ENDREFIMMJDOBS ({}); returning...".\
+                      format(start_mjdobs,end_mjdobs))
+                self.exit_code = 64
+                return []
 
         else:
             start_mjdobs = 0.0
@@ -1310,24 +1303,18 @@ class RAPIDDB:
 
         print('----> rid = {}'.format(rid))
         print('----> fid = {}'.format(fid))
-        print('----> radius_of_initial_cone_search = {}'.format(radius_of_initial_cone_search))
+        print('----> field = {}'.format(field))
+        print('----> mjdobs = {}'.format(mjdobs))
+        print('----> field_ra0,field_dec0 = {},{}'.format(field_ra0,field_dec0))
 
         rep = {"TEMPLATE_RID": str(rid)}
 
         rep["TEMPLATE_FID"] = str(fid)
         rep["TEMPLATE_STARTMJDOBS"] = str(start_mjdobs)
         rep["TEMPLATE_ENDMJDOBS"] = str(end_mjdobs)
+        rep["TEMPLATE_FIELD"] = str(field)
         rep["TEMPLATE_RA0"] = str(field_ra0)
         rep["TEMPLATE_DEC0"] = str(field_dec0)
-        rep["TEMPLATE_RA1"] = str(field_ra1)
-        rep["TEMPLATE_DEC1"] = str(field_dec1)
-        rep["TEMPLATE_RA2"] = str(field_ra2)
-        rep["TEMPLATE_DEC2"] = str(field_dec2)
-        rep["TEMPLATE_RA3"] = str(field_ra3)
-        rep["TEMPLATE_DEC3"] = str(field_dec3)
-        rep["TEMPLATE_RA4"] = str(field_ra4)
-        rep["TEMPLATE_DEC4"] = str(field_dec4)
-        rep["TEMPLATE_RADIUS"] = str(radius_of_initial_cone_search)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
@@ -1338,25 +1325,42 @@ class RAPIDDB:
 
         # Execute query.
 
+        records = []
+
         try:
             self.cur.execute(query)
 
             try:
-                records = []
-                nrecs = 0
                 for record in self.cur:
                     records.append(record)
-                    nrecs += 1
 
-                print("nrecs =",nrecs)
+            except psycopg2.ProgrammingError:
 
-            except:
+                # Raised when the query left no result set to fetch.  Any other
+                # exception raised while fetching indicates that the record list is
+                # incomplete, and is deliberately left to the outer handler below.
+
                 print("Nothing returned from database query; continuing...")
+                records = []
 
-        except (Exception, psycopg2.DatabaseError) as error:
+            print("nrecs =",len(records))
+
+        except Exception as error:
             print('*** Error from database method RAPIDDB.get_overlapping_l2files ({}); skipping...'.format(error))
+
+
+            # Clear the aborted database transaction, so that later queries on this
+            # connection are not rejected.  Guard the rollback itself, since a connection
+            # that has been lost or closed will raise again here, which would discard the
+            # exit code below and mask the error reported above.
+
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+
             self.exit_code = 67
-            return
+            return []
 
         return records
 
@@ -2425,7 +2429,6 @@ class RAPIDDB:
                            nframes,
                            mjdobsmin,
                            mjdobsmax,
-                           npixsat,
                            npixnan,
                            clmean,
                            clstddev,
@@ -2440,7 +2443,8 @@ class RAPIDDB:
                            fwhmmedpix,
                            fwhmminpix,
                            fwhmmaxpix,
-                           nsexcatsources):
+                           nsxcatsources,
+                           npucatsources):
 
         '''
         Insert or update record in RefImMeta database table.
@@ -2461,7 +2465,6 @@ class RAPIDDB:
             "cast(TEMPLATE_NFRAMES AS smallint)," +\
             "cast(TEMPLATE_MJDOBSMIN AS double precision)," +\
             "cast(TEMPLATE_MJDOBSMAX AS double precision)," +\
-            "cast(TEMPLATE_NPIXSAT AS integer)," +\
             "cast(TEMPLATE_NPIXNAN AS integer)," +\
             "cast(TEMPLATE_CLMEAN AS real)," +\
             "cast(TEMPLATE_CLSTDDEV AS real)," +\
@@ -2476,7 +2479,8 @@ class RAPIDDB:
             "cast(TEMPLATE_FWHMMEDPIX AS real)," +\
             "cast(TEMPLATE_FWHMMINPIX AS real)," +\
             "cast(TEMPLATE_FWHMMAXPIX AS real)," +\
-            "cast(TEMPLATE_NSEXCATSOURCES AS integer));"
+            "cast(TEMPLATE_NSXCATSOURCES AS integer)," +\
+            "cast(TEMPLATE_NPUCATSOURCES AS integer));"
 
 
         # Query database.
@@ -2489,7 +2493,6 @@ class RAPIDDB:
         print('----> nframes = {}'.format(nframes))
         print('----> mjdobsmin = {}'.format(mjdobsmin))
         print('----> mjdobsmax = {}'.format(mjdobsmax))
-        print('----> npixsat = {}'.format(npixsat))
         print('----> npixnan = {}'.format(npixnan))
         print('----> clmean = {}'.format(clmean))
         print('----> clstddev = {}'.format(clstddev))
@@ -2504,7 +2507,8 @@ class RAPIDDB:
         print('----> fwhmmedpix = {}'.format(fwhmmedpix))
         print('----> fwhmminpix = {}'.format(fwhmminpix))
         print('----> fwhmmaxpix = {}'.format(fwhmmaxpix))
-        print('----> nsexcatsources = {}'.format(nsexcatsources))
+        print('----> nsxcatsources = {}'.format(nsxcatsources))
+        print('----> npucatsources = {}'.format(npucatsources))
 
         rep = {"TEMPLATE_RFID": str(rfid)}
 
@@ -2515,7 +2519,6 @@ class RAPIDDB:
         rep["TEMPLATE_NFRAMES"] = str(nframes)
         rep["TEMPLATE_MJDOBSMIN"] = str(mjdobsmin)
         rep["TEMPLATE_MJDOBSMAX"] = str(mjdobsmax)
-        rep["TEMPLATE_NPIXSAT"] = str(npixsat)
         rep["TEMPLATE_NPIXNAN"] = str(npixnan)
         rep["TEMPLATE_CLMEAN"] = str(clmean)
         rep["TEMPLATE_CLSTDDEV"] = str(clstddev)
@@ -2530,7 +2533,8 @@ class RAPIDDB:
         rep["TEMPLATE_FWHMMEDPIX"] = str(fwhmmedpix)
         rep["TEMPLATE_FWHMMINPIX"] = str(fwhmminpix)
         rep["TEMPLATE_FWHMMAXPIX"] = str(fwhmmaxpix)
-        rep["TEMPLATE_NSEXCATSOURCES"] = str(nsexcatsources)
+        rep["TEMPLATE_NSXCATSOURCES"] = str(nsxcatsources)
+        rep["TEMPLATE_NPUCATSOURCES"] = str(npucatsources)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
