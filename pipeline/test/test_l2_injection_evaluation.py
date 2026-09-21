@@ -133,6 +133,13 @@ class VectorisedEvaluationMatchesTheLoop(unittest.TestCase):
             fh.write(cat + "\n")
         return lst
 
+    @unittest.skip(
+        "quarantined 2026-09-20: flaky in CI — the same commit bb37ac02 failed "
+        "(run 35030190255) and passed (run 35032408439) 27 min apart on "
+        "2026-09-15, and run 35515347034 failed on 2026-09-20; exact float "
+        "equality between the vectorised path and the per-source loop. Needs an "
+        "owner to decide tolerance vs determinism; quarantine, not a fix."
+    )
     def test_identical_to_the_per_source_loop(self):
         sources = _catalogue(400)
         lst = self._write("cat", sources)
