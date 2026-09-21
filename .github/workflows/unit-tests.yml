@@ -1,0 +1,45 @@
+# Runs the rapidpipe unit test suite on push and pull_request.
+#
+# pip install -e . --no-deps installs only the rapidpipe package under
+# test, not its runtime dependencies (numpy/astropy/astroquery from
+# requirements.txt) -- this workflow proves the package and its tests
+# import and pass on their own, and stays fast; a stage that needs those
+# runtime dependencies pulls them in when it is added.
+#
+# actions/checkout is pinned by SHA per this repo's existing convention
+# (see .github/workflows/public-safety.yml); actions/setup-python is
+# pinned the same way.
+name: unit-tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+
+      - name: set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: install rapidpipe
+        run: pip install -e . --no-deps
+
+      - name: install pytest
+        run: pip install pytest
+
+      - name: run rapidpipe unit tests
+        run: python -m pytest tests/rapidpipe -q
