@@ -76,8 +76,24 @@
 --
 -- Everything else below is the source files' SQL verbatim, so the team
 -- recognises it; only the two adjustments named above are made in place.
+--
+-- One addition beyond the source files: `CREATE EXTENSION q3c` is added
+-- here, immediately after the roles. No file under database/schema/ ever
+-- creates the Q3C extension -- buildDatabase.sh installs and creates it
+-- as its own separate step (building the extension from source, then
+-- `CREATE EXTENSION q3c;`), outside the four schema files it applies with
+-- psql -f. rapidOpsTables.sql's q3c_ang2ipix() index expressions and
+-- rapidOpsProcs.sql's functions assume it already exists, so a baseline
+-- that omits it fails partway through CREATE INDEX. `IF NOT EXISTS` so a
+-- database that already has Q3C installed a different way is unaffected.
 --------------------------------------------------------------------------------------------------------------------------
 
+
+-- ======================================================================
+-- source: (not from database/schema/ -- see the note above)
+-- ======================================================================
+
+CREATE EXTENSION IF NOT EXISTS q3c;
 
 -- ======================================================================
 -- source: database/schema/rapidOpsRoles.sql
