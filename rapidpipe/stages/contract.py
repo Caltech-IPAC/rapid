@@ -3,7 +3,13 @@
 Every stage exports a :class:`StageDeclaration` and calls :func:`run_stage`
 from its ``main(argv)``. This module implements the contract's "Invocation",
 "Exit codes" and "Settings" sections; ``rapidpipe.stages.settings`` supplies
-the TOML load and merge that "Settings" describes.
+the TOML load and merge that "Settings" describes. The manifest ``run_stage``
+publishes follows the products page's shape
+(``rapidpipe.products.manifest.Manifest``); a stage's ``body`` supplies only
+what it alone knows -- its output entries and any result sets it read -- and
+``run_stage`` wraps that into the enclosing manifest with the run, unit,
+stage and attempt identifiers from argv, an execution record it writes
+itself, and the input manifest location from ``--inputs``.
 
 This module may import ``rapidpipe.products`` and ``rapidpipe.stages.settings``,
 but never another stage module, ``rapidpipe.launch`` or ``rapidpipe.cli``.
@@ -14,13 +20,21 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import subprocess
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from rapidpipe.log import stage_log_context
-from rapidpipe.products.manifest import CompletionManifest, ManifestError
+from rapidpipe.products.manifest import (
+    Inputs,
+    Manifest,
+    ManifestError,
+    OutputEntry,
+    Unit,
+)
 from rapidpipe.stages.settings import SettingsError, canonical_hash, resolve_settings
 
 #: The stable list of stage names (stage contract, "Declaration"). A
@@ -154,7 +168,14 @@ class StageDeclaration:
 
 @dataclass
 class StageContext:
-    """What ``body(context)`` receives: parsed invocation, settings, inputs."""
+    """What ``body(context)`` receives: parsed invocation, settings, inputs.
+
+    ``input_manifest`` is the parsed and validated upstream
+    :class:`~rapidpipe.products.manifest.Manifest` this attempt reads (the
+    ``--inputs`` location's ``manifest.json``); ``body`` reads its
+    ``inputs.products`` and ``outputs`` to find what it needs, and never
+    reads a fresher copy from disk.
+    """
 
     declaration: StageDeclaration
     run_id: str
@@ -164,9 +185,33 @@ class StageContext:
     outputs_dir: Path
     settings: dict[str, Any]
     settings_hash: str
-    input_manifest: dict[str, Any]
+    input_manifest: Manifest
     dry_run: bool
     logger: logging.Logger | logging.LoggerAdapter
+
+
+@dataclass
+class StageResult:
+    """What ``body(context)`` returns: its outputs, and what it read.
+
+    ``outputs`` is the list of :class:`~rapidpipe.products.manifest.OutputEntry`
+    the stage wrote (file products, database result sets, or both).
+    ``products_read`` maps each consumed product kind to the upstream
+    instance id the stage actually used (products page, "A complete
+    manifest": ``inputs.products``) -- ``body`` selects these from
+    ``context.input_manifest``, since only the stage knows which of the
+    input manifest's declared products it read. ``result_sets_read`` names
+    the database result-set instance ids the stage read, for the stages
+    the stage contract names (``crossmatch``, ``statistics``, ``prune``);
+    transform stages leave both empty as appropriate. ``body`` assembles
+    neither ``run``/``unit``/``stage``/``attempt`` nor the execution record
+    or input-manifest reference -- ``run_stage`` supplies those from the
+    invocation it already parsed.
+    """
+
+    outputs: Sequence[OutputEntry]
+    products_read: dict[str, str] = field(default_factory=dict)
+    result_sets_read: Sequence[str] = ()
 
 
 def _build_parser(declaration: StageDeclaration) -> argparse.ArgumentParser:
@@ -186,7 +231,7 @@ def _is_s3(location: str) -> bool:
     return location.startswith("s3://")
 
 
-def _read_input_manifest(inputs: str) -> dict[str, Any]:
+def _read_input_manifest(inputs: str) -> Manifest:
     if _is_s3(inputs):
         raise UsageError(
             f"--inputs {inputs!r}: S3 input locations are not implemented "
@@ -196,14 +241,67 @@ def _read_input_manifest(inputs: str) -> dict[str, Any]:
     if not manifest_path.exists():
         raise InputRejected(f"input manifest not found: {manifest_path}")
     try:
-        return json.loads(manifest_path.read_text())
+        return Manifest.read(manifest_path)
     except json.JSONDecodeError as exc:
         raise InputRejected(f"{manifest_path}: not valid JSON: {exc}") from exc
+    except ManifestError as exc:
+        raise InputRejected(f"{manifest_path}: invalid manifest: {exc}") from exc
+
+
+def _source_revision() -> str | None:
+    """``git rev-parse HEAD`` in the current working directory, or ``None``.
+
+    ``None`` covers every way this can fail to produce a revision: git not
+    installed, cwd not a repository, or any other non-zero exit -- the
+    execution record then simply omits provenance it could not determine,
+    per the contract's "source revision, working-copy changes if any,
+    image digest when applicable".
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    revision = result.stdout.strip()
+    return revision or None
+
+
+def _write_execution_record(
+    outputs_dir: Path,
+    attempt_id: str,
+    settings_hash: str,
+) -> str:
+    """Write ``exec/<attempt>.json`` under ``outputs_dir``; return its
+    manifest-relative path.
+
+    Holds the resolved settings hash, the source revision (``None`` if
+    ``git rev-parse HEAD`` does not succeed in the current working
+    directory), and the image digest from ``RAPIDPIPE_IMAGE_DIGEST`` if
+    set, else ``None`` -- the execution record's minimal content per the
+    stage contract's "The manifest": "the source revision, working-copy
+    changes if any, image digest when applicable, database schema
+    version, and the resolved settings." Schema version and working-copy
+    changes are not recorded here: they belong to ``rapidpipe.runs``,
+    which this module must not import.
+    """
+    relative_path = f"exec/{attempt_id}.json"
+    record_path = outputs_dir / relative_path
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "settings_hash": settings_hash,
+        "source_revision": _source_revision(),
+        "image_digest": os.environ.get("RAPIDPIPE_IMAGE_DIGEST"),
+    }
+    record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return relative_path
 
 
 def run_stage(
     declaration: StageDeclaration,
-    body: Callable[[StageContext], CompletionManifest],
+    body: Callable[[StageContext], StageResult],
     argv: Sequence[str],
 ) -> int:
     """Parse argv under the one invocation form, run ``body``, return an exit code.
@@ -213,8 +311,13 @@ def run_stage(
     ``--dry-run`` validates arguments, settings and the input manifest, then
     returns 0 without calling ``body`` or writing anything (contract,
     "Invocation"). Otherwise ``body`` is called and, only after it returns a
-    manifest, that manifest is validated and published to ``--outputs``;
-    if ``body`` raises, no manifest is written.
+    :class:`StageResult`, ``run_stage`` wraps it into the enclosing
+    :class:`~rapidpipe.products.manifest.Manifest` -- run, unit and stage
+    from the declaration and argv, attempt from ``--attempt``, an
+    execution record this function writes to ``exec/<attempt>.json``, and
+    ``inputs.manifest`` set to the ``--inputs`` location -- validates it,
+    and publishes it to ``--outputs``. If ``body`` raises, no manifest is
+    written.
     """
     declaration.validate()
     # Before argv is parsed there is no run/attempt id yet; a plain logger
@@ -279,14 +382,31 @@ def run_stage(
                 context.attempt_id, int(ExitCode.SUCCESS))
             return int(ExitCode.SUCCESS)
 
-        manifest = body(context)
+        result = body(context)
 
-        if not isinstance(manifest, CompletionManifest):
+        if not isinstance(result, StageResult):
             raise StageError(
-                f"stage body returned {type(manifest).__name__}, "
-                "expected a CompletionManifest")
+                f"stage body returned {type(result).__name__}, "
+                "expected a StageResult")
 
         outputs_dir.mkdir(parents=True, exist_ok=True)
+        execution_record_ref = _write_execution_record(
+            outputs_dir, args.attempt_id, settings_hash)
+
+        manifest = Manifest(
+            run=args.run_id,
+            unit=Unit(kind=declaration.unit, id=args.unit_id),
+            stage=declaration.name,
+            attempt=args.attempt_id,
+            execution_record=execution_record_ref,
+            inputs=Inputs(
+                manifest=str(Path(args.inputs) / "manifest.json"),
+                products=dict(result.products_read),
+                result_sets=tuple(result.result_sets_read),
+            ),
+            outputs=tuple(result.outputs),
+        )
+
         manifest_path = outputs_dir / "manifest.json"
         try:
             manifest.write(manifest_path)
