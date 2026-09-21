@@ -27,7 +27,11 @@ docker build --build-arg RAPID_BRANCH=dev --no-cache --file /home/ubuntu/rapid/d
 cksum=$(tail -n 2 build.out | grep "Successfully built" | sed 's/Successfully built //')
 echo $cksum
 
-aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/y9b1s7h8
+# ECR_PUBLIC_ALIAS is account-specific; set it in the environment, never
+# committed here.
+: "${ECR_PUBLIC_ALIAS:?Set ECR_PUBLIC_ALIAS to the account public ECR alias}"
 
-docker tag $cksum public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
-docker push public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/$ECR_PUBLIC_ALIAS
+
+docker tag $cksum public.ecr.aws/$ECR_PUBLIC_ALIAS/rapid_science_pipeline:latest
+docker push public.ecr.aws/$ECR_PUBLIC_ALIAS/rapid_science_pipeline:latest

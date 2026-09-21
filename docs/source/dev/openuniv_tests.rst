@@ -111,7 +111,7 @@ for science-pipeline performance results::
        "where a.rid=b.rid and a.ppid=15 and b.pid=c.pid and b.vbest>0 and b.rfid=d.rfid ".
        "and exitcode=0 and cast(launched as date) ='".$procdate."' order by started; ";
 
-    my @op=`psql -h 35.165.53.98 -d rapidopsdb -p 5432 -U rapidporuss -c \"$q\"`;
+    my @op=`psql -h $DBSERVER -d rapidopsdb -p 5432 -U rapidporuss -c \"$q\"`;
     my $i=0;
     shift @op;
     shift @op;

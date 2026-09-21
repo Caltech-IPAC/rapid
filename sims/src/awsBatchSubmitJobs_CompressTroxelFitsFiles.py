@@ -45,14 +45,24 @@ if aws_secret_access_key is None:
 client = boto3.client('batch')
 
 
+# Account id is read from the environment, never committed.
+
+aws_account_id = os.getenv('AWS_ACCOUNT_ID')
+
+if aws_account_id is None:
+
+    print("*** Error: Env. var. AWS_ACCOUNT_ID not set; quitting...")
+    exit(64)
+
+
 # Define job definition.  Use AWS Batch Console to set this up once.
 
-job_definition = "arn:aws:batch:us-west-2:891377127831:job-definition/Fetch_and_run:3"
+job_definition = f"arn:aws:batch:us-west-2:{aws_account_id}:job-definition/Fetch_and_run:3"
 
 
 # Define job queue.  Use AWS Batch Console to set this up once.
 
-job_queue = 'arn:aws:batch:us-west-2:891377127831:job-queue/getting-started-wizard-job-queue'
+job_queue = f'arn:aws:batch:us-west-2:{aws_account_id}:job-queue/getting-started-wizard-job-queue'
 
 
 # Define job name.

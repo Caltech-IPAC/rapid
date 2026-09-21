@@ -24,7 +24,7 @@ pipeline already installed and ready to run.  It is publicly available from
 
 .. code-block::
 
-   public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+   public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
 
 It is currently approximately 8.6 GB in size, and requires sufficient disk space on the target machine.
 It can be used to ``docker-run`` a container and from within execute
@@ -34,7 +34,7 @@ and to inhibit running the automated pipeline):
 
 .. code-block::
 
-   docker run -it --entrypoint bash --name my_test -v /home/ubuntu/work/test_20241206:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+   docker run -it --entrypoint bash --name my_test -v /home/ubuntu/work/test_20241206:/work public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
 
 
 The Docker file used to generate this Docker image is

@@ -66,12 +66,12 @@ start and end observation datetimes (an observation date is distinctly different
    cd /home/ubuntu/work/test_20250404
    aws s3 cp s3://rapid-pipeline-files/roman_tessellation_nside512.db /home/ubuntu/work/test_20250404/roman_tessellation_nside512.db
 
-   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250404:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250404:/work public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
 
    export DBPORT=5432
    export DBNAME=rapidopsdb
    export DBUSER=rapidporuss
-   export DBSERVER=35.165.53.98
+   export DBSERVER=???
    export DBPASS="????"
    export AWS_DEFAULT_REGION=us-west-2
    export AWS_SECRET_ACCESS_KEY=????

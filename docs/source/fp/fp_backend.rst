@@ -53,7 +53,7 @@ Here is how to execute the forced-photometry backend inside a a RAPID-pipeline c
     #export DBNAME=fakesourcesdb
     export DBNAME=rimtimsims2db
     export DBUSER=apollo
-    export DBSERVER=35.165.53.98
+    export DBSERVER=???
     export DBPASS="???"
     export AWS_DEFAULT_REGION=us-west-2
     export AWS_ACCESS_KEY_ID=???
