@@ -239,7 +239,9 @@ def test_rd_01_physical_consumer_diffimage_refused(conn):
     fid = _first_filter_id(conn)
     ppid = _first_pipeline_id(conn)
     rfid = _make_run_refimage(conn, producer, field=991101, fid=fid,
-                              ppid=ppid, tag="rd01")
+                              ppid=ppid, tag="rd01",
+                              reference_set_id=_run_reference_set_id(
+                                  conn, producer))
 
     # The consumer's OWN diffimage cites the producer's reference by rfid.
     attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
@@ -275,7 +277,9 @@ def test_rd_03_published_product_cites_candidate_refused(conn):
     # The producer's own reference image, realizing a reference-image
     # product with a real product_key.
     rfid = _make_run_refimage(conn, producer, field=991103, fid=fid,
-                              ppid=ppid, tag="rd03-ref")
+                              ppid=ppid, tag="rd03-ref",
+                              reference_set_id=_run_reference_set_id(
+                                  conn, producer))
     ref_key, ref_payload = identity.reference_image_key(
         process_family=ppid, definition_checksum="a" * 64,
         release_digest="b" * 64, field=991103, fid=fid,
@@ -539,6 +543,40 @@ def _make_foreign_in_flight_submission(conn, foreign_run_name,
     return submission_id, checksum
 
 
+def _retire_foreign_in_flight_submission(conn, submission_id):
+    """Undo `_make_foreign_in_flight_submission`'s one `attempts` row.
+
+    **NOT A ROLLBACK — THIS FIXTURE COMMITS** (`conn` fixture's own
+    docstring: "several of these tests need their writes VISIBLE to a
+    second connection", so nothing here wraps in a transaction that would
+    roll back on teardown). A `submitted`-state attempt is exactly what
+    the real predicate this suite tests (main.py's in-flight-foreign-
+    submissions query, `lifecycle_state IN ('submitted', 'started',
+    'application_closed')`) counts as in flight — correctly, since that
+    query has no notion of "this was only a fixture" — so a foreign
+    submission left in that state after ITS OWN test finishes is real,
+    visible in-flight state for every later test sharing this session's
+    database, exactly as a real leaked submission would be.
+
+    DELETED, not moved to a terminal `lifecycle_state`: the terminal-after-
+    start CHECK constraint (011, amended by 013/014/075) requires a long
+    list of started/ended columns this fixture never populated and has no
+    reason to fabricate — a synthetic row pretending to be a real
+    completed attempt is a worse fixture than one that simply stops
+    existing once the test that needed it in flight is done with it.
+    Nothing else in this run's fixtures reads a deleted `attempts`/
+    `submissions` row (each is scoped to its own foreign run, never
+    joined by a later test), so deleting rather than terminalizing costs
+    nothing.
+    """
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM attempts WHERE submission_id = %s",
+                   [submission_id])
+        cur.execute("DELETE FROM submissions WHERE submission_id = %s",
+                   [submission_id])
+    conn.commit()
+
+
 def _envelope(objects, submissions, unreadable=None):
     return {"version": 1, "objects": objects,
            "evidence": {"submissions": submissions,
@@ -562,9 +600,12 @@ def test_rd_05_inflight_manifest_references_refused(conn):
         "manifest_checksum": checksum,
         "references_run": True}])
 
-    with pytest.raises(InvariantViolation) as caught:
-        _dry_run_delete(conn, this_run, envelope)
-    assert "manifest" in str(caught.value).lower()
+    try:
+        with pytest.raises(InvariantViolation) as caught:
+            _dry_run_delete(conn, this_run, envelope)
+        assert "manifest" in str(caught.value).lower()
+    finally:
+        _retire_foreign_in_flight_submission(conn, submission_id)
 
 
 def test_rd_06_inflight_evidence_absent_refused(conn):
@@ -574,11 +615,14 @@ def test_rd_06_inflight_evidence_absent_refused(conn):
     require_run_delete_schema(conn)
     this_run, _ = _declare_scratch_run(conn, "rd06")
     foreign_run, _ = _declare_scratch_run(conn, "foreign-rd06")
-    _make_foreign_in_flight_submission(conn, foreign_run)
+    submission_id, _ = _make_foreign_in_flight_submission(conn, foreign_run)
 
-    with pytest.raises(InvariantViolation) as caught:
-        _dry_run_delete(conn, this_run, [])  # legacy bare array, no evidence
-    assert "evidence" in str(caught.value).lower()
+    try:
+        with pytest.raises(InvariantViolation) as caught:
+            _dry_run_delete(conn, this_run, [])  # legacy bare array
+        assert "evidence" in str(caught.value).lower()
+    finally:
+        _retire_foreign_in_flight_submission(conn, submission_id)
 
 
 def test_rd_07_inflight_unreadable_refused(conn):
@@ -600,9 +644,12 @@ def test_rd_07_inflight_unreadable_refused(conn):
         unreadable=["s3://roman-rapid-products/submissions/%s/manifest.json"
                    % foreign_run])
 
-    with pytest.raises(InvariantViolation) as caught:
-        _dry_run_delete(conn, this_run, envelope)
-    assert "unreadable" in str(caught.value).lower()
+    try:
+        with pytest.raises(InvariantViolation) as caught:
+            _dry_run_delete(conn, this_run, envelope)
+        assert "unreadable" in str(caught.value).lower()
+    finally:
+        _retire_foreign_in_flight_submission(conn, submission_id)
 
 
 def test_rd_08_inflight_checksum_mismatch_refused(conn):
@@ -625,9 +672,12 @@ def test_rd_08_inflight_checksum_mismatch_refused(conn):
     assert envelope["evidence"]["submissions"][0]["manifest_checksum"] != \
         real_checksum
 
-    with pytest.raises(InvariantViolation) as caught:
-        _dry_run_delete(conn, this_run, envelope)
-    assert "checksum" in str(caught.value).lower()
+    try:
+        with pytest.raises(InvariantViolation) as caught:
+            _dry_run_delete(conn, this_run, envelope)
+        assert "checksum" in str(caught.value).lower()
+    finally:
+        _retire_foreign_in_flight_submission(conn, submission_id)
 
 
 def test_rd_09_inflight_evidence_clear_projects_not_refuses(conn):
@@ -647,9 +697,12 @@ def test_rd_09_inflight_evidence_clear_projects_not_refuses(conn):
         "manifest_checksum": checksum,
         "references_run": False}])
 
-    result = _dry_run_delete(conn, this_run, envelope)
-    assert result["dry_run"] is True
-    assert "refusal" not in result or not result.get("refusal")
+    try:
+        result = _dry_run_delete(conn, this_run, envelope)
+        assert result["dry_run"] is True
+        assert "refusal" not in result or not result.get("refusal")
+    finally:
+        _retire_foreign_in_flight_submission(conn, submission_id)
 
 
 # ---------------------------------------------------------------------------
@@ -804,21 +857,26 @@ def _make_association_family_row(conn, prototype, table_name, field,
                        % (plain_name, table_name))
     conn.commit()
     if prototype == "sources":
+        # `sources` carries ~28 NOT NULL columns (id, cfit, dec, field,
+        # flags, ra, sca, ... — the full per-source photometry solution);
+        # `_insert_filling_required` (fixture.py) reads them from the
+        # catalog and fills type-appropriate placeholders, the same way
+        # every other wide-table fixture row in this suite is built,
+        # rather than hand-listing a column set that breaks the next time
+        # the schema gains a column.
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT coalesce(max(sid), 0) + 1 FROM sources")
             new_sid = cur.fetchone()[0]
-            cur.execute(
-                "INSERT INTO %s (sid, pid, expid, mjdobs)"
-                " VALUES (%%s, %%s, %%s, %%s)" % table_name,
-                [new_sid, pid_producing_run_pid, 1, 58849.0])
+        fixture._insert_filling_required(
+            conn, table_name, "sid",
+            {"sid": new_sid, "pid": pid_producing_run_pid, "expid": 1,
+             "mjdobs": 58849.0})
         conn.commit()
         return new_sid
     else:  # merges
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO %s (aid, sid) VALUES (%%s, %%s)" % table_name,
-                [1, sid])
+        fixture._insert_filling_required(
+            conn, table_name, "aid", {"sid": sid})
         conn.commit()
         return None
 
