@@ -96,9 +96,9 @@ def _register_simple_instance(
     return instance_id
 
 
-def _full_chain_to_current_candidate(conn, run_id, instance_id=None, logical_key=None):
+def _full_chain_to_current_candidate(conn, run_id, instance_id=None, logical_key=None, unit_id=None):
     """Run a unit to a registered, selected-attempt candidate instance."""
-    stage, unit_id = _make_unit(conn, run_id)
+    stage, unit_id = _make_unit(conn, run_id, unit_id=unit_id or new_ulid())
     attempt_id = _succeed_and_select(conn, run_id, stage, unit_id)
     instance_id = _register_simple_instance(
         conn, run_id, stage, attempt_id, instance_id=instance_id, logical_key=logical_key)
