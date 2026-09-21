@@ -4,8 +4,8 @@
 # PostgreSQL 18 with Q3C, matching the smdc branch's contract-tests.yml
 # (.github/workflows/contract-tests.yml there) and the fleet it tests
 # against: the deployed database is PostgreSQL 18 with the Q3C
-# spherical-indexing extension, and 000-baseline.sql assumes Q3C is
-# available. Testing against a PostgreSQL version nobody deploys would
+# spherical-indexing extension, and 20260921-01-baseline.sql assumes Q3C
+# is available. Testing against a PostgreSQL version nobody deploys would
 # make every result here a statement about a database nobody runs. Q3C is
 # installed into the stock postgres:18 service container from the same
 # PGDG repository that image already has configured, rather than pulled
@@ -119,9 +119,12 @@ jobs:
           set -euo pipefail
           drift_dir=$(mktemp -d)
           cp database/migrations/*.sql "$drift_dir/"
-          # Modify the baseline (000, always applied by this point) in the
-          # copy only — the committed file is untouched.
-          printf '\n-- drift check: this line must never be applied\n' >> "$drift_dir/000-baseline.sql"
+          # Modify the earliest-dated migration (always applied by this
+          # point) in the copy only — the committed file is untouched. Found
+          # by filename sort rather than hardcoded, so this step needs no
+          # edit when the baseline is renamed or superseded.
+          earliest=$(find "$drift_dir" -maxdepth 1 -name '*.sql' | sort | head -1)
+          printf '\n-- drift check: this line must never be applied\n' >> "$earliest"
           if database/apply-migrations.sh "$drift_dir"; then
             echo "!! applier accepted a modified already-applied migration instead of refusing it" >&2
             exit 1
