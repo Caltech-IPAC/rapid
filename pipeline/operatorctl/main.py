@@ -1913,7 +1913,50 @@ def _assert_scratch_bucket(bucket, where):
             (bucket, where, _SCRATCH_BUCKET))
 
 
-def _enumerate_run_object_versions(s3_client, run_name):
+def _enumerate_run_owned_batch_ids(conn, run_name):
+    """`{run_name} | {run_name}-<n> for every attempt-batch this run has}`.
+
+    **THE OWNED-ID SET, NOT A PREFIX MATCH.** A scratch run's own object keys
+    carry the run name as the THIRD path segment (see
+    `_enumerate_run_object_versions`'s own docstring), and a split-batch
+    attempt or submission is named `<run>-<n>` and belongs to the SAME run
+    (`142-run-delete-reachability.sql`'s own header, "RUN ATTRIBUTION is by
+    run_key ... A split-batch attempt or submission is named <run>-<n> and
+    belongs to the run"; `pipeline/operatorctl/run.py`'s
+    `next_submission_seq` mints exactly that `<name>-<n>` suffix, read by
+    KEY rather than by prefix for the identical reason this function reads
+    it that way too — a prefix read would also match a genuinely different
+    run whose name this one's name happens to prefix).
+
+    So candidate enumeration must match the run's OWNED set of ids exactly
+    — the run name itself, plus every attempt-batch suffix it has actually
+    minted — never a bare `segments[2] == run_name` alone (which misses the
+    run's own split-batch objects) and never a LIKE/prefix match (which
+    would also catch an unrelated run whose name this one prefixes, the
+    exact hazard 131's own header names and 142 replaced).
+
+    Read from `submissions.run_id`, keyed by `run_key` (`runs.run_id`) --
+    the same column `next_submission_seq` reads to mint the next suffix,
+    and the same key 142's own in-flight query uses for attribution. A run
+    with no keyed submissions at all (pre-121, or a run that never
+    submitted through this path) returns just `{run_name}`, which is the
+    correct answer when there is no ordinal to read.
+    """
+    owned = {run_name}
+    with conn.cursor() as cur:
+        cur.execute("SELECT run_id FROM runs WHERE name = %s", [run_name])
+        row = cur.fetchone()
+    if row is None:
+        return owned
+    run_key = row[0]
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT run_id FROM submissions WHERE run_key = %s", [run_key])
+        owned.update(r[0] for r in cur.fetchall() if r[0])
+    return owned
+
+
+def _enumerate_run_object_versions(s3_client, run_name, owned_batch_ids):
     """Every object VERSION under `_SCRATCH_BUCKET` that belongs to
     `run_name`, as the `{"bucket", "key", "version_id", "size", "modified"}`
     dicts `derived.delete_run`'s `p_objects` takes.
@@ -1931,6 +1974,20 @@ def _enumerate_run_object_versions(s3_client, run_name):
     living three segments deep with two unconstrained segments ahead of
     it, not a shortcut taken for convenience.
 
+    **THE THIRD SEGMENT IS MATCHED AGAINST `owned_batch_ids` — the run's
+    OWNED SET, not `run_name` alone.** A split-batch attempt writes its own
+    objects under `<run>-<n>` as the third segment (the same id
+    `_enumerate_run_owned_batch_ids` reads from `submissions.run_id`), and
+    those bytes belong to `run_name` exactly as much as the ones written
+    under the bare run name do — `rd-17`'s own-in-flight fence and this
+    enumeration would silently miss a split-batch attempt's objects if the
+    match stayed `segments[2] == run_name`. The match is still EXACT
+    equality against one member of a finite, database-derived set, never a
+    prefix or LIKE: `owned_batch_ids` is `{run_name}` at minimum, so a
+    caller that cannot resolve the run (or that intentionally wants the old
+    exact-name-only behaviour for a run outside `runs`) gets the same
+    single-name match as before.
+
     Delete markers are skipped: `derived.delete_run`'s gate is keyed
     `(plan_id, bucket, object_key, version_id)` against real content
     versions, and a marker is not a version of the object's bytes for GC's
@@ -1944,7 +2001,7 @@ def _enumerate_run_object_versions(s3_client, run_name):
         for version in page.get("Versions", []):
             key = version["Key"]
             segments = key.split("/")
-            if len(segments) < 3 or segments[2] != run_name:
+            if len(segments) < 3 or segments[2] not in owned_batch_ids:
                 continue
             candidates.append({
                 "bucket": _SCRATCH_BUCKET,
@@ -1955,6 +2012,81 @@ def _enumerate_run_object_versions(s3_client, run_name):
                             if version.get("LastModified") else None,
             })
     return candidates
+
+
+def _run_scoped_still_referenced(execute, run_name, resolved_ref_ids, *,
+                                 manifest_reader=None):
+    """The `still_referenced`-shaped callback for `run delete`'s OWN
+    Executor call, scoped to whether a FOREIGN in-flight submission's
+    manifest now names one of `run_name`'s own objects.
+
+    Returns a callable `item -> bool`, the exact shape
+    `Executor._execute_item`/`_resolve_in_flight` take. Built on
+    `pipeline.operatorctl.gc.references_run_check` — this function adds
+    only the "ask again right now, for this one item" wrapper around it;
+    `references_run_check` and `reference_sql.per_submission_evidence`
+    carry the actual evidence logic and are unchanged by this wrapper's
+    existence.
+
+    Deliberately RE-QUERIES the in-flight foreign submission set and
+    RE-READS every manifest on each call, exactly as `still_referenced_check`
+    re-reads the global reference set on each call: this runs INSIDE the
+    fence, after `derived.delete_run` already validated the snapshot it was
+    given, and the whole point of a final re-verification is that it does
+    not trust an answer computed before the fence was acquired.
+    """
+    from pipeline.operatorctl import gc as _gc
+
+    def is_referenced(item):
+        run_key = _current_run_key(execute, run_name)
+        in_flight = _in_flight_foreign_submissions_execute(execute, run_key)
+        if not in_flight:
+            return False
+        evidence, unreadable = _gc.references_run_check(
+            execute, run_name, resolved_ref_ids, in_flight,
+            manifest_reader=manifest_reader)
+        if unreadable:
+            # FAIL CLOSED: an unreadable manifest is treated as a positive
+            # reference hit, never as "clear" — the same fail-closed
+            # direction `reference_sql.ManifestUnreadable` takes for the
+            # general collector. `derived.delete_run` already refused
+            # before this point on the SAME condition (142's header), so
+            # reaching this branch at all would mean a manifest went
+            # unreadable AFTER that check passed — still handled the same
+            # way rather than assumed impossible.
+            return True
+        # `references_run_check` reports PER-SUBMISSION attribution
+        # (142's own wire contract, matching the SQL side's per-submission
+        # refusal messages), not per-object — so any covered submission
+        # with `references_run=True` means SOME resolved reference in its
+        # manifest intersected this run's `resolved_ref_ids` set, and every
+        # remaining item of THIS run's plan is treated as still referenced
+        # rather than guessing which specific key that manifest named.
+        return any(entry["references_run"] for entry in evidence)
+    return is_referenced
+
+
+def _current_run_key(execute, run_name):
+    rows = execute("SELECT run_id FROM runs WHERE name = %s", [run_name])
+    return rows[0][0] if rows else None
+
+
+def _in_flight_foreign_submissions_execute(execute, run_key):
+    """`_in_flight_foreign_submissions`, over an `execute(sql, params)`
+    callable rather than a `conn` — the shape `still_referenced`'s own
+    caller (`Executor`) already uses for everything it asks the database,
+    so this callback needs no cursor of its own.
+    """
+    rows = execute(
+        "SELECT DISTINCT s.submission_id"
+        "  FROM submissions s"
+        "  JOIN attempts a ON a.submission_id = s.submission_id"
+        " WHERE a.lifecycle_state IN"
+        "         ('submitted', 'started', 'application_closed')"
+        "   AND (a.run_key IS DISTINCT FROM %s)"
+        "   AND (s.run_key IS DISTINCT FROM %s)",
+        [run_key, run_key])
+    return [{"submission_id": r[0]} for r in rows or ()]
 
 
 def _cmd_run_delete(conn, args, out):
@@ -1997,11 +2129,34 @@ def _cmd_run_delete(conn, args, out):
     advance) and succeeds having changed nothing -- the SAME "call it
     again under a fresh key and it either resumes or is a safe no-op"
     contract 131's header describes for a fully resolved plan.
+
+    STEP 2 ALSO BUILDS 142'S CALLER-EVIDENCE ENVELOPE, before the function
+    call. The SQL side computes every reachability question itself except
+    one — whether an in-flight attempt of ANOTHER run names this run's
+    objects in a manifest only S3 can answer (142's own header, case
+    iii-b) — and 142 REFUSES (RA021) rather than proceed without it when
+    such a submission exists. So this command enumerates those foreign
+    in-flight submissions, reads their manifests through
+    `pipeline.operatorctl.gc.references_run_check` (the run-scoped,
+    additive counterpart to `still_referenced_check`), and passes the
+    result as `p_objects.evidence` — the legacy bare array is never sent
+    once any foreign in-flight submission exists, because 131's own
+    call sites (unmodified) still work: an empty in-flight set means no
+    evidence is needed at all, and the array is sent bare exactly as
+    before.
+
+    An UNREADABLE manifest is surfaced as a clean refusal HERE, before
+    `derived.delete_run` is even called — caught below and rendered by
+    `contract.render_manifest_unreadable_refusal`, rather than letting
+    142's own RA021 text (which also fires on this case) be the first thing
+    an operator sees, or a raw traceback if this command's own read of the
+    manifest failed in a way the SQL side never reaches.
     """
     from pipeline.operatorctl import actions as _actions
     from pipeline.gc.execute import Executor
     from pipeline.gc.plans import GCPlanRepository
-    from pipeline.operatorctl.gc import s3_manifest_reader, still_referenced_check
+    from pipeline.gc.reference_sql import ManifestUnreadable
+    from pipeline.operatorctl.gc import references_run_check, s3_manifest_reader
 
     import boto3
     s3_client = boto3.Session(
@@ -2009,13 +2164,65 @@ def _cmd_run_delete(conn, args, out):
 
     # STEP 1 — ENUMERATE, ALWAYS, EVEN FOR THE DRY RUN. See the docstring
     # above and `_enumerate_run_object_versions`'s own for why this cannot
-    # be scoped by an S3 `Prefix=`.
-    objects = _enumerate_run_object_versions(s3_client, args.name)
+    # be scoped by an S3 `Prefix=`. Matched against the run's OWNED batch
+    # id set (the run name and every `<run>-<n>` split-batch attempt it has
+    # actually submitted), not the bare run name alone.
+    owned_batch_ids = _enumerate_run_owned_batch_ids(conn, args.name)
+    objects = _enumerate_run_object_versions(s3_client, args.name,
+                                             owned_batch_ids)
     for obj in objects:
         _assert_scratch_bucket(obj["bucket"], "enumerated object")
 
     key = args.idempotency_key or new_idempotency_key("run-delete")
     scope = "runs:%s" % args.name
+
+    # THE EVIDENCE ENVELOPE, BUILT BEFORE THE FUNCTION CALL. Foreign
+    # in-flight submissions (another run's attempt in `submitted`,
+    # `started` or `application_closed`) are enumerated by the SAME
+    # predicate 142's own SQL uses — `run_key IS DISTINCT FROM` this run's
+    # id — so the coverage this command supplies matches exactly what the
+    # SQL side will check it against.
+    resolved_ref_ids = {
+        "s3://%s/%s" % (obj["bucket"], obj["key"]) for obj in objects}
+    p_objects = objects
+    executor_execute = _executor(conn)
+    run_key = _current_run_key(executor_execute, args.name)
+    in_flight_foreign = _in_flight_foreign_submissions_execute(
+        executor_execute, run_key)
+
+    if in_flight_foreign:
+        try:
+            evidence, unreadable = references_run_check(
+                executor_execute, args.name, resolved_ref_ids,
+                in_flight_foreign, manifest_reader=s3_manifest_reader())
+            if unreadable:
+                # WRAPPED IN THE SAME try/except AS THE READ ABOVE, not
+                # raised separately: both this and a reader exception are
+                # the identical fact from `_cmd_run_delete`'s point of
+                # view — "the evidence could not be assembled" — and both
+                # must reach the SAME clean rendering below rather than
+                # one going through `render_manifest_unreadable_refusal`
+                # and the other propagating as a bare traceback.
+                raise ManifestUnreadable(
+                    "run %r cannot be deleted: %d in-flight foreign "
+                    "submission manifest(s) could not be read (%s); an "
+                    "unreadable manifest fails closed"
+                    % (args.name, len(unreadable),
+                       ", ".join(map(str, unreadable))))
+        except ManifestUnreadable as exc:
+            # CAUGHT HERE, BEFORE `derived.delete_run` IS EVER CALLED — a
+            # clean refusal rendered by `contract.py`, analogous to how
+            # `classify()`/`OperatorError` renders a SQL-side RA021 for the
+            # same command, rather than a raw traceback or the SQL side's
+            # own text (which also fires on this condition, but only after
+            # a call this command can avoid making at all).
+            from pipeline.operatorctl.contract import (
+                ManifestEvidenceRefused, render_manifest_unreadable_refusal)
+            print(render_manifest_unreadable_refusal(
+                "run_delete", scope, args.reason, key, exc), file=out)
+            return ManifestEvidenceRefused.exit_code
+        p_objects = {"version": 1, "objects": objects,
+                    "evidence": {"submissions": evidence, "unreadable": []}}
 
     # STEP 2 — THE FUNCTION CALL, UNDER `submission_role()` -- THE SAME
     # IDENTITY DEFECT `register_run_audited` and `submit_run` close,
@@ -2037,7 +2244,7 @@ def _cmd_run_delete(conn, args, out):
     from pipeline.operatorctl.session import submission_role
     with submission_role(conn):
         result = _actions.delete_run(
-            conn, key, args.name, args.reason, objects,
+            conn, key, args.name, args.reason, p_objects,
             max_items=args.max_items, dry_run=not args.apply,
             policy_citation=args.policy_citation)
 
@@ -2066,8 +2273,22 @@ def _cmd_run_delete(conn, args, out):
         executor = Executor(conn, _S3Versions(s3_client),
                             actor=_session_user(conn))
         repo = GCPlanRepository(conn)
-        still_referenced = still_referenced_check(
-            _executor(conn), manifest_reader=s3_manifest_reader())
+        # THE RUN-SCOPED CALLBACK, NOT THE GENERAL ONE — this call site
+        # only. `still_referenced_check` (the general collector's own final
+        # re-verification, still used UNMODIFIED by `_cmd_gc_execute`
+        # above) answers "is this object referenced by anything right
+        # now", by re-reading the global reference surfaces. A scratch
+        # run's own delete needs the NARROWER question 142's evidence
+        # envelope exists to answer: "does a foreign in-flight submission's
+        # manifest reference one of THIS run's objects" — re-checked here,
+        # AGAIN, inside the fence, for the identical reason `still_referenced
+        # _check` re-checks inside the fence rather than trusting the
+        # snapshot `derived.delete_run` validated moments earlier: the gap
+        # between that call and this per-item loop is exactly the window a
+        # registrar or a new foreign submission could act in.
+        still_referenced = _run_scoped_still_referenced(
+            _executor(conn), args.name, resolved_ref_ids,
+            manifest_reader=s3_manifest_reader())
 
         items = repo.unresolved_items(plan_id)
         if args.max_items is not None:
@@ -2088,10 +2309,15 @@ def _cmd_run_delete(conn, args, out):
         # A fresh key: this is its own auditable mutation-API call, exactly
         # as 131's header requires for a resumed call. Widened for the same
         # reason step 2's call is -- this is the identical function.
+        # THE SAME `p_objects` SHAPE AS STEP 2 — the envelope when one was
+        # built, the bare array otherwise. 142's in-flight check runs on
+        # EVERY call, not only the one that opens the plan, so a resumed
+        # call omitting the evidence it already had would manufacture a
+        # fresh RA021 on its own tombstoning pass.
         with submission_role(conn):
             result = _actions.delete_run(
                 conn, new_idempotency_key("run-delete"), args.name,
-                args.reason, objects, max_items=args.max_items,
+                args.reason, p_objects, max_items=args.max_items,
                 dry_run=False, policy_citation=args.policy_citation)
         conn.commit()
 

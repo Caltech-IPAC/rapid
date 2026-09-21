@@ -261,6 +261,25 @@ def render_plan(action, target_scope, reason, idempotency_key, result,
     lines.append("  audit id        : %s" % result.get("audit_id"))
     if result.get("scale_advisory"):
         lines.append("  ADVISORY        : %s" % result["scale_advisory"])
+    # THE REFUSAL, RENDERED — `compute_plan` (pipeline/operatorctl/gc.py)
+    # has produced `result["refusal"]` since the horizon/allowlist gates
+    # were added, and this renderer silently dropped it: an operator saw
+    # `rows affected: 0` with no explanation of why nothing would be
+    # deleted. Any action's result carrying a `refusal` key is rendered the
+    # same way, not just `gc_compute_plan`'s.
+    if result.get("refusal"):
+        lines.append("")
+        lines.append("  REFUSED: %s" % result["refusal"])
+    # THE OBJECTLESS NO-OP, RENDERED EXPLICITLY — 142's own result for a run
+    # with zero candidate objects and no open plan carries `no_op: true`
+    # and `no_op_reason`; without this, that call printed only
+    # `rows affected: 0` and an audit id, identical in appearance to any
+    # other zero-effect call and giving the operator no reason why.
+    if result.get("no_op"):
+        lines.append("")
+        lines.append("  NO-OP: %s" % (
+            result.get("no_op_reason")
+            or "no candidate objects and no unresolved plan; nothing to do"))
     if not apply_requested and not result.get("replayed"):
         lines.append("")
         if idempotency_key is not None:
@@ -271,4 +290,51 @@ def render_plan(action, target_scope, reason, idempotency_key, result,
             lines.append("  Nothing was changed. Re-run with --apply to "
                          "perform this action; a second apply is refused "
                          "by the plan's own state, not by a key.")
+    return "\n".join(lines)
+
+
+class ManifestEvidenceRefused(OperatorError):
+    """A Python-raised evidence-envelope refusal, rendered cleanly.
+
+    Covers `pipeline.gc.reference_sql.ManifestUnreadable` (and the
+    `PlanRefused` family it derives from) when it propagates out of the
+    evidence-envelope construction in `pipeline/operatorctl/main.py`'s
+    `_cmd_run_delete` — BEFORE `derived.delete_run` is even called. Without
+    this, that exception would surface as a raw Python traceback, unlike
+    every SQL-side refusal `classify()` already renders through
+    `OperatorError`. `error_category` and `exit_code` follow the same shape
+    every other refusal in this module uses, so a caller (a script parsing
+    exit codes, or a future JSON-output mode) sees ONE family of refusal
+    regardless of which side — SQL or the caller-evidence step in front of
+    it — raised it.
+    """
+
+    error_category = "manifest_unreadable"
+    exit_code = 68
+
+
+def render_manifest_unreadable_refusal(action, target_scope, reason,
+                                       idempotency_key, exc):
+    """The clean rendering for a `ManifestUnreadable`-family refusal.
+
+    Mirrors `render_plan`'s header shape (action, scope, reason, key) so
+    the two read as the same kind of thing in an operator's terminal, but
+    carries no `result` dict — there is none: the refusal fired before any
+    call that would have produced one. Called from `_cmd_run_delete` when
+    `pipeline.gc.reference_sql.ManifestUnreadable` (or a sibling
+    `PlanRefused`) propagates out of the evidence-envelope construction,
+    analogous to how `classify()`/`OperatorError` renders a SQL-side
+    refusal (RA021 etc.) for the same command.
+    """
+    lines = ["REFUSED: %s" % action]
+    lines.append("  target scope    : %s" % target_scope)
+    lines.append("  reason          : %s" % reason)
+    if idempotency_key is not None:
+        lines.append("  idempotency key : %s" % idempotency_key)
+    lines.append("")
+    lines.append("  REFUSED: %s" % str(exc).strip())
+    lines.append("")
+    lines.append("  Nothing was changed: the evidence needed to call "
+                 "derived.delete_run safely could not be assembled, so "
+                 "the function was never invoked.")
     return "\n".join(lines)

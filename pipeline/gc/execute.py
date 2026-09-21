@@ -183,9 +183,13 @@ class Executor:
     def _execute_item(self, item, still_referenced, commit):
         # RECOVERY FIRST. An `in-flight` item is one whose intent was
         # committed and whose outcome was not: the S3 call may or may not have
-        # run. Resolve it by RE-CHECKING S3, never by guessing.
+        # run. Resolve it by RE-CHECKING S3, never by guessing — and by
+        # RE-CHECKING REFERENCES too: the crash window is exactly as long as
+        # the normal critical section, and an object that became referenced
+        # during it is not made safe by the crash. `still_referenced` is
+        # threaded through here for that reason.
         if item.status == "in-flight":
-            return self._resolve_in_flight(item, commit)
+            return self._resolve_in_flight(item, still_referenced, commit)
 
         # THE FENCE, ACQUIRED BEFORE ANYTHING ELSE AND FAILING CLOSED.
         if not self._acquire_fence(item):
@@ -257,14 +261,43 @@ class Executor:
             self._release_fence(item)
             commit()
 
-    def _resolve_in_flight(self, item, commit):
-        """Resolve a crashed item by asking S3 what actually happened."""
+    def _resolve_in_flight(self, item, still_referenced, commit):
+        """Resolve a crashed item by asking S3 what actually happened.
+
+        **THE REFERENCE CHECK APPLIES HERE TOO.** The crash window this
+        recovers from sits INSIDE the same critical section the normal
+        branch's `still_referenced` guards (line ~202): the intent was
+        committed, then the process died before the S3 call (or before its
+        outcome was recorded), and a registrar could have committed a new
+        reference in that same window exactly as it could in the window the
+        normal branch covers. Re-checking S3 alone answers "did the delete
+        happen", not "would deleting now be safe" — those are different
+        questions, and the shipped version only ever asked the first one.
+        So when the object is still present at the recorded version (the
+        delete did NOT happen), `still_referenced` is consulted before
+        retrying the delete, with the identical "skip, record, don't crash
+        the run" semantics the normal branch uses for a positive hit —
+        `still_referenced is None` (no checker supplied) skips this the same
+        way the normal branch does.
+        """
         current = self._s3.head_version(item.bucket, item.object_key)
         if current == item.version_id:
             # The delete did not happen. Left as `pending` would be cleaner,
             # but the trigger forbids moving backwards from in-flight through
             # a status the vocabulary does not define, so it is retried here
-            # and its outcome recorded normally.
+            # and its outcome recorded normally — but only after re-checking
+            # references, for the reason above.
+            if still_referenced is not None and still_referenced(item):
+                outcome = DeleteOutcome(
+                    item.item_id, "skipped-fenced",
+                    "resolved from in-flight by re-checking S3: the object "
+                    "is still present at the planned version, but became "
+                    "referenced during the crash window; re-verified and "
+                    "skipped",
+                    acted_version=current)
+                self._record(item.item_id, outcome)
+                commit()
+                return outcome
             deleted = self._s3.delete_version(item.bucket, item.object_key,
                                               item.version_id)
             outcome = DeleteOutcome(

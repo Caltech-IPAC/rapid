@@ -162,6 +162,131 @@ def _uris_in(node):
     return found
 
 
+#: `submissions.manifest_checksum` alongside the columns `ACTIVE_MANIFESTS_SQL`
+#: already selects, keyed by `submission_id` rather than filtered by the
+#: active-manifest predicate — 142's evidence envelope needs the checksum of
+#: EACH NAMED in-flight foreign submission, active or not, because the SQL
+#: side's own coverage/checksum checks (`142-run-delete-reachability.sql`)
+#: compare against exactly this column for exactly the submissions it
+#: enumerates itself. A NEW query rather than a widening of
+#: `ACTIVE_MANIFESTS_SQL`: that query's SELECT list and WHERE clause are the
+#: general collector's own reference surface and are not touched here.
+SUBMISSION_MANIFEST_ROW_SQL = (
+    "SELECT submission_id, manifest_uri, manifest_checksum"
+    "  FROM submissions WHERE submission_id = ANY(%s)")
+
+
+def per_submission_evidence(execute, run_name, in_flight_submissions,
+                            manifest_reader):
+    """Per-submission manifest evidence for 142's caller-evidence envelope.
+
+    **ADDITIVE ONLY — `collect_references` and `expand_manifest_bodies` are
+    untouched.** Those two answer "what is the global reference set", folding
+    every manifest's contents into one set with no memory of which submission
+    contributed what. 142's wire contract needs the OPPOSITE shape: one
+    verdict PER in-flight foreign submission, because the SQL side reports
+    per-submission coverage, checksum-mismatch and unreadability failures by
+    `submission_id` (`142-run-delete-reachability.sql`'s `v_uncovered`,
+    `v_badsum`, `v_unreadable`). Flattening to a global set here would throw
+    away exactly the attribution the SQL side's refusal messages depend on.
+
+    `run_name` is the run being considered for deletion. It is carried
+    through only for error messages here — this function reports the RAW
+    resolved references it found in each manifest; deciding whether those
+    intersect `run_name`'s own objects is `references_run_check`'s job
+    (`pipeline/operatorctl/gc.py`), kept separate so this function stays a
+    pure "read the manifests, per submission" step with no knowledge of what
+    "this run's objects" means.
+
+    `in_flight_submissions` is the caller's own query result — an iterable of
+    rows/dicts, each carrying at least `submission_id`; `manifest_uri` and
+    `manifest_checksum` are read from `submissions` here directly (via
+    `SUBMISSION_MANIFEST_ROW_SQL`) rather than trusted from the caller, so a
+    caller that only knows submission ids (e.g. from the SQL side's own
+    enumeration) is enough — the checksum this function reports is always the
+    database's own column, which is what makes it able to pass 142's
+    checksum-mismatch check at all.
+
+    `manifest_reader(uri)` is the same reader shape `expand_manifest_bodies`
+    takes: returns the parsed body or raises.
+
+    Returns `{submission_id: {"manifest_uri", "manifest_checksum",
+    "resolved_refs", "readable", "error"}}`. **UNREADABLE MANIFESTS ARE
+    COLLECTED, NOT RAISED IMMEDIATELY** — `readable=False` and `error` carries
+    the failure, and every submission is attempted before this function
+    returns, so a caller can report every unreadable manifest in one refusal
+    rather than stopping at the first.
+    """
+    submission_ids = [
+        _submission_id_of(row) for row in in_flight_submissions]
+    submission_ids = [sid for sid in submission_ids if sid is not None]
+
+    rows = execute(SUBMISSION_MANIFEST_ROW_SQL, [submission_ids]) \
+        if submission_ids else []
+
+    envelope = {}
+    for row in rows or ():
+        submission_id, manifest_uri, manifest_checksum = _row_values(row, 3)
+        entry = {
+            "manifest_uri": manifest_uri,
+            "manifest_checksum": manifest_checksum,
+            "resolved_refs": set(),
+            "readable": True,
+            "error": None,
+        }
+        if not manifest_uri:
+            entry["readable"] = False
+            entry["error"] = (
+                "submission %s has no manifest_uri; the run named %r "
+                "cannot be cleared against it without evidence"
+                % (submission_id, run_name))
+        else:
+            try:
+                body = manifest_reader(manifest_uri)
+            except Exception as exc:                  # noqa: BLE001
+                entry["readable"] = False
+                entry["error"] = (
+                    "manifest %s could not be read (%s)"
+                    % (manifest_uri, exc))
+            else:
+                if body is None:
+                    entry["readable"] = False
+                    entry["error"] = (
+                        "manifest %s expanded to nothing" % (manifest_uri,))
+                else:
+                    entry["resolved_refs"] = _uris_in(body)
+        envelope[submission_id] = entry
+
+    # A submission the caller named but this query did not find (deleted,
+    # or a submission_id that never existed) is reported the same as an
+    # unreadable manifest — FAIL CLOSED, not silently dropped, because a
+    # caller-named submission that vanishes from the envelope entirely
+    # would look, to 142's coverage check, like evidence that was never
+    # supplied for it at all.
+    for submission_id in submission_ids:
+        if submission_id not in envelope:
+            envelope[submission_id] = {
+                "manifest_uri": None,
+                "manifest_checksum": None,
+                "resolved_refs": set(),
+                "readable": False,
+                "error": (
+                    "submission %s named as in-flight could not be found "
+                    "in submissions; reported unreadable rather than "
+                    "silently dropped" % (submission_id,)),
+            }
+
+    return envelope
+
+
+def _submission_id_of(row):
+    if isinstance(row, dict):
+        return row.get("submission_id")
+    if isinstance(row, (list, tuple)):
+        return row[0] if row else None
+    return getattr(row, "submission_id", None)
+
+
 def surface_present(execute, relation):
     """Is this reference surface deployed? Probed, never caught."""
     rows = execute("SELECT to_regclass(%s) IS NOT NULL", ["public." + relation])

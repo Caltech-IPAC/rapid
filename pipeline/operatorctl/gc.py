@@ -69,6 +69,77 @@ def still_referenced_check(execute, manifest_reader=None):
     return is_referenced
 
 
+def references_run_check(execute, run_name, resolved_ref_ids,
+                          in_flight_submissions, *, manifest_reader=None):
+    """Build 142's caller-evidence envelope for ONE run's own deletion.
+
+    **SCOPED TO ONE RUN, ADDITIVE BESIDE `still_referenced_check`.** That
+    function answers the GENERAL collector's question — "is this object
+    still referenced by anything, right now" — by re-reading the global
+    reference set inside the fence. This function answers 142's DIFFERENT
+    question — "do any of OTHER runs' in-flight submissions reference THIS
+    run's objects" — which the general collector never asks and
+    `still_referenced_check` is not shaped to answer: 142's SQL side
+    computes reachability from the database directly for everything except
+    the in-flight-manifest case (iii-b in the migration's own header),
+    where the manifest lives in S3 and only the caller can read it. Neither
+    `still_referenced_check` nor `collect_references`/
+    `expand_manifest_bodies` is modified to add this — this is a second,
+    parallel function reading `pipeline.gc.reference_sql
+    .per_submission_evidence`, the new per-submission-attribution reader.
+
+    `resolved_ref_ids` is the set of URIs (or reference-ids) that identify
+    THIS run's own candidate objects — what a foreign manifest's resolved
+    references are checked against to decide `references_run`.
+
+    Returns `(evidence, unreadable)`:
+
+      * `evidence` is 142's wire shape for `p_objects.evidence.submissions`:
+        a list of `{"submission_id", "manifest_uri", "manifest_checksum",
+        "references_run"}` dicts, one per in-flight foreign submission the
+        caller named — including the unreadable ones, so the caller can
+        decide whether to still send them (142 refuses on any `unreadable`
+        entry regardless).
+      * `unreadable` is the list of manifest URIs (or a synthesized
+        description, for a submission with no manifest_uri at all) that
+        could not be read — 142's `evidence.unreadable` array. Non-empty
+        `unreadable` means the caller should surface a refusal BEFORE even
+        calling `derived.delete_run`, so the operator sees a clean message
+        rather than the SQL side's own RA021 text — `contract.py` renders
+        this via the `ManifestUnreadable`-family exception the caller
+        raises with it.
+
+    `in_flight_submissions` — the rows naming which OTHER runs' submissions
+    are in flight — is NOT queried here: that enumeration is 142's own SQL
+    predicate (`submissions`/`attempts` joined on `run_key`), so the CALLER
+    (`pipeline/operatorctl/main.py`'s `_cmd_run_delete`) queries it directly
+    and passes the rows in, keeping this function ignorant of that query's
+    exact shape the same way `per_submission_evidence` is.
+    """
+    from pipeline.gc import reference_sql
+
+    reader = manifest_reader or s3_manifest_reader()
+    per_submission = reference_sql.per_submission_evidence(
+        execute, run_name, in_flight_submissions, reader)
+
+    evidence = []
+    unreadable = []
+    for submission_id, entry in per_submission.items():
+        if not entry["readable"]:
+            unreadable.append(entry["manifest_uri"] or entry["error"])
+            references_run = False
+        else:
+            references_run = bool(
+                entry["resolved_refs"] & set(resolved_ref_ids))
+        evidence.append({
+            "submission_id": submission_id,
+            "manifest_uri": entry["manifest_uri"],
+            "manifest_checksum": entry["manifest_checksum"],
+            "references_run": references_run,
+        })
+    return evidence, unreadable
+
+
 def compute_plan(conn, execute, *, inventory_source, inventory_id,
                  inventory_taken_at, declared_buckets, declared_prefixes,
                  horizons, max_deletions, freshness_seconds, reason,
