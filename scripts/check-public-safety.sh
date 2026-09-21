@@ -30,15 +30,22 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # ECR alias this repository used to hard-code. Assembled from fragments so
 # this tracked file does not trip its own check.
 DB_HOST="35""\.165\.53\.98"
-ECR_ALIAS="y9b1s7h8"
+ECR_ALIAS="y9b1""s7h8"
 
 # ---------------------------------------------------------------------------
 # Allowlist: one entry per line, "path<TAB>allowed-match-prefix".
 # A hit is allowed only if its file matches exactly AND the matched string
 # starts with the listed prefix. Anything new blocks the check.
+#
+# The two fake-source injection IDs below are example synthetic-source IDs
+# from a comment in generateInjectionCatalogForField.py, not AWS account
+# numbers; this file's own reference to them, two lines down, is likewise
+# allowlisted so its documentation does not trip the check.
 ALLOWLIST="$(cat <<'EOF'
 modules/fake_src/generateInjectionCatalogForField.py	526133100000
 modules/fake_src/generateInjectionCatalogForField.py	526133100001
+scripts/check-public-safety.sh	526133100000
+scripts/check-public-safety.sh	526133100001
 c/src/bkgest/readme.txt	/Users/laher
 docs/source/analyses/count_fields_imaged/count_fields_imaged.rst	/Users/laher
 scripts/check-public-safety.sh	/Users/laher
