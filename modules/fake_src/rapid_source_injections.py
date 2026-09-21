@@ -56,10 +56,10 @@ def detect_sources_in_image(image_data, detection_nsigma=10, npixels=8, bkg_box_
     image_data_bkgsub = image_data - bkg.background
 
     # Detect sources
-    threshold = detect_threshold(image_data_bkgsub, nsigma=detection_nsigma)
-    segm = detect_sources(image_data_bkgsub, threshold, npixels=npixels)
-    segm_deblend = deblend_sources(image_data_bkgsub, segm, npixels=npixels,
-                                  nlevels=segm_nlevels, contrast=segm_contrast)
+    threshold = detect_threshold(image_data_bkgsub, n_sigma=detection_nsigma)
+    segm = detect_sources(image_data_bkgsub, threshold, n_pixels=npixels)
+    segm_deblend = deblend_sources(image_data_bkgsub, segm, n_pixels=npixels,
+                                  n_levels=segm_nlevels, contrast=segm_contrast)
 
     # Get source catalog
     source_cat = SourceCatalog(image_data_bkgsub, segm_deblend)
@@ -91,6 +91,7 @@ def generate_injection_positions_fluxes(source_table, image_size, zeropoint, mag
         Number of sources to inject
     xcolname, ycolname, sizecolname : str
         Column names in the source table for x, y positions and size (e.g., semimajor axis)
+
 
     Returns:
     --------
