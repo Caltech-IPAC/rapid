@@ -7,6 +7,10 @@ Repository for RAPID (***R***oman ***A***lerts ***P***romptly from ***I***mage *
 
 This repository is public and portable. Account identifiers, bucket names and hostnames are injected at deploy time and are never committed here. Bulk data artifacts (product listings, large generated files) are referenced, with the command to reproduce them, not committed. The design authority for this repository's boundaries and stage interfaces is the [specification](https://roman-rapid.readthedocs.io/en/latest/system/specification.html).
 
+### Package
+
+The distribution built from this repository is `rapid-pipeline`; its import package is `rapidpipe`. `rapidpipe stage <name>` runs one stage against a declared unit of work, input manifest and output location. The stage contract that `rapidpipe` implements is documented at [the contract page](https://roman-rapid.readthedocs.io/en/latest/system/stage-contract.html).
+
 ## Documentation
 
 Install instructions and documentation are available on [ReadTheDocs](https://caltech-ipac-rapid.readthedocs.io/en/latest/)
