@@ -1,0 +1,34 @@
+# Runs scripts/check-public-safety.sh against every push and pull request,
+# so an account identifier, an account-tied bucket name or a personal path
+# cannot reach this public repository undetected (specification,
+# "Repositories"). The same script backs .githooks/pre-push locally; this
+# workflow is the check that still runs when a contributor has not
+# installed the hook.
+#
+# actions/checkout is pinned by SHA, following the convention this repo's
+# other workflow already uses (see .github/workflows/contract-tests.yml).
+name: public-safety
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          fetch-depth: 0
+
+      - name: run public-safety scan
+        run: scripts/check-public-safety.sh
