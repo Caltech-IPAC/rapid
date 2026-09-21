@@ -50,7 +50,7 @@ There are multiple provisions for indexing on sky position:
   There are 3,145,728 level-9 indices.
 
 
-The L2Files database table has the ``overlapfields`` int[] column for storing lists of field numbers that a given
+The L2Files database table has the ``overlapfields`` int[] column for a storing list of field numbers that a given
 Roman SCA image, with its unique orientation on the sky, for fields that it overlaps.  The algorithm that computes
 the overlapping fields omits fields with less than 25 pixels of overlap.
 
