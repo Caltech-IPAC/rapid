@@ -112,6 +112,22 @@ jobs:
         run: |
           database/apply-migrations.sh --status
 
+      - name: set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: install rapidpipe, psycopg2-binary and pytest
+        run: |
+          pip install -e . --no-deps
+          pip install psycopg2-binary pytest
+
+      - name: run rapidpipe.runs.repository tests against this database
+        env:
+          PGDATABASE: rapid
+        run: |
+          python -m pytest tests/rapidpipe_db -q
+
       - name: drift check — a modified already-applied file must be refused
         env:
           PGDATABASE: rapid
