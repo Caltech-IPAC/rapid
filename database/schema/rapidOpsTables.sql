@@ -186,6 +186,9 @@ CREATE TABLE l2files (
     pafpa real,                                          -- FITS-header keyword: PA_FPA
     zptmag real,                                         -- FITS-header keyword: ZPTMAG
     skymean real,                                        -- FITS-header keyword: SKY-MEAN
+    limmag real,                                         -- Computed 5-sigma point-source limiting magnitude [AB mag];
+                                                         -- NULL when it could not be computed (e.g., no PSF for the
+                                                         -- filter and SCA).  See modules/utils/rapid_data_analysis.py
     created timestamp without time zone                  -- Timestamp of database record INSERT or last UPDATE
         DEFAULT now() NOT NULL,
     overlapfields integer[] NOT NULL DEFAULT '{}'::integer[],
