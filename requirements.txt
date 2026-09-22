@@ -11,3 +11,7 @@ astroquery>=0.4.7
 # is the wheel-distributed build, matching what the db-migrations and
 # unit-tests CI workflows already install by hand.
 psycopg2-binary>=2.9
+# rapidpipe.science.spatial computes the level-6/level-9 HEALPix indexes
+# register writes at registration time. Wheels exist for manylinux and
+# macOS arm64, so no compiler is needed in CI or on a developer laptop.
+healpy>=1.17

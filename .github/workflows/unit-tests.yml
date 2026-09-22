@@ -19,6 +19,12 @@
 # admit a delivered l2 image, so this job's dependency set grows with it
 # rather than widening --no-deps.
 #
+# healpy is installed the same way: rapidpipe.science.spatial (imported
+# by rapidpipe.db.l2files, which rapidpipe.stages.register imports at
+# module scope) computes HEALPix indexes with it, so collecting
+# tests/rapidpipe -- not only running the database-backed spatial tests
+# -- needs it importable.
+#
 # actions/checkout is pinned by SHA per this repo's existing convention
 # (see .github/workflows/public-safety.yml); actions/setup-python is
 # pinned the same way.
@@ -51,8 +57,8 @@ jobs:
       - name: install rapidpipe
         run: pip install -e . --no-deps
 
-      - name: install pytest, psycopg2-binary, numpy and astropy
-        run: pip install pytest psycopg2-binary numpy astropy
+      - name: install pytest, psycopg2-binary, numpy, astropy and healpy
+        run: pip install pytest psycopg2-binary numpy astropy healpy
 
       - name: run rapidpipe unit tests
         run: python -m pytest tests/rapidpipe -q
