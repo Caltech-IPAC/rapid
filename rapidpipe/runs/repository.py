@@ -64,6 +64,10 @@ class AttemptNotFound(RunModelError):
     """No attempt exists with the given id."""
 
 
+class AttemptAlreadyResolved(RunModelError):
+    """record_scheduler_job was called on an attempt with a disposition."""
+
+
 class RunDeletingOrDeleted(RunModelError):
     """The run is in state 'deleting' or 'deleted'.
 
@@ -341,13 +345,18 @@ def allocate_attempt(
 def record_attempt_result(
     conn: psycopg2.extensions.connection,
     attempt_id: str,
-    exit_code: int,
+    exit_code: int | None,
     disposition: str,
     output_location: str,
     execution_record: dict[str, Any],
     scheduler_job_id: str | None,
 ) -> None:
     """Record an attempt's outcome and its execution record.
+
+    ``exit_code`` is ``None`` for a ``killed`` attempt the launcher never
+    saw a container exit code for (``attempts.exit_code`` is nullable for
+    exactly this case; see ``rapidpipe.launch.batch.reconcile``, "no exit
+    code" branch).
 
     ``disposition`` is one of the runs page's five values: 'succeeded',
     'failed', 'transient', 'killed', 'lost' -- "null while queued or
@@ -447,6 +456,45 @@ def record_attempt_result(
             )
         # disposition == 'succeeded': the unit stays 'running' until
         # select_attempt is called; success alone does not complete it.
+
+
+# ======================================================================
+# record_scheduler_job
+# ======================================================================
+
+def record_scheduler_job(
+    conn: psycopg2.extensions.connection,
+    attempt_id: str,
+    scheduler_job_id: str,
+) -> None:
+    """Record the scheduler (Batch) job id an attempt was submitted as.
+
+    Called by ``rapidpipe.launch.batch.submit_unit`` right after
+    ``submit_job`` returns, so the attempt row carries its job id before
+    ``reconcile`` ever needs to look it up. Refuses if the attempt
+    already has a disposition: a completed attempt's scheduler job id is
+    part of its recorded outcome, not something a later submission call
+    should overwrite.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT disposition FROM attempts WHERE id = %s FOR UPDATE",
+            (attempt_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise AttemptNotFound(f"attempt {attempt_id!r} does not exist")
+        (disposition,) = row
+        if disposition is not None:
+            raise AttemptAlreadyResolved(
+                f"attempt {attempt_id!r} already has disposition "
+                f"{disposition!r}; refusing to record a scheduler job id "
+                "for a completed attempt")
+
+        cur.execute(
+            "UPDATE attempts SET scheduler_job_id = %s WHERE id = %s",
+            (scheduler_job_id, attempt_id),
+        )
 
 
 # ======================================================================
