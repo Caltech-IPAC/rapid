@@ -23,6 +23,11 @@ Data units: the L2 data are in DN while ZPTMAG is the zeropoint for DN/s.
 `modules.utils.rapid_data_analysis` reads BUNIT and EXPTIME and does that
 conversion itself, so nothing here scales the pixels.
 
+Only current rows are measured: `vbest > 0 and status > 0`, the same
+conditions `get_best_psf` applies to the PSFs table.  A superseded
+version or a row flagged bad is never read by the pipeline, so measuring
+it would spend an image download on a value nothing consults.
+
 Idempotent and resumable: the default scope is rows still NULL, batches
 are keyset-paginated on `rid` and committed one at a time, and
 `--recompute` re-measures every row in scope.  `--rid-min/--rid-max`
@@ -263,12 +268,17 @@ def scope_clause(args):
 
     """The WHERE fragment for the rows in scope.
 
+    Restricted to `vbest > 0 and status > 0`, the same pair of conditions
+    `get_best_psf` applies to the PSFs table: a superseded or bad row is
+    not one the pipeline will ever read, so measuring it would spend an
+    image download on a value nothing consults.
+
     Clause order fixes parameter order for every caller: `rid > %s` first
-    (the keyset cursor), then the parameterless NULL filter, then the
+    (the keyset cursor), then the parameterless filters, then the
     optional bounds.
     """
 
-    clauses = ["rid > %s"]
+    clauses = ["rid > %s", "vbest > 0", "status > 0"]
 
     if not args.recompute:
         clauses.append("limmag is null")
@@ -473,8 +483,8 @@ def main(argv=None):
             return rc
 
         total = count_in_scope(cur, args)
-        print(f">> {total} row(s) in scope "
-              f"({'all rows' if args.recompute else 'rows still NULL'})")
+        print(f">> {total} row(s) in scope (vbest > 0 and status > 0"
+              f"{'' if args.recompute else ', limmag still NULL'})")
 
         if total == 0:
             print(">> nothing to do")
@@ -494,10 +504,12 @@ def main(argv=None):
             dbh.vacuum_analyze_table("l2files")
 
         if rc == 0:
-            cur.execute("select count(*) from l2files where limmag is null;")
+            cur.execute("select count(*) from l2files "
+                        "where limmag is null and vbest > 0 and status > 0;")
             remaining = cur.fetchone()[0]
             print(f">> {n_written} row(s) written, {n_null} row(s) left NULL "
-                  f"this run; {remaining} row(s) in the table are still NULL")
+                  f"this run; {remaining} current row(s) (vbest > 0 and "
+                  f"status > 0) are still NULL")
             if n_null:
                 print(">> rows left NULL stay in scope; re-run once their "
                       "PSFs are registered")
