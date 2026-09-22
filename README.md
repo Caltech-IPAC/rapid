@@ -13,6 +13,10 @@ The distribution built from this repository is `rapid-pipeline`; its import pack
 
 `rapidpipe.stages.admit` is the first stage: it reads a delivery manifest naming one delivered l2 image (a FITS file staged outside the pipeline, not yet a registered product), verifies the delivered bytes and FITS checksums, reads the header and WCS the products page's l2-image field list needs, copies the file into the attempt's output location, and publishes a manifest with a fresh product instance. `register`, built next, reads that manifest's registration block to write the `l2files`/`l2filemeta` rows without opening the FITS file itself.
 
+### Container
+
+[`containers/rapid-pipeline`](containers/rapid-pipeline) holds the recipe that builds `rapidpipe` into a runnable image over a base environment supplying its dependencies. Which base image that is and where the built image is published are decided and owned outside this repository, in `rapid_systems`. See [`containers/README.md`](containers/README.md) for how to build the recipe locally.
+
 ## Documentation
 
 Install instructions and documentation are available on [ReadTheDocs](https://caltech-ipac-rapid.readthedocs.io/en/latest/)

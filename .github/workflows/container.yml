@@ -1,0 +1,62 @@
+# Proves containers/rapid-pipeline/build.sh and its Containerfile on a
+# public runner. The real base image (rapid_systems/containers/rapid-base,
+# published to a private registry) is not reachable here and this
+# workflow holds no credentials to reach it, so this job builds against a
+# public stand-in base (python:3.12-slim) with --install-requirements,
+# installing requirements.txt into it at build time -- an option the
+# Containerfile documents as never appropriate for a release build, where
+# the base environment is already locked and offline-built to satisfy
+# requirements.txt. This proves the recipe's mechanics (the COPY/pip
+# install/import-gate/entrypoint chain) and that the import gate actually
+# fails a build that is missing a dependency; it proves nothing about the
+# production science environment, which only rapid_systems can build.
+#
+# psycopg2-binary and numpy/astropy install from wheels on this stand-in
+# base without difficulty. healpy is not in requirements.txt yet (a
+# concurrent pull request adds it for the register stage); import-gate.py
+# only checks for healpy when requirements.txt names it, so this workflow
+# does not need to install it by hand and will pick it up automatically
+# once that pull request lands.
+#
+# actions/checkout is pinned by SHA, matching this repository's existing
+# convention (see .github/workflows/public-safety.yml).
+name: container
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          fetch-depth: 0
+
+      - name: check build.sh syntax
+        run: bash -n containers/rapid-pipeline/build.sh
+
+      - name: build rapid-pipeline:ci against a stand-in base
+        run: |
+          containers/rapid-pipeline/build.sh HEAD \
+            --base python:3.12-slim \
+            --install-requirements \
+            --allow-dirty \
+            --tag rapid-pipeline:ci \
+            --python /usr/local/bin/python
+
+      - name: smoke test -- --version
+        run: docker run --rm rapid-pipeline:ci --version
+
+      - name: smoke test -- stage admit --help
+        run: docker run --rm rapid-pipeline:ci stage admit --help
