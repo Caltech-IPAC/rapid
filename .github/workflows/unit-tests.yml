@@ -13,6 +13,12 @@
 # widening --no-deps, matching the module the tests import and the
 # install db-migrations.yml already does.
 #
+# numpy and astropy are also installed by hand, for the same reason:
+# rapidpipe.stages.admit reads FITS headers and builds a WCS through
+# astropy (and its tests build a FITS fixture with astropy/numpy) to
+# admit a delivered l2 image, so this job's dependency set grows with it
+# rather than widening --no-deps.
+#
 # actions/checkout is pinned by SHA per this repo's existing convention
 # (see .github/workflows/public-safety.yml); actions/setup-python is
 # pinned the same way.
@@ -45,8 +51,8 @@ jobs:
       - name: install rapidpipe
         run: pip install -e . --no-deps
 
-      - name: install pytest and psycopg2-binary
-        run: pip install pytest psycopg2-binary
+      - name: install pytest, psycopg2-binary, numpy and astropy
+        run: pip install pytest psycopg2-binary numpy astropy
 
       - name: run rapidpipe unit tests
         run: python -m pytest tests/rapidpipe -q

@@ -1,0 +1,37 @@
+# Default settings for the `admit` stage.
+#
+# This directory lives at the package top (`rapidpipe/settings/`), a
+# sibling of `rapidpipe/stages/`, rather than under `rapidpipe/stages/`
+# itself: `rapidpipe/stages/settings.py` is a module (the TOML load and
+# merge machinery every stage shares), and a `rapidpipe/stages/settings/`
+# directory sitting next to it would shadow that module name confusingly.
+# Each stage's `settings_schema_path` points here instead.
+#
+# [header] names the FITS header keyword that supplies each admit-time
+# field. WCS keywords (CRVAL, CRPIX, CD, CTYPE, CUNIT, the SIP A/B order
+# and coefficient keywords, NAXIS1/2) are standard and are read directly
+# by the stage; they are not configurable here.
+
+[header]
+sca = "SCA-NUM"
+dateobs = "DATE-OBS"
+mjdobs = "MJD-OBS"
+exptime = "EXPTIME"
+filter = "FILTER"
+ra_targ = "RA_TARG"
+dec_targ = "DEC_TARG"
+pa_obsy = "PA_OBSY"
+pa_fpa = "PA_FPA"
+zptmag = "ZPTMAG"
+skymean = "SKY-MEAN"
+equinox = "EQUINOX"
+
+[verify]
+# Whether a missing DATASUM/CHECKSUM keyword pair is InputRejected (true)
+# or merely recorded as status = 0 (false).
+require_fits_checksums = true
+
+[copy]
+# Subdirectory under the attempt's output location that copied members
+# are written beneath.
+subdirectory = "l2"
