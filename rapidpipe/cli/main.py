@@ -35,6 +35,8 @@ from typing import Any, Sequence
 from rapidpipe import __version__
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
 from rapidpipe.db.connection import connect as _default_connect
+from rapidpipe.launch.batch import DependencyIncomplete, LaunchError, MissingEnvironmentVariable
+from rapidpipe.launch import batch as launch_batch
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
 from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
@@ -43,6 +45,30 @@ from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
 #: yet implemented. Each exits 64 if invoked, and is listed in --help as
 #: "not yet implemented".
 NOT_YET_IMPLEMENTED = ("promote", "delete")
+
+#: Recognised as network-shaped, the same rule
+#: ``rapidpipe.stages.contract._map_storage_error`` uses: matched by class
+#: name suffix, not ``isinstance``, so a test's stand-in exception (or a
+#: real ``botocore.exceptions`` one) without this module importing
+#: botocore is treated identically. A Batch error of this shape, or any
+#: ``ClientError``-shaped exception, exits 75 -- retryable, since the CLI
+#: invocation itself can simply be retried.
+_BATCH_ERROR_NAMES = (
+    "ClientError",
+    "EndpointConnectionError",
+    "ConnectionError",
+    "ConnectTimeoutError",
+    "ReadTimeoutError",
+    "ThrottlingException",
+    "RequestTimeout",
+    "RequestTimeoutException",
+    "BotoCoreError",
+)
+
+
+def _is_batch_error(exc: BaseException) -> bool:
+    class_name = type(exc).__name__
+    return any(class_name.endswith(name) for name in _BATCH_ERROR_NAMES)
 
 #: Module-level indirection so tests can monkeypatch
 #: ``rapidpipe.cli.main.connect`` without reaching into
@@ -108,6 +134,25 @@ def _build_parser() -> argparse.ArgumentParser:
     local_parser.add_argument("--outputs-root", required=True)
     local_parser.add_argument("--settings", default=None)
     local_parser.add_argument("--python", default=sys.executable)
+
+    submit_parser = run_subparsers.add_parser(
+        "submit", help="Submit one stage attempt to Batch.")
+    submit_parser.add_argument("run_id")
+    submit_parser.add_argument("stage")
+    submit_parser.add_argument("--unit", required=True, dest="unit_id")
+    inputs_group = submit_parser.add_mutually_exclusive_group(required=True)
+    inputs_group.add_argument("--inputs", default=None)
+    inputs_group.add_argument("--inputs-from-stage", default=None, dest="inputs_from_stage")
+    submit_parser.add_argument("--settings", default=None)
+
+    reconcile_parser = run_subparsers.add_parser(
+        "reconcile", help="Reconcile a run's unresolved Batch attempts.")
+    reconcile_parser.add_argument("run_id")
+
+    cancel_parser = run_subparsers.add_parser(
+        "cancel", help="Terminate an attempt's Batch job.")
+    cancel_parser.add_argument("attempt_id")
+    cancel_parser.add_argument("--reason", required=True)
 
     for name in NOT_YET_IMPLEMENTED:
         subparsers.add_parser(name, help="Not yet implemented.", add_help=False)
@@ -371,6 +416,138 @@ def _run_local_command(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+def _run_submit_command(args: argparse.Namespace) -> int:
+    if args.stage not in STAGE_NAMES:
+        sys.stderr.write(
+            f"rapidpipe run submit: unknown stage {args.stage!r}; known stages: "
+            f"{', '.join(STAGE_NAMES)}\n")
+        return int(ExitCode.USAGE)
+
+    module_name = f"rapidpipe.stages.{args.stage.replace('-', '_')}"
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        sys.stderr.write(
+            f"rapidpipe run submit: {args.stage!r} is a known stage name but "
+            f"{module_name} is not implemented yet\n")
+        return int(ExitCode.USAGE)
+
+    declaration = getattr(module, "DECLARATION", None)
+    if declaration is None:
+        sys.stderr.write(f"rapidpipe run submit: {module_name} has no DECLARATION\n")
+        return int(ExitCode.USAGE)
+
+    try:
+        cm = connect(application_name="rapidpipe-run-submit")
+    except ConnectionConfigError as exc:
+        sys.stderr.write(f"rapidpipe run submit: database configuration error: {exc}\n")
+        return int(ExitCode.USAGE)
+    except ConnectionUnavailable as exc:
+        sys.stderr.write(f"rapidpipe run submit: database unavailable: {exc}\n")
+        return int(ExitCode.TRANSIENT_FAILURE)
+
+    with cm as conn:
+        try:
+            if args.inputs_from_stage is not None:
+                inputs_location = launch_batch.resolve_inputs_from_stage(
+                    conn, run_id=args.run_id, unit_id=args.unit_id,
+                    upstream_stage=args.inputs_from_stage)
+            else:
+                inputs_location = args.inputs
+
+            submission = launch_batch.submit_unit(
+                conn,
+                run_id=args.run_id,
+                stage=args.stage,
+                unit_kind=declaration.unit,
+                unit_id=args.unit_id,
+                inputs_location=inputs_location,
+                settings_location=args.settings,
+            )
+        except MissingEnvironmentVariable as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run submit: {exc}\n")
+            return 64
+        except DependencyIncomplete as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run submit: {exc}\n")
+            return int(ExitCode.USAGE)
+        except RunModelError as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run submit: {exc}\n")
+            return int(ExitCode.USAGE)
+        except Exception as exc:  # noqa: BLE001 - Batch/botocore-shaped errors
+            if _is_batch_error(exc):
+                conn.rollback()
+                sys.stderr.write(f"rapidpipe run submit: Batch error: {exc}\n")
+                return int(ExitCode.TRANSIENT_FAILURE)
+            raise
+
+    print(
+        f"attempt={submission.attempt_id} job={submission.job_id} "
+        f"outputs={submission.output_location}")
+    return int(ExitCode.SUCCESS)
+
+
+def _run_reconcile_command(args: argparse.Namespace) -> int:
+    try:
+        cm = connect(application_name="rapidpipe-run-reconcile")
+    except ConnectionConfigError as exc:
+        sys.stderr.write(f"rapidpipe run reconcile: database configuration error: {exc}\n")
+        return int(ExitCode.USAGE)
+    except ConnectionUnavailable as exc:
+        sys.stderr.write(f"rapidpipe run reconcile: database unavailable: {exc}\n")
+        return int(ExitCode.TRANSIENT_FAILURE)
+
+    with cm as conn:
+        try:
+            results = launch_batch.reconcile(conn, run_id=args.run_id)
+        except Exception as exc:  # noqa: BLE001 - Batch/botocore-shaped errors
+            if _is_batch_error(exc):
+                conn.rollback()
+                sys.stderr.write(f"rapidpipe run reconcile: Batch error: {exc}\n")
+                return int(ExitCode.TRANSIENT_FAILURE)
+            raise
+
+    for result in results:
+        print(
+            f"attempt={result.attempt_id} job={result.job_id} "
+            f"status={result.batch_status} disposition={result.disposition} "
+            f"selected={result.selected}")
+    return int(ExitCode.SUCCESS)
+
+
+def _run_cancel_command(args: argparse.Namespace) -> int:
+    try:
+        cm = connect(application_name="rapidpipe-run-cancel")
+    except ConnectionConfigError as exc:
+        sys.stderr.write(f"rapidpipe run cancel: database configuration error: {exc}\n")
+        return int(ExitCode.USAGE)
+    except ConnectionUnavailable as exc:
+        sys.stderr.write(f"rapidpipe run cancel: database unavailable: {exc}\n")
+        return int(ExitCode.TRANSIENT_FAILURE)
+
+    with cm as conn:
+        try:
+            launch_batch.cancel(conn, attempt_id=args.attempt_id, reason=args.reason)
+        except RunModelError as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run cancel: {exc}\n")
+            return int(ExitCode.USAGE)
+        except LaunchError as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run cancel: {exc}\n")
+            return int(ExitCode.USAGE)
+        except Exception as exc:  # noqa: BLE001 - Batch/botocore-shaped errors
+            if _is_batch_error(exc):
+                conn.rollback()
+                sys.stderr.write(f"rapidpipe run cancel: Batch error: {exc}\n")
+                return int(ExitCode.TRANSIENT_FAILURE)
+            raise
+
+    return int(ExitCode.SUCCESS)
+
+
 def _run_command(args: argparse.Namespace) -> int:
     if args.run_command == "create":
         return _run_create_command(args)
@@ -380,8 +557,15 @@ def _run_command(args: argparse.Namespace) -> int:
         return _run_show_command(args)
     if args.run_command == "local":
         return _run_local_command(args)
+    if args.run_command == "submit":
+        return _run_submit_command(args)
+    if args.run_command == "reconcile":
+        return _run_reconcile_command(args)
+    if args.run_command == "cancel":
+        return _run_cancel_command(args)
     sys.stderr.write(
-        "rapidpipe run: a subcommand is required: create, list, show, local\n")
+        "rapidpipe run: a subcommand is required: create, list, show, local, "
+        "submit, reconcile, cancel\n")
     return int(ExitCode.USAGE)
 
 
