@@ -49,13 +49,18 @@ def _existing_seed_ids(cur):
 
 
 def _make_exposure(cur, fid, field=1000, hp6=1, hp9=1):
+    # exposures.dateobs is UNIQUE (exposurespk) and now() is frozen for the
+    # whole transaction, so two exposures created in the same test
+    # transaction would collide on a literal now(). Each call site passes
+    # a distinct `field`, so derive a distinct dateobs from it instead of
+    # depending on wall-clock time to differ between calls.
     cur.execute(
         """
         INSERT INTO exposures (dateobs, field, hp6, hp9, fid, exptime, mjdobs)
-        VALUES (now(), %s, %s, %s, %s, 100.0, 61000.0)
+        VALUES (now() + (%s || ' seconds')::interval, %s, %s, %s, %s, 100.0, 61000.0)
         RETURNING expid
         """,
-        (field, hp6, hp9, fid),
+        (field, field, hp6, hp9, fid),
     )
     (expid,) = cur.fetchone()
     return expid
