@@ -31,3 +31,9 @@ rapidpipe = "rapidpipe.cli.main:main"
 packages.find = {include = [
     "pipeline*", "modules*", "database*", "alerts*", "aws*", "rapidpipe*",
 ]}
+
+[tool.setuptools.package-data]
+# rapidpipe/settings/ holds non-Python stage-defaults data (admit.toml and
+# siblings to come), not an importable subpackage, so it needs an explicit
+# package-data entry rather than being picked up by packages.find above.
+rapidpipe = ["settings/*.toml"]
