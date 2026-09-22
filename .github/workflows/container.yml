@@ -18,6 +18,11 @@
 # does not need to install it by hand and will pick it up automatically
 # once that pull request lands.
 #
+# build.sh is told --engine docker explicitly: the runner has both podman
+# and docker, build.sh prefers podman when left to choose, and the two
+# keep separate image stores -- the smoke-test steps below use `docker
+# run`, so the build must land in docker's store too.
+#
 # actions/checkout is pinned by SHA, matching this repository's existing
 # convention (see .github/workflows/public-safety.yml).
 name: container
@@ -53,7 +58,8 @@ jobs:
             --install-requirements \
             --allow-dirty \
             --tag rapid-pipeline:ci \
-            --python /usr/local/bin/python
+            --python /usr/local/bin/python \
+            --engine docker
 
       - name: smoke test -- --version
         run: docker run --rm rapid-pipeline:ci --version

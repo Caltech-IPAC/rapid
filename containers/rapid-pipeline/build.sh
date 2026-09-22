@@ -47,6 +47,7 @@ usage() {
   cat <<'EOF'
 usage: build.sh <git-ref> [--base <image-ref>] [--tag <name>]
                  [--install-requirements] [--allow-dirty] [--python <path>]
+                 [--engine podman|docker]
 
   <git-ref>                a branch, tag or commit SHA (or HEAD)
   --base <image-ref>       full base image reference (required)
@@ -59,6 +60,10 @@ usage: build.sh <git-ref> [--base <image-ref>] [--tag <name>]
                             uncommitted changes
   --python <path>          the base image's Python interpreter path
                             (default: /opt/rapid/conda/envs/rapid/bin/python)
+  --engine podman|docker   container engine to build with (default: podman
+                            if present, else docker). Pass explicitly when
+                            a later step (e.g. `docker run` in CI) must see
+                            the built image in a specific engine's store.
 EOF
 }
 
@@ -68,6 +73,7 @@ tag=""
 install_requirements=0
 allow_dirty=0
 python_path="/opt/rapid/conda/envs/rapid/bin/python"
+engine=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -76,6 +82,7 @@ while [ $# -gt 0 ]; do
     --install-requirements) install_requirements=1; shift ;;
     --allow-dirty) allow_dirty=1; shift ;;
     --python) python_path="$2"; shift 2 ;;
+    --engine) engine="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*)
       echo "build.sh: unknown option: $1" >&2
@@ -141,8 +148,9 @@ git -C "$repo_root" archive "$source_sha" -- \
     ':(exclude)tests' \
   | tar -x -C "$src_dir"
 
-engine=""
-if command -v podman >/dev/null 2>&1; then
+if [ -n "$engine" ]; then
+  command -v "$engine" >/dev/null 2>&1 || { echo "build.sh: engine not found: $engine" >&2; exit 1; }
+elif command -v podman >/dev/null 2>&1; then
   engine="podman"
 elif command -v docker >/dev/null 2>&1; then
   engine="docker"
