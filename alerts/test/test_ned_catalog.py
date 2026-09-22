@@ -96,6 +96,14 @@ def test_parsers():
     md5s = nc.parse_md5sums("abc  dataset/x.parquet\n\ndef  *dataset/y.parquet\n")
     assert md5s == {"dataset/x.parquet": "abc", "dataset/y.parquet": "def"}
     assert nc.parse_partition_info("Norder,Npix\n2,0\n3,200\n\n") == [(2, 0), (3, 200)]
+    # the published layout (release 36.1): positional parsing read Dir as
+    # the pixel and sent every leaf to pixel 0 -- live, 2026-09-22
+    published = "Norder,Dir,Npix,num_rows\n2,0,0,3251099\n2,0,1,3193928\n3,0,200,1833268\n"
+    assert nc.parse_partition_info(published) == [(2, 0), (2, 1), (3, 200)]
+    with pytest.raises(ValueError, match="more than once"):
+        nc.parse_partition_info("Norder,Dir,Npix\n2,0,0\n2,0,0\n")
+    with pytest.raises(ValueError, match="lacks Norder/Npix"):
+        nc.parse_partition_info("order,pixel\n2,0\n")
     assert nc.read_properties("# c\nobs_collection=X_1\nhats_nrows=5\n") == {
         "obs_collection": "X_1", "hats_nrows": "5"}
 
@@ -157,6 +165,22 @@ def test_mirror_rejects_md5_mismatch_and_verify_reports_it(served, collection,
     assert counts == {"skipped": 0, "mirrored": 1, "failed": 1}
     assert not (dest / nc.HATS_SUBDIR / rel).exists()
     assert nc.verify(str(dest)) == [rel]
+
+
+def test_s3_store_requires_the_buckets_region(monkeypatch):
+    # no default and no silent lookup: an unset or wrong region refuses,
+    # naming the bucket's real region (Emily, 2026-09-22: a mis-set region
+    # is how a 70 GB repartition would run cross-region)
+    monkeypatch.setattr(nc.Store, "_bucket_region", lambda self: "us-west-2")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    with pytest.raises(RuntimeError, match="not set.*us-west-2"):
+        nc.Store("s3://some-bucket/ned")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    with pytest.raises(RuntimeError, match="us-east-1 but bucket some-bucket is in us-west-2"):
+        nc.Store("s3://some-bucket/ned")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+    store = nc.Store("s3://some-bucket/ned")
+    assert store.is_s3 and store.bucket == "some-bucket" and store.prefix == "ned"
 
 
 def test_iter_reader_reassembles_the_stream():

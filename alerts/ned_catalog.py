@@ -1,6 +1,6 @@
 """
 File    : ned_catalog.py
-Author  : Emily Everetts
+Author  : Emily Everetts, Claude Code
 Date    : 09/26
 
 Mirror, verify and repartition the NED object directory for the alert
@@ -111,12 +111,28 @@ def parse_md5sums(text: str) -> dict[str, str]:
 
 
 def parse_partition_info(text: str) -> list[tuple[int, int]]:
-    """``partition_info.csv`` -> [(Norder, Npix), ...]."""
+    """``partition_info.csv`` -> [(Norder, Npix), ...], by column NAME.
+
+    The published file is ``Norder,Dir,Npix,num_rows`` (release 36.1);
+    older/hand-made ones are ``Norder,Npix``. Positional parsing of the
+    former read ``Dir`` (0 for every leaf) as the pixel and sent all 264
+    leaves to pixel 0 -- live, 2026-09-22. Raises ValueError on a missing
+    column or a duplicated leaf.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    header = [name.strip() for name in lines[0].split(",")]
+    try:
+        i_order, i_npix = header.index("Norder"), header.index("Npix")
+    except ValueError:
+        raise ValueError(f"partition_info.csv header lacks Norder/Npix: {header}")
     rows = []
-    for i, line in enumerate(text.splitlines()):
-        if i and line.strip():
-            order, npix = line.split(",")[:2]
-            rows.append((int(order), int(npix)))
+    for line in lines[1:]:
+        fields = line.split(",")
+        rows.append((int(fields[i_order]), int(fields[i_npix])))
+    if len(set(rows)) != len(rows):
+        raise ValueError("partition_info.csv lists the same leaf more than once")
     return rows
 
 
@@ -163,9 +179,25 @@ class Store:
         if self.is_s3:
             self.bucket, _, self.prefix = self.root[len("s3://"):].partition("/")
             self.prefix = self.prefix.strip("/")
-            self.fs: pyarrow.fs.FileSystem = pyarrow.fs.S3FileSystem(
-                region=os.environ.get("AWS_DEFAULT_REGION"))
             self._client: Any = None
+            # The region must be stated, and must be the bucket's. pyarrow's
+            # S3 layer does not follow S3's region redirect (an unset region
+            # means us-east-1 and every request fails with HTTP 301), and a
+            # session pointed at the wrong region is the setup under which
+            # a 70 GB repartition would run as cross-region traffic. So no
+            # default and no silent lookup: refuse, and say what to export.
+            region = os.environ.get("AWS_DEFAULT_REGION")
+            actual = self._bucket_region()
+            if not region:
+                raise RuntimeError(
+                    f"AWS_DEFAULT_REGION is not set; bucket {self.bucket} is in "
+                    f"{actual}. Export AWS_DEFAULT_REGION={actual} and rerun.")
+            if region != actual:
+                raise RuntimeError(
+                    f"AWS_DEFAULT_REGION={region} but bucket {self.bucket} is in "
+                    f"{actual}; refusing to run across regions. Export "
+                    f"AWS_DEFAULT_REGION={actual} and run from compute in that region.")
+            self.fs: pyarrow.fs.FileSystem = pyarrow.fs.S3FileSystem(region=region)
         else:
             self.bucket, self.prefix = "", str(Path(self.root).resolve())
             self.fs = pyarrow.fs.LocalFileSystem()
@@ -185,6 +217,12 @@ class Store:
             import boto3
             self._client = boto3.client("s3")
         return self._client
+
+    def _bucket_region(self) -> str:
+        """The bucket's region per S3 (GetBucketLocation reports None for
+        us-east-1)."""
+        location = self.client.get_bucket_location(Bucket=self.bucket)
+        return location.get("LocationConstraint") or "us-east-1"
 
     # -- small objects ------------------------------------------------------
     def exists(self, rel: str) -> bool:
