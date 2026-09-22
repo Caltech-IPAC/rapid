@@ -103,6 +103,23 @@ def _read_execution_record(output_location: Path, attempt_id: str) -> dict[str, 
         return {}
 
 
+def _run_schema_version(conn, run_id: str) -> str | None:
+    """The run's own recorded ``schema_version`` (``runs.schema_version``).
+
+    The stage contract's own execution record (``exec/<attempt>.json``,
+    written by ``rapidpipe.stages.contract._write_execution_record``)
+    deliberately omits schema version: "Schema version and working-copy
+    changes are not recorded here: they belong to ``rapidpipe.runs``,
+    which this module must not import." ``rapidpipe.runs.repository.
+    execution_records.schema_version`` is NOT NULL, so this function's
+    result fills that gap before ``record_attempt_result`` is called.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT schema_version FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
 def run_stage_locally(
     conn,
     *,
@@ -183,6 +200,7 @@ def run_stage_locally(
     manifest_path = (output_location / "manifest.json") if manifest is not None else None
 
     execution_record = _read_execution_record(output_location, attempt_id)
+    execution_record.setdefault("schema_version", _run_schema_version(conn, run_id))
     record_attempt_result(
         conn, attempt_id, exit_code, disposition, str(output_location),
         execution_record, scheduler_job_id=None)

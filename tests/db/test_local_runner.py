@@ -268,7 +268,12 @@ def test_run_show_prints_run_units_and_attempts(conn, monkeypatch, capsys):
     repo.record_attempt_result(
         conn, attempt_id, exit_code=0, disposition="succeeded",
         output_location=f"runs/{run_id}/{stage}/{unit_id}/{attempt_id}",
-        execution_record={}, scheduler_job_id=None)
+        execution_record={
+            "source_revision": "abc123",
+            "schema_version": "1",
+            "settings_hash": "sha256:xyz",
+        },
+        scheduler_job_id=None)
     repo.select_attempt(conn, attempt_id)
 
     rc = cli_main.main(["run", "show", run_id])
