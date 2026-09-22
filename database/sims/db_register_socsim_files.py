@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
+import modules.utils.rapid_data_analysis as rda
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 from database.modules.utils.overlapping_fields import overlapping_fields
@@ -20,7 +21,7 @@ from database.modules.utils.overlapping_fields import overlapping_fields
 # Define code name and version.
 
 swname = "db_register_socsim_files.py"
-swvers = "1.0"
+swvers = "1.1"                  # 1.1 computes l2files.limmag at registration.
 
 debug = 1
 
@@ -447,6 +448,89 @@ def register_exposure(dbh,header,wcs):
     return expid,fid
 
 
+# Cache of PSF files already downloaded by this process, keyed by (fid,sca).  The registration
+# runs one process per core, so this is per-process; the local filenames carry the process id so
+# that two processes downloading the same PSF cannot collide on one file.
+
+psf_file_cache = {}
+
+
+def get_psf_file(dbh,fid,sca):
+
+    """Local path of the science-image PSF for a filter and SCA, or None if there is none.
+
+    The PSF comes from the PSFs database table, the same source the science pipeline uses
+    (awsBatchSubmitJobs_launchSingleSciencePipeline.py calls get_best_psf the same way), so the
+    limiting magnitude is computed with the very PSF the photometry will later use.
+    """
+
+    key = (fid,sca)
+
+    if key in psf_file_cache:
+        return psf_file_cache[key]
+
+    exit_code_before = dbh.exit_code
+
+    psfid,s3_full_name_psf = dbh.get_best_psf(sca,fid)
+
+
+    # A missing PSF is a normal condition for a filter and SCA that has none registered yet, not
+    # a database failure, so do not let get_best_psf's exit code leak into the registration.
+
+    dbh.exit_code = exit_code_before
+
+    if psfid is None or s3_full_name_psf is None:
+        print(f"*** Warning: No PSF registered for fid,sca = {fid},{sca}; "
+              "limiting magnitude will not be computed")
+        psf_file_cache[key] = None
+        return None
+
+    local_psf_filename = f"{subdir_work}/psf_fid{fid}_sca{sca}_pid{os.getpid()}.fits"
+
+    download_cmd = ['aws','s3','cp',s3_full_name_psf,local_psf_filename]
+    exitcode_from_download_cmd = util.execute_command(download_cmd)
+
+    if exitcode_from_download_cmd != 0 or not os.path.exists(local_psf_filename):
+        print(f"*** Warning: Could not download PSF {s3_full_name_psf}; "
+              "limiting magnitude will not be computed")
+        psf_file_cache[key] = None
+        return None
+
+    psf_file_cache[key] = local_psf_filename
+
+    return local_psf_filename
+
+
+def compute_limmag(dbh,file,fid,sca):
+
+    """The 5-sigma point-source limiting magnitude of an L2 file, or None.
+
+    The L2 data are in DN and ZPTMAG is the zeropoint for DN/s, so the conversion by EXPTIME is
+    left to rapid_data_analysis, which reads both from the header.  Returns None rather than
+    raising, because a limiting magnitude that cannot be computed must leave the column NULL
+    without stopping the ingest of an otherwise good file.
+    """
+
+    psf_filename = get_psf_file(dbh,fid,sca)
+
+    if psf_filename is None:
+        return None
+
+    try:
+        limmag_dict = rda.compute_limiting_magnitude_for_l2_image(subdir_work + "/" + file,
+                                                                  psf_filename)
+    except Exception as e:
+        print(f"*** Warning: Could not compute limiting magnitude for {file} ({e}); "
+              "registering a NULL")
+        return None
+
+    limmag = limmag_dict["maglimit"]
+
+    print(f"limmag = {limmag}")
+
+    return limmag
+
+
 def register_l2file(dbh,header,wcs,file,expid,fid):
 
     #print("header =",header)
@@ -706,6 +790,12 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
                                        get_keyword_value(header,"NAXIS2"),
                                        field=field)
 
+
+    # Compute the limiting magnitude while the FITS file is still on local disk; the caller
+    # deletes it as soon as registration finishes.
+
+    limmag = compute_limmag(dbh,file,fid,sca)
+
     dbh.add_l2file_fifth_order(expid,sca,field,overlapfields,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,
@@ -713,7 +803,7 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
         a_2_0,a_2_1,a_2_2,a_2_3,a_3_0,a_3_1,a_3_2,a_4_0,a_4_1,a_5_0,
         b_order,b_0_1,b_0_2,b_0_3,b_0_4,b_0_5,b_1_0,b_1_1,b_1_2,b_1_3,b_1_4,
         b_2_0,b_2_1,b_2_2,b_2_3,b_3_0,b_3_1,b_3_2,b_4_0,b_4_1,b_5_0,
-        equinox,ra0,dec0,paobsy,pafpa,zptmag,skymean)
+        equinox,ra0,dec0,paobsy,pafpa,zptmag,skymean,limmag=limmag)
 
     rid = dbh.rid
     version = dbh.version
