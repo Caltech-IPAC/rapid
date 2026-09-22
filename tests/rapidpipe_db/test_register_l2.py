@@ -45,15 +45,22 @@ from tests.rapidpipe.test_admit import main as admit_main
 from .test_repository import _make_run, _make_unit
 
 
-def _build_delivery_for_detector(tmp_path, sca_value):
+def _build_delivery_for_detector(base_dir, sca_value):
     """Like test_admit._build_delivery, but with the delivery key's
     'detector' field matching the header's SCA-NUM -- test_admit's own
     helper always keys on the module-level DETECTOR ("7") regardless of
     any sca_value override, since none of its own tests need a second
     detector. admit's own consistency check (delivery key detector must
     equal the header SCA-NUM) would reject a mismatched pair, so this
-    local helper edits the manifest's key after building the delivery."""
-    inputs_dir, fits_path = _build_delivery(tmp_path, sca_value=sca_value)
+    local helper edits the manifest's key after building the delivery.
+
+    `base_dir` must already exist -- see `_run_admit`, which creates it
+    before calling here or into `_build_delivery`: both helpers build
+    `base_dir / "inputs"` with a plain (non-parents) mkdir, matching
+    test_admit's own assumption that its `tmp_path` argument already
+    exists (there, always true, since it is pytest's own `tmp_path`
+    fixture)."""
+    inputs_dir, fits_path = _build_delivery(base_dir, sca_value=sca_value)
     manifest_path = inputs_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["outputs"][0]["key"]["detector"] = str(sca_value)
@@ -134,10 +141,12 @@ def _allocate_registering_attempt(conn, run_id, *, unit_id):
 def _run_admit(conn, tmp_path, *, name="admit1", sca_value=None, **fits_kwargs):
     """Allocate a real admit run/attempt, build a delivery, run admit for
     real; return (run_id, outputs_dir)."""
+    base_dir = tmp_path / name
+    base_dir.mkdir(parents=True)
     if sca_value is not None:
-        inputs_dir, _ = _build_delivery_for_detector(tmp_path / name, sca_value)
+        inputs_dir, _ = _build_delivery_for_detector(base_dir, sca_value)
     else:
-        inputs_dir, _ = _build_delivery(tmp_path / name, **fits_kwargs)
+        inputs_dir, _ = _build_delivery(base_dir, **fits_kwargs)
 
     run_id, attempt_id = _allocate_admit_attempt(conn, unit_id=f"{name}-admit-unit")
     outputs_dir = tmp_path / name / "admit-outputs"
