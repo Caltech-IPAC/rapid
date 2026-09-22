@@ -307,7 +307,7 @@ class RAPIDDB:
         ctype1,ctype2,cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
         a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,b_0_2,b_0_3,
         b_0_4,b_1_1,b_1_2,b_1_3,b_2_0,b_2_1,b_2_2,b_3_0,b_3_1,
-        b_4_0,equinox,ra,dec,paobsy,pafpa,zptmag,skymean):
+        b_4_0,equinox,ra,dec,paobsy,pafpa,zptmag,skymean,limmag=None):
 
         '''
         Add record in L2files database table.
@@ -316,6 +316,12 @@ class RAPIDDB:
         overlaps (database.modules.utils.overlapping_fields), NOT just the
         centre tile `field` — it sits beside `field` here because the two
         are the same kind of fact about the same image.
+
+        `limmag` is the 5-sigma point-source limiting magnitude [AB mag]
+        from modules.utils.rapid_data_analysis, or None when it could not
+        be computed, which leaves the column NULL rather than guessing.
+        It defaults to None, so callers that predate the column keep
+        working and simply register a NULL.
         '''
 
         self.exit_code = 0
@@ -383,7 +389,8 @@ class RAPIDDB:
             "cast(%s as real)," +\
             "cast(%s as real)," +\
             "cast(%s AS real)," +\
-            "overlapfields_ => cast(%s as integer[])) as " +\
+            "overlapfields_ => cast(%s as integer[])," +\
+            "limmag_ => cast(%s as real)) as " +\
             "(rid integer," +\
             " version smallint);"
 
@@ -400,7 +407,7 @@ class RAPIDDB:
                   a_1_2, a_1_3, a_2_0, a_2_1, a_2_2, a_3_0, a_3_1, a_4_0, b_order, b_0_2, b_0_3,
                   b_0_4, b_1_1, b_1_2, b_1_3, b_2_0, b_2_1, b_2_2, b_3_0, b_3_1,
                   b_4_0, equinox, ra, dec, paobsy, pafpa, zptmag, skymean,
-                  overlapfields)
+                  overlapfields, limmag)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -431,7 +438,7 @@ class RAPIDDB:
         a_2_0,a_2_1,a_2_2,a_2_3,a_3_0,a_3_1,a_3_2,a_4_0,a_4_1,a_5_0,
         b_order,b_0_1,b_0_2,b_0_3,b_0_4,b_0_5,b_1_0,b_1_1,b_1_2,b_1_3,b_1_4,
         b_2_0,b_2_1,b_2_2,b_2_3,b_3_0,b_3_1,b_3_2,b_4_0,b_4_1,b_5_0,
-        equinox,ra,dec,paobsy,pafpa,zptmag,skymean):
+        equinox,ra,dec,paobsy,pafpa,zptmag,skymean,limmag=None):
 
         '''
         Add record in L2files database table.
@@ -440,6 +447,12 @@ class RAPIDDB:
         overlaps (database.modules.utils.overlapping_fields), NOT just the
         centre tile `field` — it sits beside `field` here because the two
         are the same kind of fact about the same image.
+
+        `limmag` is the 5-sigma point-source limiting magnitude [AB mag]
+        from modules.utils.rapid_data_analysis, or None when it could not
+        be computed, which leaves the column NULL rather than guessing.
+        It defaults to None, so callers that predate the column keep
+        working and simply register a NULL.
         '''
 
         self.exit_code = 0
@@ -523,7 +536,8 @@ class RAPIDDB:
             "cast(%s as real)," +\
             "cast(%s as real)," +\
             "cast(%s AS real)," +\
-            "overlapfields_ => cast(%s as integer[])) as " +\
+            "overlapfields_ => cast(%s as integer[])," +\
+            "limmag_ => cast(%s as real)) as " +\
             "(rid integer," +\
             " version smallint);"
 
@@ -542,7 +556,7 @@ class RAPIDDB:
                   b_order, b_0_1, b_0_2, b_0_3, b_0_4, b_0_5, b_1_0, b_1_1, b_1_2, b_1_3, b_1_4,
                   b_2_0, b_2_1, b_2_2, b_2_3, b_3_0, b_3_1, b_3_2, b_4_0, b_4_1, b_5_0,
                   equinox, ra, dec, paobsy, pafpa, zptmag, skymean,
-                  overlapfields)
+                  overlapfields, limmag)
 
         print('query = {}, params = {}'.format(query, params))
 
