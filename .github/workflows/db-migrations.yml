@@ -130,7 +130,7 @@ jobs:
         env:
           PGDATABASE: rapid
         run: |
-          python -m pytest tests/rapidpipe_db -q
+          python -m pytest tests/db -q
 
       - name: drift check — a modified already-applied file must be refused
         env:

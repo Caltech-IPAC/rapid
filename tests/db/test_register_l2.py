@@ -3,7 +3,7 @@ l2-image kind, against a real PostgreSQL with the l2 run-columns
 migration (20260921-05-l2-run-columns.sql) applied.
 
 Builds a genuine admit manifest by running admit's own `main` on the FITS
-fixture from tests/rapidpipe/test_admit.py, then runs register's `main`
+fixture from tests/unit/test_admit.py, then runs register's `main`
 for real against it, with `rapidpipe.stages.register.connect` monkeypatched
 to hand back the test's own `conn` (wrapped so commit()/close() are
 no-ops, so the outer per-test transaction -- rolled back at teardown, per
@@ -17,7 +17,7 @@ attempt named in the manifest must exist in `attempts` (it is the FK
 `product_instances.producing_attempt` references). So every test here
 allocates a REAL run/unit/attempt through the repository API first for
 admit's own invocation, passes those ids on admit's argv, and only then
-runs admit -- unlike tests/rapidpipe/test_admit.py, which is free to use
+runs admit -- unlike tests/unit/test_admit.py, which is free to use
 placeholder ids ("r1"/"a1") because it never touches a database.
 
 Skips cleanly if PGHOST is unset (see conftest.py).

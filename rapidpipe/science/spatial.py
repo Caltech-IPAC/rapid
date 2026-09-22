@@ -2,7 +2,7 @@
 
 Pure functions over numpy/healpy only -- no `rapidpipe` imports outside
 `rapidpipe.science` (stage contract, dependency direction;
-``tests/rapidpipe/test_dependency_direction.py``), so this module has no
+``tests/unit/test_dependency_direction.py``), so this module has no
 opinion about manifests, the database, or any stage. Every function here
 reproduces a legacy derivation from
 ``database/sims/db_register_socsim_files.py`` exactly, so `register`'s

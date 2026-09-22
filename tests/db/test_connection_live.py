@@ -2,8 +2,8 @@
 
 Runs only when PGHOST is set (the ``conn`` fixture's own skip in
 conftest.py is not reused here since this test exercises connect()
-itself, not a pre-opened connection) -- see tests/rapidpipe_db/conftest.py
-for why this directory is separate from tests/rapidpipe/ and skips
+itself, not a pre-opened connection) -- see tests/db/conftest.py
+for why this directory is separate from tests/unit/ and skips
 rather than being ignored at collection.
 """
 

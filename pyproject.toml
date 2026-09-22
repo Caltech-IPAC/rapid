@@ -39,17 +39,17 @@ packages.find = {include = [
 rapidpipe = ["settings/*.toml"]
 
 [tool.pytest.ini_options]
-# tests/rapidpipe/ is a package (it has __init__.py) whose basename equals
-# the import package under test, and tests/ itself is not a package. Under
-# pytest's default "prepend" import mode that puts tests/ on sys.path, so a
-# bare `import rapidpipe` inside a test resolves to tests/rapidpipe/ instead
-# of the real package (seen first in the admit stage's CLI-dispatch test,
+# The test directories are not named after the import package: tests/unit
+# and tests/db, not tests/rapidpipe and tests/rapidpipe_db. With the old
+# names, tests/rapidpipe/ (a package, it has __init__.py, under a tests/
+# that is not one) shadowed the real rapidpipe package whenever pytest put
+# tests/ on sys.path -- seen first in the admit stage's CLI-dispatch test,
 # then on a fleet workstation running the suite from a plain checkout with
 # the pipeline's own interpreter, where every database test failed at
-# collection with "No module named 'rapidpipe.db'"). The importlib mode
-# never touches sys.path, and pythonpath = ["."] makes the checkout itself
-# importable, so the suite runs the same way from a checkout, an editable
-# install, or CI.
+# collection with "No module named 'rapidpipe.db'". The importlib import
+# mode alone did not clear it for a whole-tree collection. pythonpath = ["."]
+# makes the checkout itself importable, so the suite runs the same way
+# from a checkout, an editable install, or CI.
 addopts = "--import-mode=importlib"
 pythonpath = ["."]
 testpaths = ["tests"]

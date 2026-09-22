@@ -330,11 +330,11 @@ def test_dry_run_exits_zero_and_writes_nothing(tmp_path):
 def test_cli_dispatches_to_admit_stage(tmp_path):
     # Invoked out-of-process, through rapidpipe.cli.main.main's own
     # __main__ entrypoint, rather than imported directly in this test
-    # module: tests/rapidpipe/__init__.py and the installed rapidpipe
+    # module: tests/unit/__init__.py and the installed rapidpipe
     # package share a name, and pytest's rootdir-based sys.path insertion
     # (no pytest.ini/pyproject pytest config sets an import mode) makes a
     # *fresh* bare "from rapidpipe import ..." resolve to
-    # tests/rapidpipe/__init__.py instead of the installed package -- a
+    # tests/unit/__init__.py instead of the installed package -- a
     # pre-existing property of this test tree's layout, not something
     # admit's own tests can fix. A subprocess exercises the same
     # "rapidpipe stage admit ..." entrypoint a real invocation uses,
