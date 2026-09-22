@@ -37,3 +37,19 @@ packages.find = {include = [
 # siblings to come), not an importable subpackage, so it needs an explicit
 # package-data entry rather than being picked up by packages.find above.
 rapidpipe = ["settings/*.toml"]
+
+[tool.pytest.ini_options]
+# tests/rapidpipe/ is a package (it has __init__.py) whose basename equals
+# the import package under test, and tests/ itself is not a package. Under
+# pytest's default "prepend" import mode that puts tests/ on sys.path, so a
+# bare `import rapidpipe` inside a test resolves to tests/rapidpipe/ instead
+# of the real package (seen first in the admit stage's CLI-dispatch test,
+# then on a fleet workstation running the suite from a plain checkout with
+# the pipeline's own interpreter, where every database test failed at
+# collection with "No module named 'rapidpipe.db'"). The importlib mode
+# never touches sys.path, and pythonpath = ["."] makes the checkout itself
+# importable, so the suite runs the same way from a checkout, an editable
+# install, or CI.
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+testpaths = ["tests"]
