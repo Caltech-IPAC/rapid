@@ -122,6 +122,7 @@ RAPID Pipeline Development
 
    dev/notes.rst
    dev/tests.rst
+   dev/database_connections.rst
    analyses/analyses.rst
 
 RAPID Archive Deliveries
