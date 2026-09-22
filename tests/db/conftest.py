@@ -1,6 +1,6 @@
 """Fixtures for the database-backed rapidpipe.runs.repository tests.
 
-Separate from tests/rapidpipe/ so the plain unit-test job
+Separate from tests/unit/ so the plain unit-test job
 (.github/workflows/unit-tests.yml) stays database-free: nothing here is
 collected or imported unless PGHOST is set, and even collection of this
 directory does no I/O until a fixture is actually used.
@@ -17,7 +17,7 @@ free, no per-test schema reset required.
 Skipping (not ignoring collection): the ``conn`` fixture calls
 ``pytest.skip`` when ``PGHOST`` is unset, rather than a module-level
 ``collect_ignore``. A directory with nothing collected makes a bare
-``pytest tests/rapidpipe_db`` exit 5 ("no tests ran"), which is not a
+``pytest tests/db`` exit 5 ("no tests ran"), which is not a
 clean skip if anything ever invokes this directory on its own; every
 test showing as skipped, with the suite still exiting 0, is.
 """

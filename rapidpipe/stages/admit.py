@@ -19,7 +19,7 @@ not as a `products_read` dependency edge.
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli`` (stage contract, dependency
-direction; see ``tests/rapidpipe/test_dependency_direction.py``).
+direction; see ``tests/unit/test_dependency_direction.py``).
 """
 
 from __future__ import annotations

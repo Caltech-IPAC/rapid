@@ -17,7 +17,7 @@ attempt identity, completion or retry safety").
 This module may import ``rapidpipe.products``, ``rapidpipe.db`` and
 ``rapidpipe.runs``; never another stage, ``rapidpipe.launch`` or
 ``rapidpipe.cli`` (stage contract, dependency direction; see
-``tests/rapidpipe/test_dependency_direction.py``).
+``tests/unit/test_dependency_direction.py``).
 """
 
 from __future__ import annotations

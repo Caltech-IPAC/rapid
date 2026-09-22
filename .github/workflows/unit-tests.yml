@@ -7,8 +7,8 @@
 # runtime dependencies pulls them in when it is added.
 #
 # rapidpipe.db and rapidpipe.runs import psycopg2 unconditionally
-# (mocked, never connected to, in tests/rapidpipe -- the database-backed
-# tests are tests/rapidpipe_db, run by db-migrations.yml against a real
+# (mocked, never connected to, in tests/unit -- the database-backed
+# tests are tests/db, run by db-migrations.yml against a real
 # PostgreSQL), so this job installs psycopg2-binary by hand rather than
 # widening --no-deps, matching the module the tests import and the
 # install db-migrations.yml already does.
@@ -22,7 +22,7 @@
 # healpy is installed the same way: rapidpipe.science.spatial (imported
 # by rapidpipe.db.l2files, which rapidpipe.stages.register imports at
 # module scope) computes HEALPix indexes with it, so collecting
-# tests/rapidpipe -- not only running the database-backed spatial tests
+# tests/unit -- not only running the database-backed spatial tests
 # -- needs it importable.
 #
 # actions/checkout is pinned by SHA per this repo's existing convention
@@ -61,4 +61,4 @@ jobs:
         run: pip install pytest psycopg2-binary numpy astropy healpy
 
       - name: run rapidpipe unit tests
-        run: python -m pytest tests/rapidpipe -q
+        run: python -m pytest tests/unit -q

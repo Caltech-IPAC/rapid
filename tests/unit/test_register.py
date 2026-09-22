@@ -1,7 +1,7 @@
 """Tests for rapidpipe.stages.register that need no database.
 
 Database-backed behaviour (actual writes to l2files/l2filemeta,
-idempotence, constraint checks) is in tests/rapidpipe_db/test_register_l2.py,
+idempotence, constraint checks) is in tests/db/test_register_l2.py,
 which runs against a real PostgreSQL. This file exercises only what does
 not need a connection: --dry-run's no-connect guarantee, and an unknown
 output kind's rejection.
