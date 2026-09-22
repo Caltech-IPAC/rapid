@@ -313,6 +313,26 @@ def _run_schema_version(conn, run_id: str) -> str | None:
         return row[0] if row else None
 
 
+def _execution_record_with_defaults(
+    conn, run_id: str, execution_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fill the ``execution_records`` NOT NULL columns a Batch-written
+    ``exec/<attempt>.json`` (or its absence) leaves unset.
+
+    Mirrors ``rapidpipe.runs.local.run_stage_locally``'s own fallbacks for
+    the same three columns (``schema_version``, ``source_revision``,
+    ``settings_hash``): a job with no execution record at all (a job that
+    never reached the point of writing one, or a ``lost``/no-manifest
+    outcome this function synthesizes an empty record for) still needs a
+    row that satisfies the schema.
+    """
+    record = dict(execution_record) if execution_record else {}
+    record.setdefault("schema_version", _run_schema_version(conn, run_id))
+    record.setdefault("source_revision", "unknown")
+    record.setdefault("settings_hash", "unknown")
+    return record
+
+
 def _last_container_exit_code(job: dict[str, Any]) -> int | None:
     attempts = job.get("attempts") or []
     if not attempts:
@@ -385,7 +405,7 @@ def reconcile(
             # scheduler lost the job").
             record_attempt_result(
                 conn, attempt_id, None, "lost", output_location,
-                {"schema_version": _run_schema_version(conn, run_id)},
+                _execution_record_with_defaults(conn, run_id),
                 scheduler_job_id=job_id)
             conn.commit()
             results.append(Reconciled(
@@ -406,11 +426,10 @@ def reconcile(
             if manifest is not None:
                 execution_record = _fetch_execution_record(
                     output_location, attempt_id, s3_client=s3_client)
-                execution_record.setdefault(
-                    "schema_version", _run_schema_version(conn, run_id))
                 record_attempt_result(
                     conn, attempt_id, 0, "succeeded", output_location,
-                    execution_record, scheduler_job_id=job_id)
+                    _execution_record_with_defaults(conn, run_id, execution_record),
+                    scheduler_job_id=job_id)
                 conn.commit()
                 select_attempt(conn, attempt_id)
                 conn.commit()
@@ -421,7 +440,7 @@ def reconcile(
                 # Exit zero alone is not success (runs page, "Attempts").
                 record_attempt_result(
                     conn, attempt_id, 0, "failed", output_location,
-                    {"schema_version": _run_schema_version(conn, run_id)},
+                    _execution_record_with_defaults(conn, run_id),
                     scheduler_job_id=job_id)
                 conn.commit()
                 results.append(Reconciled(
@@ -441,7 +460,7 @@ def reconcile(
                 disposition = "killed"
             record_attempt_result(
                 conn, attempt_id, exit_code, disposition, output_location,
-                {"schema_version": _run_schema_version(conn, run_id)},
+                _execution_record_with_defaults(conn, run_id),
                 scheduler_job_id=job_id)
             conn.commit()
             results.append(Reconciled(
@@ -454,7 +473,7 @@ def reconcile(
         # as a termination it cannot classify further.
         record_attempt_result(
             conn, attempt_id, None, "killed", output_location,
-            {"schema_version": _run_schema_version(conn, run_id)},
+            _execution_record_with_defaults(conn, run_id),
             scheduler_job_id=job_id)
         conn.commit()
         results.append(Reconciled(
