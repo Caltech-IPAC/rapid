@@ -466,6 +466,7 @@ def record_scheduler_job(
     conn: psycopg2.extensions.connection,
     attempt_id: str,
     scheduler_job_id: str,
+    output_location: str | None = None,
 ) -> None:
     """Record the scheduler (Batch) job id an attempt was submitted as.
 
@@ -475,6 +476,13 @@ def record_scheduler_job(
     already has a disposition: a completed attempt's scheduler job id is
     part of its recorded outcome, not something a later submission call
     should overwrite.
+
+    ``output_location`` is optional and, when given, replaces
+    ``allocate_attempt``'s own local-path-shaped placeholder (it has no
+    way to know at allocation time whether the attempt's output root is
+    local or an ``s3://`` location -- that is a submission-time choice)
+    with the real location the caller resolved before submitting the
+    job, in the same update.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -491,10 +499,20 @@ def record_scheduler_job(
                 f"{disposition!r}; refusing to record a scheduler job id "
                 "for a completed attempt")
 
-        cur.execute(
-            "UPDATE attempts SET scheduler_job_id = %s WHERE id = %s",
-            (scheduler_job_id, attempt_id),
-        )
+        if output_location is not None:
+            cur.execute(
+                """
+                UPDATE attempts
+                SET scheduler_job_id = %s, output_location = %s
+                WHERE id = %s
+                """,
+                (scheduler_job_id, output_location, attempt_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE attempts SET scheduler_job_id = %s WHERE id = %s",
+                (scheduler_job_id, attempt_id),
+            )
 
 
 # ======================================================================

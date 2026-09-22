@@ -197,7 +197,7 @@ def submit_unit(
     )
     job_id = response["jobId"]
 
-    record_scheduler_job(conn, attempt_id, job_id)
+    record_scheduler_job(conn, attempt_id, job_id, output_location=output_location)
     conn.commit()
 
     return BatchSubmission(

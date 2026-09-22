@@ -38,8 +38,8 @@ def _patch_repository(monkeypatch, *, attempt_id="ATTEMPT01"):
     def _fake_allocate_attempt(conn, run_id, stage, unit_id):
         return attempt_id
 
-    def _fake_record_scheduler_job(conn, attempt_id_, scheduler_job_id):
-        calls["scheduler_job"] = (attempt_id_, scheduler_job_id)
+    def _fake_record_scheduler_job(conn, attempt_id_, scheduler_job_id, output_location=None):
+        calls["scheduler_job"] = (attempt_id_, scheduler_job_id, output_location)
 
     monkeypatch.setattr(launch_batch, "add_unit", _fake_add_unit)
     monkeypatch.setattr(launch_batch, "allocate_attempt", _fake_allocate_attempt)
@@ -130,7 +130,8 @@ def test_submit_unit_submit_job_call_shape(monkeypatch):
     assert {"name": "RAPIDPIPE_RUN_ID", "value": "RUN01"} in env
     assert {"name": "RAPIDPIPE_ATTEMPT_ID", "value": "01ATTEMPT0000000000000000"} in env
 
-    assert calls["scheduler_job"] == ("01ATTEMPT0000000000000000", submission.job_id)
+    assert calls["scheduler_job"] == (
+        "01ATTEMPT0000000000000000", submission.job_id, submission.output_location)
 
 
 def test_submit_unit_with_settings_location(monkeypatch):
