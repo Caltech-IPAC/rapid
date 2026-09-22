@@ -103,6 +103,7 @@ def test_run_stage_locally_output_location_layout(tmp_path, monkeypatch):
     monkeypatch.setattr(local_module, "record_attempt_result", _fake_record_attempt_result)
     monkeypatch.setattr(local_module, "select_attempt", _fake_select_attempt)
     monkeypatch.setattr(local_module, "_run_schema_version", lambda conn, run_id: "1")
+    monkeypatch.setattr(local_module, "_source_revision_or_unknown", lambda: "abc123")
     monkeypatch.setattr(local_module.subprocess, "run", _fake_run)
     # Manifest.read/validate would reject an empty outputs list for a
     # stage that declares produces=(); admit's own manifest never has

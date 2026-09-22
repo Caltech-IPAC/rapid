@@ -23,7 +23,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from rapidpipe.products.manifest import Manifest, ManifestError
 from rapidpipe.runs.repository import (
@@ -103,6 +103,32 @@ def _read_execution_record(output_location: Path, attempt_id: str) -> dict[str, 
         return {}
 
 
+def _source_revision_or_unknown() -> str:
+    """``git rev-parse HEAD`` in the current working directory, else the
+    literal ``"unknown"``.
+
+    Used only to fill ``execution_records.source_revision`` (NOT NULL) for
+    an attempt whose stage never reached ``run_stage``'s own
+    ``exec/<attempt>.json`` write -- a usage or input-rejected failure
+    raises before that point (``rapidpipe.stages.contract.run_stage``), so
+    there is no stage-written execution record to read at all for that
+    attempt. A stage that DID write one already has a real source
+    revision in it (``rapidpipe.stages.contract._source_revision``, the
+    same git lookup), so this fallback only ever fires for a record this
+    module itself has to construct from nothing.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if result.returncode != 0:
+        return "unknown"
+    revision = result.stdout.strip()
+    return revision or "unknown"
+
+
 def _run_schema_version(conn, run_id: str) -> str | None:
     """The run's own recorded ``schema_version`` (``runs.schema_version``).
 
@@ -157,7 +183,10 @@ def run_stage_locally(
        terminal directly.
     5. :func:`disposition_for` decides the outcome from the exit code and
        whether a valid manifest was published.
-    6. Reads ``exec/<attempt_id>.json`` if present (else ``{}``) and calls
+    6. Reads ``exec/<attempt_id>.json`` if present (else ``{}``), fills in
+       whatever ``execution_records`` requires but the stage's own record
+       omits (schema version always; source revision and settings hash
+       only when the stage never wrote a record at all), and calls
        :func:`~rapidpipe.runs.repository.record_attempt_result`.
     7. If ``succeeded``, calls
        :func:`~rapidpipe.runs.repository.select_attempt`.
@@ -200,7 +229,15 @@ def run_stage_locally(
     manifest_path = (output_location / "manifest.json") if manifest is not None else None
 
     execution_record = _read_execution_record(output_location, attempt_id)
+    # execution_records has NOT NULL columns for source_revision,
+    # schema_version and settings_hash. A stage that raised before
+    # run_stage wrote exec/<attempt>.json (a usage or input-rejected
+    # failure, stage contract "Invocation") leaves execution_record empty,
+    # so this module supplies its own fallbacks rather than let the insert
+    # violate those constraints.
     execution_record.setdefault("schema_version", _run_schema_version(conn, run_id))
+    execution_record.setdefault("source_revision", _source_revision_or_unknown())
+    execution_record.setdefault("settings_hash", "unknown")
     record_attempt_result(
         conn, attempt_id, exit_code, disposition, str(output_location),
         execution_record, scheduler_job_id=None)
