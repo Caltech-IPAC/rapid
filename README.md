@@ -13,6 +13,22 @@ The distribution built from this repository is `rapid-pipeline`; its import pack
 
 `rapidpipe.stages.admit` is the first stage: it reads a delivery manifest naming one delivered l2 image (a FITS file staged outside the pipeline, not yet a registered product), verifies the delivered bytes and FITS checksums, reads the header and WCS the products page's l2-image field list needs, copies the file into the attempt's output location, and publishes a manifest with a fresh product instance. `rapidpipe.stages.register` reads that manifest's registration block and writes the `l2files`/`l2filemeta` rows without opening the FITS file itself, registering the manifest's own product instance first and recording nothing twice on a replay. `rapidpipe.science.spatial` holds the pure spatial derivations both `register` and its tests need -- HEALPix indexes, the Roman tessellation tile id, and the exact tile-overlap footprint -- with no import of any stage, so it can be exercised without a database.
 
+`rapidpipe run create/list/show/local` operate on `rapidpipe.runs.repository`: `create` records a new run and prints its id, `list` and `show` inspect runs, units and attempts, and `local` runs one stage attempt as a subprocess on the current machine, through `rapidpipe.runs.local`, allocating its own attempt id and an exclusive output location without needing Batch. `promote`, `delete` and `run` for Batch remain placeholders.
+
+#### Running a stage locally
+
+```
+run_id=$(rapidpipe run create --kind scratch --purpose "local smoke test" --stages admit,register)
+rapidpipe run local "$run_id" admit --unit e20260821001234/SCA07 \
+    --inputs /path/to/delivery --outputs-root /tmp/rapid-local
+rapidpipe run local "$run_id" register --unit e20260821001234-reg/SCA07 \
+    --inputs /tmp/rapid-local/runs/"$run_id"/admit/e20260821001234/SCA07/<admit-attempt-id> \
+    --outputs-root /tmp/rapid-local
+rapidpipe run show "$run_id"
+```
+
+`register`'s `--inputs` is admit's own output location (printed by `run local admit` as `outputs=...`), since `register` reads the producing attempt's completion manifest rather than the original delivery.
+
 ### Container
 
 [`containers/rapid-pipeline`](containers/rapid-pipeline) holds the recipe that builds `rapidpipe` into a runnable image over a base environment supplying its dependencies. Which base image that is and where the built image is published are decided and owned outside this repository, in `rapid_systems`. See [`containers/README.md`](containers/README.md) for how to build the recipe locally.
