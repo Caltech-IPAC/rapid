@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+import rapidpipe.products.storage as storage_module
 from rapidpipe.products.manifest import Inputs, Manifest, Member, OutputEntry, Unit
 from rapidpipe.stages.contract import (
     ExitCode,
@@ -23,6 +24,8 @@ from rapidpipe.stages.contract import (
     UsageError,
     run_stage,
 )
+
+from .fakes3 import FakeClientError, FakeEndpointConnectionError, FakeS3
 
 DECLARATION = StageDeclaration(
     name="admit",
@@ -185,11 +188,15 @@ def test_missing_required_argument_yields_usage_error(inputs_dir, tmp_path):
     assert rc == int(ExitCode.USAGE)
 
 
-def test_s3_inputs_are_rejected_with_usage_error(tmp_path):
+def test_malformed_s3_inputs_are_rejected_with_usage_error(tmp_path):
+    # No bucket name -- malformed, not merely "not yet fetched" -- is still
+    # a UsageError. Full S3 input/output behaviour (successful fetch,
+    # publish, error mapping) is covered in test_storage.py's end-to-end
+    # run_stage tests, which supply a FakeS3 client via monkeypatch.
     outputs_dir = tmp_path / "outputs"
     rc = run_stage(
         DECLARATION, _success_body,
-        _argv("s3://bucket/prefix", outputs_dir))
+        _argv("s3:///no-bucket", outputs_dir))
     assert rc == int(ExitCode.USAGE)
 
 
@@ -240,3 +247,154 @@ def test_stage_declaration_rejects_unknown_database_access():
             produces=(),
             database_access="sideways",
         ).validate()
+
+
+# --- S3 --inputs/--outputs end to end ------------------------------------
+#
+# run_stage resolves an S3 location's client through
+# rapidpipe.products.storage.s3_client(); monkeypatching that to return a
+# FakeS3 makes the whole fetch-then-run-then-publish path exercisable
+# without boto3 or network access.
+
+
+def _s3_upstream_manifest_json() -> str:
+    upstream = Manifest(
+        run="r0", unit=Unit(kind="exposure", id="u0"), stage="admit",
+        attempt="a0", execution_record="exec/a0.json",
+        inputs=Inputs(manifest="s3://bucket/root/manifest.json"))
+    return upstream.to_json()
+
+
+def _seed_s3_inputs(fake: FakeS3, bucket: str, prefix: str) -> None:
+    fake.seed(bucket, f"{prefix}/manifest.json", _s3_upstream_manifest_json().encode())
+
+
+def test_run_stage_s3_inputs_and_outputs_end_to_end(monkeypatch, tmp_path):
+    fake = FakeS3()
+    _seed_s3_inputs(fake, "in-bucket", "runs/r0/admit/u0/a0")
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    seen_work_dirs = {}
+
+    def body(context):
+        seen_work_dirs["inputs_dir"] = context.inputs_dir
+        seen_work_dirs["outputs_dir"] = context.outputs_dir
+        return StageResult(
+            outputs=(
+                OutputEntry(
+                    kind="exposure", format_version="1", instance="pi-exp-1",
+                    key={"exposure": context.unit_id}, primary="out1.fits",
+                    members=(Member("image", "out1.fits", 3, "sha256:" + "a" * 64),),
+                ),
+            ),
+        )
+
+    argv = [
+        "--run", "r1", "--unit", "u1", "--attempt", "a1",
+        "--inputs", "s3://in-bucket/runs/r0/admit/u0/a0",
+        "--outputs", "s3://out-bucket/runs/r1/admit/u1/a1",
+    ]
+    rc = run_stage(DECLARATION, body, argv)
+    assert rc == int(ExitCode.SUCCESS)
+
+    # The published manifest landed in the fake bucket, with the original
+    # S3 argument recorded as inputs.manifest, not the local temp path.
+    manifest_bytes = fake._objects[("out-bucket", "runs/r1/admit/u1/a1/manifest.json")]
+    published = Manifest.from_dict(json.loads(manifest_bytes))
+    assert published.inputs.manifest == "s3://in-bucket/runs/r0/admit/u0/a0/manifest.json"
+    assert published.outputs[0].instance == "pi-exp-1"
+
+    # The execution record was uploaded too.
+    assert ("out-bucket", "runs/r1/admit/u1/a1/exec/a1.json") in fake._objects
+
+    # The manifest was uploaded last.
+    upload_keys = [key for op, key in fake.calls if op == "upload_file"]
+    assert upload_keys[-1] == "runs/r1/admit/u1/a1/manifest.json"
+
+    # The temporary work directory used for both inputs and outputs is
+    # gone afterwards.
+    assert not seen_work_dirs["inputs_dir"].exists()
+    assert not seen_work_dirs["outputs_dir"].exists()
+
+
+def test_run_stage_s3_outputs_body_raises_uploads_nothing_and_keeps_work_dir(
+        monkeypatch, tmp_path):
+    fake = FakeS3()
+    _seed_s3_inputs(fake, "in-bucket", "runs/r0/admit/u0/a0")
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    seen_work_dirs = {}
+
+    def body(context):
+        seen_work_dirs["outputs_dir"] = context.outputs_dir
+        raise StageError("boom")
+
+    argv = [
+        "--run", "r1", "--unit", "u1", "--attempt", "a1",
+        "--inputs", "s3://in-bucket/runs/r0/admit/u0/a0",
+        "--outputs", "s3://out-bucket/runs/r1/admit/u1/a1",
+    ]
+    rc = run_stage(DECLARATION, body, argv)
+    assert rc == int(ExitCode.STAGE_ERROR)
+
+    assert [c for c in fake.calls if c[0] == "upload_file"] == []
+    # The attempt's own outputs work directory survives for inspection;
+    # its parent (the attempt's overall temp work dir) does too.
+    assert seen_work_dirs["outputs_dir"].parent.exists()
+
+
+def test_run_stage_s3_dry_run_fetches_only_the_manifest_object(monkeypatch, tmp_path):
+    fake = FakeS3()
+    _seed_s3_inputs(fake, "in-bucket", "runs/r0/admit/u0/a0")
+    # A second object present under the same prefix: --dry-run must not
+    # fetch it.
+    fake.seed("in-bucket", "runs/r0/admit/u0/a0/l2/delivered.fits", b"should-not-fetch")
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    argv = [
+        "--run", "r1", "--unit", "u1", "--attempt", "a1",
+        "--inputs", "s3://in-bucket/runs/r0/admit/u0/a0",
+        "--outputs", str(tmp_path / "outputs"),
+        "--dry-run",
+    ]
+    rc = run_stage(DECLARATION, _success_body, argv)
+    assert rc == int(ExitCode.SUCCESS)
+
+    download_keys = [key for op, key in fake.calls if op == "download_file"]
+    assert download_keys == ["runs/r0/admit/u0/a0/manifest.json"]
+
+
+def test_run_stage_s3_missing_manifest_exits_input_rejected(monkeypatch, tmp_path):
+    fake = FakeS3()  # nothing seeded
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    argv = [
+        "--run", "r1", "--unit", "u1", "--attempt", "a1",
+        "--inputs", "s3://in-bucket/runs/r0/admit/u0/a0",
+        "--outputs", str(tmp_path / "outputs"),
+    ]
+    rc = run_stage(DECLARATION, _success_body, argv)
+    assert rc == int(ExitCode.INPUT_REJECTED)
+
+
+def test_run_stage_s3_connection_error_exits_transient_failure(monkeypatch, tmp_path):
+    class _BrokenS3(FakeS3):
+        def list_objects_v2(self, **kwargs):
+            raise FakeEndpointConnectionError("could not connect")
+
+    fake = _BrokenS3()
+    _seed_s3_inputs(fake, "in-bucket", "runs/r0/admit/u0/a0")
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    argv = [
+        "--run", "r1", "--unit", "u1", "--attempt", "a1",
+        "--inputs", "s3://in-bucket/runs/r0/admit/u0/a0",
+        "--outputs", str(tmp_path / "outputs"),
+    ]
+    rc = run_stage(DECLARATION, _success_body, argv)
+    assert rc == int(ExitCode.TRANSIENT_FAILURE)

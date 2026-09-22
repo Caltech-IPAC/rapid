@@ -103,7 +103,13 @@ def _body(context: StageContext) -> StageResult:
                         entry=entry.to_dict(),
                         run_id=manifest.run,
                         attempt_id=context.attempt_id,
-                        output_location=str(context.inputs_dir),
+                        # The original --inputs argument, not
+                        # context.inputs_dir: for an S3 input that is a
+                        # local temp directory run_stage fetched into, and
+                        # register must record the location, not the path
+                        # (stage contract, "Invocation": "--inputs names a
+                        # local directory or S3 prefix").
+                        output_location=context.inputs_location,
                     )
                     products_read["l2-image"] = entry.instance
 
