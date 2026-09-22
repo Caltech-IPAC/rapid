@@ -30,10 +30,18 @@ it would spend an image download on a value nothing consults.
 
 Idempotent and resumable: the default scope is rows still NULL, batches
 are keyset-paginated on `rid` and committed one at a time, and
-`--recompute` re-measures every row in scope.  `--rid-min/--rid-max`
-shard a large backfill across several concurrently running invocations,
-which is how to parallelize it; a single run is single-threaded by
-design, so one operator mistake cannot saturate the bucket.
+`--recompute` re-measures every row in scope.
+
+`--num-cores N` measures a batch across N worker processes, which is
+worth doing because a row costs roughly 3 s of download and 3 s of
+single-threaded numpy.  The parent keeps the database to itself: it
+resolves the PSFs and performs every write, so workers need no connection
+and the run keeps one transaction stream and one commit per batch.  Each
+worker holds a whole image, about 1.3 GB, so memory is the ceiling and
+the preflight refuses a setting past 80% of the machine.  The default
+stays 1, so nothing saturates the bucket by accident.  `--rid-min` and
+`--rid-max` still shard a backfill across separate invocations, which is
+how to spread it over several machines.
 
 Requires the migration that adds `l2files.limmag`:
 
@@ -44,9 +52,12 @@ configure, 65 preflight refused, 67 a database operation failed, 0 clean.
 """
 
 import argparse
+import contextlib
+import io
 import os
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import psycopg2.extras
@@ -119,12 +130,92 @@ def get_psf_file(dbh, fid, sca, work_dir, psf_cache):
     return local_psf_filename
 
 
+def make_job(row, psf_filename, args):
+
+    """The picklable unit of work for one row.
+
+    A plain tuple rather than the row and the argparse namespace, so that
+    what crosses to a worker process is explicit and small.
+    """
+
+    rid, filename, fid, sca = row
+
+    return (int(rid), filename, int(fid), int(sca), psf_filename,
+            args.work_dir, args.n_sigma_limit, args.n_clip_sigma,
+            args.keep_downloads, args.verbose)
+
+
+def measure_one(job):
+
+    """Download and measure one row.  Returns (rid, limmag or None, messages).
+
+    Runs in a worker process when --num-cores > 1, so it touches no
+    database handle and prints nothing: output from several processes at
+    once interleaves into an unreadable log, so everything written here --
+    including what the download command and rapid_data_analysis print --
+    is captured and returned for the parent to print in row order.
+    Returns None rather than raising, so that one unmeasurable image
+    cannot end a backfill of thousands.
+    """
+
+    captured = io.StringIO()
+
+    with contextlib.redirect_stdout(captured):
+        rid, limmag, messages = _measure_one(job)
+
+    return rid, limmag, captured.getvalue().splitlines() + messages
+
+
+def _measure_one(job):
+
+    """The body of measure_one, with its output still going to stdout."""
+
+    (rid, filename, fid, sca, psf_filename, work_dir, n_sigma_limit,
+     n_clip_sigma, keep_downloads, verbose) = job
+
+    messages = []
+
+    local_img_filename = os.path.join(work_dir, f"l2file_rid{rid}.fits")
+
+    try:
+
+        if not download_from_s3(filename, local_img_filename):
+            messages.append(f"*** Warning: could not download {filename} for "
+                            f"rid={rid}; leaving it NULL")
+            return rid, None, messages
+
+        try:
+            limmag_dict = rda.compute_limiting_magnitude_for_l2_image(
+                local_img_filename,
+                psf_filename,
+                n_sigma_limit=n_sigma_limit,
+                n_clip_sigma=n_clip_sigma)
+        except Exception as error:
+            messages.append(f"*** Warning: could not compute the limiting "
+                            f"magnitude for rid={rid} ({error}); leaving it "
+                            f"NULL")
+            return rid, None, messages
+
+        if verbose:
+            messages.append(f"rid={rid} fid={fid} sca={sca} "
+                            f"limmag={limmag_dict['maglimit']} "
+                            f"bkgsig={limmag_dict['bkgsig']} "
+                            f"poissonratio={limmag_dict['poissonratio']}")
+
+        return rid, limmag_dict["maglimit"], messages
+
+    finally:
+
+        if not keep_downloads and os.path.exists(local_img_filename):
+            os.remove(local_img_filename)
+
+
 def limmag_for_row(dbh, row, args, psf_cache):
 
     """The limiting magnitude for one `l2files` row, or None.
 
-    Returns None rather than raising, so that one unmeasurable image
-    cannot end a backfill of thousands.
+    The single-process path: resolve the PSF, then do the same work a
+    worker would.
     """
 
     rid, filename, fid, sca = row
@@ -135,38 +226,12 @@ def limmag_for_row(dbh, row, args, psf_cache):
     if psf_filename is None:
         return None
 
-    local_img_filename = os.path.join(args.work_dir, f"l2file_rid{rid}.fits")
+    rid, limmag, messages = measure_one(make_job(row, psf_filename, args))
 
-    try:
+    for message in messages:
+        print(message)
 
-        if not download_from_s3(filename, local_img_filename):
-            print(f"*** Warning: could not download {filename} for rid={rid}; "
-                  f"leaving it NULL")
-            return None
-
-        try:
-            limmag_dict = rda.compute_limiting_magnitude_for_l2_image(
-                local_img_filename,
-                psf_filename,
-                n_sigma_limit=args.n_sigma_limit,
-                n_clip_sigma=args.n_clip_sigma)
-        except Exception as error:
-            print(f"*** Warning: could not compute the limiting magnitude for "
-                  f"rid={rid} ({error}); leaving it NULL")
-            return None
-
-        if args.verbose:
-            print(f"rid={rid} fid={fid} sca={sca} "
-                  f"limmag={limmag_dict['maglimit']} "
-                  f"bkgsig={limmag_dict['bkgsig']} "
-                  f"poissonratio={limmag_dict['poissonratio']}")
-
-        return limmag_dict["maglimit"]
-
-    finally:
-
-        if not args.keep_downloads and os.path.exists(local_img_filename):
-            os.remove(local_img_filename)
+    return limmag
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +253,55 @@ def preflight_schema(cur):
     if cur.fetchone() is None:
         print("*** Error: l2files.limmag does not exist; apply the "
               "column-adding migration first; quitting...")
+        return 65
+
+    return 0
+
+
+#: Peak resident memory of one measurement, measured on a 4088x4088 L2
+#: image: the pixels as float64 plus the copies sigma clipping makes.
+
+GIGABYTES_PER_WORKER = 1.3
+
+
+def preflight_num_cores(args):
+
+    """Resolve --num-cores and refuse a setting the machine cannot feed.
+
+    Each worker holds a whole image, so the ceiling here is memory rather
+    than CPU: oversubscribing does not merely slow the run down, it
+    invites the OOM killer partway through a batch.
+    """
+
+    if args.num_cores == 0:
+        args.num_cores = os.cpu_count() or 1
+        print(f">> --num-cores 0: using every core ({args.num_cores})")
+
+    if args.num_cores < 1:
+        print(f"*** Error: --num-cores {args.num_cores} must be >= 0; "
+              f"quitting...")
+        return 65
+
+    print(f">> num_cores = {args.num_cores}")
+
+    if args.num_cores == 1:
+        return 0
+
+    try:
+        total_gb = (os.sysconf("SC_PHYS_PAGES") *
+                    os.sysconf("SC_PAGE_SIZE")) / 1024 ** 3
+    except (AttributeError, ValueError, OSError):
+        return 0
+
+    needed_gb = args.num_cores * GIGABYTES_PER_WORKER
+
+    print(f">> about {needed_gb:.1f} GB of {total_gb:.1f} GB of memory will "
+          f"be in use while a batch is measured")
+
+    if needed_gb > 0.8 * total_gb:
+        print(f"*** Error: {args.num_cores} workers need about "
+              f"{needed_gb:.1f} GB, more than 80% of this machine's "
+              f"{total_gb:.1f} GB; lower --num-cores; quitting...")
         return 65
 
     return 0
@@ -310,6 +424,46 @@ def count_in_scope(cur, args):
     return cur.fetchone()[0]
 
 
+def measure_batch_in_parallel(dbh, rows, args, psf_cache):
+
+    """Measure one batch across worker processes; returns [(rid, limmag)].
+
+    The parent keeps the database to itself: it resolves and downloads the
+    PSFs here, before the fan-out, so a worker needs no connection of its
+    own and the run keeps its single transaction stream.  Results come
+    back in row order, so the log reads the same as a single-process run.
+    """
+
+    jobs = []
+    results = []
+
+    for row in rows:
+
+        rid, filename, fid, sca = row
+
+        psf_filename = get_psf_file(dbh, int(fid), int(sca), args.work_dir,
+                                    psf_cache)
+
+        if psf_filename is None:
+            results.append((int(rid), None))
+            continue
+
+        jobs.append(make_job(row, psf_filename, args))
+
+    if jobs:
+
+        with ProcessPoolExecutor(max_workers=args.num_cores) as executor:
+
+            for rid, limmag, messages in executor.map(measure_one, jobs):
+
+                for message in messages:
+                    print(message)
+
+                results.append((rid, limmag))
+
+    return sorted(results, key=lambda result: result[0])
+
+
 def backfill(dbh, conn, cur, args, psf_cache):
 
     """Keyset-paginated, one committed transaction per batch."""
@@ -344,25 +498,39 @@ def backfill(dbh, conn, cur, args, psf_cache):
 
         updates = []
 
-        for row in rows:
 
-            rid = row[0]
-            last_rid = rid
+        # Measured values for this batch, as (rid, limmag or None).  A row
+        # that could not be measured is skipped rather than written as NULL:
+        # it is already NULL, and skipping keeps it in scope for a later run
+        # once its PSF is registered.
+
+        if args.num_cores == 1:
+
+            results = []
+
+            for row in rows:
+                results.append((row[0], limmag_for_row(dbh, row, args,
+                                                       psf_cache)))
+
+        else:
+
+            results = measure_batch_in_parallel(dbh, rows, args, psf_cache)
+
+        for rid, limmag in results:
+
             n_seen += 1
-
-            limmag = limmag_for_row(dbh, row, args, psf_cache)
 
             if limmag is None:
                 n_null += 1
             else:
                 limmags.append(limmag)
-
-            # A row that could not be measured is skipped rather than
-            # written as NULL: it is already NULL, and skipping keeps it
-            # in scope for a later run once its PSF is registered.
-
-            if limmag is not None:
                 updates.append((float(limmag), rid))
+
+
+        # The cursor advances past every row of the batch, measured or not,
+        # so an unmeasurable row cannot stall the scan.
+
+        last_rid = max(row[0] for row in rows)
 
         if updates and not args.dry_run:
             try:
@@ -413,6 +581,12 @@ def parse_args(argv=None):
                    help="rows per read/update/commit batch (default 50, far "
                         "smaller than a pure-SQL backfill because each row "
                         "costs an image download)")
+    p.add_argument("--num-cores", type=int, default=1,
+                   help="worker processes measuring rows concurrently "
+                        "(default 1, single process; 0 means every core).  "
+                        "Each worker downloads and holds one image, so it "
+                        "costs about 1.3 GB of memory and one concurrent S3 "
+                        "transfer")
     p.add_argument("--work-dir", default=os.getenv("RAPID_WORK", "."),
                    help="directory for downloaded images and PSFs (default "
                         "$RAPID_WORK, else the current directory)")
@@ -461,6 +635,10 @@ def main(argv=None):
         print("*** Error: --n-clip-sigma must be > 0; quitting...")
         return 65
 
+    rc = preflight_num_cores(args)
+    if rc:
+        return rc
+
     rc = preflight_work_dir(args)
     if rc:
         return rc
@@ -481,6 +659,12 @@ def main(argv=None):
         rc = preflight_schema(cur)
         if rc:
             return rc
+
+        if args.batch_size < args.num_cores:
+            print(f"*** Warning: --batch-size {args.batch_size} is smaller "
+                  f"than --num-cores {args.num_cores}, so workers will idle; "
+                  f"raising the batch size to {args.num_cores}")
+            args.batch_size = args.num_cores
 
         total = count_in_scope(cur, args)
         print(f">> {total} row(s) in scope (vbest > 0 and status > 0"
