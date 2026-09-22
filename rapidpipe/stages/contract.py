@@ -21,7 +21,9 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -34,6 +36,15 @@ from rapidpipe.products.manifest import (
     ManifestError,
     OutputEntry,
     Unit,
+)
+from rapidpipe.products.storage import (
+    Location,
+    LocationError,
+    fetch_object,
+    fetch_prefix,
+    join,
+    parse_location,
+    publish_dir,
 )
 from rapidpipe.stages.settings import SettingsError, canonical_hash, resolve_settings
 
@@ -175,6 +186,14 @@ class StageContext:
     ``--inputs`` location's ``manifest.json``); ``body`` reads its
     ``inputs.products`` and ``outputs`` to find what it needs, and never
     reads a fresher copy from disk.
+
+    ``inputs_dir``/``outputs_dir`` are always local directories: when
+    ``--inputs``/``--outputs`` name an S3 prefix, ``run_stage`` fetches (or
+    stages) it under a temporary work directory first, and these two
+    fields point there. ``inputs_location``/``outputs_location`` carry the
+    original ``--inputs``/``--outputs`` argument strings unchanged, for a
+    stage that must record the location rather than the local path it was
+    resolved to (e.g. ``register``'s ``output_location``).
     """
 
     declaration: StageDeclaration
@@ -183,6 +202,8 @@ class StageContext:
     attempt_id: str
     inputs_dir: Path
     outputs_dir: Path
+    inputs_location: str
+    outputs_location: str
     settings: dict[str, Any]
     settings_hash: str
     input_manifest: Manifest
@@ -231,13 +252,73 @@ def _is_s3(location: str) -> bool:
     return location.startswith("s3://")
 
 
-def _read_input_manifest(inputs: str) -> Manifest:
-    if _is_s3(inputs):
-        raise UsageError(
-            f"--inputs {inputs!r}: S3 input locations are not implemented "
-            "in this stage runner; pass a local directory containing "
-            "manifest.json")
-    manifest_path = Path(inputs) / "manifest.json"
+#: Recognised as network-shaped: a fetch or publish is retryable (maps to
+#: TransientFailure) when the exception's class name ends with one of
+#: these, checked by name (suffix, not exact match, so a test's stand-in
+#: class such as ``FakeEndpointConnectionError`` is recognised the same
+#: way as ``botocore.exceptions.EndpointConnectionError``) rather than by
+#: ``isinstance``, since this module never imports botocore.
+_TRANSIENT_EXCEPTION_NAMES = (
+    "EndpointConnectionError",
+    "ConnectionError",
+    "ConnectTimeoutError",
+    "ReadTimeoutError",
+    "ThrottlingException",
+    "RequestTimeout",
+    "RequestTimeoutException",
+)
+
+
+#: A ClientError-shaped exception's ``response["Error"]["Code"]`` values
+#: that mean "the object is not there" -- a missing input manifest, mapped
+#: to InputRejected rather than the generic StageError other client errors
+#: get.
+_NOT_FOUND_ERROR_CODES = ("404", "NoSuchKey")
+
+
+def _client_error_code(exc: BaseException) -> str | None:
+    """The ``Error.Code`` of a ClientError-shaped exception, or ``None``.
+
+    Matches by shape (a ``response`` attribute holding that structure), not
+    by ``isinstance``, so a test's stand-in exception is recognised the
+    same way as a real ``botocore.exceptions.ClientError`` without this
+    module importing botocore.
+    """
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return None
+    error = response.get("Error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("Code")
+    return code if isinstance(code, str) else None
+
+
+def _map_storage_error(exc: BaseException) -> StageContractError:
+    """Map an S3 fetch/publish failure to the contract's exit codes.
+
+    A missing object (a ClientError-shaped exception with a "not found"
+    error code) is :class:`InputRejected`. A ``botocore``/``boto3``
+    exception (or ``ImportError`` for missing boto3) whose class name
+    looks network-shaped -- a connection failure, timeout, or throttling --
+    is a :class:`TransientFailure` (retrying the same work may succeed);
+    any other storage-layer or boto3 failure is a :class:`StageError`.
+    """
+    if isinstance(exc, ImportError):
+        return StageError(f"boto3 is required for an S3 location: {exc}")
+
+    code = _client_error_code(exc)
+    if code in _NOT_FOUND_ERROR_CODES:
+        return InputRejected(str(exc))
+
+    class_name = type(exc).__name__
+    if any(class_name.endswith(name) for name in _TRANSIENT_EXCEPTION_NAMES):
+        return TransientFailure(str(exc))
+    return StageError(str(exc))
+
+
+def _read_input_manifest_from(inputs_dir: Path, inputs_arg: str) -> Manifest:
+    manifest_path = inputs_dir / "manifest.json"
     if not manifest_path.exists():
         raise InputRejected(f"input manifest not found: {manifest_path}")
     try:
@@ -246,6 +327,16 @@ def _read_input_manifest(inputs: str) -> Manifest:
         raise InputRejected(f"{manifest_path}: not valid JSON: {exc}") from exc
     except ManifestError as exc:
         raise InputRejected(f"{manifest_path}: invalid manifest: {exc}") from exc
+
+
+def _work_root() -> Path:
+    """The base directory for a stage attempt's temporary work directory.
+
+    ``RAPIDPIPE_WORK`` if set, else the system temp directory (stage
+    contract: locations and settings come from the environment).
+    """
+    configured = os.environ.get("RAPIDPIPE_WORK")
+    return Path(configured) if configured else Path(tempfile.gettempdir())
 
 
 def _source_revision() -> str | None:
@@ -325,6 +416,7 @@ def run_stage(
     # rapidpipe.log's identity filter once configured) covers that window.
     logger = logging.getLogger(f"rapidpipe.stages.{declaration.name}")
 
+    work_dir: Path | None = None
     try:
         parser = _build_parser(declaration)
         try:
@@ -342,11 +434,11 @@ def run_stage(
         # stage logs its start, its exit code and its manifest path".
         logger = stage_log_context(declaration.name, args.run_id, args.attempt_id)
 
-        if _is_s3(args.outputs):
-            raise UsageError(
-                f"--outputs {args.outputs!r}: S3 output locations are not "
-                "implemented in this stage runner")
-        outputs_dir = Path(args.outputs)
+        try:
+            inputs_location = parse_location(args.inputs)
+            outputs_location = parse_location(args.outputs)
+        except LocationError as exc:
+            raise UsageError(str(exc)) from exc
 
         try:
             settings = resolve_settings(declaration.settings_schema_path, args.settings)
@@ -354,15 +446,53 @@ def run_stage(
             raise UsageError(str(exc)) from exc
         settings_hash = canonical_hash(settings)
 
-        input_manifest = _read_input_manifest(args.inputs)
+        needs_work_dir = inputs_location.is_s3() or outputs_location.is_s3()
+        if needs_work_dir:
+            _work_root().mkdir(parents=True, exist_ok=True)
+            work_dir = Path(tempfile.mkdtemp(
+                prefix=f"rapidpipe-{declaration.name}-{args.attempt_id}-",
+                dir=str(_work_root())))
+
+        if inputs_location.is_s3():
+            assert work_dir is not None
+            inputs_dir = work_dir / "inputs"
+        else:
+            assert inputs_location.path is not None
+            inputs_dir = inputs_location.path
+
+        if outputs_location.is_s3():
+            assert work_dir is not None
+            outputs_dir = work_dir / "outputs"
+        else:
+            assert outputs_location.path is not None
+            outputs_dir = outputs_location.path
+
+        if inputs_location.is_s3():
+            inputs_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                if args.dry_run:
+                    # Validate without fetching the whole prefix: one object.
+                    fetch_object(
+                        inputs_location, "manifest.json",
+                        inputs_dir / "manifest.json")
+                else:
+                    fetch_prefix(inputs_location, inputs_dir)
+            except LocationError as exc:
+                raise InputRejected(str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise _map_storage_error(exc) from exc
+
+        input_manifest = _read_input_manifest_from(inputs_dir, args.inputs)
 
         context = StageContext(
             declaration=declaration,
             run_id=args.run_id,
             unit_id=args.unit_id,
             attempt_id=args.attempt_id,
-            inputs_dir=Path(args.inputs),
+            inputs_dir=inputs_dir,
             outputs_dir=outputs_dir,
+            inputs_location=args.inputs,
+            outputs_location=args.outputs,
             settings=settings,
             settings_hash=settings_hash,
             input_manifest=input_manifest,
@@ -400,7 +530,7 @@ def run_stage(
             attempt=args.attempt_id,
             execution_record=execution_record_ref,
             inputs=Inputs(
-                manifest=str(Path(args.inputs) / "manifest.json"),
+                manifest=join(inputs_location, "manifest.json"),
                 products=dict(result.products_read),
                 result_sets=tuple(result.result_sets_read),
             ),
@@ -413,18 +543,39 @@ def run_stage(
         except ManifestError as exc:
             raise StageError(f"completion manifest failed validation: {exc}") from exc
 
+        if outputs_location.is_s3():
+            try:
+                publish_dir(outputs_dir, outputs_location)
+            except Exception as exc:  # noqa: BLE001
+                raise _map_storage_error(exc) from exc
+            published_manifest_ref = join(outputs_location, "manifest.json")
+        else:
+            published_manifest_ref = str(manifest_path)
+
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            work_dir = None
+
         logger.info(
             "stage=%s run=%s unit=%s attempt=%s exit=%s manifest=%s",
             declaration.name, context.run_id, context.unit_id,
-            context.attempt_id, int(ExitCode.SUCCESS), manifest_path)
+            context.attempt_id, int(ExitCode.SUCCESS), published_manifest_ref)
         return int(ExitCode.SUCCESS)
 
     except StageContractError as exc:
         logger.error(
             "stage=%s exit=%s error=%s", declaration.name, int(exc.exit_code), exc)
+        if work_dir is not None:
+            logger.info(
+                "stage=%s attempt failed; work directory kept at %s",
+                declaration.name, work_dir)
         return int(exc.exit_code)
     except Exception as exc:  # noqa: BLE001 - contract: unhandled -> 70
         logger.error(
             "stage=%s exit=%s error=%s", declaration.name, int(ExitCode.STAGE_ERROR),
             exc, exc_info=True)
+        if work_dir is not None:
+            logger.info(
+                "stage=%s attempt failed; work directory kept at %s",
+                declaration.name, work_dir)
         return int(ExitCode.STAGE_ERROR)

@@ -15,3 +15,9 @@ psycopg2-binary>=2.9
 # register writes at registration time. Wheels exist for manylinux and
 # macOS arm64, so no compiler is needed in CI or on a developer laptop.
 healpy>=1.17
+# rapidpipe.products.storage imports boto3 lazily, inside the functions
+# that fetch or publish an S3 --inputs/--outputs location, so importing
+# rapidpipe or running a stage entirely against local directories never
+# requires it and the unit-tests job need not install it. Whatever
+# environment runs a stage against S3 locations must carry it.
+boto3>=1.34
