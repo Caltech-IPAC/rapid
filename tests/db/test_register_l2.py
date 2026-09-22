@@ -35,12 +35,12 @@ from rapidpipe.runs import repository as repo
 from rapidpipe.science.spatial import healpix_indexes, tessellation_field
 from rapidpipe.stages.contract import ExitCode
 from rapidpipe.stages.register import main as register_main
-from tests.rapidpipe.test_admit import (
+from tests.unit.test_admit import (
     DELIVERED_VERSION,
     EXPOSURE_ID,
     _build_delivery,
 )
-from tests.rapidpipe.test_admit import main as admit_main
+from tests.unit.test_admit import main as admit_main
 
 from .test_repository import _make_run, _make_unit
 
