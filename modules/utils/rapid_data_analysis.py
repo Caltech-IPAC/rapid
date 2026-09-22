@@ -40,6 +40,11 @@ dn_per_sec_bunits = ["DN/S", "DN / S", "DN S-1", "DN/SEC", "DN / SEC", "ELECTRON
 # RAPID FITS images come in both flavors: the OpenUniverse and RIMTIMSIM conversions put the
 # image data in the primary HDU, whereas the SOC-simulation conversion writes an empty primary
 # HDU followed by an image extension.
+#
+# The test reads NAXIS from the header rather than inspecting hdu.data, which would materialize
+# the pixels of every HDU it looked at just to learn their shape.  For the gzipped L2 files in
+# the S3 buckets that doubled the decompression work, since the caller opens the file again to
+# read the data it actually wants.  ZNAXIS covers a tile-compressed image HDU, whose NAXIS is 0.
 #####################################################################################################
 
 def get_image_hdu_index(hdul):
@@ -56,7 +61,7 @@ def get_image_hdu_index(hdul):
 
     for i,hdu in enumerate(hdul):
 
-        if hdu.data is not None and np.ndim(hdu.data) == 2:
+        if hdu.header.get("NAXIS") == 2 or hdu.header.get("ZNAXIS") == 2:
             return i
 
     raise ValueError("Method get_image_hdu_index: no HDU with two-dimensional image data was found")
