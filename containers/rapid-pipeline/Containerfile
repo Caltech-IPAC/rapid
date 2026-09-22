@@ -1,0 +1,103 @@
+# rapid-pipeline — the pipeline application image, built from this
+# repository's own recorded source commit (specification, "Repositories":
+# `rapid` "holds ... the container build recipe and dependency
+# definitions"; "A `rapid` release supplies the source commit;
+# `rapid_systems` builds and publishes the image and records the
+# resulting digest").
+#
+# This recipe replaces the equivalent Containerfile that used to live in
+# `rapid_systems` (containers/rapid-pipeline/Containerfile there), and the
+# legacy per-repo `docker/Dockerfile_ubuntu_runSingleSciencePipeline` and
+# its siblings under `docker/`. Those legacy files stay in this repository
+# untouched on this branch; retiring them is a separate change for
+# whoever owns that follow-up, not this one. There is no
+# `pipeline.entrypoints.job` entrypoint here — the current stage contract
+# (rapid_docs/system/stage-contract.md, "Invocation") is `rapidpipe stage
+# <name> --run ... --unit ... --attempt ... --inputs ... --outputs ...`,
+# and that is the only invocation this image knows.
+#
+# Base contract: RAPID_BASE_IMAGE must be a UBI10 image (or compatible)
+# carrying the `rapid-pipeline` RPM group's C tools under /opt/rapid, and
+# the `rapid-python` RPM's locked conda environment at
+# RAPID_PYTHON's prefix (default /opt/rapid/conda/envs/rapid) satisfying
+# every runtime import this image's own gate checks below. Which base
+# image that is, where it is published, and the digest it resolves to at
+# build time are `rapid_systems`' decisions -- this Containerfile takes
+# only a full image reference (registry, repository and tag or digest) as
+# a build argument and never names a registry, account or digest itself.
+# Account identifiers, bucket names and hostnames are injected at deploy
+# time and are never committed here (specification, "Repositories").
+ARG RAPID_BASE_IMAGE
+FROM ${RAPID_BASE_IMAGE}
+
+ARG RAPID_SOURCE_REVISION
+ARG RAPID_BUILD_DATE
+# The base environment's own interpreter. Overridable so CI can prove this
+# recipe's mechanics against a stand-in base with no science stack (see
+# .github/workflows/container.yml) without touching the release path.
+ARG RAPID_PYTHON=/opt/rapid/conda/envs/rapid/bin/python
+# Off by default: the production base environment is locked and built
+# offline (rapid_systems/rpms/rapid-python) and must already satisfy
+# requirements.txt. This switch exists only so CI can install
+# requirements.txt into a stand-in base that has no science stack at all;
+# it must never be set for a release build, which relies entirely on the
+# base image's pre-resolved environment.
+ARG RAPID_INSTALL_REQUIREMENTS=0
+
+LABEL org.opencontainers.image.title="rapid-pipeline" \
+      org.opencontainers.image.description="RAPID pipeline image: rapidpipe installed over the rapid-pipeline base environment" \
+      org.opencontainers.image.source="https://github.com/Caltech-IPAC/rapid" \
+      org.opencontainers.image.revision="${RAPID_SOURCE_REVISION}" \
+      org.opencontainers.image.created="${RAPID_BUILD_DATE}"
+
+# The filtered source tree that build.sh's `git archive` assembles into
+# ./src (a sibling of this Containerfile, inside the build context) --
+# see build.sh's header for the exact exclude list and why each entry is
+# excluded. One layer, no RUN rm/exclude logic and no multi-stage build,
+# by design: all filtering happens in build.sh's archive step, not here.
+COPY src/ /code/
+
+# Install the distribution from the copied source. --no-deps: the base
+# environment supplies every runtime dependency (numpy, astropy, healpy,
+# psycopg2, ...); this step installs only rapidpipe itself.
+RUN ${RAPID_PYTHON} -m pip install --no-cache-dir --no-deps /code
+
+# CI-only: install requirements.txt into a stand-in base that has no
+# science stack, so the steps below can prove the recipe's mechanics on a
+# runner with no access to the real base image. Never set for a release
+# build -- a release's base environment is already locked to satisfy
+# requirements.txt, and installing over it here would hide a base that
+# had silently drifted rather than failing the build on it.
+RUN if [ "$RAPID_INSTALL_REQUIREMENTS" = "1" ]; then \
+      ${RAPID_PYTHON} -m pip install --no-cache-dir -r /code/requirements.txt; \
+    fi
+
+# Import gate: a base environment missing a runtime dependency fails here,
+# at build time, rather than surfacing later as a failed Batch job. The
+# module list is `import-gate.py`, kept in step with requirements.txt --
+# see that file's header for why it is not hard-coded here. The build
+# context is this directory (containers/rapid-pipeline), so the path
+# below is relative to it, alongside this Containerfile.
+COPY import-gate.py /tmp/import-gate.py
+RUN ${RAPID_PYTHON} /tmp/import-gate.py && rm -f /tmp/import-gate.py
+RUN ${RAPID_PYTHON} -m rapidpipe.cli.main --version
+
+ENV PYTHONUNBUFFERED=1 \
+    RAPID_SOURCE_REVISION=${RAPID_SOURCE_REVISION}
+
+WORKDIR /work
+
+# ENTRYPOINT must run the interpreter named by RAPID_PYTHON, but exec-form
+# ENTRYPOINT cannot expand a build ARG at container-run time -- so bake a
+# two-line wrapper script at build time (when the ARG is in scope) and
+# ENTRYPOINT that. `exec` in the wrapper keeps the interpreter as PID 1,
+# same reasoning as the legacy image's own exec-form ENTRYPOINT.
+RUN printf '#!/bin/sh\nexec "%s" -m rapidpipe.cli.main "$@"\n' "${RAPID_PYTHON}" \
+      > /usr/local/bin/rapidpipe-entrypoint && \
+    chmod +x /usr/local/bin/rapidpipe-entrypoint
+
+ENTRYPOINT ["/usr/local/bin/rapidpipe-entrypoint"]
+CMD ["--help"]
+# The Batch job supplies the real invocation:
+#   stage <name> --run <run-id> --unit <unit-id> --attempt <attempt-id> \
+#       --inputs <dir-or-s3-prefix> --outputs <dir-or-s3-prefix>
