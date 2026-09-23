@@ -2,12 +2,22 @@
 
 `dev`: ``build_sfft_command_args`` (``pipeline/sfftCommandSubs.py``) and
 the SFFT block inline in ``awsBatchSubmitJobs_runSingleSciencePipeline.py``.
-SFFT's science (``modules/sfft/sfft_rapid_rimtimsim.py``, in its own
-``/sfft_env`` virtual environment) is not ported: the stage builds `dev`'s
-command, runs it in a bash shell between ``source /sfft_env/bin/activate``
-and ``deactivate``, and handles its output files as `dev` does. A non-zero
-exit is SFFT failing, which is not fatal (`dev` exits 4, which Batch
-counts as success; the rebuild notes it in the execution record).
+SFFT's science (``modules/sfft/sfft_rapid_rimtimsim.py``) is not ported:
+the stage builds `dev`'s command and handles its output files as `dev`
+does. A non-zero exit is SFFT failing, which is not fatal (`dev` exits 4,
+which Batch counts as success; the rebuild notes it in the execution
+record).
+
+`dev` ran SFFT in its own ``/sfft_env`` virtual environment (`` source
+/sfft_env/bin/activate && ... && deactivate``, with ``python3.11``). The
+rebuild's default is different: the pipeline image installs sfft 1.7.3
+into the main conda environment the stage itself runs under (see
+``containers/rapid-pipeline/Containerfile``'s note on
+``RAPID_SFFT_VENV``), so by default SFFT runs directly, with no
+activation step, using the stage's own interpreter --- the same
+convention ``[paths] python`` uses for ZOGY. `dev`'s values remain
+selectable, e.g. for a venv-based image; see ``[sfft]`` in
+``rapidpipe/settings/difference.toml``.
 """
 
 from __future__ import annotations
@@ -97,5 +107,13 @@ def sfft_file_names(crossconv_flag: bool) -> dict[str, str]:
 
 
 def shell_command(activate_cmd: str, sfft_cmd: list[str], deactivate_cmd: str = "deactivate") -> str:
-    """`dev`'s one-shell command: activate, run, deactivate, joined by ``&&``."""
+    """The command `run_shell` executes.
+
+    An empty ``activate_cmd`` means no activation and no deactivation: the
+    command runs directly, as it does in the stage's own environment. A
+    non-empty ``activate_cmd`` reproduces `dev`'s one-shell command,
+    activating, running, then deactivating, joined by ``&&``.
+    """
+    if not activate_cmd:
+        return " ".join(sfft_cmd)
     return activate_cmd + " && " + " ".join(sfft_cmd) + " && " + deactivate_cmd
