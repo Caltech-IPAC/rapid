@@ -231,7 +231,11 @@ class StageResult:
     input manifest's declared products it read. ``result_sets_read`` names
     the database result-set instance ids the stage read, for the stages
     the stage contract names (``crossmatch``, ``statistics``, ``prune``);
-    transform stages leave both empty as appropriate. ``body`` assembles
+    transform stages leave both empty as appropriate. ``execution_notes``
+    is anything the stage must record about how the attempt went that is
+    not an output (the difference stage notes a non-fatal SFFT failure
+    here); ``run_stage`` writes it into the execution record under
+    ``notes``, and writes no ``notes`` key when it is empty. ``body`` assembles
     neither ``run``/``unit``/``stage``/``attempt`` nor the execution record
     or input-manifest reference -- ``run_stage`` supplies those from the
     invocation it already parsed.
@@ -240,6 +244,7 @@ class StageResult:
     outputs: Sequence[OutputEntry]
     products_read: dict[str, str] = field(default_factory=dict)
     result_sets_read: Sequence[str] = ()
+    execution_notes: dict[str, Any] = field(default_factory=dict)
 
 
 def _build_parser(declaration: StageDeclaration) -> argparse.ArgumentParser:
@@ -375,6 +380,7 @@ def _write_execution_record(
     outputs_dir: Path,
     attempt_id: str,
     settings_hash: str,
+    notes: dict[str, Any] | None = None,
 ) -> str:
     """Write ``exec/<attempt>.json`` under ``outputs_dir``; return its
     manifest-relative path.
@@ -397,6 +403,8 @@ def _write_execution_record(
         "source_revision": _source_revision(),
         "image_digest": os.environ.get("RAPIDPIPE_IMAGE_DIGEST"),
     }
+    if notes:
+        record["notes"] = notes
     record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     return relative_path
 
@@ -559,7 +567,7 @@ def run_stage(
 
         outputs_dir.mkdir(parents=True, exist_ok=True)
         execution_record_ref = _write_execution_record(
-            outputs_dir, args.attempt_id, settings_hash)
+            outputs_dir, args.attempt_id, settings_hash, dict(result.execution_notes))
 
         manifest = Manifest(
             run=args.run_id,
