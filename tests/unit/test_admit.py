@@ -51,7 +51,8 @@ def _header_dict(*, include_checksums_placeholder=True) -> dict:
     }
 
 
-def _build_fits(path, *, with_checksums=True, delete_keyword=None, sca_value=None):
+def _build_fits(path, *, with_checksums=True, delete_keyword=None, sca_value=None,
+                 equinox_value=None):
     rng = np.random.default_rng(0)
     data = rng.normal(size=(NAXIS, NAXIS)).astype(np.float32)
 
@@ -60,6 +61,8 @@ def _build_fits(path, *, with_checksums=True, delete_keyword=None, sca_value=Non
         header[keyword] = value
     if sca_value is not None:
         header["SCA-NUM"] = sca_value
+    if equinox_value is not None:
+        header["EQUINOX"] = equinox_value
     if delete_keyword is not None and delete_keyword in header:
         del header[delete_keyword]
 
@@ -317,6 +320,24 @@ def test_optional_keywords_absent_give_none_not_zero(tmp_path):
     assert rc == int(ExitCode.SUCCESS)
     manifest = Manifest.read(outputs_dir / "manifest.json")
     assert manifest.outputs[0].registration["zptmag"] is None
+
+
+def test_missing_equinox_falls_back_to_the_configured_default(tmp_path):
+    inputs_dir, _ = _build_delivery(tmp_path, delete_keyword="EQUINOX")
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, _body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+    manifest = Manifest.read(outputs_dir / "manifest.json")
+    assert manifest.outputs[0].registration["equinox"] == 2000.0
+
+
+def test_present_equinox_keyword_wins_over_the_default(tmp_path):
+    inputs_dir, _ = _build_delivery(tmp_path, equinox_value=1950.0)
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, _body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+    manifest = Manifest.read(outputs_dir / "manifest.json")
+    assert manifest.outputs[0].registration["equinox"] == 1950.0
 
 
 def test_dry_run_exits_zero_and_writes_nothing(tmp_path):

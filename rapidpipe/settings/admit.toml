@@ -26,6 +26,19 @@ zptmag = "ZPTMAG"
 skymean = "SKY-MEAN"
 equinox = "EQUINOX"
 
+# [defaults] supplies a value for a field whose header keyword is absent, so
+# that field can still be optional at the header level while never being
+# None downstream (products page: "nothing substitutes zero for an
+# unavailable measurement" is about optional fields with no field-wide
+# convention; equinox is different -- J2000 is a real, near-universal
+# convention, not a stand-in for zero). A present EQUINOX keyword still
+# wins over this default. The dev socsim registration path
+# (`database/sims/db_register_socsim_files.py`) hardcodes this same value
+# for exactly the same reason: its real-world deliveries carry no EQUINOX
+# keyword at all.
+[defaults]
+equinox = 2000.0
+
 [verify]
 # Whether a missing DATASUM/CHECKSUM keyword pair is InputRejected (true)
 # or merely recorded as status = 0 (false).
