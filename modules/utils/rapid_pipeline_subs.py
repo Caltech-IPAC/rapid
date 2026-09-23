@@ -97,6 +97,42 @@ def get_galsim_roman_ab_zeropoint(filter_name):
 
 
 #####################################################################################################
+# SOC-simulation AB magnitude zeropoints, for flux in DN/s, one representative value per filter.
+#
+# Each SOC-sim file carries its own ZPTMAG, derived by sims/src/socsims/convert_socsims.py from
+# that file's meta.photometry as
+#
+#     -2.5 * log10(conversion_megajanskys * 1e6 * pixel_area / 3631)
+#
+# so the value is per SCA, not per filter.  The numbers below are the median over all 18 SCAs,
+# measured on 2026-09-23 by reading the header of one file per (filter, SCA) from
+# s3://socsims-fakesrc-fits-20260807-lite, 144 files in all.  None of them carried the nominal
+# fallback value, so every one was derived from its own photometric calibration.  The spread
+# across SCAs within a filter is 0.13 to 0.18 mag, which is the per-detector calibration a
+# single per-filter number necessarily averages over.
+#
+# These run 0.81 to 0.87 mag below the GalSim-derived zeropoints above, a consistent offset
+# between the two throughput models rather than a per-filter disagreement.
+#
+# This table is what the shipped zprefimg_<filter> values in the [AWAICGEN] block are set to,
+# so that a SOC-sim frame is coadded at a scale factor of about one.  It is not used at run
+# time: the reference-image zeropoint is configuration, read from the config file, and this is
+# the record of where the shipped numbers came from and how to regenerate them.
+#####################################################################################################
+
+socsim_ab_zeropoints = {
+    "F062": 25.8939023158, "R062": 25.8939023158,
+    "F087": 25.5924495668, "Z087": 25.5924495668,
+    "F106": 25.6351909166, "Y106": 25.6351909166,
+    "F129": 25.6306327632, "J129": 25.6306327632,
+    "F158": 25.6549325807, "H158": 25.6549325807,
+    "F184": 25.1999194557,
+    "F213": 25.1449429981, "K213": 25.1449429981,
+    "F146": 26.8630336165, "W146": 26.8630336165,
+}
+
+
+#####################################################################################################
 # Resolve the reference-image zeropoint for a filter.
 #
 # The reference image is built by scaling every input frame by 10 ** (0.4 * (zprefimg - ZPTMAG)),

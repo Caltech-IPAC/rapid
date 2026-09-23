@@ -18,7 +18,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 
 from modules.utils.rapid_pipeline_subs import (galsim_roman_ab_zeropoints,
-                                               get_reference_image_zeropoint)
+                                               get_reference_image_zeropoint,
+                                               socsim_ab_zeropoints)
 
 MASTER_INI = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "cdf",
                           "awsBatchSubmitJobs_launchSingleSciencePipeline.ini")
@@ -93,9 +94,9 @@ def test_master_ini_carries_every_filter():
             f"the master .ini has no zprefimg entry for {filter_name}"
 
 
-def test_master_ini_values_match_the_galsim_table():
+def test_master_ini_values_match_the_socsim_table():
 
-    """The shipped values are the GalSim-derived zeropoints.
+    """The shipped values are the socsim zeropoints.
 
     They are configuration, so an operator may retune them per data set; this
     test states what the repository ships, so that an edit is a deliberate act
@@ -106,16 +107,32 @@ def test_master_ini_values_match_the_galsim_table():
 
     for filter_name in RAPID_FILTER_NAMES:
         assert get_reference_image_zeropoint(block, filter_name) == \
-            pytest.approx(galsim_roman_ab_zeropoints[filter_name], abs=1.0e-9)
+            pytest.approx(socsim_ab_zeropoints[filter_name], abs=1.0e-9)
 
 
-def test_scale_factor_is_unity_for_a_corrected_openuniverse_frame():
+def test_scale_factor_is_unity_for_a_socsim_frame():
+
+    """The shipped values put a socsim frame at the scale it already has."""
+
+    block = _awaicgen_block()
+
+    for filter_name in RAPID_FILTER_NAMES:
+
+        zprefimg = get_reference_image_zeropoint(block, filter_name)
+        zptmag = socsim_ab_zeropoints[filter_name]
+
+        scale = 10.0 ** (0.4 * (zprefimg - zptmag))
+
+        assert scale == pytest.approx(1.0, abs=1.0e-9)
+
+
+def test_scale_factor_stays_near_unity_for_the_other_data_set():
 
     """The point of the change: frames scale by about one, not by 1e-4.
 
-    An OpenUniverse frame whose ZPTMAG has been corrected carries exactly the
-    GalSim-derived zeropoint, so the reference image is built on the scale the
-    frames already have.
+    A corrected OpenUniverse frame carries the GalSim-derived zeropoint, which
+    sits about 0.85 mag above the shipped socsim values, so it coadds at about
+    0.46 rather than at the 1e-4 the single value of 17.0 produced.
     """
 
     block = _awaicgen_block()
@@ -127,4 +144,10 @@ def test_scale_factor_is_unity_for_a_corrected_openuniverse_frame():
 
         scale = 10.0 ** (0.4 * (zprefimg - zptmag))
 
-        assert scale == pytest.approx(1.0, abs=1.0e-9)
+        assert 0.1 < scale < 10.0, \
+            f"{filter_name}: OpenUniverse frames would coadd at {scale}"
+
+        legacy_scale = 10.0 ** (0.4 * (17.0 - zptmag))
+
+        assert legacy_scale < 1.0e-3, \
+            f"{filter_name}: the legacy scale was meant to be tiny, got {legacy_scale}"
