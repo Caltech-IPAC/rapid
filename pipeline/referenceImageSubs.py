@@ -40,6 +40,13 @@ def generateReferenceImage(s3_client,
 
     infobits_refimage = 0                                                             # TODO
 
+
+    # Resolved per filter inside the loop over input frames, from the FILTER of the frames
+    # themselves; seeded here with the scalar fallback so that it is defined for the return
+    # value and the MAGZP keyword even if no frame is ever read.
+
+    zprefimg = float(awaicgen_dict["zprefimg"])
+
     print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
 
     response = s3_client.download_file(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename)
@@ -202,10 +209,8 @@ def generateReferenceImage(s3_client,
 
             # Reformat the FITS file so that the image data are contained in the PRIMARY header.
             # Normalize by exposure time, and scale the input image data such that the zero point
-            # of the reference image will always be a fixed value, as assigned in the input config file.
-            # The data units of the reference image data will be DN/s.
-
-            zprefimg = float(awaicgen_dict["zprefimg"])
+            # of the reference image will be the value assigned to this frame's filter in the
+            # input config file.  The data units of the reference image data will be DN/s.
 
             fname_output = refimage_input_filename.replace(".fits.gz","_reformatted.fits")
             fname_output_unc = refimage_input_filename.replace(".fits.gz","_reformatted_unc.fits")
@@ -220,6 +225,13 @@ def generateReferenceImage(s3_client,
             hdr["BUNIT"] = "DN/s"
 
             data_norm = np.array(data) / exptime
+
+
+            # The zeropoint the coadd will be built on, for the filter these frames were taken
+            # in.  Read from the frame rather than passed in, because the frames are the only
+            # thing here that knows the filter, and every frame of a reference image shares it.
+
+            zprefimg = util.get_reference_image_zeropoint(awaicgen_dict,hdr.get("FILTER"))
 
             zptmag = hdr["ZPTMAG"]
             flux_scale_factor = 10 ** (0.4 * (zprefimg - zptmag))

@@ -23,13 +23,16 @@ Subs used by the RAPID pipeline related to difference-image processing.
 # 2. SCA gain and readout noise.
 # 3. EXPTIME
 # 4. Data-clipped-image mean
+# 5. fix_openuniverse_zptmag, which replaces the header ZPTMAG with the GalSim-derived
+#    per-filter AB zeropoint.  Set it only for the OpenUniverse sims; see the note below.
 
 def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,
                                                                               sca_gain,
                                                                               sca_readout_noise,
                                                                               clipped_image_mean,
                                                                               fname_output,
-                                                                              fname_output_unc):
+                                                                              fname_output_unc,
+                                                                              fix_openuniverse_zptmag=False):
 
 
     # Reformat the FITS file so that the image data are contained in the PRIMARY header.
@@ -42,6 +45,49 @@ def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(in
 
     exptime = hdr["EXPTIME"]
     hdr["BUNIT"] = "DN/s"
+
+
+    # Replace the ZPTMAG of an OpenUniverse sim with the GalSim-derived per-filter AB zeropoint,
+    # which is the right basis for these sims because GalSim generated them.
+    #
+    # The OpenUniverse headers do not carry a photometric zeropoint at all.  Their ZPTMAG is
+    # GalSim's flux-scaling term, which is exactly 2.5 * log10(EXPTIME * collecting_area) with
+    # collecting_area = 37570 cm^2 = galsim.roman.collecting_area: it has no filter dependence,
+    # so H158 and Y106 frames of equal exposure carry identical values, and it tracks exposure
+    # time rather than throughput.  What is missing from it is the filter's bandpass zeropoint.
+    # Left alone it makes magnitudes about 9 mag too bright and, because the data here are
+    # divided by EXPTIME while the keyword is not, it also makes frames of different exposure
+    # time inconsistent with each other.
+    #
+    # Only the keyword changes.  The pixels are untouched, and the reference image is brought
+    # onto this image's flux scale by the later gain-matching step rather than by this keyword,
+    # so the difference image inherits the corrected zeropoint and nothing upstream of it moves.
+    #
+    # The RIMTIMSIM and SOC sims, and real data, carry real zeropoints and must not be touched,
+    # which is why this is off unless the caller asks for it.
+
+    if fix_openuniverse_zptmag:
+
+        filter_name = hdr.get("FILTER")
+
+        zptmag_derived = util.get_galsim_roman_ab_zeropoint(filter_name)
+
+        if zptmag_derived is None:
+            print(f"*** Warning: fix_openuniverse_zptmag is set, but FILTER = {filter_name} is "
+                  "not a Roman WFI filter; leaving ZPTMAG unchanged")
+        else:
+            zptmag_original = hdr.get("ZPTMAG")
+
+            print(f"fix_openuniverse_zptmag: FILTER = {filter_name}, replacing "
+                  f"ZPTMAG = {zptmag_original} with GalSim-derived {zptmag_derived}")
+
+            # The comments are kept short enough that the long original value still leaves an
+            # 80-column card, and the history is two lines rather than one wrapped mid-word.
+
+            hdr["ZPTMAGOU"] = (zptmag_original, "Original OpenUniverse ZPTMAG")
+            hdr["ZPTMAG"] = (zptmag_derived, "GalSim AB zeropoint for flux in DN/s")
+            hdr.add_history("ZPTMAG replaced with GalSim-derived per-filter AB zeropoint.")
+            hdr.add_history("Original OpenUniverse ZPTMAG saved in ZPTMAGOU.")
 
     np_data = np.array(data)
     new_row = np.full(np_data.shape[1], clipped_image_mean)
@@ -279,9 +325,15 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     # The MAGZP keyword will not be in the header of the swarped reference image, because the
     # swarped-reference-image FITS header is inherited from the science image with PV keywords.
-    # So get the reference-image zero point from the [AWAICGEN] config-file block.
+    # So get the reference-image zero point from the [AWAICGEN] config-file block, for the same
+    # filter the reference image was coadded in, which is the filter of this science image.
+    #
+    # This must resolve to the value the reference image was actually built on.  A reference
+    # image generated before the per-filter entries existed carries MAGZP = 17.0 and needs the
+    # configuration that produced it, or this default gain-matching factor will be wrong by the
+    # difference.
 
-    magzpref = float(awaicgen_dict["zprefimg"])
+    magzpref = util.get_reference_image_zeropoint(awaicgen_dict,hdr_sci.get("FILTER"))
 
     print(f"magzpref={magzpref}")
 

@@ -216,6 +216,14 @@ if __name__ == '__main__':
     else:
         repair_extreme_artifact_pixels = False
         extreme_artifact_threshold = None
+
+    # OpenUniverse ZPTMAG fix.  Defaults to disabled, so the zeropoint of every other data set
+    # is left exactly as its files carry it.
+
+    if 'openuniverse_zptmag_fix' in config_input['SCI_IMAGE']:
+        openuniverse_zptmag_fix = ast.literal_eval(config_input['SCI_IMAGE']['openuniverse_zptmag_fix'])
+    else:
+        openuniverse_zptmag_fix = False
     rid_sciimage = int(config_input['SCI_IMAGE']['rid'])
     sca_sciimage = int(config_input['SCI_IMAGE']['sca'])
     fid_sciimage = int(config_input['SCI_IMAGE']['fid'])
@@ -942,7 +950,8 @@ if __name__ == '__main__':
                                                                                    sca_readout_noise,
                                                                                    avg_sci_img,
                                                                                    reformatted_science_image_filename,
-                                                                                   reformatted_science_uncert_image_filename)
+                                                                                   reformatted_science_uncert_image_filename,
+                                                                                   fix_openuniverse_zptmag=openuniverse_zptmag_fix)
 
 
 

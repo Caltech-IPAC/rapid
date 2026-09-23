@@ -29,6 +29,192 @@ to_zone = tz.gettz('America/Los_Angeles')
 from datetime import datetime, timezone
 
 
+#####################################################################################################
+# Roman WFI AB magnitude zeropoints, for flux in DN/s, derived from the GalSim Roman module.
+#
+# For each filter,
+#
+#     zeropoint [AB mag] = bandpass.zeropoint + 2.5 * log10(collecting_area)
+#
+# which inverts the GalSim convention that a source of AB magnitude m yields
+#
+#     counts = 10 ** (-0.4 * (m - bandpass.zeropoint)) * exptime * collecting_area
+#
+# Derived from galsim 2.7.2, with collecting_area = 37570 cm^2 (2.5 * log10 of it is
+# 11.437102987658461).  Regenerate with:
+#
+#     import math, galsim.roman as roman
+#     bps = roman.getBandpasses(AB_zeropoint=True)
+#     area_term = 2.5 * math.log10(roman.collecting_area)
+#     {f: bp.zeropoint + area_term for f, bp in bps.items()}
+#
+# pipeline/test/test_galsim_zeropoints.py checks this table against the installed GalSim, so
+# drift between the two is caught rather than silently changing a calibration.  The values are
+# written out here rather than derived at run time so that a GalSim upgrade cannot quietly
+# re-calibrate newly processed data while data already processed keeps the older numbers, and so
+# that this module stays importable where GalSim is not installed, such as the database scripts.
+#
+# This is the right basis for the OpenUniverse sims, which GalSim generated.  It runs 0.06 to
+# 0.33 mag away from the Roman nominal table for the main filters and 0.6 mag for K213; the
+# nominal table lives in sims/src/socsims/convert_socsims.py, which uses it only as a fallback
+# for a SOC-sim file whose own meta.photometry is unavailable.
+#
+# Keyed by both spellings a Roman filter goes by: the designation used in the PSF filenames and
+# in the SOC-sim ASDF metadata (F062, F106, ...), and the RAPID name used in the Filters
+# database table, in the OpenUniverse FITS headers and by GalSim itself (R062, Y106, ...).
+# F184 is spelled the same either way.
+#####################################################################################################
+
+galsim_roman_ab_zeropoints = {
+    "F062": 26.7339352625, "R062": 26.7339352625,
+    "F087": 26.4014374563, "Z087": 26.4014374563,
+    "F106": 26.4606501787, "Y106": 26.4606501787,
+    "F129": 26.4767282775, "J129": 26.4767282775,
+    "F158": 26.5112678175, "H158": 26.5112678175,
+    "F184": 26.0590969786,
+    "F213": 26.0164185708, "K213": 26.0164185708,
+    "F146": 27.7071790899, "W146": 27.7071790899,
+}
+
+
+def get_galsim_roman_ab_zeropoint(filter_name):
+
+    """
+    Method get_galsim_roman_ab_zeropoint
+
+    Inputs:
+    filter_name             Filter name in either spelling, as a string, or None.
+
+    Returns:
+    zptmag                  GalSim-derived AB magnitude zeropoint for flux in DN/s [AB mag], or
+                            None when the filter is not one of the eight Roman WFI filters.
+    """
+
+    if filter_name is None:
+        return None
+
+    return galsim_roman_ab_zeropoints.get(str(filter_name).strip().upper())
+
+
+#####################################################################################################
+# SOC-simulation AB magnitude zeropoints, for flux in DN/s, one representative value per filter.
+#
+# Each SOC-sim file carries its own ZPTMAG, derived by sims/src/socsims/convert_socsims.py from
+# that file's meta.photometry as
+#
+#     -2.5 * log10(conversion_megajanskys * 1e6 * pixel_area / 3631)
+#
+# so the value is per SCA, not per filter.  The numbers below are the median over all 18 SCAs,
+# measured on 2026-09-23 by reading the header of one file per (filter, SCA) from
+# s3://socsims-fakesrc-fits-20260807-lite, 144 files in all.  None of them carried the nominal
+# fallback value, so every one was derived from its own photometric calibration.  The spread
+# across SCAs within a filter is 0.13 to 0.18 mag, which is the per-detector calibration a
+# single per-filter number necessarily averages over.
+#
+# These run 0.81 to 0.87 mag below the GalSim-derived zeropoints above, a consistent offset
+# between the two throughput models rather than a per-filter disagreement.
+#
+# This table is what the shipped zprefimg_<filter> values in the [AWAICGEN] block are set to,
+# so that a SOC-sim frame is coadded at a scale factor of about one.  It is not used at run
+# time: the reference-image zeropoint is configuration, read from the config file, and this is
+# the record of where the shipped numbers came from and how to regenerate them.
+#####################################################################################################
+
+socsim_ab_zeropoints = {
+    "F062": 25.8939023158, "R062": 25.8939023158,
+    "F087": 25.5924495668, "Z087": 25.5924495668,
+    "F106": 25.6351909166, "Y106": 25.6351909166,
+    "F129": 25.6306327632, "J129": 25.6306327632,
+    "F158": 25.6549325807, "H158": 25.6549325807,
+    "F184": 25.1999194557,
+    "F213": 25.1449429981, "K213": 25.1449429981,
+    "F146": 26.8630336165, "W146": 26.8630336165,
+}
+
+
+#####################################################################################################
+# Resolve the reference-image zeropoint for a filter.
+#
+# The reference image is built by scaling every input frame by 10 ** (0.4 * (zprefimg - ZPTMAG)),
+# so zprefimg is the zeropoint the coadd ends up on, and it is written to the reference image as
+# MAGZP and used again when the science and reference images are gain-matched.  A single value
+# for every filter puts each filter's coadd a different distance from its own natural scale; a
+# per-filter value keeps every scale factor near unity and leaves the coadd on a scale where
+# mag = -2.5 * log10(flux) + zprefimg is an AB magnitude.
+#
+# Values come from the [AWAICGEN] block of the master config file, as zprefimg_<filter>, with
+# the scalar zprefimg as the fallback for a filter that has no entry of its own.  Either
+# spelling of the filter is accepted, since the config file and the FITS headers do not have to
+# agree on which one they use.
+#####################################################################################################
+
+#: Roman filter designations mapped to the RAPID names carried by FITS FILTER headers and by the
+#: Filters database table.  F184 is spelled the same either way.
+
+roman_to_rapid_filter_names = {
+    "F062": "R062",
+    "F087": "Z087",
+    "F106": "Y106",
+    "F129": "J129",
+    "F158": "H158",
+    "F184": "F184",
+    "F213": "K213",
+    "F146": "W146",
+}
+
+rapid_to_roman_filter_names = {v: k for k, v in roman_to_rapid_filter_names.items()}
+
+
+def get_reference_image_zeropoint(awaicgen_dict,filter_name):
+
+    """
+    Method get_reference_image_zeropoint
+
+    Inputs:
+    awaicgen_dict           The [AWAICGEN] config-file block, as a dictionary.
+    filter_name             Filter name in either spelling, as a string, or None.
+
+    Returns:
+    zprefimg                Reference-image zeropoint for that filter [AB mag].
+
+    Raises KeyError when neither a per-filter entry nor the scalar zprefimg is configured,
+    because a reference image built on a zeropoint nobody chose is worse than a job that stops.
+    """
+
+    if filter_name is not None:
+
+        name = str(filter_name).strip().upper()
+
+        candidates = [name]
+
+        alternate = roman_to_rapid_filter_names.get(name,
+                                                    rapid_to_roman_filter_names.get(name))
+
+        if alternate is not None:
+            candidates.append(alternate)
+
+        for candidate in candidates:
+
+            key = "zprefimg_" + candidate.lower()
+
+            if key in awaicgen_dict:
+                zprefimg = float(awaicgen_dict[key])
+                print(f"get_reference_image_zeropoint: {key} = {zprefimg}")
+                return zprefimg
+
+    if "zprefimg" not in awaicgen_dict:
+        raise KeyError("Method get_reference_image_zeropoint: neither a per-filter "
+                       f"zprefimg_<filter> entry for FILTER = {filter_name} nor the scalar "
+                       "zprefimg is configured in the [AWAICGEN] block")
+
+    zprefimg = float(awaicgen_dict["zprefimg"])
+
+    print(f"*** Warning: no zprefimg_<filter> entry for FILTER = {filter_name}; "
+          f"falling back to the scalar zprefimg = {zprefimg}")
+
+    return zprefimg
+
+
 def utc_to_local(utc_dt):
     """Converts a UTC datetime object to local time."""
 

@@ -220,7 +220,13 @@ awaicgen_dict["awaicgen_output_mosaic_cov_map_file"] = config_input['AWAICGEN'][
 awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"] = config_input['AWAICGEN']['awaicgen_output_mosaic_uncert_image_file']
 awaicgen_dict["awaicgen_debug"] = config_input['AWAICGEN']['awaicgen_debug']
 awaicgen_dict["awaicgen_verbose"] = config_input['AWAICGEN']['awaicgen_verbose']
-awaicgen_dict["zprefimg"] = config_input['AWAICGEN']['zprefimg']
+
+# The scalar zprefimg and every per-filter zprefimg_<filter> entry, copied by prefix so that
+# adding a filter to the config file needs no change here.
+
+for awaicgen_key in config_input['AWAICGEN']:
+    if awaicgen_key.startswith("zprefimg"):
+        awaicgen_dict[awaicgen_key] = config_input['AWAICGEN'][awaicgen_key]
 
 
 # Update the awaicgen dictionary for quantities that do not vary with sky location.
@@ -817,6 +823,13 @@ if __name__ == '__main__':
             config_input['SCI_IMAGE']['repair_extreme_artifact_pixels']
         job_config['SCI_IMAGE']['extreme_artifact_threshold'] = \
             config_input['SCI_IMAGE']['extreme_artifact_threshold']
+
+    # Likewise for the OpenUniverse ZPTMAG fix, so that a data set which omits it keeps the
+    # zeropoint its files came with.
+
+    if 'openuniverse_zptmag_fix' in config_input['SCI_IMAGE']:
+        job_config['SCI_IMAGE']['openuniverse_zptmag_fix'] = \
+            config_input['SCI_IMAGE']['openuniverse_zptmag_fix']
 
     job_config['SCI_IMAGE']['rid'] = str(rid)
     job_config['SCI_IMAGE']['sca'] = str(sca)
