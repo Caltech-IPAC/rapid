@@ -27,7 +27,13 @@
 --   - `SET default_tablespace = pipeline_data_01` / `pipeline_indx_01` are
 --     omitted, as the baseline omits them (20260921-01's header: no
 --     tablespace exists in a database this stream builds).
---   - The grants block (`dev` L931-936, run in `dev` after loading) is run
+--   - `dev`'s `REVOKE ALL ... FROM rapidporole` and its re-grant of
+--     INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES are omitted:
+--     `rapidporole` owns the table, so up to PostgreSQL 16 the pair changed
+--     nothing (the list was every table privilege), and from 17 it strips
+--     the owner's MAINTAIN privilege, after which `dev`'s own CLUSTER of an
+--     existing child table is refused (measured in CI on PostgreSQL 18).
+--   - The rest of the grants block (`dev` L931-934, run in `dev` after loading) is run
 --     here at creation, adding the rebuild's two roles when they exist
 --     (`rapid_rebuild_pipeline`: the rows it loads, `rapid_read`: SELECT, as
 --     20260923-01 grants them everywhere else). Default privileges do not
@@ -83,8 +89,6 @@ BEGIN
     EXECUTE format('GRANT SELECT ON TABLE %I TO GROUP rapidreadrole', t);
     EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidadminrole', t);
     EXECUTE format('GRANT ALL ON TABLE %I TO GROUP rapidadminrole', t);
-    EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidporole', t);
-    EXECUTE format('GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE %I TO rapidporole', t);
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_rebuild_pipeline') THEN
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I TO rapid_rebuild_pipeline', t);
     END IF;
