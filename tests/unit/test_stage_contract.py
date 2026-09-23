@@ -24,6 +24,7 @@ from rapidpipe.stages.contract import (
     UsageError,
     run_stage,
 )
+from rapidpipe.stages.settings import canonical_hash
 
 from .fakes3 import FakeClientError, FakeEndpointConnectionError, FakeS3
 
@@ -398,3 +399,174 @@ def test_run_stage_s3_connection_error_exits_transient_failure(monkeypatch, tmp_
     ]
     rc = run_stage(DECLARATION, _success_body, argv)
     assert rc == int(ExitCode.TRANSIENT_FAILURE)
+
+
+# --- --settings as an s3:// overlay ---------------------------------------
+#
+# A Batch job has no laptop path to give --settings, so the overlay may
+# also be an s3://bucket/key location; contract.py fetches it (settings.py
+# stays stdlib-only) before resolve_settings runs. These tests use a
+# declaration with a real settings schema, since DECLARATION above (schema
+# None) can only accept an empty overlay.
+
+
+@pytest.fixture
+def declaration_with_settings(tmp_path):
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text('greeting = "hello"\ncount = 1\n')
+    return StageDeclaration(
+        name="admit",
+        unit="exposure",
+        argument_schema={},
+        settings_schema_path=str(schema_path),
+        consumes=(),
+        produces=("exposure",),
+        database_access="none",
+    )
+
+
+def test_s3_settings_overlay_is_applied(
+        monkeypatch, declaration_with_settings, inputs_dir, tmp_path):
+    fake = FakeS3()
+    fake.seed("cfg-bucket", "overlays/a1.toml", b'greeting = "hi"\n')
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    seen_settings = {}
+
+    def body(context):
+        seen_settings["settings"] = context.settings
+        return StageResult(
+            outputs=(
+                OutputEntry(
+                    kind="exposure", format_version="1", instance="pi-exp-1",
+                    key={"exposure": context.unit_id}, primary="out1.fits",
+                    members=(Member("image", "out1.fits", 3, "sha256:" + "a" * 64),),
+                ),
+            ),
+        )
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(
+        declaration_with_settings, body,
+        _argv(
+            inputs_dir, outputs_dir,
+            extra=["--settings", "s3://cfg-bucket/overlays/a1.toml"]))
+    assert rc == int(ExitCode.SUCCESS)
+    assert seen_settings["settings"] == {"greeting": "hi", "count": 1}
+
+    restored = Manifest.read(outputs_dir / "manifest.json")
+    record = json.loads(
+        (outputs_dir / restored.execution_record).read_text())
+    assert record["settings_hash"] == canonical_hash(
+        {"greeting": "hi", "count": 1})
+
+
+def test_s3_settings_overlay_missing_object_exits_usage_error(
+        monkeypatch, declaration_with_settings, inputs_dir, tmp_path):
+    fake = FakeS3()  # nothing seeded at overlays/missing.toml
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(
+        declaration_with_settings, _success_body,
+        _argv(
+            inputs_dir, outputs_dir,
+            extra=["--settings", "s3://cfg-bucket/overlays/missing.toml"]))
+    # A missing --settings overlay is a usage error (64), the same family
+    # as a missing local --settings path -- not InputRejected (65), which
+    # is reserved for a declared --inputs location being absent.
+    assert rc == int(ExitCode.USAGE)
+    assert not (outputs_dir / "manifest.json").exists()
+
+
+def test_s3_settings_overlay_storage_error_exits_usage_error(
+        monkeypatch, declaration_with_settings, inputs_dir, tmp_path):
+    class _BrokenS3(FakeS3):
+        def download_file(self, bucket, key, dest):
+            raise FakeEndpointConnectionError("could not connect")
+
+    fake = _BrokenS3()
+    fake.seed("cfg-bucket", "overlays/a1.toml", b'greeting = "hi"\n')
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(
+        declaration_with_settings, _success_body,
+        _argv(
+            inputs_dir, outputs_dir,
+            extra=["--settings", "s3://cfg-bucket/overlays/a1.toml"]))
+    # Even a transient-shaped S3 failure maps to USAGE here (not
+    # TRANSIENT_FAILURE): from the contract's point of view --settings was
+    # an unusable argument, and --settings does not get its own retry path.
+    assert rc == int(ExitCode.USAGE)
+
+
+def test_local_settings_overlay_still_works_alongside_s3(
+        declaration_with_settings, inputs_dir, tmp_path):
+    settings_path = tmp_path / "overlay.toml"
+    settings_path.write_text('greeting = "howdy"\n')
+
+    seen_settings = {}
+
+    def body(context):
+        seen_settings["settings"] = context.settings
+        return StageResult(
+            outputs=(
+                OutputEntry(
+                    kind="exposure", format_version="1", instance="pi-exp-1",
+                    key={"exposure": context.unit_id}, primary="out1.fits",
+                    members=(Member("image", "out1.fits", 3, "sha256:" + "a" * 64),),
+                ),
+            ),
+        )
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(
+        declaration_with_settings, body,
+        _argv(inputs_dir, outputs_dir, extra=["--settings", str(settings_path)]))
+    assert rc == int(ExitCode.SUCCESS)
+    assert seen_settings["settings"] == {"greeting": "howdy", "count": 1}
+
+
+def test_dry_run_with_s3_settings_overlay_validates_without_publishing(
+        monkeypatch, declaration_with_settings, inputs_dir, tmp_path):
+    fake = FakeS3()
+    fake.seed("cfg-bucket", "overlays/a1.toml", b'greeting = "hi"\n')
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(
+        declaration_with_settings, _success_body,
+        _argv(
+            inputs_dir, outputs_dir,
+            extra=[
+                "--settings", "s3://cfg-bucket/overlays/a1.toml",
+                "--dry-run",
+            ]))
+    assert rc == int(ExitCode.SUCCESS)
+    assert not (outputs_dir / "manifest.json").exists()
+    # The overlay object was actually fetched and validated, not skipped.
+    download_keys = [key for op, key in fake.calls if op == "download_file"]
+    assert "overlays/a1.toml" in download_keys
+
+
+def test_dry_run_with_missing_s3_settings_overlay_exits_usage_error(
+        monkeypatch, declaration_with_settings, inputs_dir, tmp_path):
+    fake = FakeS3()  # nothing seeded
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(
+        declaration_with_settings, _success_body,
+        _argv(
+            inputs_dir, outputs_dir,
+            extra=[
+                "--settings", "s3://cfg-bucket/overlays/missing.toml",
+                "--dry-run",
+            ]))
+    assert rc == int(ExitCode.USAGE)

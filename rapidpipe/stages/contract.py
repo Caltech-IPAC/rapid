@@ -3,8 +3,15 @@
 Every stage exports a :class:`StageDeclaration` and calls :func:`run_stage`
 from its ``main(argv)``. This module implements the contract's "Invocation",
 "Exit codes" and "Settings" sections; ``rapidpipe.stages.settings`` supplies
-the TOML load and merge that "Settings" describes. The manifest ``run_stage``
-publishes follows the products page's shape
+the TOML load and merge that "Settings" describes. ``--settings`` accepts a
+local path or an ``s3://bucket/key`` location -- a Batch job has no laptop
+path to give it -- fetched here (``rapidpipe.stages.settings`` stays
+stdlib-only, so the fetch cannot live there) before the file is handed to
+``resolve_settings``; a bad or unreachable ``s3://`` overlay is a usage
+error (exit 64), the same as a bad local ``--settings`` path, not the
+``InputRejected``/``TransientFailure`` family ``--inputs``/``--outputs`` S3
+errors map to -- the overlay is an argument, not a declared input. The
+manifest ``run_stage`` publishes follows the products page's shape
 (``rapidpipe.products.manifest.Manifest``); a stage's ``body`` supplies only
 what it alone knows -- its output entries and any result sets it read -- and
 ``run_stage`` wraps that into the enclosing manifest with the run, unit,
@@ -243,7 +250,11 @@ def _build_parser(declaration: StageDeclaration) -> argparse.ArgumentParser:
     parser.add_argument("--attempt", required=True, dest="attempt_id")
     parser.add_argument("--inputs", required=True, dest="inputs")
     parser.add_argument("--outputs", required=True, dest="outputs")
-    parser.add_argument("--settings", required=False, default=None)
+    parser.add_argument(
+        "--settings", required=False, default=None,
+        help="Path to a TOML settings overlay: a local path, or an "
+             "s3://bucket/key location (fetched before use, including "
+             "under --dry-run).")
     parser.add_argument("--dry-run", action="store_true", default=False)
     return parser
 
@@ -437,21 +448,48 @@ def run_stage(
         try:
             inputs_location = parse_location(args.inputs)
             outputs_location = parse_location(args.outputs)
+            settings_location = (
+                parse_location(args.settings) if args.settings is not None else None)
         except LocationError as exc:
             raise UsageError(str(exc)) from exc
 
-        try:
-            settings = resolve_settings(declaration.settings_schema_path, args.settings)
-        except (SettingsError, FileNotFoundError, OSError) as exc:
-            raise UsageError(str(exc)) from exc
-        settings_hash = canonical_hash(settings)
+        settings_is_s3 = settings_location is not None and settings_location.is_s3()
 
-        needs_work_dir = inputs_location.is_s3() or outputs_location.is_s3()
+        needs_work_dir = (
+            inputs_location.is_s3() or outputs_location.is_s3() or settings_is_s3)
         if needs_work_dir:
             _work_root().mkdir(parents=True, exist_ok=True)
             work_dir = Path(tempfile.mkdtemp(
                 prefix=f"rapidpipe-{declaration.name}-{args.attempt_id}-",
                 dir=str(_work_root())))
+
+        # The settings overlay is fetched (if it names an s3:// location)
+        # and resolved before --dry-run's early return, since --dry-run
+        # validates settings too. A missing/unreadable overlay -- local or
+        # S3 -- is a usage error (exit 64): the overlay is an argument, not
+        # a declared input, so this does not go through
+        # _map_storage_error's InputRejected/TransientFailure mapping.
+        settings_overlay_path = args.settings
+        if settings_is_s3:
+            assert work_dir is not None
+            assert settings_location is not None
+            try:
+                settings_overlay_path = fetch_object(
+                    settings_location, "",
+                    work_dir / "settings-overlay.toml")
+            except LocationError as exc:
+                raise UsageError(str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise UsageError(
+                    f"could not fetch --settings overlay {args.settings!r}: {exc}"
+                ) from exc
+
+        try:
+            settings = resolve_settings(
+                declaration.settings_schema_path, settings_overlay_path)
+        except (SettingsError, FileNotFoundError, OSError) as exc:
+            raise UsageError(str(exc)) from exc
+        settings_hash = canonical_hash(settings)
 
         if inputs_location.is_s3():
             assert work_dir is not None
