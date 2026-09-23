@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------------------------------------------------
--- 20260923-01-refimages-instance.sql
+-- 20260923-02-refimages-instance.sql
 --
 -- Attaches the run model (20260921-02-run-model.sql) to `refimages`, so
 -- `register` can resolve a difference image's reference instance to its

@@ -4,7 +4,7 @@ An l2 image is admitted and registered for real (tests/db/test_register_l2.py's
 helpers), the difference stage runs with fake tools on an input set whose
 l2 entry names that admitted instance, and `register` runs for real against
 the difference manifest. Covers the reference resolved both ways -- by its
-instance (20260923-01-refimages-instance.sql) and, for a reference
+instance (20260923-02-refimages-instance.sql) and, for a reference
 registered by `dev`, by the legacy rfid the manifest carries -- and the
 column sources the products page's difference-image field list fixes.
 

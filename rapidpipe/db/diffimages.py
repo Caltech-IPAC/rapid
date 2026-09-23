@@ -15,7 +15,7 @@ Sources, column by column, where they are not the manifest itself:
   `l2files` row (``jd`` from its ``mjdobs``), as `dev`'s ``addDiffImage``
   copies them.
 - ``rfid``: the reference instance's `refimages` row
-  (20260923-01-refimages-instance.sql); for a reference registered by
+  (20260923-02-refimages-instance.sql); for a reference registered by
   `dev`, which has no instance, the legacy rfid the manifest carries.
 - ``ppid``: :data:`DIFFERENCER_PPIDS`, the fixed differencer-to-pipeline
   map. ZOGY registers as in `dev`, under the science pipeline's row (15).
