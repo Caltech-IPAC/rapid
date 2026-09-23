@@ -1,9 +1,10 @@
-"""Database-backed tests for 20260923-04/-05 and rapidpipe.db.sources.
+"""Database-backed tests for 20260923-04/-05/-09 and rapidpipe.db.sources.
 
 The `sources` run columns and their together-check, the child-table
-functions (`dev`'s creation, index and grant blocks; CLUSTER and ANALYZE),
-COPY into a child with `dev`'s separator and null string, and the done
-check. Every test runs inside conftest's rolled-back transaction.
+functions (`dev`'s creation, index and grant blocks, plus 20260923-09's
+`result_set`/`run` indexes; CLUSTER and ANALYZE), COPY into a child with
+`dev`'s separator and null string, and the done check. Every test runs
+inside conftest's rolled-back transaction.
 
 Skips cleanly if PGHOST is unset (see conftest.py).
 """
@@ -67,7 +68,8 @@ def test_create_makes_devs_child_table_once(conn):
         cur.execute("SELECT indexname FROM pg_indexes WHERE tablename = %s", (table,))
         indexes = {r[0] for r in cur.fetchall()}
         assert indexes == {f"{table}_{c}_idx" for c in
-                           ("pid", "expid", "sca", "field", "flags", "mjdobs", "sid", "radec")}
+                           ("pid", "expid", "sca", "field", "flags", "mjdobs", "sid", "radec",
+                            "result_set", "run")}
 
         cur.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
