@@ -309,7 +309,11 @@ class FakeToolRunner:
         self.shell_calls.append(command)
         if self.sfft_exit_code != 0:
             return self.sfft_exit_code
-        tokens = shlex.split(command.split(" && ")[1])
+        # No activation: the whole command is the sfft call. With
+        # activation, dev's "source ... && <sfft cmd> && deactivate".
+        parts = command.split(" && ")
+        sfft_call = parts[1] if len(parts) > 1 else parts[0]
+        tokens = shlex.split(sfft_call)
         sci, ref = tokens[2].removeprefix("./"), tokens[3].removeprefix("./")
         sci_data, header = _read(Path(cwd) / sci)
         ref_data, _ = _read(Path(cwd) / ref)

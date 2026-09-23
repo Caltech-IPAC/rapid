@@ -82,10 +82,17 @@ sfft_bsmask_value = "20000.0"
 sfft_bsmask_radius = "30.0"
 sfft_use_gainmatch_catalogs = false
 sfft_use_segmentation = false
-# `dev` hard-codes these three in the script.
-python_cmd = "python3.11"
 sfft_code = "/code/modules/sfft/sfft_rapid_rimtimsim.py"
-activate_cmd = "source /sfft_env/bin/activate"
+# The interpreter that runs sfft_code; empty means the interpreter
+# running this stage (the pipeline image's main conda environment, where
+# sfft is installed), as [paths] python means for ZOGY. `dev` hard-codes
+# python3.11 in its own /sfft_env virtual environment. New default.
+python_cmd = ""
+# The shell command to activate SFFT's environment before running it (and
+# to deactivate after, joined by " && "); empty means no activation, no
+# deactivation -- run python_cmd directly. `dev` hard-codes
+# "source /sfft_env/bin/activate" for its own venv image. New default.
+activate_cmd = ""
 # New: whether SFFT's output is registered as its own difference-image
 # instance. Off by default: SFFT runs as `dev` runs it, and its files stay
 # diagnostics. Ruling 2.

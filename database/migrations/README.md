@@ -27,6 +27,10 @@ together by CI (`.github/workflows/db-migrations.yml`).
   date, whichever merges second is renamed to the next free `NN` before
   merge — the same resolution any conflicting sequence assignment gets,
   nothing migration-specific.
+- **A migration number is claimed at merge, not at authorship.** An open
+  pull request's migration renumbers on rebase if another migration has
+  merged ahead of it in the meantime, since the applier records each
+  file's sha256 and a number can only change before merge, never after.
 - **`20260921-01-baseline.sql` is the floor**: the team's schema as of the
   rebuild, taken from `database/schema/`. Every later migration assumes it
   applied. See its own header for what was stripped and why (nothing

@@ -511,6 +511,12 @@ def test_sfft_shell_command():
     assert sfft.shell_command("source /a", ["p", "x"]) == "source /a && p x && deactivate"
 
 
+def test_sfft_shell_command_with_no_activation():
+    # The rebuild's default: run directly in the stage's own environment,
+    # no source, no deactivate.
+    assert sfft.shell_command("", ["p", "x"]) == "p x"
+
+
 # ----------------------------------------------------------------------
 # psfcat, with photutils where it is installed
 # ----------------------------------------------------------------------

@@ -65,7 +65,13 @@ DECLARATION = StageDeclaration(
             "[--settings <toml>] [--dry-run]. --inputs holds the "
             "producing attempt's completion manifest (admit's, naming "
             "l2-image and psf entries, or difference's, naming difference-image "
-            "and source-catalog entries)."
+            "and source-catalog entries). <unit-id> is always "
+            "<producing stage>/<producing unit id> (rapidpipe.products."
+            "manifest.register_unit_id), derived from that same manifest's "
+            "own `stage` and `unit.id` -- a register unit is identified by "
+            "what it registers, so this stage's own invocation never "
+            "chooses it; `rapidpipe run local`/`run submit` derive and "
+            "pass it, refusing an explicit --unit for register."
         ),
     },
     settings_schema_path=None,

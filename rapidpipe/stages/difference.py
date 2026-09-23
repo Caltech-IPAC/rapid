@@ -720,15 +720,21 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
               filename_bkg_subbed_science_image, gainmatched_reference, resampled_cov_map,
               scigainmatch_catalog, refgainmatch_catalog, science_psf, reference_psf,
               reformatted_science_image, gain_times_exptime, thresh) -> _SfftResult:
-    """`dev`'s SFFT block: the command in its own environment, then its files and catalogs."""
+    """SFFT's command, then its files and catalogs.
+
+    Empty ``[sfft] python_cmd`` means the stage's own interpreter, the
+    same convention ``[paths] python`` uses for ZOGY; empty
+    ``activate_cmd`` means no activation (see ``sfft.shell_command``).
+    """
     s = settings["sfft"]
     crossconv_flag = bool(s["crossconv_flag"])
     if "rimtimsim" in science_image_filename:
         crossconv_flag = False
     names = sfft.sfft_file_names(crossconv_flag)
+    python_cmd = s["python_cmd"] or sys.executable
 
     sfft_cmd = sfft.build_sfft_command_args(
-        s["python_cmd"], s["sfft_code"], filename_bkg_subbed_science_image,
+        python_cmd, s["sfft_code"], filename_bkg_subbed_science_image,
         gainmatched_reference, scigainmatch_catalog, refgainmatch_catalog,
         science_psf, reference_psf, names["scisegm"], names["refsegm"],
         science_image_filename, crossconv_flag,

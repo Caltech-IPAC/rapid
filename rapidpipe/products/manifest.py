@@ -357,6 +357,25 @@ class Manifest:
 CompletionManifest = Manifest
 
 
+def register_unit_id(manifest: "Manifest") -> str:
+    """The unit id a ``register`` unit recording ``manifest`` must use.
+
+    A `register` unit is identified by what it registers (Ben, 2026-09-23):
+    ``<producing stage>/<producing unit id>``, e.g.
+    ``admit/r0034001002001001001/SCA01`` after `admit` and
+    ``difference/r0034001002001001001/SCA01`` after `difference`, derived
+    from the manifest register reads -- ``manifest.stage`` (the producing
+    stage) and ``manifest.unit.id`` (the producing unit) name both.
+    `register` is one stage that follows every producer, so this is the
+    single place that derivation happens; no occurrence counter, no new
+    column, and no hand-keyed suffix (the old ``<unit>/difference``
+    pattern a caller used to add by hand for a second `register` in one
+    run) is needed -- two different producing stages already yield two
+    distinct derived ids for the same nominal unit.
+    """
+    return f"{manifest.stage}/{manifest.unit.id}"
+
+
 def hash_file(path: str | Path) -> tuple[int, str]:
     """Return ``(byte_size, sha256_hex)`` for the file at ``path``.
 

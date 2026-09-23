@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import sys
 
 import numpy as np
 import pytest
@@ -173,9 +174,24 @@ def test_zogy_catalogs_detect_on_scorr_with_devs_overrides(tmp_path, fakes):
     assert naive_pos[naive_pos.index("-FILTER") + 1] == "Y"
 
 
-def test_sfft_command_is_devs(tmp_path, fakes):
+def test_sfft_runs_in_the_stages_own_environment_by_default(tmp_path, fakes):
+    # New default: no activation, the stage's own interpreter -- sfft 1.7.3
+    # lives in the pipeline image's main conda environment, not a venv.
     runner, _ = fakes
     _run(tmp_path)
+    (command,) = runner.shell_calls
+    assert command == (
+        f"{sys.executable} /code/modules/sfft/sfft_rapid_rimtimsim.py "
+        "./bkg_subbed_science_image.fits ./awaicgen_output_mosaic_image_resampled_gainmatched.fits "
+        "--bsmaskvalue 20000.0 --bsmaskradius 30.0 --scipsf sciimage_psf_f184_sca07_normalized.fits")
+
+
+def test_sfft_command_can_select_devs_venv(tmp_path, fakes):
+    # dev's values remain selectable, e.g. for a venv-based image.
+    runner, _ = fakes
+    _run(tmp_path, overlay=(
+        '[sfft]\npython_cmd = "python3.11"\n'
+        'activate_cmd = "source /sfft_env/bin/activate"\n'))
     (command,) = runner.shell_calls
     assert command == (
         "source /sfft_env/bin/activate && python3.11 /code/modules/sfft/sfft_rapid_rimtimsim.py "

@@ -33,6 +33,7 @@ import pytest
 import rapidpipe.cli.main as cli_main
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.manifest import Manifest
+from rapidpipe.products.manifest import register_unit_id as derive_register_unit_id
 from rapidpipe.runs import repository as repo
 from rapidpipe.runs.local import run_stage_locally
 from tests.unit.test_admit import _build_delivery
@@ -170,13 +171,19 @@ def test_admit_then_register_end_to_end(conn, tmp_path):
         entry = admit_manifest.outputs[0]
         instance_id = entry.instance
 
-        register_unit_id = "e2local001-reg/SCA07"
+        # register's unit id is derived from the producer manifest it
+        # reads, never hand-picked (Ben, 2026-09-23 ruling): the CLI does
+        # this derivation itself (rapidpipe.cli.main._resolve_register_
+        # unit_id) before calling run_stage_locally, exercised here
+        # directly since this test drives run_stage_locally, not the CLI.
+        register_unit = derive_register_unit_id(admit_manifest)
+        assert register_unit == f"admit/{admit_unit_id}"
         register_result = run_stage_locally(
             conn,
             run_id=run_id,
             stage="register",
             unit_kind="detector-image",
-            unit_id=register_unit_id,
+            unit_id=register_unit,
             inputs=admit_result.output_location,
             outputs_root=str(outputs_root),
         )
@@ -191,6 +198,14 @@ def test_admit_then_register_end_to_end(conn, tmp_path):
             row = cur.fetchone()
             assert row is not None
             assert row[0] == register_result.attempt_id
+
+            cur.execute(
+                "SELECT state, selected_attempt FROM units "
+                "WHERE run = %s AND stage = 'register' AND unit_id = %s",
+                (run_id, register_unit))
+            state, selected_attempt = cur.fetchone()
+            assert state == "complete"
+            assert selected_attempt == register_result.attempt_id
     finally:
         if instance_id is not None:
             _cleanup_l2_rows(instance_id)

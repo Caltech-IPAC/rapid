@@ -30,7 +30,7 @@ import json
 import pytest
 
 from rapidpipe.db.ids import new_ulid
-from rapidpipe.products.manifest import Manifest
+from rapidpipe.products.manifest import Manifest, register_unit_id
 from rapidpipe.runs import repository as repo
 from rapidpipe.science.spatial import healpix_indexes, tessellation_field
 from rapidpipe.stages.contract import ExitCode
@@ -199,7 +199,8 @@ def test_register_writes_instance_exposure_l2files_l2filemeta(conn, tmp_path, mo
 
     rc, registering_attempt = _run_register(
         conn, monkeypatch, admit_outputs,
-        run_id=run_id, unit_id="happy-register-unit", tmp_path=tmp_path, name="happy-reg")
+        run_id=run_id, unit_id=register_unit_id(admit_manifest),
+        tmp_path=tmp_path, name="happy-reg")
     assert rc == int(ExitCode.SUCCESS)
 
     with conn.cursor() as cur:
@@ -308,17 +309,21 @@ def test_register_replay_with_fresh_attempt_adds_no_rows(conn, tmp_path, monkeyp
 def test_second_detector_same_exposure_second_run_creates_second_l2files_row(
         conn, tmp_path, monkeypatch):
     run_1, admit_outputs_1 = _run_admit(conn, tmp_path, name="sca7", sca_value="7")
-    entry_1 = Manifest.read(admit_outputs_1 / "manifest.json").outputs[0]
+    admit_manifest_1 = Manifest.read(admit_outputs_1 / "manifest.json")
+    entry_1 = admit_manifest_1.outputs[0]
     rc1, _ = _run_register(
         conn, monkeypatch, admit_outputs_1,
-        run_id=run_1, unit_id="sca7-register-unit", tmp_path=tmp_path, name="sca7-reg")
+        run_id=run_1, unit_id=register_unit_id(admit_manifest_1),
+        tmp_path=tmp_path, name="sca7-reg")
     assert rc1 == int(ExitCode.SUCCESS)
 
     run_2, admit_outputs_2 = _run_admit(conn, tmp_path, name="sca8", sca_value="8")
-    entry_2 = Manifest.read(admit_outputs_2 / "manifest.json").outputs[0]
+    admit_manifest_2 = Manifest.read(admit_outputs_2 / "manifest.json")
+    entry_2 = admit_manifest_2.outputs[0]
     rc2, _ = _run_register(
         conn, monkeypatch, admit_outputs_2,
-        run_id=run_2, unit_id="sca8-register-unit", tmp_path=tmp_path, name="sca8-reg")
+        run_id=run_2, unit_id=register_unit_id(admit_manifest_2),
+        tmp_path=tmp_path, name="sca8-reg")
     assert rc2 == int(ExitCode.SUCCESS)
 
     with conn.cursor() as cur:
@@ -349,9 +354,10 @@ def test_unknown_filter_exits_65_and_leaves_no_rows(conn, tmp_path, monkeypatch)
     admit_manifest_path.write_text(json.dumps(admit_manifest))
     instance = admit_manifest["outputs"][0]["instance"]
 
+    register_id = f"{admit_manifest['stage']}/{admit_manifest['unit']['id']}"
     rc, _ = _run_register(
         conn, monkeypatch, admit_outputs,
-        run_id=run_id, unit_id="badfilter-register-unit", tmp_path=tmp_path,
+        run_id=run_id, unit_id=register_id, tmp_path=tmp_path,
         name="badfilter-reg")
     assert rc == int(ExitCode.INPUT_REJECTED)
 

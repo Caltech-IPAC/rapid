@@ -12,12 +12,14 @@ connection is attempted.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 import rapidpipe.cli.main as cli_main
 from rapidpipe.db.connection import ConnectionUnavailable
+from rapidpipe.products.manifest import Inputs, Manifest, Unit, register_unit_id
 from rapidpipe.runs.local import LocalAttempt, disposition_for
 from rapidpipe.stages.contract import ExitCode
 
@@ -282,3 +284,144 @@ def test_connection_unavailable_exits_75(monkeypatch):
     monkeypatch.setattr(cli_main, "connect", _raise_unavailable)
     rc = cli_main.main(["run", "list"])
     assert rc == int(ExitCode.TRANSIENT_FAILURE)
+
+
+# ======================================================================
+# register's unit id: derived from the manifest it reads, never chosen
+# (Ben, 2026-09-23: "a register unit is identified by what it registers";
+# id = <producing stage>/<producing unit id>).
+# ======================================================================
+
+def _manifest_json(*, stage: str, unit_id: str, run: str = "r0", attempt: str = "a0") -> str:
+    manifest = Manifest(
+        run=run,
+        unit=Unit(kind="detector-image", id=unit_id),
+        stage=stage,
+        attempt=attempt,
+        execution_record=f"exec/{attempt}.json",
+        inputs=Inputs(manifest="s3://bucket/root/manifest.json"),
+    )
+    return manifest.to_json()
+
+
+def test_register_unit_id_after_admit():
+    manifest = Manifest(
+        run="r0", unit=Unit(kind="detector-image", id="r0034001002001001001/SCA01"),
+        stage="admit", attempt="a0", execution_record="exec/a0.json",
+        inputs=Inputs(manifest="s3://bucket/root/manifest.json"))
+    assert register_unit_id(manifest) == "admit/r0034001002001001001/SCA01"
+
+
+def test_register_unit_id_after_difference_is_distinct_from_after_admit():
+    admit_manifest = Manifest(
+        run="r0", unit=Unit(kind="detector-image", id="r0034001002001001001/SCA01"),
+        stage="admit", attempt="a0", execution_record="exec/a0.json",
+        inputs=Inputs(manifest="s3://bucket/root/manifest.json"))
+    difference_manifest = Manifest(
+        run="r0", unit=Unit(kind="detector-image", id="r0034001002001001001/SCA01"),
+        stage="difference", attempt="a1", execution_record="exec/a1.json",
+        inputs=Inputs(manifest="s3://bucket/root/manifest.json"))
+
+    admit_register_id = register_unit_id(admit_manifest)
+    difference_register_id = register_unit_id(difference_manifest)
+
+    assert admit_register_id == "admit/r0034001002001001001/SCA01"
+    assert difference_register_id == "difference/r0034001002001001001/SCA01"
+    assert admit_register_id != difference_register_id
+
+
+def test_resolve_register_unit_id_reads_a_local_manifest(tmp_path):
+    inputs = tmp_path / "admit-outputs"
+    inputs.mkdir()
+    (inputs / "manifest.json").write_text(
+        _manifest_json(stage="admit", unit_id="e1/SCA07"))
+
+    unit_id = cli_main._resolve_register_unit_id(
+        unit_id_arg=None, inputs_location_arg=str(inputs))
+
+    assert unit_id == "admit/e1/SCA07"
+
+
+def test_resolve_register_unit_id_refuses_an_explicit_unit(tmp_path):
+    inputs = tmp_path / "admit-outputs"
+    inputs.mkdir()
+    (inputs / "manifest.json").write_text(
+        _manifest_json(stage="admit", unit_id="e1/SCA07"))
+
+    with pytest.raises(cli_main.RegisterUnitIdError):
+        cli_main._resolve_register_unit_id(
+            unit_id_arg="hand-picked", inputs_location_arg=str(inputs))
+
+
+def test_resolve_register_unit_id_refuses_a_missing_manifest(tmp_path):
+    inputs = tmp_path / "empty"
+    inputs.mkdir()
+
+    with pytest.raises(cli_main.RegisterUnitIdError):
+        cli_main._resolve_register_unit_id(
+            unit_id_arg=None, inputs_location_arg=str(inputs))
+
+
+def test_resolve_register_unit_id_refuses_invalid_json(tmp_path):
+    inputs = tmp_path / "bad"
+    inputs.mkdir()
+    (inputs / "manifest.json").write_text("not json")
+
+    with pytest.raises(cli_main.RegisterUnitIdError):
+        cli_main._resolve_register_unit_id(
+            unit_id_arg=None, inputs_location_arg=str(inputs))
+
+
+def test_run_local_register_rejects_an_explicit_unit_without_connecting(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli_main, "connect", _raise_if_called)
+    rc = cli_main.main([
+        "run", "local", "r1", "register",
+        "--unit", "hand-picked", "--inputs", str(tmp_path), "--outputs-root", "/tmp/out",
+    ])
+    assert rc == int(ExitCode.USAGE)
+
+
+def test_run_local_register_derives_unit_id_from_the_manifest(tmp_path, monkeypatch):
+    inputs = tmp_path / "admit-outputs"
+    inputs.mkdir()
+    (inputs / "manifest.json").write_text(
+        _manifest_json(stage="admit", unit_id="e1/SCA07"))
+
+    seen = {}
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_connect(*a, **k):
+        return _FakeConnCtx()
+
+    def _fake_run_stage_locally(conn, *, run_id, stage, unit_kind, unit_id, inputs,
+                                 outputs_root, settings, python):
+        seen["unit_id"] = unit_id
+        return LocalAttempt(
+            attempt_id="a1", output_location=str(tmp_path / "out"), exit_code=0,
+            disposition="succeeded", manifest_path=None, selected=True)
+
+    monkeypatch.setattr(cli_main, "connect", _fake_connect)
+    monkeypatch.setattr(cli_main, "run_stage_locally", _fake_run_stage_locally)
+
+    rc = cli_main.main([
+        "run", "local", "r1", "register",
+        "--inputs", str(inputs), "--outputs-root", str(tmp_path / "outputs-root"),
+    ])
+
+    assert rc == int(ExitCode.SUCCESS)
+    assert seen["unit_id"] == "admit/e1/SCA07"
+
+
+def test_run_local_non_register_stage_still_requires_unit(monkeypatch):
+    monkeypatch.setattr(cli_main, "connect", _raise_if_called)
+    rc = cli_main.main([
+        "run", "local", "r1", "admit",
+        "--inputs", "/tmp/in", "--outputs-root", "/tmp/out",
+    ])
+    assert rc == int(ExitCode.USAGE)
