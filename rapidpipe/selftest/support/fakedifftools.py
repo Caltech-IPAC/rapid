@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,8 +43,57 @@ from astropy.io import fits
 from rapidpipe.science.difference.psfcat import PsfCatalogResult
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-#: The repository's own SExtractor parameter files; tests point the
-#: stage's [paths] cfg_path here, where production uses /code/cdf.
+#: The env var an operator can point at an arbitrary cdf/ checkout, read
+#: by :func:`cdf_dir`. Not set by the pipeline image itself (which relies
+#: on the /code/cdf fallback below) -- an escape hatch for a checkout
+#: whose cdf/ isn't where REPO_ROOT lands, or a non-image test host.
+CDF_DIR_ENV = "RAPID_CFG"
+
+
+def cdf_dir() -> Path:
+    """Resolve the SExtractor parameter directory the selftest fixture needs.
+
+    In a source checkout (``pip install -e``, or the test suite, where
+    this module's package still lives under the repository's own
+    ``rapidpipe/``) ``REPO_ROOT / "cdf"`` is correct, as it always was.
+    Inside the pipeline image, ``rapidpipe`` is installed into the conda
+    environment's ``site-packages`` (``containers/rapid-pipeline/
+    Containerfile``: ``pip install --no-deps /code``) and ``tests/`` is
+    excluded from the image (``build.sh``'s archive filter) -- the
+    repository's own ``cdf/`` never lands under ``REPO_ROOT`` there, so
+    ``REPO_ROOT / "cdf"`` does not exist. The image copies the whole
+    filtered source tree to ``/code`` (kept explicitly: "cdf/" -- the
+    Containerfile's own comment), so ``/code/cdf`` is the fallback, the
+    same directory the stage's own default ``cfg_path`` setting names
+    (``rapidpipe/settings/difference.toml``).
+
+    Tried in order, first that exists wins: ``REPO_ROOT / "cdf"`` (a
+    checkout), ``$RAPID_CFG`` (an explicit override, for a checkout or
+    test host where neither of the other two applies), ``/code/cdf`` (the
+    image default). Raises :class:`FileNotFoundError` naming all three
+    candidates when none exists, rather than failing later and obscurely
+    on a missing parameter file.
+    """
+    candidates = [REPO_ROOT / "cdf"]
+    env_value = os.environ.get(CDF_DIR_ENV)
+    if env_value:
+        candidates.append(Path(env_value))
+    candidates.append(Path("/code/cdf"))
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+
+    tried = ", ".join(str(c) for c in candidates)
+    raise FileNotFoundError(
+        f"cdf_dir: no candidate cdf/ directory exists; tried: {tried} "
+        f"(set {CDF_DIR_ENV} to override)")
+
+
+#: Back-compatible module-level constant: the repository checkout's own
+#: cdf/ directory. Still used by callers that only ever run from a
+#: checkout; :func:`cdf_dir` is the image-safe resolution used by
+#: ``build_input_set`` and ``rapidpipe.selftest.difference``.
 CDF_DIR = REPO_ROOT / "cdf"
 
 NAXIS = 64
@@ -160,7 +210,7 @@ def build_input_set(inputs_dir: Path, *, seed: int = 20260922, rfid: int | None 
     ref_unc = inputs_dir / "ref" / "awaicgen_output_mosaic_uncert_image.fits"
     fits.PrimaryHDU(data=np.full((n, n), 0.02, dtype=np.float32), header=ref_header).writeto(ref_unc)
     ref_cat = inputs_dir / "ref" / "awaicgen_output_mosaic_refimsexcat.txt"
-    params = _params(str(CDF_DIR / "rapidSexParamsRefImage.inp"))
+    params = _params(str(cdf_dir() / "rapidSexParamsRefImage.inp"))
     ref_cat.write_text(
         "".join(f"#{i + 1:4d} {p}\n" for i, p in enumerate(params))
         + "".join(" ".join(_catalog_row(p, int(x), int(y), flux) for p in params) + "\n"

@@ -172,10 +172,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "(default: a fresh temporary directory).")
     selftest_parser.add_argument(
         "--output-location", default=None,
-        help="Where the stage publishes its manifest and products: a "
-             "local path or an s3:// prefix (default: <work-dir>/outputs). "
-             "An s3:// location is not re-read afterwards to verify "
-             "products -- only the stage's own exit code is checked there.")
+        help="Where the stage's manifest and products end up: a local "
+             "path or an s3:// prefix (default: <work-dir>/outputs). The "
+             "stage always runs against a local directory first, and "
+             "every check runs against that copy; an s3:// location is "
+             "uploaded to only afterwards, so the check count is the "
+             "same either way.")
     selftest_parser.add_argument("--python", default=sys.executable)
 
     run_parser = subparsers.add_parser(

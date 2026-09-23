@@ -19,14 +19,18 @@ stage-<name>``) reads the same packaged copy this module reads, so
 nothing is duplicated between the two.
 
 A stage's own products (``difference-image``, ``source-set``, ...) are
-checked only when ``--output-location`` is a local path: that is the only
-case this module can read the manifest and its members back to verify
-them. Against an S3 ``--output-location`` the stage publishes for real
-(``rapidpipe.products.storage``, the same as any Batch job) but this
-module cannot cheaply re-read S3 objects without a network round trip and
-credentials no other part of ``selftest`` needs, so the check there
-reduces to the stage's own exit code -- documented in the printed report,
-not silently assumed.
+always checked against a local copy of the outputs, whatever
+``--output-location`` names. When it is an ``s3://`` prefix, the stage is
+still run with a local ``--outputs`` directory (under ``work_dir``) so
+this module can read the manifest and its members back the same way a
+local run would; only once every check has run against that local copy is
+the directory uploaded to the requested S3 location with
+:func:`rapidpipe.products.storage.publish_dir` -- the same upload path
+``rapidpipe.stages.contract`` itself uses for a real S3 ``--outputs``, so
+the object layout and manifest-last upload order are identical to what a
+Batch job produces. This means the check count is the same locally and on
+Batch (``FixtureResult.checks``), never silently reduced to just the exit
+code -- and the printed report says where the outputs ended up.
 """
 
 from __future__ import annotations
@@ -44,7 +48,7 @@ from typing import Any, Callable
 
 from rapidpipe.db.ids import is_valid_ulid, new_ulid
 from rapidpipe.products.manifest import Manifest, hash_file
-from rapidpipe.products.storage import parse_location
+from rapidpipe.products.storage import parse_location, publish_dir
 
 #: The two stages a fixture exists for today (stage contract, "Local
 #: execution"; ``tests/fixtures/<stage>/``).
@@ -74,7 +78,14 @@ class Checks:
 
 @dataclass
 class FixtureResult:
-    """What one fixture run produced, for the caller to report or check further."""
+    """What one fixture run produced, for the caller to report or check further.
+
+    ``output_location`` is always where the checks in ``checks`` ran
+    against -- a local directory, whether or not ``--output-location``
+    named one (see :func:`run_fixture`). ``uploaded_to`` is set only when
+    ``--output-location`` named an ``s3://`` prefix: the local outputs
+    were, after every check passed or failed, uploaded there too.
+    """
 
     stage: str
     tools: str
@@ -84,6 +95,7 @@ class FixtureResult:
     output_location: str
     output_is_local: bool
     manifest: Manifest | None = None
+    uploaded_to: str | None = None
 
 
 @dataclass
@@ -188,15 +200,26 @@ def run_stage_subprocess(python: str, module: str, inputs: Path, outputs_locatio
 
 def run_fixture(fx: StageFixture, *, tools: str, python: str, repo_root: Path,
                 work_dir: Path | None, output_location: str | None) -> FixtureResult:
-    """Prepare, run, and (when local) check one stage's packaged fixture.
+    """Prepare, run, and check one stage's packaged fixture.
 
     ``tools`` is ``"fake"`` (the default; every external tool replaced by
     the packaged stand-ins) or ``"real"`` (the pipeline image's own
-    tools). ``work_dir`` holds the prepared inputs and, when
-    ``output_location`` is not given, the outputs too; it is created if
-    missing and must be empty. ``output_location`` overrides where the
-    stage publishes (``--outputs``): a local path or an ``s3://`` prefix;
-    defaults to ``<work_dir>/outputs``.
+    tools). ``work_dir`` holds the prepared inputs and the outputs; it is
+    created if missing and must be empty.
+
+    The stage is always run with a *local* ``--outputs`` directory
+    (``work_dir / "outputs"``), so its manifest and products can be read
+    back and checked the same way regardless of ``output_location`` --
+    this is what makes the check count identical locally and on Batch.
+    When ``output_location`` names an ``s3://`` prefix, the local outputs
+    are uploaded there with :func:`~rapidpipe.products.storage.publish_dir`
+    after every check has run (so a check failure is still reported, and
+    still uploaded for inspection). When it names a local path instead,
+    that path *is* the outputs directory (no separate upload: the runner
+    prepares the stage's outputs directly there, matching
+    ``rapidpipe.products.storage.publish_dir``'s own same-directory no-op
+    for a local destination). ``output_location`` defaults to
+    ``<work_dir>/outputs`` when not given.
     """
     expected = load_expected(fx.stage)
     if work_dir is None:
@@ -210,19 +233,22 @@ def run_fixture(fx: StageFixture, *, tools: str, python: str, repo_root: Path,
     if tools == "fake":
         extra_env = {**fx.fake_toolkit_env, **extra_env}
 
-    output_is_local = True
+    upload_location: str | None = None
     if output_location is None:
         outputs_path = work_dir / "outputs"
-        output_location_str = str(outputs_path)
     else:
-        output_location_str = output_location
         location = parse_location(output_location)
-        output_is_local = not location.is_s3()
-        outputs_path = location.path if output_is_local else None
+        if location.is_s3():
+            upload_location = output_location
+            outputs_path = work_dir / "outputs"
+        else:
+            assert location.path is not None
+            outputs_path = location.path
+    local_output_location_str = str(outputs_path)
 
     run_id, attempt_id = new_ulid(), new_ulid()
     exit_code = run_stage_subprocess(
-        python, fx.module, inputs, output_location_str, overlay, run_id, attempt_id,
+        python, fx.module, inputs, local_output_location_str, overlay, run_id, attempt_id,
         fx.unit_id, extra_env, repo_root)
 
     spec = expected[fx.spec_key(tools)]
@@ -231,19 +257,19 @@ def run_fixture(fx: StageFixture, *, tools: str, python: str, repo_root: Path,
                  f"exit code: expected {spec['exit_code']}, got {exit_code}")
 
     manifest = None
-    if exit_code == 0 and output_is_local:
+    if exit_code == 0:
         manifest = _check_manifest_shape(
             checks, outputs_path, run_id, attempt_id, fx.stage, fx.unit_kind, fx.unit_id)
         if manifest is not None:
             context = CheckContext(inputs=inputs, outputs=outputs_path, work_dir=work_dir, tools=tools)
             fx.check(checks, manifest, expected, context)
-    elif exit_code == 0:
-        # Not a check -- see module docstring: S3 output isn't re-read to
-        # verify products, so all that's known is that the stage exited 0.
-        print(f"selftest: {fx.stage}: output published to {output_location_str} "
-              "(S3); product checks skipped -- only local output locations are "
-              "re-read for verification", file=sys.stderr)
+
+    if upload_location is not None and outputs_path.exists():
+        upload_target = parse_location(upload_location)
+        publish_dir(outputs_path, upload_target)
+        print(f"selftest: {fx.stage}: outputs uploaded to {upload_location}", file=sys.stderr)
 
     return FixtureResult(
         stage=fx.stage, tools=tools, exit_code=exit_code, checks=checks, work_dir=work_dir,
-        output_location=output_location_str, output_is_local=output_is_local, manifest=manifest)
+        output_location=local_output_location_str, output_is_local=True, manifest=manifest,
+        uploaded_to=upload_location)

@@ -54,11 +54,11 @@ def run(*, stage: str, real_tools: bool, work_dir: str | None, output_location: 
     of the packaged fakes -- only meaningful inside that image (or a
     checkout with the same tools on ``PATH``). ``work_dir`` is an empty or
     new directory to prepare the fixture in (default: a fresh temporary
-    one). ``output_location`` overrides where the stage publishes its
-    manifest and products (default: ``<work_dir>/outputs``); an ``s3://``
-    location is passed straight through to the stage (the same
-    ``--outputs`` any Batch job gets) but is not re-read afterwards to
-    verify products -- see :mod:`rapidpipe.selftest.runner`'s docstring.
+    one). ``output_location`` names where the outputs end up after the
+    fixture passes or fails (default: ``<work_dir>/outputs``); an
+    ``s3://`` location is uploaded to only after every check has already
+    run against a local copy -- see :mod:`rapidpipe.selftest.runner`'s
+    docstring, and :func:`rapidpipe.selftest.runner.run_fixture`.
     """
     module = _fixture_module(stage)
     tools = "real" if real_tools else "fake"
@@ -92,7 +92,9 @@ def _report(stage: str, result: FixtureResult) -> int:
         return result.exit_code
 
     verdict = "PASS" if not result.checks.failures else "FAIL"
+    location_note = (f"outputs checked in {result.output_location}, uploaded to "
+                      f"{result.uploaded_to}" if result.uploaded_to
+                      else f"outputs in {result.output_location}")
     print(f"selftest: {stage}: {verdict} ({result.checks.passed} checks passed, "
-          f"{len(result.checks.failures)} failed; tools={result.tools}; "
-          f"outputs in {result.output_location})")
+          f"{len(result.checks.failures)} failed; tools={result.tools}; {location_note})")
     return 0 if not result.checks.failures else 1
