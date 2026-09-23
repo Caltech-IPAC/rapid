@@ -75,3 +75,8 @@ lead's gate before operational use** (stage contract, "Local execution":
 "differences and tolerances approved by the lead before operational
 use"); neither has been run. After the first real-tool run, its measured
 values and their tolerances belong in `real`.
+
+`settings.toml`'s `[bkgest]` override shrinks bkgest's grid spacing and
+input window from the stage's full-detector default (500/501) to sizes
+that don't segfault against this fixture's 64x64/65x65 synthetic images,
+for the real-tool run only -- the fake bkgest ignores these values.

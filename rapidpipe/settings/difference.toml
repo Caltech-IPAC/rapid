@@ -18,9 +18,18 @@ cfg_path = "/code/cdf"
 # (the rebuild image's conda environment). New.
 python = ""
 zogy_code = "/code/modules/zogy/v21Aug2018/py_zogy.py"
-# `dev`: rapid_sw + "/c/bin/bkgest" and rapid_sw + "/c/include".
-bkgest_code = "/code/c/bin/bkgest"
-bkgest_include_dir = "/code/c/include"
+# `dev`: rapid_sw + "/c/bin/bkgest" and rapid_sw + "/c/include". The
+# rebuild pipeline image does not carry `dev`'s /code/c tree; its bkgest
+# comes from the rapid-cmodules RPM (rapid_systems
+# rpms/rapid-cmodules/rapid-cmodules.spec), which installs the binary at
+# the flat /opt/rapid/bin prefix every rapid-* RPM uses (already on PATH,
+# like sextractor/swarp below) and bkgest's own runtime message catalogue
+# (bkgest_errcodes.h, read by -a at run time to decode a status code, not
+# merely compiled in) at /opt/rapid/share/bkgest. Confirmed live against
+# the pipeline image (LEDGER-fixture-real.md, 2026-09-23): the /code/c
+# paths do not exist there; /opt/rapid/bin/bkgest does.
+bkgest_code = "bkgest"
+bkgest_include_dir = "/opt/rapid/share/bkgest"
 # `dev` calls these by bare name on PATH.
 sextractor = "sex"
 swarp = "swarp"

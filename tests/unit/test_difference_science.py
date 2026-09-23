@@ -542,3 +542,40 @@ def test_photutils_catalog_on_a_synthetic_difference_image(tmp_path):
     assert result.produced and result.nsources == 2
     assert (tmp_path / "c.txt").exists() and (tmp_path / "f.txt").exists()
     assert (tmp_path / "r.fits").exists()
+
+
+def test_photutils_catalog_none_when_no_sources_pass_filtering(tmp_path):
+    """photutils' PSFPhotometry.__call__ returns ``None``, not an exception,
+
+    when DAOStarFinder detects candidate sources but none survive its
+    sharpness/roundness filter (``NoDetectionsWarning``) -- a real, valid
+    outcome on a near-empty image, found live on the difference stage's
+    negative-image catalog against the fixture's synthetic data
+    (LEDGER-fixture-real.md, 2026-09-23). psf_catalog() must report this
+    the same way as the constructor/fit exceptions above: not produced,
+    not a crash.
+    """
+    pytest.importorskip("photutils")
+    from rapidpipe.science.difference import psfcat
+
+    from .fakedifftools import _gaussian
+
+    rng = np.random.default_rng(3)
+    n = 64
+    data = rng.normal(0.0, 1.0, size=(n, n)).astype(np.float32)
+    header = wcs_header(n, sip=False)
+    image = _write(tmp_path / "d.fits", data, header)
+    unc = _write(tmp_path / "u.fits", np.ones((n, n), dtype=np.float32))
+    kernel = _gaussian(9, 4, 4, sigma=1.5)
+    psf_path = _write(tmp_path / "p.fits", (kernel / kernel.sum()).astype(np.float32))
+    # A low detection threshold with a tight sharpness/roundness window:
+    # DAOStarFinder finds noise-spike candidates, all of which the filter
+    # rejects, so PSFPhotometry.__call__ returns None before ever fitting.
+    settings = psfcat.PsfCatalogSettings(3.0, 1.0, 2.0, (9, 9), 8.0, 0.9, 1.0, -0.1, 0.1, 1.0)
+    result = psfcat.psf_catalog(
+        settings, image=str(image), uncertainty=str(unc), psf=str(psf_path),
+        sky_coords_image=str(image), catalog=str(tmp_path / "c.txt"),
+        finder=str(tmp_path / "f.txt"), residual=str(tmp_path / "r.fits"),
+        parquet=None, label="negative test", seed=1)
+    assert result == psfcat.PsfCatalogResult(produced=False, nsources=None)
+    assert not (tmp_path / "c.txt").exists()
