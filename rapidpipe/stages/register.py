@@ -5,7 +5,7 @@ from manifests"; per "The manifest": "Each product kind defines the
 registration metadata its manifest entry must carry. `register` validates
 that metadata and writes product rows without reading product contents."
 
-It records three kinds. It registers the enclosing manifest's own
+It records four kinds. It registers the enclosing manifest's own
 instances (`rapidpipe.runs.repository.register_manifest`), then writes
 the legacy rows each kind has, all in one transaction:
 
@@ -14,6 +14,8 @@ the legacy rows each kind has, all in one transaction:
 - `difference-image` (`difference`'s manifest): `diffimages`/`diffimmeta`,
   one pair per registered differencer
   (`rapidpipe.db.diffimages.register_difference_image`);
+- `psf` (designed in for `admit`'s manifest, which carries none today):
+  one `psfs` row through `dev`'s ``addPSF`` (``rapidpipe.db.psfs.register_psf``);
 - `source-catalog` (also `difference`'s): validated and accepted, nothing
   written beyond its instance row -- the products page's "Today's table"
   for this kind is "none until `load`". It stays independently runnable from whatever
@@ -33,10 +35,12 @@ from rapidpipe.db import connection as _connection_module
 from rapidpipe.db.connection import ConnectionUnavailable
 from rapidpipe.db.diffimages import register_difference_image
 from rapidpipe.db.l2files import register_l2_image
+from rapidpipe.db.psfs import register_psf
 from rapidpipe.products.diffimage import (
     validate_difference_entry,
     validate_source_catalog_entry,
 )
+from rapidpipe.products.psf import validate_psf_entry
 from rapidpipe.runs.repository import register_manifest
 from rapidpipe.stages.contract import (
     InputRejected,
@@ -49,7 +53,7 @@ from rapidpipe.stages.contract import (
 
 #: Product kinds this stage knows how to record. An output entry of any
 #: other kind is InputRejected, naming the kind.
-_KNOWN_KINDS = ("l2-image", "difference-image", "source-catalog")
+_KNOWN_KINDS = ("l2-image", "psf", "difference-image", "source-catalog")
 
 DECLARATION = StageDeclaration(
     name="register",
@@ -60,12 +64,12 @@ DECLARATION = StageDeclaration(
             "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
             "[--settings <toml>] [--dry-run]. --inputs holds the "
             "producing attempt's completion manifest (admit's, naming "
-            "l2-image entries, or difference's, naming difference-image "
+            "l2-image and psf entries, or difference's, naming difference-image "
             "and source-catalog entries)."
         ),
     },
     settings_schema_path=None,
-    consumes=("l2-image", "difference-image", "source-catalog"),
+    consumes=("l2-image", "psf", "difference-image", "source-catalog"),
     produces=(),
     database_access="read-write",
     resource_defaults={"vcpus": 1, "memory_mib": 1024},
@@ -94,7 +98,7 @@ def _reject_unknown_kinds(entries) -> None:
 def _body(context: StageContext) -> StageResult:
     manifest = context.input_manifest
     _reject_unknown_kinds(manifest.outputs)
-    # The difference kinds' blocks are checked before any connection is
+    # The difference and psf kinds' blocks are checked before any connection is
     # opened, so a malformed manifest is refused without touching the
     # database.
     for entry in manifest.outputs:
@@ -103,6 +107,8 @@ def _body(context: StageContext) -> StageResult:
                 validate_difference_entry(entry.to_dict())
             elif entry.kind == "source-catalog":
                 validate_source_catalog_entry(entry.to_dict())
+            elif entry.kind == "psf":
+                validate_psf_entry(entry.to_dict())
         except ValueError as exc:
             raise InputRejected(f"{entry.kind} {entry.instance!r}: {exc}") from exc
 
@@ -127,6 +133,16 @@ def _body(context: StageContext) -> StageResult:
                             output_location=context.inputs_location,
                         )
                         products_read["difference-image"] = entry.instance
+                        continue
+                    if entry.kind == "psf":
+                        register_psf(
+                            conn,
+                            entry=entry.to_dict(),
+                            run_id=manifest.run,
+                            attempt_id=context.attempt_id,
+                            output_location=context.inputs_location,
+                        )
+                        products_read["psf"] = entry.instance
                         continue
                     if entry.kind != "l2-image":
                         continue
