@@ -818,6 +818,13 @@ if __name__ == '__main__':
         job_config['SCI_IMAGE']['extreme_artifact_threshold'] = \
             config_input['SCI_IMAGE']['extreme_artifact_threshold']
 
+    # Likewise for the OpenUniverse ZPTMAG fix, so that a data set which omits it keeps the
+    # zeropoint its files came with.
+
+    if 'openuniverse_zptmag_fix' in config_input['SCI_IMAGE']:
+        job_config['SCI_IMAGE']['openuniverse_zptmag_fix'] = \
+            config_input['SCI_IMAGE']['openuniverse_zptmag_fix']
+
     job_config['SCI_IMAGE']['rid'] = str(rid)
     job_config['SCI_IMAGE']['sca'] = str(sca)
     job_config['SCI_IMAGE']['fid'] = str(fid)

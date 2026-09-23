@@ -29,6 +29,52 @@ to_zone = tz.gettz('America/Los_Angeles')
 from datetime import datetime, timezone
 
 
+#####################################################################################################
+# Nominal Roman WFI AB magnitude zeropoints, for flux in DN/s.
+#
+# These are the Roman WFI nominal zero points, the same table that
+# sims/src/socsims/convert_socsims.py carries as its fallback for a SOC-sim file whose
+# meta.photometry is unavailable.  It lives here so that a caller which has no photometric
+# calibration of its own, such as the OpenUniverse reformatting path, has one place to read it
+# from rather than a literal of its own.
+#
+# Keyed by both spellings a Roman filter goes by: the designation used in the PSF filenames and
+# in the SOC-sim ASDF metadata (F062, F106, ...), and the RAPID name used in the Filters
+# database table and in the OpenUniverse FITS headers (R062, Y106, ...).  F184 is spelled the
+# same either way.
+#####################################################################################################
+
+nominal_ab_zeropoints = {
+    "F062": 26.4, "R062": 26.4,
+    "F087": 26.3, "Z087": 26.3,
+    "F106": 26.4, "Y106": 26.4,
+    "F129": 26.3, "J129": 26.3,
+    "F158": 26.4, "H158": 26.4,
+    "F184": 25.9,
+    "F213": 25.4, "K213": 25.4,
+    "F146": 27.5, "W146": 27.5,
+}
+
+
+def get_nominal_ab_zeropoint(filter_name):
+
+    """
+    Method get_nominal_ab_zeropoint
+
+    Inputs:
+    filter_name             Filter name in either spelling, as a string, or None.
+
+    Returns:
+    zptmag                  Nominal AB magnitude zeropoint for flux in DN/s [AB mag], or None
+                            when the filter is not one of the eight Roman WFI filters.
+    """
+
+    if filter_name is None:
+        return None
+
+    return nominal_ab_zeropoints.get(str(filter_name).strip().upper())
+
+
 def utc_to_local(utc_dt):
     """Converts a UTC datetime object to local time."""
 
