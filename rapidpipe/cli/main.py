@@ -27,9 +27,12 @@ from __future__ import annotations
 import argparse
 import getpass
 import importlib
+import json
 import os
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any, Sequence
 
 from rapidpipe import __version__
@@ -37,6 +40,8 @@ from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
 from rapidpipe.db.connection import connect as _default_connect
 from rapidpipe.launch.batch import DependencyIncomplete, LaunchError, MissingEnvironmentVariable
 from rapidpipe.launch import batch as launch_batch
+from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_id
+from rapidpipe.products.storage import fetch_object, parse_location
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
 from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
@@ -75,6 +80,56 @@ def _is_batch_error(exc: BaseException) -> bool:
 #: ``rapidpipe.db.connection`` and affecting other callers -- the same
 #: pattern ``rapidpipe.stages.register`` uses for the same reason.
 connect = _default_connect
+
+
+class RegisterUnitIdError(ValueError):
+    """The register unit id could not be derived from its input manifest."""
+
+
+def _read_manifest_at(location_arg: str) -> Manifest:
+    """Read ``manifest.json`` from a local directory or S3 prefix.
+
+    Same fetch used by a stage's own ``--dry-run`` path
+    (``rapidpipe.stages.contract._read_input_manifest_from``, one object,
+    not the whole prefix): a local location is read directly; an S3
+    location is fetched to a throwaway temp file first, since
+    :meth:`~rapidpipe.products.manifest.Manifest.read` only takes a local
+    path.
+    """
+    location = parse_location(location_arg)
+    if not location.is_s3():
+        manifest_path = Path(location_arg) / "manifest.json"
+    else:
+        with tempfile.TemporaryDirectory(prefix="rapidpipe-register-unit-") as tmp:
+            manifest_path = fetch_object(
+                location, "manifest.json", Path(tmp) / "manifest.json")
+            return _load_manifest(manifest_path)
+    return _load_manifest(manifest_path)
+
+
+def _load_manifest(manifest_path: Path) -> Manifest:
+    try:
+        return Manifest.read(manifest_path)
+    except FileNotFoundError as exc:
+        raise RegisterUnitIdError(f"input manifest not found: {manifest_path}") from exc
+    except (json.JSONDecodeError, ManifestError) as exc:
+        raise RegisterUnitIdError(f"{manifest_path}: invalid manifest: {exc}") from exc
+
+
+def _resolve_register_unit_id(*, unit_id_arg: str | None, inputs_location_arg: str) -> str:
+    """The ``--unit`` value to use for a `register` invocation.
+
+    register's unit id is always derived from the manifest it reads
+    (register_unit_id, ruling: "a register unit is identified by what it
+    registers"), never chosen by the caller, so an explicit ``--unit`` for
+    register is refused rather than silently overridden.
+    """
+    if unit_id_arg is not None:
+        raise RegisterUnitIdError(
+            "--unit is not accepted for register: its unit id is always "
+            "derived from the manifest it reads")
+    manifest = _read_manifest_at(inputs_location_arg)
+    return register_unit_id(manifest)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -129,7 +184,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "local", help="Run one stage attempt locally as a subprocess.")
     local_parser.add_argument("run_id")
     local_parser.add_argument("stage")
-    local_parser.add_argument("--unit", required=True, dest="unit_id")
+    local_parser.add_argument(
+        "--unit", required=False, default=None, dest="unit_id",
+        help="Required for every stage except register, whose unit id is "
+             "always derived from the manifest it reads (--unit is refused "
+             "for register).")
     local_parser.add_argument("--inputs", required=True)
     local_parser.add_argument("--outputs-root", required=True)
     local_parser.add_argument("--settings", default=None)
@@ -139,7 +198,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "submit", help="Submit one stage attempt to Batch.")
     submit_parser.add_argument("run_id")
     submit_parser.add_argument("stage")
-    submit_parser.add_argument("--unit", required=True, dest="unit_id")
+    submit_parser.add_argument(
+        "--unit", required=False, default=None, dest="unit_id",
+        help="Required for every stage except register, whose unit id is "
+             "always derived from the manifest it reads (--unit is refused "
+             "for register).")
     inputs_group = submit_parser.add_mutually_exclusive_group(required=True)
     inputs_group.add_argument("--inputs", default=None)
     inputs_group.add_argument("--inputs-from-stage", default=None, dest="inputs_from_stage")
@@ -382,6 +445,19 @@ def _run_local_command(args: argparse.Namespace) -> int:
         sys.stderr.write(f"rapidpipe run local: {module_name} has no DECLARATION\n")
         return int(ExitCode.USAGE)
 
+    if args.stage == "register":
+        try:
+            unit_id = _resolve_register_unit_id(
+                unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
+        except RegisterUnitIdError as exc:
+            sys.stderr.write(f"rapidpipe run local: {exc}\n")
+            return int(ExitCode.USAGE)
+    elif args.unit_id is None:
+        sys.stderr.write("rapidpipe run local: --unit is required\n")
+        return int(ExitCode.USAGE)
+    else:
+        unit_id = args.unit_id
+
     try:
         cm = connect(application_name="rapidpipe-run-local")
     except ConnectionConfigError as exc:
@@ -398,7 +474,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
                 run_id=args.run_id,
                 stage=args.stage,
                 unit_kind=declaration.unit,
-                unit_id=args.unit_id,
+                unit_id=unit_id,
                 inputs=args.inputs,
                 outputs_root=args.outputs_root,
                 settings=args.settings,
@@ -437,6 +513,34 @@ def _run_submit_command(args: argparse.Namespace) -> int:
         sys.stderr.write(f"rapidpipe run submit: {module_name} has no DECLARATION\n")
         return int(ExitCode.USAGE)
 
+    # register's own --unit is refused (derived, from the manifest it
+    # reads); --inputs-from-stage still names the producing unit's own id
+    # (admit's/difference's), needed to look up its output location --
+    # carried on --unit for this one case, since register's own unit id
+    # does not exist yet to disambiguate it from. Checked before any
+    # connection is attempted, matching the plain-stage --unit-required
+    # check below (unless the location is --inputs-from-stage, which
+    # itself needs a connection to resolve).
+    if args.stage == "register":
+        if args.inputs_from_stage is None:
+            try:
+                unit_id = _resolve_register_unit_id(
+                    unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
+            except RegisterUnitIdError as exc:
+                sys.stderr.write(f"rapidpipe run submit: {exc}\n")
+                return int(ExitCode.USAGE)
+        elif args.unit_id is None:
+            sys.stderr.write(
+                "rapidpipe run submit: --unit is required together with "
+                "--inputs-from-stage for register: it names the producing "
+                "unit to resolve, not register's own unit id\n")
+            return int(ExitCode.USAGE)
+    elif args.unit_id is None:
+        sys.stderr.write("rapidpipe run submit: --unit is required\n")
+        return int(ExitCode.USAGE)
+    else:
+        unit_id = args.unit_id
+
     try:
         cm = connect(application_name="rapidpipe-run-submit")
     except ConnectionConfigError as exc:
@@ -448,9 +552,15 @@ def _run_submit_command(args: argparse.Namespace) -> int:
 
     with cm as conn:
         try:
-            if args.inputs_from_stage is not None:
+            if args.stage == "register" and args.inputs_from_stage is not None:
                 inputs_location = launch_batch.resolve_inputs_from_stage(
                     conn, run_id=args.run_id, unit_id=args.unit_id,
+                    upstream_stage=args.inputs_from_stage)
+                unit_id = _resolve_register_unit_id(
+                    unit_id_arg=None, inputs_location_arg=inputs_location)
+            elif args.inputs_from_stage is not None:
+                inputs_location = launch_batch.resolve_inputs_from_stage(
+                    conn, run_id=args.run_id, unit_id=unit_id,
                     upstream_stage=args.inputs_from_stage)
             else:
                 inputs_location = args.inputs
@@ -460,10 +570,14 @@ def _run_submit_command(args: argparse.Namespace) -> int:
                 run_id=args.run_id,
                 stage=args.stage,
                 unit_kind=declaration.unit,
-                unit_id=args.unit_id,
+                unit_id=unit_id,
                 inputs_location=inputs_location,
                 settings_location=args.settings,
             )
+        except RegisterUnitIdError as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run submit: {exc}\n")
+            return int(ExitCode.USAGE)
         except MissingEnvironmentVariable as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")

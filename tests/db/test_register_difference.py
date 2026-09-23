@@ -19,7 +19,7 @@ import pytest
 
 import rapidpipe.stages.difference as difference
 from rapidpipe.db.ids import new_ulid
-from rapidpipe.products.manifest import Manifest
+from rapidpipe.products.manifest import Manifest, register_unit_id
 from rapidpipe.runs import repository as repo
 from rapidpipe.science.spatial import healpix_indexes
 from rapidpipe.stages.contract import ExitCode
@@ -116,15 +116,32 @@ def _run_difference(conn, tmp_path, monkeypatch, *, l2_instance, reference_insta
 
 def _admitted_l2(conn, tmp_path, monkeypatch):
     run_id, admit_outputs = _run_admit(conn, tmp_path, name="l2")
+    admit_manifest = Manifest.read(admit_outputs / "manifest.json")
     rc, _ = _run_register(conn, monkeypatch, admit_outputs, run_id=run_id,
-                          unit_id="l2-register-unit", tmp_path=tmp_path, name="l2")
+                          unit_id=register_unit_id(admit_manifest),
+                          tmp_path=tmp_path, name="l2")
     assert rc == int(ExitCode.SUCCESS)
-    return Manifest.read(admit_outputs / "manifest.json").outputs[0].instance
+    return admit_manifest.outputs[0].instance
 
 
 def _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, name="reg"):
+    """Register the difference manifest at ``outputs``.
+
+    The registering unit id is derived from that manifest
+    (``register_unit_id``, ruling: "a register unit is identified by what
+    it registers" -- <producing stage>/<producing unit id>), the same
+    derivation the CLI now performs at submission time
+    (rapidpipe.cli.main._resolve_register_unit_id) rather than a
+    hand-keyed name. Two calls against the *same* ``outputs`` manifest
+    (e.g. replay tests) therefore collide on the same unit id by design --
+    a distinct ``name`` no longer buys a distinct unit for the same
+    producer, matching the "no occurrence counter" rule; a caller that
+    wants a second, fresh unit must pass a different producer manifest.
+    """
+    difference_manifest = Manifest.read(outputs / "manifest.json")
     return _run_register(conn, monkeypatch, outputs, run_id=run_id,
-                         unit_id=f"{name}-unit", tmp_path=tmp_path, name=name)
+                         unit_id=register_unit_id(difference_manifest),
+                         tmp_path=tmp_path, name=name)
 
 
 def _diffimages_row(cur, instance):
@@ -265,3 +282,56 @@ def test_an_sfft_instance_is_refused_until_it_has_a_pipelines_row(conn, tmp_path
         overlay="[sfft]\nregister_sfft = true\n")
     rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path)
     assert rc == int(ExitCode.INPUT_REJECTED)
+
+
+# ======================================================================
+# Two registers in one run: derived ids are distinct per producer
+# ======================================================================
+
+def test_two_registers_in_one_run_get_distinct_derived_ids(conn, tmp_path, monkeypatch):
+    """A run that registers after both `admit` and `difference` (the
+    diffchain shape: admit, register, difference, register) gets two
+    distinct `register` units, each named for its own producer -- no
+    hand-keyed ``<unit>/difference`` suffix and no occurrence counter
+    (Ben, 2026-09-23 ruling: "a register unit is identified by what it
+    registers"; id = <producing stage>/<producing unit id>).
+    """
+    admit_run_id, admit_outputs = _run_admit(conn, tmp_path, name="twice")
+    admit_manifest = Manifest.read(admit_outputs / "manifest.json")
+    admit_register_id = register_unit_id(admit_manifest)
+    rc, admit_registering_attempt = _run_register(
+        conn, monkeypatch, admit_outputs, run_id=admit_run_id,
+        unit_id=admit_register_id, tmp_path=tmp_path, name="twice-admit-reg")
+    assert rc == int(ExitCode.SUCCESS)
+    l2_instance = admit_manifest.outputs[0].instance
+
+    with conn.cursor() as cur:
+        rfid = _legacy_refimage(cur)
+    difference_run_id, outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
+    difference_manifest = Manifest.read(outputs / "manifest.json")
+    difference_register_id = register_unit_id(difference_manifest)
+    rc, difference_registering_attempt = _register_difference(
+        conn, monkeypatch, outputs, difference_run_id, tmp_path, "twice-diff-reg")
+    assert rc == int(ExitCode.SUCCESS)
+
+    assert admit_register_id == f"admit/{admit_manifest.unit.id}"
+    assert difference_register_id == f"difference/{difference_manifest.unit.id}"
+    assert admit_register_id != difference_register_id
+
+    # Neither register_main nor _run_register calls record_attempt_result/
+    # select_attempt (that is run_stage_locally's/submit_unit's job, an
+    # end-to-end concern covered by tests/db/test_local_runner.py) -- this
+    # test is only about the two units table rows this run now carries,
+    # each keyed by its own derived id.
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT run, stage, unit_id FROM units "
+            "WHERE stage = 'register' AND unit_id IN (%s, %s) ORDER BY unit_id",
+            (admit_register_id, difference_register_id))
+        rows = {row[2]: row for row in cur.fetchall()}
+
+    assert set(rows) == {admit_register_id, difference_register_id}
+    assert rows[admit_register_id][0] == admit_run_id
+    assert rows[difference_register_id][0] == difference_run_id
+    assert admit_registering_attempt != difference_registering_attempt
