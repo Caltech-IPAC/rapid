@@ -456,3 +456,174 @@ def test_rapid_db_secret_id_env_var_routes_to_the_secret_resolver(monkeypatch):
     assert calls == ["the-secret"]
     assert connect_calls[0]["user"] == "secret-user"
     assert connect_calls[0]["password"] == "secret-pass"
+
+
+# ======================================================================
+# RAPID_PARAMETER_PATH SSM parameter tree fallback
+# ======================================================================
+
+class _FakeSSMClient:
+    """A minimal in-memory stand-in for a boto3 SSM client.
+
+    Only ``get_parameters_by_path`` is implemented, paginated by
+    ``page_size`` when set. ``calls`` records each call's kwargs.
+    """
+
+    def __init__(self, values: dict[str, str], *, path: str, page_size: int | None = None):
+        self._path = path.rstrip("/") + "/"
+        self._parameters = [
+            {"Name": self._path + name, "Value": value}
+            for name, value in values.items()
+        ]
+        self.page_size = page_size
+        self.calls: list[dict] = []
+
+    def get_parameters_by_path(self, **kwargs):
+        self.calls.append(kwargs)
+        assert kwargs.get("Recursive") is True
+        assert kwargs.get("WithDecryption") is True
+        token = kwargs.get("NextToken")
+        start = int(token) if token else 0
+        if self.page_size is None:
+            page = self._parameters[start:]
+            next_start = len(self._parameters)
+        else:
+            page = self._parameters[start:start + self.page_size]
+            next_start = start + self.page_size
+        response = {"Parameters": page}
+        if next_start < len(self._parameters):
+            response["NextToken"] = str(next_start)
+        return response
+
+
+_TREE_PATH = "/rapid/pipeline"
+_TREE_DB_VALUES = {
+    "db/server": "tree-host",
+    "db/port": "5433",
+    "db/name": "tree-db",
+    "db/secret-id": "tree-secret",
+}
+
+
+def test_env_endpoint_set_means_the_tree_is_never_read(monkeypatch):
+    _set_pg_env(monkeypatch)
+    monkeypatch.setenv("RAPID_PARAMETER_PATH", _TREE_PATH)
+
+    fake_ssm = _FakeSSMClient(_TREE_DB_VALUES, path=_TREE_PATH)
+    connect_calls = []
+    with conn_mod.connect(connect_fn=_recording_connect_fn(connect_calls),
+                          sleep=lambda _s: None, ssm_client=fake_ssm):
+        pass
+
+    assert fake_ssm.calls == []
+    assert connect_calls[0]["host"] == "env-host"
+    assert connect_calls[0]["user"] == "env-user"
+
+
+def test_env_endpoint_unset_and_path_set_uses_the_tree(monkeypatch):
+    _clear_pg_env(monkeypatch)
+    monkeypatch.setenv("RAPID_PARAMETER_PATH", _TREE_PATH)
+
+    fake_ssm = _FakeSSMClient(_TREE_DB_VALUES, path=_TREE_PATH)
+
+    calls = []
+
+    def _fake_credentials_from_secret(secret_id):
+        calls.append(secret_id)
+        return conn_mod.Credentials(user="tree-user", password="tree-pass")
+
+    monkeypatch.setattr(conn_mod, "credentials_from_secret", _fake_credentials_from_secret)
+
+    connect_calls = []
+    with conn_mod.connect(connect_fn=_recording_connect_fn(connect_calls),
+                          sleep=lambda _s: None, ssm_client=fake_ssm):
+        pass
+
+    assert len(fake_ssm.calls) == 1
+    assert calls == ["tree-secret"]
+    assert connect_calls[0]["host"] == "tree-host"
+    assert connect_calls[0]["port"] == "5433"
+    assert connect_calls[0]["dbname"] == "tree-db"
+    assert connect_calls[0]["user"] == "tree-user"
+    assert connect_calls[0]["password"] == "tree-pass"
+
+
+def test_tree_read_is_paginated(monkeypatch):
+    _clear_pg_env(monkeypatch)
+    monkeypatch.setenv("RAPID_PARAMETER_PATH", _TREE_PATH)
+
+    fake_ssm = _FakeSSMClient(_TREE_DB_VALUES, path=_TREE_PATH, page_size=2)
+    monkeypatch.setattr(
+        conn_mod, "credentials_from_secret",
+        lambda secret_id: conn_mod.Credentials(user="u", password="p"))
+
+    connect_calls = []
+    with conn_mod.connect(connect_fn=_recording_connect_fn(connect_calls),
+                          sleep=lambda _s: None, ssm_client=fake_ssm):
+        pass
+
+    assert len(fake_ssm.calls) == 2
+    assert "NextToken" not in fake_ssm.calls[0]
+    assert fake_ssm.calls[1]["NextToken"] == "2"
+    assert connect_calls[0]["host"] == "tree-host"
+
+
+def test_env_credentials_win_even_when_endpoint_comes_from_the_tree(monkeypatch):
+    _clear_pg_env(monkeypatch)
+    monkeypatch.setenv("RAPID_PARAMETER_PATH", _TREE_PATH)
+    monkeypatch.setenv("PGUSER", "env-user")
+    monkeypatch.setenv("PGPASSWORD", "env-pass")
+
+    fake_ssm = _FakeSSMClient(_TREE_DB_VALUES, path=_TREE_PATH)
+
+    connect_calls = []
+    with conn_mod.connect(connect_fn=_recording_connect_fn(connect_calls),
+                          sleep=lambda _s: None, ssm_client=fake_ssm):
+        pass
+
+    assert connect_calls[0]["host"] == "tree-host"
+    assert connect_calls[0]["user"] == "env-user"
+    assert connect_calls[0]["password"] == "env-pass"
+
+
+def test_path_set_but_key_missing_raises_config_error_naming_it(monkeypatch):
+    _clear_pg_env(monkeypatch)
+    monkeypatch.setenv("RAPID_PARAMETER_PATH", _TREE_PATH)
+
+    incomplete = dict(_TREE_DB_VALUES)
+    del incomplete["db/secret-id"]
+    fake_ssm = _FakeSSMClient(incomplete, path=_TREE_PATH)
+
+    with pytest.raises(conn_mod.ConnectionConfigError, match="db/secret-id"):
+        with conn_mod.connect(sleep=lambda _s: None, ssm_client=fake_ssm):
+            pass
+
+
+def test_neither_env_endpoint_nor_path_raises_the_existing_error(monkeypatch):
+    _clear_pg_env(monkeypatch)
+    monkeypatch.delenv("RAPID_PARAMETER_PATH", raising=False)
+
+    with pytest.raises(conn_mod.ConnectionConfigError, match="PGHOST"):
+        with conn_mod.connect(sleep=lambda _s: None):
+            pass
+
+
+def test_explicit_endpoint_and_credentials_still_win_over_the_tree(monkeypatch):
+    _clear_pg_env(monkeypatch)
+    monkeypatch.setenv("RAPID_PARAMETER_PATH", _TREE_PATH)
+
+    fake_ssm = _FakeSSMClient(_TREE_DB_VALUES, path=_TREE_PATH)
+    explicit_endpoint = conn_mod.Endpoint(host="explicit-host", port="1", dbname="explicit-db")
+    explicit_credentials = conn_mod.Credentials(user="explicit-user", password="explicit-pass")
+
+    connect_calls = []
+    with conn_mod.connect(
+        endpoint=explicit_endpoint, credentials=explicit_credentials,
+        connect_fn=_recording_connect_fn(connect_calls),
+        sleep=lambda _s: None, ssm_client=fake_ssm,
+    ):
+        pass
+
+    assert fake_ssm.calls == []
+    assert connect_calls[0]["host"] == "explicit-host"
+    assert connect_calls[0]["user"] == "explicit-user"

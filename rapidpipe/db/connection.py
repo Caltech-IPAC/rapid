@@ -1,14 +1,30 @@
 """One connection path to the run-model tables.
 
-Reads the standard ``PG*`` variables -- ``PGHOST``, ``PGPORT``, ``PGDATABASE``,
-``PGUSER``, ``PGPASSWORD`` -- exactly as ``database/apply-migrations.sh``
-does, when a caller passes neither ``endpoint=`` nor ``credentials=``.
-A caller holding either already -- the CLI having just read a parameter
-tree, a launcher having just resolved a secret under its own role --
-passes it explicitly instead, per the environment policy: the
-environment is not an in-process transport, so this module never writes
-it for a downstream reader to read back, only reads its own at the
-boundary.
+Environment contract, in order, when a caller passes neither ``endpoint=``
+nor ``credentials=`` (a caller holding either passes it explicitly instead
+-- the CLI having just read a parameter tree, a launcher having just
+resolved a secret under its own role -- and it always wins over both
+steps below):
+
+1. The standard ``PG*`` variables -- ``PGHOST``, ``PGPORT``, ``PGDATABASE``,
+   ``PGUSER``, ``PGPASSWORD`` -- exactly as ``database/apply-migrations.sh``
+   reads them, whenever they are set (``RAPID_DB_SECRET_ID`` still takes
+   the credential from Secrets Manager instead of ``PGUSER``/``PGPASSWORD``
+   when it is set).
+2. The Batch estate's ``RAPID_PARAMETER_PATH`` SSM parameter tree, when the
+   ``PG*`` endpoint variables are unset and this variable names a tree:
+   its ``db/server``/``db/port``/``db/name``/``db/secret-id`` keys supply
+   the endpoint and, via :func:`credentials_from_secret`, the credential.
+   Designed in from the smdc branch's parameter-tree mechanism
+   (``pipeline/entrypoints/job.py``'s ``database_connection_inputs``,
+   ``submission/startup.py``'s ``fetch_parameters``) and unused by any
+   caller in this repository today.
+3. Neither of the above: the plain ``PG*`` read, which raises naming the
+   missing variable, unchanged from before this fallback existed.
+
+This module never writes the environment for a downstream reader to read
+back, only reads it (or the tree) at the boundary; nothing here is an
+in-process transport.
 
 No connection pooling, no pooler-specific configuration: pgbouncer (or
 any pooler) is server-side infrastructure that ``rapid_systems``
@@ -152,6 +168,93 @@ def _credentials_from_environment() -> Credentials:
     return Credentials(user=env["PGUSER"], password=env["PGPASSWORD"])
 
 
+#: The parameter tree's four database keys, read relative to
+#: ``RAPID_PARAMETER_PATH`` -- following the smdc branch's
+#: ``pipeline/entrypoints/job.py`` (``DB_PARAMETER_KEYS``) and
+#: ``database_connection_inputs``.
+_PARAMETER_TREE_DB_KEYS = ("db/server", "db/port", "db/name", "db/secret-id")
+
+
+def _fetch_parameter_tree_db_values(path: str, ssm_client: Any = None) -> dict[str, str]:
+    """Read the four ``db/*`` keys under ``path`` from the SSM parameter tree.
+
+    One paginated ``get_parameters_by_path`` walk, exactly as the smdc
+    branch's ``submission/startup.py.fetch_parameters`` reads the wider
+    pipeline tree -- names come back relative to ``path``, decrypted
+    (``WithDecryption=True``), and pagination follows ``NextToken``.
+    ``boto3`` is imported lazily, here, matching
+    :func:`credentials_from_secret`, so this module -- and every caller
+    that never falls back to the tree -- imports without boto3 installed.
+
+    Raises :class:`ConnectionConfigError` naming ``path`` and every one of
+    :data:`_PARAMETER_TREE_DB_KEYS` that the tree does not carry.
+    """
+    if ssm_client is None:
+        try:
+            import boto3
+        except ImportError as exc:
+            raise ConnectionConfigError(
+                "RAPID_PARAMETER_PATH is set but boto3 is not installed "
+                "in this environment") from exc
+        ssm_client = boto3.client("ssm")
+
+    prefix = path.rstrip("/") + "/"
+    values: dict[str, str] = {}
+    kwargs: dict[str, Any] = {"Path": path, "Recursive": True, "WithDecryption": True}
+    try:
+        while True:
+            response = ssm_client.get_parameters_by_path(**kwargs)
+            for parameter in response.get("Parameters", []):
+                name = parameter["Name"]
+                relative = name[len(prefix):] if name.startswith(prefix) else name
+                values[relative] = parameter["Value"]
+            token = response.get("NextToken")
+            if not token:
+                break
+            kwargs["NextToken"] = token
+    except ConnectionConfigError:
+        raise
+    except Exception as exc:
+        raise ConnectionConfigError(
+            f"could not read the database parameters from the SSM "
+            f"parameter tree at {path!r}: {exc}") from exc
+
+    missing = [key for key in _PARAMETER_TREE_DB_KEYS if key not in values]
+    if missing:
+        raise ConnectionConfigError(
+            f"the SSM parameter tree at {path!r} does not carry the "
+            f"database endpoint; missing: {', '.join(missing)}")
+
+    return values
+
+
+def _cached_parameter_tree_db_values(
+    path: str, ssm_client: Any, cache: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    """As :func:`_fetch_parameter_tree_db_values`, but fetched at most once
+    per :func:`connect` call: the endpoint and credential resolvers each
+    need the tree, and ``cache`` (one dict, created fresh per ``connect``
+    call and passed to both) makes that one read, not two."""
+    if path not in cache:
+        cache[path] = _fetch_parameter_tree_db_values(path, ssm_client=ssm_client)
+    return cache[path]
+
+
+def _endpoint_from_parameter_tree(
+    path: str, ssm_client: Any, cache: dict[str, dict[str, str]],
+) -> Endpoint:
+    values = _cached_parameter_tree_db_values(path, ssm_client, cache)
+    return Endpoint(host=values["db/server"], port=values["db/port"],
+                     dbname=values["db/name"])
+
+
+def _credentials_from_parameter_tree(
+    path: str, ssm_client: Any, cache: dict[str, dict[str, str]],
+) -> Credentials:
+    values = _cached_parameter_tree_db_values(path, ssm_client, cache)
+    return credentials_from_secret(values["db/secret-id"])
+
+
 def credentials_from_secret(secret_id: str) -> Credentials:
     """Resolve a database credential from an AWS Secrets Manager secret.
 
@@ -190,15 +293,24 @@ def credentials_from_secret(secret_id: str) -> Credentials:
     return Credentials(user=user, password=password)
 
 
-def _resolve_endpoint(endpoint: Endpoint | None) -> Endpoint:
+def _resolve_endpoint(
+    endpoint: Endpoint | None, ssm_client: Any, tree_cache: dict[str, dict[str, str]],
+) -> Endpoint:
     if endpoint is None:
+        if os.environ.get("PGHOST"):
+            return _endpoint_from_environment()
+        parameter_path = os.environ.get("RAPID_PARAMETER_PATH")
+        if parameter_path:
+            return _endpoint_from_parameter_tree(parameter_path, ssm_client, tree_cache)
         return _endpoint_from_environment()
     if isinstance(endpoint, Endpoint):
         return endpoint
     return Endpoint(**endpoint) if hasattr(endpoint, "keys") else Endpoint(*endpoint)
 
 
-def _resolve_credentials(credentials: Credentials | None) -> Credentials:
+def _resolve_credentials(
+    credentials: Credentials | None, ssm_client: Any, tree_cache: dict[str, dict[str, str]],
+) -> Credentials:
     if credentials is not None:
         if isinstance(credentials, Credentials):
             return credentials
@@ -207,6 +319,12 @@ def _resolve_credentials(credentials: Credentials | None) -> Credentials:
     secret_id = os.environ.get("RAPID_DB_SECRET_ID")
     if secret_id:
         return credentials_from_secret(secret_id)
+    if os.environ.get("PGUSER"):
+        return _credentials_from_environment()
+
+    parameter_path = os.environ.get("RAPID_PARAMETER_PATH")
+    if parameter_path:
+        return _credentials_from_parameter_tree(parameter_path, ssm_client, tree_cache)
     return _credentials_from_environment()
 
 
@@ -295,6 +413,7 @@ def connect(
     sleep=time.sleep,
     connect_fn=None,
     random_func=random.uniform,
+    ssm_client=None,
 ) -> Iterator[psycopg2.extensions.connection]:
     """Yield one connection with autocommit off.
 
@@ -307,14 +426,34 @@ def connect(
     (each is documented as a single transaction).
 
     ``endpoint`` and ``credentials`` are the explicit parameter
-    interface: a caller holding either passes it here. What is not
-    passed falls back to the ``PG*`` environment -- ``PGHOST``,
-    ``PGPORT``, ``PGDATABASE`` for the endpoint, ``PGUSER``/``PGPASSWORD``
-    for credentials unless ``RAPID_DB_SECRET_ID`` is set, in which case
-    the credential is resolved from that Secrets Manager secret instead
-    (see :func:`credentials_from_secret`). This is a boundary read, not
-    an in-process transport: nothing in this module writes the
-    environment for a downstream reader.
+    interface: a caller holding either passes it here, and an explicit
+    argument always wins over both the environment and the parameter
+    tree below. What is not passed falls back, in order:
+
+    1. The ``PG*`` environment -- ``PGHOST``, ``PGPORT``, ``PGDATABASE``
+       for the endpoint, ``PGUSER``/``PGPASSWORD`` for credentials --
+       whenever those variables are set.
+    2. Unless ``RAPID_DB_SECRET_ID`` is set, in which case the credential
+       is resolved from that Secrets Manager secret instead (see
+       :func:`credentials_from_secret`), still ahead of the tree below.
+    3. The ``RAPID_PARAMETER_PATH`` SSM parameter tree, when the ``PG*``
+       endpoint variables are unset and this variable names a tree: its
+       ``db/server``/``db/port``/``db/name`` keys supply the endpoint,
+       and its ``db/secret-id`` key names the Secrets Manager secret used
+       for credentials (again via :func:`credentials_from_secret`) when
+       neither ``RAPID_DB_SECRET_ID`` nor ``PGUSER`` is set. Endpoint and
+       credential fall back to the tree independently -- an operator can
+       set ``PGUSER``/``PGPASSWORD`` while still resolving the endpoint
+       from the tree, for instance.
+    4. The plain ``PG*`` environment read, unchanged, if neither
+       ``RAPID_PARAMETER_PATH`` nor the values above apply -- so a
+       deployment that never sets ``RAPID_PARAMETER_PATH`` gets exactly
+       the errors it always got.
+
+    This is a boundary read, not an in-process transport: nothing in
+    this module writes the environment for a downstream reader.
+    ``ssm_client`` is a test injection point (:func:`credentials_from_secret`
+    already covers Secrets Manager); nothing in production passes it.
 
     Connecting retries up to ``attempts`` times (default
     :data:`DEFAULT_CONNECT_ATTEMPTS`) on ``psycopg2.OperationalError``,
@@ -338,8 +477,9 @@ def connect(
     raising. Exhausting the retry budget raises
     :class:`ConnectionUnavailable`.
     """
-    resolved_endpoint = _resolve_endpoint(endpoint)
-    resolved_credentials = _resolve_credentials(credentials)
+    tree_cache: dict[str, dict[str, str]] = {}
+    resolved_endpoint = _resolve_endpoint(endpoint, ssm_client, tree_cache)
+    resolved_credentials = _resolve_credentials(credentials, ssm_client, tree_cache)
     conn = _connect_with_retry(
         endpoint=resolved_endpoint,
         credentials=resolved_credentials,
