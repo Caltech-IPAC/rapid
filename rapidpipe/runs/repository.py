@@ -393,7 +393,7 @@ def record_attempt_result(
             """
             UPDATE attempts
             SET exit_code = %s, disposition = %s, output_location = %s,
-                scheduler_job_id = %s, ended = now()
+                scheduler_job_id = %s, ended = now(), reconcile_note = NULL
             WHERE id = %s
             """,
             (exit_code, disposition, output_location, scheduler_job_id, attempt_id),
@@ -456,6 +456,55 @@ def record_attempt_result(
             )
         # disposition == 'succeeded': the unit stays 'running' until
         # select_attempt is called; success alone does not complete it.
+
+
+# ======================================================================
+# record_reconcile_note
+# ======================================================================
+
+def record_reconcile_note(
+    conn: psycopg2.extensions.connection,
+    attempt_id: str,
+    note: str,
+) -> None:
+    """Record why :func:`~rapidpipe.launch.batch.reconcile` could not
+    determine this attempt's outcome, without setting a disposition.
+
+    Leaves ``disposition`` and ``scheduler_job_id`` untouched -- the
+    attempt stays exactly as unresolved (and re-reconcilable) as it was
+    before reconcile looked at it (runs page, "Attempts": disposition is
+    null while queued or running). Used when a Batch job has SUCCEEDED
+    but reconcile could not fetch its manifest or execution record from
+    S3 for a reason other than the object being absent (e.g. an
+    AccessDenied on the launcher's own role): that is not evidence the
+    job failed, so it must not consume one of the unit's limited
+    attempts. A later reconcile call for the same attempt overwrites
+    this note, or clears it via :func:`record_attempt_result` once it
+    can record a real disposition.
+
+    Refuses (``AttemptAlreadyResolved``) if the attempt already has a
+    disposition -- a completed attempt's outcome is not something a
+    later reconcile call should annotate over.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT disposition FROM attempts WHERE id = %s FOR UPDATE",
+            (attempt_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise AttemptNotFound(f"attempt {attempt_id!r} does not exist")
+        (disposition,) = row
+        if disposition is not None:
+            raise AttemptAlreadyResolved(
+                f"attempt {attempt_id!r} already has disposition "
+                f"{disposition!r}; refusing to overwrite it with a "
+                "reconcile note")
+
+        cur.execute(
+            "UPDATE attempts SET reconcile_note = %s WHERE id = %s",
+            (note, attempt_id),
+        )
 
 
 # ======================================================================

@@ -23,7 +23,7 @@ from rapidpipe.launch import batch as launch_batch
 from rapidpipe.runs import repository as repo
 from rapidpipe.runs.local import run_stage_locally
 from tests.unit.fakebatch import FakeBatch
-from tests.unit.fakes3 import FakeS3
+from tests.unit.fakes3 import FakeClientError, FakeS3
 from tests.unit.test_admit import _build_delivery
 
 from .test_repository import _make_run
@@ -237,6 +237,133 @@ def test_reconcile_succeeded_without_manifest_is_failed(conn, batch_env):
         disposition, exit_code = cur.fetchone()
         assert disposition == "failed"
         assert exit_code == 0
+
+
+class _AccessDeniedThenS3:
+    """Wraps a real FakeS3 but raises AccessDenied on download_file calls
+    until armed, standing in for a launcher-side S3 permissions problem
+    that gets fixed between one reconcile call and the next (rapid_systems
+    PR #70's own shape, 2026-09-22)."""
+
+    def __init__(self, fake_s3):
+        self._fake = fake_s3
+        self.denied = True
+
+    def download_file(self, bucket, key, filename, **kwargs):
+        if self.denied:
+            raise FakeClientError("AccessDenied", "not authorized")
+        return self._fake.download_file(bucket, key, filename, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._fake, name)
+
+
+def test_reconcile_succeeded_fetch_denied_stays_unresolved_then_completes(conn, batch_env):
+    # job SUCCEEDED + fetch raises -> attempt stays non-terminal, reason
+    # recorded, reconcile is re-runnable and completes once the fetch
+    # later succeeds (the defect this fix addresses: an AccessDenied
+    # reading the manifest/exec record from S3 must not consume the
+    # unit's only attempt for a launcher-side problem the Batch job never
+    # had a chance to cause).
+    run_id = _make_run(conn, kind="scratch", max_attempts=1)
+    conn.commit()
+
+    fake_batch = FakeBatch()
+    submission = _submit_one(conn, fake_batch, run_id=run_id, unit_id="reconcile-007/SCA07")
+    conn.commit()
+
+    manifest = {
+        "schema_version": "1", "run": run_id,
+        "unit": {"kind": "detector-image", "id": "reconcile-007/SCA07"},
+        "stage": "admit", "attempt": submission.attempt_id,
+        "execution_record": f"exec/{submission.attempt_id}.json",
+        "inputs": {"manifest": "x", "products": {}, "result_sets": []},
+        "outputs": [],
+    }
+    bucket = "test-bucket"
+    prefix = submission.output_location[len(f"s3://{bucket}/"):]
+    fake_s3 = FakeS3()
+    fake_s3.seed(bucket, f"{prefix}/manifest.json", json.dumps(manifest).encode())
+
+    fake_batch.set_status(submission.job_id, "SUCCEEDED")
+
+    denying_s3 = _AccessDeniedThenS3(fake_s3)
+    results = launch_batch.reconcile(
+        conn, run_id=run_id, client=fake_batch, s3_client=denying_s3)
+    conn.commit()
+
+    # Unresolved, not terminal: max_attempts=1 would refuse a second
+    # allocation if this were wrongly recorded 'failed'.
+    assert results[0].disposition is None
+    assert results[0].selected is False
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT disposition, scheduler_job_id, reconcile_note "
+            "FROM attempts WHERE id = %s",
+            (submission.attempt_id,))
+        disposition, scheduler_job_id, note = cur.fetchone()
+        assert disposition is None
+        assert scheduler_job_id == submission.job_id
+        assert note is not None and "AccessDenied" in note
+
+        cur.execute(
+            "SELECT state, selected_attempt FROM units WHERE run = %s AND stage = 'admit' "
+            "AND unit_id = %s", (run_id, "reconcile-007/SCA07"))
+        state, selected_attempt = cur.fetchone()
+        assert state == "running"
+        assert selected_attempt is None
+
+    # The launcher-side problem is fixed; reconcile the same run again.
+    denying_s3.denied = False
+    results = launch_batch.reconcile(
+        conn, run_id=run_id, client=fake_batch, s3_client=denying_s3)
+    conn.commit()
+
+    assert results[0].disposition == "succeeded"
+    assert results[0].selected is True
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT disposition, reconcile_note FROM attempts WHERE id = %s",
+            (submission.attempt_id,))
+        disposition, note = cur.fetchone()
+        assert disposition == "succeeded"
+        assert note is None  # cleared on real resolution
+
+        cur.execute(
+            "SELECT selected_attempt FROM units WHERE run = %s AND stage = 'admit' "
+            "AND unit_id = %s", (run_id, "reconcile-007/SCA07"))
+        (selected_attempt,) = cur.fetchone()
+        assert selected_attempt == submission.attempt_id
+
+
+def test_reconcile_failed_job_is_terminal_despite_note_machinery(conn, batch_env):
+    # job FAILED -> terminal as before; the new non-terminal path is
+    # specific to SUCCEEDED + an unreadable manifest/exec record, and
+    # must not affect a real Batch failure.
+    run_id = _make_run(conn, kind="scratch", max_attempts=2)
+    conn.commit()
+
+    fake_batch = FakeBatch()
+    submission = _submit_one(conn, fake_batch, run_id=run_id, unit_id="reconcile-008/SCA07")
+    conn.commit()
+
+    fake_batch.set_status(submission.job_id, "FAILED", container_exit_code=1)
+
+    results = launch_batch.reconcile(
+        conn, run_id=run_id, client=fake_batch, s3_client=FakeS3())
+    conn.commit()
+
+    assert results[0].disposition == "failed"
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT disposition, reconcile_note FROM attempts WHERE id = %s",
+            (submission.attempt_id,))
+        disposition, note = cur.fetchone()
+        assert disposition == "failed"
+        assert note is None
 
 
 def test_reconcile_failed_exit_75_is_transient(conn, batch_env):

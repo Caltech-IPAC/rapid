@@ -43,6 +43,7 @@ from rapidpipe.runs.repository import (
     add_unit,
     allocate_attempt,
     record_attempt_result,
+    record_reconcile_note,
     record_scheduler_job,
     select_attempt,
 )
@@ -74,6 +75,55 @@ class DependencyIncomplete(LaunchError):
     until its declared input set is complete and its upstream attempts
     are selected.").
     """
+
+
+class ReconcileFetchFailed(LaunchError):
+    """:func:`reconcile` could not fetch an attempt's manifest or
+    execution record from S3, for a reason other than "the object is not
+    there" (e.g. AccessDenied on the launcher's own role, a network
+    failure, or any other unexpected error).
+
+    Distinct from "the job wrote nothing" -- the job may well have
+    succeeded. Raised internally by :func:`_fetch_manifest_if_valid` and
+    :func:`_fetch_execution_record`; :func:`reconcile` catches it and
+    leaves the attempt's disposition unresolved rather than recording a
+    terminal ``failed`` for a launcher-side problem the job never had a
+    chance to cause (runs page, "Attempts").
+    """
+
+    def __init__(self, exc: BaseException, *, key: str):
+        self.key = key
+        self.__cause__ = exc
+        super().__init__(f"{type(exc).__name__}: {exc} (key={key!r})")
+
+
+#: A ClientError-shaped exception's ``response["Error"]["Code"]`` values
+#: that mean "the object is not there" -- the job wrote no manifest (or no
+#: execution record), as opposed to reconcile being unable to tell.
+#: Mirrors ``rapidpipe.stages.contract``'s ``_NOT_FOUND_ERROR_CODES``;
+#: duplicated rather than imported because this module never imports a
+#: stage module (module docstring, "the package's fixed dependency
+#: direction").
+_NOT_FOUND_ERROR_CODES = ("404", "NoSuchKey")
+
+
+def _client_error_code(exc: BaseException) -> str | None:
+    """The ``Error.Code`` of a ClientError-shaped exception, or ``None``.
+
+    Matches by shape (a ``response`` attribute holding that structure), not
+    by ``isinstance``, so a test's stand-in exception is recognised the
+    same way as a real ``botocore.exceptions.ClientError`` without this
+    module importing botocore. Mirrors
+    ``rapidpipe.stages.contract._client_error_code``.
+    """
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return None
+    error = response.get("Error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("Code")
+    return code if isinstance(code, str) else None
 
 
 def _require_env(name: str) -> str:
@@ -254,6 +304,14 @@ def _chunks(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:
 
 
 def _fetch_manifest_if_valid(output_location: str, *, s3_client: Any) -> Manifest | None:
+    """Return the attempt's manifest, or ``None`` if it genuinely wrote
+    none.
+
+    Raises :class:`ReconcileFetchFailed` if an S3 fetch failed for any
+    reason other than the object being absent (``404``/``NoSuchKey``) --
+    e.g. AccessDenied -- since that means reconcile could not determine
+    whether a manifest exists, not that it doesn't.
+    """
     location = parse_location(output_location)
 
     if not location.is_s3():
@@ -268,10 +326,13 @@ def _fetch_manifest_if_valid(output_location: str, *, s3_client: Any) -> Manifes
 
     with tempfile.TemporaryDirectory() as tmp:
         dest_path = Path(tmp) / "manifest.json"
+        key = join(location, "manifest.json")
         try:
             fetch_object(location, "manifest.json", dest_path, client=s3_client)
-        except Exception:  # noqa: BLE001 - any fetch failure means no valid manifest
-            return None
+        except Exception as exc:  # noqa: BLE001 - classified below
+            if _client_error_code(exc) in _NOT_FOUND_ERROR_CODES:
+                return None
+            raise ReconcileFetchFailed(exc, key=key) from exc
         try:
             return Manifest.read(dest_path)
         except (ManifestError, OSError, ValueError):
@@ -281,6 +342,13 @@ def _fetch_manifest_if_valid(output_location: str, *, s3_client: Any) -> Manifes
 def _fetch_execution_record(
     output_location: str, attempt_id: str, *, s3_client: Any,
 ) -> dict[str, Any]:
+    """Return the attempt's execution record, or ``{}`` if it genuinely
+    wrote none.
+
+    Raises :class:`ReconcileFetchFailed` on the same non-"not found"
+    fetch failures :func:`_fetch_manifest_if_valid` does, and for the
+    same reason.
+    """
     location = parse_location(output_location)
     relative = f"exec/{attempt_id}.json"
 
@@ -296,10 +364,13 @@ def _fetch_execution_record(
 
     with tempfile.TemporaryDirectory() as tmp:
         dest_path = Path(tmp) / "record.json"
+        key = join(location, relative)
         try:
             fetch_object(location, relative, dest_path, client=s3_client)
-        except Exception:  # noqa: BLE001 - missing/unreadable record -> {}
-            return {}
+        except Exception as exc:  # noqa: BLE001 - classified below
+            if _client_error_code(exc) in _NOT_FOUND_ERROR_CODES:
+                return {}
+            raise ReconcileFetchFailed(exc, key=key) from exc
         try:
             return json.loads(dest_path.read_text())
         except (json.JSONDecodeError, OSError):
@@ -364,6 +435,14 @@ def reconcile(
       ``succeeded`` (exit 0), then selected.
     - ``SUCCEEDED`` without a valid manifest: ``failed``, exit 0 -- exit
       zero alone is not success.
+    - ``SUCCEEDED`` where fetching the manifest or execution record from
+      S3 failed for a reason other than the object being absent (e.g.
+      AccessDenied on the launcher's own role): left unresolved,
+      reported with ``disposition=None`` -- the job may well have
+      succeeded, so this must not consume one of the unit's limited
+      attempts. The reason is recorded on the attempt (``reconcile_note``)
+      via :func:`~rapidpipe.runs.repository.record_reconcile_note`; a
+      later :func:`reconcile` call retries it.
     - ``FAILED`` with a container exit code: :func:`disposition_for` maps
       it (75 -> ``transient``, else ``failed``).
     - ``FAILED`` with no container exit code (a ``statusReason`` and no
@@ -430,10 +509,29 @@ def reconcile(
             continue
 
         if status == "SUCCEEDED":
-            manifest = _fetch_manifest_if_valid(output_location, s3_client=s3_client)
+            try:
+                manifest = _fetch_manifest_if_valid(output_location, s3_client=s3_client)
+                execution_record = (
+                    _fetch_execution_record(output_location, attempt_id, s3_client=s3_client)
+                    if manifest is not None else None)
+            except ReconcileFetchFailed as exc:
+                # The Batch job SUCCEEDED; reconcile just could not read
+                # its manifest or execution record (e.g. AccessDenied on
+                # the launcher's own role) -- not evidence the job
+                # failed. Leave the attempt unresolved (disposition
+                # stays NULL, scheduler_job_id untouched) so a later
+                # reconcile retries it once the launcher-side problem is
+                # fixed, instead of consuming one of the unit's limited
+                # attempts on a launcher-side error (runs page,
+                # "Attempts").
+                record_reconcile_note(conn, attempt_id, str(exc))
+                conn.commit()
+                results.append(Reconciled(
+                    attempt_id=attempt_id, job_id=job_id, batch_status=status,
+                    disposition=None, selected=False))
+                continue
+
             if manifest is not None:
-                execution_record = _fetch_execution_record(
-                    output_location, attempt_id, s3_client=s3_client)
                 record_attempt_result(
                     conn, attempt_id, 0, "succeeded", output_location,
                     _execution_record_with_defaults(conn, run_id, execution_record),
