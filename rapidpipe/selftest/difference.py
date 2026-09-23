@@ -18,7 +18,7 @@ from astropy.io import fits
 from rapidpipe.products.diffimage import validate_difference_entry, validate_source_catalog_entry
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture, fixture_dir
-from rapidpipe.selftest.support.fakedifftools import build_input_set
+from rapidpipe.selftest.support.fakedifftools import build_input_set, cdf_dir
 
 FAKE_TOOLKIT = "rapidpipe.selftest.support.fakedifftools:fake_toolkit"
 TOOLKIT_ENV = "RAPIDPIPE_DIFFERENCE_TOOLKIT"
@@ -32,7 +32,12 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
     overlay = work / "settings.toml"
     text = (fixture_dir("difference") / "settings.toml").read_text()
     if fake:
-        text += f'\n[paths]\ncfg_path = "{REPO_ROOT / "cdf"}"\n'
+        # cdf_dir() resolves the same directory build_input_set() itself
+        # used for the reference catalog's SExtractor parameter file --
+        # a checkout's own cdf/, $RAPID_CFG, or the image's /code/cdf
+        # (see that function's docstring). Both must agree, or the fixture
+        # and the stage it drives would read different parameter files.
+        text += f'\n[paths]\ncfg_path = "{cdf_dir()}"\n'
     overlay.write_text(text)
     return inputs, overlay, {}
 
