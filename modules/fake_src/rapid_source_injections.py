@@ -3,6 +3,7 @@ import numpy as np
 import random
 import argparse
 import json
+import warnings
 
 
 from astropy.io import fits, ascii
@@ -64,12 +65,14 @@ def detect_sources_in_image(image_data, detection_nsigma=10, npixels=8, bkg_box_
     # Get source catalog
     source_cat = SourceCatalog(image_data_bkgsub, segm_deblend)
     source_table = source_cat.to_table()
+    source_table['r50'] = source_cat.flux_radius(0.5) # half-light radius [pix] for star/galaxy separation; NaN if unsolvable
 
     return source_table
 
 def generate_injection_positions_fluxes(source_table, image_size, zeropoint, mag_range=(22.0, 27.0),
                                         size_factor=1.5, edge_buffer=10.0, num_injections=10,
-                                        xcolname='xcentroid', ycolname='ycentroid', sizecolname='semimajor_sigma'):
+                                        xcolname='xcentroid', ycolname='ycentroid', sizecolname='semimajor_sigma',
+                                        star_galaxy_cut=None):
     """
     Generate randomized injection positions and fluxes based on detected sources.
 
@@ -91,6 +94,9 @@ def generate_injection_positions_fluxes(source_table, image_size, zeropoint, mag
         Number of sources to inject
     xcolname, ycolname, sizecolname : str
         Column names in the source table for x, y positions and size (e.g., semimajor axis)
+    star_galaxy_cut : float or None
+        If set, only sources whose half-light radius (r50 column) exceeds this multiple of the
+        image's PSF half-light radius (10th percentile of r50) are used, i.e. galaxies only
 
 
     Returns:
@@ -110,13 +116,21 @@ def generate_injection_positions_fluxes(source_table, image_size, zeropoint, mag
                (source_table[ycolname].value > edge_buffer) &
                (source_table[ycolname].value < ymax - edge_buffer))
 
+    # Keep only galaxies
+    if star_galaxy_cut is not None:
+        r50 = source_table['r50'].value
+        psf_r50 = np.nanpercentile(r50[goodidx], 10)
+        goodidx &= r50 > star_galaxy_cut * psf_r50
+
     ds = source_table[sizecolname][goodidx].value
     xc = source_table[xcolname][goodidx].value
     yc = source_table[ycolname][goodidx].value
 
     # Generate random positions and fluxes
-    n_inj = num_injections
     n_obj = len(ds)
+    n_inj = min(num_injections, n_obj)
+    if n_inj < num_injections:
+        warnings.warn(f"only {n_obj} sources pass the cuts; injecting {n_inj} instead of {num_injections}")
     inj_idx = random.sample(range(0,n_obj),n_inj) #choose n_inj random objects from the catalog to do injections
 
     #initialize arrays for injected positions and fluxes (in image counts)
@@ -316,6 +330,7 @@ def main():
     parser.add_argument('--num_injections', type=int, default=10, help='Number of sources to inject by image.')# Ignored if inj_catalog is provided.')
     parser.add_argument('--mag_min', type=float, default=22.0, help='Minimum magnitude for random sources by image.')# Ignored if inj_catalog is provided.')
     parser.add_argument('--mag_max', type=float, default=27.0, help='Maximum magnitude for random sources by image.')# Ignored if inj_catalog is provided.')
+    parser.add_argument('--star_galaxy_cut', type=float, default=None, help='Keep only sources whose half-light radius exceeds this multiple of the PSF half-light radius (galaxies) as injection anchors. Ignored unless injections_by_image_flag is set.')
 
     args = parser.parse_args()
     input_file = args.input_file
@@ -367,7 +382,8 @@ def main():
         source_table = detect_sources_in_image(image_data, detection_nsigma=10, npixels=8)
 
         xpos_image, ypos_image, fluxes_image = generate_injection_positions_fluxes(source_table, image_size, zeropoint,
-                                                                                   mag_range=mag_range, num_injections=num_injections)
+                                                                                   mag_range=mag_range, num_injections=num_injections,
+                                                                                   star_galaxy_cut=args.star_galaxy_cut)
     else:
         xpos_image, ypos_image, fluxes_image = np.array([]), np.array([]), np.array([]) #empty arrays if not using image specific injections
 

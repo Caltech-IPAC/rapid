@@ -866,6 +866,7 @@ if __name__ == '__main__':
         num_injections = fake_sources_dict['num_injections']
         injection_mag_min = fake_sources_dict['mag_min']
         injection_mag_max = fake_sources_dict['mag_max']
+        star_galaxy_cut = fake_sources_dict['star_galaxy_cut']
         injections_by_field = ast.literal_eval(fake_sources_dict['injections_by_field_flag'])
         injections_by_image = ast.literal_eval(fake_sources_dict['injections_by_image_flag'])
 
@@ -884,6 +885,8 @@ if __name__ == '__main__':
                             injection_mag_max,
                             '--field_catalogs_input_filename',
                             injection_catalog_list_filename,
+                            '--star_galaxy_cut',
+                            star_galaxy_cut,
                             science_image_filename]
 
         if injections_by_field:
