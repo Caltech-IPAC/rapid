@@ -103,9 +103,9 @@ def test_copy_sources_refuses_any_other_table():
 
 
 def test_find_complete_source_set_matches_kind_run_and_key():
-    cur = FakeCursor([("01J8Y6QZ3M0000000000000000",)])
+    cur = FakeCursor([("01J8Y6QZ3M0000000000000000", 12)])
     key = {"difference": "D", "catalog_type": "photutils"}
-    assert sources.find_complete_source_set(cur, "RUN", key) == "01J8Y6QZ3M0000000000000000"
+    assert sources.find_complete_source_set(cur, "RUN", key) == ("01J8Y6QZ3M0000000000000000", 12)
     sql, params = cur.executed[0]
     assert "pi.kind = 'source-set'" in sql and "rs.complete" in sql
     assert params == ("RUN", json.dumps(key))

@@ -138,11 +138,16 @@ def count_result_set_rows(cur, table: str, result_set: str) -> int:
     return int(cur.fetchone()[0])
 
 
-def find_complete_source_set(cur, run_id: str, logical_key: dict[str, Any]) -> str | None:
-    """The earliest complete, retained `source-set` instance for ``logical_key`` in ``run_id``."""
+def find_complete_source_set(
+    cur, run_id: str, logical_key: dict[str, Any],
+) -> tuple[str, int | None] | None:
+    """The earliest complete, retained `source-set` for ``logical_key`` in ``run_id``.
+
+    Returns ``(instance, row_count)``, or ``None`` when there is none.
+    """
     cur.execute(
         """
-        SELECT pi.id FROM product_instances pi
+        SELECT pi.id, rs.row_count FROM product_instances pi
         JOIN result_sets rs ON rs.instance = pi.id
         WHERE pi.kind = 'source-set' AND pi.run = %s AND pi.logical_key = %s::jsonb
           AND rs.complete AND pi.deletion_state = 'retained'
@@ -150,7 +155,7 @@ def find_complete_source_set(cur, run_id: str, logical_key: dict[str, Any]) -> s
         """,
         (run_id, json.dumps(logical_key)))
     row = cur.fetchone()
-    return row[0] if row is not None else None
+    return (row[0], row[1]) if row is not None else None
 
 
 def cluster_and_analyze(cur, obs_date: str, sca: int) -> None:
