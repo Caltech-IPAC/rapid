@@ -23,13 +23,16 @@ Subs used by the RAPID pipeline related to difference-image processing.
 # 2. SCA gain and readout noise.
 # 3. EXPTIME
 # 4. Data-clipped-image mean
+# 5. fix_openuniverse_zptmag, which replaces the header ZPTMAG with the nominal per-filter AB
+#    zeropoint.  Set it only for the OpenUniverse sims; see the note on the parameter below.
 
 def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,
                                                                               sca_gain,
                                                                               sca_readout_noise,
                                                                               clipped_image_mean,
                                                                               fname_output,
-                                                                              fname_output_unc):
+                                                                              fname_output_unc,
+                                                                              fix_openuniverse_zptmag=False):
 
 
     # Reformat the FITS file so that the image data are contained in the PRIMARY header.
@@ -42,6 +45,48 @@ def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(in
 
     exptime = hdr["EXPTIME"]
     hdr["BUNIT"] = "DN/s"
+
+
+    # Replace the ZPTMAG of an OpenUniverse sim with the nominal per-filter AB zeropoint.
+    #
+    # The OpenUniverse headers do not carry a photometric zeropoint at all.  Their ZPTMAG is
+    # GalSim's flux-scaling term, which is exactly 2.5 * log10(EXPTIME * collecting_area) with
+    # collecting_area = 37570 cm^2 = galsim.roman.collecting_area: it has no filter dependence,
+    # so H158 and Y106 frames of equal exposure carry identical values, and it tracks exposure
+    # time rather than throughput.  What is missing from it is the filter's bandpass zeropoint.
+    # Left alone it makes magnitudes about 9 mag too bright and, because the data here are
+    # divided by EXPTIME while the keyword is not, it also makes frames of different exposure
+    # time inconsistent with each other.
+    #
+    # Only the keyword changes.  The pixels are untouched, and the reference image is brought
+    # onto this image's flux scale by the later gain-matching step rather than by this keyword,
+    # so the difference image inherits the corrected zeropoint and nothing upstream of it moves.
+    #
+    # The RIMTIMSIM and SOC sims, and real data, carry real zeropoints and must not be touched,
+    # which is why this is off unless the caller asks for it.
+
+    if fix_openuniverse_zptmag:
+
+        filter_name = hdr.get("FILTER")
+
+        zptmag_nominal = util.get_nominal_ab_zeropoint(filter_name)
+
+        if zptmag_nominal is None:
+            print(f"*** Warning: fix_openuniverse_zptmag is set, but FILTER = {filter_name} is "
+                  "not a Roman WFI filter; leaving ZPTMAG unchanged")
+        else:
+            zptmag_original = hdr.get("ZPTMAG")
+
+            print(f"fix_openuniverse_zptmag: FILTER = {filter_name}, replacing "
+                  f"ZPTMAG = {zptmag_original} with nominal {zptmag_nominal}")
+
+            # The comments are kept short enough that the long original value still leaves an
+            # 80-column card, and the history is two lines rather than one wrapped mid-word.
+
+            hdr["ZPTMAGOU"] = (zptmag_original, "Original OpenUniverse ZPTMAG")
+            hdr["ZPTMAG"] = (zptmag_nominal, "Nominal AB zeropoint for flux in DN/s")
+            hdr.add_history("ZPTMAG replaced with nominal per-filter AB zeropoint.")
+            hdr.add_history("Original OpenUniverse ZPTMAG saved in ZPTMAGOU.")
 
     np_data = np.array(data)
     new_row = np.full(np_data.shape[1], clipped_image_mean)
