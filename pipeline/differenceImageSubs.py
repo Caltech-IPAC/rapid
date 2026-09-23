@@ -325,9 +325,15 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     # The MAGZP keyword will not be in the header of the swarped reference image, because the
     # swarped-reference-image FITS header is inherited from the science image with PV keywords.
-    # So get the reference-image zero point from the [AWAICGEN] config-file block.
+    # So get the reference-image zero point from the [AWAICGEN] config-file block, for the same
+    # filter the reference image was coadded in, which is the filter of this science image.
+    #
+    # This must resolve to the value the reference image was actually built on.  A reference
+    # image generated before the per-filter entries existed carries MAGZP = 17.0 and needs the
+    # configuration that produced it, or this default gain-matching factor will be wrong by the
+    # difference.
 
-    magzpref = float(awaicgen_dict["zprefimg"])
+    magzpref = util.get_reference_image_zeropoint(awaicgen_dict,hdr_sci.get("FILTER"))
 
     print(f"magzpref={magzpref}")
 

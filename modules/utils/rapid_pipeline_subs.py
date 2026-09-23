@@ -96,6 +96,89 @@ def get_galsim_roman_ab_zeropoint(filter_name):
     return galsim_roman_ab_zeropoints.get(str(filter_name).strip().upper())
 
 
+#####################################################################################################
+# Resolve the reference-image zeropoint for a filter.
+#
+# The reference image is built by scaling every input frame by 10 ** (0.4 * (zprefimg - ZPTMAG)),
+# so zprefimg is the zeropoint the coadd ends up on, and it is written to the reference image as
+# MAGZP and used again when the science and reference images are gain-matched.  A single value
+# for every filter puts each filter's coadd a different distance from its own natural scale; a
+# per-filter value keeps every scale factor near unity and leaves the coadd on a scale where
+# mag = -2.5 * log10(flux) + zprefimg is an AB magnitude.
+#
+# Values come from the [AWAICGEN] block of the master config file, as zprefimg_<filter>, with
+# the scalar zprefimg as the fallback for a filter that has no entry of its own.  Either
+# spelling of the filter is accepted, since the config file and the FITS headers do not have to
+# agree on which one they use.
+#####################################################################################################
+
+#: Roman filter designations mapped to the RAPID names carried by FITS FILTER headers and by the
+#: Filters database table.  F184 is spelled the same either way.
+
+roman_to_rapid_filter_names = {
+    "F062": "R062",
+    "F087": "Z087",
+    "F106": "Y106",
+    "F129": "J129",
+    "F158": "H158",
+    "F184": "F184",
+    "F213": "K213",
+    "F146": "W146",
+}
+
+rapid_to_roman_filter_names = {v: k for k, v in roman_to_rapid_filter_names.items()}
+
+
+def get_reference_image_zeropoint(awaicgen_dict,filter_name):
+
+    """
+    Method get_reference_image_zeropoint
+
+    Inputs:
+    awaicgen_dict           The [AWAICGEN] config-file block, as a dictionary.
+    filter_name             Filter name in either spelling, as a string, or None.
+
+    Returns:
+    zprefimg                Reference-image zeropoint for that filter [AB mag].
+
+    Raises KeyError when neither a per-filter entry nor the scalar zprefimg is configured,
+    because a reference image built on a zeropoint nobody chose is worse than a job that stops.
+    """
+
+    if filter_name is not None:
+
+        name = str(filter_name).strip().upper()
+
+        candidates = [name]
+
+        alternate = roman_to_rapid_filter_names.get(name,
+                                                    rapid_to_roman_filter_names.get(name))
+
+        if alternate is not None:
+            candidates.append(alternate)
+
+        for candidate in candidates:
+
+            key = "zprefimg_" + candidate.lower()
+
+            if key in awaicgen_dict:
+                zprefimg = float(awaicgen_dict[key])
+                print(f"get_reference_image_zeropoint: {key} = {zprefimg}")
+                return zprefimg
+
+    if "zprefimg" not in awaicgen_dict:
+        raise KeyError("Method get_reference_image_zeropoint: neither a per-filter "
+                       f"zprefimg_<filter> entry for FILTER = {filter_name} nor the scalar "
+                       "zprefimg is configured in the [AWAICGEN] block")
+
+    zprefimg = float(awaicgen_dict["zprefimg"])
+
+    print(f"*** Warning: no zprefimg_<filter> entry for FILTER = {filter_name}; "
+          f"falling back to the scalar zprefimg = {zprefimg}")
+
+    return zprefimg
+
+
 def utc_to_local(utc_dt):
     """Converts a UTC datetime object to local time."""
 
