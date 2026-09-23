@@ -1,0 +1,65 @@
+{
+  "about": "Expected products of the difference stage's fixture (run_fixture.py; make stage-difference). See README.md for what each value means and why each tolerance is what it is.",
+  "inputs": {"seed": 20260922, "rfid": null, "ref_infobits": 0, "gzip_science": true},
+  "tolerances": {
+    "position_deg_abs": 1e-9,
+    "scalar_rel": 1e-9,
+    "scalar_abs": 1e-12,
+    "residual_pixels_abs": 1e-9,
+    "pixel_stat_rel": 1e-5,
+    "pixel_stat_abs": 1e-6
+  },
+  "fake": {
+    "exit_code": 0,
+    "entries": {"difference-image": 1, "source-catalog": 4},
+    "difference_image": {
+      "differencer": "zogy",
+      "roles": ["difference", "uncertainty", "significance", "psf"],
+      "registration_exact": {
+        "detection_role": "significance",
+        "catalog_outcome_bits": 0,
+        "infobits_science": 0,
+        "infobits_reference": 0,
+        "reference_rfid": null,
+        "source_counts": {
+          "sextractor": {"positive": 1, "negative": 0},
+          "photutils": {"positive": 1, "negative": 0}
+        }
+      },
+      "registration_close": {"reference_scale_factor": 1.0},
+      "residual_close": {"x_rms": 0.0, "y_rms": 0.0, "x_median": 0.0, "y_median": 0.0},
+      "pixels": {
+        "member": "difference",
+        "shape": [65, 65],
+        "nan_count": 195,
+        "finite": {
+          "sum": 24.665320656320546,
+          "max": 2.7120072841644287,
+          "min": -0.1574515998363495,
+          "std": 0.09968627432150612
+        }
+      }
+    },
+    "execution_notes": {"sfft": {"ran": true, "succeeded": true, "exit_code": 0}}
+  },
+  "real": {
+    "exit_code": 0,
+    "entries": {"difference-image": 1, "source-catalog": [2, 4]},
+    "difference_image": {
+      "differencer": "zogy",
+      "roles": ["difference", "uncertainty", "significance", "psf"],
+      "registration_exact": {
+        "detection_role": "significance",
+        "infobits_science": 0,
+        "infobits_reference": 0,
+        "reference_rfid": null
+      },
+      "residual_close": {"x_rms": 0.0, "y_rms": 0.0},
+      "pixels": {
+        "member": "difference",
+        "shape": [65, 65],
+        "nan_count": 195
+      }
+    }
+  }
+}

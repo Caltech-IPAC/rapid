@@ -388,3 +388,11 @@ class FakePsfCatalog:
         Path(kwargs["catalog"]).write_text(f"# id x_fit y_fit\n# {nsources} sources\n")
         Path(kwargs["finder"]).write_text("# finder\n")
         return PsfCatalogResult(produced=True, nsources=nsources)
+
+
+def fake_toolkit():
+    """Every external tool faked: the value ``RAPIDPIPE_DIFFERENCE_TOOLKIT`` names
+    (``tests.unit.fakedifftools:fake_toolkit``) for a stage run as a subprocess."""
+    from rapidpipe.stages.difference import Toolkit
+
+    return Toolkit(runner=FakeToolRunner(), sip_to_pv=fake_sip_to_pv, psf_catalog=FakePsfCatalog())

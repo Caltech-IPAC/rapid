@@ -46,6 +46,8 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import importlib
+import os
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -132,9 +134,27 @@ class Toolkit:
     psf_catalog: Callable = psfcat.psf_catalog
 
 
+#: Names a ``module:factory`` returning a :class:`Toolkit` to use instead
+#: of the real tools. Unset in every deployment; the stage fixture
+#: (``make stage-difference``) and the ``run local`` smoke test set it to
+#: the fakes, since a stage run as a subprocess cannot be monkeypatched.
+TOOLKIT_ENV = "RAPIDPIPE_DIFFERENCE_TOOLKIT"
+
+
 def toolkit() -> Toolkit:
-    """The real tools. Tests monkeypatch this name."""
-    return Toolkit()
+    """The real tools, unless ``RAPIDPIPE_DIFFERENCE_TOOLKIT`` names others.
+
+    In-process tests monkeypatch this name instead.
+    """
+    override = os.environ.get(TOOLKIT_ENV)
+    if not override:
+        return Toolkit()
+    module_name, _, factory_name = override.partition(":")
+    try:
+        factory = getattr(importlib.import_module(module_name), factory_name)
+    except (ImportError, AttributeError) as exc:
+        raise UsageError(f"{TOOLKIT_ENV}={override!r} does not name a factory: {exc}") from exc
+    return factory()
 
 
 # ----------------------------------------------------------------------

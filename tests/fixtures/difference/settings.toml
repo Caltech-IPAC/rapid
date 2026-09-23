@@ -1,0 +1,11 @@
+# Settings overlay for the difference stage's fixture (make stage-difference).
+#
+# The stage's own defaults (rapidpipe/settings/difference.toml, dev's
+# values) apply except where set here. The clipped-statistics correction
+# is seeded so the fixture's numbers repeat; the stage's default reproduces
+# dev's unseeded draw. run_fixture.py appends [paths] cfg_path pointing at
+# the repository's cdf directory when the tools are faked; with the real
+# tools the pipeline image's /code/cdf default applies.
+
+[statistics]
+clip_correction_seed = 20260922
