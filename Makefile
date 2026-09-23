@@ -16,3 +16,10 @@ DIFFERENCE_TOOLS ?= fake
 .PHONY: stage-difference
 stage-difference:
 	$(PYTHON) tests/fixtures/difference/run_fixture.py --tools $(DIFFERENCE_TOOLS)
+
+# The load stage's fixture: a difference attempt's catalogs into sources,
+# against the fake database (tests/unit/fakeloaddb.py); runs anywhere. The
+# PostgreSQL path is tests/db/test_load.py.
+.PHONY: stage-load
+stage-load:
+	$(PYTHON) tests/fixtures/load/run_fixture.py
