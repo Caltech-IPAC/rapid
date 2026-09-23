@@ -39,6 +39,8 @@ from rapidpipe.launch.batch import DependencyIncomplete, LaunchError, MissingEnv
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
+from rapidpipe.selftest import run as run_selftest
+from rapidpipe.selftest.runner import STAGE_NAMES as SELFTEST_STAGE_NAMES
 from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
 
 #: Subcommands named in the specification's "Tools" section that are not
@@ -96,6 +98,30 @@ def _build_parser() -> argparse.ArgumentParser:
     stage_parser.add_argument(
         "stage_argv", nargs=argparse.REMAINDER,
         help="Arguments forwarded to the stage's own entrypoint.")
+
+    selftest_parser = subparsers.add_parser(
+        "selftest",
+        help="Run one stage's own packaged fixture and check it: "
+             "rapidpipe selftest --stage difference|load [--real-tools] "
+             "[--work-dir DIR] [--output-location s3://... or path]")
+    selftest_parser.add_argument(
+        "--stage", required=True, choices=SELFTEST_STAGE_NAMES, help="Which stage's fixture to run.")
+    selftest_parser.add_argument(
+        "--real-tools", action="store_true",
+        help="Run the pipeline image's own tools/database instead of the "
+             "packaged fakes (the default). Needs the pipeline image, or a "
+             "checkout with the same tools on PATH.")
+    selftest_parser.add_argument(
+        "--work-dir", default=None,
+        help="An empty or new directory to prepare the fixture in "
+             "(default: a fresh temporary directory).")
+    selftest_parser.add_argument(
+        "--output-location", default=None,
+        help="Where the stage publishes its manifest and products: a "
+             "local path or an s3:// prefix (default: <work-dir>/outputs). "
+             "An s3:// location is not re-read afterwards to verify "
+             "products -- only the stage's own exit code is checked there.")
+    selftest_parser.add_argument("--python", default=sys.executable)
 
     run_parser = subparsers.add_parser(
         "run", help="Create, list, inspect and locally run runs.")
@@ -189,6 +215,20 @@ def _run_stage_command(name: str | None, stage_argv: list[str]) -> int:
         return int(ExitCode.USAGE)
 
     return stage_main(stage_argv)
+
+
+def _run_selftest_command(args: argparse.Namespace) -> int:
+    """``rapidpipe selftest``: run one stage's own packaged fixture.
+
+    A thin wrapper over :func:`rapidpipe.selftest.run`, which does the
+    actual prepare/run/check work; this function only translates argparse
+    into that call. Exit codes per the ruling this subcommand implements
+    (2026-09-23): 0 on a full pass, 1 on a fixture mismatch, and the
+    stage's own exit code on a stage failure.
+    """
+    return run_selftest(
+        stage=args.stage, real_tools=args.real_tools, work_dir=args.work_dir,
+        output_location=args.output_location, python=args.python)
 
 
 def _source_revision_or_unknown() -> str:
@@ -575,6 +615,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "stage":
         return _run_stage_command(args.name, args.stage_argv)
+
+    if args.command == "selftest":
+        return _run_selftest_command(args)
 
     if args.command == "run":
         return _run_command(args)

@@ -36,7 +36,11 @@ packages.find = {include = [
 # rapidpipe/settings/ holds non-Python stage-defaults data (admit.toml and
 # siblings to come), not an importable subpackage, so it needs an explicit
 # package-data entry rather than being picked up by packages.find above.
-rapidpipe = ["settings/*.toml"]
+# rapidpipe/selftest/fixtures/ is the packaged copy of each stage
+# fixture's expected.json and settings.toml (rapidpipe.selftest.runner),
+# needed so `rapidpipe selftest` can read them inside the pipeline image,
+# which excludes tests/ at build time (containers/rapid-pipeline/build.sh).
+rapidpipe = ["settings/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml"]
 
 [tool.pytest.ini_options]
 # The test directories are not named after the import package: tests/unit

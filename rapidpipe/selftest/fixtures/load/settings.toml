@@ -1,0 +1,10 @@
+# Settings overlay for the load stage's fixture (make stage-load).
+#
+# The stage's own defaults (rapidpipe/settings/load.toml, dev's values) apply
+# except where set here: the fixture's catalogs come from a 64x64 detector,
+# so fit positions are bounded by [-0.5, 64 + 1 - 0.5], as dev bounds them
+# for a 4088x4088 one.
+
+[instrument]
+naxis1_sciimage = 64
+naxis2_sciimage = 64
