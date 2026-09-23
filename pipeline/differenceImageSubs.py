@@ -23,8 +23,8 @@ Subs used by the RAPID pipeline related to difference-image processing.
 # 2. SCA gain and readout noise.
 # 3. EXPTIME
 # 4. Data-clipped-image mean
-# 5. fix_openuniverse_zptmag, which replaces the header ZPTMAG with the nominal per-filter AB
-#    zeropoint.  Set it only for the OpenUniverse sims; see the note on the parameter below.
+# 5. fix_openuniverse_zptmag, which replaces the header ZPTMAG with the GalSim-derived
+#    per-filter AB zeropoint.  Set it only for the OpenUniverse sims; see the note below.
 
 def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,
                                                                               sca_gain,
@@ -47,7 +47,8 @@ def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(in
     hdr["BUNIT"] = "DN/s"
 
 
-    # Replace the ZPTMAG of an OpenUniverse sim with the nominal per-filter AB zeropoint.
+    # Replace the ZPTMAG of an OpenUniverse sim with the GalSim-derived per-filter AB zeropoint,
+    # which is the right basis for these sims because GalSim generated them.
     #
     # The OpenUniverse headers do not carry a photometric zeropoint at all.  Their ZPTMAG is
     # GalSim's flux-scaling term, which is exactly 2.5 * log10(EXPTIME * collecting_area) with
@@ -69,23 +70,23 @@ def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(in
 
         filter_name = hdr.get("FILTER")
 
-        zptmag_nominal = util.get_nominal_ab_zeropoint(filter_name)
+        zptmag_derived = util.get_galsim_roman_ab_zeropoint(filter_name)
 
-        if zptmag_nominal is None:
+        if zptmag_derived is None:
             print(f"*** Warning: fix_openuniverse_zptmag is set, but FILTER = {filter_name} is "
                   "not a Roman WFI filter; leaving ZPTMAG unchanged")
         else:
             zptmag_original = hdr.get("ZPTMAG")
 
             print(f"fix_openuniverse_zptmag: FILTER = {filter_name}, replacing "
-                  f"ZPTMAG = {zptmag_original} with nominal {zptmag_nominal}")
+                  f"ZPTMAG = {zptmag_original} with GalSim-derived {zptmag_derived}")
 
             # The comments are kept short enough that the long original value still leaves an
             # 80-column card, and the history is two lines rather than one wrapped mid-word.
 
             hdr["ZPTMAGOU"] = (zptmag_original, "Original OpenUniverse ZPTMAG")
-            hdr["ZPTMAG"] = (zptmag_nominal, "Nominal AB zeropoint for flux in DN/s")
-            hdr.add_history("ZPTMAG replaced with nominal per-filter AB zeropoint.")
+            hdr["ZPTMAG"] = (zptmag_derived, "GalSim AB zeropoint for flux in DN/s")
+            hdr.add_history("ZPTMAG replaced with GalSim-derived per-filter AB zeropoint.")
             hdr.add_history("Original OpenUniverse ZPTMAG saved in ZPTMAGOU.")
 
     np_data = np.array(data)

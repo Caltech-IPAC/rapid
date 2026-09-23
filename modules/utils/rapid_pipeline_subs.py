@@ -30,49 +30,70 @@ from datetime import datetime, timezone
 
 
 #####################################################################################################
-# Nominal Roman WFI AB magnitude zeropoints, for flux in DN/s.
+# Roman WFI AB magnitude zeropoints, for flux in DN/s, derived from the GalSim Roman module.
 #
-# These are the Roman WFI nominal zero points, the same table that
-# sims/src/socsims/convert_socsims.py carries as its fallback for a SOC-sim file whose
-# meta.photometry is unavailable.  It lives here so that a caller which has no photometric
-# calibration of its own, such as the OpenUniverse reformatting path, has one place to read it
-# from rather than a literal of its own.
+# For each filter,
+#
+#     zeropoint [AB mag] = bandpass.zeropoint + 2.5 * log10(collecting_area)
+#
+# which inverts the GalSim convention that a source of AB magnitude m yields
+#
+#     counts = 10 ** (-0.4 * (m - bandpass.zeropoint)) * exptime * collecting_area
+#
+# Derived from galsim 2.7.2, with collecting_area = 37570 cm^2 (2.5 * log10 of it is
+# 11.437102987658461).  Regenerate with:
+#
+#     import math, galsim.roman as roman
+#     bps = roman.getBandpasses(AB_zeropoint=True)
+#     area_term = 2.5 * math.log10(roman.collecting_area)
+#     {f: bp.zeropoint + area_term for f, bp in bps.items()}
+#
+# pipeline/test/test_galsim_zeropoints.py checks this table against the installed GalSim, so
+# drift between the two is caught rather than silently changing a calibration.  The values are
+# written out here rather than derived at run time so that a GalSim upgrade cannot quietly
+# re-calibrate newly processed data while data already processed keeps the older numbers, and so
+# that this module stays importable where GalSim is not installed, such as the database scripts.
+#
+# This is the right basis for the OpenUniverse sims, which GalSim generated.  It runs 0.06 to
+# 0.33 mag away from the Roman nominal table for the main filters and 0.6 mag for K213; the
+# nominal table lives in sims/src/socsims/convert_socsims.py, which uses it only as a fallback
+# for a SOC-sim file whose own meta.photometry is unavailable.
 #
 # Keyed by both spellings a Roman filter goes by: the designation used in the PSF filenames and
 # in the SOC-sim ASDF metadata (F062, F106, ...), and the RAPID name used in the Filters
-# database table and in the OpenUniverse FITS headers (R062, Y106, ...).  F184 is spelled the
-# same either way.
+# database table, in the OpenUniverse FITS headers and by GalSim itself (R062, Y106, ...).
+# F184 is spelled the same either way.
 #####################################################################################################
 
-nominal_ab_zeropoints = {
-    "F062": 26.4, "R062": 26.4,
-    "F087": 26.3, "Z087": 26.3,
-    "F106": 26.4, "Y106": 26.4,
-    "F129": 26.3, "J129": 26.3,
-    "F158": 26.4, "H158": 26.4,
-    "F184": 25.9,
-    "F213": 25.4, "K213": 25.4,
-    "F146": 27.5, "W146": 27.5,
+galsim_roman_ab_zeropoints = {
+    "F062": 26.7339352625, "R062": 26.7339352625,
+    "F087": 26.4014374563, "Z087": 26.4014374563,
+    "F106": 26.4606501787, "Y106": 26.4606501787,
+    "F129": 26.4767282775, "J129": 26.4767282775,
+    "F158": 26.5112678175, "H158": 26.5112678175,
+    "F184": 26.0590969786,
+    "F213": 26.0164185708, "K213": 26.0164185708,
+    "F146": 27.7071790899, "W146": 27.7071790899,
 }
 
 
-def get_nominal_ab_zeropoint(filter_name):
+def get_galsim_roman_ab_zeropoint(filter_name):
 
     """
-    Method get_nominal_ab_zeropoint
+    Method get_galsim_roman_ab_zeropoint
 
     Inputs:
     filter_name             Filter name in either spelling, as a string, or None.
 
     Returns:
-    zptmag                  Nominal AB magnitude zeropoint for flux in DN/s [AB mag], or None
-                            when the filter is not one of the eight Roman WFI filters.
+    zptmag                  GalSim-derived AB magnitude zeropoint for flux in DN/s [AB mag], or
+                            None when the filter is not one of the eight Roman WFI filters.
     """
 
     if filter_name is None:
         return None
 
-    return nominal_ab_zeropoints.get(str(filter_name).strip().upper())
+    return galsim_roman_ab_zeropoints.get(str(filter_name).strip().upper())
 
 
 def utc_to_local(utc_dt):
