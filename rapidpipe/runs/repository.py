@@ -680,7 +680,9 @@ def _entry_members(entry: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _entry_primary_location(entry: dict[str, Any], members: list[dict[str, Any]]) -> str:
     if "primary" in entry:
-        return entry["primary"]
+        # A result set has no primary file ("primary": null); the column is
+        # NOT NULL, so it records the empty string.
+        return entry["primary"] or ""
     if members:
         return members[0]["path"]
     return entry.get("location", "")
