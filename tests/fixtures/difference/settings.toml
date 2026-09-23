@@ -9,3 +9,17 @@
 
 [statistics]
 clip_correction_seed = 20260922
+
+# bkgest's stage default (rapidpipe/settings/difference.toml
+# [bkgest] local_clippedmean_grid_spacing/local_clippedmean_input_window
+# = 500/501) is sized for a full ~4kx4k detector image and is NOT
+# overridden here for the fake-tool run (the fake bkgest ignores these
+# values, so the fake run is unaffected). With the real tool, that
+# grid/window segfaults against this fixture's tiny 64x64 synthetic
+# image (confirmed live, LEDGER-fixture-real.md 2026-09-23). These two
+# values are overridden only for the real-tool run, to sizes proven live
+# against this fixture's own image dimensions (64x64 science, 65x65
+# reference).
+[bkgest]
+local_clippedmean_grid_spacing = "16"
+local_clippedmean_input_window = "7"

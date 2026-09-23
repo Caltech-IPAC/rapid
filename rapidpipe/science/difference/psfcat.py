@@ -239,6 +239,20 @@ def psf_catalog(settings: PsfCatalogSettings,
     logger.info("psfcat_flag = %s", psfcat_flag)
     if not psfcat_flag:
         return PsfCatalogResult(produced=False, nsources=None)
+    # photutils' PSFPhotometry.__call__ returns None, not an exception, when
+    # DAOStarFinder detects candidate sources but none survive its
+    # sharpness/roundness filter (a real, valid outcome on a near-empty
+    # image -- confirmed live, LEDGER-fixture-real.md 2026-09-23). `dev`'s
+    # own pattern here is "could not make a catalog -> log, mark the
+    # outcome, continue" (the bare excepts above); this is the same
+    # outcome via photutils' non-exception path, so it takes the same
+    # branch rather than the docstring's promised
+    # "the catalog is absent and the caller sets that difference image's
+    # catalog-outcome bit" turning into a crash instead.
+    if phot is None:
+        logger.warning("*** Warning: Could not make psf-fit catalog (no sources passed "
+                       "filtering); continuing...")
+        return PsfCatalogResult(produced=False, nsources=None)
     nsources = len(phot)
     logger.info("npsfcatsources (%s) = %s", label, nsources)
     write_psf_catalog_products(phot, psfphot, sky_coords_image, catalog, finder, parquet, label)
