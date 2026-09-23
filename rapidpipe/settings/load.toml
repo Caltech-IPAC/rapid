@@ -1,0 +1,37 @@
+# Defaults for the load stage (rapidpipe.stages.load): every knob `dev`'s
+# pipeline/loadPSFCatIntoDBSourcesTable.py reads, with `dev`'s values, except
+# the S3, job-database and parallelism knobs the rebuild's launcher and
+# manifests replace (see the port's ledger for the full map).
+
+[load]
+# Which differencer's Photutils PSF-fit catalogs to load. `dev` loads SFFT's
+# (output_sfft_psfcat_filename) stamped with the ZOGY diffimages pid
+# (get_best_difference_image(rid, [SCI_IMAGE] ppid = 15)). The rebuild
+# registers ZOGY only -- SFFT registration is off by default and has no
+# pipelines row -- so the default loads ZOGY's catalogs against ZOGY's pid.
+# "sfft" loads SFFT's catalogs against SFFT's instance once it registers.
+differencer = "zogy"
+# `dev`: DONTCHECKDONEFILE unset. When true, a complete source set already
+# loaded for this difference instance in this run is reused, not reloaded.
+done_check = true
+# `dev`: SKIPLOADING unset. When true, no child table is made and no rows load.
+skip_loading = false
+
+[instrument]
+# `dev`'s [INSTRUMENT] naxis1_sciimage, naxis2_sciimage. `dev` adds one row
+# and one column ("An extra row and column has been added to SFFT input
+# images") before bounding the fit positions.
+naxis1_sciimage = 4088
+naxis2_sciimage = 4088
+
+[psf_fit_bounds]
+# `dev`'s module constants: sources with PSF-fit positions outside
+# [xy_fit_min, naxis - xy_fit_max_offset] are rejected, in pixels.
+xy_fit_min = -0.5
+xy_fit_max_offset = 0.5
+
+[child_tables]
+# `dev` clusters each child table on its radec index and analyzes it once per
+# processing date, after all loads. `load` runs per detector image, so doing
+# that here would cluster the whole table on every load; off by default.
+cluster_and_analyze = false
