@@ -23,7 +23,7 @@
 -- table, false when it already existed. A transaction-scoped advisory lock on
 -- the table name serialises two loads racing to make the same table; the
 -- second sees the first's table once the first commits. Differences from
--- `dev`, both forced:
+-- `dev`, each forced:
 --   - `SET default_tablespace = pipeline_data_01` / `pipeline_indx_01` are
 --     omitted, as the baseline omits them (20260921-01's header: no
 --     tablespace exists in a database this stream builds).
