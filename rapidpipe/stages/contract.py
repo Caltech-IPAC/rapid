@@ -356,24 +356,31 @@ def _work_root() -> Path:
 
 
 def _source_revision() -> str | None:
-    """``git rev-parse HEAD`` in the current working directory, or ``None``.
+    """``git rev-parse HEAD`` in the current working directory, falling
+    back to the ``RAPID_SOURCE_REVISION`` environment variable, or
+    ``None`` if neither yields one.
 
-    ``None`` covers every way this can fail to produce a revision: git not
-    installed, cwd not a repository, or any other non-zero exit -- the
-    execution record then simply omits provenance it could not determine,
-    per the contract's "source revision, working-copy changes if any,
-    image digest when applicable".
+    A developer's working copy has a real git repository, so git wins
+    when it succeeds. A Batch container does not: it has no ``.git`` to
+    query, but its image bakes the built SHA into ``RAPID_SOURCE_REVISION``
+    (``containers/rapid-pipeline/Containerfile``, set by ``build.sh`` from
+    the commit it built). git failing covers every way that can happen --
+    git not installed, cwd not a repository, or any other non-zero exit --
+    at which point the environment variable is the next best source of
+    provenance, and only if that is unset too does the execution record
+    omit it, per the contract's "source revision, working-copy changes if
+    any, image digest when applicable".
     """
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
-        return None
+        return os.environ.get("RAPID_SOURCE_REVISION")
     if result.returncode != 0:
-        return None
+        return os.environ.get("RAPID_SOURCE_REVISION")
     revision = result.stdout.strip()
-    return revision or None
+    return revision or os.environ.get("RAPID_SOURCE_REVISION")
 
 
 def _write_execution_record(
@@ -385,15 +392,18 @@ def _write_execution_record(
     """Write ``exec/<attempt>.json`` under ``outputs_dir``; return its
     manifest-relative path.
 
-    Holds the resolved settings hash, the source revision (``None`` if
-    ``git rev-parse HEAD`` does not succeed in the current working
-    directory), and the image digest from ``RAPIDPIPE_IMAGE_DIGEST`` if
-    set, else ``None`` -- the execution record's minimal content per the
-    stage contract's "The manifest": "the source revision, working-copy
-    changes if any, image digest when applicable, database schema
-    version, and the resolved settings." Schema version and working-copy
-    changes are not recorded here: they belong to ``rapidpipe.runs``,
-    which this module must not import.
+    Holds the resolved settings hash, the source revision (``git rev-parse
+    HEAD`` in the current working directory, else ``RAPID_SOURCE_REVISION``,
+    else ``None`` -- see :func:`_source_revision`), and the image digest
+    from ``RAPIDPIPE_IMAGE_DIGEST`` if set, else the deployed job
+    definition's ``RAPID_IMAGE_DIGEST`` (``rapid_systems`` ``rapid-batch.yaml``
+    ``RapidRebuildJobDefinition``) if that is set, else ``None`` -- the
+    execution record's minimal content per the stage contract's "The
+    manifest": "the source revision, working-copy changes if any, image
+    digest when applicable, database schema version, and the resolved
+    settings." Schema version and working-copy changes are not recorded
+    here: they belong to ``rapidpipe.runs``, which this module must not
+    import.
     """
     relative_path = f"exec/{attempt_id}.json"
     record_path = outputs_dir / relative_path
@@ -401,7 +411,10 @@ def _write_execution_record(
     record = {
         "settings_hash": settings_hash,
         "source_revision": _source_revision(),
-        "image_digest": os.environ.get("RAPIDPIPE_IMAGE_DIGEST"),
+        "image_digest": (
+            os.environ.get("RAPIDPIPE_IMAGE_DIGEST")
+            or os.environ.get("RAPID_IMAGE_DIGEST")
+        ),
     }
     if notes:
         record["notes"] = notes

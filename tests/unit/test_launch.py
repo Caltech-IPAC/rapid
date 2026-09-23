@@ -317,3 +317,74 @@ def test_reconcile_missing_job_id_is_lost(monkeypatch):
     assert result.disposition == "lost"
     assert result.batch_status == "LOST"
     assert recorded["record"] == ("attempt-1", None, "lost", "job-1")
+
+
+class _SchemaConn:
+    """Fake connection for _execution_record_with_defaults: cursor().execute()
+    then fetchone() returns a one-tuple schema version, as
+    _run_schema_version expects."""
+
+    def __init__(self, schema_version="1"):
+        self._schema_version = schema_version
+
+    def cursor(self):
+        conn = self
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, query, params=None):
+                pass
+
+            def fetchone(self):
+                return (conn._schema_version,)
+
+        return _Cursor()
+
+
+def test_execution_record_with_defaults_fills_missing_keys():
+    record = launch_batch._execution_record_with_defaults(_SchemaConn("2"), "r1", {})
+    assert record == {
+        "schema_version": "2",
+        "source_revision": "unknown",
+        "settings_hash": "unknown",
+    }
+
+
+def test_execution_record_with_defaults_fills_none_values():
+    # A Batch-written exec/<attempt>.json with the keys present but null
+    # (the failure this fix addresses: dict.setdefault is a no-op when the
+    # key already exists, even with value None).
+    record = launch_batch._execution_record_with_defaults(
+        _SchemaConn("2"), "r1",
+        {"image_digest": None, "settings_hash": "6725abc", "source_revision": None})
+    assert record == {
+        "schema_version": "2",
+        "source_revision": "unknown",
+        "settings_hash": "6725abc",
+        "image_digest": None,
+    }
+
+
+def test_execution_record_with_defaults_keeps_real_values():
+    record = launch_batch._execution_record_with_defaults(
+        _SchemaConn("2"), "r1",
+        {"schema_version": "9", "source_revision": "abc123", "settings_hash": "hash1"})
+    assert record == {
+        "schema_version": "9",
+        "source_revision": "abc123",
+        "settings_hash": "hash1",
+    }
+
+
+def test_execution_record_with_defaults_handles_none_record():
+    record = launch_batch._execution_record_with_defaults(_SchemaConn("2"), "r1", None)
+    assert record == {
+        "schema_version": "2",
+        "source_revision": "unknown",
+        "settings_hash": "unknown",
+    }

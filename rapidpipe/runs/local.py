@@ -234,10 +234,17 @@ def run_stage_locally(
     # run_stage wrote exec/<attempt>.json (a usage or input-rejected
     # failure, stage contract "Invocation") leaves execution_record empty,
     # so this module supplies its own fallbacks rather than let the insert
-    # violate those constraints.
-    execution_record.setdefault("schema_version", _run_schema_version(conn, run_id))
-    execution_record.setdefault("source_revision", _source_revision_or_unknown())
-    execution_record.setdefault("settings_hash", "unknown")
+    # violate those constraints. A record the stage DID write can still
+    # hold explicit null for source_revision (git unavailable) or, in
+    # principle, the other two fields, so a plain setdefault (which does
+    # nothing when the key is present with None) is not enough -- check
+    # the value, not just the key's presence.
+    if execution_record.get("schema_version") is None:
+        execution_record["schema_version"] = _run_schema_version(conn, run_id)
+    if execution_record.get("source_revision") is None:
+        execution_record["source_revision"] = _source_revision_or_unknown()
+    if execution_record.get("settings_hash") is None:
+        execution_record["settings_hash"] = "unknown"
     record_attempt_result(
         conn, attempt_id, exit_code, disposition, str(output_location),
         execution_record, scheduler_job_id=None)

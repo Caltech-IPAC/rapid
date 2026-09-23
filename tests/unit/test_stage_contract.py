@@ -570,3 +570,106 @@ def test_dry_run_with_missing_s3_settings_overlay_exits_usage_error(
                 "--dry-run",
             ]))
     assert rc == int(ExitCode.USAGE)
+
+
+# ======================================================================
+# source revision / image digest env fallbacks (a Batch container has no
+# git repository, but its image bakes the built SHA into
+# RAPID_SOURCE_REVISION, and the deployed job definition sets
+# RAPID_IMAGE_DIGEST)
+# ======================================================================
+
+def test_source_revision_uses_git_when_available(monkeypatch):
+    import rapidpipe.stages.contract as contract_module
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = "abc123\n"
+
+    monkeypatch.setattr(
+        contract_module.subprocess, "run",
+        lambda *a, **k: _FakeCompletedProcess())
+    monkeypatch.setenv("RAPID_SOURCE_REVISION", "should-not-be-used")
+
+    assert contract_module._source_revision() == "abc123"
+
+
+def test_source_revision_falls_back_to_env_when_git_fails(monkeypatch):
+    import rapidpipe.stages.contract as contract_module
+
+    class _FakeCompletedProcess:
+        returncode = 128
+        stdout = ""
+
+    monkeypatch.setattr(
+        contract_module.subprocess, "run",
+        lambda *a, **k: _FakeCompletedProcess())
+    monkeypatch.setenv("RAPID_SOURCE_REVISION", "baked-sha-456")
+
+    assert contract_module._source_revision() == "baked-sha-456"
+
+
+def test_source_revision_falls_back_to_env_when_git_not_installed(monkeypatch):
+    import rapidpipe.stages.contract as contract_module
+
+    def _raise(*a, **k):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(contract_module.subprocess, "run", _raise)
+    monkeypatch.setenv("RAPID_SOURCE_REVISION", "baked-sha-789")
+
+    assert contract_module._source_revision() == "baked-sha-789"
+
+
+def test_source_revision_none_when_git_fails_and_env_unset(monkeypatch):
+    import rapidpipe.stages.contract as contract_module
+
+    class _FakeCompletedProcess:
+        returncode = 128
+        stdout = ""
+
+    monkeypatch.setattr(
+        contract_module.subprocess, "run",
+        lambda *a, **k: _FakeCompletedProcess())
+    monkeypatch.delenv("RAPID_SOURCE_REVISION", raising=False)
+
+    assert contract_module._source_revision() is None
+
+
+def test_write_execution_record_prefers_rapidpipe_image_digest(monkeypatch, tmp_path):
+    import rapidpipe.stages.contract as contract_module
+
+    monkeypatch.setattr(contract_module, "_source_revision", lambda: "rev1")
+    monkeypatch.setenv("RAPIDPIPE_IMAGE_DIGEST", "sha256:developer")
+    monkeypatch.setenv("RAPID_IMAGE_DIGEST", "sha256:deployed")
+
+    outputs_dir = tmp_path / "outputs"
+    relative = contract_module._write_execution_record(outputs_dir, "a1", "hash1")
+    record = json.loads((outputs_dir / relative).read_text())
+    assert record["image_digest"] == "sha256:developer"
+
+
+def test_write_execution_record_falls_back_to_rapid_image_digest(monkeypatch, tmp_path):
+    import rapidpipe.stages.contract as contract_module
+
+    monkeypatch.setattr(contract_module, "_source_revision", lambda: "rev1")
+    monkeypatch.delenv("RAPIDPIPE_IMAGE_DIGEST", raising=False)
+    monkeypatch.setenv("RAPID_IMAGE_DIGEST", "sha256:deployed")
+
+    outputs_dir = tmp_path / "outputs"
+    relative = contract_module._write_execution_record(outputs_dir, "a1", "hash1")
+    record = json.loads((outputs_dir / relative).read_text())
+    assert record["image_digest"] == "sha256:deployed"
+
+
+def test_write_execution_record_digest_none_when_both_unset(monkeypatch, tmp_path):
+    import rapidpipe.stages.contract as contract_module
+
+    monkeypatch.setattr(contract_module, "_source_revision", lambda: "rev1")
+    monkeypatch.delenv("RAPIDPIPE_IMAGE_DIGEST", raising=False)
+    monkeypatch.delenv("RAPID_IMAGE_DIGEST", raising=False)
+
+    outputs_dir = tmp_path / "outputs"
+    relative = contract_module._write_execution_record(outputs_dir, "a1", "hash1")
+    record = json.loads((outputs_dir / relative).read_text())
+    assert record["image_digest"] is None
