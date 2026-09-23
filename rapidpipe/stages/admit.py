@@ -65,13 +65,20 @@ _REQUIRED_WCS_KEYWORDS = (
 
 #: [header]-configured keys that are required; a missing one is InputRejected.
 _REQUIRED_HEADER_KEYS = (
-    "sca", "dateobs", "mjdobs", "exptime", "filter", "equinox",
+    "sca", "dateobs", "mjdobs", "exptime", "filter",
     "ra_targ", "dec_targ",
 )
 
 #: [header]-configured keys that are optional; absent means None, never 0
 #: (products page: "nothing substitutes zero for an unavailable measurement").
 _OPTIONAL_HEADER_KEYS = ("pa_obsy", "pa_fpa", "zptmag", "skymean")
+
+#: [header]-configured keys that fall back to a [defaults] value when the
+#: header keyword is absent, rather than being either required or None.
+#: equinox is the one field with a real, near-universal convention (J2000)
+#: to fall back to instead of a field-wide "unavailable" sentinel -- see
+#: admit.toml's [defaults] table. A present keyword still wins.
+_DEFAULTABLE_HEADER_KEYS = ("equinox",)
 
 _SIP_COEFF_RE = re.compile(r"^([AB])_(\d+)_(\d+)$")
 
@@ -328,6 +335,13 @@ def _body(context: StageContext) -> StageResult:
         keyword = header_settings[field_name]
         header_values[field_name] = _get_header_value(
             header, keyword, required=False, field_name=field_name)
+    for field_name in _DEFAULTABLE_HEADER_KEYS:
+        keyword = header_settings[field_name]
+        value = _get_header_value(
+            header, keyword, required=False, field_name=field_name)
+        header_values[field_name] = (
+            value if value is not None
+            else context.settings["defaults"][field_name])
 
     sca_from_header = str(header_values["sca"]).strip()
     detector_from_key = str(key["detector"]).strip()
