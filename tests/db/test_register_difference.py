@@ -1,0 +1,267 @@
+"""Database-backed tests for `register` recording the difference stage's manifest.
+
+An l2 image is admitted and registered for real (tests/db/test_register_l2.py's
+helpers), the difference stage runs with fake tools on an input set whose
+l2 entry names that admitted instance, and `register` runs for real against
+the difference manifest. Covers the reference resolved both ways -- by its
+instance (20260923-01-refimages-instance.sql) and, for a reference
+registered by `dev`, by the legacy rfid the manifest carries -- and the
+column sources the products page's difference-image field list fixes.
+
+Skips cleanly if PGHOST is unset (see conftest.py).
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+import rapidpipe.stages.difference as difference
+from rapidpipe.db.ids import new_ulid
+from rapidpipe.products.manifest import Manifest
+from rapidpipe.runs import repository as repo
+from rapidpipe.science.spatial import healpix_indexes
+from rapidpipe.stages.contract import ExitCode
+from tests.unit.fakedifftools import (
+    CDF_DIR,
+    FakePsfCatalog,
+    FakeToolRunner,
+    build_input_set,
+    fake_sip_to_pv,
+)
+
+from .test_register_l2 import _run_admit, _run_register
+from .test_repository import _make_run, _make_unit
+
+
+def _seed_ids(cur):
+    cur.execute("SELECT fid FROM filters ORDER BY fid LIMIT 1")
+    (fid,) = cur.fetchone()
+    cur.execute("SELECT svid FROM swversions ORDER BY svid LIMIT 1")
+    (svid,) = cur.fetchone()
+    return fid, svid
+
+
+def _legacy_refimage(cur) -> int:
+    """A `refimages` row as `dev` writes one: no run, attempt or instance."""
+    fid, svid = _seed_ids(cur)
+    cur.execute(
+        """
+        INSERT INTO refimages (field, hp6, hp9, fid, ppid, version, vbest, svid, infobits)
+        VALUES (5321, 1, 1, %s, 12, 1, 1, %s, 0) RETURNING rfid
+        """,
+        (fid, svid))
+    return cur.fetchone()[0]
+
+
+def _instance_refimage(conn) -> tuple[int, str]:
+    """A `refimages` row carrying a registered reference instance."""
+    run_id = _make_run(conn)
+    _make_unit(conn, run_id, stage="reference", unit_id="field-5321")
+    attempt_id = repo.allocate_attempt(conn, run_id, "reference", "field-5321")
+    instance = new_ulid()
+    repo.register_manifest(conn, {
+        "run": run_id, "stage": "reference", "attempt": attempt_id,
+        "inputs": {"products": {}, "result_sets": []},
+        "outputs": [{
+            "kind": "reference-image", "format_version": "1", "instance": instance,
+            "key": {"field": "5321", "filter": "F184", "recipe": "awaicgen", "version": "1"},
+            "primary": "ref/image.fits",
+            "members": [{"role": "image", "path": "ref/image.fits", "bytes": 1,
+                         "sha256": "sha256:" + "a" * 64}],
+            "registration": {},
+        }],
+    }, registering_attempt_id=attempt_id)
+    with conn.cursor() as cur:
+        fid, svid = _seed_ids(cur)
+        cur.execute(
+            """
+            INSERT INTO refimages (field, hp6, hp9, fid, ppid, version, vbest, svid,
+                                   infobits, run, attempt, instance)
+            VALUES (5321, 1, 1, %s, 12, 1, 0, %s, 0, %s, %s, %s) RETURNING rfid
+            """,
+            (fid, svid, run_id, attempt_id, instance))
+        return cur.fetchone()[0], instance
+
+
+def _run_difference(conn, tmp_path, monkeypatch, *, l2_instance, reference_instance=None,
+                    rfid=None, overlay=""):
+    """Run the difference stage (fake tools) in a real run; return (run, outputs)."""
+    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
+        runner=FakeToolRunner(), sip_to_pv=fake_sip_to_pv, psf_catalog=FakePsfCatalog()))
+
+    inputs = tmp_path / "diff-inputs"
+    build_input_set(inputs, rfid=rfid)
+    manifest_path = inputs / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["outputs"][0]["instance"] = l2_instance
+    if reference_instance is not None:
+        manifest["outputs"][1]["instance"] = reference_instance
+    manifest_path.write_text(json.dumps(manifest))
+
+    run_id = _make_run(conn, selected_stages=["difference", "register"])
+    unit_id = "e20260821001234/SCA07"
+    _make_unit(conn, run_id, stage="difference", unit_id=unit_id)
+    attempt_id = repo.allocate_attempt(conn, run_id, "difference", unit_id)
+    settings = tmp_path / "overlay.toml"
+    settings.write_text(f'[paths]\ncfg_path = "{CDF_DIR}"\n' + overlay)
+    outputs = tmp_path / "diff-outputs"
+    rc = difference.main([
+        "--run", run_id, "--unit", unit_id, "--attempt", attempt_id,
+        "--inputs", str(inputs), "--outputs", str(outputs), "--settings", str(settings)])
+    assert rc == int(ExitCode.SUCCESS)
+    return run_id, outputs
+
+
+def _admitted_l2(conn, tmp_path, monkeypatch):
+    run_id, admit_outputs = _run_admit(conn, tmp_path, name="l2")
+    rc, _ = _run_register(conn, monkeypatch, admit_outputs, run_id=run_id,
+                          unit_id="l2-register-unit", tmp_path=tmp_path, name="l2")
+    assert rc == int(ExitCode.SUCCESS)
+    return Manifest.read(admit_outputs / "manifest.json").outputs[0].instance
+
+
+def _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, name="reg"):
+    return _run_register(conn, monkeypatch, outputs, run_id=run_id,
+                         unit_id=f"{name}-unit", tmp_path=tmp_path, name=name)
+
+
+def _diffimages_row(cur, instance):
+    cur.execute(
+        """
+        SELECT pid, rid, expid, sca, ppid, version, vbest, rfid, field, hp6, hp9, fid, jd,
+               ra0, dec0, ra1, dec4, infobitssci, infobitsref, filename, checksum, status,
+               svid, run, attempt, instance
+        FROM diffimages WHERE instance = %s
+        """,
+        (instance,))
+    columns = [d[0] for d in cur.description]
+    row = cur.fetchone()
+    return dict(zip(columns, row)) if row is not None else None
+
+
+def _diffimmeta_row(cur, pid):
+    cur.execute(
+        """
+        SELECT nsexcatsources, scalefacref, dxrmsfin, dyrmsfin, dxmedianfin, dymedianfin,
+               field, hp6, hp9, fid, sca, source_counts, run, instance
+        FROM diffimmeta WHERE pid = %s
+        """,
+        (pid,))
+    columns = [d[0] for d in cur.description]
+    return dict(zip(columns, cur.fetchone()))
+
+
+def test_register_writes_diffimages_and_diffimmeta_for_a_legacy_reference(
+        conn, tmp_path, monkeypatch):
+    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
+    with conn.cursor() as cur:
+        rfid = _legacy_refimage(cur)
+    run_id, outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
+    manifest = Manifest.read(outputs / "manifest.json")
+    entry = next(e for e in manifest.outputs if e.kind == "difference-image")
+    registration = entry.registration
+
+    rc, registering_attempt = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path)
+    assert rc == int(ExitCode.SUCCESS)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT rid, expid, sca, field, fid, mjdobs FROM l2files WHERE instance = %s",
+            (l2_instance,))
+        rid, expid, sca, field, fid, mjdobs = cur.fetchone()
+        row = _diffimages_row(cur, entry.instance)
+        assert row is not None
+        hp6, hp9 = healpix_indexes(registration["centre"]["ra"], registration["centre"]["dec"])
+        assert (row["rid"], row["expid"], row["sca"], row["field"], row["fid"]) == (
+            rid, expid, sca, field, fid)
+        assert row["jd"] == pytest.approx(mjdobs + 2400000.5)
+        assert row["ppid"] == 15
+        assert row["rfid"] == rfid
+        assert (row["version"], row["vbest"], row["status"]) == (1, 0, 0)
+        assert (row["hp6"], row["hp9"]) == (hp6, hp9)
+        assert row["ra0"] == pytest.approx(registration["centre"]["ra"])
+        assert row["ra1"] == pytest.approx(registration["corners"][0][0])
+        assert row["dec4"] == pytest.approx(registration["corners"][3][1])
+        assert row["infobitssci"] == registration["catalog_outcome_bits"]
+        assert row["infobitsref"] == registration["infobits_reference"]
+        assert row["checksum"] == registration["md5"]
+        assert row["filename"] == f"{outputs}/{entry.primary}"
+        assert (row["run"], row["attempt"], row["instance"]) == (
+            run_id, registering_attempt, entry.instance)
+        cur.execute("SELECT cvstag FROM swversions WHERE svid = %s", (row["svid"],))
+        assert cur.fetchone()[0] == "abc123"   # _make_run's code_revision
+
+        meta = _diffimmeta_row(cur, row["pid"])
+        counts = registration["source_counts"]
+        assert meta["nsexcatsources"] == counts["sextractor"]["positive"]
+        assert meta["source_counts"] == counts
+        assert meta["dxrmsfin"] == 0.0 and meta["dyrmsfin"] == 0.0
+        assert meta["scalefacref"] == pytest.approx(registration["reference_scale_factor"])
+        assert (meta["field"], meta["hp6"], meta["hp9"], meta["fid"], meta["sca"]) == (
+            field, hp6, hp9, fid, sca)
+        assert (meta["run"], meta["instance"]) == (run_id, entry.instance)
+
+        # Source catalogs: an instance row each, no legacy rows.
+        cur.execute(
+            "SELECT count(*) FROM product_instances WHERE kind = 'source-catalog' AND run = %s",
+            (run_id,))
+        assert cur.fetchone()[0] == 4
+
+
+def test_register_resolves_rfid_from_the_reference_instance(conn, tmp_path, monkeypatch):
+    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
+    rfid, reference_instance = _instance_refimage(conn)
+    run_id, outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance,
+        reference_instance=reference_instance)
+    entry = next(e for e in Manifest.read(outputs / "manifest.json").outputs
+                 if e.kind == "difference-image")
+    rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path)
+    assert rc == int(ExitCode.SUCCESS)
+    with conn.cursor() as cur:
+        assert _diffimages_row(cur, entry.instance)["rfid"] == rfid
+        cur.execute(
+            "SELECT count(*) FROM dependencies WHERE consumer_instance = %s "
+            "AND producer_instance = %s", (entry.instance, reference_instance))
+        assert cur.fetchone()[0] == 1
+
+
+def test_replaying_the_manifest_writes_nothing_new(conn, tmp_path, monkeypatch):
+    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
+    with conn.cursor() as cur:
+        rfid = _legacy_refimage(cur)
+    run_id, outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
+    assert _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, "first")[0] == 0
+    assert _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, "second")[0] == 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM diffimages WHERE run = %s", (run_id,))
+        assert cur.fetchone()[0] == 1
+
+
+def test_unregistered_l2_instance_exits_65(conn, tmp_path, monkeypatch):
+    with conn.cursor() as cur:
+        rfid = _legacy_refimage(cur)
+    # An l2 instance that was never registered: the dependency edge's
+    # foreign key or the l2files lookup refuses it.
+    run_id, outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=new_ulid(), rfid=rfid)
+    rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path)
+    assert rc in (int(ExitCode.INPUT_REJECTED), int(ExitCode.STAGE_ERROR))
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM diffimages WHERE run = %s", (run_id,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_an_sfft_instance_is_refused_until_it_has_a_pipelines_row(conn, tmp_path, monkeypatch):
+    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
+    with conn.cursor() as cur:
+        rfid = _legacy_refimage(cur)
+    run_id, outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid,
+        overlay="[sfft]\nregister_sfft = true\n")
+    rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path)
+    assert rc == int(ExitCode.INPUT_REJECTED)
