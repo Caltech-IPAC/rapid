@@ -223,8 +223,16 @@ def test_repartition_is_correct_and_idempotent(served, tmp_path):
     assert manifest["hp6"]["rows"] == 600
     assert manifest["hp6"]["n_files"] == len(files)
     assert set(manifest["hats"]["md5sums"]) == {nc.leaf_path(o, p) for o, p in LEAVES}
+    # summary values, not a 49k-entry pixel list
+    assert "pixels" not in manifest["hp6"]
+    pixels = sorted(int(f.parent.name.split("=")[1]) for f in files)
+    assert (manifest["hp6"]["pixel_min"], manifest["hp6"]["pixel_max"]) == (pixels[0], pixels[-1])
+    assert manifest["hp6"]["sky_coverage"] == round(len(files) / 49152, 4)
+    per_file = sorted(pq.read_metadata(f).num_rows for f in files)
+    assert manifest["hp6"]["rows_per_file_max"] == per_file[-1]
+    assert manifest["hp6"]["rows_per_file_median"] == per_file[len(per_file) // 2]
     on_disk = json.loads((dest / nc.MANIFEST_NAME).read_text())
-    assert on_disk["hp6"]["pixels"] == manifest["hp6"]["pixels"]
+    assert on_disk["hp6"] == manifest["hp6"]
 
 
 def test_delete_leaves_keeps_one_copy(served, tmp_path):

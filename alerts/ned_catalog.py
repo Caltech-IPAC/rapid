@@ -590,7 +590,9 @@ def build_manifest(dest: str) -> dict[str, Any]:
     done = [json.loads(store.read_text(rel))
             for rel in store.list_files(f"{HP6_SUBDIR}/{DONE_SUBDIR}")
             if rel.endswith(".json")]
+    rows_per_file = sorted(p["rows"] for d in done for p in d["pixels"])
     hp6_pixels = sorted({p["hp6"] for d in done for p in d["pixels"]})
+    n_pixels_total = 12 * 4 ** HP6_ORDER               # 49,152 at order 6
     return {
         "release": props.get("obs_collection"),
         "hats_nrows": int(props.get("hats_nrows", 0)),
@@ -605,7 +607,15 @@ def build_manifest(dest: str) -> dict[str, Any]:
                 "complete": len(done) == len(leaves),
                 "source_leaves_deleted": sum(bool(d.get("source_deleted")) for d in done),
                 "rows": sum(d["rows"] for d in done),
-                "n_files": len(hp6_pixels), "pixels": hp6_pixels},
+                "n_files": len(hp6_pixels),
+                # summary in place of the file list (49k entries at order 6);
+                # the reader tests a pixel's file directly
+                "pixel_min": hp6_pixels[0] if hp6_pixels else None,
+                "pixel_max": hp6_pixels[-1] if hp6_pixels else None,
+                "sky_coverage": round(len(hp6_pixels) / n_pixels_total, 4),
+                "rows_per_file_median": (rows_per_file[len(rows_per_file) // 2]
+                                         if rows_per_file else 0),
+                "rows_per_file_max": rows_per_file[-1] if rows_per_file else 0},
     }
 
 
