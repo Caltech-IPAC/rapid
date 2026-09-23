@@ -220,7 +220,13 @@ awaicgen_dict["awaicgen_output_mosaic_cov_map_file"] = config_input['AWAICGEN'][
 awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"] = config_input['AWAICGEN']['awaicgen_output_mosaic_uncert_image_file']
 awaicgen_dict["awaicgen_debug"] = config_input['AWAICGEN']['awaicgen_debug']
 awaicgen_dict["awaicgen_verbose"] = config_input['AWAICGEN']['awaicgen_verbose']
-awaicgen_dict["zprefimg"] = config_input['AWAICGEN']['zprefimg']
+
+# The scalar zprefimg and every per-filter zprefimg_<filter> entry, copied by prefix so that
+# adding a filter to the config file needs no change here.
+
+for awaicgen_key in config_input['AWAICGEN']:
+    if awaicgen_key.startswith("zprefimg"):
+        awaicgen_dict[awaicgen_key] = config_input['AWAICGEN'][awaicgen_key]
 
 
 # Update the awaicgen dictionary for quantities that do not vary with sky location.
