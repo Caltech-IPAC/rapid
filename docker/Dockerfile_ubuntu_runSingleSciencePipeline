@@ -81,7 +81,6 @@ RUN python3.11 -m pip install --upgrade roman_datamodels
 RUN python3.11 -m pip install --upgrade romancal
 RUN python3.11 -m pip install --upgrade fitsio
 RUN python3.11 -m pip install --upgrade fastavro
-RUN python3.11 -m pip install --upgrade astroquery
 RUN python3.11 -m pip install --upgrade pytest
 RUN python3.11 -m pip install --upgrade psutil
 

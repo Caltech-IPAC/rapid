@@ -396,7 +396,7 @@ class NedMatch:
                          # East of North [deg]
     ptype: str | None = None    # NED preferred type; None = unclassified
     z: float | None = None      # preferred redshift (frame as published)
-    zunc: float | None = None   # None on the astroquery path (no column)
+    zunc: float | None = None   # None when NED gives no uncertainty
     zflag: str | None = None    # e.g. "SLS"; see select_host_candidates
 
 
@@ -865,9 +865,9 @@ def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
 # is its redshift".
 #
 # Catalog access is behind the NedSliceReader callable rather than wired to
-# one backend: v1 queries the NED web service (astroquery, one cone per
-# chip), and a local HATS copy can be swapped in later without touching
-# this section. The matcher only ever sees column arrays. Geometry is
+# one backend: production reads the local copy of the object directory
+# (alerts/ned_reader.py, one cone per chip); v1 used the NED web service,
+# removed 2026-09-23. The matcher only ever sees column arrays. Geometry is
 # identical to the reference-catalog match.
 # ---------------------------------------------------------------------------
 
@@ -888,8 +888,7 @@ NED_MATCH_NMAX = 3
 # object directory disagree: "Object Name" vs "prefname", "Redshift Flag"
 # vs "zflag"). Readers must deliver missing numerics as NaN and missing
 # strings as None. Only prefname/ra/dec are required; the rest are filled
-# with nulls when a backend lacks them -- the astroquery path has no
-# redshift-uncertainty column at all.
+# with nulls when a backend lacks them.
 NED_COLUMNS = ("prefname", "ra", "dec", "ptype", "z", "zunc", "zflag")
 NED_REQUIRED_COLUMNS = ("prefname", "ra", "dec")
 
@@ -938,11 +937,12 @@ NED_CONE_MAX_ARCSEC = 400.0
 # Every match still carries its own `type`, and the schema records that a
 # selection was applied, so consumers can re-cut downstream.
 #
-# NOT SETTLED: the access paths disagree about type -- astroquery typed all
-# 566 rows above, where HATS leaves ptype null for most of the same objects
-# (they arrive null, not as "IrS"). Untyped rows fail the type test and
-# fall through to the redshift test, so both work, but the EFFECTIVE cut
-# differs by backend. Re-measure when a HATS reader lands.
+# SETTLED 2026-09-22: the local copy and NED's TAP table agree -- ptype /
+# prefphytype is empty for 96-99% of rows; the web service's populated
+# "Type" (IrS/UvS...) was the outlier. The measurements above were taken
+# through the web service, so the type mix they quote is not what this
+# code now sees; the row counts and chance-coincidence rates still hold.
+# The rule is to be re-evaluated on the local copy (selection is OFF).
 # ===========================================================================
 
 # Set False to disable selection entirely and match against all of NED.
@@ -1254,103 +1254,11 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
     return results
 
 
-# -- NED backend: the web service via astroquery ----------------------------
-
-# astroquery's NED result columns -> NED_COLUMNS. The web service labels
-# columns for display, not by the object-directory schema; "Redshift
-# Uncertainty" does not exist there at all, so zunc is filled with NaN.
-# Measured 2026-09-14 against astroquery 0.4.11: 'No.', 'Object Name',
-# 'RA', 'DEC', 'Type', 'Velocity', 'Redshift', 'Redshift Flag',
-# 'Magnitude and Filter', 'Separation', 'References', 'Notes', ...
-ASTROQUERY_NED_COLUMNS = {
-    "prefname": "Object Name",
-    "ra": "RA",
-    "dec": "DEC",
-    "ptype": "Type",
-    "z": "Redshift",
-    "zflag": "Redshift Flag",
-}
-
-
-def ned_table_to_columns(table: Any) -> dict[str, np.ndarray]:
-    """Convert an astroquery NED result table to NED_COLUMNS arrays.
-
-    Masked cells (astroquery returns a masked Table) become NaN in the
-    numeric columns and None in the string columns, which is the contract
-    build_nedcat() and _ned_match_from_row() rely on. Columns the web
-    service lacks (zunc) are filled with NaN. Pure function so the mapping
-    is testable without a network.
-
-    Parameters
-    ----------
-    table : astropy.table.Table
-        As returned by ``astroquery.ipac.ned.Ned.query_region``.
-
-    Returns
-    -------
-    dict
-        NED_COLUMNS -> array, all the same length (possibly zero).
-    """
-    n = len(table)
-    out: dict[str, np.ndarray] = {}
-    for name in NED_COLUMNS:
-        numeric = name in ("ra", "dec", "z", "zunc")
-        src = ASTROQUERY_NED_COLUMNS.get(name)
-        if src is None or src not in table.colnames:
-            out[name] = (np.full(n, np.nan)
-                         if numeric else np.full(n, None, dtype=object))
-            continue
-        col = table[src]
-        mask = np.ma.getmaskarray(col)
-        data = np.ma.getdata(col)
-        if numeric:
-            values = np.asarray(data, dtype=float)
-            values[mask] = np.nan
-        else:
-            values = np.array([None if m else str(v)
-                               for v, m in zip(data, mask)], dtype=object)
-        out[name] = values
-    return out
-
-
-class AstroqueryNedReader:
-    """A NedSliceReader over the NED web service (astroquery).
-
-    One HTTP cone search per call. Sized for one call per chip: a Roman
-    SCA needs a ~5.3' cone, which returned ~1100 rows in ~12 s on the
-    HLTDS-like field (2026-09-14); a ~3.9' cone took ~3 s. Exceptions
-    propagate -- the provider treats them as "could not run".
-
-    Known limits of this path, accepted for v1 (see
-    alerts/scratch/ned-crossmatch-design-notes.md section 3): results
-    are not reproducible across NED releases, an outage leaves nedMatches
-    null for the affected chips, and many concurrent jobs are a burst
-    against a shared production service. A local HATS copy replaces this
-    class without touching the matcher.
-
-    Parameters
-    ----------
-    timeout_s : float, optional
-        HTTP timeout applied to the NED query.
-    """
-
-    def __init__(self, timeout_s: float = 120.0) -> None:
-        self.timeout_s = float(timeout_s)
-
-    def __call__(self, ra_deg: float, dec_deg: float,
-                 radius_arcsec: float) -> dict[str, np.ndarray]:
-        # deferred import: astroquery is not in the pipeline image, and
-        # the module must import without it (the KONA/astropy pattern)
-        from astropy import units as u
-        from astropy.coordinates import SkyCoord
-        from astroquery.ipac.ned import Ned
-
-        Ned.TIMEOUT = self.timeout_s
-        centre = SkyCoord(ra_deg * u.deg, dec_deg * u.deg)
-        table = Ned.query_region(centre, radius=radius_arcsec * u.arcsec)
-        logger.debug("NED cone (%.5f, %.5f) r=%.1f\": %d rows",
-                     ra_deg, dec_deg, radius_arcsec, len(table))
-        return ned_table_to_columns(table)
+# -- NED backend ------------------------------------------------------------
+# alerts/ned_reader.py: Hp6NedReader over the local copy of the object
+# directory (order-6 HEALPix parquet built by alerts/ned_catalog.py). The
+# web-service reader (astroquery) was removed 2026-09-23: 3-24 s per chip
+# and hours-long timeouts, and it could never supply zunc.
 
 
 # ---------------------------------------------------------------------------

@@ -608,8 +608,7 @@ NED_MATCH_PARAMS = (
                                                "published (assumed heliocentric, not CMB-corrected -- NED does "
                                                "not document this); check zFlag before using",
                         IMPLEMENTED, _NED_SRC),
-    Param("zUnc",          ["null", "float"],  "Uncertainty in z; null when NED gives none. Always null on the "
-                                               "astroquery access path, which returns no uncertainty column",
+    Param("zUnc",          ["null", "float"],  "Uncertainty in z; null when NED gives none",
                         IMPLEMENTED, _NED_SRC, attr="zunc"),
     Param("zFlag",         ["null", "string"], "NED redshift code: technique (S = spectroscopic, P = "
                                                "photometric, M = modelled) + 2-char method + optional '?' "

@@ -59,6 +59,23 @@ def test_settings_are_read_from_the_alerts_section():
     assert s["kona_file"] is None                  # blank -> association off
     assert s["upload_to_s3_bucket"] is False
     assert s["archive_codec"] == "deflate"
+    # ned_source: absent -> the pipeline's default copy; blank -> None (off)
+    from alerts.ned_reader import DEFAULT_NED_SOURCE
+    assert s["ned_source"] == DEFAULT_NED_SOURCE
+    assert _settings(ned_source="s3://other/ned")["ned_source"] == "s3://other/ned"
+    assert _settings(ned_source="")["ned_source"] is None
+
+
+def test_build_ned_reader_opens_a_copy_or_degrades(tmp_path, caplog):
+    from alerts.cli import build_ned_reader
+    from alerts.ned_reader import Hp6NedReader
+    assert build_ned_reader(None) is None
+    assert build_ned_reader(str(tmp_path), enabled=False) is None
+    reader = build_ned_reader(str(tmp_path))              # a (bare) local copy opens
+    assert isinstance(reader, Hp6NedReader) and not reader.complete
+    with caplog.at_level("WARNING", logger="alerts.cli"):
+        assert build_ned_reader("s3://no-such-bucket-rapid-test/ned") is None
+    assert "NED matching off" in caplog.text               # cause logged, no raise
 
 
 def test_donotuploadproducts_overrides_the_config(monkeypatch):
@@ -170,7 +187,8 @@ def fake_make_provider(monkeypatch, chip_data):
     """Route the stage's make_provider() to the fake chip instead of RAPIDDB."""
     made = []
 
-    def _make(diff_flavor="sfft", kona_file=None, refcat=True, ned=True):
+    def _make(diff_flavor="sfft", kona_file=None, refcat=True, ned=True,
+              ned_source=None):
         provider = AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor,
                                      kona_lookup=None, refcat=refcat,
                                      ned_reader=None)

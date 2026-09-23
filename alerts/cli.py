@@ -22,15 +22,17 @@ from pathlib import Path
 
 # Support both `python -m alerts.cli` (module) and `python cli.py` (script).
 if __package__:
+    from .ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader
     from .produce import batch_produce, open_alert_archive, produce_alert
-    from .providers import AlertDataProvider, AstroqueryNedReader
+    from .providers import AlertDataProvider
 else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from alerts.ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader
     from alerts.produce import (batch_produce, open_alert_archive,
                                       produce_alert)
-    from alerts.providers import AlertDataProvider, AstroqueryNedReader
+    from alerts.providers import AlertDataProvider
 
 from database.modules.utils.rapid_db import RAPIDDB
 
@@ -59,10 +61,40 @@ def load_kona_predictions(path: str | Path) -> dict[int, dict]:
     return {int(expid): predictions for expid, predictions in data.items()}
 
 
+def build_ned_reader(ned_source: str | None,
+                     enabled: bool = True) -> "Hp6NedReader | None":
+    """Open the local NED copy for the provider, or None to leave NED off.
+
+    A copy that cannot be opened (no AWS credentials, wrong or unset
+    AWS_DEFAULT_REGION, missing prefix) is logged as a warning and NED
+    matching is left off, so the alert still assembles with a null
+    nedMatches -- the same degrade-not-fail rule as an unreachable
+    reference catalog. The cause is in the log line.
+
+    Parameters
+    ----------
+    ned_source : str or None
+        ``s3://bucket/prefix`` or a local directory holding
+        ``objectdir_hp6/`` (see alerts/ned_catalog.py). None means off.
+    enabled : bool, optional
+        False turns NED matching off regardless of `ned_source`.
+    """
+    if not enabled or not ned_source:
+        return None
+    try:
+        return Hp6NedReader(ned_source)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "NED matching off: could not open the NED copy at %s (%s: %s)",
+            ned_source, type(exc).__name__, exc)
+        return None
+
+
 def make_provider(diff_flavor: str = "sfft",
                   kona_file: str | Path | None = None,
                   refcat: bool = True,
-                  ned: bool = True) -> AlertDataProvider:
+                  ned: bool = True,
+                  ned_source: str | None = DEFAULT_NED_SOURCE) -> AlertDataProvider:
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
 
@@ -79,14 +111,16 @@ def make_provider(diff_flavor: str = "sfft",
         catalog (on by default; see providers.get_ref_matches). When off,
         refStarMatches and refGalaxyMatches stay null.
     ned : bool, optional
-        Cross-match detections against NED over the web service
-        (providers.AstroqueryNedReader; one cone query per chip, ~3-12 s).
-        On by default, like refcat. It is a network dependency on a shared
-        external service, and astroquery is imported only when a query is
-        made -- so an image without it, or an unreachable NED, degrades
-        per chip to a logged warning and a null nedMatches rather than an
-        error. When off, nedMatches stays null. To use a different NED
-        backend, construct AlertDataProvider with ``ned_reader=`` directly.
+        Cross-match detections against the local copy of the NED object
+        directory (alerts/ned_reader.py; a few parquet reads per chip, no
+        web service). On by default, like refcat. When off, nedMatches
+        stays null.
+    ned_source : str or None, optional
+        Where the copy lives (``s3://...`` or a local directory); defaults
+        to the pipeline's bucket. A copy that cannot be opened degrades to
+        a logged warning and null nedMatches (see build_ned_reader). To
+        use a different NED backend, construct AlertDataProvider with
+        ``ned_reader=`` directly.
 
     Returns
     -------
@@ -103,11 +137,9 @@ def make_provider(diff_flavor: str = "sfft",
     if kona_file is not None:
         kona_lookup = load_kona_predictions(kona_file).get
 
-    # astroquery is imported inside the reader's __call__, and a failure
-    # there is caught per chip by the provider -- so an environment without
-    # it degrades to a null nedMatches (with a warning) rather than failing
-    # at startup. NED is on by default; --no-ned turns it off.
-    ned_reader = AstroqueryNedReader() if ned else None
+    # NED is on by default; --no-ned turns it off, and a copy that cannot
+    # be opened degrades to null nedMatches with a warning.
+    ned_reader = build_ned_reader(ned_source, enabled=ned)
 
     # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
     repo_root = Path(__file__).resolve().parents[1]
@@ -181,9 +213,13 @@ def main(argv: list[str] | None = None) -> int:
                              "per reference image from S3")
     parser.add_argument("--no-ned", action="store_true",
                         help="skip the NED cross-match (nedMatches stays "
-                             "null); on by default, one NED web-service "
-                             "cone query per chip (~3-12 s, needs network "
-                             "and astroquery)")
+                             "null); on by default, reading the local NED "
+                             "copy at --ned-source")
+    parser.add_argument("--ned-source", metavar="PREFIX",
+                        default=DEFAULT_NED_SOURCE,
+                        help="the local NED copy: s3://bucket/prefix or a "
+                             "directory holding objectdir_hp6/ (built by "
+                             "alerts/ned_catalog.py); default %(default)s")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="diagnostic verbosity on stderr; quiet by "
@@ -207,7 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     provider = make_provider(diff_flavor=args.diff_flavor,
                              kona_file=args.kona_file,
                              refcat=not args.no_refcat,
-                             ned=not args.no_ned)
+                             ned=not args.no_ned,
+                             ned_source=args.ned_source)
 
     # Make producer, if kafka arg is True
     producer = None

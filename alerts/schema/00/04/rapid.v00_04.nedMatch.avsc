@@ -55,7 +55,7 @@
                 "float"
             ],
             "default": null,
-            "doc": "Uncertainty in z; null when NED gives none. Always null on the astroquery access path, which returns no uncertainty column"
+            "doc": "Uncertainty in z; null when NED gives none"
         },
         {
             "name": "zFlag",

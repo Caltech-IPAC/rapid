@@ -13,11 +13,12 @@ Three layers, mirroring test_ref_match.py:
     fake_ned_reader: assemble + serialize alerts for all three nedMatches
     states -- null (matching not run), [] (ran and found nothing),
     populated -- through the real provider and its per-chip slice cache.
-  - The astroquery adapter's column mapping, over a synthetic masked
-    astropy Table with the web service's real column names (no network).
+  - Hp6NedReader (alerts/ned_reader.py), the production reader over the
+    local order-6 copy of NED, against synthetic pixel files in tmp_path;
+    see the section at the end of this file.
 
-No test here touches NED itself; a live counterpart belongs in
-test_live_db.py once the reader is wired into the CLI.
+No test here touches NED or S3; the live copy is exercised by hand with
+the CLI (--ned-source) and in test_live_db.py.
 """
 
 import io
@@ -26,15 +27,13 @@ import math
 import fastavro
 import numpy as np
 import pytest
-from astropy.table import MaskedColumn, Table
 
 from alerts import providers
 from alerts.produce import assemble_alert, load_schema, serialize_alert
 from alerts.providers import (NED_CONE_MAX_ARCSEC, NED_MATCH_NMAX,
                               NED_MATCH_RADIUS_ARCSEC, bounding_cone,
                               build_nedcat, chip_cone, match_nedcat,
-                              match_ss_predictions, ned_table_to_columns,
-                              select_host_candidates)
+                              match_ss_predictions, select_host_candidates)
 from conftest import fake_ned_reader, make_ned_table, make_source_row
 
 
@@ -500,43 +499,146 @@ def test_e2e_slice_cached_per_chip_including_failure(make_provider,
 
 
 # ---------------------------------------------------------------------------
-# The astroquery adapter (column mapping only; no network)
+# Hp6NedReader (alerts/ned_reader.py): the NedSliceReader over the local
+# order-6 copy of NED that alerts.ned_catalog builds. Synthetic pixel files
+# in tmp_path; the reader contract, pixel-edge cones, the cache, and one
+# full alert over the fake chip whose nedMatches come from the store.
+# (Selection is ON in this file, so store objects carry a type or a z.)
 # ---------------------------------------------------------------------------
 
-def test_ned_table_to_columns_maps_names_and_masks():
-    # the web service's real column names, with masked cells where NED
-    # has no value -- exactly what astroquery hands back
-    table = Table({
-        "No.": [1, 2, 3],
-        "Object Name": ["2MASX J1", "WISEA J2", "SDSS J3"],
-        "RA": [150.0, 150.1, 150.2],
-        "DEC": [-20.0, -20.0, -20.0],
-        "Type": MaskedColumn(["G", "IrS", "G"], mask=[False, False, True]),
-        "Redshift": MaskedColumn([0.0312, 0.0, 0.5],
-                                 mask=[False, True, False]),
-        "Redshift Flag": MaskedColumn(["SLS", "", "PSE?"],
-                                      mask=[False, True, False]),
-        "Magnitude and Filter": ["15.2g", "", "18.1r"],
-    })
-    cols = ned_table_to_columns(table)
+import json
 
-    assert set(cols) == set(providers.NED_COLUMNS)
-    assert list(cols["prefname"]) == ["2MASX J1", "WISEA J2", "SDSS J3"]
-    assert cols["ra"].tolist() == pytest.approx([150.0, 150.1, 150.2])
-    assert list(cols["ptype"]) == ["G", "IrS", None]         # masked -> None
-    assert cols["z"][0] == pytest.approx(0.0312)
-    assert np.isnan(cols["z"][1])                            # masked -> NaN
-    assert list(cols["zflag"]) == ["SLS", None, "PSE?"]
-    assert np.isnan(cols["zunc"]).all()                      # not served
+import healpy as hp
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-    # and the result feeds straight into the matcher
-    cat = build_nedcat(cols)
-    assert list(cat.columns["prefname"]) == ["2MASX J1", "SDSS J3"]
+from alerts import ned_catalog as nc
+from alerts import ned_reader as nr
+from alerts.providers import NED_COLUMNS, build_nedcat, match_nedcat
+
+HP6_NSIDE = 2 ** nc.HP6_ORDER
 
 
-def test_ned_table_to_columns_empty_table():
-    cols = ned_table_to_columns(Table({"Object Name": [], "RA": [],
-                                       "DEC": [], "Type": [],
-                                       "Redshift": [], "Redshift Flag": []}))
-    assert all(v.size == 0 for v in cols.values())
-    assert build_nedcat(cols).coords is None
+def write_hp6_store(root, objects, complete=True):
+    """Lay out `objects` (dicts: ra, dec, prefname, optional ptype/z/zunc/
+    zflag) as order-6 pixel files under `root`, plus a manifest. Returns
+    the pixels written."""
+    by_pixel = {}
+    for obj in objects:
+        pix = int(hp.ang2pix(HP6_NSIDE, obj["ra"], obj["dec"], nest=True, lonlat=True))
+        by_pixel.setdefault(pix, []).append(obj)
+    for pix, objs in by_pixel.items():
+        path = root / nc.hp6_file(pix)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(pa.table({
+            "prefname": [o["prefname"] for o in objs],
+            "ra": [o["ra"] for o in objs], "dec": [o["dec"] for o in objs],
+            "ptype": pa.array([o.get("ptype") for o in objs], pa.string()),
+            "z": [o.get("z", np.nan) for o in objs],
+            "zunc": [o.get("zunc", np.nan) for o in objs],
+            "zflag": pa.array([o.get("zflag") for o in objs], pa.string()),
+        }), path)
+    (root / nc.MANIFEST_NAME).write_text(json.dumps(
+        {"release": "NED_TEST", "hp6": {"complete": complete}}))
+    return sorted(by_pixel)
+
+
+def test_hp6_table_to_columns_contract():
+    t = pa.table({"prefname": ["A", "B"], "ra": [1.0, 2.0], "dec": [3.0, 4.0],
+                  "ptype": pa.array(["G", ""], pa.string()), "z": [0.1, None],
+                  "zunc": [None, None], "zflag": pa.array([None, "SLS"], pa.string())})
+    cols = nr.table_to_columns(t)
+    assert set(cols) == set(NED_COLUMNS)
+    assert list(cols["ptype"]) == ["G", None]            # "" -> None
+    assert list(cols["zflag"]) == [None, "SLS"]
+    assert cols["z"][0] == 0.1 and np.isnan(cols["z"][1]) and np.isnan(cols["zunc"]).all()
+
+
+def test_hp6_cone_returns_only_rows_within_radius(tmp_path):
+    ra0, dec0 = 150.0, -20.0
+    write_hp6_store(tmp_path, [
+        {"ra": ra0, "dec": dec0, "prefname": "AT-CENTRE", "ptype": "G", "z": 0.02},
+        {"ra": ra0 + ra_offset(dec0, 6.0), "dec": dec0, "prefname": "AT-6AS", "ptype": ""},
+        {"ra": ra0, "dec": dec0 + 15.0 / 3600, "prefname": "AT-15AS"},
+        {"ra": ra0 + 1.0, "dec": dec0, "prefname": "FAR"},
+    ])
+    reader = nr.Hp6NedReader(str(tmp_path))
+    assert reader.complete and reader.release == "NED_TEST"
+    got = reader(ra0, dec0, 10.0)
+    assert sorted(got["prefname"]) == ["AT-6AS", "AT-CENTRE"]
+    assert list(got["ptype"][np.argsort(got["prefname"])]) == [None, "G"]   # "" -> None
+    assert reader(ra0, dec0, 20.0)["prefname"].tolist().count("AT-15AS") == 1
+
+
+def test_hp6_cone_crossing_pixel_edges_sees_every_neighbour(tmp_path):
+    # centre the cone on a pixel corner: the disc overlaps several pixels,
+    # and objects 3" away in each of them must all come back
+    pix = int(hp.ang2pix(HP6_NSIDE, 40.0, 10.0, nest=True, lonlat=True))
+    corner = hp.boundaries(HP6_NSIDE, pix, step=1, nest=True)[:, 0]
+    ra0, dec0 = (float(v) for v in hp.vec2ang(corner, lonlat=True))
+    objs = [{"ra": ra0 + ra_offset(dec0, dra), "dec": dec0 + ddec / 3600,
+             "prefname": f"N{i}", "ptype": "G"}
+            for i, (dra, ddec) in enumerate([(3, 0), (-3, 0), (0, 3), (0, -3)])]
+    pixels = write_hp6_store(tmp_path, objs)
+    assert len(pixels) >= 2                       # the objects do straddle pixels
+    reader = nr.Hp6NedReader(str(tmp_path))
+    assert sorted(reader(ra0, dec0, 5.0)["prefname"]) == ["N0", "N1", "N2", "N3"]
+    assert set(reader.pixels_for_cone(ra0, dec0, 5.0)) >= set(pixels)
+
+
+def test_hp6_missing_pixel_is_empty_when_complete_and_none_when_not(tmp_path):
+    # X sits at a pixel centre, so a 10" cone around it touches its pixel only
+    xra, xdec = (float(v) for v in hp.pix2ang(HP6_NSIDE, 1234, nest=True, lonlat=True))
+    write_hp6_store(tmp_path, [{"ra": xra, "dec": xdec, "prefname": "X"}], complete=True)
+    reader = nr.Hp6NedReader(str(tmp_path))
+    empty = reader(180.0, 45.0, 10.0)             # no file anywhere near
+    assert empty is not None and len(empty["prefname"]) == 0
+    assert set(empty) == set(NED_COLUMNS)
+    (tmp_path / nc.MANIFEST_NAME).unlink()        # no manifest: coverage unknown
+    reader = nr.Hp6NedReader(str(tmp_path))
+    assert not reader.complete
+    assert reader(180.0, 45.0, 10.0) is None      # a touched pixel has no file
+    assert reader(xra, xdec, 10.0)["prefname"].tolist() == ["X"]   # present pixel works
+
+
+def test_hp6_pixel_cache_reads_each_file_once(tmp_path):
+    write_hp6_store(tmp_path, [{"ra": 10.0, "dec": 10.0, "prefname": "A"}])
+    reader = nr.Hp6NedReader(str(tmp_path), cache_pixels=2)
+    reader(10.0, 10.0, 10.0); n = reader.n_reads
+    reader(10.0, 10.0 + 1 / 3600, 10.0)
+    assert reader.n_reads == n >= 1               # second cone served from cache
+
+
+def test_hp6_alert_over_fake_chip_matches_local_store(make_provider, trigger_positions,
+                                                      tmp_path):
+    ra, dec = trigger_positions[9001]
+    write_hp6_store(tmp_path, [
+        {"ra": ra + ra_offset(dec, 2.0), "dec": dec, "prefname": "HOST-A",
+         "ptype": "G", "z": 0.0312, "zunc": 0.0001, "zflag": "SLS"},
+        {"ra": ra, "dec": dec + 6.0 / 3600, "prefname": "HOST-B", "ptype": "",
+         "z": 0.05},                              # untyped but has z: passes selection
+        {"ra": ra, "dec": dec + 40.0 / 3600, "prefname": "TOO-FAR", "ptype": "G"},
+    ])
+    provider = make_provider(ned_reader=nr.Hp6NedReader(str(tmp_path)))
+    alert = assemble_alert(provider, 9001)
+    names = [m["prefName"] for m in alert["nedMatches"]]
+    assert names == ["HOST-A", "HOST-B"]          # nearest first, TOO-FAR excluded
+    first = alert["nedMatches"][0]
+    assert first["sep"] == pytest.approx(2.0, abs=0.02)
+    assert first["type"] == "G" and first["z"] == pytest.approx(0.0312)
+    assert first["zUnc"] == pytest.approx(0.0001) and first["zFlag"] == "SLS"
+    assert alert["nedMatches"][1]["type"] is None      # "" arrived as null
+    schema = load_schema()
+    decoded = fastavro.schemaless_reader(io.BytesIO(serialize_alert(alert, schema=schema)), schema)
+    assert [m["prefName"] for m in decoded["nedMatches"]] == names
+
+
+def test_hp6_reader_feeds_the_matcher_directly(tmp_path):
+    ra0, dec0 = 185.7288, 15.8225                 # M100's position
+    write_hp6_store(tmp_path, [{"ra": ra0, "dec": dec0, "prefname": "NGC 4321",
+                                "ptype": "G", "z": 0.00524}])
+    reader = nr.Hp6NedReader(str(tmp_path))
+    cat = build_nedcat(reader(ra0, dec0, NED_MATCH_RADIUS_ARCSEC + 1.0))
+    [matches] = match_nedcat(ra0, dec0, cat)
+    assert [m.prefname for m in matches] == ["NGC 4321"]
+    assert matches[0].sep == pytest.approx(0.0, abs=1e-3)

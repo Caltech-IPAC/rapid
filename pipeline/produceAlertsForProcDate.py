@@ -55,6 +55,7 @@ import boto3
 
 import database.modules.utils.rapid_db as db
 from alerts.cli import make_provider
+from alerts.ned_reader import DEFAULT_NED_SOURCE
 from alerts.produce import BatchStats, batch_produce, open_alert_archive
 
 to_zone = tz.gettz('America/Los_Angeles')
@@ -101,6 +102,7 @@ def read_alert_settings(config_input):
         'diff_flavor': alerts.get('diff_flavor', fallback='sfft'),
         'refcat_match': alerts.getboolean('refcat_match', fallback=True),
         'ned_match': alerts.getboolean('ned_match', fallback=True),
+        'ned_source': alerts.get('ned_source', fallback=DEFAULT_NED_SOURCE).strip() or None,
         'kona_file': kona_file,
         'archive_filename_base': alerts.get('archive_filename_base', fallback='alerts_jid'),
         'archive_codec': alerts.get('archive_codec', fallback='deflate'),
@@ -292,7 +294,8 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
             provider = make_provider(diff_flavor=settings['diff_flavor'],
                                      kona_file=settings['kona_file'],
                                      refcat=settings['refcat_match'],
-                                     ned=settings['ned_match'])
+                                     ned=settings['ned_match'],
+                                     ned_source=settings['ned_source'])
         except SystemExit as e:
             raise RuntimeError(f"*** Error opening alert data provider in index_thread={index_thread}: {e}")
 
