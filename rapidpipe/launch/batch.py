@@ -317,19 +317,27 @@ def _execution_record_with_defaults(
     conn, run_id: str, execution_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fill the ``execution_records`` NOT NULL columns a Batch-written
-    ``exec/<attempt>.json`` (or its absence) leaves unset.
+    ``exec/<attempt>.json`` (or its absence, or a present-but-``null``
+    field within it) leaves unset.
 
     Mirrors ``rapidpipe.runs.local.run_stage_locally``'s own fallbacks for
     the same three columns (``schema_version``, ``source_revision``,
     ``settings_hash``): a job with no execution record at all (a job that
     never reached the point of writing one, or a ``lost``/no-manifest
     outcome this function synthesizes an empty record for) still needs a
-    row that satisfies the schema.
+    row that satisfies the schema. A record a stage DID write can still
+    hold explicit ``null`` for these fields (``_source_revision`` and the
+    ``RAPIDPIPE_IMAGE_DIGEST``/``RAPID_IMAGE_DIGEST`` lookup both return
+    ``None`` when they can't determine a value), so ``setdefault`` alone
+    is not enough -- a present ``None`` must be replaced too.
     """
     record = dict(execution_record) if execution_record else {}
-    record.setdefault("schema_version", _run_schema_version(conn, run_id))
-    record.setdefault("source_revision", "unknown")
-    record.setdefault("settings_hash", "unknown")
+    if record.get("schema_version") is None:
+        record["schema_version"] = _run_schema_version(conn, run_id)
+    if record.get("source_revision") is None:
+        record["source_revision"] = "unknown"
+    if record.get("settings_hash") is None:
+        record["settings_hash"] = "unknown"
     return record
 
 

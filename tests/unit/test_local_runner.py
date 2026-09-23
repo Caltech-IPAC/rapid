@@ -136,6 +136,79 @@ def test_run_stage_locally_output_location_layout(tmp_path, monkeypatch):
     assert calls["add_unit"] == ("RUN01", "admit", "detector-image", "e20260821001234/SCA07")
 
 
+def test_run_stage_locally_fills_none_valued_execution_record_fields(tmp_path, monkeypatch):
+    """A stage-written exec/<attempt>.json can hold the NOT NULL columns
+    present but explicitly null (e.g. a Batch container where git isn't
+    available), not merely absent. dict.setdefault is a no-op when the
+    key already exists, so run_stage_locally must check the value, not
+    just the key, before falling back -- this is the failure the fix
+    addresses (NotNullViolation on execution_records.source_revision).
+    """
+    from rapidpipe.runs import local as local_module
+
+    calls = {}
+
+    class _FakeConn:
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    def _fake_record_attempt_result(conn, attempt_id, exit_code, disposition,
+                                     output_location, execution_record,
+                                     scheduler_job_id):
+        calls["execution_record"] = execution_record
+
+    class _FakeCompletedProcess:
+        returncode = 0
+
+    def _fake_run(argv, env):
+        outputs_dir = Path(argv[argv.index("--outputs") + 1])
+        (outputs_dir / "manifest.json").write_text(
+            '{"schema_version": "1", "run": "r1", '
+            '"unit": {"kind": "detector-image", "id": "e1/SCA07"}, '
+            '"stage": "admit", "attempt": "ATTEMPT01", '
+            '"execution_record": "exec/ATTEMPT01.json", '
+            '"inputs": {"manifest": "x", "products": {}, "result_sets": []}, '
+            '"outputs": []}')
+        exec_dir = outputs_dir / "exec"
+        exec_dir.mkdir(parents=True, exist_ok=True)
+        (exec_dir / "ATTEMPT01.json").write_text(
+            '{"image_digest": null, "settings_hash": "6725abc", '
+            '"source_revision": null}')
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(local_module, "add_unit", lambda *a, **k: None)
+    monkeypatch.setattr(local_module, "allocate_attempt", lambda *a, **k: "ATTEMPT01")
+    monkeypatch.setattr(local_module, "record_attempt_result", _fake_record_attempt_result)
+    monkeypatch.setattr(local_module, "select_attempt", lambda conn, attempt_id: None)
+    monkeypatch.setattr(local_module, "_run_schema_version", lambda conn, run_id: "2")
+    monkeypatch.setattr(local_module, "_source_revision_or_unknown", lambda: "abc123")
+    monkeypatch.setattr(local_module.subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        local_module, "_read_manifest_if_valid",
+        lambda output_location: object())
+
+    outputs_root = tmp_path / "root"
+    local_module.run_stage_locally(
+        _FakeConn(),
+        run_id="RUN01",
+        stage="admit",
+        unit_kind="detector-image",
+        unit_id="unit1",
+        inputs=str(tmp_path / "in"),
+        outputs_root=str(outputs_root),
+    )
+
+    assert calls["execution_record"] == {
+        "image_digest": None,
+        "settings_hash": "6725abc",
+        "source_revision": "abc123",
+        "schema_version": "2",
+    }
+
+
 def test_run_stage_locally_refuses_existing_output_location(tmp_path, monkeypatch):
     from rapidpipe.runs import local as local_module
 
