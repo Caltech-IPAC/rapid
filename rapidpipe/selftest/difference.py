@@ -96,6 +96,9 @@ def _check(checks: Checks, manifest: Manifest, expected: dict[str, Any],
         checks.close(value, registration[field], rel=tolerances["scalar_rel"],
                      abs_=tolerances["scalar_abs"], label=f"registration {field}")
     for key, value in d.get("residual_close", {}).items():
+        if value is None:
+            # Not yet measured against the real tools (TODO in expected.json).
+            continue
         checks.close(value, registration["registration_residual"][key],
                      abs_=tolerances["residual_pixels_abs"], label=f"registration_residual {key}")
     for catalog_type, counts in d.get("source_counts_close", {}).items():

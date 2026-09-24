@@ -561,12 +561,16 @@ def _body(context: StageContext) -> StageResult:
     filename_diffpsf = zogy_settings["zogy_output_diffpsf_file"]
     filename_scorrimage = zogy_settings["zogy_output_scorrimage_file"]
 
-    # dev overrides the measured RMS with 0.0 here; the setting reproduces
-    # that by default, and the measured values stay in this log only.
-    dxrmsfin = float(zogy_settings["astrometric_sigma"])
-    dyrmsfin = float(zogy_settings["astrometric_sigma"])
-    log.info("measured registration RMS (log only) dx,dy = %s %s; ZOGY dx,dy = %s %s",
-             dxrmsfin_measured, dyrmsfin_measured, dxrmsfin, dyrmsfin)
+    # dev feeds ZOGY a fixed astrometric uncertainty (0.0 by default), not
+    # the measured RMS; the setting reproduces that override exactly. The
+    # measured RMS (dxrmsfin_measured/dyrmsfin_measured) is what gets
+    # recorded as dxrmsfin/dyrmsfin (see `residual` below) — production's
+    # dxrmsfin/dyrmsfin columns hold the measured value, not this override.
+    zogy_astrometric_sigma_x = float(zogy_settings["astrometric_sigma"])
+    zogy_astrometric_sigma_y = float(zogy_settings["astrometric_sigma"])
+    log.info("measured registration RMS dx,dy = %s %s; ZOGY astrometric_sigma dx,dy = %s %s",
+             dxrmsfin_measured, dyrmsfin_measured,
+             zogy_astrometric_sigma_x, zogy_astrometric_sigma_y)
 
     zogy_sn, zogy_sr = zogy.zogy_background_sigmas(
         zogy_settings["zogy_sn_sr_from_uncertainty_maps"],
@@ -582,7 +586,7 @@ def _body(context: StageContext) -> StageResult:
         filename_sciimage_psf_normalized, inputs.reference_psf,
         reformatted_science_uncert_image_filename,
         output_resampled_gainmatched_reference_uncert_image,
-        zogy_sn, zogy_sr, dxrmsfin, dyrmsfin,
+        zogy_sn, zogy_sr, zogy_astrometric_sigma_x, zogy_astrometric_sigma_y,
         filename_diffimage, filename_diffpsf, filename_scorrimage), cwd=work_dir)
 
     # Mask with the resampled coverage map, restore NaNs, negate.
@@ -642,7 +646,10 @@ def _body(context: StageContext) -> StageResult:
     output_diffimage_file_infobits = zogy_catalogs.bits
 
     # SFFT, as dev runs it.
-    notes: dict[str, Any] = {}
+    notes: dict[str, Any] = {
+        "zogy_astrometric_sigma": {"x": zogy_astrometric_sigma_x,
+                                    "y": zogy_astrometric_sigma_y},
+    }
     sfft_settings = settings["sfft"]
     sfft_result = None
     if sfft_settings["run_sfft"]:
@@ -684,7 +691,7 @@ def _body(context: StageContext) -> StageResult:
         inputs=inputs, settings_hash="sha256:" + context.settings_hash,
         outputs_dir=context.outputs_dir, work_dir=work_dir,
         catalog_outcome_bits=output_diffimage_file_infobits,
-        residual={"x_rms": dxrmsfin, "y_rms": dyrmsfin,
+        residual={"x_rms": dxrmsfin_measured, "y_rms": dyrmsfin_measured,
                   "x_median": float(dxmedianfin), "y_median": float(dymedianfin)},
         scalefacref=float(scalefacref))
     outputs = _instance_outputs(

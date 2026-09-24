@@ -215,7 +215,9 @@ def test_register_writes_diffimages_and_diffimmeta_for_a_legacy_reference(
         counts = registration["source_counts"]
         assert meta["nsexcatsources"] == counts["sextractor"]["positive"]
         assert meta["source_counts"] == counts
-        assert meta["dxrmsfin"] == 0.0 and meta["dyrmsfin"] == 0.0
+        residual = registration["registration_residual"]
+        assert meta["dxrmsfin"] == pytest.approx(residual["x_rms"])
+        assert meta["dyrmsfin"] == pytest.approx(residual["y_rms"])
         assert meta["scalefacref"] == pytest.approx(registration["reference_scale_factor"])
         assert (meta["field"], meta["hp6"], meta["hp9"], meta["fid"], meta["sca"]) == (
             field, hp6, hp9, fid, sca)

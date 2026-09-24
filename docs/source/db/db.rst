@@ -173,9 +173,9 @@ The DiffImMeta database table stores various QA measures for difference images.
 +--------------------+-------------------------------------------------------------------------------------------+
 | scalefacref        | Gain-matching image-data scale factor for reference image w.r.t. science image            |
 +--------------------+-------------------------------------------------------------------------------------------+
-| dxrmsfin           | Final RMS of matched-isolated-source separations along x axis, fed to ZOGY [pixels]       |
+| dxrmsfin           | Final measured RMS of matched-isolated-source separations along x axis [pixels]           |
 +--------------------+-------------------------------------------------------------------------------------------+
-| dyrmsfin           | Final RMS of matched-isolated-source separations along y axis, fed to ZOGY [pixels]       |
+| dyrmsfin           | Final measured RMS of matched-isolated-source separations along y axis [pixels]           |
 +--------------------+-------------------------------------------------------------------------------------------+
 | dxmedianfin        | Final median of matched-isolated-source separations along x axis [pixels],                |
 |                    | used to orthogonally subpixel offset reference-image data for difference-image alignment  |
