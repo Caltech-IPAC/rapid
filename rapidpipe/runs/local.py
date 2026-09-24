@@ -164,7 +164,9 @@ def run_stage_locally(
 
     Steps, each its own short transaction on ``conn`` (the repository
     functions open no transaction of their own; this function commits
-    after each one, per ``rapidpipe.runs.repository``'s module docstring):
+    after each one, per ``rapidpipe.runs.repository``'s module docstring)
+    -- except steps 6 and 7, which share one commit so a success is never
+    recorded without also being selected:
 
     1. :func:`~rapidpipe.runs.repository.add_unit` -- a no-op if the unit
        already exists (its own ``ON CONFLICT DO NOTHING``).
@@ -247,16 +249,21 @@ def run_stage_locally(
         execution_record["source_revision"] = _source_revision_or_unknown()
     if execution_record.get("settings_hash") is None:
         execution_record["settings_hash"] = "unknown"
+    # record_attempt_result and, when it succeeded, select_attempt run in
+    # the same transaction as one commit -- not two -- so a process death
+    # between them cannot leave the attempt 'succeeded' with its unit
+    # neither selected nor terminal (rapidpipe.launch.batch.reconcile has
+    # the same fix, and a repair pass for exactly this kind of pre-
+    # existing damage; supervisor step 3, 2026-09-24, WP-F).
     record_attempt_result(
         conn, attempt_id, exit_code, disposition, str(output_location),
         execution_record, scheduler_job_id=None)
-    conn.commit()
 
     selected = False
     if disposition == "succeeded":
         select_attempt(conn, attempt_id)
-        conn.commit()
         selected = True
+    conn.commit()
 
     return LocalAttempt(
         attempt_id=attempt_id,
