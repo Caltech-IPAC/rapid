@@ -10,9 +10,7 @@ row 1 (and its statistics) and a merges row for negative row 1 whose object
 is missing (an orphan). `alerts` runs against the rolled-back transaction.
 
 The `run`, `attempt` and `result_set` columns on `merges`, `astroobjects`
-and `astroobjectsmeta` belong to the crossmatch port's migration (step 1,
-pending on `rebuild`); until it lands, :func:`_catalog_run_columns` adds them
-inside this test's transaction, so they vanish at rollback.
+and `astroobjectsmeta` are 20260924-03-objects-run-columns.sql's.
 
 Skips cleanly if PGHOST is unset (see conftest.py).
 """
@@ -36,14 +34,6 @@ from .test_register_l2 import _NoCloseNoCommitConnProxy, _run_register
 from .test_repository import _make_unit
 
 ALERTS_UNIT = "e20260821001234/SCA07"
-
-
-def _catalog_run_columns(cur):
-    """The crossmatch port's run columns, added in this transaction if not yet migrated."""
-    for table in ("merges", "astroobjects", "astroobjectsmeta"):
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS run rapid_ulid, "
-                    f"ADD COLUMN IF NOT EXISTS attempt rapid_ulid, "
-                    f"ADD COLUMN IF NOT EXISTS result_set rapid_ulid")
 
 
 def _register_set(conn, run_id, *, stage, kind, key, row_count):
@@ -83,7 +73,6 @@ def _seeded_chain(conn, tmp_path, monkeypatch):
     kept, orphan = sids[(1, True)], sids[(1, False)]
     aid, orphan_aid = 7_000_000_001, 7_000_000_002
     with conn.cursor() as cur:
-        _catalog_run_columns(cur)
         cur.execute("INSERT INTO merges (aid, sid, run, attempt, result_set) VALUES "
                     "(%s, %s, %s, %s, %s), (%s, %s, %s, %s, %s)",
                     (aid, kept["sid"], run_id, assoc_attempt, association_set,
@@ -149,18 +138,21 @@ def test_alerts_writes_outbox_rows_instances_and_nalertpackets(conn, tmp_path, m
 
     with conn.cursor() as cur:
         cur.execute("SELECT run, attempt, instance, result_set, alert_name, candidate, object, "
-                    "record_index, block_offset, block_length, schema_version, published_at "
+                    "record_ordinal, record_index, block_offset, block_length, "
+                    "time_processed_mjd, schema_version, published_at "
                     "FROM alert_outbox WHERE attempt = %s", (attempt_id,))
         rows = cur.fetchall()
         assert len(rows) == 1
-        (run, attempt, instance, result_set, name, candidate, obj, index, offset, length,
-         schema_version, published_at) = rows[0]
+        (run, attempt, instance, result_set, name, candidate, obj, ordinal, index, offset,
+         length, time_proc, schema_version, published_at) = rows[0]
         assert (run, attempt, instance, result_set) == (run_id, attempt_id, container.instance,
                                                         alert_set.instance)
-        assert (name, candidate, obj, index, schema_version, published_at) == (
-            None, ids["kept"], ids["aid"], 0, "00.04", None)
-        one = list(fastavro.reader(io.BytesIO(raw[:offset] + raw[offset:offset + length])))
-        assert [a["diaSourceId"] for a in one] == [ids["kept"]]
+        assert (name, candidate, obj, ordinal, index, schema_version, published_at) == (
+            None, ids["kept"], ids["aid"], 0, 0, "00.04", None)
+        # the one block, read on its own after the header, holds the alert
+        block = list(fastavro.reader(io.BytesIO(raw[:offset] + raw[offset:offset + length])))
+        assert [a["diaSourceId"] for a in block] == [ids["kept"]]
+        assert block[0]["diaSource"]["timeProcessedMjd"] == time_proc
 
         cur.execute(
             "SELECT pi.kind, pi.producing_stage, pi.producing_attempt, pi.custody, "
@@ -180,10 +172,15 @@ def test_alerts_writes_outbox_rows_instances_and_nalertpackets(conn, tmp_path, m
                     (difference, run_id))
         assert cur.fetchone()[0] == 1
 
-    # A rerun of the same attempt after an uncertain commit reuses what it wrote.
+    # A rerun of the same attempt after an uncertain commit, its local
+    # outputs lost: identical bytes regenerated, the rows reused.
+    before = {m.path: (outputs / m.path).read_bytes() for m in container.members}
+    for path in before:
+        (outputs / path).unlink()
     rc, _, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs,
                                  attempt_id=attempt_id)
     assert rc == int(ExitCode.SUCCESS)
+    assert {p: (outputs / p).read_bytes() for p in before} == before
     again = {e.kind: e.instance for e in Manifest.read(outputs / "manifest.json").outputs}
     assert again == {"alert-container": container.instance, "alert-set": alert_set.instance}
     with conn.cursor() as cur:

@@ -21,7 +21,14 @@ from rapidpipe.products.alertcontainer import (
     validate_alert_set_entry,
 )
 from rapidpipe.products.manifest import Manifest
-from rapidpipe.selftest.alerts import _prepare
+from rapidpipe.selftest.alerts import (
+    ASSOCIATION_SET_2,
+    RESULT_SETS,
+    STATISTICS_SET_2,
+    UNNAMED_ASSOCIATION_SET,
+    UNNAMED_STATISTICS_SET,
+    _prepare,
+)
 from rapidpipe.selftest.runner import load_expected
 from rapidpipe.selftest.support.fakealertsdb import (
     ASSOCIATION_SET,
@@ -84,10 +91,15 @@ def test_success_writes_container_outbox_and_both_outputs(tmp_path, monkeypatch,
     validate_alert_set_entry(alert_set.to_dict())
     assert container.registration["alert_count"] == 4
     assert container.registration["dropped_count"] == 2
-    assert list(manifest.inputs.result_sets) == [SOURCE_SET, ASSOCIATION_SET, STATISTICS_SET]
+    assert list(manifest.inputs.result_sets) == RESULT_SETS
+    assert container.registration["association_sets"] == [ASSOCIATION_SET, ASSOCIATION_SET_2]
+    assert container.registration["statistics_sets"] == [STATISTICS_SET, STATISTICS_SET_2]
     raw = (outputs / container.primary).read_bytes()
     assert [r["diaSourceId"] for r in fastavro.reader(io.BytesIO(raw))] == [103, 104, 105, 106]
-    assert [r["record_index"] for r in db.outbox] == [0, 1, 2, 3]
+    assert [r["record_ordinal"] for r in db.outbox] == [0, 1, 2, 3]
+    # default 129x129 stamps: each alert fills an Avro block of its own
+    assert [r["record_index"] for r in db.outbox] == [0, 0, 0, 0]
+    assert len({r["block_offset"] for r in db.outbox}) == 4
     assert {r["result_set"] for r in db.outbox} == {alert_set.instance}
     assert db.commits == 1
     assert db.nalertpackets == [{"instance": DIFFERENCE_INSTANCE, "run": RUN, "value": 1}]
@@ -144,7 +156,8 @@ def test_member_checksum_mismatch_exits_65(tmp_path, monkeypatch, prepared):
 
 
 @pytest.mark.parametrize("change", ["unknown-kind", "unregistered", "incomplete", "other-difference",
-                                    "no-association-set", "two-source-sets"])
+                                    "no-association-set", "two-source-sets",
+                                    "statistics-of-an-unnamed-set", "two-statistics-for-one-set"])
 def test_result_set_problems_exit_65(tmp_path, monkeypatch, prepared, change):
     inputs, _, seed = prepared
     instances = seed["product_instances"]
@@ -158,7 +171,11 @@ def test_result_set_problems_exit_65(tmp_path, monkeypatch, prepared, change):
     elif change == "other-difference":
         instances[SOURCE_SET]["key"]["difference"] = "01J8Y6QZ3M00000000000OTHER"
     elif change == "no-association-set":
-        manifest["inputs"]["result_sets"] = [SOURCE_SET, STATISTICS_SET]
+        manifest["inputs"]["result_sets"] = [SOURCE_SET]
+    elif change == "statistics-of-an-unnamed-set":
+        instances[STATISTICS_SET_2]["key"] = {"membership": UNNAMED_ASSOCIATION_SET}
+    elif change == "two-statistics-for-one-set":
+        manifest["inputs"]["result_sets"].append(UNNAMED_STATISTICS_SET)
     elif change == "two-source-sets":
         instances["01J8Y6QZ3M00000000000SRCS9"] = dict(instances[SOURCE_SET])
         manifest["inputs"]["result_sets"].append("01J8Y6QZ3M00000000000SRCS9")
@@ -179,13 +196,13 @@ def test_unregistered_difference_instance_exits_65(tmp_path, monkeypatch, prepar
 def test_statistics_set_is_optional(tmp_path, monkeypatch, prepared):
     inputs, _, seed = prepared
     manifest = _manifest_inputs(inputs)
-    manifest["inputs"]["result_sets"] = [SOURCE_SET, ASSOCIATION_SET]
+    manifest["inputs"]["result_sets"] = [SOURCE_SET, ASSOCIATION_SET, ASSOCIATION_SET_2]
     _rewrite(inputs, manifest)
     rc, outputs, _ = _run(tmp_path, monkeypatch, inputs, seed)
     assert rc == 0
     container = next(e for e in Manifest.read(outputs / "manifest.json").outputs
                      if e.kind == "alert-container")
-    assert container.registration["statistics_set"] is None
+    assert container.registration["statistics_sets"] == []
     raw = (outputs / container.primary).read_bytes()
     objects = {r["diaSourceId"]: r["diaObject"] for r in fastavro.reader(io.BytesIO(raw))}
     # no statistics: sigmas null, nDiaSources the merges count (dev's _stats_sql)
@@ -224,14 +241,32 @@ def test_rerun_of_the_same_attempt_reuses_what_it_committed(tmp_path, monkeypatc
     assert len(db.outbox) == 4 and len(db.registered) == 1 and db.commits == 1
 
 
-def test_rerun_with_a_changed_container_refuses_to_recover(tmp_path, monkeypatch, prepared):
+def test_rerun_regenerates_lost_outputs_byte_for_byte(tmp_path, monkeypatch, prepared):
     inputs, _, seed = prepared
     db = FakeAlertsDatabase(seed)
     rc, outputs, _ = _run(tmp_path, monkeypatch, inputs, seed, db=db)
     assert rc == 0
     container = next(e for e in Manifest.read(outputs / "manifest.json").outputs
                      if e.kind == "alert-container")
-    (outputs / container.primary).write_bytes(b"truncated")
+    before = {m.path: (outputs / m.path).read_bytes() for m in container.members}
+    for path in before:
+        (outputs / path).unlink()
+    rc, _, _ = _run(tmp_path, monkeypatch, inputs, seed, db=db)
+    assert rc == 0
+    assert {p: (outputs / p).read_bytes() for p in before} == before
+    assert db.commits == 1
+
+
+def test_rerun_that_cannot_reproduce_the_registered_bytes_exits_70(tmp_path, monkeypatch,
+                                                                   prepared):
+    inputs, _, seed = prepared
+    db = FakeAlertsDatabase(seed)
+    rc, outputs, _ = _run(tmp_path, monkeypatch, inputs, seed, db=db)
+    assert rc == 0
+    container = next(e for e in Manifest.read(outputs / "manifest.json").outputs
+                     if e.kind == "alert-container")
+    for member in db.members[container.instance]:
+        member["sha256"] = "sha256:" + "f" * 64
     rc, _, _ = _run(tmp_path, monkeypatch, inputs, seed, db=db)
     assert rc == int(ExitCode.STAGE_ERROR)
 
@@ -248,8 +283,8 @@ def test_alert_container_validation_refuses_a_missing_summary():
              "primary": "a.avro",
              "members": [{"role": "container", "path": "a.avro"}],
              "registration": {"alert_count": 0, "dropped_count": 0, "schema_version": "00.04",
-                              "difference": "x", "source_set": "s", "association_set": "a",
-                              "statistics_set": None}}
+                              "difference": "x", "source_set": "s", "association_sets": ["a"],
+                              "statistics_sets": []}}
     with pytest.raises(AlertContainerRegistrationError, match="roles"):
         validate_alert_container_entry(entry)
     entry["members"].append({"role": "summary", "path": "a.json"})

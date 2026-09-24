@@ -13,20 +13,32 @@ functions over plain records instead of methods over a live provider:
 - :func:`serialize_alert` and :class:`BatchStats`, unchanged apart from the
   flagged-source tally below;
 - :class:`AlertContainer`: `dev`'s ``open_alert_archive`` (a fastavro
-  object container, codec deflate, compression level 1), which also
-  reports the byte range of every record it writes (see below);
+  object container, codec deflate, compression level 1, fastavro's default
+  block size), with a caller-given sync marker so the bytes are
+  reproducible; :func:`locate_records` reads a closed container back and
+  gives every record's block (see below);
 - :func:`batch_produce`: `dev`'s ``batch_produce`` plus the provider's
   per-chip prefetch lookups (``_prefetch_chip``, ``get_object_for_source``,
   ``get_prv_detections``, ``get_cutouts``), over rows the stage read.
 
-Byte ranges. fastavro writes a container as a header followed by
-sync-marked blocks; a block decodes on its own given the header's schema
-and codec. :class:`AlertContainer` flushes after every record, so each
-record is exactly one block and its ``(offset, length)`` -- block count,
-size, data and sync marker -- is addressable. `dev` writes with fastavro's
-default sync interval (16 000 bytes), so any alert carrying a 129x129
-float32 cutout (about 67 kB) already filled its own block there; only
-cutout-less alerts, which `dev` would pack several to a block, differ.
+Locating a record. fastavro writes a container as a header followed by
+sync-marked blocks, packing records into a block until it reaches the sync
+interval (16 000 bytes, `dev`'s default, kept); a block decodes on its own
+given the header. :func:`locate_records` reads the closed container with
+``fastavro.block_reader`` and returns, per record in container order, its
+block's byte offset and size (sync marker included) and its index within
+the block, with the decoded ``diaSourceId`` so the caller can check it. An
+alert with a 129x129 float32 cutout (about 67 kB) fills a block alone;
+smaller alerts share one.
+
+Reproducible bytes. Given the same records in the same order, the same
+schema, codec, level and sync marker, fastavro writes the same bytes: the
+header carries only the schema (key-sorted by :func:`load_schema`, since
+fastavro's own key order follows the process's hash seed) and the codec,
+deflate is deterministic, and the FITS cutouts carry no date. The one clock value in an alert is
+``timeProcessedMjd``; :func:`batch_produce` stamps one value, given by the
+caller, on every alert of the container (`dev` stamps each alert with its
+own ``Time.now()``), so a rerun that reuses it reproduces the container.
 
 Flagged sources. `dev` counts the image's ``flags <> 0`` sources and logs
 them, never builds an alert (``ALERTABLE_FLAGS``). :class:`BatchStats` keeps
@@ -43,6 +55,7 @@ No database access; files only through the paths and handles callers give.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import io
 import json
 import logging
@@ -310,7 +323,22 @@ def load_schema(version: str = SCHEMA_VERSION, schema_root: str | Path = SCHEMA_
             raise RuntimeError("Avro schema files are out of sync with param_registry.py:\n  "
                                + "\n  ".join(problems))
     paths = [str(p) for p in schema_paths(version, schema_root)]
-    return fastavro.schema.load_schema_ordered(paths)
+    return _key_sorted(fastavro.schema.load_schema_ordered(paths))
+
+
+def _key_sorted(value: Any) -> Any:
+    """``value`` with every dict's keys sorted; list order (field order) untouched.
+
+    fastavro's parsed schema orders each field's keys by set iteration, which
+    follows the process's string-hash seed, and a container's header embeds
+    that schema as JSON text. Sorting the keys makes the header -- and so the
+    container bytes -- the same in every process; the schema is unchanged.
+    """
+    if isinstance(value, dict):
+        return {key: _key_sorted(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_key_sorted(item) for item in value]
+    return value
 
 
 def serialize_alert(alert_dict: dict[str, Any], schema: Any = None) -> bytes:
@@ -322,34 +350,58 @@ def serialize_alert(alert_dict: dict[str, Any], schema: Any = None) -> bytes:
     return buf.getvalue()
 
 
-class AlertContainer:
-    """`dev`'s ``open_alert_archive``: one Avro object container, one block per record.
+def sync_marker_for(seed: str) -> bytes:
+    """A 16-byte Avro sync marker derived from ``seed`` (the attempt id), so bytes repeat."""
+    return hashlib.sha256(seed.encode()).digest()[:16]
 
-    :meth:`write` appends one alert and returns its block's
-    ``(offset, length)`` in the file. :meth:`close` flushes (also after an
-    error, so completed blocks stay readable, as `dev` does) and closes a
-    file this object opened.
+
+class AlertContainer:
+    """`dev`'s ``open_alert_archive``: one Avro object container, `dev`'s block packing.
+
+    :meth:`write` appends one alert and returns its 0-based ordinal in the
+    container. :meth:`flush` writes out the last block (call it before
+    closing the file; `dev` flushes on exit, also after an error).
     """
 
     def __init__(self, fo: BinaryIO, schema: Any = None, *, codec: str = DEFAULT_CODEC,
-                 compression_level: int = DEFAULT_COMPRESSION_LEVEL) -> None:
+                 compression_level: int = DEFAULT_COMPRESSION_LEVEL,
+                 sync_marker: bytes | None = None) -> None:
         if schema is None:
             schema = load_schema()
-        self._fo = fo
         self._writer = fastavro.write.Writer(fo, schema, codec=codec,
-                                             compression_level=compression_level)
-        self._writer.flush()  # the header, so the first record's offset is exact
+                                             compression_level=compression_level,
+                                             sync_marker=sync_marker)
         self.count = 0
 
-    def write(self, alert: dict[str, Any]) -> tuple[int, int]:
-        start = self._fo.tell()
+    def write(self, alert: dict[str, Any]) -> int:
         self._writer.write(alert)
-        self._writer.flush()
         self.count += 1
-        return start, self._fo.tell() - start
+        return self.count - 1
 
     def flush(self) -> None:
         self._writer.flush()
+
+
+@dataclasses.dataclass(frozen=True)
+class Locator:
+    """Where one record sits in a closed container."""
+
+    record_ordinal: int      # 0-based within the container
+    block_offset: int        # byte offset of its block
+    block_length: int        # the block's size in bytes, sync marker included
+    record_index: int        # 0-based within the block
+    dia_source_id: int       # the decoded record's diaSourceId
+
+
+def locate_records(fo: BinaryIO) -> list[Locator]:
+    """Every record's block and position, read back with ``fastavro.block_reader``."""
+    locators: list[Locator] = []
+    for block in fastavro.block_reader(fo):
+        for index, record in enumerate(block):
+            locators.append(Locator(record_ordinal=len(locators), block_offset=int(block.offset),
+                                    block_length=int(block.size), record_index=index,
+                                    dia_source_id=int(record["diaSourceId"])))
+    return locators
 
 
 # The alert-level lists whose three states (null = could not run, empty =
@@ -458,18 +510,20 @@ class Associations:
 
     objects_by_sid: dict[int, dict[str, Any]]      # sid -> object row (lowest aid)
     orphans_by_sid: dict[int, list[int]]           # sid -> merges aids with no object row
-    history_by_aid: dict[int, list[Source]]        # aid -> sources, oldest first
+    history: dict[tuple[str, int], list[Source]]   # (association set, aid) -> sources, oldest first
 
 
 def index_associations(object_rows: Sequence[dict[str, Any]],
                        history_rows: Sequence[dict[str, Any]]) -> Associations:
     """Index the association and history rows the way `dev`'s prefetch does.
 
-    ``object_rows``: one per (sid, merges aid), ordered by sid then aid, with
-    ``sid``, ``merges_aid`` and the object's ``aid``/``ra0``/``dec0``/
-    ``stdevra``/``stdevdec``/``nsources`` (``aid`` None for an orphan).
+    ``object_rows``: one per (sid, merges aid, association set), ordered by
+    sid then aid, with ``sid``, ``merges_aid``, ``association_set`` and the
+    object's ``aid``/``ra0``/``dec0``/``stdevra``/``stdevdec``/``nsources``
+    (``aid`` None for an orphan). An image may span several fields, hence
+    several association sets; an object is identified by (set, aid).
     ``history_rows``: ``sources`` rows (with ``band``, ``exptime``) plus
-    ``object_aid``, ordered by mjdobs.
+    ``object_set`` and ``object_aid``, ordered by mjdobs.
     """
     objects_by_sid: dict[int, dict[str, Any]] = {}
     orphans_by_sid: dict[int, list[int]] = {}
@@ -486,12 +540,13 @@ def index_associations(object_rows: Sequence[dict[str, Any]],
     if duplicated:
         logger.warning("%d sources have more than one merges row (several aids each); "
                        "the lowest aid is used", len(duplicated))
-    history_by_aid: dict[int, list[Source]] = {}
+    history: dict[tuple[str, int], list[Source]] = {}
     for row in history_rows:
         row = dict(row)
         row["aid"] = row["object_aid"]
-        history_by_aid.setdefault(row["aid"], []).append(Source.from_row(row, strict=True))
-    return Associations(objects_by_sid, orphans_by_sid, history_by_aid)
+        history.setdefault((row["object_set"], row["aid"]), []).append(
+            Source.from_row(row, strict=True))
+    return Associations(objects_by_sid, orphans_by_sid, history)
 
 
 def association_failure(detection: Source, orphan_aids: list[int]) -> tuple[str, str]:
@@ -515,9 +570,7 @@ class Written:
     first_seen_mjd: float
     ra: float
     dec: float
-    record_index: int
-    block_offset: int
-    block_length: int
+    record_ordinal: int
 
 
 def batch_produce(sources: Sequence[Source], associations: Associations, *,
@@ -528,7 +581,7 @@ def batch_produce(sources: Sequence[Source], associations: Associations, *,
                   ss_lookup: Callable[[int], Any] | None = None,
                   ref_matches_by_sid: dict[int, Any] | None = None,
                   ned_matches_by_sid: dict[int, Any] | None = None,
-                  time_proc: float | None = None) -> list[Written]:
+                  time_proc: float) -> list[Written]:
     """`dev`'s ``batch_produce`` for one image, answering the provider's calls from memory.
 
     ``sources`` are the image's alertable (``flags = 0``) detections in sid
@@ -538,6 +591,8 @@ def batch_produce(sources: Sequence[Source], associations: Associations, *,
     or None`` (None: association not run). ``ref_matches_by_sid``/
     ``ned_matches_by_sid`` are None when that cross-match is off; a sid
     missing from a given dict means "not run" for that source, as in `dev`.
+    ``time_proc`` is the one ``timeProcessedMjd`` of every alert (module
+    docstring, "Reproducible bytes").
     """
     pixels, header = difference_image
     written: list[Written] = []
@@ -554,7 +609,7 @@ def batch_produce(sources: Sequence[Source], associations: Associations, *,
             continue
         obj = ObjectRecord.from_row(row, strict=True)
         cutoff = source.mjdobs - window_days
-        prv = [s for s in associations.history_by_aid.get(obj.aid, [])
+        prv = [s for s in associations.history.get((row["association_set"], obj.aid), [])
                if s.sid != source.sid and s.mjdobs >= cutoff]
         ss_matches = associate_ss(source, ss_lookup(source.expid) if ss_lookup else None)
         ref_matches = (None if ref_matches_by_sid is None
@@ -569,11 +624,12 @@ def batch_produce(sources: Sequence[Source], associations: Associations, *,
                                ref_matches=ref_matches, ned_matches=ned_matches,
                                cutouts=cutouts, time_proc=time_proc)
         n_bytes = len(serialize_alert(alert, schema=schema))
-        offset, length = container.write(alert)
+        ordinal = container.write(alert)
         stats.record(alert, n_bytes)
         written.append(Written(
             sid=source.sid, aid=obj.aid, pid=source.pid,
             first_seen_mjd=float(obj.first_mjd), ra=float(source.ra), dec=float(source.dec),
-            record_index=len(written), block_offset=offset, block_length=length))
+            record_ordinal=ordinal))
+    container.flush()
     stats.log()
     return written

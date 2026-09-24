@@ -15,9 +15,11 @@ commits or rolls back.
 - :func:`flagged_sources`, :func:`alertable_sources`: `dev`'s ``iter_sources``
   split, ``flags <> 0`` counted and ``flags = 0`` selected, in the source set.
 - :func:`associations`: `dev`'s merges LEFT JOIN astroobjects with the
-  statistics columns (``_prefetch_chip`` + ``_stats_sql``), in the sets.
-- :func:`history`: the objects' sources through merges of the association
-  set, `dev`'s previous-detection prefetch.
+  statistics columns (``_prefetch_chip`` + ``_stats_sql``), over every named
+  association set (an image can span fields) and the statistics set that
+  describes each.
+- :func:`history`: the objects' sources through merges of their association
+  set, from any source set, `dev`'s previous-detection prefetch.
 - :func:`attempt_outputs`, :func:`outbox_rows`, :func:`insert_outbox_rows`:
   the outbox and the recovery of an attempt whose commit was uncertain.
 - :func:`set_nalertpackets`: `diffimages.nalertpackets` on the run's own row.
@@ -43,8 +45,8 @@ _SOURCE_SELECT = ", ".join(f"s.{c}" for c in SOURCE_COLUMNS) + ", f.filter AS ba
 
 OUTBOX_COLUMNS: tuple[str, ...] = (
     "id", "run", "attempt", "instance", "result_set", "alert_name", "candidate", "object",
-    "pid", "first_seen_mjd", "ra", "dec", "record_index", "block_offset", "block_length",
-    "schema_version",
+    "pid", "first_seen_mjd", "ra", "dec", "record_ordinal", "block_offset", "block_length",
+    "record_index", "time_processed_mjd", "schema_version",
 )
 
 
@@ -100,52 +102,60 @@ def alertable_sources(cur, source_set: str, pid: int) -> list[dict[str, Any]]:
     return _dicts(cur)
 
 
-def associations(cur, association_set: str, statistics_set: str | None,
+def associations(cur, statistics_by_association: dict[str, str | None],
                  sids: Sequence[int]) -> list[dict[str, Any]]:
-    """`dev`'s association prefetch: one row per (sid, merges aid), sid then aid order.
+    """`dev`'s association prefetch over one or more association sets.
 
-    ``aid`` is None where the merges row has no astroobjects row in the set
-    (an orphan). ``stdevra``/``stdevdec`` come from the statistics set's
-    astroobjectsmeta row; ``nsources`` from it, else the aid's merges count
-    in the association set (`dev`'s ``_stats_sql``).
+    ``statistics_by_association`` maps each named association set to the
+    statistics set that describes it, or None. One row per (sid, merges aid,
+    association set), in sid, aid, set order. ``aid`` is None where the
+    merges row has no astroobjects row in its set (an orphan).
+    ``stdevra``/``stdevdec`` come from the describing statistics set's
+    astroobjectsmeta row; ``nsources`` from it, else the aid's merges count in
+    its association set (`dev`'s ``_stats_sql``).
     """
-    if not sids:
+    if not sids or not statistics_by_association:
         return []
+    assocs = list(statistics_by_association)
+    stats = [statistics_by_association[a] for a in assocs]
     cur.execute(
         """
-        SELECT m.sid, m.aid AS merges_aid, a.aid, a.ra0, a.dec0,
-               am.stdevra, am.stdevdec,
+        SELECT m.sid, m.aid AS merges_aid, m.result_set AS association_set,
+               a.aid, a.ra0, a.dec0, am.stdevra, am.stdevdec,
                COALESCE(am.nsources::int,
                         (SELECT count(*) FROM merges m2
-                         WHERE m2.aid = a.aid AND m2.result_set = %(assoc)s)::int) AS nsources
+                         WHERE m2.aid = a.aid AND m2.result_set = m.result_set)::int) AS nsources
         FROM merges m
-        LEFT JOIN astroobjects a ON a.aid = m.aid AND a.result_set = %(assoc)s
-        LEFT JOIN astroobjectsmeta am ON am.aid = a.aid AND am.result_set = %(stats)s
-        WHERE m.result_set = %(assoc)s AND m.sid = ANY(%(sids)s)
-        ORDER BY m.sid, m.aid
-        """, {"assoc": association_set, "stats": statistics_set, "sids": list(sids)})
+        LEFT JOIN astroobjects a ON a.aid = m.aid AND a.result_set = m.result_set
+        LEFT JOIN unnest(%(assocs)s::text[], %(stats)s::text[]) AS sm(assoc, stats)
+               ON sm.assoc = m.result_set
+        LEFT JOIN astroobjectsmeta am ON am.aid = a.aid AND am.result_set = sm.stats
+        WHERE m.result_set = ANY(%(assocs)s::text[]) AND m.sid = ANY(%(sids)s)
+        ORDER BY m.sid, m.aid, m.result_set
+        """, {"assocs": assocs, "stats": stats, "sids": list(sids)})
     return _dicts(cur)
 
 
-def history(cur, association_set: str, aids: Sequence[int],
-            min_mjd: float) -> list[dict[str, Any]]:
-    """Every source of the objects through the association set's merges, oldest first.
+def history(cur, objects: Sequence[tuple[str, int]], min_mjd: float) -> list[dict[str, Any]]:
+    """Every source of the objects through their association set's merges, oldest first.
 
-    The sources may belong to any source set: they are the frozen inputs the
-    association set names. ``object_aid`` is the object each row belongs to.
+    ``objects`` are (association set, aid) pairs. The sources may belong to
+    any source set: they are the frozen inputs the association set names.
+    ``object_set``/``object_aid`` say which object each row belongs to.
     """
-    if not aids:
+    if not objects:
         return []
     cur.execute(
         f"""
-        SELECT m.aid AS object_aid, {_SOURCE_SELECT}
-        FROM merges m
+        SELECT m.result_set AS object_set, m.aid AS object_aid, {_SOURCE_SELECT}
+        FROM unnest(%s::text[], %s::bigint[]) AS o(result_set, aid)
+        JOIN merges m ON m.result_set = o.result_set AND m.aid = o.aid
         JOIN sources s ON s.sid = m.sid
         JOIN filters f ON s.fid = f.fid
         JOIN exposures e ON s.expid = e.expid
-        WHERE m.result_set = %s AND m.aid = ANY(%s) AND s.mjdobs >= %s
+        WHERE s.mjdobs >= %s
         ORDER BY s.mjdobs, s.sid
-        """, (association_set, list(aids), min_mjd))
+        """, ([o[0] for o in objects], [int(o[1]) for o in objects], min_mjd))
     return _dicts(cur)
 
 
@@ -167,7 +177,7 @@ def outbox_rows(cur, instance: str) -> list[dict[str, Any]]:
     """The outbox rows of one container, in record order."""
     cur.execute(
         f"SELECT {', '.join(OUTBOX_COLUMNS)} FROM alert_outbox WHERE instance = %s "
-        "ORDER BY record_index", (instance,))
+        "ORDER BY record_ordinal", (instance,))
     return _dicts(cur)
 
 

@@ -69,7 +69,7 @@ def _succeed_and_select(conn, run_id, stage, unit_id):
 
 def _register_simple_instance(
     conn, run_id, stage, attempt_id, instance_id=None, kind=TEST_KIND,
-    logical_key=None, input_products=None,
+    logical_key=None, input_products=None, member_bytes=100, member_sha256="sha256:" + "0" * 64,
 ):
     instance_id = instance_id or new_ulid()
     logical_key = logical_key if logical_key is not None else {"unit": "e001/SCA01"}
@@ -92,7 +92,7 @@ def _register_simple_instance(
                 "primary": f"diff/{instance_id}.fits",
                 "members": [
                     {"role": "difference", "path": f"diff/{instance_id}.fits",
-                     "bytes": 100, "sha256": "sha256:" + "0" * 64},
+                     "bytes": member_bytes, "sha256": member_sha256},
                 ],
             },
         ],
@@ -396,6 +396,21 @@ def test_register_manifest_conflicting_replay_raises(conn):
         _register_simple_instance(
             conn, run_id, stage, attempt_id, instance_id=instance_id,
             logical_key={"unit": "different-key"})
+
+
+@pytest.mark.parametrize("change", [{"member_bytes": 101},
+                                    {"member_sha256": "sha256:" + "1" * 64}])
+def test_register_manifest_replay_with_different_member_bytes_raises(conn, change):
+    """Same instance, same identity fields, a member of different size or SHA-256: a conflict."""
+    run_id = _make_run(conn)
+    stage, unit_id, attempt_id, instance_id = _full_chain_to_current_candidate(conn, run_id)
+    with pytest.raises(repo.ManifestConflict):
+        _register_simple_instance(conn, run_id, stage, attempt_id, instance_id=instance_id,
+                                  **change)
+    with conn.cursor() as cur:
+        cur.execute("SELECT bytes, sha256 FROM product_members WHERE instance = %s",
+                    (instance_id,))
+        assert cur.fetchall() == [(100, "sha256:" + "0" * 64)]
 
 
 def test_register_manifest_records_dependency_edges(conn):
