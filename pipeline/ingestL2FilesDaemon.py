@@ -34,6 +34,16 @@ the process group; the daemon notices the child died on a signal and stops
 rather than starting another cycle.
 
 
+Exit codes
+----------
+
+0    Stopped cleanly: by a signal, or on INGESTL2FILESMAXCYCLES.
+64   Any failure, the code ingestL2Files.py and the rest of RAPID use.  A
+     missing RAPID_SW, an ingest script that is not there, an interval that is
+     not a number, a lock already held by another daemon, or giving up on an
+     ingest that kept failing.
+
+
 Usage
 -----
 
@@ -105,9 +115,12 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 ingest_script_relative_path = "pipeline/ingestL2Files.py"
 
 
-# Exit code ingestL2Files.py uses for a condition it cannot start under.
+# Exit code for every failure, matching ingestL2Files.py and the rest of RAPID.  A daemon
+# that gives up because its ingest kept failing exits with it too, rather than 0, so that
+# whatever supervises the daemon cannot take the stop for a clean shutdown and leave it
+# stopped.
 
-exit_code_cannot_start = 64
+exit_code_failure = 64
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -291,11 +304,11 @@ def get_positive_int_from_env(name,default):
         value = int(value_str)
     except ValueError:
         print(f"*** Error: Env. var. {name} = {value_str} is not an integer; quitting...")
-        exit(exit_code_cannot_start)
+        exit(exit_code_failure)
 
     if value < 0:
         print(f"*** Error: Env. var. {name} = {value} is negative; quitting...")
-        exit(exit_code_cannot_start)
+        exit(exit_code_failure)
 
     return value
 
@@ -330,13 +343,13 @@ if __name__ == '__main__':
 
     if rapid_sw is None:
         print("*** Error: Env. var. RAPID_SW not set; quitting...")
-        exit(exit_code_cannot_start)
+        exit(exit_code_failure)
 
     ingest_script = os.path.join(rapid_sw,ingest_script_relative_path)
 
     if not os.path.exists(ingest_script):
         print(f"*** Error: {ingest_script} does not exist; quitting...")
-        exit(exit_code_cannot_start)
+        exit(exit_code_failure)
 
 
     # The ingest imports modules and database from the root of the software tree, so that root
@@ -362,11 +375,11 @@ if __name__ == '__main__':
         except ValueError:
             print(f"*** Error: Interval {sys.argv[1]} is not an integer; quitting...")
             print(f"Usage: python3 {swname} [interval_seconds]")
-            exit(exit_code_cannot_start)
+            exit(exit_code_failure)
 
         if interval_seconds < 0:
             print(f"*** Error: Interval {interval_seconds} is negative; quitting...")
-            exit(exit_code_cannot_start)
+            exit(exit_code_failure)
 
 
     # Stop after this many cycles, or this many consecutive failures.  A daemon that keeps
@@ -412,7 +425,7 @@ if __name__ == '__main__':
     lock_fh = acquire_lock(lock_filename)
 
     if lock_fh is None:
-        exit(exit_code_cannot_start)
+        exit(exit_code_failure)
 
 
     # Begin open loop.
@@ -528,10 +541,11 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark)
 
 
-    # Termination.  A daemon stopped because its ingest kept failing has to exit non-zero, or
-    # whatever supervises it will take the stop for a clean shutdown and leave it stopped.
+    # Termination.  Stopping on a signal, or on the cycle limit, is a clean shutdown and exits
+    # 0; giving up on an ingest that kept failing is a failure and exits with the same code
+    # every other failure here does.
 
     if stop_reason == "consecutive failures":
-        exit(1)
+        exit(exit_code_failure)
 
     exit(0)

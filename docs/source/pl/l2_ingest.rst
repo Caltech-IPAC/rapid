@@ -392,7 +392,8 @@ Variable                                Meaning
 Two daemons against the same buckets would each build a work list, and every
 file on both would be converted, uploaded and registered twice -- the second
 registration making a needless extra version of each.  The lock file is what
-stops a second one being started by accident; it refuses to start and exits 64.
+stops a second one being started by accident; it refuses to start and exits 64,
+leaving the daemon that holds the lock running and untouched.
 
 
 Stopping it
@@ -407,10 +408,15 @@ A control-C from a terminal reaches the ingest child as well, since it shares
 the process group; the daemon notices the child died on a signal and stops
 rather than starting another cycle.
 
-A daemon that stops because its ingest kept failing exits **1**, not 0, so that
-whatever supervises it does not take the stop for a clean shutdown and leave it
-stopped.  A daemon stopped by a signal, or by ``INGESTL2FILESMAXCYCLES``, exits
-0.
+Every failure exits **64**, the code ``ingestL2Files.py`` and the rest of RAPID
+use: a missing ``RAPID_SW``, an ingest script that is not there, an interval
+that is not a number, a lock already held by another daemon, and giving up on an
+ingest that kept failing.  That last one matters most: it has to be non-zero, or
+whatever supervises the daemon takes the stop for a clean shutdown and leaves it
+stopped.
+
+A daemon stopped by a signal, or by ``INGESTL2FILESMAXCYCLES``, has shut down
+cleanly and exits 0.
 
 .. note::
    The consecutive-failure limit exists because a daemon that keeps failing is
