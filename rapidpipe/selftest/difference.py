@@ -98,6 +98,12 @@ def _check(checks: Checks, manifest: Manifest, expected: dict[str, Any],
     for key, value in d.get("residual_close", {}).items():
         checks.close(value, registration["registration_residual"][key],
                      abs_=tolerances["residual_pixels_abs"], label=f"registration_residual {key}")
+    for catalog_type, counts in d.get("source_counts_close", {}).items():
+        for sign, value in counts.items():
+            checks.close_count(
+                value, registration["source_counts"][catalog_type][sign],
+                abs_tol=tolerances["catalog_count_abs"], rel_tol=tolerances["catalog_count_rel"],
+                label=f"source_counts {catalog_type} {sign}")
 
     pixels = d.get("pixels")
     if pixels:

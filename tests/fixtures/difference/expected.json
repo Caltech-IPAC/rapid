@@ -7,7 +7,9 @@
     "scalar_abs": 1e-12,
     "residual_pixels_abs": 1e-9,
     "pixel_stat_rel": 1e-5,
-    "pixel_stat_abs": 1e-6
+    "pixel_stat_abs": 1e-6,
+    "catalog_count_abs": 3,
+    "catalog_count_rel": 0.02
   },
   "fake": {
     "exit_code": 0,
@@ -50,16 +52,29 @@
       "roles": ["difference", "uncertainty", "significance", "psf"],
       "registration_exact": {
         "detection_role": "significance",
+        "catalog_outcome_bits": 42,
         "infobits_science": 0,
         "infobits_reference": 0,
         "reference_rfid": null
       },
-      "residual_close": {"x_rms": 0.0, "y_rms": 0.0},
+      "registration_close": {"reference_scale_factor": 1.0},
+      "residual_close": {"x_rms": 0.0, "y_rms": 0.0, "x_median": 0.0, "y_median": 0.0},
+      "source_counts_close": {
+        "sextractor": {"positive": 5, "negative": 4},
+        "photutils": {"positive": 1, "negative": null}
+      },
       "pixels": {
         "member": "difference",
         "shape": [65, 65],
-        "nan_count": 195
+        "nan_count": 257,
+        "finite": {
+          "sum": -23.363712049667811,
+          "max": 2.6904745101928711,
+          "min": -1.1373682022094727,
+          "std": 0.13516776096875266
+        }
       }
-    }
+    },
+    "execution_notes": {"sfft": {"ran": true, "succeeded": true, "exit_code": 0}}
   }
 }

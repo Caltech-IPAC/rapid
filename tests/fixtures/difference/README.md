@@ -67,14 +67,19 @@ attempt are the invocation's, instance ids are ULIDs, the execution
 record carries a SHA-256 settings hash, and every member's size and
 SHA-256 match the file on disk.
 
-With the real tools, `real` holds only what the fixture's construction
-fixes (entry counts within a range, roles, the l2 instance's info bits,
-ZOGY's astrometric inputs, the coverage mask's NaN count). **The real-tool
-run of this fixture and the IMSS comparison on fixed inputs are the
-lead's gate before operational use** (stage contract, "Local execution":
-"differences and tolerances approved by the lead before operational
-use"); neither has been run. After the first real-tool run, its measured
-values and their tolerances belong in `real`.
+With the real tools, `real` holds what the fixture's construction fixes
+(entry counts within a range, roles, the l2 instance's info bits, ZOGY's
+astrometric inputs) plus the values measured by the first real-tool run
+of this fixture (2026-09-23): the coverage mask's NaN count, the
+difference image's finite-pixel statistics, and each catalog's row
+counts. SExtractor and photutils give a few more or fewer rows run to
+run on identical pixels, so `source_counts_close` checks those within
+`max(catalog_count_abs, catalog_count_rel * expected)` rather than
+exactly; a `null` count (a catalog the real tools skipped, e.g. no
+negative photutils detections) is still checked for equality. **The IMSS
+comparison on fixed inputs is still the lead's gate before operational
+use** (stage contract, "Local execution": "differences and tolerances
+approved by the lead before operational use"); it has not been run.
 
 `settings.toml`'s `[bkgest]` override shrinks bkgest's grid spacing and
 input window from the stage's full-detector default (500/501) to sizes
