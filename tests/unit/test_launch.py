@@ -29,8 +29,12 @@ class _FakeConn:
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
-def _patch_repository(monkeypatch, *, attempt_id="ATTEMPT01"):
+def _patch_repository(monkeypatch, *, attempt_id="ATTEMPT01", run_kind="scratch"):
     calls = {}
+
+    def _fake_run_kind(conn, run_id):
+        calls["run_kind"] = run_id
+        return run_kind
 
     def _fake_add_unit(conn, run_id, stage, unit_kind, unit_id):
         calls["add_unit"] = (run_id, stage, unit_kind, unit_id)
@@ -41,6 +45,7 @@ def _patch_repository(monkeypatch, *, attempt_id="ATTEMPT01"):
     def _fake_record_scheduler_job(conn, attempt_id_, scheduler_job_id, output_location=None):
         calls["scheduler_job"] = (attempt_id_, scheduler_job_id, output_location)
 
+    monkeypatch.setattr(launch_batch, "_run_kind", _fake_run_kind)
     monkeypatch.setattr(launch_batch, "add_unit", _fake_add_unit)
     monkeypatch.setattr(launch_batch, "allocate_attempt", _fake_allocate_attempt)
     monkeypatch.setattr(launch_batch, "record_scheduler_job", _fake_record_scheduler_job)
@@ -163,6 +168,107 @@ def test_submit_unit_custom_job_name_prefix(monkeypatch):
         unit_id="u1", inputs_location="s3://in/pre", client=fake)
 
     assert submission.job_name == "myproj-difference-ATT1"
+
+
+# ======================================================================
+# outputs_root_for / job_definition_for: kind-specific, then plain fallback
+# ======================================================================
+
+_KIND_VARS = (
+    "RAPIDPIPE_OUTPUTS_ROOT", "RAPIDPIPE_OUTPUTS_ROOT_SCRATCH",
+    "RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION", "RAPIDPIPE_BATCH_JOB_DEFINITION",
+    "RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH", "RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION",
+)
+
+
+@pytest.fixture()
+def clean_kind_env(monkeypatch):
+    for name in _KIND_VARS:
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+@pytest.mark.parametrize("kind", ["scratch", "production"])
+def test_outputs_root_for_prefers_the_kind_specific_variable(clean_kind_env, kind):
+    clean_kind_env.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://plain/root")
+    clean_kind_env.setenv(f"RAPIDPIPE_OUTPUTS_ROOT_{kind.upper()}", f"s3://{kind}/root")
+    assert launch_batch.outputs_root_for(kind) == f"s3://{kind}/root"
+
+
+def test_outputs_root_for_falls_back_to_the_plain_variable(clean_kind_env):
+    clean_kind_env.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://plain/root")
+    clean_kind_env.setenv("RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION", "s3://project/root")
+    assert launch_batch.outputs_root_for("scratch") == "s3://plain/root"
+    assert launch_batch.outputs_root_for("production") == "s3://project/root"
+
+
+def test_outputs_root_for_missing_names_both_variables(clean_kind_env):
+    with pytest.raises(launch_batch.MissingEnvironmentVariable) as excinfo:
+        launch_batch.outputs_root_for("production")
+    assert "RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION" in str(excinfo.value)
+    assert "RAPIDPIPE_OUTPUTS_ROOT " in str(excinfo.value)
+
+
+@pytest.mark.parametrize("kind", ["scratch", "production"])
+def test_job_definition_for_prefers_the_kind_specific_variable(clean_kind_env, kind):
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "plain-def")
+    clean_kind_env.setenv(f"RAPIDPIPE_BATCH_JOB_DEFINITION_{kind.upper()}", f"{kind}-def")
+    assert launch_batch.job_definition_for(kind) == f"{kind}-def"
+
+
+def test_job_definition_for_falls_back_to_the_plain_variable(clean_kind_env):
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "plain-def")
+    assert launch_batch.job_definition_for("scratch") == "plain-def"
+    assert launch_batch.job_definition_for("production") == "plain-def"
+
+
+def test_job_definition_for_missing_raises(clean_kind_env):
+    with pytest.raises(
+        launch_batch.MissingEnvironmentVariable, match="RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH",
+    ):
+        launch_batch.job_definition_for("scratch")
+
+
+def test_kind_lookup_refuses_an_unknown_kind(clean_kind_env):
+    clean_kind_env.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://plain/root")
+    with pytest.raises(ValueError):
+        launch_batch.outputs_root_for("staging")
+
+
+@pytest.mark.parametrize("kind", ["scratch", "production"])
+def test_submit_unit_uses_the_run_kinds_root_and_definition(clean_kind_env, kind):
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue1")
+    clean_kind_env.setenv("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH", "s3://scratch-bucket/s")
+    clean_kind_env.setenv("RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION", "s3://project-bucket/p")
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH", "scratch-def")
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION", "production-def")
+    calls = _patch_repository(clean_kind_env, attempt_id="ATT1", run_kind=kind)
+
+    fake = FakeBatch()
+    submission = launch_batch.submit_unit(
+        _FakeConn(), run_id="RUN01", stage="admit", unit_kind="detector-image",
+        unit_id="u1", inputs_location="s3://in/pre", client=fake)
+
+    expected_root = {"scratch": "s3://scratch-bucket/s",
+                     "production": "s3://project-bucket/p"}[kind]
+    assert calls["run_kind"] == "RUN01"
+    assert submission.output_location == f"{expected_root}/runs/RUN01/admit/u1/ATT1"
+    assert fake.submitted[0]["jobDefinition"] == f"{kind}-def"
+
+
+def test_submit_unit_explicit_arguments_skip_the_kind_lookup(clean_kind_env):
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue1")
+    calls = _patch_repository(clean_kind_env, attempt_id="ATT1")
+
+    fake = FakeBatch()
+    submission = launch_batch.submit_unit(
+        _FakeConn(), run_id="RUN01", stage="admit", unit_kind="detector-image",
+        unit_id="u1", inputs_location="s3://in/pre", outputs_root="s3://given/root",
+        job_definition="given-def", client=fake)
+
+    assert "run_kind" not in calls
+    assert submission.output_location == "s3://given/root/runs/RUN01/admit/u1/ATT1"
+    assert fake.submitted[0]["jobDefinition"] == "given-def"
 
 
 # ======================================================================
