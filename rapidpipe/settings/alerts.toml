@@ -1,0 +1,40 @@
+# Default settings for the alerts stage (rapidpipe.stages.alerts).
+#
+# Every knob dev's alert production reads (pipeline/produceAlertsForProcDate.py
+# [ALERTS] and alerts/cli.py's make_provider), with dev's value, except its
+# S3, job-query and process-pool knobs, which the launcher and the input
+# manifest replace. Where the lead ruled a different default (2026-09-24),
+# the comment says so. An overlay (--settings) may change values, never add
+# keys: an unknown key fails with exit 64.
+
+[alerts]
+# Which differencer's image feeds cutoutDifference; the input set's
+# difference-image instance must be this differencer's. dev's default is
+# "sfft"; the rebuild's registered difference image is ZOGY (lead, 2026-09-24).
+diff_flavor = "zogy"
+# Stamps are 2 * stamp_half_width + 1 pixels square (dev: 64, 129x129).
+stamp_half_width = 64
+# dev's nightly KONA predictions JSON ({expid: {designation: [ra, dec, vmag]}}).
+# Empty: solar-system association off, ssMatches and isSSCandidate null.
+kona_file = ""
+# NED cross-match through astroquery. dev's default is on; the rebuild's is
+# off (lead, 2026-09-24): nedMatches null.
+ned = false
+# Reference-catalog cross-match against the input set's reference-catalog
+# entry, when there is one (dev's default: on).
+refcat = true
+# Previous-detection look-back window in days (dev's PRV_WINDOW_DAYS). dev
+# bounds the history by time, not by count.
+prv_window_days = 365.25
+
+[archive]
+# dev's open_alert_archive: deflate, compression level 1 ("part of the MAST
+# delivery contract"). "null" stores the container uncompressed.
+codec = "deflate"
+compression_level = 1
+
+[publish]
+# Kafka publication is designed in and off. true exits 64: "Kafka
+# publication is not enabled in this build" (dev's stage refuses the same way).
+kafka = false
+topic = ""
