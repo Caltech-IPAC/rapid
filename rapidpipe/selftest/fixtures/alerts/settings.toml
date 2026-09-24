@@ -1,0 +1,15 @@
+# Settings overlay for the alerts stage's fixture (make stage-alerts).
+#
+# The stage's own defaults (rapidpipe/settings/alerts.toml, dev's values and
+# the lead's 2026-09-24 rulings) apply: ZOGY difference image, 129x129
+# stamps, reference-catalog match on, KONA and NED off, no Kafka. Stated
+# here so the fixture's intent survives a change of default.
+
+[alerts]
+diff_flavor = "zogy"
+stamp_half_width = 64
+ned = false
+refcat = true
+
+[publish]
+kafka = false

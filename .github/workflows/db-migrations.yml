@@ -123,8 +123,9 @@ jobs:
           # numpy/astropy/healpy: test_register_l2.py runs admit's own
           # main() to build a genuine manifest fixture (needs astropy/numpy)
           # and register's l2 registration derives spatial indexes with
-          # healpy (rapidpipe.science.spatial).
-          pip install psycopg2-binary pytest numpy astropy healpy
+          # healpy (rapidpipe.science.spatial). fastavro: test_alerts.py
+          # runs the alerts stage, which writes an Avro container.
+          pip install psycopg2-binary pytest numpy astropy healpy fastavro
 
       - name: run rapidpipe.runs.repository tests against this database
         env:

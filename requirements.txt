@@ -21,3 +21,7 @@ healpy>=1.17
 # requires it and the unit-tests job need not install it. Whatever
 # environment runs a stage against S3 locations must carry it.
 boto3>=1.34
+# The alerts stage writes its Avro object container with fastavro
+# (rapidpipe.science.alerts imports it at module scope; nothing else in
+# rapidpipe does). The pipeline image's conda environment carries it.
+fastavro>=1.9
