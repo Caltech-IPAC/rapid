@@ -37,11 +37,18 @@ rather than starting another cycle.
 Exit codes
 ----------
 
-0    Stopped cleanly: by a signal, or on INGESTL2FILESMAXCYCLES.
-64   Any failure, the code ingestL2Files.py and the rest of RAPID use.  A
-     missing RAPID_SW, an ingest script that is not there, an interval that is
-     not a number, a lock already held by another daemon, or giving up on an
-     ingest that kept failing.
+Failures are distinguished rather than lumped into one code, so that a
+supervisor's log says which kind of failure stopped the daemon without anyone
+having to open the ingest log to find out.  The values follow the BSD sysexits
+convention RAPID already uses.
+
+ 0   Stopped cleanly: by a signal, or on INGESTL2FILESMAXCYCLES.
+64   Bad or missing configuration: RAPID_SW not set, or an interval that is not
+     a non-negative integer.
+66   The ingest script is not where RAPID_SW says it is.
+69   Another daemon already holds the lock.
+70   Gave up on an ingest that kept failing; read its log for why.
+73   The lock file could not be opened or created.
 
 
 Usage
@@ -115,12 +122,21 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 ingest_script_relative_path = "pipeline/ingestL2Files.py"
 
 
-# Exit code for every failure, matching ingestL2Files.py and the rest of RAPID.  A daemon
-# that gives up because its ingest kept failing exits with it too, rather than 0, so that
-# whatever supervises the daemon cannot take the stop for a clean shutdown and leave it
+# Exit codes, following the BSD sysexits values that RAPID already uses: 64 for a bad or
+# missing configuration, 66 for a required input that is not there, 69 for a service that is
+# unavailable, 70 for a software failure, 73 for something that could not be created.  They
+# are distinguished rather than lumped into one so that a supervisor's log says WHICH kind of
+# failure stopped the daemon without anyone having to open the ingest log to find out.
+#
+# Every one of them is non-zero, which matters most for exit_code_ingest_failing: a daemon
+# that gives up must not look like a clean shutdown, or whatever supervises it will leave it
 # stopped.
 
-exit_code_failure = 64
+exit_code_config = 64             # Bad or missing configuration: RAPID_SW unset, interval not a number.
+exit_code_no_input = 66           # The ingest script is not where RAPID_SW says it is.
+exit_code_already_running = 69    # Another daemon holds the lock.
+exit_code_ingest_failing = 70     # Gave up on an ingest that kept failing.
+exit_code_cannot_create = 73      # The lock file could not be opened or created.
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -183,8 +199,9 @@ def timestamp():
 def acquire_lock(lock_filename):
 
     '''
-    Take an exclusive lock, and return the open file object so that it stays held for as long
-    as this process lives.  Returns None if another daemon holds it.
+    Take an exclusive lock, and return (file object, None) so that the lock stays held for as
+    long as this process lives.  Returns (None, exit code) if it could not be taken, the code
+    saying whether the file itself was the problem or another daemon already holds it.
 
     Two daemons against the same buckets would each build a work list, and the files on both
     lists would be converted, uploaded and registered twice -- the second registration making
@@ -199,21 +216,21 @@ def acquire_lock(lock_filename):
         fh = open(lock_filename,'a+',encoding="utf-8")
     except OSError as e:
         print(f"*** Error: Could not open lock file {lock_filename} ({e}); quitting...")
-        return None
+        return None,exit_code_cannot_create
 
     try:
         fcntl.flock(fh.fileno(),fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         print(f"*** Error: Another {swname} holds {lock_filename}; quitting...")
         fh.close()
-        return None
+        return None,exit_code_already_running
 
     fh.seek(0)
     fh.truncate()
     fh.write(f"{os.getpid()}\n")
     fh.flush()
 
-    return fh
+    return fh,None
 
 
 def run_ingest(python_executable,ingest_script):
@@ -304,11 +321,11 @@ def get_positive_int_from_env(name,default):
         value = int(value_str)
     except ValueError:
         print(f"*** Error: Env. var. {name} = {value_str} is not an integer; quitting...")
-        exit(exit_code_failure)
+        exit(exit_code_config)
 
     if value < 0:
         print(f"*** Error: Env. var. {name} = {value} is negative; quitting...")
-        exit(exit_code_failure)
+        exit(exit_code_config)
 
     return value
 
@@ -343,13 +360,13 @@ if __name__ == '__main__':
 
     if rapid_sw is None:
         print("*** Error: Env. var. RAPID_SW not set; quitting...")
-        exit(exit_code_failure)
+        exit(exit_code_config)
 
     ingest_script = os.path.join(rapid_sw,ingest_script_relative_path)
 
     if not os.path.exists(ingest_script):
         print(f"*** Error: {ingest_script} does not exist; quitting...")
-        exit(exit_code_failure)
+        exit(exit_code_no_input)
 
 
     # The ingest imports modules and database from the root of the software tree, so that root
@@ -375,11 +392,11 @@ if __name__ == '__main__':
         except ValueError:
             print(f"*** Error: Interval {sys.argv[1]} is not an integer; quitting...")
             print(f"Usage: python3 {swname} [interval_seconds]")
-            exit(exit_code_failure)
+            exit(exit_code_config)
 
         if interval_seconds < 0:
             print(f"*** Error: Interval {interval_seconds} is negative; quitting...")
-            exit(exit_code_failure)
+            exit(exit_code_config)
 
 
     # Stop after this many cycles, or this many consecutive failures.  A daemon that keeps
@@ -422,10 +439,10 @@ if __name__ == '__main__':
     print("lock_filename =",lock_filename)
     print("pid =",os.getpid())
 
-    lock_fh = acquire_lock(lock_filename)
+    lock_fh,lock_exit_code = acquire_lock(lock_filename)
 
     if lock_fh is None:
-        exit(exit_code_failure)
+        exit(lock_exit_code)
 
 
     # Begin open loop.
@@ -546,6 +563,6 @@ if __name__ == '__main__':
     # every other failure here does.
 
     if stop_reason == "consecutive failures":
-        exit(exit_code_failure)
+        exit(exit_code_ingest_failing)
 
     exit(0)

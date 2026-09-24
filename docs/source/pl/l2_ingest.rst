@@ -392,7 +392,7 @@ Variable                                Meaning
 Two daemons against the same buckets would each build a work list, and every
 file on both would be converted, uploaded and registered twice -- the second
 registration making a needless extra version of each.  The lock file is what
-stops a second one being started by accident; it refuses to start and exits 64,
+stops a second one being started by accident; it refuses to start and exits 69,
 leaving the daemon that holds the lock running and untouched.
 
 
@@ -408,15 +408,39 @@ A control-C from a terminal reaches the ingest child as well, since it shares
 the process group; the daemon notices the child died on a signal and stops
 rather than starting another cycle.
 
-Every failure exits **64**, the code ``ingestL2Files.py`` and the rest of RAPID
-use: a missing ``RAPID_SW``, an ingest script that is not there, an interval
-that is not a number, a lock already held by another daemon, and giving up on an
-ingest that kept failing.  That last one matters most: it has to be non-zero, or
-whatever supervises the daemon takes the stop for a clean shutdown and leaves it
+Failures are distinguished by exit code rather than lumped into one, so that a
+supervisor's log says *which* kind of failure stopped the daemon without anyone
+having to open the ingest log to find out.  The values follow the BSD
+``sysexits`` convention already used elsewhere in RAPID.
+
+======   ===============================================================================
+Code     Meaning
+======   ===============================================================================
+0        Stopped cleanly: by a signal, or on ``INGESTL2FILESMAXCYCLES``.
+64       Bad or missing configuration: ``RAPID_SW`` not set, or an interval that is not
+         a non-negative integer.
+66       The ingest script is not where ``RAPID_SW`` says it is.
+69       Another daemon already holds the lock.
+70       Gave up on an ingest that kept failing; read its log for why.
+73       The lock file could not be opened or created.
+======   ===============================================================================
+
+Every failure code is non-zero, which matters most for 70: a daemon that gives
+up must not look like a clean shutdown, or whatever supervises it will leave it
 stopped.
 
-A daemon stopped by a signal, or by ``INGESTL2FILESMAXCYCLES``, has shut down
-cleanly and exits 0.
+``ingestL2Files.py`` itself is coded the same way:
+
+======   ===============================================================================
+Code     Meaning
+======   ===============================================================================
+0        Finished.  Files that individually failed are logged and skipped, and reappear
+         on the next run's work list; they do not make the run a failure.
+64       Bad or missing configuration: a required environment variable is not set.
+66       A required input is not there: the work directory does not exist.
+73       A file could not be created: a per-process log.
+67, 69   Passed through from ``rapid_db`` when the database could not be used.
+======   ===============================================================================
 
 .. note::
    The consecutive-failure limit exists because a daemon that keeps failing is

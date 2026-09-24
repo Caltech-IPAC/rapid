@@ -112,6 +112,17 @@ CRDS_PATH, CRDS_SERVER_URL
                         Only needed if the gWCS has to be assigned here; the
                         simulated inputs already carry a correct gWCS.
 
+Exit codes
+----------
+
+ 0   Finished.  Files that individually failed are logged and skipped, and
+     reappear on the next run's work list; they do not make the run a failure.
+64   Bad or missing configuration: a required environment variable is not set.
+66   A required input is not there: the work directory does not exist.
+73   A file could not be created: a per-process log.
+67, 69
+     Passed through from rapid_db when the database could not be used.
+
 Usage:
 
     python3 pipeline/ingestL2Files.py
@@ -170,6 +181,16 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
+# Exit codes, following the BSD sysexits values that RAPID already uses, so that a caller --
+# ingestL2FilesDaemon.py above all -- can tell from the code alone what kind of failure this
+# was, without parsing the log.  A database failure exits with whatever code rapid_db chose
+# (67 for a query error, 69 for an unexpected result), which is passed straight through.
+
+exit_code_config = 64             # Bad or missing configuration: a required env. var. is not set.
+exit_code_no_input = 66           # A required input is not there: the work directory does not exist.
+exit_code_cannot_create = 73      # A file could not be created: the per-process log.
+
+
 # Global variables.
 
 level6 = 6
@@ -186,13 +207,13 @@ bucket_name_input = os.getenv('RAPIDL2INPUTBUCKET')
 
 if bucket_name_input is None:
     print("*** Error: Env. var. RAPIDL2INPUTBUCKET not set; quitting...")
-    exit(64)
+    exit(exit_code_config)
 
 bucket_name_output = os.getenv('RAPIDL2OUTPUTBUCKET')
 
 if bucket_name_output is None:
     print("*** Error: Env. var. RAPIDL2OUTPUTBUCKET not set; quitting...")
-    exit(64)
+    exit(exit_code_config)
 
 input_prefix = os.getenv('RAPIDL2INPUTPREFIX')
 
@@ -1726,7 +1747,7 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
         fh = open(thread_work_file,'w',encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        exit(exit_code_cannot_create)
 
     dbh = db.RAPIDDB()
 
@@ -1930,14 +1951,14 @@ if __name__ == '__main__':
 
     if os.getenv('ROMANTESSELLATIONDBNAME') is None:
         print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
-        exit(64)
+        exit(exit_code_config)
 
 
     # Ensure the work directory exists before any process tries to write into it.
 
     if not os.path.isdir(subdir_work):
         print(f"*** Error: Work directory {subdir_work} does not exist; quitting...")
-        exit(64)
+        exit(exit_code_no_input)
 
 
     # Query the database for the files that have already been ingested.
