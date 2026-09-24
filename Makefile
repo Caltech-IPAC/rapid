@@ -23,3 +23,10 @@ stage-difference:
 .PHONY: stage-load
 stage-load:
 	$(PYTHON) tests/fixtures/load/run_fixture.py
+
+# The maintain stage's fixture: CLUSTER/ANALYZE of a sources child table,
+# against the fake database (tests/unit/fakemaintaindb.py); runs anywhere.
+# The PostgreSQL path is tests/db/test_maintain.py.
+.PHONY: stage-maintain
+stage-maintain:
+	$(PYTHON) tests/fixtures/maintain/run_fixture.py
