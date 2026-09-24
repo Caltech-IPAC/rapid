@@ -183,12 +183,14 @@ def _check(checks: Checks, manifest: Manifest, expected: dict[str, Any],
                      and all(_sha256(outputs / m.path) == m.sha256 for m in catalog.members),
                      f"{label} members byte-identical to the input's")
 
-    checks.check(sorted(manifest.inputs.products) == spec["products_read"],
-                 f"inputs.products names: got {sorted(manifest.inputs.products)}")
-    checks.check(manifest.inputs.products.get("difference-image") == source_diff.instance,
-                 "inputs.products names the input difference instance")
+    # Ruling (option b): only the difference's own registered upstream.
+    checks.check(manifest.inputs.products == spec["products_read"],
+                 f"inputs.products: expected {spec['products_read']}, "
+                 f"got {manifest.inputs.products}")
+    checks.check(manifest.inputs.manifest.endswith("manifest.json"),
+                 "inputs.manifest references the difference manifest")
     record = json.loads((outputs / manifest.execution_record).read_text())
-    checks.check("notes" not in record, "no execution notes")
+    checks.check("notes" not in record, "no execution notes (nothing dropped)")
 
 
 FIXTURE = StageFixture(

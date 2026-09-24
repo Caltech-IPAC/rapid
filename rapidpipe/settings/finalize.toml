@@ -6,6 +6,13 @@
 # The stamped keyword list is fixed in rapidpipe/science/finalize/headers.py
 # (supervisor ruling, 2026-09-24), not a setting.
 
+[finalize]
+# Which differencer's difference-image instance (and its catalogs) to
+# republish, as load's [load] differencer selects one. Another
+# differencer's entries in the same manifest (SFFT with [sfft]
+# register_sfft on) are dropped and noted in the execution record.
+differencer = "zogy"
+
 # The `pipelines` row each differencer's finalized image records as PPID:
 # ZOGY is the science pipeline's row as dev stamps it; SFFT's row was
 # assigned by the lead 2026-09-24 (database/migrations/20260924-01-pipelines-

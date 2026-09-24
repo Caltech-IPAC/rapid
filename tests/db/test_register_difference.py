@@ -310,19 +310,18 @@ def _run_finalize(conn, tmp_path, run_id, diff_outputs):
     return outputs
 
 
-def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
-    # Chain difference -> register(raw) -> finalize -> register(finalized)
-    # (supervisor, 2026-09-24, amended): the raw instance is registered
-    # first, so the dependency edges finalize's inputs.products names
-    # resolve; the finalized instance gets its own diffimages row, the next
-    # version for (rid, ppid) within the run.
+def test_register_records_a_finalized_instance_whose_difference_was_never_registered(
+        conn, tmp_path, monkeypatch):
+    # Chain difference -> finalize -> register(finalize output) (supervisor
+    # ruling 2026-09-24, option b): the raw difference instance is never
+    # registered; finalize's inputs.products names the l2 instance (and the
+    # reference only when it has an instance row), so every dependency edge
+    # resolves. One diffimages row per image, as dev.
     l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)
     run_id, diff_outputs = _run_difference(
         conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
-    rc, _ = _register_difference(conn, monkeypatch, diff_outputs, run_id, tmp_path)
-    assert rc == int(ExitCode.SUCCESS)
     source = next(e for e in Manifest.read(diff_outputs / "manifest.json").outputs
                   if e.kind == "difference-image")
 
@@ -330,6 +329,7 @@ def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
     manifest = Manifest.read(outputs / "manifest.json")
     entry = next(e for e in manifest.outputs if e.kind == "difference-image")
     assert entry.registration["finalized_from"] == source.instance
+    assert manifest.inputs.products == {"l2-image": l2_instance}   # dev reference: no row
 
     rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, name="fin")
     assert rc == int(ExitCode.SUCCESS)
@@ -338,17 +338,17 @@ def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
         assert row is not None
         assert row["checksum"] == entry.registration["md5"] != source.registration["md5"]
         assert row["filename"] == f"{outputs}/{entry.primary}"
-        assert (row["ppid"], row["rfid"]) == (15, rfid)
-        raw = _diffimages_row(cur, source.instance)
-        assert (raw["version"], row["version"]) == (1, 2)
-        assert raw["rid"] == row["rid"]
+        assert (row["ppid"], row["rfid"], row["version"]) == (15, rfid, 1)
+        assert _diffimages_row(cur, source.instance) is None
+        cur.execute("SELECT count(*) FROM diffimages WHERE run = %s", (run_id,))
+        assert cur.fetchone()[0] == 1
         cur.execute(
             "SELECT count(*) FROM product_instances WHERE kind = 'source-catalog' "
             "AND producing_stage = 'finalize' AND run = %s", (run_id,))
         assert cur.fetchone()[0] == sum(1 for e in manifest.outputs if e.kind == "source-catalog")
         cur.execute(
             "SELECT count(*) FROM dependencies WHERE consumer_instance = %s "
-            "AND producer_instance = %s", (entry.instance, source.instance))
+            "AND producer_instance = %s", (entry.instance, l2_instance))
         assert cur.fetchone()[0] == 1
 
 

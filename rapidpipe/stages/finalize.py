@@ -10,18 +10,22 @@ informational keywords to its primary header, rewrites it with astropy's
 updates the database row; the rebuild never overwrites a published
 instance (products page, "Identity"), so this stage writes a new instance
 of the same kind in its own attempt location and `register` records it.
-Chain (supervisor, 2026-09-24, amended after review): difference ->
-register(raw) -> finalize -> register(finalized) -> load(finalize output).
-The raw instance is registered first, so the dependency edges finalize's
-``inputs.products`` names resolve; the finalized instance gets its own
-`diffimages` row, the next version for (rid, ppid) within the run. `dev`'s
-reference-image stamp is not ported: a reference is the `reference`
-stage's product.
+Chain (supervisor ruling, 2026-09-24): difference -> finalize ->
+register(finalize output) -> load(finalize output); one `diffimages` row
+per image, as `dev`. The raw instances are never registered, so
+``inputs.products`` names the difference's own registered upstream (l2,
+and the reference when it has an instance row), and the raw ids live in
+``finalized_from``/``copied_from``, ``RPFINFRM`` and ``inputs.manifest``.
+`dev`'s reference-image stamp is not ported: a reference is the
+`reference` stage's product.
 
 Inputs. ``--inputs`` is a difference attempt's output location: its
-completion manifest (stage ``difference``) with one ``difference-image``
-entry and however many ``source-catalog`` entries are keyed to it (0..n,
-all passed through), plus the attempt's execution record. Every member
+completion manifest (stage ``difference``). The ``difference-image``
+entry of the ``[finalize] differencer`` setting and however many
+``source-catalog`` entries are keyed to it (0..n) are republished; another
+differencer's entry and its catalogs are dropped, and named in the
+execution record's notes. The difference attempt's execution record is
+read for provenance. Every member
 read is verified (size and SHA-256) first.
 
 Outputs. One ``difference-image`` entry: a new instance id, the same
@@ -52,6 +56,7 @@ from typing import Any
 
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.diffimage import (
+    DIFFERENCERS,
     SOURCE_CATALOG_PROVENANCE_FIELD,
     validate_difference_entry,
     validate_source_catalog_entry,
@@ -101,6 +106,10 @@ REVISION = 2
 
 
 def _check_settings(settings: dict[str, Any]) -> None:
+    differencer = settings.get("finalize", {}).get("differencer")
+    if differencer not in DIFFERENCERS:
+        raise UsageError(
+            f"[finalize] differencer must be one of {sorted(DIFFERENCERS)}, got {differencer!r}")
     pipelines = settings.get("pipelines")
     if not isinstance(pipelines, dict) or not pipelines:
         raise UsageError("[pipelines] must map each differencer to its pipelines row id")
@@ -143,26 +152,17 @@ class _InputSet:
     manifest: Manifest
     difference: OutputEntry
     catalogs: list[OutputEntry]      # in input order
+    dropped: list[dict[str, str]]    # other differencers' entries, not republished
 
 
 def _catalog_entries(manifest: Manifest, difference: OutputEntry) -> list[OutputEntry]:
     """Every source-catalog entry keyed to the difference instance, in input order.
 
     However many the input carries (0..n) pass through; none is required
-    (supervisor amendment, 2026-09-24). Two entries of one catalog type and
-    sign are refused: ``inputs.products`` names each by type and sign.
+    (supervisor amendment, 2026-09-24).
     """
-    found = [e for e in manifest.outputs if e.kind == "source-catalog"
-             and e.key.get("difference") == difference.instance]
-    seen: set[tuple[Any, Any]] = set()
-    for entry in found:
-        name = (entry.key.get("catalog_type"), entry.key.get("sign"))
-        if name in seen:
-            raise InputRejected(
-                f"input manifest has two {name[0]} {name[1]} source-catalog entries for "
-                f"difference instance {difference.instance!r}")
-        seen.add(name)
-    return found
+    return [e for e in manifest.outputs if e.kind == "source-catalog"
+            and e.key.get("difference") == difference.instance]
 
 
 def _read_input_set(context: StageContext) -> _InputSet:
@@ -174,12 +174,14 @@ def _read_input_set(context: StageContext) -> _InputSet:
         raise InputRejected(
             f"input manifest is stage {manifest.stage!r}'s, expected 'difference'")
 
+    differencer = context.settings["finalize"]["differencer"]
     differences = [e for e in manifest.outputs if e.kind == "difference-image"]
-    if len(differences) != 1:
+    selected = [e for e in differences if e.key.get("differencer") == differencer]
+    if len(selected) != 1:
         raise InputRejected(
-            f"input manifest has {len(differences)} difference-image entries, "
-            "expected exactly one")
-    difference = differences[0]
+            f"input manifest has {len(selected)} difference-image entries for differencer "
+            f"{differencer!r} ([finalize] differencer), expected exactly one")
+    difference = selected[0]
     try:
         validate_difference_entry(difference.to_dict())
     except ValueError as exc:
@@ -192,8 +194,15 @@ def _read_input_set(context: StageContext) -> _InputSet:
         except ValueError as exc:
             raise InputRejected(f"source-catalog {entry.instance!r}: {exc}") from exc
 
+    # Another differencer's instance and its catalogs are dropped, and noted
+    # (supervisor ruling, 2026-09-24); anything else is refused.
+    others = {e.instance for e in differences if e is not difference}
+    dropped = [e for e in manifest.outputs
+               if e.instance in others
+               or (e.kind == "source-catalog" and e.key.get("difference") in others)]
     republished = {difference.instance} | {e.instance for e in catalogs}
-    extra = [f"{e.kind} {e.instance}" for e in manifest.outputs if e.instance not in republished]
+    extra = [f"{e.kind} {e.instance}" for e in manifest.outputs
+             if e.instance not in republished and e not in dropped]
     if extra:
         raise InputRejected(
             f"input manifest carries entries finalize does not republish: {extra}")
@@ -201,7 +210,13 @@ def _read_input_set(context: StageContext) -> _InputSet:
     for entry in (difference, *catalogs):
         for member in entry.members:
             _verified_member_path(context.inputs_dir, member)
-    return _InputSet(manifest=manifest, difference=difference, catalogs=catalogs)
+    return _InputSet(
+        manifest=manifest, difference=difference, catalogs=catalogs,
+        dropped=[{"kind": e.kind, "instance": e.instance,
+                  "differencer": (e.key.get("differencer") if e.kind == "difference-image"
+                                  else next(d.key.get("differencer") for d in differences
+                                            if d.instance == e.key.get("difference")))}
+                 for e in dropped])
 
 
 def _difference_execution_record(context: StageContext) -> dict[str, Any]:
@@ -309,17 +324,24 @@ def finalized_catalog_entry(*, inputs_dir: Path, outputs_dir: Path, entry: Outpu
         primary=entry.primary, registration=registration)
 
 
-def products_read(inputs: _InputSet) -> dict[str, str]:
-    """The difference instance, and each catalog as ``source-catalog/<type>/<sign>``.
+#: The upstream kinds finalize names in ``inputs.products``.
+UPSTREAM_KINDS = ("l2-image", "reference-image")
 
-    ``inputs.products`` maps a name to one instance; the catalogs share a
-    kind, so each is named by type and sign (``load``'s naming, extended).
+
+def products_read(inputs: _InputSet) -> dict[str, str]:
+    """The difference manifest's own registered upstream: its l2 and reference.
+
+    Supervisor ruling (2026-09-24, option b): ``inputs.products`` names only
+    instances that have rows for `register`'s dependency edges. The raw
+    difference and catalog instances are never registered (chain
+    difference -> finalize -> register), so they are recorded in
+    ``finalized_from``/``copied_from``, ``RPFINFRM`` and ``inputs.manifest``
+    instead. ``reference-image`` is named only when the difference manifest
+    names it: a reference registered by `dev` has no instance row
+    (``difference.py``'s ``products_read``).
     """
-    products = {"difference-image": inputs.difference.instance}
-    for entry in inputs.catalogs:
-        products[f"source-catalog/{entry.key['catalog_type']}/{entry.key['sign']}"] = (
-            entry.instance)
-    return products
+    upstream = inputs.manifest.inputs.products
+    return {kind: upstream[kind] for kind in UPSTREAM_KINDS if upstream.get(kind)}
 
 
 # ----------------------------------------------------------------------
@@ -354,7 +376,9 @@ def _body(context: StageContext) -> StageResult:
     context.logger.info(
         "finalize: %s -> %s (%s), %d catalogs", inputs.difference.instance, instance,
         values.diff_filename, len(inputs.catalogs))
-    return StageResult(outputs=outputs, products_read=products_read(inputs))
+    notes = {"dropped": inputs.dropped} if inputs.dropped else {}
+    return StageResult(outputs=outputs, products_read=products_read(inputs),
+                       execution_notes=notes)
 
 
 def main(argv: list[str]) -> int:

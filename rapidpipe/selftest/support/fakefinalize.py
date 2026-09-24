@@ -66,11 +66,13 @@ SFFT_FILES = {
 
 _BUNDLES = {"zogy": (ZOGY_FILES, "significance"), "sfft": (SFFT_FILES, "difference")}
 
-_CATALOG_INSTANCES = {
-    ("sextractor", "positive"): "01J8Y6QZ3MF1NA1E000000SXP0",
-    ("sextractor", "negative"): "01J8Y6QZ3MF1NA1E000000SXN0",
-    ("photutils", "positive"): "01J8Y6QZ3MF1NA1E000000PHP0",
-    ("photutils", "negative"): "01J8Y6QZ3MF1NA1E000000PHN0",
+#: Each catalog's instance id is the difference instance's first 22
+#: characters and one of these (01J8Y6QZ3MF1NA1E000000SXP0 by default).
+_CATALOG_SUFFIXES = {
+    ("sextractor", "positive"): "SXP0",
+    ("sextractor", "negative"): "SXN0",
+    ("photutils", "positive"): "PHP0",
+    ("photutils", "negative"): "PHN0",
 }
 
 
@@ -99,14 +101,17 @@ def _catalog_text(catalog_type: str, sign: str, rows: int) -> str:
 def build_difference_output(inputs: Path, *, differencer: str = "zogy",
                             catalog_outcome_bits: int = 0, seed: int = 20260924,
                             execution_record: dict[str, Any] | None = None,
-                            source_rows: int = 3) -> Path:
+                            source_rows: int = 3,
+                            difference_instance: str = DIFFERENCE_INSTANCE) -> Path:
     """Write a difference attempt's output location under ``inputs``; return the manifest path.
 
     ``catalog_outcome_bits`` is the instance's mask: a Photutils sign whose
     bit is set gets no entry and a ``null`` source count, as `difference`
     writes it. ``execution_record`` replaces the default record's content;
     pass ``{}`` for a record with neither provenance field. ``differencer``
-    selects ZOGY's bundle or SFFT's (with its ``kernel`` member). Each
+    selects ZOGY's bundle or SFFT's (with its ``kernel`` member).
+    ``difference_instance`` lets two builds (one per differencer) share a
+    directory; merge their manifests with :func:`merge_manifests`. Each
     Photutils catalog carries every member `difference` writes: ``catalog``,
     ``finder``, ``residual`` (a FITS image) and ``parquet`` (synthetic bytes;
     nothing reads it here).
@@ -160,8 +165,8 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
             counts[catalog_type][sign] = source_rows
             catalog_entries.append({
                 "kind": "source-catalog", "format_version": "1",
-                "instance": _CATALOG_INSTANCES[(catalog_type, sign)],
-                "key": {"difference": DIFFERENCE_INSTANCE, "catalog_type": catalog_type,
+                "instance": difference_instance[:22] + _CATALOG_SUFFIXES[(catalog_type, sign)],
+                "key": {"difference": difference_instance, "catalog_type": catalog_type,
                         "sign": sign},
                 "primary": members[0]["path"], "members": members,
                 "registration": {"source_count": source_rows}})
@@ -181,7 +186,7 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
         "reference_rfid": None,
     }
     difference_entry = {
-        "kind": "difference-image", "format_version": "1", "instance": DIFFERENCE_INSTANCE,
+        "kind": "difference-image", "format_version": "1", "instance": difference_instance,
         "key": {"l2": L2_INSTANCE, "reference": REFERENCE_INSTANCE,
                 "differencer": differencer, "settings_hash": SETTINGS_HASH},
         "primary": f"work/{files['difference']}",
@@ -208,5 +213,19 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
         "outputs": [difference_entry, *catalog_entries],
     }
     path = inputs / "manifest.json"
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def merge_manifests(inputs: Path, other: dict[str, Any]) -> Path:
+    """Append ``other``'s outputs to the manifest under ``inputs``; return its path.
+
+    For a manifest carrying two differencers' instances, as `difference`
+    writes one with ``[sfft] register_sfft`` on: build one bundle, read its
+    manifest, build the other into the same directory, then merge.
+    """
+    path = inputs / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["outputs"] += other["outputs"]
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return path

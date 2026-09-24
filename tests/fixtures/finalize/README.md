@@ -45,7 +45,8 @@ at prepare time, deterministically (a fixed random seed), in the shape
   revision and an image digest;
 - `manifest.json` (stage `difference`): one `difference-image` entry with
   a registration block that passes `validate_difference_entry`, and four
-  `source-catalog` entries keyed to it. Only `expected.json` and
+  `source-catalog` entries keyed to it, ZOGY by default (the stage's
+  `[finalize] differencer`). Only `expected.json` and
   `settings.toml` are package data; every FITS and catalog byte is
   generated here; `inputs.products` names the l2
   and reference instances.
@@ -71,7 +72,7 @@ All exact; nothing here is floating-point science.
 | the input header's own keywords kept; pixels and dtype unchanged | only the header is stamped |
 | every other member byte-identical (SHA-256) to its input | copied, not rewritten |
 | each catalog's key names the finalized instance, `copied_from` names its input, members identical | catalogs follow the new instance |
-| `inputs.products` names the input difference instance and each catalog as `source-catalog/<type>/<sign>` | provenance |
+| `inputs.products` names only the difference manifest's own l2 and reference instances; `inputs.manifest` references the difference manifest; no execution notes | ruling option (b): only registered instances are dependencies |
 
 Provenance is otherwise checked for shape only, by the shared runner: the
 manifest's run, unit and attempt are the invocation's, the execution

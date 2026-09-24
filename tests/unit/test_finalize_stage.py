@@ -27,6 +27,7 @@ from rapidpipe.selftest.support.fakefinalize import (
     REFERENCE_INSTANCE,
     UNIT_ID,
     build_difference_output,
+    merge_manifests,
 )
 from rapidpipe.stages.contract import ExitCode
 
@@ -90,10 +91,10 @@ def test_republishes_the_difference_attempt_under_new_instances(tmp_path):
         validate_source_catalog_entry(catalog.to_dict())
         assert catalog.key["difference"] == diff.instance
         assert catalog.registration["copied_from"] in {e.instance for e in source.outputs}
-    assert manifest.inputs.products == {
-        "difference-image": DIFFERENCE_INSTANCE,
-        **{f"source-catalog/{e.key['catalog_type']}/{e.key['sign']}": e.instance
-           for e in source.outputs[1:]}}
+    # Ruling (option b): the difference's own registered upstream only.
+    assert manifest.inputs.products == {"l2-image": L2_INSTANCE,
+                                        "reference-image": REFERENCE_INSTANCE}
+    assert manifest.inputs.manifest == str(tmp_path / "inputs" / "manifest.json")
 
     header = fits.getheader(outputs / diff.primary)
     assert (header["RPRUN"], header["RPATTMPT"], header["RPINST"]) == (RUN, ATTEMPT, diff.instance)
@@ -133,8 +134,11 @@ def test_reference_absent_from_inputs_products_falls_back_to_the_key(tmp_path):
     _edit_manifest(inputs, lambda m: m["inputs"]["products"].pop("reference-image"))
     rc, outputs = _run(tmp_path)
     assert rc == ExitCode.SUCCESS
-    diff = Manifest.read(outputs / "manifest.json").outputs[0]
+    manifest = Manifest.read(outputs / "manifest.json")
+    diff = manifest.outputs[0]
     assert fits.getheader(outputs / diff.primary)["RPREFINS"] == REFERENCE_INSTANCE
+    # A dev-registered reference has no instance row: not a dependency.
+    assert manifest.inputs.products == {"l2-image": L2_INSTANCE}
 
 
 def test_a_photutils_sign_the_mask_says_was_not_produced_is_absent(tmp_path):
@@ -160,7 +164,7 @@ def test_source_catalogs_pass_through_however_many(tmp_path, keep):
     assert rc == ExitCode.SUCCESS
     manifest = Manifest.read(outputs / "manifest.json")
     assert sum(1 for e in manifest.outputs if e.kind == "source-catalog") == keep
-    assert len(manifest.inputs.products) == 1 + keep
+    assert set(manifest.inputs.products) == {"l2-image", "reference-image"}
 
 
 def test_every_catalog_member_is_copied(tmp_path):
@@ -177,7 +181,9 @@ def test_every_catalog_member_is_copied(tmp_path):
 
 
 def test_an_sfft_bundle_keeps_its_kernel_and_stamps_ppid_16(tmp_path):
-    rc, outputs = _run(tmp_path, differencer="sfft")
+    (tmp_path / "overlay.toml").write_text('[finalize]\ndifferencer = "sfft"\n')
+    rc, outputs = _run(tmp_path, "--settings", str(tmp_path / "overlay.toml"),
+                       differencer="sfft")
     assert rc == ExitCode.SUCCESS
     source = Manifest.read(tmp_path / "inputs" / "manifest.json").outputs[0]
     diff = Manifest.read(outputs / "manifest.json").outputs[0]
@@ -220,6 +226,52 @@ def test_rpoutloc_is_the_s3_location_as_given_not_the_staging_directory(tmp_path
     assert fits.getheader(stamped)["RPOUTLOC"] == location
 
 
+SFFT_INSTANCE = "01J8Y6QZ3MF1NA1E5FF0000D1F"
+
+
+def _two_differencers(tmp_path: Path) -> Path:
+    """A difference manifest with a ZOGY and an SFFT instance ([sfft] register_sfft on)."""
+    inputs = tmp_path / "inputs"
+    build_difference_output(inputs, differencer="sfft", difference_instance=SFFT_INSTANCE)
+    sfft = json.loads((inputs / "manifest.json").read_text())
+    build_difference_output(inputs)     # ZOGY, rewrites manifest.json
+    merge_manifests(inputs, sfft)
+    return inputs
+
+
+def test_the_configured_differencer_is_republished_and_the_other_dropped(tmp_path):
+    _two_differencers(tmp_path)
+    rc, outputs = _run(tmp_path)
+    assert rc == ExitCode.SUCCESS
+    manifest = Manifest.read(outputs / "manifest.json")
+    diffs = [e for e in manifest.outputs if e.kind == "difference-image"]
+    assert [d.key["differencer"] for d in diffs] == ["zogy"]
+    assert diffs[0].registration["finalized_from"] == DIFFERENCE_INSTANCE
+    assert all(e.key["difference"] == diffs[0].instance
+               for e in manifest.outputs if e.kind == "source-catalog")
+    assert len(manifest.outputs) == 5
+    notes = json.loads((outputs / manifest.execution_record).read_text())["notes"]
+    assert [d["kind"] for d in notes["dropped"]] == ["difference-image"] + ["source-catalog"] * 4
+    assert {d["differencer"] for d in notes["dropped"]} == {"sfft"}
+    assert notes["dropped"][0]["instance"] == SFFT_INSTANCE
+
+
+def test_sfft_selected_from_a_two_differencer_manifest(tmp_path):
+    _two_differencers(tmp_path)
+    (tmp_path / "overlay.toml").write_text('[finalize]\ndifferencer = "sfft"\n')
+    rc, outputs = _run(tmp_path, "--settings", str(tmp_path / "overlay.toml"))
+    assert rc == ExitCode.SUCCESS
+    manifest = Manifest.read(outputs / "manifest.json")
+    assert manifest.outputs[0].key["differencer"] == "sfft"
+    assert fits.getheader(outputs / manifest.outputs[0].primary)["PPID"] == 16
+
+
+def test_no_entry_for_the_configured_differencer_exits_65(tmp_path):
+    (tmp_path / "overlay.toml").write_text('[finalize]\ndifferencer = "sfft"\n')
+    rc, _ = _run(tmp_path, "--settings", str(tmp_path / "overlay.toml"))
+    assert rc == ExitCode.INPUT_REJECTED
+
+
 def _drop(kind_type_sign):
     def edit(manifest):
         manifest["outputs"] = [
@@ -231,8 +283,6 @@ def _drop(kind_type_sign):
 @pytest.mark.parametrize("edit", [
     pytest.param(lambda m: m.update(stage="admit"), id="not-a-difference-manifest"),
     pytest.param(lambda m: m["unit"].update(kind="field"), id="wrong-unit-kind"),
-    pytest.param(lambda m: m["outputs"].append(dict(
-        m["outputs"][1], instance="01ARZ3NDEKTSV4RRFFQ69G5FAY")), id="two-catalogs-one-type-and-sign"),
     pytest.param(_drop(("difference-image", None, None)), id="no-difference-entry"),
     pytest.param(lambda m: m["outputs"].append(dict(m["outputs"][0], instance="01ARZ3NDEKTSV4RRFFQ69G5FAV")),
                  id="two-difference-entries"),
@@ -281,6 +331,7 @@ def test_an_unreadable_execution_record_exits_65(tmp_path):
 
 
 @pytest.mark.parametrize("overlay", [
+    '[finalize]\ndifferencer = "naive"\n',
     '[pipelines]\nzogy = "fifteen"\n',
     '[pipelines]\nzogy = 0\n',
     '[pipelines]\nzogy = 15\n[stamp]\nx = 1\n',
