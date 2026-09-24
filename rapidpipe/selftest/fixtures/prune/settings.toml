@@ -1,0 +1,7 @@
+# The prune stage fixture's settings overlay: the packaged defaults,
+# spelled out (rapidpipe/settings/prune.toml already gives the same
+# values; this overlay demonstrates the shape rather than changing
+# anything).
+[prune]
+rule = "not-best"
+done_check = true
