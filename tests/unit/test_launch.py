@@ -39,7 +39,8 @@ def _patch_repository(monkeypatch, *, attempt_id="ATTEMPT01", run_kind="scratch"
     def _fake_add_unit(conn, run_id, stage, unit_kind, unit_id):
         calls["add_unit"] = (run_id, stage, unit_kind, unit_id)
 
-    def _fake_allocate_attempt(conn, run_id, stage, unit_id):
+    def _fake_allocate_attempt(conn, run_id, stage, unit_id, *, outputs_root=None):
+        calls["allocate_outputs_root"] = outputs_root
         return attempt_id
 
     def _fake_record_scheduler_job(conn, attempt_id_, scheduler_job_id, output_location=None):
@@ -202,11 +203,38 @@ def test_outputs_root_for_falls_back_to_the_plain_variable(clean_kind_env):
     assert launch_batch.outputs_root_for("production") == "s3://project/root"
 
 
-def test_outputs_root_for_missing_names_both_variables(clean_kind_env):
+def test_outputs_root_for_scratch_missing_names_both_variables(clean_kind_env):
     with pytest.raises(launch_batch.MissingEnvironmentVariable) as excinfo:
-        launch_batch.outputs_root_for("production")
-    assert "RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION" in str(excinfo.value)
+        launch_batch.outputs_root_for("scratch")
+    assert "RAPIDPIPE_OUTPUTS_ROOT_SCRATCH" in str(excinfo.value)
     assert "RAPIDPIPE_OUTPUTS_ROOT " in str(excinfo.value)
+
+
+def test_production_never_falls_back_to_the_plain_variables(clean_kind_env):
+    clean_kind_env.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://plain/root")
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "plain-def")
+    with pytest.raises(
+        launch_batch.MissingEnvironmentVariable, match="RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION",
+    ):
+        launch_batch.outputs_root_for("production")
+    with pytest.raises(
+        launch_batch.MissingEnvironmentVariable, match="RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION",
+    ):
+        launch_batch.job_definition_for("production")
+
+
+def test_submit_unit_for_a_production_run_fails_closed(clean_kind_env):
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue1")
+    clean_kind_env.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://plain/root")
+    clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "plain-def")
+    calls = _patch_repository(clean_kind_env, run_kind="production")
+    fake = FakeBatch()
+    with pytest.raises(launch_batch.MissingEnvironmentVariable):
+        launch_batch.submit_unit(
+            _FakeConn(), run_id="RUN01", stage="admit", unit_kind="detector-image",
+            unit_id="u1", inputs_location="s3://in/pre", client=fake)
+    assert fake.submitted == []
+    assert "add_unit" not in calls
 
 
 @pytest.mark.parametrize("kind", ["scratch", "production"])
@@ -216,10 +244,9 @@ def test_job_definition_for_prefers_the_kind_specific_variable(clean_kind_env, k
     assert launch_batch.job_definition_for(kind) == f"{kind}-def"
 
 
-def test_job_definition_for_falls_back_to_the_plain_variable(clean_kind_env):
+def test_job_definition_for_scratch_falls_back_to_the_plain_variable(clean_kind_env):
     clean_kind_env.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "plain-def")
     assert launch_batch.job_definition_for("scratch") == "plain-def"
-    assert launch_batch.job_definition_for("production") == "plain-def"
 
 
 def test_job_definition_for_missing_raises(clean_kind_env):
@@ -253,6 +280,8 @@ def test_submit_unit_uses_the_run_kinds_root_and_definition(clean_kind_env, kind
                      "production": "s3://project-bucket/p"}[kind]
     assert calls["run_kind"] == "RUN01"
     assert submission.output_location == f"{expected_root}/runs/RUN01/admit/u1/ATT1"
+    # The attempt row is inserted with its final location (amendment A7).
+    assert calls["allocate_outputs_root"] == expected_root
     assert fake.submitted[0]["jobDefinition"] == f"{kind}-def"
 
 

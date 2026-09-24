@@ -73,7 +73,7 @@ def test_run_stage_locally_output_location_layout(tmp_path, monkeypatch):
     def _fake_add_unit(conn, run_id, stage, unit_kind, unit_id):
         calls["add_unit"] = (run_id, stage, unit_kind, unit_id)
 
-    def _fake_allocate_attempt(conn, run_id, stage, unit_id):
+    def _fake_allocate_attempt(conn, run_id, stage, unit_id, *, outputs_root=None):
         return "ATTEMPT01"
 
     def _fake_record_attempt_result(conn, attempt_id, exit_code, disposition,

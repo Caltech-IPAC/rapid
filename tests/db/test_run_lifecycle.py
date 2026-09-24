@@ -24,7 +24,7 @@ from rapidpipe.runs import cleanup
 from rapidpipe.runs import repository as repo
 from tests.unit.fakes3 import FakeVersionedS3
 
-from .test_repository import _make_run, _make_unit, _register_simple_instance
+from .test_repository import TEST_KIND, _make_run, _make_unit, _register_simple_instance
 
 MD5 = "9e107d9d372bb6826bd81d3542a419d6"
 SCRATCH_BUCKET = "scratch-bucket"
@@ -44,9 +44,10 @@ def _selected_attempt(conn, run_id, *, stage="difference", unit_id=None, output_
     """
     unit_id = unit_id or new_ulid()
     _make_unit(conn, run_id, stage=stage, unit_id=unit_id)
-    attempt_id = repo.allocate_attempt(conn, run_id, stage, unit_id)
-    location = (f"{output_root}/runs/{run_id}/{stage}/{unit_id}/{attempt_id}"
-                if output_root else f"runs/{run_id}/{stage}/{unit_id}/{attempt_id}")
+    attempt_id = repo.allocate_attempt(conn, run_id, stage, unit_id, outputs_root=output_root)
+    with conn.cursor() as cur:
+        cur.execute("SELECT output_location FROM attempts WHERE id = %s", (attempt_id,))
+        (location,) = cur.fetchone()
     repo.record_attempt_result(
         conn, attempt_id, exit_code=0, disposition="succeeded",
         output_location=location, execution_record=EXEC_RECORD,
@@ -55,7 +56,7 @@ def _selected_attempt(conn, run_id, *, stage="difference", unit_id=None, output_
     return unit_id, attempt_id
 
 
-def _candidate(conn, run_id, *, kind="difference-image", key=None, output_root=None):
+def _candidate(conn, run_id, *, kind=TEST_KIND, key=None, output_root=None):
     """One registered instance from a selected attempt; returns (instance, attempt)."""
     key = key if key is not None else {"k": new_ulid()}
     _unit, attempt_id = _selected_attempt(conn, run_id, output_root=output_root)
@@ -141,18 +142,18 @@ def test_promote_with_after_none_unselects(conn):
     run_id = _make_run(conn)
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
-    repo.promote(conn, "brusholme", "select", [("difference-image", key, None, instance)])
+    repo.promote(conn, "brusholme", "select", [(TEST_KIND, key, None, instance)])
     assert _custody(conn, instance) == "current"
 
     promotion_id = repo.promote(
-        conn, "brusholme", "unselect", [("difference-image", key, instance, None)])
+        conn, "brusholme", "unselect", [(TEST_KIND, key, instance, None)])
 
     assert _custody(conn, instance) == "candidate"
     ((kind, logical_key, before, after),) = _changes(conn, promotion_id)
-    assert (kind, logical_key, before, after) == ("difference-image", key, instance, None)
+    assert (kind, logical_key, before, after) == (TEST_KIND, key, instance, None)
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM current_selection WHERE kind = %s AND logical_key = %s",
-                    ("difference-image", json.dumps(key)))
+                    (TEST_KIND, json.dumps(key)))
         assert cur.fetchone()[0] == 0
 
 
@@ -160,11 +161,11 @@ def test_promote_refuses_after_equal_to_before(conn):
     run_id = _make_run(conn)
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
-    repo.promote(conn, "brusholme", "select", [("difference-image", key, None, instance)])
+    repo.promote(conn, "brusholme", "select", [(TEST_KIND, key, None, instance)])
     with pytest.raises(repo.PromotionRefused):
-        repo.promote(conn, "brusholme", "again", [("difference-image", key, instance, instance)])
+        repo.promote(conn, "brusholme", "again", [(TEST_KIND, key, instance, instance)])
     with pytest.raises(repo.PromotionRefused):
-        repo.promote(conn, "brusholme", "nothing", [("difference-image", {"k": new_ulid()}, None, None)])
+        repo.promote(conn, "brusholme", "nothing", [(TEST_KIND, {"k": new_ulid()}, None, None)])
 
 
 def test_promote_records_request_context(conn):
@@ -172,7 +173,7 @@ def test_promote_records_request_context(conn):
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
     promotion_id = repo.promote(
-        conn, "brusholme", "r", [("difference-image", key, None, instance)],
+        conn, "brusholme", "r", [(TEST_KIND, key, None, instance)],
         request_context={"ticket": "T-1"})
     with conn.cursor() as cur:
         cur.execute("SELECT request_context FROM promotions WHERE id = %s", (promotion_id,))
@@ -212,15 +213,15 @@ def test_vbest_follows_promotion_and_rollback(conn):
 def test_promote_run_promotes_one_candidate_per_key_across_kinds(conn):
     run_id = _make_run(conn)
     diff_key, catalog_key = {"k": new_ulid()}, {"k": new_ulid()}
-    diff, _ = _candidate(conn, run_id, kind="difference-image", key=diff_key)
+    diff, _ = _candidate(conn, run_id, kind=TEST_KIND, key=diff_key)
     catalog, _ = _candidate(conn, run_id, kind="source-catalog", key=catalog_key)
 
     promotion_id = repo.promote_run(conn, run_id, "brusholme", "deliver")
 
     assert (_custody(conn, diff), _custody(conn, catalog)) == ("current", "current")
-    changes = _changes(conn, promotion_id)
+    changes = _changes(conn, promotion_id)  # ordered by kind
     assert [(c[0], c[2], c[3]) for c in changes] == [
-        ("difference-image", None, diff), ("source-catalog", None, catalog)]
+        ("source-catalog", None, catalog), (TEST_KIND, None, diff)]
     with conn.cursor() as cur:
         cur.execute("SELECT request_context FROM promotions WHERE id = %s", (promotion_id,))
         assert cur.fetchone()[0] == {"run": run_id}
@@ -237,10 +238,10 @@ def test_promote_run_kinds_filter_and_replaces_the_current_instance(conn):
     other, _ = _candidate(conn, run_id, kind="source-catalog")
 
     promotion_id = repo.promote_run(
-        conn, run_id, "brusholme", "only images", kinds=["difference-image"])
+        conn, run_id, "brusholme", "only images", kinds=[TEST_KIND])
 
     ((kind, _key, before, after),) = _changes(conn, promotion_id)
-    assert (kind, before, after) == ("difference-image", old, new)
+    assert (kind, before, after) == (TEST_KIND, old, new)
     assert _custody(conn, other) == "candidate"
     assert (_custody(conn, old), _custody(conn, new)) == ("candidate", "current")
 
@@ -462,7 +463,7 @@ def test_delete_run_removes_only_this_runs_objects_and_rows(conn):
     assert again.already_deleted
 
 
-def test_delete_run_refuses_a_non_scratch_bucket_then_resumes(conn):
+def test_delete_run_refuses_a_non_scratch_bucket_before_marking(conn):
     run_id = _make_run(conn, kind="scratch")
     _instance, attempt_id = _psf_run_row(conn, run_id, f"s3://project-bucket/test-{new_ulid()}")
     conn.commit()
@@ -473,17 +474,60 @@ def test_delete_run_refuses_a_non_scratch_bucket_then_resumes(conn):
         cleanup.delete_run(conn, run_id, "brusholme", s3_client=s3,
                            scratch_bucket=SCRATCH_BUCKET)
     conn.rollback()
-    assert _run_state(conn, run_id) == "deleting"
+    # Preflight refuses before the run is marked: it keeps its state.
+    assert _run_state(conn, run_id) == "open"
     assert len(s3.remaining("project-bucket")) == 4
+    assert [c for c in s3.calls if c[0] == "delete_objects"] == []
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM psfs WHERE run = %s", (run_id,))
         assert cur.fetchone()[0] == 1
 
+
+def test_delete_run_refuses_a_location_outside_the_runs_prefix(conn):
+    run_id = _make_run(conn, kind="scratch")
+    _instance, attempt_id = _psf_run_row(conn, run_id, f"s3://{SCRATCH_BUCKET}/t-{new_ulid()}")
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE attempts SET output_location = %s WHERE id = %s",
+            (f"s3://{SCRATCH_BUCKET}/elsewhere/{attempt_id}", attempt_id))
+    conn.commit()
+    s3 = FakeVersionedS3()
+    s3.seed(SCRATCH_BUCKET, f"elsewhere/{attempt_id}/manifest.json")
+
+    with pytest.raises(repo.DeletionRefused, match=f"not under runs/{run_id}/"):
+        cleanup.delete_run(conn, run_id, "brusholme", s3_client=s3,
+                           scratch_bucket=SCRATCH_BUCKET)
+    conn.rollback()
+    assert _run_state(conn, run_id) == "open"
+    assert len(s3.remaining(SCRATCH_BUCKET, "elsewhere/")) == 1
+
+
+def test_delete_run_s3_error_leaves_deleting_and_the_database_untouched_then_resumes(conn):
+    run_id = _make_run(conn, kind="scratch")
+    instance, attempt_id = _psf_run_row(conn, run_id, f"s3://{SCRATCH_BUCKET}/t-{new_ulid()}")
+    conn.commit()
+    s3 = FakeVersionedS3()
+    _bucket, prefix = _seed_attempt_objects(s3, conn, attempt_id)
+    s3.fail_keys.add(f"{prefix}/manifest.json")
+
+    with pytest.raises(cleanup.CleanupFailed):
+        cleanup.delete_run(conn, run_id, "brusholme", s3_client=s3,
+                           scratch_bucket=SCRATCH_BUCKET)
+    conn.rollback()
+    assert _run_state(conn, run_id) == "deleting"
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM psfs WHERE run = %s", (run_id,))
+        assert cur.fetchone()[0] == 1
+        cur.execute("SELECT deletion_state FROM product_instances WHERE id = %s", (instance,))
+        assert cur.fetchone()[0] == "retained"
+
     # Resuming a 'deleting' run skips the fence and finishes the cleanup.
-    report = cleanup.delete_run(conn, run_id, "brusholme", s3_client=s3,
-                                scratch_bucket="project-bucket")
+    s3.fail_keys.clear()
+    report = cleanup.delete_run(conn, run_id, "someone-else", s3_client=s3,
+                                scratch_bucket=SCRATCH_BUCKET)
     assert report.rows_deleted["psfs"] == 1
-    assert report.versions_deleted == 4
+    assert report.instances_marked == 1
+    assert s3.remaining(SCRATCH_BUCKET, prefix + "/") == []
     assert _run_state(conn, run_id) == "deleted"
 
 
@@ -563,3 +607,141 @@ def test_pin_run_sets_and_clears_the_flag(conn):
         assert cur.fetchone()[0] is False
     with pytest.raises(repo.RunNotFound):
         cleanup.pin_run(conn, new_ulid(), True)
+
+
+# ======================================================================
+# Amendments (supervisor step 3, 2026-09-24): A1 fence, A2 vbest,
+# A3 eligibility, A6 sweeper predicate, A7 final attempt location
+# ======================================================================
+
+def test_allocate_attempt_records_the_final_location(conn):
+    run_id = _make_run(conn, kind="scratch")
+    unit_id = new_ulid()
+    _make_unit(conn, run_id, unit_id=unit_id)
+    attempt_id = repo.allocate_attempt(
+        conn, run_id, "difference", unit_id, outputs_root="s3://bucket/root")
+    with conn.cursor() as cur:
+        cur.execute("SELECT output_location FROM attempts WHERE id = %s", (attempt_id,))
+        (location,) = cur.fetchone()
+    assert location == f"s3://bucket/root/runs/{run_id}/difference/{unit_id}/{attempt_id}"
+
+
+def test_finished_run_admits_no_new_unit_or_attempt(conn):
+    run_id = _make_run(conn)
+    _selected_attempt(conn, run_id)
+    repo.finish_run(conn, run_id)
+    with pytest.raises(repo.RunDeletingOrDeleted, match="admits no new work"):
+        repo.add_unit(conn, run_id, "difference", "detector-image", new_ulid())
+
+
+def test_register_manifest_refused_on_a_deleting_run(conn):
+    run_id = _make_run(conn, kind="scratch")
+    _unit, attempt_id = _selected_attempt(conn, run_id)
+    repo.mark_run_deleting(conn, run_id, requested_by="brusholme")
+    with pytest.raises(repo.RunDeletingOrDeleted):
+        _register_simple_instance(conn, run_id, "difference", attempt_id,
+                                  logical_key={"k": new_ulid()})
+    with pytest.raises(repo.RunDeletingOrDeleted):
+        repo.record_attempt_result(
+            conn, attempt_id, exit_code=0, disposition="succeeded",
+            output_location="runs/x", execution_record=EXEC_RECORD,
+            scheduler_job_id="j")
+
+
+def test_dependency_on_a_deleting_producer_is_refused(conn):
+    producer_run = _make_run(conn, kind="scratch")
+    producer, _ = _candidate(conn, producer_run)
+    repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
+
+    consumer_run = _make_run(conn, kind="scratch")
+    _unit, attempt_id = _selected_attempt(conn, consumer_run)
+    with pytest.raises(repo.RunDeletingOrDeleted, match=producer_run):
+        _register_simple_instance(
+            conn, consumer_run, "difference", attempt_id,
+            logical_key={"k": new_ulid()}, input_products={TEST_KIND: producer})
+
+
+def test_promote_refuses_a_mapped_kind_with_no_dev_row(conn):
+    run_id = _make_run(conn)
+    _candidate(conn, run_id, kind="psf", key=_psf_key())  # no psfs row
+    with pytest.raises(repo.PromotionRefused, match="has no psfs row"):
+        repo.promote_run(conn, run_id, "brusholme", "no dev row")
+
+
+def test_promote_never_rewrites_a_dev_written_row(conn):
+    """A dev row linked to an instance but written by no run (``run`` NULL,
+    as an import run links one) keeps dev's own vbest on promote and
+    rollback. The schema's together-CHECK (20260923-07) does not allow
+    that row shape yet, so this test drops the CHECK inside its own
+    never-committed transaction to build it."""
+    run_id = _make_run(conn)
+    key = _psf_key()
+    instance = _psf_candidate(conn, run_id, key)
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE psfs DROP CONSTRAINT psfs_run_columns_together")
+        cur.execute(
+            "UPDATE psfs SET run = NULL, attempt = NULL, vbest = 2 WHERE instance = %s",
+            (instance,))
+
+    promotion_id = repo.promote_run(conn, run_id, "brusholme", "import")
+    assert _custody(conn, instance) == "current"
+    assert _vbest(conn, instance) == 2
+    repo.rollback_promotion(conn, promotion_id, "brusholme", "undo")
+    assert _custody(conn, instance) == "candidate"
+    assert _vbest(conn, instance) == 2
+
+
+def test_promote_refuses_a_kind_or_key_that_does_not_match_the_instance(conn):
+    run_id = _make_run(conn)
+    key = {"k": new_ulid()}
+    instance, _ = _candidate(conn, run_id, key=key)
+    with pytest.raises(repo.PromotionRefused, match="not the requested"):
+        repo.promote(conn, "brusholme", "wrong kind", [("other-kind", key, None, instance)])
+    with pytest.raises(repo.PromotionRefused, match="not the requested"):
+        repo.promote(conn, "brusholme", "wrong key",
+                     [(TEST_KIND, {"k": new_ulid()}, None, instance)])
+
+
+def test_promote_refuses_a_deleted_after_instance(conn):
+    run_id = _make_run(conn)
+    key = {"k": new_ulid()}
+    instance, _ = _candidate(conn, run_id, key=key)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE product_instances SET deletion_state = 'deleted' WHERE id = %s",
+            (instance,))
+    with pytest.raises(repo.PromotionRefused, match="not retained"):
+        repo.promote(conn, "brusholme", "gone", [(TEST_KIND, key, None, instance)])
+
+
+def test_promote_refuses_an_incomplete_result_set(conn):
+    run_id = _make_run(conn)
+    _unit, attempt_id = _selected_attempt(conn, run_id)
+    instance, key = new_ulid(), {"k": new_ulid()}
+    repo.register_manifest(conn, {
+        "run": run_id, "unit": {"kind": "detector-image", "id": "u"},
+        "stage": "load", "attempt": attempt_id,
+        "inputs": {"manifest": "m", "products": {}, "result_sets": []},
+        "outputs": [{"kind": "source-set", "format_version": "1", "instance": instance,
+                     "key": key, "primary": None, "members": []}],
+    }, registering_attempt_id=attempt_id)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE result_sets SET complete = false WHERE instance = %s", (instance,))
+    with pytest.raises(repo.PromotionRefused, match="incomplete result set"):
+        repo.promote(conn, "brusholme", "partial", [("source-set", key, None, instance)])
+
+
+def test_the_sweeper_refuses_a_pinned_or_unexpired_run(conn):
+    past = datetime(2001, 5, 6, tzinfo=timezone.utc)
+    pinned = _make_run(conn, kind="scratch", expires_at=past)
+    cleanup.pin_run(conn, pinned, True)
+    unexpired = _make_run(conn, kind="scratch")  # default: now() + 14 days
+    expired = _make_run(conn, kind="scratch", owner="alice", expires_at=past)
+
+    with pytest.raises(repo.DeletionRefused, match="pinned"):
+        repo.mark_run_deleting(conn, pinned, cleanup.EXPIRY_ACTOR, expiry=True)
+    with pytest.raises(repo.DeletionRefused, match="not expired"):
+        repo.mark_run_deleting(conn, unexpired, cleanup.EXPIRY_ACTOR, expiry=True)
+    # The owner check is replaced, not added: another owner's expired run passes.
+    repo.mark_run_deleting(conn, expired, cleanup.EXPIRY_ACTOR, expiry=True)
+    assert _run_state(conn, expired) == "deleting"

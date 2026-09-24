@@ -22,13 +22,16 @@ hostnames are injected at deploy time, never committed to `rapid`."):
 - ``RAPIDPIPE_BATCH_JOB_QUEUE`` -- the Batch job queue name or ARN.
 - ``RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH`` /
   ``RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION`` -- the Batch job
-  definition name or ARN for a run of that kind; either falls back to
-  ``RAPIDPIPE_BATCH_JOB_DEFINITION`` when unset (:func:`job_definition_for`).
+  definition name or ARN for a run of that kind (:func:`job_definition_for`).
 - ``RAPIDPIPE_OUTPUTS_ROOT_SCRATCH`` / ``RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION``
   -- an ``s3://bucket/prefix`` under which ``runs/<run>/<stage>/<unit>/
   <attempt>`` lives for a run of that kind (the scratch bucket and the
-  project bucket); either falls back to ``RAPIDPIPE_OUTPUTS_ROOT`` when
-  unset (:func:`outputs_root_for`).
+  project bucket) (:func:`outputs_root_for`).
+- ``RAPIDPIPE_BATCH_JOB_DEFINITION`` / ``RAPIDPIPE_OUTPUTS_ROOT`` -- the
+  scratch fallback only. A production run fails closed: it never falls
+  back to an unsuffixed variable (supervisor step 3, 2026-09-24,
+  amendment A4), so a missing production setting cannot send project
+  outputs to a scratch location.
 - ``RAPIDPIPE_BATCH_JOB_NAME_PREFIX`` -- optional, default ``rapid``.
 
 The run's kind is fixed at creation (runs page, "Runs"), so
@@ -53,6 +56,7 @@ from rapidpipe.runs.repository import (
     RunNotFound,
     add_unit,
     allocate_attempt,
+    attempt_output_location,
     record_attempt_result,
     record_reconcile_note,
     record_scheduler_job,
@@ -150,11 +154,13 @@ _RUN_KINDS = ("scratch", "production")
 
 
 def _env_for_kind(base: str, kind: str) -> str:
-    """``<base>_<KIND>``, else ``<base>``, else :class:`MissingEnvironmentVariable`
-    naming both."""
+    """``<base>_<KIND>``; for scratch only, else ``<base>``. Otherwise
+    :class:`MissingEnvironmentVariable` naming what was looked for."""
     if kind not in _RUN_KINDS:
         raise ValueError(f"run kind must be one of {_RUN_KINDS}, got {kind!r}")
     specific = f"{base}_{kind.upper()}"
+    if kind == "production":
+        return _require_env(specific)
     value = os.environ.get(specific) or os.environ.get(base)
     if not value:
         raise MissingEnvironmentVariable(
@@ -166,9 +172,10 @@ def _env_for_kind(base: str, kind: str) -> str:
 def outputs_root_for(kind: str) -> str:
     """The outputs root for a run of ``kind`` ('scratch' or 'production').
 
-    ``RAPIDPIPE_OUTPUTS_ROOT_SCRATCH`` or ``RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION``,
-    falling back to ``RAPIDPIPE_OUTPUTS_ROOT``; raises
-    :class:`MissingEnvironmentVariable` if neither is set.
+    ``RAPIDPIPE_OUTPUTS_ROOT_SCRATCH`` (falling back to
+    ``RAPIDPIPE_OUTPUTS_ROOT``) or ``RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION``
+    (no fallback: production fails closed); raises
+    :class:`MissingEnvironmentVariable` when unset.
     """
     return _env_for_kind("RAPIDPIPE_OUTPUTS_ROOT", kind)
 
@@ -176,10 +183,10 @@ def outputs_root_for(kind: str) -> str:
 def job_definition_for(kind: str) -> str:
     """The Batch job definition for a run of ``kind`` ('scratch' or 'production').
 
-    ``RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH`` or
-    ``RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION``, falling back to
-    ``RAPIDPIPE_BATCH_JOB_DEFINITION``; raises
-    :class:`MissingEnvironmentVariable` if neither is set.
+    ``RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH`` (falling back to
+    ``RAPIDPIPE_BATCH_JOB_DEFINITION``) or
+    ``RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION`` (no fallback: production
+    fails closed); raises :class:`MissingEnvironmentVariable` when unset.
     """
     return _env_for_kind("RAPIDPIPE_BATCH_JOB_DEFINITION", kind)
 
@@ -283,12 +290,10 @@ def submit_unit(
     add_unit(conn, run_id, stage, unit_kind, unit_id)
     conn.commit()
 
-    attempt_id = allocate_attempt(conn, run_id, stage, unit_id)
+    attempt_id = allocate_attempt(conn, run_id, stage, unit_id, outputs_root=outputs_root)
     conn.commit()
 
-    outputs_location_obj = parse_location(outputs_root)
-    output_location = join(
-        outputs_location_obj, f"runs/{run_id}/{stage}/{unit_id}/{attempt_id}")
+    output_location = attempt_output_location(outputs_root, run_id, stage, unit_id, attempt_id)
 
     command = [
         "stage", stage,
