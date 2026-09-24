@@ -75,6 +75,21 @@ class Checks:
         ok = actual is not None and math.isclose(actual, expected, rel_tol=rel, abs_tol=abs_)
         self.check(ok, f"{label}: expected {expected} (rel {rel}, abs {abs_}), got {actual}")
 
+    def close_count(self, expected: int | None, actual: int | None, *, abs_tol: int,
+                    rel_tol: float, label: str) -> None:
+        """A catalog row count, allowed to drift by up to ``max(abs_tol,
+        rel_tol * expected)`` either way -- SExtractor and photutils give a
+        few more or fewer sources run to run on identical pixels. ``None``
+        means no detections (a catalog the real tools skipped), checked for
+        equality since there is no meaningful tolerance around "none".
+        """
+        if expected is None or actual is None:
+            self.check(expected == actual, f"{label}: expected {expected}, got {actual}")
+            return
+        tol = max(abs_tol, rel_tol * expected)
+        self.check(abs(actual - expected) <= tol,
+                   f"{label}: expected {expected} (+/- {tol:.3g}), got {actual}")
+
 
 @dataclass
 class FixtureResult:
