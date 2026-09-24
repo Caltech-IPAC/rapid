@@ -108,7 +108,10 @@ def test_full_run_publishes_a_valid_zogy_instance(tmp_path, fakes):
         assert catalog.key["difference"] == entry.instance
 
     assert manifest.inputs.products == {"l2-image": L2_INSTANCE, "reference-image": REF_INSTANCE}
-    assert _exec_record(outputs)["notes"] == {"sfft": {"ran": True, "succeeded": True, "exit_code": 0}}
+    assert _exec_record(outputs)["notes"] == {
+        "sfft": {"ran": True, "succeeded": True, "exit_code": 0},
+        "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0},
+    }
 
 
 def test_tools_run_in_dev_order(tmp_path, fakes):
@@ -146,14 +149,21 @@ def test_zogy_command_is_devs(tmp_path, fakes):
     assert zogy[12:] == ["zogy_diffimage.fits", "diffpsf.fits", "scorrimage.fits"]
 
 
-def test_astrometric_sigma_setting_reaches_zogy_and_registration(tmp_path, fakes):
+def test_astrometric_sigma_setting_reaches_zogy_but_not_registration(tmp_path, fakes):
+    """``[zogy] astrometric_sigma`` only overrides ZOGY's input (`dev`'s
+    behaviour, recorded in the execution notes); it does not affect the
+    registered ``registration_residual``, which always holds the measured
+    gain-match RMS (production's ``dxrmsfin``/``dyrmsfin``), regardless of
+    this setting.
+    """
     runner, _ = fakes
     code, outputs = _run(tmp_path, overlay="[zogy]\nastrometric_sigma = 0.3\n")
     assert code == ExitCode.SUCCESS
     zogy = next(a for a in runner.calls if a[1].endswith("py_zogy.py"))
     assert zogy[10:12] == ["0.3", "0.3"]
     residual = _entries(_manifest(outputs), "difference-image")[0].registration["registration_residual"]
-    assert residual["x_rms"] == 0.3 and residual["y_rms"] == 0.3
+    assert residual["x_rms"] == 0.05 and residual["y_rms"] == 0.05
+    assert _exec_record(outputs)["notes"]["zogy_astrometric_sigma"] == {"x": 0.3, "y": 0.3}
 
 
 def test_zogy_catalogs_detect_on_scorr_with_devs_overrides(tmp_path, fakes):
@@ -248,7 +258,9 @@ def test_run_sfft_off_runs_no_sfft(tmp_path, fakes):
     code, outputs = _run(tmp_path, overlay="[sfft]\nrun_sfft = false\n")
     assert code == ExitCode.SUCCESS
     assert runner.shell_calls == []
-    assert "notes" not in _exec_record(outputs)
+    # No "sfft" key with SFFT off, but the ZOGY-fed astrometric sigma note
+    # is unconditional.
+    assert _exec_record(outputs)["notes"] == {"zogy_astrometric_sigma": {"x": 0.0, "y": 0.0}}
 
 
 # ----------------------------------------------------------------------

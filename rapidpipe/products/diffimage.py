@@ -178,10 +178,15 @@ class DifferenceImageRegistration:
     - ``source_counts``: ``{catalog_type: {sign: count}}``. A count is
       ``None`` where that catalog was not produced (the mask says why),
       never zero in its place.
-    - ``registration_residual``: ``x_rms``/``y_rms`` are ZOGY's astrometric
-      uncertainty inputs (the stage setting, 0.0 by default, reproducing
-      `dev`); ``x_median``/``y_median`` are the measured median offsets
-      the stage applied to the reference.
+    - ``registration_residual``: ``x_rms``/``y_rms`` are the measured
+      astrometric residual RMS from gain-matching / catalog matching
+      (`dev`'s DxRMS/DyRMS), matching what `dev` records in
+      ``dxrmsfin``/``dyrmsfin``; ``x_median``/``y_median`` are the measured
+      median offsets the stage applied to the reference. ZOGY itself is
+      still fed a fixed astrometric uncertainty (the stage setting, 0.0 by
+      default, reproducing `dev`'s override) — that value is unrelated to
+      this residual and is recorded separately, in the execution record's
+      ``zogy_astrometric_sigma`` note, not here.
     - ``reference_scale_factor``: `dev`'s ``scalefacref``.
     - ``detection_role``: the member the catalogs were detected on.
     - ``md5``: the legacy MD5 of the primary member (products page,
