@@ -13,8 +13,11 @@ it:
 The astrometric-uncertainty arguments are the stage's
 ``[zogy] astrometric_sigma`` setting, default 0.0: `dev` overrides the
 measured RMS with 0.0 before calling ZOGY ("2025-08-15 Jacob's
-recommendation"), and registers that 0.0 as ``dxrmsfin``/``dyrmsfin``
-(ruling 1, lead 2026-09-22).
+recommendation"). That override is unrelated to what gets registered:
+``dxrmsfin``/``dyrmsfin`` record the MEASURED astrometric residual RMS
+from gain-matching (`rapidpipe.stages.difference`, matching production;
+ruling "measured", 2026-09-23), and the ZOGY-fed override is recorded
+separately, in the execution record's ``zogy_astrometric_sigma`` note.
 """
 
 from __future__ import annotations
