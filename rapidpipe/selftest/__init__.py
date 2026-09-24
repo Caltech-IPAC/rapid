@@ -43,6 +43,8 @@ def _fixture_module(stage: str):
         from rapidpipe.selftest import load as module
     elif stage == "maintain":
         from rapidpipe.selftest import maintain as module
+    elif stage == "crossmatch":
+        from rapidpipe.selftest import crossmatch as module
     elif stage == "alerts":
         from rapidpipe.selftest import alerts as module
     else:

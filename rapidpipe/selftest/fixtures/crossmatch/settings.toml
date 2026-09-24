@@ -1,0 +1,10 @@
+# The crossmatch fixture's settings overlay: `dev`'s values, spelled out so a
+# change to the defaults shows up as a fixture difference.
+[source_matching]
+match_radius = 0.00001528
+
+[crossmatch]
+source_flags = 0
+cluster_between_passes = true
+legacy_catalog = false
+done_check = true
