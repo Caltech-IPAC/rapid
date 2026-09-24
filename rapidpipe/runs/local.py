@@ -29,6 +29,7 @@ from rapidpipe.products.manifest import Manifest, ManifestError
 from rapidpipe.runs.repository import (
     add_unit,
     allocate_attempt,
+    attempt_output_location,
     record_attempt_result,
     select_attempt,
 )
@@ -199,10 +200,11 @@ def run_stage_locally(
     add_unit(conn, run_id, stage, unit_kind, unit_id)
     conn.commit()
 
-    attempt_id = allocate_attempt(conn, run_id, stage, unit_id)
+    attempt_id = allocate_attempt(conn, run_id, stage, unit_id, outputs_root=str(outputs_root))
     conn.commit()
 
-    output_location = Path(outputs_root) / "runs" / run_id / stage / unit_id / attempt_id
+    output_location = Path(attempt_output_location(
+        str(outputs_root), run_id, stage, unit_id, attempt_id))
     if output_location.exists():
         raise FileExistsError(
             f"output location already exists, but must be exclusive to "

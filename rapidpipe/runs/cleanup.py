@@ -11,25 +11,36 @@ that state first, then does the physical cleanup, then
 :func:`~rapidpipe.runs.repository.mark_run_deleted`.
 
 Unlike ``rapidpipe.runs.repository``, :func:`delete_run` and
-:func:`expire_runs` commit on the connection they are given: the
-``deleting`` state has to be durable before any object or row is removed,
-so a crash part-way leaves a run ``deleting`` that a second
-:func:`delete_run` call finishes. Everything after that first commit is
+:func:`expire_runs` COMMIT on the connection they are given, so they must
+be called on a connection with no pending caller work. The ``deleting``
+state is committed before any object or row is removed; then S3 is
+emptied; then the science-row deletes, the instance marking and
+``mark_run_deleted`` run as ONE transaction, committed once. A failure
+anywhere after the first commit leaves the run ``deleting``, and a second
+:func:`delete_run` call finishes it -- every step after that commit is
 idempotent. :func:`pin_run` is an ordinary one-transaction repository
 call; the caller commits.
 
 What is removed, and only for rows whose ``run`` is this run:
 
 - every S3 object version and delete marker under each attempt's
-  ``s3://`` output location, which must be in the scratch bucket;
+  ``s3://`` output location, which must be in the scratch bucket and
+  under ``runs/<run>/`` (checked for every attempt before anything is
+  marked or removed);
 - ``dev`` science rows in ``sources`` (the inheritance parent: a DELETE
   on it reaches every ``sources_<date>_<sca>`` child, which carry ``run``
-  since 20260923-04), ``diffimmeta``, ``diffimages``, ``psfs``,
-  ``l2filemeta``, ``l2files`` and ``refimages``, in that order -- each
-  table before the table its foreign keys point at (baseline:
+  since 20260923-04), ``diffimmeta``, ``diffimages``, ``l2filemeta``,
+  ``l2files``, ``refimages`` and ``psfs``, in that order -- each table
+  before the table its foreign keys point at (baseline:
   ``sources.pid`` and ``diffimmeta.pid`` -> ``diffimages``;
   ``diffimages.rid`` -> ``l2files``, ``diffimages.rfid`` -> ``refimages``;
-  ``l2filemeta.rid`` -> ``l2files``).
+  ``l2filemeta.rid`` -> ``l2files``; ``psfs`` has no inbound key).
+
+``xsources``, ``refimimages``, ``refimcatalogs`` and ``refimmeta`` carry
+no ``run`` column and are never cleaned. A row in them -- or a science
+row of another run, or a ``dev`` row with no run -- that references one of
+this run's rows blocks deletion: it is found by a preflight and refused
+before the run is marked (``_blocking_references``).
 
 Run-model rows (runs, units, attempts, execution records, instances,
 members, result sets, dependencies, promotions) are tombstones and are
@@ -68,20 +79,44 @@ SCIENCE_TABLES = (
     "sources",
     "diffimmeta",
     "diffimages",
-    "psfs",
     "l2filemeta",
     "l2files",
     "refimages",
+    "psfs",
 )
+
+#: Every foreign key in the baseline that points at a run-scoped science
+#: table, as (referencing table, its column, referenced table, its key
+#: column). A referencing row that does not belong to the run being
+#: deleted blocks the deletion (module docstring). The first four have no
+#: ``run`` column at all, so any referencing row blocks.
+_INBOUND_REFERENCES = (
+    ("xsources", "pid", "diffimages", "pid"),
+    ("refimimages", "rid", "l2files", "rid"),
+    ("refimimages", "rfid", "refimages", "rfid"),
+    ("refimcatalogs", "rfid", "refimages", "rfid"),
+    ("refimmeta", "rfid", "refimages", "rfid"),
+    ("sources", "pid", "diffimages", "pid"),
+    ("diffimmeta", "pid", "diffimages", "pid"),
+    ("diffimages", "rid", "l2files", "rid"),
+    ("diffimages", "rfid", "refimages", "rfid"),
+    ("l2filemeta", "rid", "l2files", "rid"),
+)
+_RUNLESS_TABLES = ("xsources", "refimimages", "refimcatalogs", "refimmeta")
+
+#: The ``requested_by`` :func:`expire_runs` deletes as.
+EXPIRY_ACTOR = "expire_runs"
 
 #: ``delete_objects`` takes at most 1000 keys per call (an S3 API limit).
 _DELETE_OBJECTS_BATCH_SIZE = 1000
 
 
 class CleanupFailed(RunModelError):
-    """S3 reported per-object errors from ``delete_objects``.
+    """S3 reported per-object errors from ``delete_objects`` (which it
+    does with HTTP 200).
 
-    The run is left ``deleting``; a later :func:`delete_run` resumes it.
+    The run is left ``deleting`` and nothing in the database changes; a
+    later :func:`delete_run` resumes it.
     """
 
 
@@ -160,14 +195,51 @@ def _s3_prefixes(conn, run_id: str, scratch_bucket: str | None) -> list[tuple[st
                 f"{output_location!r}, outside the scratch bucket "
                 f"{bucket_allowed!r}; refusing (the run stays 'deleting')")
         prefix = location.prefix or ""
-        # Belt and braces: an attempt's own location always ends in
-        # runs/<run>/<stage>/<unit>/<attempt> (runs page, "Storage
-        # layout"); anything else is not ours to empty.
-        if f"runs/{run_id}/" not in f"/{prefix}/" or not prefix.endswith(attempt_id):
+        # The key must contain /runs/<run>/ (runs page, "Storage layout":
+        # <root>/runs/<run>/<stage>/<unit>/<attempt>) and end in the
+        # attempt's own id; anything else is not this run's to empty.
+        if f"/runs/{run_id}/" not in f"/{prefix}/" or not prefix.endswith(attempt_id):
             raise DeletionRefused(
                 f"attempt {attempt_id!r} output location {output_location!r} is "
                 f"not under runs/{run_id}/.../{attempt_id}; refusing")
+        # Trailing delimiter: .../<attempt>/ never matches a sibling
+        # .../<attempt>X.
         prefixes.append((location.bucket, prefix + "/"))  # type: ignore[arg-type]
+    return prefixes
+
+
+def _blocking_references(conn, run_id: str) -> list[str]:
+    """Describe every row outside this run that references one of its
+    science rows (``_INBOUND_REFERENCES``); empty when deletion is clear."""
+    blocking: list[str] = []
+    with conn.cursor() as cur:
+        for table, column, target, key in _INBOUND_REFERENCES:
+            outside = "TRUE" if table in _RUNLESS_TABLES else "r.run IS DISTINCT FROM %(run)s"
+            # Names come from the fixed tuple above, never caller input.
+            cur.execute(
+                f"""
+                SELECT count(*) FROM {table} r
+                JOIN {target} t ON t.{key} = r.{column}
+                WHERE t.run = %(run)s AND {outside}
+                """,
+                {"run": run_id},
+            )
+            (count,) = cur.fetchone()
+            if count:
+                blocking.append(f"{count} {table} row(s) via {table}.{column} -> {target}")
+    return blocking
+
+
+def _preflight(conn, run_id: str, scratch_bucket: str | None) -> list[tuple[str, str]]:
+    """Everything that must hold before a run is marked or cleaned: every
+    S3 location is this run's, in the scratch bucket; nothing outside the
+    run references its rows. Returns the S3 prefixes to empty."""
+    prefixes = _s3_prefixes(conn, run_id, scratch_bucket)
+    blocking = _blocking_references(conn, run_id)
+    if blocking:
+        raise DeletionRefused(
+            f"run {run_id!r} has rows referenced from outside it, which "
+            f"cleanup does not remove: {'; '.join(blocking)}; refusing")
     return prefixes
 
 
@@ -215,31 +287,40 @@ def delete_run(
     *,
     s3_client: Any = None,
     scratch_bucket: str | None = None,
+    expiry: bool = False,
 ) -> DeletionReport:
-    """Delete a scratch run: fence, commit, clean up, record completion.
+    """Delete a scratch run: preflight, fence, commit, clean up, record completion.
 
-    1. :func:`~rapidpipe.runs.repository.mark_run_deleting` (its fence:
-       scratch only, owner only, no unresolved attempts, no outside
-       bindings), then ``conn.commit()``. A run already ``deleting`` skips
-       this and resumes; a run already ``deleted`` returns at once with
-       ``already_deleted=True``.
-    2. Every attempt's ``s3://`` output location must be in the scratch
-       bucket (``scratch_bucket``, else ``RAPIDPIPE_SCRATCH_BUCKET``, else
-       the bucket of ``RAPIDPIPE_OUTPUTS_ROOT_SCRATCH`` /
-       ``RAPIDPIPE_OUTPUTS_ROOT``) -- checked for all attempts before any
-       object is removed; otherwise :class:`DeletionRefused` and the run
-       stays ``deleting``. Then every object version and delete marker
-       under each location is removed (``list_object_versions``,
-       paginated; ``delete_objects`` in batches of 1000, quiet).
-    3. ``DELETE FROM <table> WHERE run = %s`` for each of
-       :data:`SCIENCE_TABLES`, in that order, counted per table.
-    4. The run's instances are marked ``deletion_state = 'deleted'``.
-    5. :func:`~rapidpipe.runs.repository.mark_run_deleted`, then
-       ``conn.commit()``.
+    COMMITS on ``conn``: call it on a connection with no pending work.
 
-    Steps 2-5 are idempotent, so a second call on a run left
-    ``deleting`` by a failure finishes it. Rows with a NULL ``run`` or
-    another run's id, and every run-model row, are never touched.
+    By state: ``open``/``finished`` runs the full fence; ``deleting``
+    resumes; ``deleted`` returns at once with ``already_deleted=True``.
+
+    1. Preflight (every state but ``deleted``): every attempt's ``s3://``
+       output location must be ``s3://<scratch bucket>/.../runs/<run>/...
+       /<attempt>`` (``scratch_bucket``, else ``RAPIDPIPE_SCRATCH_BUCKET``,
+       else the bucket of ``RAPIDPIPE_OUTPUTS_ROOT_SCRATCH`` /
+       ``RAPIDPIPE_OUTPUTS_ROOT``), and no row outside the run may
+       reference one of its science rows. A failure raises
+       :class:`DeletionRefused` and leaves the run in the state it had.
+    2. :func:`~rapidpipe.runs.repository.mark_run_deleting` (scratch only;
+       owner only, or with ``expiry=True`` the expiry predicate instead;
+       no unresolved attempts; no outside bindings), then ``commit``. The
+       preflight is repeated once the fence holds, since no new attempt
+       can appear after it.
+    3. Every object version and delete marker under each location plus
+       ``/`` is removed (``list_object_versions``, paginated;
+       ``delete_objects`` in batches of 1000, quiet). Any per-object error
+       raises :class:`CleanupFailed`; the run stays ``deleting`` and the
+       database is untouched.
+    4. In ONE transaction: ``DELETE FROM <table> WHERE run = %s`` for each
+       of :data:`SCIENCE_TABLES` in order, counted per table; the run's
+       instances marked ``deletion_state = 'deleted'``;
+       :func:`~rapidpipe.runs.repository.mark_run_deleted`; then one
+       ``commit``. A failure rolls all of it back and leaves ``deleting``.
+
+    Rows with a NULL ``run`` or another run's id, and every run-model row
+    (tombstones), are never touched.
     """
     report = DeletionReport(run_id=run_id)
 
@@ -248,11 +329,13 @@ def delete_run(
     if state == "deleted":
         report.already_deleted = True
         return report
-    if state != "deleting":
-        mark_run_deleting(conn, run_id, requested_by)
-        conn.commit()
 
-    prefixes = _s3_prefixes(conn, run_id, scratch_bucket)
+    _preflight(conn, run_id, scratch_bucket)
+    if state != "deleting":
+        mark_run_deleting(conn, run_id, requested_by, expiry=expiry)
+        conn.commit()
+    prefixes = _preflight(conn, run_id, scratch_bucket)
+
     if prefixes:
         s3 = s3_client if s3_client is not None else _default_s3_client()
         for bucket, prefix in prefixes:
@@ -260,20 +343,23 @@ def delete_run(
             report.objects_deleted += objects
             report.versions_deleted += versions
 
-    with conn.cursor() as cur:
-        for table in SCIENCE_TABLES:
-            # table comes from the fixed tuple above, never caller input.
-            cur.execute(f"DELETE FROM {table} WHERE run = %s", (run_id,))
-            report.rows_deleted[table] = cur.rowcount
-        cur.execute(
-            "UPDATE product_instances SET deletion_state = 'deleted' "
-            "WHERE run = %s AND deletion_state <> 'deleted'",
-            (run_id,),
-        )
-        report.instances_marked = cur.rowcount
-
-    mark_run_deleted(conn, run_id)
-    conn.commit()
+    try:
+        with conn.cursor() as cur:
+            for table in SCIENCE_TABLES:
+                # table comes from the fixed tuple above, never caller input.
+                cur.execute(f"DELETE FROM {table} WHERE run = %s", (run_id,))
+                report.rows_deleted[table] = cur.rowcount
+            cur.execute(
+                "UPDATE product_instances SET deletion_state = 'deleted' "
+                "WHERE run = %s AND deletion_state <> 'deleted'",
+                (run_id,),
+            )
+            report.instances_marked = cur.rowcount
+        mark_run_deleted(conn, run_id)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     return report
 
 
@@ -286,10 +372,16 @@ def expire_runs(
 ) -> list[DeletionReport]:
     """Delete every expired scratch run; return one report per run tried.
 
-    A run is expired when it is ``scratch``, ``expires_at < now`` (the
+    COMMITS on ``conn``: call it on a connection with no pending work.
+
+    A run is a candidate when it is ``scratch``, ``expires_at < now`` (the
     database's ``now()`` when ``now`` is ``None``), not pinned, and
-    ``open`` or ``finished``. Each is deleted with :func:`delete_run` as
-    its owner. A refusal or cleanup failure is rolled back, caught and
+    ``open`` or ``finished``. Each is deleted with :func:`delete_run` with
+    ``expiry=True``: the sweeper is an explicitly authorised actor, so
+    ``mark_run_deleting`` replaces the owner check with the expiry
+    predicate (scratch, not pinned, ``expires_at < now()``), re-checked
+    under the run's row lock -- a run pinned after this listing is
+    refused there. A refusal or cleanup failure is rolled back, caught and
     recorded in that run's report (``refused``), and the sweep moves on.
     """
     with conn.cursor() as cur:
@@ -309,10 +401,11 @@ def expire_runs(
     conn.commit()
 
     reports: list[DeletionReport] = []
-    for run_id, owner in candidates:
+    for run_id, _owner in candidates:
         try:
             reports.append(delete_run(
-                conn, run_id, owner, s3_client=s3_client, scratch_bucket=scratch_bucket))
+                conn, run_id, EXPIRY_ACTOR, s3_client=s3_client,
+                scratch_bucket=scratch_bucket, expiry=True))
         except RunModelError as exc:
             conn.rollback()
             reports.append(DeletionReport(run_id=run_id, refused=str(exc)))
