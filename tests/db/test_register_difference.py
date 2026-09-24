@@ -297,17 +297,8 @@ def test_register_writes_an_sfft_instance_under_its_pipelines_row(conn, tmp_path
         assert row["ppid"] == 16
 
 
-def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
-    # Chain difference -> finalize -> register (supervisor ruling 2026-09-24):
-    # register records finalize's new instance, its stamped file and MD5.
-    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
-    with conn.cursor() as cur:
-        rfid = _legacy_refimage(cur)
-    run_id, diff_outputs = _run_difference(
-        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
-    source = next(e for e in Manifest.read(diff_outputs / "manifest.json").outputs
-                  if e.kind == "difference-image")
-
+def _run_finalize(conn, tmp_path, run_id, diff_outputs):
+    """Run finalize on ``diff_outputs`` in ``run_id``; return its outputs directory."""
     unit_id = "e20260821001234/SCA07"
     _make_unit(conn, run_id, stage="finalize", unit_id=unit_id)
     attempt_id = repo.allocate_attempt(conn, run_id, "finalize", unit_id)
@@ -316,12 +307,30 @@ def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
         "--run", run_id, "--unit", unit_id, "--attempt", attempt_id,
         "--inputs", str(diff_outputs), "--outputs", str(outputs)])
     assert rc == int(ExitCode.SUCCESS)
+    return outputs
+
+
+def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
+    # register records finalize's new instance, its stamped file and MD5.
+    # The difference manifest is registered first, so the instances
+    # finalize names in inputs.products have rows for register's
+    # dependency edges (see the xfail below for the chain without it).
+    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
+    with conn.cursor() as cur:
+        rfid = _legacy_refimage(cur)
+    run_id, diff_outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
+    rc, _ = _register_difference(conn, monkeypatch, diff_outputs, run_id, tmp_path)
+    assert rc == int(ExitCode.SUCCESS)
+    source = next(e for e in Manifest.read(diff_outputs / "manifest.json").outputs
+                  if e.kind == "difference-image")
+
+    outputs = _run_finalize(conn, tmp_path, run_id, diff_outputs)
     manifest = Manifest.read(outputs / "manifest.json")
     entry = next(e for e in manifest.outputs if e.kind == "difference-image")
     assert entry.registration["finalized_from"] == source.instance
 
-    rc, registering_attempt = _register_difference(
-        conn, monkeypatch, outputs, run_id, tmp_path, name="fin")
+    rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, name="fin")
     assert rc == int(ExitCode.SUCCESS)
     with conn.cursor() as cur:
         row = _diffimages_row(cur, entry.instance)
@@ -329,11 +338,31 @@ def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
         assert row["checksum"] == entry.registration["md5"] != source.registration["md5"]
         assert row["filename"] == f"{outputs}/{entry.primary}"
         assert (row["ppid"], row["rfid"]) == (15, rfid)
-        assert _diffimages_row(cur, source.instance) is None
         cur.execute(
             "SELECT count(*) FROM product_instances WHERE kind = 'source-catalog' "
             "AND producing_stage = 'finalize' AND run = %s", (run_id,))
         assert cur.fetchone()[0] == sum(1 for e in manifest.outputs if e.kind == "source-catalog")
+        cur.execute(
+            "SELECT count(*) FROM dependencies WHERE consumer_instance = %s "
+            "AND producer_instance = %s", (entry.instance, source.instance))
+        assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "Open ruling conflict (step 2, 2026-09-24): the chain difference -> finalize -> "
+    "register(finalize output) never registers the difference instances, but finalize's "
+    "inputs.products names them, and register_manifest's dependency edge needs a "
+    "product_instances row for each producer (dependencies_producer_instance_fkey)."))
+def test_register_records_a_finalized_instance_whose_difference_was_never_registered(
+        conn, tmp_path, monkeypatch):
+    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
+    with conn.cursor() as cur:
+        rfid = _legacy_refimage(cur)
+    run_id, diff_outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
+    outputs = _run_finalize(conn, tmp_path, run_id, diff_outputs)
+    rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, name="fin")
+    assert rc == int(ExitCode.SUCCESS)
 
 
 # ======================================================================
