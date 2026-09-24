@@ -31,24 +31,32 @@ The work list
 The work list is *every ASDF file in the input bucket that has not yet been
 ingested*.
 
-A file counts as ingested when a row for its output FITS file already exists in
-the ``L2Files`` database table.  That row is the only record of the ingest that
-survives a restart, so it, and not the contents of the output bucket, is what
-decides whether a file still has to be done.  The test is on a row existing at
-all, rather than on it being the best version (``vbest > 0``), because a row
-that exists means the file has been ingested; ingesting it again would add a
-second row for the same file rather than repair the first.
+A file counts as ingested when its output FITS file has a **current**
+(``vbest > 0``) row in the ``L2Files`` database table.  That row is the only
+record of the ingest that survives a restart, so it, and not the contents of the
+output bucket, is what decides whether a file still has to be done.
 
-.. note::
-   This differs from ``db_register_socsim_files.py``, which queried
-   ``where vbest > 0`` and would therefore re-register a file whose earlier
-   registration had not been finalized.
+.. important::
+   The test has to be on ``vbest > 0``, not on a row existing at all.  A
+   redelivered ASDF file keeps its name and is ingested again, which supersedes
+   the earlier ``L2Files`` record: ``vbest`` goes to 0 on the old row and the new
+   row becomes the best version.  A superseded row is therefore exactly the state
+   that has to let a file back onto the work list, and counting it as ingested
+   would make a redelivery invisible to this script forever.
 
 The output bucket is listed as well, but never to decide whether a file has to
-be ingested.  A converted FITS file sitting there without a database row was
-left behind by a run that stopped between the upload and the registration; that
-file is downloaded and registered rather than converted a second time, since the
-conversion, and the SIP fit inside it, is by far the most expensive step.
+be ingested.  A converted FITS file sitting there with no current database row,
+and **newer** than the ASDF file it came from, was left behind by a run that
+stopped between the upload and the registration; that file is downloaded and
+registered rather than converted a second time, since the conversion, and the
+SIP fit inside it, is by far the most expensive step.
+
+A converted FITS file **older** than its ASDF file is a different thing
+entirely: it was made from a *previous* delivery of that file, and the
+redelivery is precisely the case where the S3 object name is unchanged but the
+pixels are not.  Reusing it would register the superseded data as the new
+version, so it is converted afresh.  The two are told apart by the
+last-modified times, which come free with the S3 listings.
 
 Within a run, the work list is sorted by SCA and then by observation, so that
 the files belonging to one exposure are spread across the list instead of being

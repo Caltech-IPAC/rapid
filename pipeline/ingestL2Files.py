@@ -19,13 +19,19 @@ written to S3 by one script and pulled back down by the other.  It also removes
 the window in which a converted file sits in the output bucket unregistered.
 
 The work list is "every ASDF file in the input bucket that has not yet been
-ingested".  A file counts as ingested when a row for its output FITS file
-already exists in the L2Files database table, which is the only record that
-survives a restart of this script.  The output bucket is consulted as well, but
-never to decide whether a file has to be ingested: a converted file sitting
-there without a database row was left by a run that stopped between the upload
-and the registration, and is downloaded and registered rather than converted a
-second time.
+ingested".  A file counts as ingested when its output FITS file has a current
+(vbest > 0) row in the L2Files database table, which is the only record of the
+ingest that survives a restart of this script.  It has to be vbest rather than
+the mere existence of a row: a redelivered ASDF file keeps its name and is
+ingested again, which supersedes the earlier row, and a superseded row must let
+the file back onto the work list rather than hide it.
+
+The output bucket is consulted as well, but never to decide whether a file has
+to be ingested.  A converted FITS file sitting there with no current database
+row, and NEWER than the ASDF file it came from, was left by a run that stopped
+between the upload and the registration; it is downloaded and registered rather
+than converted a second time.  One that is OLDER than its ASDF file was made
+from a previous delivery of that file and is stale, so it is converted afresh.
 
 
 Output FITS layout
@@ -1570,18 +1576,23 @@ def output_fits_object_name(input_asdf_file):
     return name + ".fits.gz"
 
 
-def list_bucket_object_names(bucket_name,prefix="",suffixes=None):
+def list_bucket_objects(bucket_name,prefix="",suffixes=None):
 
     '''
-    Return the names of the objects in an S3 bucket, paging through a listing of any length
-    and keeping only the ones ending in one of the given suffixes.  All the suffixes are
-    matched in one pass, because these buckets hold tens of thousands of objects and a
-    separate listing per suffix would page through all of them again.
+    Return {object name: last-modified datetime} for the objects in an S3 bucket, paging
+    through a listing of any length and keeping only the ones ending in one of the given
+    suffixes.  All the suffixes are matched in one pass, because these buckets hold tens of
+    thousands of objects and a separate listing per suffix would page through all of them
+    again.
+
+    The modification times come free with the listing, and are what lets the caller tell a
+    converted file still waiting to be registered from one left over from an earlier
+    delivery of the same ASDF file.
     '''
 
     s3_client = boto3.client('s3')
 
-    object_names = []
+    objects = {}
 
     paginator = s3_client.get_paginator('list_objects_v2')
 
@@ -1594,23 +1605,25 @@ def list_bucket_object_names(bucket_name,prefix="",suffixes=None):
             if suffixes and not key.endswith(tuple(suffixes)):
                 continue
 
-            object_names.append(key)
+            objects[key] = entry['LastModified']
 
-    return object_names
+    return objects
 
 
 def get_already_ingested_fits_files(dbh):
 
     '''
-    Return the set of L2 FITS filenames, without their S3-bucket names, that already have a
+    Return the set of L2 FITS filenames, without their S3-bucket names, that have a CURRENT
     row in the L2Files database table.
 
-    The test is on a row existing at all, not on it being the best version, because a row
-    that exists means the file has been ingested; re-ingesting it would add a second row for
-    the same file rather than repair the first.
+    The test has to be on vbest > 0, not on a row existing at all.  A redelivered ASDF file
+    keeps its name and is ingested again, which supersedes the earlier L2Files record --
+    vbest goes to 0 on the old row and the new row becomes the best version.  A superseded
+    row is therefore exactly the state that has to let a file back onto the work list, and
+    counting it as ingested would make a redelivery invisible to this script forever.
     '''
 
-    query = "select (regexp_match(filename, '.+/(.+)'))[1] from l2files;"
+    query = "select (regexp_match(filename, '.+/(.+)'))[1] from l2files where vbest > 0;"
 
     records = dbh.execute_sql_queries([query],debug)
 
@@ -1626,7 +1639,7 @@ def get_already_ingested_fits_files(dbh):
 # Methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(asdf_files,index_thread,existing_output_fits_files=None):
+def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None):
 
     '''
     Convert and register the share of the work list belonging to one process.
@@ -1635,14 +1648,16 @@ def run_single_core_job(asdf_files,index_thread,existing_output_fits_files=None)
     child process, rather than inherited from the parent, so that no two processes can end up
     sharing one connection.
 
-    `existing_output_fits_files` is the set of objects already in the output bucket.  A file
-    named in it was converted by an earlier run (or by convert_socsims.py, before this script
-    replaced it) but never registered, so it is downloaded and registered rather than
-    converted again -- the conversion is by far the most expensive step.
+    `reusable_output_fits_files` is the set of output objects the main program found already
+    in the output bucket AND newer than the ASDF file they came from.  Such a file was
+    converted by an earlier run (or by convert_socsims.py, before this script replaced it)
+    but never registered, so it is downloaded and registered rather than converted again --
+    the conversion is by far the most expensive step.  An output object older than its ASDF
+    file is stale, is not in this set, and is converted afresh.
     '''
 
-    if existing_output_fits_files is None:
-        existing_output_fits_files = set()
+    if reusable_output_fits_files is None:
+        reusable_output_fits_files = set()
 
     thread_start_time_benchmark = time.time()
 
@@ -1698,7 +1713,7 @@ def run_single_core_job(asdf_files,index_thread,existing_output_fits_files=None)
 
         try:
 
-            if s3_object_name in existing_output_fits_files:
+            if s3_object_name in reusable_output_fits_files:
 
 
                 # Already converted by an earlier run, but not registered, so take the
@@ -1821,7 +1836,7 @@ def run_single_core_job(asdf_files,index_thread,existing_output_fits_files=None)
     return f"Finish normally for index_thread = {index_thread}: n_ingested = {n_ingested}, n_failed = {n_failed}"
 
 
-def execute_parallel_processes(asdf_files_list,num_cores=None,existing_output_fits_files=None):
+def execute_parallel_processes(asdf_files_list,num_cores=None,reusable_output_fits_files=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()
@@ -1832,7 +1847,7 @@ def execute_parallel_processes(asdf_files_list,num_cores=None,existing_output_fi
 
         # Submit all tasks to the executor and store the futures in a list.
 
-        futures = [executor.submit(run_single_core_job,asdf_files_list,thread_index,existing_output_fits_files)
+        futures = [executor.submit(run_single_core_job,asdf_files_list,thread_index,reusable_output_fits_files)
                    for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress.
@@ -1891,29 +1906,31 @@ if __name__ == '__main__':
     # The FITS files already in the output bucket.  These never decide whether a file still
     # has to be ingested -- the database, above, decides that -- but a file that is in the
     # bucket and not in the database was converted by an earlier run that did not get as far
-    # as registering it, and is downloaded rather than converted again.
+    # as registering it, and can be downloaded rather than converted again.
 
-    existing_output_fits_files = set(list_bucket_object_names(bucket_name_output,
-                                                             suffixes=(".fits.gz",)))
+    existing_output_fits_objects = list_bucket_objects(bucket_name_output,
+                                                       suffixes=(".fits.gz",))
 
-    print(f"n_existing_output_fits_files = {len(existing_output_fits_files)}")
+    print(f"n_existing_output_fits_objects = {len(existing_output_fits_objects)}")
 
 
     # Parse the ASDF files in the input S3 bucket, and keep the ones not yet ingested.
 
-    input_asdf_object_names = list_bucket_object_names(bucket_name_input,
-                                                      prefix=input_prefix,
-                                                      suffixes=(".asdf",".asdf.gz"))
+    input_asdf_objects = list_bucket_objects(bucket_name_input,
+                                             prefix=input_prefix,
+                                             suffixes=(".asdf",".asdf.gz"))
 
-    print(f"n_input_asdf_files = {len(input_asdf_object_names)}")
+    print(f"n_input_asdf_files = {len(input_asdf_objects)}")
 
     input_asdf_files = []
     root_names = []
     sca_nums = []
 
+    reusable_output_fits_files = set()
+
     n_already_ingested = 0
 
-    for input_asdf_file in sorted(input_asdf_object_names):
+    for input_asdf_file in sorted(input_asdf_objects):
 
         s3_object_name = output_fits_object_name(input_asdf_file)
 
@@ -1927,6 +1944,19 @@ if __name__ == '__main__':
             print(f"*** Warning: Unexpected filename {input_asdf_file}; skipping...")
             continue
 
+
+        # A converted FITS file in the output bucket may be reused only if it is newer than
+        # the ASDF file it came from.  An older one was made from a PREVIOUS delivery of that
+        # ASDF file -- the redelivery that put this file back on the work list is exactly the
+        # case where the object name is unchanged but the pixels are not -- and reusing it
+        # would register the superseded data as the new version.
+
+        output_last_modified = existing_output_fits_objects.get(s3_object_name)
+
+        if output_last_modified is not None and \
+           output_last_modified > input_asdf_objects[input_asdf_file]:
+            reusable_output_fits_files.add(s3_object_name)
+
         input_asdf_files.append(input_asdf_file)
         root_names.append(fname_fields[0] + fname_fields[1])
         sca_nums.append(fname_fields[2])
@@ -1936,6 +1966,7 @@ if __name__ == '__main__':
             break
 
     print(f"n_already_ingested = {n_already_ingested}")
+    print(f"n_reusable_output_fits_files = {len(reusable_output_fits_files)}")
     print(f"Total number of L2 files to ingest = {len(input_asdf_files)}")
 
     if len(input_asdf_files) == 0:
@@ -1961,10 +1992,10 @@ if __name__ == '__main__':
     ###############################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(sorted_input_asdf_files,num_cores,existing_output_fits_files)
+        execute_parallel_processes(sorted_input_asdf_files,num_cores,reusable_output_fits_files)
     else:
         thread_index = 0
-        print(run_single_core_job(sorted_input_asdf_files,thread_index,existing_output_fits_files))
+        print(run_single_core_job(sorted_input_asdf_files,thread_index,reusable_output_fits_files))
 
 
     # Code-timing benchmark.
