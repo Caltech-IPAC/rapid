@@ -11,7 +11,9 @@ recorded in the alert outbox. Its field list, fixed with the `alerts` stage
 - members: role ``container`` (the primary, the ``.avro`` file) and role
   ``summary`` (`dev`'s per-chip summary JSON), both required;
 - registration: ``alert_count``, ``dropped_count``, ``schema_version``,
-  ``difference``, ``source_set``, ``association_set``, ``statistics_set``.
+  ``difference``, ``source_set``, ``association_sets`` (one or more: an
+  image can span fields) and ``statistics_sets`` (zero or more), the last
+  two lists of instance ids.
 
 The `alerts` stage writes the container's outbox rows and registers both
 of its outputs itself, in its own transaction. `register` validates an
@@ -34,7 +36,7 @@ ALERT_SET_KIND = "alert-set"
 KEY_FIELDS = ("difference", "schema_version")
 ROLES = ("container", "summary")
 REGISTRATION_FIELDS = ("alert_count", "dropped_count", "schema_version", "difference",
-                       "source_set", "association_set", "statistics_set")
+                       "source_set", "association_sets", "statistics_sets")
 
 _VERSION_RE = re.compile(r"^[0-9]{2}\.[0-9]{2}$")
 
@@ -88,13 +90,13 @@ def validate_alert_container_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
              "registration schema_version differs from the key's")
     _require(registration["difference"] == key["difference"],
              "registration difference differs from the key's")
-    for name in ("source_set", "association_set"):
-        _require(isinstance(registration[name], str) and bool(registration[name]),
-                 f"{name} must be a non-empty instance id")
-    _require(registration["statistics_set"] is None
-             or (isinstance(registration["statistics_set"], str)
-                 and bool(registration["statistics_set"])),
-             "statistics_set must be an instance id or null")
+    _require(isinstance(registration["source_set"], str) and bool(registration["source_set"]),
+             "source_set must be a non-empty instance id")
+    for name, minimum in (("association_sets", 1), ("statistics_sets", 0)):
+        ids = registration[name]
+        _require(isinstance(ids, list) and len(ids) >= minimum
+                 and all(isinstance(i, str) and i for i in ids),
+                 f"{name} must be a list of at least {minimum} instance ids, got {ids!r}")
     return registration
 
 

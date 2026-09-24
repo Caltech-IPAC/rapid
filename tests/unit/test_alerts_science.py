@@ -31,7 +31,7 @@ def _source(sid, **overrides):
 
 
 def _object_row(object_id, sid, **overrides):
-    row = {"sid": sid, "merges_aid": object_id, "aid": object_id, "ra0": 269.45, "dec0": -28.77,
+    row = {"sid": sid, "merges_aid": object_id, "association_set": "A1", "aid": object_id, "ra0": 269.45, "dec0": -28.77,
            "stdevra": None, "stdevdec": None, "nsources": 1}
     row.update(overrides)
     return row
@@ -123,18 +123,38 @@ def test_assemble_alert_is_devs_packet():
     assert decoded["diaSourceId"] == 1 and decoded["cutoutDifference"] == b"FITS"
 
 
-def test_container_byte_ranges_decode_one_record_each():
+def _container(sids, cutout_bytes, marker=b"0123456789abcdef"):
     buf = io.BytesIO()
-    container = assemble.AlertContainer(buf, assemble.load_schema())
-    ranges = [container.write(_alert(sid)) for sid in (1, 2, 3)]
-    raw = buf.getvalue()
-    reader = fastavro.reader(io.BytesIO(raw))
-    assert reader.codec == "deflate"
-    assert [r["diaSourceId"] for r in reader] == [1, 2, 3]
-    header_end = ranges[0][0]
-    for sid, (offset, length) in zip((1, 2, 3), ranges):
-        one = list(fastavro.reader(io.BytesIO(raw[:header_end] + raw[offset:offset + length])))
-        assert [r["diaSourceId"] for r in one] == [sid]
+    container = assemble.AlertContainer(buf, assemble.load_schema(), sync_marker=marker)
+    assert [container.write(_alert(sid, cutout=b"x" * cutout_bytes)) for sid in sids] == \
+        list(range(len(sids)))
+    container.flush()
+    return buf.getvalue()
+
+
+def test_locate_records_gives_each_records_block_and_index():
+    # 6 kB records: fastavro closes a block at 16 000 bytes, so three share one.
+    raw = _container([1, 2, 3, 4], 6000)
+    assert fastavro.reader(io.BytesIO(raw)).codec == "deflate"
+    locators = assemble.locate_records(io.BytesIO(raw))
+    assert [loc.dia_source_id for loc in locators] == [1, 2, 3, 4]
+    assert [loc.record_ordinal for loc in locators] == [0, 1, 2, 3]
+    assert [loc.record_index for loc in locators] == [0, 1, 2, 0]
+    assert len({loc.block_offset for loc in locators[:3]}) == 1
+    assert locators[3].block_offset == locators[0].block_offset + locators[0].block_length
+    header_end = locators[0].block_offset
+    for loc in locators:
+        block = raw[loc.block_offset:loc.block_offset + loc.block_length]
+        records = list(fastavro.reader(io.BytesIO(raw[:header_end] + block)))
+        assert records[loc.record_index]["diaSourceId"] == loc.dia_source_id
+
+
+def test_the_same_records_and_marker_give_the_same_bytes():
+    assert _container([1, 2], 10) == _container([1, 2], 10)
+    assert _container([1, 2], 10) != _container([1, 2], 10, marker=b"fedcba9876543210")
+    assert assemble.sync_marker_for("A") == assemble.sync_marker_for("A") != \
+        assemble.sync_marker_for("B")
+    assert len(assemble.sync_marker_for("A")) == 16
 
 
 def test_an_empty_container_is_a_readable_header():
@@ -145,7 +165,7 @@ def test_an_empty_container_is_a_readable_header():
 
 def test_index_associations_keeps_the_lowest_aid_and_the_orphans():
     rows = [_object_row(5, 1), _object_row(7, 1), _object_row(8, 2, aid=None)]
-    history = [{**{c: getattr(_source(3, mjdobs=61000.0), c) for c in
+    history = [{"object_set": "A1", **{c: getattr(_source(3, mjdobs=61000.0), c) for c in
                    ("sid", "expid", "sca", "mjdobs", "ra", "dec", "xfit", "yfit", "band", "xerr",
                     "yerr", "fluxfit", "fluxerr", "flags", "field", "hp6", "hp9", "pid",
                     "isdiffpos", "qfit", "cfit", "redchi", "npixfit", "sharpness",
@@ -153,7 +173,7 @@ def test_index_associations_keeps_the_lowest_aid_and_the_orphans():
     indexed = assemble.index_associations(rows, history)
     assert indexed.objects_by_sid[1]["aid"] == 5
     assert indexed.orphans_by_sid == {2: [8]}
-    assert [s.sid for s in indexed.history_by_aid[5]] == [3]
+    assert [s.sid for s in indexed.history[("A1", 5)]] == [3]
 
 
 def test_batch_produce_drops_orphans_and_unassociated_with_reasons():
@@ -167,9 +187,11 @@ def test_batch_produce_drops_orphans_and_unassociated_with_reasons():
     written = assemble.batch_produce(
         sources, indexed, container=assemble.AlertContainer(buf, schema), stats=stats,
         schema=schema, window_days=365.25,
-        difference_image=(np.zeros((50, 50), dtype=np.float32), None))
+        difference_image=(np.zeros((50, 50), dtype=np.float32), None), time_proc=61274.0)
     assert [w.sid for w in written] == [1]
-    assert written[0].record_index == 0 and written[0].aid == 5
+    assert written[0].record_ordinal == 0 and written[0].aid == 5
+    (alert,) = fastavro.reader(io.BytesIO(buf.getvalue()))
+    assert alert["diaSource"]["timeProcessedMjd"] == 61274.0
     assert [(d["sid"], d["reason"]) for d in stats.dropped] == [
         (9, "flagged"), (2, "orphan"), (3, "unassociated")]
     assert stats.dropped_count == 3 and stats.n_failed == 2 and stats.n_flagged == 1

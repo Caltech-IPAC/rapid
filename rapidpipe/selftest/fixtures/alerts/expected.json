@@ -14,17 +14,36 @@
       {"sid": 105, "x": 5.0, "y": 190.0},
       {"sid": 106, "x": 150.0, "y": 30.0, "isdiffpos": false}
     ],
+    "contaminating_sources": [
+      {"sid": 107, "x": 120.0, "y": 120.0}
+    ],
     "history": [
       {"sid": 51, "x": 100.2, "y": 100.1, "days_before": 30, "pid": 4000, "expid": 1200},
       {"sid": 50, "x": 100.1, "y": 99.9, "days_before": 400, "pid": 3900, "expid": 1200}
     ],
-    "merges": [[9001, 103], [9001, 104], [9001, 51], [9001, 50], [9002, 102], [9003, 105], [9004, 106]],
-    "astroobjects": {"9001": 50, "9003": 105, "9004": 106},
-    "astroobjects_in_another_set": {"9002": 102},
-    "astroobjectsmeta": [
-      {"aid": 9001, "nsources": 4, "stdevra": 1e-05, "stdevdec": 2e-05},
-      {"aid": 9003, "nsources": 1, "stdevra": 0.0, "stdevdec": 0.0}
-    ],
+    "merges": {
+      "association": [[9001, 103], [9001, 104], [9001, 51], [9001, 50], [9002, 102], [9003, 105]],
+      "association_2": [[9004, 106]],
+      "unnamed_association": [[9999, 103], [9998, 107]]
+    },
+    "astroobjects": {
+      "association": {"9001": 50, "9003": 105},
+      "association_2": {"9004": 106},
+      "unnamed_association": {"9002": 102, "9999": 103, "9998": 107}
+    },
+    "astroobjectsmeta": {
+      "statistics": [
+        {"aid": 9001, "nsources": 4, "stdevra": 1e-05, "stdevdec": 2e-05},
+        {"aid": 9003, "nsources": 1, "stdevra": 0.0, "stdevdec": 0.0}
+      ],
+      "statistics_2": [
+        {"aid": 9004, "nsources": 7, "stdevra": 3e-05, "stdevdec": 3e-05}
+      ],
+      "unnamed_statistics": [
+        {"aid": 9001, "nsources": 99, "stdevra": 9.0, "stdevdec": 9.0},
+        {"aid": 9003, "nsources": 99, "stdevra": 9.0, "stdevdec": 9.0}
+      ]
+    },
     "reference_catalog": [
       {"number": 1, "x": 100.5, "y": 100.5, "class_star": 0.9},
       {"number": 2, "x": 6.0, "y": 189.0, "class_star": 0.1}
@@ -35,11 +54,12 @@
     "alerts": [103, 104, 105, 106],
     "dropped": {"101": "flagged", "102": "orphan"},
     "prv_counts": {"103": 2, "104": 2, "105": 0, "106": 0},
-    "n_dia_sources": {"103": 4, "104": 4, "105": 1, "106": 1},
+    "n_dia_sources": {"103": 4, "104": 4, "105": 1, "106": 7},
     "objects": {"103": 9001, "104": 9001, "105": 9003, "106": 9004},
     "first_seen_days_before": {"103": 30, "104": 30, "105": 0, "106": 0},
     "ref_star_matches": {"103": 1, "104": 1, "105": 0, "106": 0},
     "ref_galaxy_matches": {"103": 0, "104": 0, "105": 1, "106": 0},
-    "stamp_side": 129
+    "stamp_side": 17,
+    "min_records_in_largest_block": 2
   }
 }

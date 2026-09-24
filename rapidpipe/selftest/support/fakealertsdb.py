@@ -17,9 +17,9 @@
   the stage wrote: outbox rows, registered manifests, `nalertpackets`
   updates, commits. :func:`fake_database` is the factory
   ``RAPIDPIPE_ALERTS_DATABASE`` names for a stage run as a subprocess: it
-  reads its seed from the JSON file ``RAPIDPIPE_FAKE_ALERTS_SEED`` names and
-  writes its state, on commit, to the JSON file ``RAPIDPIPE_FAKE_ALERTS_STATE``
-  names.
+  reads its seed from the JSON file ``RAPIDPIPE_FAKE_ALERTS_SEED`` names,
+  restores what earlier invocations committed from the JSON file
+  ``RAPIDPIPE_FAKE_ALERTS_STATE`` names, and writes its state there on commit.
 
 Packaged under ``rapidpipe.selftest.support`` (not ``tests/``, which the
 pipeline image excludes) so ``rapidpipe selftest --stage alerts`` can import
@@ -194,7 +194,7 @@ class FakeAlertsDatabase:
 
     def outbox_rows(self, instance: str) -> list[dict]:
         return sorted((r for r in self.outbox if r["instance"] == instance),
-                      key=lambda r: r["record_index"])
+                      key=lambda r: r["record_ordinal"])
 
     def result_set_kinds(self, instances: list[str]) -> dict[str, dict]:
         return {i: {"kind": p["kind"], "complete": p.get("complete"), "key": p.get("key", {})}
@@ -219,38 +219,40 @@ class FakeAlertsDatabase:
         return [self._joined(s) for s in sorted(self.sources, key=lambda s: s["sid"])
                 if s["result_set"] == source_set and s["pid"] == pid and s["flags"] == 0]
 
-    def associations(self, association_set, statistics_set, sids) -> list[dict]:
-        objects = {o["aid"]: o for o in self.astroobjects if o["result_set"] == association_set}
-        meta = {m["aid"]: m for m in self.astroobjectsmeta
-                if statistics_set is not None and m["result_set"] == statistics_set}
-        merges = [m for m in self.merges if m["result_set"] == association_set]
+    def associations(self, statistics_by_association, sids) -> list[dict]:
         rows = []
-        for m in sorted(merges, key=lambda m: (m["sid"], m["aid"])):
-            if m["sid"] not in sids:
-                continue
-            obj = objects.get(m["aid"])
-            stats = meta.get(m["aid"]) if obj else None
-            count = sum(1 for m2 in merges if obj and m2["aid"] == obj["aid"])
-            rows.append({
-                "sid": m["sid"], "merges_aid": m["aid"],
-                "aid": obj["aid"] if obj else None,
-                "ra0": obj["ra0"] if obj else None, "dec0": obj["dec0"] if obj else None,
-                "stdevra": stats["stdevra"] if stats else None,
-                "stdevdec": stats["stdevdec"] if stats else None,
-                "nsources": (stats["nsources"] if stats else count) if obj else None,
-            })
-        return rows
+        for assoc, stats_set in statistics_by_association.items():
+            objects = {o["aid"]: o for o in self.astroobjects if o["result_set"] == assoc}
+            meta = {m["aid"]: m for m in self.astroobjectsmeta
+                    if stats_set is not None and m["result_set"] == stats_set}
+            merges = [m for m in self.merges if m["result_set"] == assoc]
+            for m in merges:
+                if m["sid"] not in sids:
+                    continue
+                obj = objects.get(m["aid"])
+                stats = meta.get(m["aid"]) if obj else None
+                count = sum(1 for m2 in merges if obj and m2["aid"] == obj["aid"])
+                rows.append({
+                    "sid": m["sid"], "merges_aid": m["aid"], "association_set": assoc,
+                    "aid": obj["aid"] if obj else None,
+                    "ra0": obj["ra0"] if obj else None, "dec0": obj["dec0"] if obj else None,
+                    "stdevra": stats["stdevra"] if stats else None,
+                    "stdevdec": stats["stdevdec"] if stats else None,
+                    "nsources": (stats["nsources"] if stats else count) if obj else None,
+                })
+        return sorted(rows, key=lambda r: (r["sid"], r["merges_aid"], r["association_set"]))
 
-    def history(self, association_set, aids, min_mjd) -> list[dict]:
+    def history(self, objects, min_mjd) -> list[dict]:
+        wanted = {(o[0], int(o[1])) for o in objects}
         by_sid = {s["sid"]: s for s in self.sources}
         rows = []
         for m in self.merges:
-            if m["result_set"] != association_set or m["aid"] not in aids:
+            if (m["result_set"], m["aid"]) not in wanted:
                 continue
             s = by_sid.get(m["sid"])
             if s is None or s["mjdobs"] < min_mjd:
                 continue
-            rows.append({"object_aid": m["aid"], **self._joined(s)})
+            rows.append({"object_set": m["result_set"], "object_aid": m["aid"], **self._joined(s)})
         return sorted(rows, key=lambda r: (r["mjdobs"], r["sid"]))
 
     # -- writes ----------------------------------------------------------
@@ -268,9 +270,9 @@ class FakeAlertsDatabase:
         for row in rows:
             if set(row) != set(OUTBOX_COLUMNS):
                 raise ValueError(f"outbox row columns {sorted(row)} != {sorted(OUTBOX_COLUMNS)}")
-            if any((r["instance"], r["candidate"]) == (row["instance"], row["candidate"])
-                   for r in self.outbox):
-                raise ValueError("duplicate (instance, candidate) in alert_outbox")
+            for key in ("candidate", "record_ordinal"):
+                if any((r["instance"], r[key]) == (row["instance"], row[key]) for r in self.outbox):
+                    raise ValueError(f"duplicate (instance, {key}) in alert_outbox")
             self.outbox.append(dict(row))
 
     def set_nalertpackets(self, instance: str, run: str) -> int:
@@ -293,10 +295,23 @@ SEED_ENV = "RAPIDPIPE_FAKE_ALERTS_SEED"
 STATE_ENV = "RAPIDPIPE_FAKE_ALERTS_STATE"
 
 
+#: What a commit made, restored from the state file when one exists, so a
+#: second invocation (a rerun of the same attempt) sees the first's rows.
+_COMMITTED = ("product_instances", "members", "outbox", "registered", "nalertpackets", "commits")
+
+
 def fake_database():
-    """The ``RAPIDPIPE_ALERTS_DATABASE`` factory: seeded from, and saved to, JSON files."""
+    """The ``RAPIDPIPE_ALERTS_DATABASE`` factory: seeded from, and saved to, JSON files.
+
+    When the state file already exists, what earlier invocations committed
+    is restored from it on top of the seed.
+    """
     db = FakeAlertsDatabase(json.loads(Path(os.environ[SEED_ENV]).read_text()))
     state_path = Path(os.environ[STATE_ENV])
+    if state_path.exists():
+        state = json.loads(state_path.read_text())
+        for name in _COMMITTED:
+            setattr(db, name, state[name])
 
     def save(database: FakeAlertsDatabase) -> None:
         state_path.write_text(json.dumps(database.state(), indent=2, sort_keys=True))

@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------------------------------------------------
--- 20260924-03-alert-outbox.sql
+-- 20260924-07-alert-outbox.sql
 --
 -- The alert outbox: one row per alert the `alerts` stage wrote into an Avro
 -- object container (products page: "`alerts` writes one record per alert
@@ -24,11 +24,16 @@
 --   - `first_seen_mjd`: the alert's `diaObject.firstDiaSourceMjd`, `dev`'s
 --     "first seen" (the earliest of the trigger and its previous detections).
 --   - `ra`, `dec`: the trigger's position, with `alertnames`' CHECKs.
---   - `record_index`: the alert's 0-based position in the container.
---   - `block_offset`, `block_length`: the byte range of the Avro block that
---     holds exactly this record. The stage flushes one block per record, so
---     the range is addressable (it decodes on its own given the container's
---     header); nullable for a writer that cannot address a record.
+--   - `record_ordinal`: the alert's 0-based position in the container.
+--   - `block_offset`, `block_length`: the byte offset and size (sync marker
+--     included) of the Avro block holding the record, read back from the
+--     closed container with fastavro's block_reader; a block decodes on its
+--     own given the container's header. Nullable for a reader that cannot
+--     address blocks.
+--   - `record_index`: the record's 0-based position within that block.
+--   - `time_processed_mjd`: the diaSource.timeProcessedMjd written into every
+--     alert of the container, kept so a rerun of the same attempt can
+--     regenerate identical container bytes.
 --   - `schema_version`: the Avro schema, e.g. '00.04'.
 --   - `published_at`, `topic`, `publication_ref`: NULL until something
 --     publishes the row. Publication is designed in and off.
@@ -51,9 +56,11 @@ CREATE TABLE alert_outbox (
     first_seen_mjd double precision,
     ra double precision NOT NULL,
     dec double precision NOT NULL,
-    record_index integer NOT NULL,
+    record_ordinal integer NOT NULL,
     block_offset bigint NULL,
     block_length bigint NULL,
+    record_index integer NOT NULL,
+    time_processed_mjd double precision NOT NULL,
     schema_version text NOT NULL,
     written_at timestamptz NOT NULL DEFAULT now(),
     published_at timestamptz NULL,
@@ -61,11 +68,13 @@ CREATE TABLE alert_outbox (
     publication_ref text NULL,
     CONSTRAINT alert_outbox_ra_check CHECK ((ra >= 0.0) AND (ra < 360.0)),
     CONSTRAINT alert_outbox_dec_check CHECK ((dec >= -90.0) AND (dec <= 90.0)),
+    CONSTRAINT alert_outbox_record_ordinal_check CHECK (record_ordinal >= 0),
     CONSTRAINT alert_outbox_record_index_check CHECK (record_index >= 0),
     CONSTRAINT alert_outbox_block_range_check
         CHECK ((block_offset IS NULL) = (block_length IS NULL)
                AND (block_offset IS NULL OR (block_offset >= 0 AND block_length > 0))),
-    CONSTRAINT alert_outbox_instance_candidate_key UNIQUE (instance, candidate)
+    CONSTRAINT alert_outbox_instance_candidate_key UNIQUE (instance, candidate),
+    CONSTRAINT alert_outbox_instance_ordinal_key UNIQUE (instance, record_ordinal)
 );
 
 CREATE INDEX alert_outbox_run_idx ON alert_outbox USING btree (run);
@@ -81,10 +90,13 @@ COMMENT ON COLUMN alert_outbox.alert_name IS
     'NULL: the alert naming scheme is not decided (dev''s alertnames/computeAlertName are unused).';
 COMMENT ON COLUMN alert_outbox.candidate IS 'The triggering sources.sid.';
 COMMENT ON COLUMN alert_outbox.object IS 'The triggering source''s astroobjects aid in the association set.';
-COMMENT ON COLUMN alert_outbox.record_index IS '0-based position of the alert in the container.';
+COMMENT ON COLUMN alert_outbox.record_ordinal IS '0-based position of the alert in the container.';
+COMMENT ON COLUMN alert_outbox.record_index IS '0-based position of the alert within its Avro block.';
 COMMENT ON COLUMN alert_outbox.block_offset IS
-    'Byte offset of the Avro block holding exactly this record; with block_length, readable '
-    'on its own given the container header.';
+    'Byte offset of the Avro block holding this record; with block_length (sync marker '
+    'included), readable on its own given the container header.';
+COMMENT ON COLUMN alert_outbox.time_processed_mjd IS
+    'The timeProcessedMjd written into the container''s alerts, reused on a rerun of the attempt.';
 
 DO $$
 BEGIN

@@ -12,10 +12,14 @@ Inputs. ``--inputs`` is an input-set manifest (stage ``input-set``, unit
 finalized instance; its ``difference`` member feeds ``cutoutDifference``)
 and optionally one ``reference-catalog`` entry (its primary member, a
 SExtractor catalog, feeds ``refStarMatches``/``refGalaxyMatches``); its
-``inputs.result_sets`` names the source set, association set and
-statistics set by instance id. The stage tells them apart by
-``product_instances.kind`` and reads the parent tables ``sources``,
-``merges``, ``astroobjects`` and ``astroobjectsmeta`` by ``result_set``.
+``inputs.result_sets`` names, by instance id, exactly one source set, one or
+more association sets (an image can span fields) and any statistics sets,
+each describing one of the named association sets. The stage tells them
+apart by ``product_instances.kind`` and reads the parent tables
+``sources``, ``merges``, ``astroobjects`` and ``astroobjectsmeta`` by
+``result_set``. Triggers come only from the source set; a trigger's object
+may come from any named association set, and its history is that object's
+merges joined to ``sources`` in any source set.
 ``cutoutScience`` and ``cutoutReference`` are null in this port: those
 files are not input-set members.
 
@@ -34,9 +38,23 @@ result set are registered, one ``alert_outbox`` row per alert is written,
 and ``diffimages.nalertpackets`` is set to 1 on the run's own row for the
 difference instance. Zero alertable sources still give an empty container,
 an empty complete set and the manifest. Registration comes before the
-outbox rows because the rows reference both instances. A rerun of the same
-attempt after an uncertain commit finds the instances this attempt already
-registered and reuses them, writing nothing.
+outbox rows because the rows reference both instances. Each outbox row
+locates its alert: the Avro block's byte offset and size and the record's
+index in it, read back from the closed container with
+``fastavro.block_reader``, and its ordinal in the container.
+
+Rerun of an attempt. As in ``load``, the transaction commits before
+``run_stage`` publishes the outputs, so the rows can outlive the files. A
+rerun of the same attempt finds the instances and outbox rows it
+committed, regenerates the container and summary -- the same records in the
+same order, the sync marker derived from the attempt id, and the
+``timeProcessedMjd`` stored on its outbox rows -- checks the bytes against
+the registered members and the locators against the rows, and returns the
+same manifest without writing (exit 70 if they differ). Deterministic: the
+records, their order, cutouts, cross-matches against the same catalog,
+KONA from the same file, the Avro header and blocks, the summary JSON. Not
+deterministic: NED (a live service), and ``timeProcessedMjd`` of a committed
+attempt with zero alerts, which appears in no byte.
 
 Publication: ``[publish] kafka = true`` exits 64; nothing imports Kafka.
 
@@ -53,8 +71,11 @@ import importlib
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator
+
+from astropy.time import Time
 
 from rapidpipe.db import alerts as _alerts_db
 from rapidpipe.db import connection as _connection_module
@@ -151,12 +172,12 @@ class PostgresAlertsDatabase:
     def alertable_sources(self, source_set: str, pid: int) -> list[dict[str, Any]]:
         return self._call(_alerts_db.alertable_sources, source_set, pid)
 
-    def associations(self, association_set: str, statistics_set: str | None,
+    def associations(self, statistics_by_association: dict[str, str | None],
                      sids: list[int]) -> list[dict[str, Any]]:
-        return self._call(_alerts_db.associations, association_set, statistics_set, sids)
+        return self._call(_alerts_db.associations, statistics_by_association, sids)
 
-    def history(self, association_set: str, aids: list[int], min_mjd: float):
-        return self._call(_alerts_db.history, association_set, aids, min_mjd)
+    def history(self, objects: list[tuple[str, int]], min_mjd: float):
+        return self._call(_alerts_db.history, objects, min_mjd)
 
     def register_outputs(self, manifest: dict[str, Any], attempt_id: str) -> None:
         register_manifest(self.conn, manifest, registering_attempt_id=attempt_id)
@@ -298,11 +319,33 @@ def _primary(entry: OutputEntry) -> Member:
     return members[0]
 
 
+@dataclass(frozen=True)
+class _Sets:
+    """The input set's result sets, by kind (amendment: an image can span fields)."""
+
+    source_set: str
+    association_sets: tuple[str, ...]
+    statistics_by_association: dict[str, str | None]
+
+    @property
+    def statistics_sets(self) -> tuple[str, ...]:
+        return tuple(s for s in self.statistics_by_association.values() if s is not None)
+
+
 def _classify_result_sets(named: tuple[str, ...], found: dict[str, dict[str, Any]],
-                          difference: str) -> dict[str, str | None]:
-    """``{source-set, association-set, statistics-set: instance}`` from ``product_instances.kind``."""
+                          difference: str) -> _Sets:
+    """Tell the named result sets apart by ``product_instances.kind``.
+
+    Exactly one ``source-set`` (loaded from the input set's difference
+    instance), one or more ``association-set``, and any number of
+    ``statistics-set``, each describing one of the named association sets
+    (some value of its logical key names that set) and at most one per
+    association set. Every set must be complete.
+    """
     if not named:
         raise InputRejected("the input set names no result sets")
+    if len(set(named)) != len(named):
+        raise InputRejected("the input set names a result set twice")
     by_kind: dict[str, list[str]] = {kind: [] for kind in RESULT_SET_KINDS}
     for instance in named:
         row = found.get(instance)
@@ -315,19 +358,43 @@ def _classify_result_sets(named: tuple[str, ...], found: dict[str, dict[str, Any
         if row["complete"] is not True:
             raise InputRejected(f"{row['kind']} {instance!r} is not a complete result set")
         by_kind[row["kind"]].append(instance)
-    for kind, instances in by_kind.items():
-        if len(instances) > 1:
-            raise InputRejected(f"the input set names {len(instances)} {kind} result sets")
-    for kind in (SOURCE_SET, ASSOCIATION_SET):
-        if not by_kind[kind]:
-            raise InputRejected(f"the input set names no {kind}")
+    if len(by_kind[SOURCE_SET]) != 1:
+        raise InputRejected(
+            f"the input set names {len(by_kind[SOURCE_SET])} source sets, expected exactly one")
+    if not by_kind[ASSOCIATION_SET]:
+        raise InputRejected("the input set names no association-set")
     source_set = by_kind[SOURCE_SET][0]
     key = found[source_set]["key"] or {}
     if key.get("difference") != difference:
         raise InputRejected(
             f"source set {source_set!r} was loaded from difference instance "
             f"{key.get('difference')!r}, not the input set's {difference!r}")
-    return {kind: (instances[0] if instances else None) for kind, instances in by_kind.items()}
+    associations = tuple(by_kind[ASSOCIATION_SET])
+    statistics: dict[str, str | None] = {a: None for a in associations}
+    for stats in by_kind[STATISTICS_SET]:
+        values = set(_key_values(found[stats]["key"]))
+        described = [a for a in associations if a in values]
+        if len(described) != 1:
+            raise InputRejected(
+                f"statistics set {stats!r} must describe exactly one of the named association "
+                f"sets; its logical key {found[stats]['key']!r} names {len(described)}")
+        if statistics[described[0]] is not None:
+            raise InputRejected(
+                f"association set {described[0]!r} is described by two named statistics sets")
+        statistics[described[0]] = stats
+    return _Sets(source_set=source_set, association_sets=associations,
+                 statistics_by_association=statistics)
+
+
+def _key_values(key: Any) -> list[str]:
+    """Every string in a logical key, however nested."""
+    if isinstance(key, str):
+        return [key]
+    if isinstance(key, dict):
+        return [v for value in key.values() for v in _key_values(value)]
+    if isinstance(key, (list, tuple)):
+        return [v for value in key for v in _key_values(value)]
+    return []
 
 
 # ----------------------------------------------------------------------
@@ -347,7 +414,7 @@ def _key(difference: str) -> dict[str, str]:
 
 def _entries(*, container_instance: str, alert_set_instance: str, difference: str,
              members: tuple[Member, Member], alert_count: int, dropped_count: int,
-             sets: dict[str, str | None]) -> tuple[OutputEntry, OutputEntry]:
+             sets: _Sets) -> tuple[OutputEntry, OutputEntry]:
     container_member, summary_member = members
     container = OutputEntry(
         kind="alert-container", format_version="1", instance=container_instance,
@@ -356,8 +423,9 @@ def _entries(*, container_instance: str, alert_set_instance: str, difference: st
         registration={
             "alert_count": alert_count, "dropped_count": dropped_count,
             "schema_version": assemble.SCHEMA_VERSION, "difference": difference,
-            "source_set": sets[SOURCE_SET], "association_set": sets[ASSOCIATION_SET],
-            "statistics_set": sets[STATISTICS_SET],
+            "source_set": sets.source_set,
+            "association_sets": list(sets.association_sets),
+            "statistics_sets": list(sets.statistics_sets),
         })
     alert_set = OutputEntry(
         kind="alert-set", format_version="1", instance=alert_set_instance,
@@ -365,36 +433,44 @@ def _entries(*, container_instance: str, alert_set_instance: str, difference: st
     return container, alert_set
 
 
-def _recover(db, context: StageContext, existing: dict[str, str], difference: str,
-             sets: dict[str, str | None]) -> tuple[OutputEntry, OutputEntry]:
-    """Rebuild the entries of an attempt that already committed, from its rows and files."""
+_LOCATOR_COLUMNS = ("candidate", "record_ordinal", "block_offset", "block_length", "record_index")
+
+
+def _outbox_rows(context: StageContext, container: str, alert_set: str,
+                 written: list[assemble.Written], locators: list[assemble.Locator],
+                 time_proc: float) -> list[dict[str, Any]]:
+    return [{
+        "id": new_ulid(), "run": context.run_id, "attempt": context.attempt_id,
+        "instance": container, "result_set": alert_set, "alert_name": None,
+        "candidate": w.sid, "object": w.aid, "pid": w.pid, "first_seen_mjd": w.first_seen_mjd,
+        "ra": w.ra, "dec": w.dec, "record_ordinal": loc.record_ordinal,
+        "block_offset": loc.block_offset, "block_length": loc.block_length,
+        "record_index": loc.record_index, "time_processed_mjd": time_proc,
+        "schema_version": assemble.SCHEMA_VERSION,
+    } for w, loc in zip(written, locators)]
+
+
+def _check_recovered(db, context: StageContext, existing: dict[str, str],
+                     members: tuple[Member, Member], rows: list[dict[str, Any]],
+                     existing_rows: list[dict[str, Any]]) -> None:
+    """A rerun must regenerate exactly what the attempt registered; StageError otherwise."""
     if set(existing) != {"alert-container", "alert-set"}:
         raise StageError(f"attempt {context.attempt_id} registered only {sorted(existing)}; "
                          "cannot recover a partial commit")
-    container_instance, alert_set_instance = existing["alert-container"], existing["alert-set"]
-    by_role = {m["role"]: m for m in db.product_members(container_instance)}
-    members = []
-    for role in ("container", "summary"):
-        row = by_role.get(role)
-        if row is None:
-            raise StageError(f"alert-container {container_instance} has no {role!r} member row")
-        member = Member(role=role, path=row["path"], bytes=int(row["bytes"]), sha256=row["sha256"])
-        path = context.outputs_dir / member.path
-        if (not path.exists() or path.stat().st_size != member.bytes
-                or f"sha256:{_sha256_of_file(path)}" != member.sha256):
-            raise StageError(f"cannot recover attempt {context.attempt_id}: {path} is missing "
-                             "or differs from the registered member")
-        members.append(member)
-    summary = json.loads((context.outputs_dir / members[1].path).read_text())
-    alert_count = len(db.outbox_rows(container_instance))
-    if alert_count != summary["n_alerts"]:
-        raise StageError(f"alert-container {container_instance}: {alert_count} outbox rows, "
-                         f"summary says {summary['n_alerts']}")
-    return _entries(container_instance=container_instance,
-                    alert_set_instance=alert_set_instance, difference=difference,
-                    members=(members[0], members[1]), alert_count=alert_count,
-                    dropped_count=int(summary["n_failed"]) + int(summary["n_flagged"]),
-                    sets=sets)
+    registered = {m["role"]: m for m in db.product_members(existing["alert-container"])}
+    for member in members:
+        row = registered.get(member.role)
+        if row is None or (row["path"], int(row["bytes"]), row["sha256"]) != (
+                member.path, member.bytes, member.sha256):
+            raise StageError(
+                f"cannot recover attempt {context.attempt_id}: the regenerated {member.role} "
+                f"{member.path} ({member.bytes} bytes, {member.sha256}) differs from the "
+                f"registered member {row}")
+    want = [tuple(r[c] for c in _LOCATOR_COLUMNS) for r in rows]
+    have = [tuple(r[c] for c in _LOCATOR_COLUMNS) for r in existing_rows]
+    if want != have:
+        raise StageError(f"cannot recover attempt {context.attempt_id}: the regenerated "
+                         "container's records differ from its outbox rows")
 
 
 # ----------------------------------------------------------------------
@@ -451,36 +527,34 @@ def _body(context: StageContext) -> StageResult:
             sets = _classify_result_sets(
                 result_sets_read, db.result_set_kinds(list(result_sets_read)),
                 difference.instance)
-
-            existing = db.attempt_outputs(context.attempt_id)
-            if existing:
-                container, alert_set = _recover(db, context, existing, difference.instance, sets)
-                log.warning("attempt %s already registered alert-container %s; reusing it",
-                            context.attempt_id, container.instance)
-                return StageResult(outputs=[container, alert_set], products_read=products_read,
-                                   result_sets_read=result_sets_read,
-                                   execution_notes={"recovered": container.instance})
-
             try:
                 pid = db.difference_pid(difference.instance)
             except ValueError as exc:
                 raise InputRejected(str(exc)) from exc
 
+            # A rerun of this attempt after a commit whose outputs may not
+            # have been published: reuse the rows, regenerate the same bytes.
+            existing = db.attempt_outputs(context.attempt_id)
+            existing_rows = (db.outbox_rows(existing["alert-container"])
+                             if "alert-container" in existing else [])
+            time_proc = (float(existing_rows[0]["time_processed_mjd"]) if existing_rows
+                         else float(Time.now().mjd))
+
             stats = assemble.BatchStats(pid=pid)
-            for sid, flags in db.flagged_sources(sets[SOURCE_SET], pid):
+            for sid, flags in db.flagged_sources(sets.source_set, pid):
                 stats.record_flagged(sid, flags)
             if stats.n_flagged:
                 log.info("pid=%s: %d flagged detections (flags <> 0) skipped -- not associated "
                          "by the cross-match, not alertable", pid, stats.n_flagged)
             sources = [Source.from_row(row, strict=True)
-                       for row in db.alertable_sources(sets[SOURCE_SET], pid)]
-            object_rows = db.associations(sets[ASSOCIATION_SET], sets[STATISTICS_SET],
+                       for row in db.alertable_sources(sets.source_set, pid)]
+            object_rows = db.associations(sets.statistics_by_association,
                                           [s.sid for s in sources])
-            aids = sorted({row["aid"] for row in object_rows if row["aid"] is not None})
+            objects = sorted({(row["association_set"], row["aid"]) for row in object_rows
+                              if row["aid"] is not None})
             window = float(alert_settings["prv_window_days"])
-            history_rows = (db.history(sets[ASSOCIATION_SET], aids,
-                                       min(s.mjdobs for s in sources) - window)
-                            if aids else [])
+            history_rows = (db.history(objects, min(s.mjdobs for s in sources) - window)
+                            if objects else [])
             associations = assemble.index_associations(object_rows, history_rows)
 
             ref_matches = (crossmatch.chip_ref_matches(sources, refcat)
@@ -492,37 +566,55 @@ def _body(context: StageContext) -> StageResult:
             with container_path.open("wb") as fo:
                 container_writer = assemble.AlertContainer(
                     fo, schema, codec=settings["archive"]["codec"],
-                    compression_level=settings["archive"]["compression_level"])
+                    compression_level=settings["archive"]["compression_level"],
+                    sync_marker=assemble.sync_marker_for(context.attempt_id))
                 written = assemble.batch_produce(
                     sources, associations, container=container_writer, stats=stats,
                     schema=schema, window_days=window, difference_image=(pixels, header),
                     stamp_half_width=alert_settings["stamp_half_width"], ss_lookup=ss_lookup,
-                    ref_matches_by_sid=ref_matches, ned_matches_by_sid=ned_matches)
+                    ref_matches_by_sid=ref_matches, ned_matches_by_sid=ned_matches,
+                    time_proc=time_proc)
             summary_path.write_text(json.dumps(stats.as_dict(), indent=2, sort_keys=True) + "\n")
+            with container_path.open("rb") as fo:
+                locators = assemble.locate_records(fo)
+            if [loc.dia_source_id for loc in locators] != [w.sid for w in written]:
+                raise StageError(f"{container_path.name}: the records read back "
+                                 f"{[loc.dia_source_id for loc in locators]} are not the "
+                                 f"alerts written {[w.sid for w in written]}")
+            members = (member_for_file("container", container_path,
+                                       relative_to=context.outputs_dir),
+                       member_for_file("summary", summary_path,
+                                       relative_to=context.outputs_dir))
+
+            if existing:
+                container, alert_set = _entries(
+                    container_instance=existing.get("alert-container", ""),
+                    alert_set_instance=existing.get("alert-set", ""),
+                    difference=difference.instance, members=members,
+                    alert_count=len(written), dropped_count=stats.dropped_count, sets=sets)
+                _check_recovered(db, context, existing, members,
+                                 _outbox_rows(context, container.instance, alert_set.instance,
+                                              written, locators, time_proc),
+                                 existing_rows)
+                log.warning("attempt %s already committed alert-container %s; regenerated its "
+                            "identical bytes and reused its rows", context.attempt_id,
+                            container.instance)
+                return StageResult(outputs=[container, alert_set], products_read=products_read,
+                                   result_sets_read=result_sets_read,
+                                   execution_notes={"recovered": container.instance})
 
             container, alert_set = _entries(
                 container_instance=new_ulid(), alert_set_instance=new_ulid(),
-                difference=difference.instance,
-                members=(member_for_file("container", container_path,
-                                         relative_to=context.outputs_dir),
-                         member_for_file("summary", summary_path,
-                                         relative_to=context.outputs_dir)),
-                alert_count=len(written), dropped_count=stats.dropped_count, sets=sets)
-
+                difference=difference.instance, members=members, alert_count=len(written),
+                dropped_count=stats.dropped_count, sets=sets)
             db.register_outputs({
                 "run": context.run_id, "stage": "alerts", "attempt": context.attempt_id,
                 "inputs": {"products": products_read, "result_sets": list(result_sets_read)},
                 "outputs": [container.to_dict(),
                             {**alert_set.to_dict(), "row_count": len(written)}],
             }, context.attempt_id)
-            db.insert_outbox_rows([{
-                "id": new_ulid(), "run": context.run_id, "attempt": context.attempt_id,
-                "instance": container.instance, "result_set": alert_set.instance,
-                "alert_name": None, "candidate": w.sid, "object": w.aid, "pid": w.pid,
-                "first_seen_mjd": w.first_seen_mjd, "ra": w.ra, "dec": w.dec,
-                "record_index": w.record_index, "block_offset": w.block_offset,
-                "block_length": w.block_length, "schema_version": assemble.SCHEMA_VERSION,
-            } for w in written])
+            db.insert_outbox_rows(_outbox_rows(context, container.instance, alert_set.instance,
+                                               written, locators, time_proc))
             updated = db.set_nalertpackets(difference.instance, context.run_id)
             if updated != 1:
                 log.warning("diffimages row for %s in run %s: %d rows updated; nalertpackets "
@@ -530,9 +622,10 @@ def _body(context: StageContext) -> StageResult:
                             context.run_id, updated)
                 notes["nalertpackets_rows_updated"] = updated
             db.commit()
-            log.info("pid=%s: %d alerts into %s, %d dropped (%d flagged); alert-container %s, "
-                     "alert-set %s", pid, len(written), container_path.name,
-                     stats.dropped_count, stats.n_flagged, container.instance, alert_set.instance)
+            log.info("pid=%s: %d alerts into %s (%d blocks), %d dropped (%d flagged); "
+                     "alert-container %s, alert-set %s", pid, len(written), container_path.name,
+                     len({loc.block_offset for loc in locators}), stats.dropped_count,
+                     stats.n_flagged, container.instance, alert_set.instance)
     except ConnectionUnavailable as exc:
         raise TransientFailure(f"could not connect to the database: {exc}") from exc
     except _connection_module.psycopg2.OperationalError as exc:
