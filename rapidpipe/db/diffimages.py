@@ -41,10 +41,12 @@ from rapidpipe.science.spatial import healpix_indexes
 #: The differencer-to-`pipelines` map, fixed with the difference stage
 #: (products page: "the name-to-row mapping is fixed with the `difference`
 #: stage"). ZOGY is the science pipeline's row, as `dev` registers it
-#: (``[SCI_IMAGE] ppid = 15``). SFFT has no `pipelines` row yet: its
-#: registration is designed in and off by default, and a manifest carrying
-#: an SFFT instance is refused here until the lead assigns one.
-DIFFERENCER_PPIDS: dict[str, int] = {"zogy": 15}
+#: (``[SCI_IMAGE] ppid = 15``). SFFT's row (ppid 16, priority 6) was
+#: assigned by the lead 2026-09-24 (database/migrations/20260924-01-pipelines-
+#: sfft.sql); its registration is still off by default (``[sfft]
+#: register_sfft``), a separate ruling, but a manifest carrying an SFFT
+#: instance is no longer refused here.
+DIFFERENCER_PPIDS: dict[str, int] = {"zogy": 15, "sfft": 16}
 
 #: `swversions.cvstag` and `.release` widths (baseline schema).
 _CVSTAG_WIDTH = 30
