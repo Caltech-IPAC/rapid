@@ -848,6 +848,13 @@ def _entry_is_result_set(entry: dict[str, Any]) -> bool:
     return entry.get("byte_size") is None and entry.get("sha256") is None
 
 
+def _member_row(member: dict[str, Any]) -> tuple[str, str, int, str]:
+    """(role, path, bytes, sha256) as a `product_members` row stores one member."""
+    return (member.get("role", "primary"), member["path"],
+            int(member.get("bytes", member.get("byte_size", 0)) or 0),
+            member.get("sha256", "") or "")
+
+
 def _register_one_output(
     cur,
     *,
@@ -892,6 +899,14 @@ def _register_one_output(
             and existing_primary == primary_location
         )
         if same:
+            # The member files too: a replay naming the same instance with
+            # different bytes is a conflict, not a no-op.
+            cur.execute(
+                "SELECT role, path, bytes, sha256 FROM product_members WHERE instance = %s",
+                (instance_id,))
+            same = sorted(cur.fetchall()) == sorted(
+                _member_row(member) for member in members)
+        if same:
             # Replaying an identical manifest is a no-op (runs page,
             # "Instances").
             return
@@ -920,11 +935,7 @@ def _register_one_output(
             INSERT INTO product_members (id, instance, role, path, bytes, sha256)
             VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (
-                new_ulid(), instance_id, member.get("role", "primary"),
-                member["path"], member.get("bytes", member.get("byte_size", 0)) or 0,
-                member.get("sha256", ""),
-            ),
+            (new_ulid(), instance_id, *_member_row(member)),
         )
 
     if is_result_set:
@@ -1096,11 +1107,7 @@ def _maintain_vbest(
 
     Only the kinds in ``_VBEST_TABLES`` have a ``dev`` row; every other
     kind (result sets, catalogs) is skipped. For a mapped kind, an
-    instance with NO row in its table is a no-op, not a refusal: ``vbest``
-    is ``dev``'s legacy flag, kept in step where a row exists, not a
-    promotion precondition (worker deviation 9, kept by the supervisor,
-    step 3, 2026-09-24). More than one row for one instance (which the
-    ``instance`` UNIQUE constraints already rule out) is refused
+    instance with no row in its table, or with more than one, is refused
     (:class:`PromotionRefused`). The baseline's CHECK allows 0, 1 and 2;
     this sets only 0 and 1.
     """
@@ -1116,6 +1123,10 @@ def _maintain_vbest(
             f"FROM {table} WHERE instance = %s",
             (instance,))
         total, run_written = cur.fetchone()
+        if total == 0:
+            raise PromotionRefused(
+                f"instance {instance!r} of kind {kind!r} has no {table} row; "
+                "refusing (its vbest cannot be kept in step)")
         if total > 1:
             raise PromotionRefused(
                 f"instance {instance!r} of kind {kind!r} has {total} {table} "
