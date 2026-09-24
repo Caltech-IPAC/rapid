@@ -14,9 +14,11 @@
 -- Choices, in the pattern of 20260923-04-sources-run-columns.sql:
 --   - `run`, `attempt` and `result_set` are nullable. Rows with `run IS NULL`
 --     are pre-run-model rows (written by `dev`'s crossMatchSources.py and
---     computeStatisticsForAstroObjects.py) and are always current: every run's
---     crossmatch reads them as part of the catalog (step 1 ruling R3,
---     2026-09-24). No existing row is touched.
+--     computeStatisticsForAstroObjects.py) and belong to no result set. A
+--     rebuild crossmatch reads by result-set id only, its base chain plus its
+--     own new set (step 1 ruling R3 as amended 2026-09-24, "base plus
+--     delta"), so these rows are not read unless a later ruling brings them
+--     into a set. No existing row is touched.
 --   - A CHECK requires the three to be all NULL or all set: a row half
 --     attached to the run model is not a state this schema allows.
 --   - The prototypes are NOT inheritance parents ("Like-tables are NOT
@@ -46,7 +48,7 @@ ALTER TABLE merges
 
 COMMENT ON COLUMN merges.run IS
     'The run whose crossmatch attempt wrote this row, NULL for rows written '
-    'before the run model, which are always current (products page, "Database '
+    'before the run model (products page, "Database '
     'result sets").';
 COMMENT ON COLUMN merges.attempt IS
     'The crossmatch attempt that wrote this row, NULL for rows written before '
@@ -69,7 +71,7 @@ ALTER TABLE astroobjects
 
 COMMENT ON COLUMN astroobjects.run IS
     'The run whose crossmatch attempt wrote this row, NULL for rows written '
-    'before the run model, which are always current (products page, "Database '
+    'before the run model (products page, "Database '
     'result sets").';
 COMMENT ON COLUMN astroobjects.attempt IS
     'The crossmatch attempt that wrote this row, NULL for rows written before '
@@ -92,7 +94,7 @@ ALTER TABLE astroobjectsmeta
 
 COMMENT ON COLUMN astroobjectsmeta.run IS
     'The run whose statistics attempt wrote this row, NULL for rows written '
-    'before the run model, which are always current (products page, "Database '
+    'before the run model (products page, "Database '
     'result sets").';
 COMMENT ON COLUMN astroobjectsmeta.attempt IS
     'The statistics attempt that wrote this row, NULL for rows written before '

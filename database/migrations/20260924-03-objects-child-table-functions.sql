@@ -83,7 +83,7 @@
 -- in place and returns false, since it did not make the table. It adds the
 -- three columns, the all-or-none CHECK, the set-scoped UNIQUE, the
 -- `run`/`result_set` indexes and the rebuild's grants. `dev`'s rows keep
--- `run IS NULL` (pre-run-model, always current). A new table gets the same
+-- `run IS NULL` (pre-run-model, in no result set). A new table gets the same
 -- additions from the same helper, `attach_object_run_model`, so the two paths
 -- cannot drift. That helper is callable only by its owner, `rapidporole`, which
 -- is who the SECURITY DEFINER functions run as.
