@@ -72,7 +72,7 @@ def detect_sources_in_image(image_data, detection_nsigma=10, npixels=8, bkg_box_
 
 def generate_injection_positions_fluxes(source_table, image_size, zeropoint, mag_range=(22.0, 27.0),
                                         size_factor=1.5, edge_buffer=10.0, num_injections=10,
-                                        xcolname='x_centroid', ycolname='y_centroid', sizecolname='semimajor_sigma',
+                                        xcolname='x_centroid', ycolname='y_centroid', sizecolname='semimajor_axis',
                                         star_galaxy_cut=None, saturation_level=None):
     """
     Generate randomized injection positions and fluxes based on detected sources.
