@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------------------------------------------------
--- 20260924-03-objects-child-table-functions.sql
+-- 20260924-04-objects-child-table-functions.sql
 --
 -- The per-field tables `astroobjects_<field>`, `merges_<field>` and
 -- `astroobjectsmeta_<field>`, made and finished as `dev`'s
@@ -14,7 +14,7 @@
 -- grants only, so these functions run as their owner, `rapidporole` (SECURITY
 -- DEFINER), take only a field number, build the table names themselves with
 -- format('%I'), and run `dev`'s statements. EXECUTE is granted to the service
--- login in 20260924-05, guarded on the role.
+-- login in 20260924-06, guarded on the role.
 --
 -- `create_field_object_tables(field)`: crossMatchSources.py main()'s creation
 -- block and its index-and-grant block, which in `dev` run for exactly the
@@ -38,7 +38,7 @@
 --
 -- Constraints. `CREATE TABLE ... (LIKE p INCLUDING DEFAULTS INCLUDING
 -- CONSTRAINTS)` copies NOT NULL constraints (always copied by LIKE), column
--- defaults and CHECK constraints -- here 20260924-02's `*_run_columns_together`.
+-- defaults and CHECK constraints -- here 20260924-03's `*_run_columns_together`.
 -- It does not copy PRIMARY KEY, UNIQUE or EXCLUDE constraints (only INCLUDING
 -- INDEXES does) and never copies a foreign key (PostgreSQL 18 documentation,
 -- CREATE TABLE, "LIKE"). So the prototypes' `astroobjects_pkey` and
@@ -76,7 +76,7 @@
 --     `<t>_set_aid_sid_key`.
 --
 -- Adopting an existing table. A per-field table `dev` made before
--- 20260924-02 (production `rapid` has them) got nothing from that migration's
+-- 20260924-03 (production `rapid` has them) got nothing from that migration's
 -- ALTER of the prototype, because a LIKE copy is not an inheritance child. When
 -- `create_field_object_tables` or `create_astroobjectsmeta_child_table` finds
 -- such a table (it exists, but has no `run` column), it attaches the run model

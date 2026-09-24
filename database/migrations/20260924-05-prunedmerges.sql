@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------------------------------------------------
--- 20260924-04-prunedmerges.sql
+-- 20260924-05-prunedmerges.sql
 --
 -- The membership table of the `pruned-set` result set, which the rebuild's
 -- `prune` stage writes (step 1 ruling R6). Authority: rapid_docs' products
@@ -23,7 +23,7 @@
 --     most once, and `INSERT ... ON CONFLICT DO NOTHING` makes a retried
 --     insert a no-op (step 1 ruling R4's pattern).
 --   - `run` and `attempt` are nullable with the all-or-none CHECK, the
---     shape of 20260923-04 and 20260924-02, although every row this stream
+--     shape of 20260923-04 and 20260924-03, although every row this stream
 --     knows of carries both.
 --   - Foreign keys on `result_set`, `base_set`, `run` and `attempt`, as on
 --     every other run-model column: the rows reference a registered set, so

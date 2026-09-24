@@ -1,12 +1,12 @@
-"""Database-backed tests for 20260924-02/-03/-04 and rapidpipe.db.objects.
+"""Database-backed tests for 20260924-03/-04/-05 and rapidpipe.db.objects.
 
 The run columns on the `merges`, `astroobjects` and `astroobjectsmeta`
 prototypes, the per-field table functions (`dev`'s creation, index and
 grant blocks, plus the rebuild's set-scoped UNIQUE constraints and
 `run`/`result_set` indexes; CLUSTER and ANALYZE), COPY with de-duplication
 into the per-field tables, adoption of a `dev` table made before the run
-model, `prunedmerges`, the association chain, the done check, the
-source-set lookup, and 20260924-06's `detector-date` unit kind. Every test runs inside conftest's rolled-back
+model, `prunedmerges`, the association chain, the done check and the
+source-set lookup. Every test runs inside conftest's rolled-back
 transaction.
 
 Skips cleanly if PGHOST is unset (see conftest.py).
@@ -256,7 +256,7 @@ def test_a_dev_table_without_run_columns_is_adopted_in_place(conn):
     a, m, t = names["astroobjects"], names["merges"], names["astroobjectsmeta"]
     run_id, attempt_id, instance = _result_set(conn)
     with conn.cursor() as cur:
-        # dev's per-field tables, made before 20260924-02: dev's columns only.
+        # dev's per-field tables, made before 20260924-03: dev's columns only.
         cur.execute(f"CREATE TABLE {a} (aid bigint NOT NULL, ra0 double precision NOT NULL, "
                     f"dec0 double precision NOT NULL, flux0 real NOT NULL)")
         cur.execute(f"CREATE INDEX {a}_radec_idx ON {a} (q3c_ang2ipix(ra0, dec0))")
@@ -289,17 +289,6 @@ def test_a_dev_table_without_run_columns_is_adopted_in_place(conn):
         assert cur.fetchall() == [(1, None), (1, run_id)]
         with pytest.raises(psycopg2.errors.CheckViolation):
             objects.copy_merges(cur, FIELD, _csv((1, 5, run_id, attempt_id, "\\N")))
-
-
-def test_units_accept_the_detector_date_kind(conn):
-    run_id = _make_run(conn, kind="scratch", selected_stages=["load"])
-    repo.add_unit(conn, run_id, "load", "detector-date", "20260821/SCA07")
-    with conn.cursor() as cur:
-        cur.execute("SELECT unit_kind FROM units WHERE run = %s", (run_id,))
-        assert cur.fetchone()[0] == "detector-date"
-        with pytest.raises(psycopg2.errors.CheckViolation):
-            cur.execute("INSERT INTO units (id, run, stage, unit_kind, unit_id) "
-                        "VALUES (%s, %s, 'load', 'fortnight', 'x')", (new_ulid(), run_id))
 
 
 def test_source_set_table_refuses_what_is_not_a_complete_source_set(conn):

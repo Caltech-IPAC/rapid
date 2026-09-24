@@ -1,7 +1,7 @@
 --------------------------------------------------------------------------------------------------------------------------
--- 20260924-05-objects-grants.sql
+-- 20260924-06-objects-grants.sql
 --
--- EXECUTE on 20260924-03's three per-field table functions for the rebuild's
+-- EXECUTE on 20260924-04's three per-field table functions for the rebuild's
 -- service login `rapid_rebuild_pipeline`, whose `crossmatch` and `statistics`
 -- stages call them. Guarded on the role's existence, as 20260923-06 is, so CI
 -- (a fresh PostgreSQL with no such role) applies it as a no-op. Additive only.

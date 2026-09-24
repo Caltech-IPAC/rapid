@@ -10,7 +10,7 @@ caller's transaction: none commits or rolls back.
 - :func:`ensure_field_object_tables`, :func:`ensure_astroobjectsmeta_table`:
   `dev`'s ``astroobjects_<field>``/``merges_<field>`` and
   ``astroobjectsmeta_<field>`` creation, indexing and grants, through
-  20260924-03's ``create_field_object_tables`` and
+  20260924-04's ``create_field_object_tables`` and
   ``create_astroobjectsmeta_child_table``, which also adopt a table `dev`
   made before the run model (adding the run columns in place). `dev` drops
   and recreates ``astroobjectsmeta_<field>`` on every run; the rebuild never
@@ -61,7 +61,7 @@ DEV_ASTROOBJECTSMETA_COLUMNS: tuple[str, ...] = (
     "aid", "meanra", "stdevra", "meandec", "stdevdec", "meanflux", "stdevflux", "nsources",
 )
 
-#: The run-model columns (20260924-02-objects-run-columns.sql) the rebuild
+#: The run-model columns (20260924-03-objects-run-columns.sql) the rebuild
 #: appends to every row it writes.
 RUN_COLUMNS: tuple[str, ...] = ("run", "attempt", "result_set")
 

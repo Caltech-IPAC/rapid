@@ -1,6 +1,6 @@
 """Tests for rapidpipe.db.objects that need no database: names, SQL shape, COPY arguments.
 
-The functions against a real PostgreSQL (the 20260924-03 per-field table
+The functions against a real PostgreSQL (the 20260924-04 per-field table
 functions, COPY with de-duplication, `prunedmerges`, the visibility rule)
 are in tests/db/test_objects_child_tables.py.
 """

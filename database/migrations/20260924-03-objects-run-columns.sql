@@ -1,10 +1,10 @@
 --------------------------------------------------------------------------------------------------------------------------
--- 20260924-02-objects-run-columns.sql
+-- 20260924-03-objects-run-columns.sql
 --
 -- Attaches the run model (20260921-02-run-model.sql) to the `dev` prototypes
 -- `merges`, `astroobjects` and `astroobjectsmeta`, which the rebuild's
 -- `crossmatch` and `statistics` stages write through per-field tables made
--- `LIKE` them (20260924-03). Authority: rapid_docs' products page, "Database
+-- `LIKE` them (20260924-04). Authority: rapid_docs' products page, "Database
 -- result sets": an `association-set` is a result set whose rows live in
 -- `merges` and `astroobjects`, a `statistics-set` one whose rows live in
 -- `astroobjectsmeta`, and "Every row carries the run id, the attempt id that
@@ -28,7 +28,7 @@
 --     `dev` makes them. A per-field table `dev` made before this migration
 --     does not gain them: ADD COLUMN on a prototype reaches no copy. A
 --     database built by this stream holds no such table. Production `rapid`
---     does; 20260924-03's table functions adopt such a table in place (they
+--     does; 20260924-04's table functions adopt such a table in place (they
 --     add these columns, the CHECK and the rebuild's constraints and indexes)
 --     the first time a stage asks for it.
 --   - The foreign keys sit on the prototypes only. `LIKE` never copies a
@@ -36,7 +36,7 @@
 --     of meaning, as 20260923-04's are on `sources`.
 --   - No index on the new columns: the prototypes hold no rows, and each
 --     per-field table indexes `run` and `result_set` when it is made
---     (20260924-03).
+--     (20260924-04).
 --------------------------------------------------------------------------------------------------------------------------
 
 -- merges -----------------------------------------------------------------------------------------------------------------
