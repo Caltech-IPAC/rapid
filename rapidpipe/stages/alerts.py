@@ -17,9 +17,13 @@ more association sets (an image can span fields) and any statistics sets,
 each describing one of the named association sets. The stage tells them
 apart by ``product_instances.kind`` and reads the parent tables
 ``sources``, ``merges``, ``astroobjects`` and ``astroobjectsmeta`` by
-``result_set``. Triggers come only from the source set; a trigger's object
-may come from any named association set, and its history is that object's
-merges joined to ``sources`` in any source set.
+``result_set``. Triggers come only from the source set. An association
+set's membership is its own rows plus those of the bases it extends
+(crossmatch's ``logical_key.base``, recursively), so a trigger's merges
+row and its object are looked up across that chain, the newest set winning
+per aid, and its history is the object's merges anywhere in the chain
+joined to ``sources`` in any source set. The bases read are added to the
+manifest's ``inputs.result_sets``.
 ``cutoutScience`` and ``cutoutReference`` are null in this port: those
 files are not input-set members.
 
@@ -172,12 +176,17 @@ class PostgresAlertsDatabase:
     def alertable_sources(self, source_set: str, pid: int) -> list[dict[str, Any]]:
         return self._call(_alerts_db.alertable_sources, source_set, pid)
 
-    def associations(self, statistics_by_association: dict[str, str | None],
-                     sids: list[int]) -> list[dict[str, Any]]:
-        return self._call(_alerts_db.associations, statistics_by_association, sids)
+    def association_chain(self, instance: str) -> list[str]:
+        return self._call(_alerts_db.association_chain, instance)
 
-    def history(self, objects: list[tuple[str, int]], min_mjd: float):
-        return self._call(_alerts_db.history, objects, min_mjd)
+    def associations(self, lineages: dict[str, list[str]],
+                     statistics_by_association: dict[str, str | None],
+                     sids: list[int]) -> list[dict[str, Any]]:
+        return self._call(_alerts_db.associations, lineages, statistics_by_association, sids)
+
+    def history(self, lineages: dict[str, list[str]], objects: list[tuple[str, int]],
+                min_mjd: float):
+        return self._call(_alerts_db.history, lineages, objects, min_mjd)
 
     def register_outputs(self, manifest: dict[str, Any], attempt_id: str) -> None:
         register_manifest(self.conn, manifest, registering_attempt_id=attempt_id)
@@ -529,8 +538,15 @@ def _body(context: StageContext) -> StageResult:
                 difference.instance)
             try:
                 pid = db.difference_pid(difference.instance)
+                # Each named association set with the bases it extends: a new
+                # detection of a known object has its merges row in the newest
+                # set and its object in the set that first made it.
+                lineages = {a: db.association_chain(a) for a in sets.association_sets}
             except ValueError as exc:
                 raise InputRejected(str(exc)) from exc
+            bases = [b for chain in lineages.values() for b in chain[1:]
+                     if b not in result_sets_read]
+            result_sets_read = result_sets_read + tuple(dict.fromkeys(bases))
 
             # A rerun of this attempt after a commit whose outputs may not
             # have been published: reuse the rows, regenerate the same bytes.
@@ -548,12 +564,13 @@ def _body(context: StageContext) -> StageResult:
                          "by the cross-match, not alertable", pid, stats.n_flagged)
             sources = [Source.from_row(row, strict=True)
                        for row in db.alertable_sources(sets.source_set, pid)]
-            object_rows = db.associations(sets.statistics_by_association,
+            object_rows = db.associations(lineages, sets.statistics_by_association,
                                           [s.sid for s in sources])
             objects = sorted({(row["association_set"], row["aid"]) for row in object_rows
                               if row["aid"] is not None})
             window = float(alert_settings["prv_window_days"])
-            history_rows = (db.history(objects, min(s.mjdobs for s in sources) - window)
+            history_rows = (db.history(lineages, objects,
+                                       min(s.mjdobs for s in sources) - window)
                             if objects else [])
             associations = assemble.index_associations(object_rows, history_rows)
 

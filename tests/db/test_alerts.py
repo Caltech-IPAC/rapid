@@ -36,8 +36,8 @@ from .test_repository import _make_unit
 ALERTS_UNIT = "e20260821001234/SCA07"
 
 
-def _register_set(conn, run_id, *, stage, kind, key, row_count):
-    unit_id = f"{stage}-field-5321"
+def _register_set(conn, run_id, *, stage, kind, key, row_count, unit_suffix=""):
+    unit_id = f"{stage}-field-5321{unit_suffix}"
     _make_unit(conn, run_id, stage=stage, unit_id=unit_id)
     attempt_id = repo.allocate_attempt(conn, run_id, stage, unit_id)
     instance = new_ulid()
@@ -51,8 +51,13 @@ def _register_set(conn, run_id, *, stage, kind, key, row_count):
     return instance, attempt_id
 
 
-def _seeded_chain(conn, tmp_path, monkeypatch):
-    """Everything up to the alerts invocation: returns (run, diff outputs, sets, sids)."""
+def _seeded_chain(conn, tmp_path, monkeypatch, *, extend_base=False):
+    """Everything up to the alerts invocation: returns (run, diff outputs, sets, sids).
+
+    With ``extend_base``, the association set extends a base set as crossmatch
+    leaves them: the object row stays in the base that made it, the new
+    detection's merges rows are in the extending set.
+    """
     run_id, diff_outputs = _registered_difference(conn, tmp_path, monkeypatch)
     rc, _, load_outputs = _run_load(conn, monkeypatch, tmp_path, run_id, diff_outputs)
     assert rc == 0
@@ -64,8 +69,14 @@ def _seeded_chain(conn, tmp_path, monkeypatch):
                 for r in cur.fetchall()}
     assert sids[(3, True)]["flags"] == 4
 
+    base_set = None
+    if extend_base:
+        base_set, base_attempt = _register_set(
+            conn, run_id, stage="crossmatch", kind="association-set",
+            key={"field": 5321, "base": None}, row_count=1, unit_suffix="-base")
     association_set, assoc_attempt = _register_set(
-        conn, run_id, stage="crossmatch", kind="association-set", key={"field": "5321"},
+        conn, run_id, stage="crossmatch", kind="association-set",
+        key={"field": 5321, "base": base_set} if extend_base else {"field": "5321"},
         row_count=2)
     statistics_set, stats_attempt = _register_set(
         conn, run_id, stage="statistics", kind="statistics-set",
@@ -77,16 +88,19 @@ def _seeded_chain(conn, tmp_path, monkeypatch):
                     "(%s, %s, %s, %s, %s), (%s, %s, %s, %s, %s)",
                     (aid, kept["sid"], run_id, assoc_attempt, association_set,
                      orphan_aid, orphan["sid"], run_id, assoc_attempt, association_set))
+        object_set, object_attempt = ((base_set, base_attempt) if extend_base
+                                      else (association_set, assoc_attempt))
         cur.execute("INSERT INTO astroobjects (aid, ra0, dec0, flux0, run, attempt, result_set) "
                     "VALUES (%s, %s, %s, 100.0, %s, %s, %s)",
-                    (aid, kept["ra"], kept["dec"], run_id, assoc_attempt, association_set))
+                    (aid, kept["ra"], kept["dec"], run_id, object_attempt, object_set))
         cur.execute("INSERT INTO astroobjectsmeta (aid, meanra, stdevra, meandec, stdevdec, "
                     "meanflux, stdevflux, nsources, run, attempt, result_set) VALUES "
                     "(%s, %s, 0.5, %s, 0.25, 100.0, 1.0, 3, %s, %s, %s)",
                     (aid, kept["ra"], kept["dec"], run_id, stats_attempt, statistics_set))
     sets = (source_set, association_set, statistics_set)
     return run_id, diff_outputs, sets, {"kept": kept["sid"], "orphan": orphan["sid"],
-                                        "flagged": sids[(3, True)]["sid"], "aid": aid}
+                                        "flagged": sids[(3, True)]["sid"], "aid": aid,
+                                        "base": base_set}
 
 
 def _input_set(tmp_path, diff_outputs, result_sets):
@@ -209,3 +223,28 @@ def test_an_unknown_result_set_kind_exits_65(conn, tmp_path, monkeypatch):
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM alert_outbox WHERE attempt = %s", (attempt_id,))
         assert cur.fetchone()[0] == 0
+
+
+def test_an_object_in_the_base_set_is_found_for_a_detection_in_the_extending_set(
+        conn, tmp_path, monkeypatch):
+    run_id, diff_outputs, sets, ids = _seeded_chain(conn, tmp_path, monkeypatch,
+                                                    extend_base=True)
+    inputs, difference = _input_set(tmp_path, diff_outputs, sets)
+    rc, attempt_id, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
+    assert rc == int(ExitCode.SUCCESS)
+    manifest = Manifest.read(outputs / "manifest.json")
+    assert list(manifest.inputs.result_sets) == [*sets, ids["base"]]
+    container = next(e for e in manifest.outputs if e.kind == "alert-container")
+    raw = (outputs / container.primary).read_bytes()
+    alerts_read = list(fastavro.reader(io.BytesIO(raw)))
+    assert [a["diaSourceId"] for a in alerts_read] == [ids["kept"]]
+    assert alerts_read[0]["diaObject"]["diaObjectId"] == ids["aid"]
+    assert alerts_read[0]["diaObject"]["nDiaSources"] == 3
+    assert container.registration["dropped_count"] == 2      # flagged, and the orphan
+    with conn.cursor() as cur:
+        cur.execute("SELECT candidate, object FROM alert_outbox WHERE attempt = %s",
+                    (attempt_id,))
+        assert cur.fetchall() == [(ids["kept"], ids["aid"])]
+        cur.execute("SELECT producer_instance FROM dependencies WHERE consumer_instance = %s",
+                    (container.instance,))
+        assert ids["base"] in {r[0] for r in cur.fetchall()}
