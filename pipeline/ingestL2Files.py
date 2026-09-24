@@ -19,12 +19,26 @@ written to S3 by one script and pulled back down by the other.  It also removes
 the window in which a converted file sits in the output bucket unregistered.
 
 The work list is "every ASDF file in the input bucket that has not yet been
-ingested".  A file counts as ingested when its output FITS file has a current
-(vbest > 0) row in the L2Files database table, which is the only record of the
-ingest that survives a restart of this script.  It has to be vbest rather than
-the mere existence of a row: a redelivered ASDF file keeps its name and is
-ingested again, which supersedes the earlier row, and a superseded row must let
-the file back onto the work list rather than hide it.
+ingested".  Two things put a file on it, and both are needed:
+
+  * It has no current (vbest > 0) row in the L2Files database table.  Selecting
+    on vbest rather than on a row merely existing is what lets a run that died
+    between addL2File and updateL2File be picked up again: the half-written row
+    it left behind still reads vbest = 0.
+
+  * Or it has one, but the ASDF file in the bucket has been modified since that
+    row was created, which means it has been redelivered.  The vbest flag alone
+    cannot catch this.  updateL2File demotes the old row to vbest = 0 as part of
+    registering the new version, so the demotion is a CONSEQUENCE of the ingest
+    and cannot also be its trigger -- until the redelivery is ingested, the row
+    for the previous delivery still reads vbest = 1.  The S3 last-modified time
+    of the ASDF file, against l2files.created, is what tells them apart.
+
+Ingesting a redelivered file registers a new L2Files version and demotes the
+previous one, which is the intended behaviour: the file keeps its name, so its
+new pixels would otherwise never reach the database.  Set IGNOREASDFTIMESTAMPS
+to turn the recency comparison off, for a bucket whose objects have been bulk-
+copied and whose timestamps therefore say nothing about deliveries.
 
 The output bucket is consulted as well, but never to decide whether a file has
 to be ingested.  A converted FITS file sitting there with no current database
@@ -87,6 +101,9 @@ MAXFILESTOINGEST        Stop after this many files, for short tests.
 DONTCHECKALREADYINGESTED
                         Set to skip the L2Files query for already-ingested
                         files and (re-)ingest everything in the input bucket.
+IGNOREASDFTIMESTAMPS    Set to ignore the S3 last-modified times of the ASDF
+                        files, so that a file with a current L2Files row is
+                        never re-ingested as a redelivery.
 DBPORT, DBNAME, DBUSER, DBPASS, DBSERVER
                         Database connection, as for every RAPID script.
 ROMANTESSELLATIONDBNAME
@@ -228,6 +245,17 @@ if os.getenv('CRDS_SERVER_URL') is None:
 do_already_ingested_check = os.getenv('DONTCHECKALREADYINGESTED') is None
 
 print("do_already_ingested_check =",do_already_ingested_check)
+
+
+# Set IGNOREASDFTIMESTAMPS to fall back on a filename-only already-ingested check, which
+# ingests a file only if it has no current L2Files row at all and never re-ingests on the
+# strength of a timestamp.  Worth reaching for when the input bucket has been bulk-copied or
+# re-synced, which restamps every object and would otherwise present the whole bucket as
+# redelivered.
+
+do_asdf_recency_check = os.getenv('IGNOREASDFTIMESTAMPS') is None
+
+print("do_asdf_recency_check =",do_asdf_recency_check)
 
 
 # Number of parallel processes.
@@ -1610,29 +1638,56 @@ def list_bucket_objects(bucket_name,prefix="",suffixes=None):
     return objects
 
 
-def get_already_ingested_fits_files(dbh):
+def get_ingested_l2file_times(dbh):
 
     '''
-    Return the set of L2 FITS filenames, without their S3-bucket names, that have a CURRENT
-    row in the L2Files database table.
+    Return {L2 FITS filename without its S3-bucket name: when it was ingested, in UTC} for
+    every file with a CURRENT row in the L2Files database table.  The time is None where the
+    row has no `created` timestamp.
 
-    The test has to be on vbest > 0, not on a row existing at all.  A redelivered ASDF file
-    keeps its name and is ingested again, which supersedes the earlier L2Files record --
-    vbest goes to 0 on the old row and the new row becomes the best version.  A superseded
-    row is therefore exactly the state that has to let a file back onto the work list, and
-    counting it as ingested would make a redelivery invisible to this script forever.
+    Two things about that query are worth saying plainly, because they decide what gets
+    ingested and neither is obvious from the column names.
+
+    First, the row has to be selected on vbest > 0 rather than on merely existing.  addL2File
+    inserts a row with vbest = 0, and it is updateL2File -- the finalize step -- that promotes
+    it to 1.  So a run that died between the two leaves a vbest = 0 row behind, and that row
+    has to let the file back onto the work list; re-ingesting it registers a fresh version and
+    promotes that.  A locked record (vbest = 2) matches as well, and correctly so: it is
+    current, and must not be touched.
+
+    Second, and the reason this returns times rather than a set: a vbest > 0 row does NOT mean
+    the file on hand has been ingested, only that SOME delivery of it has.  The demotion of an
+    old row to vbest = 0 happens as a consequence of ingesting the new version -- it is
+    updateL2File that sets the old rows to 0 when it promotes the new one -- so it cannot also
+    be the signal that an ingest is due.  Until this script ingests a redelivered file, the
+    row for the previous delivery still reads vbest = 1.  A redelivery therefore has to be
+    recognised some other way, and `created` against the S3 last-modified time of the ASDF
+    file is that way.
+
+    `created` is a timestamp without a time zone, holding local time in whatever zone the
+    database is set to (America/Los_Angeles; see database/schema/rapidOpsTimeZone.sql).  The
+    cast to timestamptz resolves it using that same session zone, DST included, and the result
+    is converted to UTC so it can be compared with the UTC times S3 reports.
     '''
 
-    query = "select (regexp_match(filename, '.+/(.+)'))[1] from l2files where vbest > 0;"
+    query = ("select (regexp_match(filename, '.+/(.+)'))[1], "
+             "max(created::timestamptz at time zone 'UTC') "
+             "from l2files where vbest > 0 group by 1;")
 
     records = dbh.execute_sql_queries([query],debug)
 
-    already_ingested_fits_files = set()
+    ingested_l2file_times = {}
 
     for record in records:
-        already_ingested_fits_files.add(record[0])
 
-    return already_ingested_fits_files
+        created = record[1]
+
+        if created is not None:
+            created = created.replace(tzinfo=timezone.utc)
+
+        ingested_l2file_times[record[0]] = created
+
+    return ingested_l2file_times
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -1892,13 +1947,13 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    already_ingested_fits_files = set()
+    ingested_l2file_times = {}
 
     if do_already_ingested_check:
 
-        already_ingested_fits_files = get_already_ingested_fits_files(dbh)
+        ingested_l2file_times = get_ingested_l2file_times(dbh)
 
-        print(f"n_ingested_fits_files = {len(already_ingested_fits_files)}")
+        print(f"n_ingested_fits_files = {len(ingested_l2file_times)}")
 
     dbh.close()
 
@@ -1929,14 +1984,36 @@ if __name__ == '__main__':
     reusable_output_fits_files = set()
 
     n_already_ingested = 0
+    n_redelivered = 0
 
     for input_asdf_file in sorted(input_asdf_objects):
 
         s3_object_name = output_fits_object_name(input_asdf_file)
 
-        if os.path.basename(s3_object_name) in already_ingested_fits_files:
-            n_already_ingested += 1
-            continue
+        input_last_modified = input_asdf_objects[input_asdf_file]
+
+
+        # A current L2Files row says some delivery of this file has been ingested, not that
+        # THIS one has.  The row is what was ingested last; if the ASDF file in the bucket is
+        # newer than that, it has been redelivered since and has to be ingested again, which
+        # registers a new version and demotes the row that matched here.
+        #
+        # A row whose `created` is unknown is taken as ingested rather than redelivered: a
+        # null timestamp is no evidence of a redelivery, and guessing the other way would put
+        # the whole bucket back on the work list.
+
+        if os.path.basename(s3_object_name) in ingested_l2file_times:
+
+            created = ingested_l2file_times[os.path.basename(s3_object_name)]
+
+            if not do_asdf_recency_check or created is None or input_last_modified <= created:
+                n_already_ingested += 1
+                continue
+
+            print(f"{input_asdf_file} was modified at {input_last_modified}, after its "
+                  f"L2Files record was created at {created}; ingesting it as a new version...")
+
+            n_redelivered += 1
 
         fname_fields = os.path.basename(s3_object_name).split("_")
 
@@ -1953,8 +2030,7 @@ if __name__ == '__main__':
 
         output_last_modified = existing_output_fits_objects.get(s3_object_name)
 
-        if output_last_modified is not None and \
-           output_last_modified > input_asdf_objects[input_asdf_file]:
+        if output_last_modified is not None and output_last_modified > input_last_modified:
             reusable_output_fits_files.add(s3_object_name)
 
         input_asdf_files.append(input_asdf_file)
@@ -1966,6 +2042,7 @@ if __name__ == '__main__':
             break
 
     print(f"n_already_ingested = {n_already_ingested}")
+    print(f"n_redelivered = {n_redelivered}")
     print(f"n_reusable_output_fits_files = {len(reusable_output_fits_files)}")
     print(f"Total number of L2 files to ingest = {len(input_asdf_files)}")
 

@@ -31,18 +31,57 @@ The work list
 The work list is *every ASDF file in the input bucket that has not yet been
 ingested*.
 
-A file counts as ingested when its output FITS file has a **current**
-(``vbest > 0``) row in the ``L2Files`` database table.  That row is the only
-record of the ingest that survives a restart, so it, and not the contents of the
-output bucket, is what decides whether a file still has to be done.
+Two things put a file on the list, and both are needed.
+
+**No current row.**  A file with no ``vbest > 0`` row in ``L2Files`` has never
+been ingested, or its ingest did not finish.  Selecting on ``vbest`` rather than
+on a row merely existing is what makes the second case work: ``addL2File``
+inserts the row with ``vbest = 0``, and it is ``updateL2File`` -- the finalize
+step -- that promotes it to 1.  A run that died between the two therefore leaves
+a ``vbest = 0`` row behind, and that row has to let the file back onto the work
+list; re-ingesting it registers a fresh version and promotes that.  A locked
+record (``vbest = 2``) matches as current, and correctly so: it must not be
+touched.
+
+**Or a current row, but a newer ASDF file.**  A redelivered ASDF file keeps its
+name, so the filename alone cannot show that anything has changed.
 
 .. important::
-   The test has to be on ``vbest > 0``, not on a row existing at all.  A
-   redelivered ASDF file keeps its name and is ingested again, which supersedes
-   the earlier ``L2Files`` record: ``vbest`` goes to 0 on the old row and the new
-   row becomes the best version.  A superseded row is therefore exactly the state
-   that has to let a file back onto the work list, and counting it as ingested
-   would make a redelivery invisible to this script forever.
+   The ``vbest`` flag cannot detect a redelivery either, and it is worth being
+   precise about why.  ``updateL2File`` demotes the old row to ``vbest = 0`` as
+   part of registering the new version, so the demotion is a **consequence** of
+   the ingest and cannot also be its trigger.  Until this script ingests a
+   redelivered file, the row for the *previous* delivery still reads
+   ``vbest = 1``, and a work list built on ``vbest`` alone would skip that file
+   forever.
+
+   What tells them apart is time: the S3 last-modified time of the ASDF file
+   against ``l2files.created``, the timestamp of the row's insert or last
+   update.  An ASDF file modified after its row was created has been redelivered
+   since the last ingest.
+
+Ingesting a redelivered file registers a new ``L2Files`` version and demotes the
+previous one, which is the intended outcome -- the file keeps its name, so its
+new pixels would otherwise never reach the database.
+
+``created`` is a ``timestamp without time zone`` holding local time in whatever
+zone the database is set to (``America/Los_Angeles``; see
+``database/schema/rapidOpsTimeZone.sql``), so the query casts it to
+``timestamptz`` -- which resolves it in that same zone, DST included -- and
+converts the result to UTC, the zone S3 reports its times in.  A row whose
+``created`` is null is taken as ingested rather than redelivered: a missing
+timestamp is no evidence of a redelivery, and guessing the other way would put
+the whole bucket back on the work list.
+
+.. note::
+   Set ``IGNOREASDFTIMESTAMPS`` to turn the recency comparison off, leaving a
+   filename-only check.  This is the one to reach for when the input bucket has
+   been bulk-copied or re-synced, which restamps every object and would
+   otherwise present the whole bucket as redelivered.
+
+
+Reusing a converted file
+====================================
 
 The output bucket is listed as well, but never to decide whether a file has to
 be ingested.  A converted FITS file sitting there with no current database row,
@@ -52,11 +91,11 @@ registered rather than converted a second time, since the conversion, and the
 SIP fit inside it, is by far the most expensive step.
 
 A converted FITS file **older** than its ASDF file is a different thing
-entirely: it was made from a *previous* delivery of that file, and the
-redelivery is precisely the case where the S3 object name is unchanged but the
-pixels are not.  Reusing it would register the superseded data as the new
-version, so it is converted afresh.  The two are told apart by the
-last-modified times, which come free with the S3 listings.
+entirely: it was made from a *previous* delivery, which is exactly the state a
+redelivery leaves behind, the S3 object name being unchanged while the pixels
+are not.  Reusing it would register the superseded data as the new version, so
+it is converted afresh.  The two are told apart by the last-modified times,
+which come free with the S3 listings.
 
 Within a run, the work list is sorted by SCA and then by observation, so that
 the files belonging to one exposure are spread across the list instead of being
@@ -268,6 +307,9 @@ Variable                                             Meaning
 ``MAXFILESTOINGEST``                                 Stop after this many files, for short tests.
 ``DONTCHECKALREADYINGESTED``                         Set to skip the ``L2Files`` query and re-ingest everything in the
                                                      input bucket.
+``IGNOREASDFTIMESTAMPS``                             Set to ignore the S3 last-modified times of the ASDF files, so that
+                                                     a file with a current ``L2Files`` row is never re-ingested as a
+                                                     redelivery.
 ``DBPORT``, ``DBNAME``, ``DBUSER``, ``DBPASS``,
 ``DBSERVER``                                         Database connection, as for every RAPID script.
 ``ROMANTESSELLATIONDBNAME``                          SQLite database defining the Roman sky tessellation.
