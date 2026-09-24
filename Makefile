@@ -46,3 +46,10 @@ stage-crossmatch:
 .PHONY: stage-alerts
 stage-alerts:
 	$(PYTHON) tests/fixtures/alerts/run_fixture.py
+# The statistics stage's fixture: per-object statistics over an association
+# set's base-plus-delta membership, against the fake database
+# (rapidpipe/selftest/support/fakestatisticsdb.py); runs anywhere. The
+# PostgreSQL path is tests/db/test_statistics.py.
+.PHONY: stage-statistics
+stage-statistics:
+	$(PYTHON) tests/fixtures/statistics/run_fixture.py
