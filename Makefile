@@ -24,6 +24,13 @@ stage-difference:
 stage-load:
 	$(PYTHON) tests/fixtures/load/run_fixture.py
 
+# The finalize stage's fixture: a synthetic difference attempt's products
+# republished with the stamped header (rapidpipe/selftest/support/
+# fakefinalize.py builds the inputs); no tools, no database, runs anywhere.
+.PHONY: stage-finalize
+stage-finalize:
+	$(PYTHON) tests/fixtures/finalize/run_fixture.py
+
 # The maintain stage's fixture: CLUSTER/ANALYZE of a sources child table,
 # against the fake database (tests/unit/fakemaintaindb.py); runs anywhere.
 # The PostgreSQL path is tests/db/test_maintain.py.

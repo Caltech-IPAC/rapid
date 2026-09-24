@@ -13,9 +13,10 @@ and grants) -> one CSV of `dev`'s 28 columns, positive rows then negative,
 fit positions outside the image rejected -> COPY -> optionally CLUSTER and
 ANALYZE (`dev` does this once per date; off by default here).
 
-Inputs. ``--inputs`` is the difference attempt's output location: its
-completion manifest and files. The stage reads the ``difference-image``
-entry of the ``[load] differencer`` setting and that instance's two
+Inputs. ``--inputs`` is the finalize attempt's output location (chain
+difference -> finalize -> register -> load, supervisor ruling 2026-09-24), or a difference attempt's: its completion manifest and files; ``finalize``
+republishes the same entries under new instance ids. The stage reads the
+``difference-image`` entry of the ``[load] differencer`` setting and that instance's two
 ``photutils`` ``source-catalog`` entries (members ``catalog`` and
 ``finder``), verifying each member's size and SHA-256. ``pid`` comes from
 the `diffimages` row `register` wrote for the instance, and ``expid``,
@@ -151,6 +152,10 @@ class PostgresLoadDatabase:
     def commit(self) -> None:
         self.conn.commit()
 
+
+#: The stages whose manifest this stage reads: ``finalize``'s in the chain,
+#: ``difference``'s directly (the shape is the same).
+INPUT_STAGES = ("finalize", "difference")
 
 #: Names a ``module:factory`` returning a context manager that yields an
 #: object with :class:`PostgresLoadDatabase`'s methods, used instead of
@@ -323,9 +328,9 @@ def _body(context: StageContext) -> StageResult:
     if manifest.unit.kind != "detector-image":
         raise InputRejected(
             f"input manifest unit kind is {manifest.unit.kind!r}, expected 'detector-image'")
-    if manifest.stage != "difference":
+    if manifest.stage not in INPUT_STAGES:
         raise InputRejected(
-            f"input manifest is stage {manifest.stage!r}'s, expected 'difference'")
+            f"input manifest is stage {manifest.stage!r}'s, expected one of {INPUT_STAGES}")
 
     difference = _difference_entry(manifest, load_settings["differencer"])
     found = _catalogs(manifest, difference.instance)

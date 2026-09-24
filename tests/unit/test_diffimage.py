@@ -220,3 +220,55 @@ def test_valid_source_catalog_entry():
 def test_invalid_source_catalog_entry(overrides, match):
     with pytest.raises(DifferenceImageRegistrationError, match=match):
         validate_source_catalog_entry(_catalog_entry(**overrides))
+
+
+# finalize's provenance fields (supervisor ruling, 2026-09-24).
+
+
+def test_an_entry_without_provenance_fields_still_validates():
+    registration = validate_difference_entry(_zogy_entry())
+    assert registration.reference_rfid is None
+
+
+def test_other_unknown_fields_are_still_rejected_beside_provenance():
+    with pytest.raises(DifferenceImageRegistrationError, match="unknown fields"):
+        validate_difference_entry(_zogy_entry(
+            finalized_from="01ARZ3NDEKTSV4RRFFQ69G5FAV", revision=2, extra=1))
+
+
+def test_finalized_entry_with_provenance_fields_validates():
+    reg = validate_difference_entry(
+        _zogy_entry(finalized_from="01ARZ3NDEKTSV4RRFFQ69G5FAV", revision=2))
+    assert reg.md5 == "9e107d9d372bb6826bd81d3542a419d6"
+    assert not hasattr(reg, "finalized_from")
+
+
+@pytest.mark.parametrize("overrides,match", [
+    ({"finalized_from": "01ARZ3NDEKTSV4RRFFQ69G5FAV"}, "both of"),
+    ({"revision": 2}, "both of"),
+    ({"finalized_from": "", "revision": 2}, "finalized_from"),
+    ({"finalized_from": "not-a-ulid", "revision": 2}, "finalized_from"),
+    ({"finalized_from": "01arz3ndektsv4rrffq69g5fav", "revision": 2}, "finalized_from"),
+    ({"finalized_from": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "revision": 1}, "revision"),
+    ({"finalized_from": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "revision": True}, "revision"),
+    ({"finalized_from": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "revision": "2"}, "revision"),
+])
+def test_finalized_entry_with_bad_provenance_rejected(overrides, match):
+    with pytest.raises(DifferenceImageRegistrationError, match=match):
+        validate_difference_entry(_zogy_entry(**overrides))
+
+
+def test_copied_source_catalog_entry_validates():
+    validate_source_catalog_entry(_catalog_entry(
+        registration={"source_count": 412, "copied_from": "01ARZ3NDEKTSV4RRFFQ69G5FAW"}))
+
+
+@pytest.mark.parametrize("registration,match", [
+    ({"source_count": 412, "copied_from": ""}, "copied_from"),
+    ({"source_count": 412, "copied_from": "X"}, "copied_from"),
+    ({"source_count": 412, "copied_from": "01ARZ3NDEKTSV4RRFFQ69G5FAW", "extra": 1},
+     "source_count"),
+])
+def test_copied_source_catalog_entry_with_bad_provenance_rejected(registration, match):
+    with pytest.raises(DifferenceImageRegistrationError, match=match):
+        validate_source_catalog_entry(_catalog_entry(registration=registration))
