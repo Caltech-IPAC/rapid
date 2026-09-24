@@ -13,15 +13,22 @@ The distribution built from this repository is `rapid-pipeline`; its import pack
 
 `rapidpipe.stages.admit` is the first stage: it reads a delivery manifest naming one delivered l2 image (a FITS file staged outside the pipeline, not yet a registered product), verifies the delivered bytes and FITS checksums, reads the header and WCS the products page's l2-image field list needs, copies the file into the attempt's output location, and publishes a manifest with a fresh product instance. `rapidpipe.stages.register` reads that manifest's registration block and writes the `l2files`/`l2filemeta` rows without opening the FITS file itself, registering the manifest's own product instance first and recording nothing twice on a replay. `rapidpipe.science.spatial` holds the pure spatial derivations both `register` and its tests need -- HEALPix indexes, the Roman tessellation tile id, and the exact tile-overlap footprint -- with no import of any stage, so it can be exercised without a database.
 
-`rapidpipe run create/list/show/local` operate on `rapidpipe.runs.repository`: `create` records a new run and prints its id, `list` and `show` inspect runs, units and attempts, and `local` runs one stage attempt as a subprocess on the current machine, through `rapidpipe.runs.local`, allocating its own attempt id and an exclusive output location without needing Batch. `rapidpipe.launch` submits units to AWS Batch, resolves a unit's inputs from an upstream stage's selected attempt, and reconciles submitted jobs' results back into the run model; `promote` and `delete` remain placeholders.
+`rapidpipe run create/list/show/local` operate on `rapidpipe.runs.repository`: `create` records a new run and prints its id, `list` and `show` inspect runs, units and attempts, and `local` runs one stage attempt as a subprocess on the current machine, through `rapidpipe.runs.local`, allocating its own attempt id and an exclusive output location without needing Batch. `rapidpipe.launch` submits units to AWS Batch, resolves a unit's inputs from an upstream stage's selected attempt, and reconciles submitted jobs' results back into the run model.
+
+- `rapidpipe run promote <run> --reason R [--who W] [--kinds a,b]` promotes a production run's candidates (one per kind and logical key) and prints the promotion id.
+- `rapidpipe run rollback <promotion> --reason R [--who W]` reverses one promotion, refused if a later promotion changed any of its keys.
+- `rapidpipe run finish <run>` marks a run finished once every unit is complete, failed or cancelled; a finished run admits no new units or attempts.
+- `rapidpipe run delete <run> [--requested-by U]` deletes a scratch run's S3 object versions and run-scoped science rows, keeping its run-model rows as tombstones; it resumes a run left `deleting`.
+- `rapidpipe run pin <run>` / `rapidpipe run unpin <run>` keep a scratch run from expiring (scratch runs expire 14 days after creation unless pinned), or release it.
 
 #### Running on Batch
 
 `rapidpipe.launch.batch` reads its deployment configuration from the environment only, never from a committed value:
 
 - `RAPIDPIPE_BATCH_JOB_QUEUE` -- the Batch job queue name or ARN.
-- `RAPIDPIPE_BATCH_JOB_DEFINITION` -- the Batch job definition name or ARN.
-- `RAPIDPIPE_OUTPUTS_ROOT` -- an `s3://bucket/prefix` under which `runs/<run>/<stage>/<unit>/<attempt>` lives, chosen by whoever configures the run's lane (a project or personal bucket).
+- `RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH` / `RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION` -- the Batch job definition name or ARN for a scratch or production run; `RAPIDPIPE_BATCH_JOB_DEFINITION` is the scratch fallback only.
+- `RAPIDPIPE_OUTPUTS_ROOT_SCRATCH` / `RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION` -- the `s3://bucket/prefix` under which `runs/<run>/<stage>/<unit>/<attempt>` lives for a scratch or production run; `RAPIDPIPE_OUTPUTS_ROOT` is the scratch fallback only. A production run never falls back to an unsuffixed variable.
+- `RAPIDPIPE_SCRATCH_BUCKET` -- optional: the only bucket `run delete` may remove objects from (default: the bucket of the scratch outputs root).
 - `RAPIDPIPE_BATCH_JOB_NAME_PREFIX` -- optional, default `rapid`.
 
 ```
@@ -30,7 +37,7 @@ rapidpipe run submit "$run_id" register --unit e20260821001234-reg/SCA07 --input
 rapidpipe run reconcile "$run_id"
 ```
 
-The job definition named by `RAPIDPIPE_BATCH_JOB_DEFINITION` must run the image built from [`containers/rapid-pipeline`](containers/rapid-pipeline), with a retry rule on exit code 75.
+Each job definition must run the image built from [`containers/rapid-pipeline`](containers/rapid-pipeline), with a retry rule on exit code 75.
 
 #### Running a stage locally
 

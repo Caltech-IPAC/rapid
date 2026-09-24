@@ -1096,7 +1096,11 @@ def _maintain_vbest(
 
     Only the kinds in ``_VBEST_TABLES`` have a ``dev`` row; every other
     kind (result sets, catalogs) is skipped. For a mapped kind, an
-    instance with no row in its table, or with more than one, is refused
+    instance with NO row in its table is a no-op, not a refusal: ``vbest``
+    is ``dev``'s legacy flag, kept in step where a row exists, not a
+    promotion precondition (worker deviation 9, kept by the supervisor,
+    step 3, 2026-09-24). More than one row for one instance (which the
+    ``instance`` UNIQUE constraints already rule out) is refused
     (:class:`PromotionRefused`). The baseline's CHECK allows 0, 1 and 2;
     this sets only 0 and 1.
     """
@@ -1112,10 +1116,6 @@ def _maintain_vbest(
             f"FROM {table} WHERE instance = %s",
             (instance,))
         total, run_written = cur.fetchone()
-        if total == 0:
-            raise PromotionRefused(
-                f"instance {instance!r} of kind {kind!r} has no {table} row; "
-                "refusing (its vbest cannot be kept in step)")
         if total > 1:
             raise PromotionRefused(
                 f"instance {instance!r} of kind {kind!r} has {total} {table} "

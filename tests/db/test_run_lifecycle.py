@@ -661,11 +661,16 @@ def test_dependency_on_a_deleting_producer_is_refused(conn):
             logical_key={"k": new_ulid()}, input_products={TEST_KIND: producer})
 
 
-def test_promote_refuses_a_mapped_kind_with_no_dev_row(conn):
+def test_promote_of_a_mapped_kind_with_no_dev_row_touches_no_vbest(conn):
     run_id = _make_run(conn)
-    _candidate(conn, run_id, kind="psf", key=_psf_key())  # no psfs row
-    with pytest.raises(repo.PromotionRefused, match="has no psfs row"):
-        repo.promote_run(conn, run_id, "brusholme", "no dev row")
+    instance, _ = _candidate(conn, run_id, kind="psf", key=_psf_key())  # no psfs row
+    promotion_id = repo.promote_run(conn, run_id, "brusholme", "no dev row")
+    assert _custody(conn, instance) == "current"
+    repo.rollback_promotion(conn, promotion_id, "brusholme", "undo")
+    assert _custody(conn, instance) == "candidate"
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM psfs WHERE instance = %s", (instance,))
+        assert cur.fetchone()[0] == 0
 
 
 def test_promote_never_rewrites_a_dev_written_row(conn):
