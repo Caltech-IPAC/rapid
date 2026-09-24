@@ -2,14 +2,27 @@
 
 ``rapidpipe stage <name> ...`` imports ``rapidpipe.stages.<name>`` and calls
 its ``main(argv)``, per the stage contract's "Invocation" section: "``rapidpipe
-stage <name>`` calls that same entrypoint." ``rapidpipe run create/list/show/
-local`` operates on ``rapidpipe.runs.repository`` directly -- create a run,
-list and inspect runs, and run one stage attempt locally through
-``rapidpipe.runs.local``. The specification's "Tools" section names two
-more operations this module does not yet implement, ``promote`` and
-``delete``, plus ``run`` for Batch (rerun part of a run, watch progress,
-cancel and restart); each remaining placeholder exits 64 until it is
-built on ``rapidpipe.launch``.
+stage <name>`` calls that same entrypoint." The ``rapidpipe run``
+subcommands implemented here:
+
+- ``create``, ``list``, ``show`` -- record a run, list runs, inspect one
+  (its units, attempts, expiry, pin and promotions), over
+  ``rapidpipe.runs.repository``;
+- ``local`` -- run one stage attempt as a local subprocess through
+  ``rapidpipe.runs.local``;
+- ``submit``, ``reconcile``, ``cancel`` -- one attempt on AWS Batch,
+  through ``rapidpipe.launch.batch``;
+- ``promote`` -- promote a production run's deliverables
+  (``repository.promote_run``); ``rollback`` -- reverse one promotion
+  (``repository.rollback_promotion``);
+- ``finish`` -- mark a run whose units are all terminal finished
+  (``repository.finish_run``);
+- ``delete`` -- delete a scratch run and its outputs
+  (``rapidpipe.runs.cleanup.delete_run``); ``pin`` / ``unpin`` -- keep a
+  scratch run from expiring, or release it (``cleanup.pin_run``).
+
+The specification's "Tools" section also names Batch-level run
+management (rerun part of a run, watch progress, restart), not yet built.
 
 This module resolves a stage's ``DECLARATION`` by
 ``importlib.import_module(f"rapidpipe.stages.{name}")`` rather than
@@ -47,11 +60,6 @@ from rapidpipe.runs.repository import RunModelError
 from rapidpipe.selftest import run as run_selftest
 from rapidpipe.selftest.runner import STAGE_NAMES as SELFTEST_STAGE_NAMES
 from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
-
-#: Subcommands named in the specification's "Tools" section that are not
-#: yet implemented. Each exits 64 if invoked, and is listed in --help as
-#: "not yet implemented".
-NOT_YET_IMPLEMENTED = ("promote", "delete")
 
 #: Recognised as network-shaped, the same rule
 #: ``rapidpipe.stages.contract._map_storage_error`` uses: matched by class
@@ -181,7 +189,7 @@ def _build_parser() -> argparse.ArgumentParser:
     selftest_parser.add_argument("--python", default=sys.executable)
 
     run_parser = subparsers.add_parser(
-        "run", help="Create, list, inspect and locally run runs.")
+        "run", help="Create, list, inspect, run, promote and delete runs.")
     run_subparsers = run_parser.add_subparsers(dest="run_command")
 
     create_parser = run_subparsers.add_parser(
@@ -245,8 +253,41 @@ def _build_parser() -> argparse.ArgumentParser:
     cancel_parser.add_argument("attempt_id")
     cancel_parser.add_argument("--reason", required=True)
 
-    for name in NOT_YET_IMPLEMENTED:
-        subparsers.add_parser(name, help="Not yet implemented.", add_help=False)
+    promote_parser = run_subparsers.add_parser(
+        "promote", help="Promote a production run's candidates; print the promotion id.")
+    promote_parser.add_argument("run_id")
+    promote_parser.add_argument("--reason", required=True)
+    promote_parser.add_argument(
+        "--who", default=None, help="Who is promoting (default: the current user).")
+    promote_parser.add_argument(
+        "--kinds", default=None,
+        help="Comma-separated product kinds to promote (default: every kind).")
+
+    rollback_parser = run_subparsers.add_parser(
+        "rollback", help="Reverse one promotion; print the reversing promotion id.")
+    rollback_parser.add_argument("promotion_id")
+    rollback_parser.add_argument("--reason", required=True)
+    rollback_parser.add_argument(
+        "--who", default=None, help="Who is rolling back (default: the current user).")
+
+    delete_parser = run_subparsers.add_parser(
+        "delete", help="Delete a scratch run's outputs and science rows.")
+    delete_parser.add_argument("run_id")
+    delete_parser.add_argument(
+        "--requested-by", default=None, dest="requested_by",
+        help="The run's owner (default: the current user).")
+
+    finish_parser = run_subparsers.add_parser(
+        "finish", help="Mark a run whose units are all terminal as finished.")
+    finish_parser.add_argument("run_id")
+
+    pin_parser = run_subparsers.add_parser(
+        "pin", help="Pin a run so it never expires.")
+    pin_parser.add_argument("run_id")
+
+    unpin_parser = run_subparsers.add_parser(
+        "unpin", help="Unpin a run so it expires at its expires_at.")
+    unpin_parser.add_argument("run_id")
 
     return parser
 
@@ -425,7 +466,7 @@ def _run_show_command(args: argparse.Namespace) -> int:
                 "SELECT id, kind, owner, purpose, selected_stages, state, "
                 "code_revision, image_digest, schema_version, lane, "
                 "resource_profile, database_target, max_attempts_per_unit, "
-                "auto_promote, created "
+                "auto_promote, created, expires_at, pinned, finished_at "
                 "FROM runs WHERE id = %s",
                 (args.run_id,),
             )
@@ -438,7 +479,7 @@ def _run_show_command(args: argparse.Namespace) -> int:
                 "id", "kind", "owner", "purpose", "selected_stages", "state",
                 "code_revision", "image_digest", "schema_version", "lane",
                 "resource_profile", "database_target", "max_attempts_per_unit",
-                "auto_promote", "created",
+                "auto_promote", "created", "expires_at", "pinned", "finished_at",
             ]
             for column, value in zip(columns, run_row):
                 print(f"{column}: {value}")
@@ -462,6 +503,28 @@ def _run_show_command(args: argparse.Namespace) -> int:
                 print(
                     f"  {attempt_id}\t{stage}\t{unit}\t{disposition}\t"
                     f"{exit_code}\t{started}\t{ended}")
+
+            # Promotions that selected or unselected one of this run's
+            # instances, with how many of their changes did.
+            cur.execute(
+                """
+                SELECT p.id, p.who, p.happened_at, p.reason, count(*)
+                FROM promotions p
+                JOIN promotion_changes pc ON pc.promotion = p.id
+                WHERE EXISTS (
+                    SELECT 1 FROM product_instances pi
+                    WHERE pi.run = %s
+                      AND pi.id IN (pc.before_instance, pc.after_instance))
+                GROUP BY p.id, p.who, p.happened_at, p.reason
+                ORDER BY p.happened_at, p.id
+                """,
+                (args.run_id,),
+            )
+            promotions = cur.fetchall()
+            if promotions:
+                print("promotions:")
+                for promotion_id, who, happened_at, reason, changes in promotions:
+                    print(f"  {promotion_id}\t{who}\t{happened_at}\t{reason}\t{changes}")
 
     return int(ExitCode.SUCCESS)
 
@@ -704,6 +767,109 @@ def _run_cancel_command(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_model_command(
+    name: str,
+    action,
+    *,
+    print_result=None,
+) -> int:
+    """Shared shape of the run-model subcommands: connect, call
+    ``action(conn)``, commit, print; a refusal (any
+    :class:`~rapidpipe.runs.repository.RunModelError`) rolls back, prints
+    the exception message and exits 64; an AWS-shaped error (``run
+    delete``'s S3 calls) exits 75, retryable -- ``delete`` resumes a
+    ``deleting`` run."""
+    try:
+        cm = connect(application_name=f"rapidpipe-run-{name}")
+    except ConnectionConfigError as exc:
+        sys.stderr.write(f"rapidpipe run {name}: database configuration error: {exc}\n")
+        return int(ExitCode.USAGE)
+    except ConnectionUnavailable as exc:
+        sys.stderr.write(f"rapidpipe run {name}: database unavailable: {exc}\n")
+        return int(ExitCode.TRANSIENT_FAILURE)
+
+    with cm as conn:
+        try:
+            result = action(conn)
+            conn.commit()
+        except RunModelError as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run {name}: {exc}\n")
+            return int(ExitCode.USAGE)
+        except Exception as exc:  # noqa: BLE001 - AWS/botocore-shaped errors
+            conn.rollback()
+            if _is_batch_error(exc):
+                sys.stderr.write(f"rapidpipe run {name}: AWS error: {exc}\n")
+                return int(ExitCode.TRANSIENT_FAILURE)
+            raise
+        except BaseException:
+            conn.rollback()
+            raise
+
+    if print_result is not None:
+        print_result(result)
+    return int(ExitCode.SUCCESS)
+
+
+def _run_promote_command(args: argparse.Namespace) -> int:
+    from rapidpipe.runs.repository import promote_run
+
+    who = args.who or getpass.getuser()
+    kinds = None
+    if args.kinds is not None:
+        kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+        if not kinds:
+            sys.stderr.write("rapidpipe run promote: --kinds must name at least one kind\n")
+            return int(ExitCode.USAGE)
+    return _run_model_command(
+        "promote",
+        lambda conn: promote_run(conn, args.run_id, who, args.reason, kinds=kinds),
+        print_result=print)
+
+
+def _run_rollback_command(args: argparse.Namespace) -> int:
+    from rapidpipe.runs.repository import rollback_promotion
+
+    who = args.who or getpass.getuser()
+    return _run_model_command(
+        "rollback",
+        lambda conn: rollback_promotion(conn, args.promotion_id, who, args.reason),
+        print_result=print)
+
+
+def _print_deletion_report(report) -> None:
+    print(f"run_id: {report.run_id}")
+    print(f"already_deleted: {report.already_deleted}")
+    print(f"objects_deleted: {report.objects_deleted}")
+    print(f"versions_deleted: {report.versions_deleted}")
+    for table, count in report.rows_deleted.items():
+        print(f"rows_deleted.{table}: {count}")
+    print(f"instances_marked: {report.instances_marked}")
+
+
+def _run_delete_command(args: argparse.Namespace) -> int:
+    from rapidpipe.runs.cleanup import delete_run
+
+    requested_by = args.requested_by or getpass.getuser()
+    return _run_model_command(
+        "delete",
+        lambda conn: delete_run(conn, args.run_id, requested_by),
+        print_result=_print_deletion_report)
+
+
+def _run_finish_command(args: argparse.Namespace) -> int:
+    from rapidpipe.runs.repository import finish_run
+
+    return _run_model_command("finish", lambda conn: finish_run(conn, args.run_id))
+
+
+def _run_pin_command(args: argparse.Namespace, pinned: bool) -> int:
+    from rapidpipe.runs.cleanup import pin_run
+
+    return _run_model_command(
+        "pin" if pinned else "unpin", lambda conn: pin_run(conn, args.run_id, pinned))
+
+
 def _run_command(args: argparse.Namespace) -> int:
     if args.run_command == "create":
         return _run_create_command(args)
@@ -719,9 +885,22 @@ def _run_command(args: argparse.Namespace) -> int:
         return _run_reconcile_command(args)
     if args.run_command == "cancel":
         return _run_cancel_command(args)
+    if args.run_command == "promote":
+        return _run_promote_command(args)
+    if args.run_command == "rollback":
+        return _run_rollback_command(args)
+    if args.run_command == "delete":
+        return _run_delete_command(args)
+    if args.run_command == "finish":
+        return _run_finish_command(args)
+    if args.run_command == "pin":
+        return _run_pin_command(args, True)
+    if args.run_command == "unpin":
+        return _run_pin_command(args, False)
     sys.stderr.write(
         "rapidpipe run: a subcommand is required: create, list, show, local, "
-        "submit, reconcile, cancel\n")
+        "submit, reconcile, cancel, promote, rollback, delete, finish, pin, "
+        "unpin\n")
     return int(ExitCode.USAGE)
 
 
@@ -737,10 +916,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run":
         return _run_command(args)
-
-    if args.command in NOT_YET_IMPLEMENTED:
-        sys.stderr.write(f"rapidpipe {args.command}: not yet implemented\n")
-        return int(ExitCode.USAGE)
 
     parser.print_help()
     return int(ExitCode.SUCCESS) if args.command is None else int(ExitCode.USAGE)

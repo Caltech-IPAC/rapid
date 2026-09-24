@@ -20,11 +20,21 @@ specification.md, "Repositories": "Account identifiers, bucket names and
 hostnames are injected at deploy time, never committed to `rapid`."):
 
 - ``RAPIDPIPE_BATCH_JOB_QUEUE`` -- the Batch job queue name or ARN.
-- ``RAPIDPIPE_BATCH_JOB_DEFINITION`` -- the Batch job definition name or ARN.
-- ``RAPIDPIPE_OUTPUTS_ROOT`` -- an ``s3://bucket/prefix`` under which
-  ``runs/<run>/<stage>/<unit>/<attempt>`` lives; chosen by whoever
-  configures the run's lane (a project or personal bucket).
+- ``RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH`` /
+  ``RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION`` -- the Batch job
+  definition name or ARN for a run of that kind; either falls back to
+  ``RAPIDPIPE_BATCH_JOB_DEFINITION`` when unset (:func:`job_definition_for`).
+- ``RAPIDPIPE_OUTPUTS_ROOT_SCRATCH`` / ``RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION``
+  -- an ``s3://bucket/prefix`` under which ``runs/<run>/<stage>/<unit>/
+  <attempt>`` lives for a run of that kind (the scratch bucket and the
+  project bucket); either falls back to ``RAPIDPIPE_OUTPUTS_ROOT`` when
+  unset (:func:`outputs_root_for`).
 - ``RAPIDPIPE_BATCH_JOB_NAME_PREFIX`` -- optional, default ``rapid``.
+
+The run's kind is fixed at creation (runs page, "Runs"), so
+:func:`submit_unit` reads it from the ``runs`` row and picks the root and
+definition from it; an explicit ``outputs_root``/``job_definition``
+argument still wins.
 """
 
 from __future__ import annotations
@@ -40,6 +50,7 @@ from rapidpipe.products.manifest import Manifest, ManifestError
 from rapidpipe.products.storage import fetch_object, join, parse_location
 from rapidpipe.runs.local import disposition_for
 from rapidpipe.runs.repository import (
+    RunNotFound,
     add_unit,
     allocate_attempt,
     record_attempt_result,
@@ -135,6 +146,58 @@ def _require_env(name: str) -> str:
     return value
 
 
+_RUN_KINDS = ("scratch", "production")
+
+
+def _env_for_kind(base: str, kind: str) -> str:
+    """``<base>_<KIND>``, else ``<base>``, else :class:`MissingEnvironmentVariable`
+    naming both."""
+    if kind not in _RUN_KINDS:
+        raise ValueError(f"run kind must be one of {_RUN_KINDS}, got {kind!r}")
+    specific = f"{base}_{kind.upper()}"
+    value = os.environ.get(specific) or os.environ.get(base)
+    if not value:
+        raise MissingEnvironmentVariable(
+            f"neither {specific} nor {base} is set; rapidpipe.launch.batch "
+            "requires one (README, \"Running on Batch\")")
+    return value
+
+
+def outputs_root_for(kind: str) -> str:
+    """The outputs root for a run of ``kind`` ('scratch' or 'production').
+
+    ``RAPIDPIPE_OUTPUTS_ROOT_SCRATCH`` or ``RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION``,
+    falling back to ``RAPIDPIPE_OUTPUTS_ROOT``; raises
+    :class:`MissingEnvironmentVariable` if neither is set.
+    """
+    return _env_for_kind("RAPIDPIPE_OUTPUTS_ROOT", kind)
+
+
+def job_definition_for(kind: str) -> str:
+    """The Batch job definition for a run of ``kind`` ('scratch' or 'production').
+
+    ``RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH`` or
+    ``RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION``, falling back to
+    ``RAPIDPIPE_BATCH_JOB_DEFINITION``; raises
+    :class:`MissingEnvironmentVariable` if neither is set.
+    """
+    return _env_for_kind("RAPIDPIPE_BATCH_JOB_DEFINITION", kind)
+
+
+def _run_kind(conn, run_id: str) -> str:
+    """The ``runs.kind`` of ``run_id``; :class:`RunNotFound` if there is none.
+
+    A module-level function so the database-free unit tests can
+    monkeypatch it alongside the repository calls.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT kind FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise RunNotFound(f"run {run_id!r} does not exist")
+    return row[0]
+
+
 def batch_client() -> Any:
     """Return a fresh ``boto3`` Batch client.
 
@@ -188,6 +251,7 @@ def submit_unit(
     inputs_location: str,
     settings_location: str | None = None,
     outputs_root: str | None = None,
+    job_definition: str | None = None,
     client: Any = None,
 ) -> BatchSubmission:
     """Allocate an attempt and submit it to Batch as one job.
@@ -196,7 +260,10 @@ def submit_unit(
     :func:`~rapidpipe.runs.repository.allocate_attempt` (its exceptions --
     the run fence and the attempt allowance -- propagate uncommitted);
     the output location is ``<outputs_root>/runs/<run>/<stage>/<unit>/
-    <attempt>``; the Batch job's ``containerOverrides.command`` starts at
+    <attempt>``, where ``outputs_root`` and ``job_definition`` default,
+    when ``None``, to :func:`outputs_root_for` and
+    :func:`job_definition_for` of the run's kind (read from its ``runs``
+    row before anything is written); the Batch job's ``containerOverrides.command`` starts at
     ``stage`` (the image's entrypoint is ``rapidpipe``, per the stage
     contract's "Invocation" form). The job id Batch returns is then
     recorded on the attempt row with
@@ -204,9 +271,13 @@ def submit_unit(
     after each repository call, as
     :func:`rapidpipe.runs.local.run_stage_locally` does.
     """
-    outputs_root = outputs_root or _require_env("RAPIDPIPE_OUTPUTS_ROOT")
-    job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
-    job_definition = _require_env("RAPIDPIPE_BATCH_JOB_DEFINITION")
+    if outputs_root is None or job_definition is None:
+        kind = _run_kind(conn, run_id)
+        outputs_root = outputs_root or outputs_root_for(kind)
+        job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
+        job_definition = job_definition or job_definition_for(kind)
+    else:
+        job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
     job_name_prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX", "rapid")
 
     add_unit(conn, run_id, stage, unit_kind, unit_id)
@@ -455,6 +526,10 @@ def reconcile(
 
     Every recorded disposition passes ``scheduler_job_id`` through to
     :func:`~rapidpipe.runs.repository.record_attempt_result`.
+
+    Reconcile never finishes the run, even when every unit is now
+    terminal: that is an explicit
+    :func:`~rapidpipe.runs.repository.finish_run` call only.
     """
     with conn.cursor() as cur:
         cur.execute(

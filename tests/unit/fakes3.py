@@ -120,3 +120,74 @@ class FakeS3:
             raise FakeClientError("NoSuchKey") from None
         with open(filename, "wb") as fh:
             fh.write(data)
+
+
+class FakeVersionedS3:
+    """An in-memory versioned bucket for ``rapidpipe.runs.cleanup``.
+
+    Implements only ``list_object_versions`` (``Prefix``, ``KeyMarker`` /
+    ``VersionIdMarker`` pagination at ``page_size`` entries, versions and
+    delete markers both) and ``delete_objects`` (``Delete={"Objects":
+    [{"Key", "VersionId"}], "Quiet": True}``, removing exactly those
+    versions). ``calls`` records ``(operation, kwargs)`` in order.
+    ``fail_keys`` makes ``delete_objects`` report an error for those keys
+    instead of deleting them.
+    """
+
+    def __init__(self, page_size: int = 1000):
+        self.page_size = page_size
+        # (bucket, key, version_id, is_delete_marker), in insertion order.
+        self.entries: list[tuple[str, str, str, bool]] = []
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.fail_keys: set[str] = set()
+        self._next_version = 0
+
+    def seed(self, bucket: str, key: str, *, versions: int = 1, delete_marker: bool = False) -> None:
+        for _ in range(versions):
+            self._next_version += 1
+            self.entries.append((bucket, key, f"v{self._next_version:06d}", False))
+        if delete_marker:
+            self._next_version += 1
+            self.entries.append((bucket, key, f"v{self._next_version:06d}", True))
+
+    def remaining(self, bucket: str, prefix: str = "") -> list[tuple[str, str]]:
+        return [(k, v) for b, k, v, _m in self.entries if b == bucket and k.startswith(prefix)]
+
+    def list_object_versions(self, **kwargs: Any) -> dict:
+        self.calls.append(("list_object_versions", dict(kwargs)))
+        bucket = kwargs["Bucket"]
+        prefix = kwargs.get("Prefix", "")
+        matching = sorted(
+            (k, v, m) for b, k, v, m in self.entries if b == bucket and k.startswith(prefix))
+        key_marker = kwargs.get("KeyMarker")
+        version_marker = kwargs.get("VersionIdMarker")
+        if key_marker is not None:
+            matching = [e for e in matching
+                        if (e[0], e[1]) > (key_marker, version_marker or "")]
+        page = matching[:self.page_size]
+        truncated = len(matching) > self.page_size
+        response: dict[str, Any] = {
+            "Versions": [{"Key": k, "VersionId": v} for k, v, m in page if not m],
+            "DeleteMarkers": [{"Key": k, "VersionId": v} for k, v, m in page if m],
+            "IsTruncated": truncated,
+        }
+        if truncated:
+            response["NextKeyMarker"] = page[-1][0]
+            response["NextVersionIdMarker"] = page[-1][1]
+        return response
+
+    def delete_objects(self, **kwargs: Any) -> dict:
+        self.calls.append(("delete_objects", dict(kwargs)))
+        bucket = kwargs["Bucket"]
+        objects = kwargs["Delete"]["Objects"]
+        assert len(objects) <= 1000, "delete_objects takes at most 1000 keys"
+        errors = []
+        for obj in objects:
+            if obj["Key"] in self.fail_keys:
+                errors.append({"Key": obj["Key"], "VersionId": obj["VersionId"],
+                               "Code": "AccessDenied", "Message": "denied"})
+                continue
+            self.entries = [e for e in self.entries
+                            if not (e[0] == bucket and e[1] == obj["Key"]
+                                    and e[2] == obj["VersionId"])]
+        return {"Errors": errors} if errors else {}
