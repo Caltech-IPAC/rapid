@@ -178,7 +178,8 @@ def test_unknown_unit_kind_fails_validation():
         Unit(kind="not-a-real-unit", id="u1").validate()
 
 
-@pytest.mark.parametrize("kind", ["exposure", "detector-image", "field", "processing-date"])
+@pytest.mark.parametrize(
+    "kind", ["exposure", "detector-image", "field", "processing-date", "detector-date"])
 def test_each_contract_unit_kind_is_valid(kind):
     Unit(kind=kind, id="u1").validate()  # does not raise
 

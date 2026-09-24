@@ -64,6 +64,7 @@ STAGE_NAMES = (
     "finalize",
     "register",
     "load",
+    "maintain",
     "crossmatch",
     "statistics",
     "prune",
@@ -72,8 +73,8 @@ STAGE_NAMES = (
     "export",
 )
 
-#: The four units of work a stage may declare (stage contract, "Declaration").
-UNIT_KINDS = ("exposure", "detector-image", "field", "processing-date")
+#: The five units of work a stage may declare (stage contract, "Declaration").
+UNIT_KINDS = ("exposure", "detector-image", "field", "processing-date", "detector-date")
 
 #: The three database access levels a stage may declare.
 DB_ACCESS_LEVELS = ("none", "read", "read-write")
@@ -230,7 +231,8 @@ class StageResult:
     ``context.input_manifest``, since only the stage knows which of the
     input manifest's declared products it read. ``result_sets_read`` names
     the database result-set instance ids the stage read, for the stages
-    the stage contract names (``crossmatch``, ``statistics``, ``prune``);
+    the stage contract names (``maintain``, ``crossmatch``, ``statistics``,
+    ``prune``);
     transform stages leave both empty as appropriate. ``execution_notes``
     is anything the stage must record about how the attempt went that is
     not an output (the difference stage notes a non-fatal SFFT failure
