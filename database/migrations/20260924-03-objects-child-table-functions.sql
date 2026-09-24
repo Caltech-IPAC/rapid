@@ -74,6 +74,19 @@
 --     by `result_set`.
 --   - The set-scoped UNIQUE constraints above, named `<t>_set_aid_key` and
 --     `<t>_set_aid_sid_key`.
+--
+-- Adopting an existing table. A per-field table `dev` made before
+-- 20260924-02 (production `rapid` has them) got nothing from that migration's
+-- ALTER of the prototype, because a LIKE copy is not an inheritance child. When
+-- `create_field_object_tables` or `create_astroobjectsmeta_child_table` finds
+-- such a table (it exists, but has no `run` column), it attaches the run model
+-- in place and returns false, since it did not make the table. It adds the
+-- three columns, the all-or-none CHECK, the set-scoped UNIQUE, the
+-- `run`/`result_set` indexes and the rebuild's grants. `dev`'s rows keep
+-- `run IS NULL` (pre-run-model, always current). A new table gets the same
+-- additions from the same helper, `attach_object_run_model`, so the two paths
+-- cannot drift. That helper is callable only by its owner, `rapidporole`, which
+-- is who the SECURITY DEFINER functions run as.
 --------------------------------------------------------------------------------------------------------------------------
 
 CREATE FUNCTION object_field_table_name(prefix_ text, field_ integer)
@@ -87,6 +100,41 @@ BEGIN
         RAISE EXCEPTION 'per-field table: field must be a non-negative integer, got %', field_;
     END IF;
     RETURN format('%s_%s', prefix_, field_);
+END
+$$;
+
+-- The rebuild's additions to one per-field table, idempotent: run columns and
+-- their CHECK when absent (an adopted `dev` table), the set-scoped UNIQUE, the
+-- `run`/`result_set` indexes, the rebuild's grants.
+CREATE FUNCTION attach_object_run_model(prefix_ text, field_ integer)
+    RETURNS void
+    LANGUAGE plpgsql
+    SET search_path = public, pg_temp AS $$
+DECLARE
+    t text := object_field_table_name(prefix_, field_);
+    rel regclass := to_regclass('public.' || object_field_table_name(prefix_, field_));
+    key_name text := t || CASE WHEN prefix_ = 'merges' THEN '_set_aid_sid_key' ELSE '_set_aid_key' END;
+    key_cols text := CASE WHEN prefix_ = 'merges' THEN 'result_set, aid, sid' ELSE 'result_set, aid' END;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = rel AND attname = 'run' AND NOT attisdropped) THEN
+        EXECUTE format('ALTER TABLE %I ADD COLUMN run rapid_ulid, ADD COLUMN attempt rapid_ulid, '
+                       'ADD COLUMN result_set rapid_ulid', t);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = rel AND conname = prefix_ || '_run_columns_together') THEN
+        EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I CHECK ((run IS NULL) = (attempt IS NULL) '
+                       'AND (run IS NULL) = (result_set IS NULL))', t, prefix_ || '_run_columns_together');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = rel AND conname = key_name) THEN
+        EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I UNIQUE (%s)', t, key_name, key_cols);
+    END IF;
+    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I (result_set)', t || '_result_set_idx', t);
+    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I (run)', t || '_run_idx', t);
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_rebuild_pipeline') THEN
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I TO rapid_rebuild_pipeline', t);
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_read') THEN
+        EXECUTE format('GRANT SELECT ON TABLE %I TO rapid_read', t);
+    END IF;
 END
 $$;
 
@@ -108,22 +156,14 @@ BEGIN
 
         EXECUTE format('CREATE INDEX %I ON %I (aid)', a || '_aid_idx', a);
         EXECUTE format('CREATE INDEX %I ON %I (q3c_ang2ipix(ra0, dec0))', a || '_radec_idx', a);
-        EXECUTE format('CREATE INDEX %I ON %I (result_set)', a || '_result_set_idx', a);
-        EXECUTE format('CREATE INDEX %I ON %I (run)', a || '_run_idx', a);
-        EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I UNIQUE (result_set, aid)', a, a || '_set_aid_key');
 
         EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidreadrole', a);
         EXECUTE format('GRANT SELECT ON TABLE %I TO GROUP rapidreadrole', a);
         EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidadminrole', a);
         EXECUTE format('GRANT ALL ON TABLE %I TO GROUP rapidadminrole', a);
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_rebuild_pipeline') THEN
-            EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I TO rapid_rebuild_pipeline', a);
-        END IF;
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_read') THEN
-            EXECUTE format('GRANT SELECT ON TABLE %I TO rapid_read', a);
-        END IF;
         made := true;
     END IF;
+    PERFORM attach_object_run_model('astroobjects', field_);
 
     IF to_regclass('public.' || m) IS NULL THEN
         EXECUTE format('CREATE TABLE %I (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS)', m);
@@ -132,22 +172,14 @@ BEGIN
 
         EXECUTE format('CREATE INDEX %I ON %I USING btree (aid)', m || '_aid_idx', m);
         EXECUTE format('CREATE INDEX %I ON %I USING btree (sid)', m || '_sid_idx', m);
-        EXECUTE format('CREATE INDEX %I ON %I (result_set)', m || '_result_set_idx', m);
-        EXECUTE format('CREATE INDEX %I ON %I (run)', m || '_run_idx', m);
-        EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I UNIQUE (result_set, aid, sid)', m, m || '_set_aid_sid_key');
 
         EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidreadrole', m);
         EXECUTE format('GRANT SELECT ON TABLE %I TO GROUP rapidreadrole', m);
         EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidadminrole', m);
         EXECUTE format('GRANT ALL ON TABLE %I TO GROUP rapidadminrole', m);
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_rebuild_pipeline') THEN
-            EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I TO rapid_rebuild_pipeline', m);
-        END IF;
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_read') THEN
-            EXECUTE format('GRANT SELECT ON TABLE %I TO rapid_read', m);
-        END IF;
         made := true;
     END IF;
+    PERFORM attach_object_run_model('merges', field_);
 
     RETURN made;
 END
@@ -159,33 +191,27 @@ CREATE FUNCTION create_astroobjectsmeta_child_table(field_ integer)
     SET search_path = public, pg_temp AS $$
 DECLARE
     t text := object_field_table_name('astroobjectsmeta', field_);
+    made boolean := false;
 BEGIN
     PERFORM pg_advisory_xact_lock(hashtext('rapid.astroobjectsmeta-table.' || t));
-    IF to_regclass('public.' || t) IS NOT NULL THEN
-        RETURN false;
-    END IF;
 
-    EXECUTE format('CREATE TABLE %I (LIKE astroobjectsmeta INCLUDING DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = 70)', t);
-    EXECUTE format('ALTER TABLE %I OWNER TO rapidporole', t);
-    EXECUTE format('ALTER TABLE %I SET UNLOGGED', t);
+    IF to_regclass('public.' || t) IS NULL THEN
+        EXECUTE format('CREATE TABLE %I (LIKE astroobjectsmeta INCLUDING DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = 70)', t);
+        EXECUTE format('ALTER TABLE %I OWNER TO rapidporole', t);
+        EXECUTE format('ALTER TABLE %I SET UNLOGGED', t);
 
-    EXECUTE format('CREATE INDEX %I ON %I (nsources)', t || '_nsources_idx', t);
-    EXECUTE format('CREATE INDEX %I ON %I (q3c_ang2ipix(meanra, meandec))', t || '_meanradec_idx', t);
-    EXECUTE format('CREATE INDEX %I ON %I (result_set)', t || '_result_set_idx', t);
-    EXECUTE format('CREATE INDEX %I ON %I (run)', t || '_run_idx', t);
-    EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I UNIQUE (result_set, aid)', t, t || '_set_aid_key');
+        EXECUTE format('CREATE INDEX %I ON %I (nsources)', t || '_nsources_idx', t);
+        EXECUTE format('CREATE INDEX %I ON %I (q3c_ang2ipix(meanra, meandec))', t || '_meanradec_idx', t);
 
-    EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidreadrole', t);
-    EXECUTE format('GRANT SELECT ON TABLE %I TO GROUP rapidreadrole', t);
-    EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidadminrole', t);
-    EXECUTE format('GRANT ALL ON TABLE %I TO GROUP rapidadminrole', t);
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_rebuild_pipeline') THEN
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I TO rapid_rebuild_pipeline', t);
+        EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidreadrole', t);
+        EXECUTE format('GRANT SELECT ON TABLE %I TO GROUP rapidreadrole', t);
+        EXECUTE format('REVOKE ALL ON TABLE %I FROM rapidadminrole', t);
+        EXECUTE format('GRANT ALL ON TABLE %I TO GROUP rapidadminrole', t);
+        made := true;
     END IF;
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapid_read') THEN
-        EXECUTE format('GRANT SELECT ON TABLE %I TO rapid_read', t);
-    END IF;
-    RETURN true;
+    PERFORM attach_object_run_model('astroobjectsmeta', field_);
+
+    RETURN made;
 END
 $$;
 
@@ -206,9 +232,11 @@ BEGIN
 END
 $$;
 
+ALTER FUNCTION attach_object_run_model(text, integer) OWNER TO rapidporole;
 ALTER FUNCTION create_field_object_tables(integer) OWNER TO rapidporole;
 ALTER FUNCTION create_astroobjectsmeta_child_table(integer) OWNER TO rapidporole;
 ALTER FUNCTION cluster_field_object_tables(integer) OWNER TO rapidporole;
+REVOKE ALL ON FUNCTION attach_object_run_model(text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION create_field_object_tables(integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION create_astroobjectsmeta_child_table(integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION cluster_field_object_tables(integer) FROM PUBLIC;

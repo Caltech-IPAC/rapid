@@ -25,9 +25,10 @@
 --     ... (LIKE <prototype> INCLUDING DEFAULTS INCLUDING CONSTRAINTS)`, as
 --     `dev` makes them. A per-field table `dev` made before this migration
 --     does not gain them: ADD COLUMN on a prototype reaches no copy. A
---     database built by this stream holds no such table; one that does would
---     need its field tables adopted by a later migration before the rebuild
---     writes into them.
+--     database built by this stream holds no such table. Production `rapid`
+--     does; 20260924-03's table functions adopt such a table in place (they
+--     add these columns, the CHECK and the rebuild's constraints and indexes)
+--     the first time a stage asks for it.
 --   - The foreign keys sit on the prototypes only. `LIKE` never copies a
 --     foreign key, and the prototypes hold no rows, so they are declarations
 --     of meaning, as 20260923-04's are on `sources`.

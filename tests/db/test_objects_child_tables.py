@@ -4,8 +4,9 @@ The run columns on the `merges`, `astroobjects` and `astroobjectsmeta`
 prototypes, the per-field table functions (`dev`'s creation, index and
 grant blocks, plus the rebuild's set-scoped UNIQUE constraints and
 `run`/`result_set` indexes; CLUSTER and ANALYZE), COPY with de-duplication
-into the per-field tables, `prunedmerges`, the catalog visibility rule and
-the source-set lookup. Every test runs inside conftest's rolled-back
+into the per-field tables, adoption of a `dev` table made before the run
+model, `prunedmerges`, the association chain, the done check, the
+source-set lookup, and 20260924-06's `detector-date` unit kind. Every test runs inside conftest's rolled-back
 transaction.
 
 Skips cleanly if PGHOST is unset (see conftest.py).
@@ -207,24 +208,98 @@ def test_prunedmerges_records_excluded_pairs_once(conn):
         assert cur.fetchall() == [(base, run_id, prune_attempt)]
 
 
-def test_catalog_visibility_reads_legacy_own_and_current_sets(conn):
-    own_run, own_attempt, own = _result_set(conn)
-    other_run, other_attempt, other_scratch = _result_set(conn)
-    cur_run, cur_attempt, current = _result_set(conn)
+def test_association_chain_and_set_rows_read_base_plus_delta(conn):
+    run_id, a0, first = _result_set(conn, key={"field": FIELD, "base": None, "settings_hash": "h"})
+    _, a1, second = _result_set(conn, run_id=run_id,
+                                key={"field": FIELD, "base": first, "settings_hash": "h"})
+    other_run, a2, unrelated = _result_set(conn)
     with conn.cursor() as cur:
-        cur.execute("UPDATE product_instances SET custody = 'current' WHERE id = %s", (current,))
+        assert objects.association_chain(cur, second) == [second, first]
+        assert objects.association_chain(cur, first) == [first]
         objects.ensure_field_object_tables(cur, FIELD)
         objects.copy_astroobjects(cur, FIELD, _csv(
             (1, 1.0, 1.0, 1.0, "\\N", "\\N", "\\N"),
-            (2, 1.0, 1.0, 1.0, own_run, own_attempt, own),
-            (3, 1.0, 1.0, 1.0, other_run, other_attempt, other_scratch),
-            (4, 1.0, 1.0, 1.0, cur_run, cur_attempt, current)))
+            (2, 1.0, 1.0, 1.0, run_id, a0, first),
+            (3, 1.0, 1.0, 1.0, run_id, a1, second),
+            (4, 1.0, 1.0, 1.0, other_run, a2, unrelated)))
         a = objects.field_table_names(FIELD)["astroobjects"]
-        sql, params = objects.catalog_visibility_sql("o", own_run)
+        sql, params = objects.set_rows_clause("o", objects.association_chain(cur, second))
         cur.execute(f"SELECT aid FROM {a} o WHERE {sql} ORDER BY aid", params)
-        assert [r[0] for r in cur.fetchall()] == [1, 2, 4]
+        assert [r[0] for r in cur.fetchall()] == [2, 3]
+        cur.execute("UPDATE product_instances SET deletion_state = 'deleted' WHERE id = %s",
+                    (first,))
+        with pytest.raises(ValueError, match="not retained"):
+            objects.association_chain(cur, second)
+
+
+def test_find_complete_result_set(conn):
+    key = {"field": FIELD, "source_sets": ["S1"], "settings_hash": "h"}
+    run_id, _, instance = _result_set(conn, key=key, rows=5)
+    with conn.cursor() as cur:
+        assert objects.find_complete_result_set(cur, "association-set", run_id, key) == (instance, 5)
+        assert objects.find_complete_result_set(cur, "pruned-set", run_id, key) is None
+        assert objects.find_complete_result_set(
+            cur, "association-set", run_id, {**key, "settings_hash": "other"}) is None
+
+
+def test_current_association_sets(conn):
+    _, _, scratch = _result_set(conn)
+    _, _, current = _result_set(conn)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE product_instances SET custody = 'current' WHERE id = %s", (current,))
         assert objects.current_association_sets(cur, FIELD) == [current]
         assert objects.current_association_sets(cur, FIELD + 1) == []
+
+
+def test_a_dev_table_without_run_columns_is_adopted_in_place(conn):
+    names = objects.field_table_names(FIELD)
+    a, m, t = names["astroobjects"], names["merges"], names["astroobjectsmeta"]
+    run_id, attempt_id, instance = _result_set(conn)
+    with conn.cursor() as cur:
+        # dev's per-field tables, made before 20260924-02: dev's columns only.
+        cur.execute(f"CREATE TABLE {a} (aid bigint NOT NULL, ra0 double precision NOT NULL, "
+                    f"dec0 double precision NOT NULL, flux0 real NOT NULL)")
+        cur.execute(f"CREATE INDEX {a}_radec_idx ON {a} (q3c_ang2ipix(ra0, dec0))")
+        cur.execute(f"CREATE TABLE {m} (aid bigint NOT NULL, sid bigint NOT NULL)")
+        cur.execute(f"CREATE TABLE {t} (aid bigint NOT NULL, meanra double precision NOT NULL, "
+                    f"stdevra real NOT NULL, meandec double precision NOT NULL, "
+                    f"stdevdec real NOT NULL, meanflux real NOT NULL, stdevflux real NOT NULL, "
+                    f"nsources smallint NOT NULL)")
+        for table in (a, m, t):
+            cur.execute(f"ALTER TABLE {table} OWNER TO rapidporole")
+        cur.execute(f"INSERT INTO {a} VALUES (1, 1.0, 1.0, 1.0)")
+
+        assert objects.ensure_field_object_tables(cur, FIELD) is False
+        assert objects.ensure_astroobjectsmeta_table(cur, FIELD) is False
+        for table, prefix, key in ((a, "astroobjects", "_set_aid_key"),
+                                   (m, "merges", "_set_aid_sid_key"),
+                                   (t, "astroobjectsmeta", "_set_aid_key")):
+            constraints = _constraints(cur, table)
+            assert constraints[f"{prefix}_run_columns_together"] == "c"
+            assert constraints[f"{table}{key}"] == "u"
+            assert {f"{table}_run_idx", f"{table}_result_set_idx"} <= _indexes(cur, table)
+
+        # Adoption is idempotent, and the function path agrees.
+        cur.execute("SELECT create_field_object_tables(%s)", (FIELD,))
+        assert cur.fetchone()[0] is False
+        assert objects.copy_astroobjects(
+            cur, FIELD, _csv((1, 1.0, 1.0, 1.0, run_id, attempt_id, instance),
+                             (1, 1.0, 1.0, 1.0, run_id, attempt_id, instance))) == 1
+        cur.execute(f"SELECT aid, run FROM {a} ORDER BY run NULLS FIRST")
+        assert cur.fetchall() == [(1, None), (1, run_id)]
+        with pytest.raises(psycopg2.errors.CheckViolation):
+            objects.copy_merges(cur, FIELD, _csv((1, 5, run_id, attempt_id, "\\N")))
+
+
+def test_units_accept_the_detector_date_kind(conn):
+    run_id = _make_run(conn, kind="scratch", selected_stages=["load"])
+    repo.add_unit(conn, run_id, "load", "detector-date", "20260821/SCA07")
+    with conn.cursor() as cur:
+        cur.execute("SELECT unit_kind FROM units WHERE run = %s", (run_id,))
+        assert cur.fetchone()[0] == "detector-date"
+        with pytest.raises(psycopg2.errors.CheckViolation):
+            cur.execute("INSERT INTO units (id, run, stage, unit_kind, unit_id) "
+                        "VALUES (%s, %s, 'load', 'fortnight', 'x')", (new_ulid(), run_id))
 
 
 def test_source_set_table_refuses_what_is_not_a_complete_source_set(conn):

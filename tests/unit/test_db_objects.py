@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import io
+import json
 
 import pytest
 
@@ -75,7 +76,8 @@ def test_ensure_field_object_tables_calls_the_function_when_one_is_absent():
 def test_ensure_astroobjectsmeta_table():
     cur = FakeCursor([(True,)])
     assert objects.ensure_astroobjectsmeta_table(cur, 7) is False
-    assert cur.executed == [("SELECT to_regclass(%s) IS NOT NULL", ("public.astroobjectsmeta_7",))]
+    ((sql, params),) = cur.executed
+    assert "attname = 'result_set'" in sql and params == ("public.astroobjectsmeta_7",)
     cur = FakeCursor([(False,), (True,)])
     assert objects.ensure_astroobjectsmeta_table(cur, 7) is True
     assert cur.executed[-1] == ("SELECT create_astroobjectsmeta_child_table(%s)", (7,))
@@ -140,18 +142,42 @@ def test_source_set_table_refuses(rows, match):
         objects.source_set_table(FakeCursor(rows), "SS")
 
 
-def test_catalog_visibility_sql():
-    sql, params = objects.catalog_visibility_sql("o", "RUN")
-    assert sql == (
-        "(o.run IS NULL OR o.run = %s OR o.result_set IN "
-        "(SELECT id FROM product_instances WHERE kind = 'association-set' "
-        "AND custody = 'current' AND deletion_state = 'retained'))")
-    assert params == ("RUN",)
-    assert objects.catalog_visibility_sql("a")[1] == ()
-    assert sql.count("%s") == 1
+def test_association_chain_follows_base_until_null():
+    cur = FakeCursor([("association-set", "retained", "B"),
+                      ("association-set", "retained", "C"),
+                      ("association-set", "retained", None)])
+    assert objects.association_chain(cur, "A") == ["A", "B", "C"]
+    assert [p for _, p in cur.executed] == [("A",), ("B",), ("C",)]
+    assert "logical_key->>'base'" in cur.executed[0][0]
+
+
+@pytest.mark.parametrize("rows, match", [
+    ([], "no instance"),
+    ([("association-set", "retained", "B")], "no instance 'B'"),
+    ([("source-set", "retained", None)], "not an association-set"),
+    ([("association-set", "deleted", None)], "not retained"),
+    ([("association-set", "retained", "B"), ("association-set", "retained", "A")], "loops"),
+])
+def test_association_chain_refuses(rows, match):
+    with pytest.raises(ValueError, match=match):
+        objects.association_chain(FakeCursor(rows), "A")
+
+
+def test_set_rows_clause():
+    assert objects.set_rows_clause("o", ("A", "B")) == ("o.result_set = ANY(%s)", (["A", "B"],))
     for bad in ("", "o.x", "o; DROP", "1a"):
         with pytest.raises(ValueError):
-            objects.catalog_visibility_sql(bad)
+            objects.set_rows_clause(bad, ["A"])
+
+
+def test_find_complete_result_set_matches_kind_run_and_key():
+    cur = FakeCursor([("SET", 7)])
+    key = {"field": 5321, "source_sets": ["S"], "settings_hash": "h"}
+    assert objects.find_complete_result_set(cur, "association-set", "RUN", key) == ("SET", 7)
+    sql, params = cur.executed[0]
+    assert "pi.kind = %s" in sql and "rs.complete" in sql and "deletion_state = 'retained'" in sql
+    assert params == ("association-set", "RUN", json.dumps(key))
+    assert objects.find_complete_result_set(FakeCursor([]), "pruned-set", "RUN", key) is None
 
 
 def test_current_association_sets():

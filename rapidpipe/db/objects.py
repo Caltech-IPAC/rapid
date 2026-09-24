@@ -11,8 +11,10 @@ caller's transaction: none commits or rolls back.
   `dev`'s ``astroobjects_<field>``/``merges_<field>`` and
   ``astroobjectsmeta_<field>`` creation, indexing and grants, through
   20260924-03's ``create_field_object_tables`` and
-  ``create_astroobjectsmeta_child_table``. `dev` drops and recreates
-  ``astroobjectsmeta_<field>`` on every run; the rebuild never drops it.
+  ``create_astroobjectsmeta_child_table``, which also adopt a table `dev`
+  made before the run model (adding the run columns in place). `dev` drops
+  and recreates ``astroobjectsmeta_<field>`` on every run; the rebuild never
+  drops it.
 - :func:`cluster_field_object_tables`: `dev`'s CLUSTER of
   ``astroobjects_<field>`` and ANALYZE of both tables between crossmatch's
   two passes.
@@ -25,8 +27,14 @@ caller's transaction: none commits or rolls back.
   instance's rows live in -- the rebuild's form of `dev`'s
   ``lookup_source_tables_to_crossmatch_and_distinct_fields`` date scan, by
   instance id rather than processing date.
-- :func:`catalog_visibility_sql`, :func:`current_association_sets`: the rows
-  a crossmatch pass may read as the existing catalog (step 1 ruling R3).
+- :func:`association_chain`, :func:`set_rows_clause`: the rows a crossmatch
+  pass reads as the existing catalog, "base plus delta" (step 1 ruling R3 as
+  amended 2026-09-24): the association sets its base chain names, never
+  "whatever is current".
+- :func:`find_complete_result_set`: the rebuild's done check for the three
+  field stages, a complete set of the same kind and key in the same run
+  (ruling R14), as :func:`rapidpipe.db.sources.find_complete_source_set` is
+  for `load`.
 - :func:`insert_pruned_merges`: a `pruned-set`'s excluded pairs, the rows
   `dev`'s ``pruneNotBestMerges`` deletes in place (step 1 ruling R6).
 
@@ -39,6 +47,7 @@ This module imports ``rapidpipe.db`` only, matching the package contract.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import IO, Any, Iterable
 
@@ -98,23 +107,33 @@ def _split_field_table(table: str) -> tuple[str, int]:
     return match.group(1), int(match.group(2))
 
 
+def _run_model_table_exists(cur, table: str) -> bool:
+    """Whether ``table`` exists and already carries the run columns (made or adopted)."""
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(%s) "
+        "AND attname = 'result_set' AND NOT attisdropped)",
+        (f"public.{table}",))
+    return bool(cur.fetchone()[0])
+
+
 def ensure_field_object_tables(cur, field: int) -> bool:
     """Make ``astroobjects_<field>`` and ``merges_<field>`` if absent; return whether this call made either.
 
-    Existing tables are found without a lock; only an attempt that must
-    make a table takes the function's advisory lock.
+    Tables that exist with the run columns are found without a lock. Any
+    other case goes to the function, which makes an absent table or adopts
+    a `dev` table without the run columns (returning false for that one).
     """
     names = field_table_names(field)
-    if (sources.child_table_exists(cur, names["astroobjects"])
-            and sources.child_table_exists(cur, names["merges"])):
+    if (_run_model_table_exists(cur, names["astroobjects"])
+            and _run_model_table_exists(cur, names["merges"])):
         return False
     cur.execute("SELECT create_field_object_tables(%s)", (_field(field),))
     return bool(cur.fetchone()[0])
 
 
 def ensure_astroobjectsmeta_table(cur, field: int) -> bool:
-    """Make ``astroobjectsmeta_<field>`` if absent; return whether this call made it."""
-    if sources.child_table_exists(cur, field_table_names(field)["astroobjectsmeta"]):
+    """Make ``astroobjectsmeta_<field>`` if absent (or adopt a `dev` one); return whether this call made it."""
+    if _run_model_table_exists(cur, field_table_names(field)["astroobjectsmeta"]):
         return False
     cur.execute("SELECT create_astroobjectsmeta_child_table(%s)", (_field(field),))
     return bool(cur.fetchone()[0])
@@ -212,27 +231,76 @@ def source_set_table(cur, instance: str) -> tuple[str, int | None]:
     return sources.child_table_name(sources.obs_date_of(dateobs), sca), row_count
 
 
-def catalog_visibility_sql(alias: str, run_id: str | None = None) -> tuple[str, tuple]:
-    """The rows of ``<alias>`` a crossmatch pass reads as the existing catalog (ruling R3).
+def association_chain(cur, instance: str) -> list[str]:
+    """``instance`` and its bases, recursively: the association sets a crossmatch pass reads.
 
-    Visible: pre-run-model rows (``run IS NULL``, always current), this
-    run's own rows, and rows of any current, retained `association-set`.
-    Returns ``(sql, params)``: ``sql`` has one ``%s`` placeholder, the run
-    id. With ``run_id`` the params are ``(run_id,)``; without, they are
-    ``()`` and the caller supplies the run id in that position.
+    Follows ``product_instances.logical_key->>'base'`` (a nullable
+    association-set instance id) until it is null. Returns the ids in order,
+    ``instance`` first. Raises :class:`ValueError` (the stage maps it to
+    InputRejected) when a link is missing, is not an `association-set`, is
+    not retained, or the chain loops.
+    """
+    chain: list[str] = []
+    current: str | None = instance
+    while current is not None:
+        if current in chain:
+            raise ValueError(f"association chain of {instance!r} loops at {current!r}")
+        cur.execute(
+            "SELECT kind, deletion_state, logical_key->>'base' FROM product_instances "
+            "WHERE id = %s",
+            (current,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"association chain of {instance!r}: no instance {current!r}")
+        kind, deletion_state, base = row
+        if kind != "association-set":
+            raise ValueError(
+                f"association chain of {instance!r}: {current!r} is a {kind}, not an association-set")
+        if deletion_state != "retained":
+            raise ValueError(
+                f"association chain of {instance!r}: {current!r} is {deletion_state}, not retained")
+        chain.append(current)
+        current = base or None
+    return chain
+
+
+def set_rows_clause(alias: str, chain: Iterable[str]) -> tuple[str, tuple]:
+    """``(<alias>.result_set = ANY(%s), (list(chain),))``: the rows of the named sets.
+
+    One spelling for the three stages; ``chain`` is typically
+    :func:`association_chain`'s list plus the attempt's own new set.
     """
     if not _ALIAS_RE.fullmatch(alias):
         raise ValueError(f"not a table alias: {alias!r}")
-    sql = (
-        f"({alias}.run IS NULL OR {alias}.run = %s OR {alias}.result_set IN "
-        "(SELECT id FROM product_instances WHERE kind = 'association-set' "
-        "AND custody = 'current' AND deletion_state = 'retained'))"
-    )
-    return sql, ((run_id,) if run_id is not None else ())
+    return f"{alias}.result_set = ANY(%s)", (list(chain),)
+
+
+def find_complete_result_set(
+    cur, kind: str, run_id: str, logical_key: dict[str, Any],
+) -> tuple[str, int | None] | None:
+    """The earliest complete, retained result set of ``kind`` for ``logical_key`` in ``run_id``.
+
+    Returns ``(instance, row_count)``, or ``None`` when there is none.
+    """
+    cur.execute(
+        """
+        SELECT pi.id, rs.row_count FROM product_instances pi
+        JOIN result_sets rs ON rs.instance = pi.id
+        WHERE pi.kind = %s AND pi.run = %s AND pi.logical_key = %s::jsonb
+          AND rs.complete AND pi.deletion_state = 'retained'
+        ORDER BY pi.id LIMIT 1
+        """,
+        (kind, run_id, json.dumps(logical_key)))
+    row = cur.fetchone()
+    return (row[0], row[1]) if row is not None else None
 
 
 def current_association_sets(cur, field: int) -> list[str]:
-    """The current, retained `association-set` instances whose logical key names ``field``."""
+    """The current, retained `association-set` instances whose logical key names ``field``.
+
+    Not the crossmatch read rule (that is :func:`association_chain`); a
+    helper for choosing a base, for instance.
+    """
     cur.execute(
         """
         SELECT id FROM product_instances
