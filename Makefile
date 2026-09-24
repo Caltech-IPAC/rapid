@@ -37,3 +37,26 @@ stage-finalize:
 .PHONY: stage-maintain
 stage-maintain:
 	$(PYTHON) tests/fixtures/maintain/run_fixture.py
+
+# The crossmatch stage's fixture: two source sets' sources into one field's
+# astroobjects and merges, both passes, against the fake database
+# (rapidpipe/selftest/support/fakecrossmatchdb.py); runs anywhere. The
+# PostgreSQL path is tests/db/test_crossmatch.py.
+.PHONY: stage-crossmatch
+stage-crossmatch:
+	$(PYTHON) tests/fixtures/crossmatch/run_fixture.py
+# The alerts stage's fixture: a synthetic difference image, reference
+# catalog and catalog result sets into an Avro container and outbox rows,
+# against the fake database (rapidpipe/selftest/support/fakealertsdb.py);
+# runs anywhere PYTHON has fastavro. The PostgreSQL path is
+# tests/db/test_alerts.py.
+.PHONY: stage-alerts
+stage-alerts:
+	$(PYTHON) tests/fixtures/alerts/run_fixture.py
+# The statistics stage's fixture: per-object statistics over an association
+# set's base-plus-delta membership, against the fake database
+# (rapidpipe/selftest/support/fakestatisticsdb.py); runs anywhere. The
+# PostgreSQL path is tests/db/test_statistics.py.
+.PHONY: stage-statistics
+stage-statistics:
+	$(PYTHON) tests/fixtures/statistics/run_fixture.py

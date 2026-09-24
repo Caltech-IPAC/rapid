@@ -1,0 +1,8 @@
+# Settings overlay for the statistics stage's fixture (make stage-statistics).
+#
+# The stage's own defaults (rapidpipe/settings/statistics.toml) apply; this
+# overlay restates them so the fixture exercises the --settings path.
+
+[statistics]
+done_check = true
+membership = "association"

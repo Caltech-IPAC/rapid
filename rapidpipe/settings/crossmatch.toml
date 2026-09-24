@@ -1,0 +1,26 @@
+# Defaults for the crossmatch stage (rapidpipe.stages.crossmatch): the knobs
+# `dev`'s pipeline/crossMatchSources.py reads or hard-codes, with `dev`'s
+# values. `dev`'s [SCI_IMAGE] ppid is not carried: it only served the
+# processing-date job scan, which the input manifest's source-set instances
+# replace (supervisor step 1, ruling R2, 2026-09-24).
+
+[source_matching]
+# `dev`'s [SOURCE_MATCHING] match_radius, in degrees: "Half of 0.11 arcsec
+# (a Roman WFI pixel)". The q3c_join radius of both passes.
+match_radius = 0.00001528
+
+[crossmatch]
+# `dev` hard-codes `flags = 0` in every sources query: only unflagged sources
+# are matched.
+source_flags = 0
+# `dev` CLUSTERs astroobjects_<field> on its radec index and ANALYZEs both
+# tables between the two passes (main() step 7; ruling R5).
+cluster_between_passes = true
+# When true, rows written before the run model (run IS NULL) are also read as
+# catalog, besides the base chain's. For the cutover onto production `rapid`;
+# `rapid_rebuild` has no such rows (ruling R3).
+legacy_catalog = false
+# When true, a complete association set already written in this run for the
+# same logical key is reused and nothing is written (ruling R14), as load's
+# done_check does.
+done_check = true

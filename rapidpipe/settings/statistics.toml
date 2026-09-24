@@ -1,0 +1,19 @@
+# Defaults for the statistics stage (rapidpipe.stages.statistics).
+#
+# `dev`'s pipeline/computeStatisticsForAstroObjects.py reads no load-bearing
+# setting: its .ini reads (`[SCI_IMAGE] ppid`, `[PSFCAT_DIFFIMAGE]` file
+# names, the S3 buckets) serve its processing-date scan or are never used,
+# and the rebuild's unit (one field) and input (one association set)
+# replace them. What remains is the rebuild's own two knobs.
+
+[statistics]
+# The done check (step 1 ruling R14): a complete statistics set with the
+# same key (the same membership set) already written in this run is
+# reused, nothing is written, and the manifest names that instance.
+done_check = true
+# Which membership the statistics describe. "association" is the only value
+# accepted: delivered statistics describe the association set, as `dev`
+# computes them (crossmatch, then statistics, then prune). A pruned set as
+# the input is designed in on the products page and left unused (lead,
+# 2026-09-22); "pruned" is refused until that is built.
+membership = "association"
