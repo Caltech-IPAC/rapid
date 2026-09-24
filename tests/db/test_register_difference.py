@@ -275,15 +275,25 @@ def test_unregistered_l2_instance_exits_65(conn, tmp_path, monkeypatch):
         assert cur.fetchone()[0] == 0
 
 
-def test_an_sfft_instance_is_refused_until_it_has_a_pipelines_row(conn, tmp_path, monkeypatch):
+def test_register_writes_an_sfft_instance_under_its_pipelines_row(conn, tmp_path, monkeypatch):
+    # database/migrations/20260924-01-pipelines-sfft.sql (lead ruling 2026-09-24:
+    # ppid 16, priority 6) replaces the earlier refusal -- an SFFT instance used
+    # to be rejected here for having no `pipelines` row to register under.
     l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)
     run_id, outputs = _run_difference(
         conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid,
         overlay="[sfft]\nregister_sfft = true\n")
+    manifest = Manifest.read(outputs / "manifest.json")
+    sfft_entry = next(e for e in manifest.outputs
+                       if e.kind == "difference-image" and e.key["differencer"] == "sfft")
     rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path)
-    assert rc == int(ExitCode.INPUT_REJECTED)
+    assert rc == int(ExitCode.SUCCESS)
+    with conn.cursor() as cur:
+        row = _diffimages_row(cur, sfft_entry.instance)
+        assert row is not None
+        assert row["ppid"] == 16
 
 
 # ======================================================================
