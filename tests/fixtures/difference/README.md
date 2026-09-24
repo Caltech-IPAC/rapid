@@ -18,15 +18,22 @@ code, the manifest and the products. It exits 0 when every check passes.
 | File | Holds |
 |---|---|
 | `run_fixture.py` | prepare, run, check |
-| `settings.toml` | the settings overlay: the clipped-statistics seed, so numbers repeat |
-| `expected.json` | the input parameters, the expected products per tool set, the tolerances |
+| `README.md` | this file |
+
+The fixture *data* -- `settings.toml` (the settings overlay: the
+clipped-statistics seed, so numbers repeat) and `expected.json` (the input
+parameters, the expected products per tool set, the tolerances) -- lives
+once, under the packaged `rapidpipe/selftest/fixtures/difference/`: the
+same copy `rapidpipe selftest --stage difference` reads inside the
+pipeline image. This directory keeps no copy of its own, so there is
+nothing here to fall out of sync with it.
 
 ### Inputs
 
 Not committed as files: `run_fixture.py` writes them with
-`tests/unit/fakedifftools.build_input_set` from the parameters in
-`expected.json` (`inputs`), deterministically (a fixed random seed). They
-are minimal and synthetic:
+`tests/unit/fakedifftools.build_input_set` from the packaged
+`expected.json`'s parameters (`inputs`), deterministically (a fixed
+random seed). They are minimal and synthetic:
 
 - the l2 image: a 64x64 float32 image in HDU 1 of a gzipped FITS file,
   `dev`'s socsims layout, with EXPTIME, ZPTMAG and a TAN-SIP WCS; four
@@ -81,7 +88,7 @@ comparison on fixed inputs is still the lead's gate before operational
 use** (stage contract, "Local execution": "differences and tolerances
 approved by the lead before operational use"); it has not been run.
 
-`settings.toml`'s `[bkgest]` override shrinks bkgest's grid spacing and
-input window from the stage's full-detector default (500/501) to sizes
-that don't segfault against this fixture's 64x64/65x65 synthetic images,
-for the real-tool run only -- the fake bkgest ignores these values.
+The packaged `settings.toml`'s `[bkgest]` override shrinks bkgest's grid
+spacing and input window from the stage's full-detector default (500/501)
+to sizes that don't segfault against this fixture's 64x64/65x65 synthetic
+images, for the real-tool run only -- the fake bkgest ignores these values.
