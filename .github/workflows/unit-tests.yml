@@ -25,6 +25,14 @@
 # tests/unit -- not only running the database-backed spatial tests
 # -- needs it importable.
 #
+# fastavro is installed the same way: the alerts stage and its science
+# (rapidpipe.science.alerts) import it at module scope, and the alerts
+# unit tests and stage fixture decode the container it writes. scipy
+# comes with it: the alerts stage's reference-catalog and NED matches use
+# astropy's match_to_catalog_sky, which builds its KD-tree with scipy (the
+# pipeline image carries scipy through photutils; requirements.txt does not
+# name it, as it does not name photutils).
+#
 # actions/checkout is pinned by SHA per this repo's existing convention
 # (see .github/workflows/public-safety.yml); actions/setup-python is
 # pinned the same way.
@@ -57,8 +65,8 @@ jobs:
       - name: install rapidpipe
         run: pip install -e . --no-deps
 
-      - name: install pytest, psycopg2-binary, numpy, astropy and healpy
-        run: pip install pytest psycopg2-binary numpy astropy healpy
+      - name: install pytest, psycopg2-binary, numpy, astropy, healpy, fastavro and scipy
+        run: pip install pytest psycopg2-binary numpy astropy healpy fastavro scipy
 
       - name: run rapidpipe unit tests
         run: python -m pytest tests/unit -q

@@ -38,3 +38,11 @@ stage-maintain:
 .PHONY: stage-crossmatch
 stage-crossmatch:
 	$(PYTHON) tests/fixtures/crossmatch/run_fixture.py
+# The alerts stage's fixture: a synthetic difference image, reference
+# catalog and catalog result sets into an Avro container and outbox rows,
+# against the fake database (rapidpipe/selftest/support/fakealertsdb.py);
+# runs anywhere PYTHON has fastavro. The PostgreSQL path is
+# tests/db/test_alerts.py.
+.PHONY: stage-alerts
+stage-alerts:
+	$(PYTHON) tests/fixtures/alerts/run_fixture.py

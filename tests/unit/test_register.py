@@ -59,7 +59,8 @@ def _argv(inputs_dir, outputs_dir, *, extra=()):
 def test_declaration_validates():
     DECLARATION.validate()
     assert DECLARATION.name == "register"
-    assert DECLARATION.consumes == ("l2-image", "psf", "difference-image", "source-catalog")
+    assert DECLARATION.consumes == ("l2-image", "psf", "difference-image", "source-catalog",
+                                    "alert-container", "alert-set")
     assert DECLARATION.produces == ()
     assert DECLARATION.database_access == "read-write"
 

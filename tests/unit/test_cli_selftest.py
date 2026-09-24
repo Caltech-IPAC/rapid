@@ -39,7 +39,7 @@ def test_selftest_rejects_an_unknown_stage():
 
 
 def test_selftest_accepts_every_known_stage():
-    for stage in ("difference", "load", "maintain", "crossmatch"):
+    for stage in ("difference", "load", "maintain", "crossmatch", "alerts"):
         args = _parse(["selftest", "--stage", stage])
         assert args.stage == stage
 

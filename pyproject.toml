@@ -40,7 +40,10 @@ packages.find = {include = [
 # fixture's expected.json and settings.toml (rapidpipe.selftest.runner),
 # needed so `rapidpipe selftest` can read them inside the pipeline image,
 # which excludes tests/ at build time (containers/rapid-pipeline/build.sh).
-rapidpipe = ["settings/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml"]
+# rapidpipe/science/alerts/schema/ holds the alert schema's .avsc files
+# (dev's alerts/schema/<major>/<minor>/), read by the alerts stage.
+rapidpipe = ["settings/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml",
+             "science/alerts/schema/*/*/*.avsc"]
 
 [tool.pytest.ini_options]
 # The test directories are not named after the import package: tests/unit
