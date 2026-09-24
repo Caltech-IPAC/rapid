@@ -33,8 +33,8 @@ from typing import Any
 #: manifest's field set or semantics change.
 SCHEMA_VERSION = "1"
 
-#: The four units of work a stage may declare (stage contract, "Declaration").
-UNIT_KINDS = ("exposure", "detector-image", "field", "processing-date")
+#: The five units of work a stage may declare (stage contract, "Declaration").
+UNIT_KINDS = ("exposure", "detector-image", "field", "processing-date", "detector-date")
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
