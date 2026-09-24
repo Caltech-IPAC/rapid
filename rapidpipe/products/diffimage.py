@@ -38,6 +38,9 @@ from dataclasses import asdict, dataclass, fields
 from typing import Any, Iterable, Mapping
 
 _MD5_RE = re.compile(r"^[0-9a-f]{32}$")
+#: A ULID as rapidpipe.db.ids writes one (the rapid_ulid domain's pattern);
+#: repeated here because products must not import db.
+_ULID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 _SETTINGS_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -333,8 +336,8 @@ def check_finalize_provenance(registration: Mapping[str, Any]) -> None:
         f"got only {present}")
     finalized_from = registration["finalized_from"]
     _require(
-        isinstance(finalized_from, str) and bool(finalized_from),
-        f"finalized_from must be a non-empty instance id, got {finalized_from!r}")
+        isinstance(finalized_from, str) and _ULID_RE.match(finalized_from) is not None,
+        f"finalized_from must be an instance ULID, got {finalized_from!r}")
     revision = registration["revision"]
     _require(
         _is_int(revision) and revision >= 2,
@@ -413,8 +416,8 @@ def validate_source_catalog_entry(entry: Mapping[str, Any]) -> None:
              f"got {sorted(registration)}")
     if SOURCE_CATALOG_PROVENANCE_FIELD in registration:
         copied_from = registration[SOURCE_CATALOG_PROVENANCE_FIELD]
-        _require(isinstance(copied_from, str) and bool(copied_from),
-                 f"copied_from must be a non-empty instance id, got {copied_from!r}")
+        _require(isinstance(copied_from, str) and _ULID_RE.match(copied_from) is not None,
+                 f"copied_from must be an instance ULID, got {copied_from!r}")
     count = registration["source_count"]
     _require(_is_int(count) and count >= 0,
              f"source_count must be a non-negative integer, got {count!r}")

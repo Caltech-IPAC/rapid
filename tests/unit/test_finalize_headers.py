@@ -20,7 +20,7 @@ def _values(**overrides) -> headers.StampValues:
     values = dict(
         run=ULID, attempt=ULID, instance=ULID, finalized_from=ULID,
         l2_instance=ULID, reference_instance=ULID, differencer="zogy",
-        settings_hash="sha256:" + "0" * 64,
+        settings_hash="sha256:" + "0" * 64, finalize_settings_hash="sha256:" + "1" * 64,
         source_revision="0123456789abcdef0123456789abcdef01234567",
         image_digest="sha256:" + "a" * 64, output_location="s3://bucket/runs/r/finalize/u/a",
         ppid=15, infobits=3, field=4662268, diff_filename="diffimage_masked.fits",
@@ -32,7 +32,7 @@ def _values(**overrides) -> headers.StampValues:
 def test_the_keyword_table_is_the_ruling_s():
     assert [k for k, _, _ in headers.KEYWORDS] == [
         "RPRUN", "RPATTMPT", "RPINST", "RPSTAGE", "RPFINFRM", "RPL2INST", "RPREFINS",
-        "RPDIFFER", "RPSETHSH", "RPSRCREV", "RPIMGDIG", "RPOUTLOC", "PPID", "INFOBITS",
+        "RPDIFFER", "RPSETHSH", "RPFSETHS", "RPSRCREV", "RPIMGDIG", "RPOUTLOC", "PPID", "INFOBITS",
         "FIELD", "DIFFILEN", "DATE"]
     headers.check_keywords()
 

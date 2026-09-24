@@ -39,12 +39,15 @@ at prepare time, deterministically (a fixed random seed), in the shape
   `significance` as 64x64 float32 FITS images with a TAN WCS, and a 9x9
   `psf`;
 - the SExtractor catalogs (role `catalog`) and the Photutils catalogs
-  (roles `catalog` and `finder`) for both signs, small text files;
+  (roles `catalog`, `finder`, `residual` as a small FITS image, and
+  `parquet` as synthetic bytes) for both signs;
 - the attempt's execution record, `exec/<attempt>.json`, with a source
   revision and an image digest;
 - `manifest.json` (stage `difference`): one `difference-image` entry with
   a registration block that passes `validate_difference_entry`, and four
-  `source-catalog` entries keyed to it; `inputs.products` names the l2
+  `source-catalog` entries keyed to it. Only `expected.json` and
+  `settings.toml` are package data; every FITS and catalog byte is
+  generated here; `inputs.products` names the l2
   and reference instances.
 
 ### Database seed
@@ -59,12 +62,12 @@ All exact; nothing here is floating-point science.
 
 | Check | Why |
 |---|---|
-| one `difference-image` and four `source-catalog` entries, every instance a new ULID, none reused from the input | the ruling: new instances, same kinds |
+| one `difference-image` entry and every input `source-catalog` entry (four here; finalize passes through 0..n), every instance a new ULID, none reused from the input | the ruling: new instances, same kinds |
 | difference-image key, primary path and roles unchanged; block validates | same logical key |
 | registration = the input's, `md5` recomputed, plus `finalized_from` (input instance) and `revision` 2 | the products page: the manifest records the input instance and the output revision |
 | registration `md5` = MD5 of the stamped file | `diffimages.checksum` |
 | stamped file opens with `fits.open(checksum=True)` with no checksum warning; `CHECKSUM` and `DATASUM` present | `dev`'s `writeto(..., checksum=True)` |
-| every stamp keyword present with its full comment; fixed values from `expected.json`; `RPRUN`, `RPATTMPT`, `RPINST`, `RPOUTLOC` equal to the invocation's; `DATE` ISO to the second | the keyword table |
+| every stamp keyword present with its full comment; fixed values from `expected.json`; `RPRUN`, `RPATTMPT`, `RPINST`, `RPOUTLOC` equal to the invocation's; `RPFSETHS` equal to finalize's own settings hash and `RPSETHSH` to the key's original one; `DATE` ISO to the second | the keyword table |
 | the input header's own keywords kept; pixels and dtype unchanged | only the header is stamped |
 | every other member byte-identical (SHA-256) to its input | copied, not rewritten |
 | each catalog's key names the finalized instance, `copied_from` names its input, members identical | catalogs follow the new instance |

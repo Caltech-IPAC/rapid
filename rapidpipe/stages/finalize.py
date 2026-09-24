@@ -9,17 +9,20 @@ informational keywords to its primary header, rewrites it with astropy's
 ``diffimages.checksum``. `dev` overwrites the S3 object in place and
 updates the database row; the rebuild never overwrites a published
 instance (products page, "Identity"), so this stage writes a new instance
-of the same kind in its own attempt location and `register` records it
-(chain difference -> finalize -> register -> load, supervisor ruling
-2026-09-24). `dev`'s reference-image stamp is not ported: a reference is
-the `reference` stage's product.
+of the same kind in its own attempt location and `register` records it.
+Chain (supervisor, 2026-09-24, amended after review): difference ->
+register(raw) -> finalize -> register(finalized) -> load(finalize output).
+The raw instance is registered first, so the dependency edges finalize's
+``inputs.products`` names resolve; the finalized instance gets its own
+`diffimages` row, the next version for (rid, ppid) within the run. `dev`'s
+reference-image stamp is not ported: a reference is the `reference`
+stage's product.
 
 Inputs. ``--inputs`` is a difference attempt's output location: its
 completion manifest (stage ``difference``) with one ``difference-image``
-entry and that instance's ``source-catalog`` entries -- SExtractor
-positive and negative always, Photutils per sign unless the instance's
-catalog-outcome bit says it was not produced -- plus the attempt's
-execution record. Every member read is verified (size and SHA-256) first.
+entry and however many ``source-catalog`` entries are keyed to it (0..n,
+all passed through), plus the attempt's execution record. Every member
+read is verified (size and SHA-256) first.
 
 Outputs. One ``difference-image`` entry: a new instance id, the same
 logical key, the ``difference`` member rewritten with the stamp
@@ -49,10 +52,7 @@ from typing import Any
 
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.diffimage import (
-    CATALOG_TYPES,
-    SIGNS,
     SOURCE_CATALOG_PROVENANCE_FIELD,
-    catalog_outcome_bit,
     validate_difference_entry,
     validate_source_catalog_entry,
 )
@@ -142,38 +142,26 @@ def _verified_member_path(inputs_dir: Path, member: Member) -> Path:
 class _InputSet:
     manifest: Manifest
     difference: OutputEntry
-    catalogs: list[OutputEntry]      # in (catalog type, sign) order
+    catalogs: list[OutputEntry]      # in input order
 
 
 def _catalog_entries(manifest: Manifest, difference: OutputEntry) -> list[OutputEntry]:
-    """The difference instance's catalogs, SExtractor then Photutils, positive first.
+    """Every source-catalog entry keyed to the difference instance, in input order.
 
-    SExtractor's pair is always written by `difference`; a Photutils sign
-    may be absent only where the instance's catalog-outcome bit records
-    that no Photutils catalog was produced.
+    However many the input carries (0..n) pass through; none is required
+    (supervisor amendment, 2026-09-24). Two entries of one catalog type and
+    sign are refused: ``inputs.products`` names each by type and sign.
     """
-    differencer = difference.key["differencer"]
-    bits = int(difference.registration["catalog_outcome_bits"])
-    found = []
-    for catalog_type in CATALOG_TYPES:
-        for sign in SIGNS:
-            entries = [e for e in manifest.outputs if e.kind == "source-catalog"
-                       and e.key.get("difference") == difference.instance
-                       and e.key.get("catalog_type") == catalog_type
-                       and e.key.get("sign") == sign]
-            if len(entries) > 1:
-                raise InputRejected(
-                    f"input manifest has {len(entries)} {catalog_type} {sign} source-catalog "
-                    f"entries for difference instance {difference.instance!r}")
-            if entries:
-                found.append(entries[0])
-                continue
-            absent_by_mask = (catalog_type == "photutils"
-                              and bits & catalog_outcome_bit(differencer, sign))
-            if not absent_by_mask:
-                raise InputRejected(
-                    f"input manifest has no {catalog_type} {sign} source-catalog entry for "
-                    f"difference instance {difference.instance!r}")
+    found = [e for e in manifest.outputs if e.kind == "source-catalog"
+             and e.key.get("difference") == difference.instance]
+    seen: set[tuple[Any, Any]] = set()
+    for entry in found:
+        name = (entry.key.get("catalog_type"), entry.key.get("sign"))
+        if name in seen:
+            raise InputRejected(
+                f"input manifest has two {name[0]} {name[1]} source-catalog entries for "
+                f"difference instance {difference.instance!r}")
+        seen.add(name)
     return found
 
 
@@ -259,6 +247,7 @@ def stamp_values(*, context: StageContext, inputs: _InputSet, instance: str,
         reference_instance=products.get("reference-image") or key["reference"],
         differencer=key["differencer"],
         settings_hash=key["settings_hash"],
+        finalize_settings_hash="sha256:" + context.settings_hash,
         source_revision=headers.provenance_value(record.get("source_revision")),
         image_digest=headers.provenance_value(record.get("image_digest")),
         output_location=context.outputs_location,

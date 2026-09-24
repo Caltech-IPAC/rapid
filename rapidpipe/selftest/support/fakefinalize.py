@@ -3,9 +3,10 @@
 :func:`build_difference_output` writes what ``rapidpipe.stages.difference``
 publishes for one registered instance: the bundle's member files (small
 64x64 float32 FITS images with a TAN WCS -- ``difference``,
-``uncertainty``, ``significance`` and ``psf`` for ZOGY), the SExtractor
-and Photutils catalogs for both signs (Photutils with its ``finder``
-member), the attempt's execution record, and its completion manifest with
+``uncertainty``, ``significance`` and ``psf`` for ZOGY; ``kernel`` in place
+of ``significance`` for SFFT), the SExtractor and Photutils catalogs for
+both signs (Photutils with its ``finder``, ``residual`` and ``parquet``
+members), the attempt's execution record, and its completion manifest with
 the shape the stage writes (the entry order, logical keys, member paths
 under ``work/`` and a registration block that passes
 :func:`rapidpipe.products.diffimage.validate_difference_entry`). Nothing
@@ -54,6 +55,17 @@ ZOGY_FILES = {
     "psf": "diffpsf.fits",
 }
 
+#: SFFT's members: no significance; ``kernel`` (the matching-kernel
+#: solution) is its optional role.
+SFFT_FILES = {
+    "difference": "sfftdiffimage_masked.fits",
+    "uncertainty": "sfftdiffimage_uncert_masked.fits",
+    "psf": "sfftdiffpsf.fits",
+    "kernel": "sfftsoln.fits",
+}
+
+_BUNDLES = {"zogy": (ZOGY_FILES, "significance"), "sfft": (SFFT_FILES, "difference")}
+
 _CATALOG_INSTANCES = {
     ("sextractor", "positive"): "01J8Y6QZ3MF1NA1E000000SXP0",
     ("sextractor", "negative"): "01J8Y6QZ3MF1NA1E000000SXN0",
@@ -93,19 +105,23 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
     ``catalog_outcome_bits`` is the instance's mask: a Photutils sign whose
     bit is set gets no entry and a ``null`` source count, as `difference`
     writes it. ``execution_record`` replaces the default record's content;
-    pass ``{}`` for a record with neither provenance field. Only ZOGY's
-    bundle is built.
+    pass ``{}`` for a record with neither provenance field. ``differencer``
+    selects ZOGY's bundle or SFFT's (with its ``kernel`` member). Each
+    Photutils catalog carries every member `difference` writes: ``catalog``,
+    ``finder``, ``residual`` (a FITS image) and ``parquet`` (synthetic bytes;
+    nothing reads it here).
     """
-    if differencer != "zogy":
-        raise ValueError("build_difference_output builds ZOGY's bundle only")
+    if differencer not in _BUNDLES:
+        raise ValueError(f"no bundle for differencer {differencer!r}")
+    files, detection_role = _BUNDLES[differencer]
     work = inputs / "work"
     work.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
 
     paths = {}
-    for role, name in ZOGY_FILES.items():
+    for role, name in files.items():
         path = work / name
-        if role == "psf":
+        if role in ("psf", "kernel"):
             yy, xx = np.mgrid[0:9, 0:9]
             data = np.exp(-((xx - 4) ** 2 + (yy - 4) ** 2) / (2 * 1.2 ** 2))
             _write_image(path, data / data.sum(), wcs=False)
@@ -126,7 +142,7 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
             suffix = "" if sign == "positive" else "_negative"
             members = []
             if catalog_type == "sextractor":
-                path = work / f"diffimage_masked{suffix}.txt"
+                path = work / f"{differencer}_diffimage_masked{suffix}.txt"
                 path.write_text(_catalog_text(catalog_type, sign, source_rows))
                 members.append(_member("catalog", path, inputs))
             else:
@@ -134,7 +150,13 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
                 path.write_text(_catalog_text(catalog_type, sign, source_rows))
                 finder = work / f"{differencer}_diffimage_masked_psfcat_finder{suffix}.txt"
                 finder.write_text(_catalog_text("finder", sign, source_rows))
-                members += [_member("catalog", path, inputs), _member("finder", finder, inputs)]
+                residual = work / f"{differencer}_diffimage_masked_psfcat_residual{suffix}.fits"
+                _write_image(residual, rng.normal(0.0, 0.1, (NAXIS, NAXIS)))
+                parquet = work / f"{differencer}_diffimage_masked_psfcat{suffix}.parquet"
+                parquet.write_bytes(b"PAR1" + rng.bytes(64) + b"PAR1")
+                members += [_member("catalog", path, inputs), _member("finder", finder, inputs),
+                            _member("residual", residual, inputs),
+                            _member("parquet", parquet, inputs)]
             counts[catalog_type][sign] = source_rows
             catalog_entries.append({
                 "kind": "source-catalog", "format_version": "1",
@@ -145,7 +167,7 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
                 "registration": {"source_count": source_rows}})
 
     registration = {
-        "detection_role": "significance",
+        "detection_role": detection_role,
         "centre": dict(CENTRE),
         "corners": [list(c) for c in CORNERS],
         "catalog_outcome_bits": catalog_outcome_bits,
@@ -162,8 +184,8 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
         "kind": "difference-image", "format_version": "1", "instance": DIFFERENCE_INSTANCE,
         "key": {"l2": L2_INSTANCE, "reference": REFERENCE_INSTANCE,
                 "differencer": differencer, "settings_hash": SETTINGS_HASH},
-        "primary": f"work/{ZOGY_FILES['difference']}",
-        "members": [_member(role, paths[role], inputs) for role in ZOGY_FILES],
+        "primary": f"work/{files['difference']}",
+        "members": [_member(role, paths[role], inputs) for role in files],
         "registration": registration,
     }
 

@@ -3,7 +3,8 @@
 ``prepare`` writes a synthetic difference attempt's output location
 (:func:`rapidpipe.selftest.support.fakefinalize.build_difference_output`)
 and the settings overlay; ``check`` asserts what the supervisor's ruling
-fixes (2026-09-24): one difference-image and four source-catalog entries
+fixes (2026-09-24, with the review amendments): one difference-image entry
+and the input's source-catalog entries (four here), all
 under new instance ids, the stamped primary member opening with checksum
 verification and carrying every keyword with its expected value, every
 other member byte-identical to its input, the registration ``md5`` equal
@@ -144,6 +145,13 @@ def _check(checks: Checks, manifest: Manifest, expected: dict[str, Any],
                                ("RPINST", entry.instance), ("RPOUTLOC", str(outputs))):
             checks.check(header.get(keyword) == value,
                          f"{keyword}: expected {value!r}, got {header.get(keyword)!r}")
+        record = json.loads((outputs / manifest.execution_record).read_text())
+        own_hash = "sha256:" + str(record.get("settings_hash"))
+        checks.check(header.get("RPFSETHS") == own_hash,
+                     f"RPFSETHS is finalize's own settings hash: expected {own_hash!r}, "
+                     f"got {header.get('RPFSETHS')!r}")
+        checks.check(header.get("RPSETHSH") == entry.key["settings_hash"] != own_hash,
+                     "RPSETHSH is the key's original difference settings hash")
         checks.check(_DATE_RE.match(str(header.get("DATE", ""))) is not None,
                      f"DATE is ISO UTC to the second, got {header.get('DATE')!r}")
         source_header = fits.getheader(inputs / source_diff.primary)

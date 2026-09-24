@@ -311,10 +311,11 @@ def _run_finalize(conn, tmp_path, run_id, diff_outputs):
 
 
 def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
-    # register records finalize's new instance, its stamped file and MD5.
-    # The difference manifest is registered first, so the instances
-    # finalize names in inputs.products have rows for register's
-    # dependency edges (see the xfail below for the chain without it).
+    # Chain difference -> register(raw) -> finalize -> register(finalized)
+    # (supervisor, 2026-09-24, amended): the raw instance is registered
+    # first, so the dependency edges finalize's inputs.products names
+    # resolve; the finalized instance gets its own diffimages row, the next
+    # version for (rid, ppid) within the run.
     l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)
@@ -338,6 +339,9 @@ def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
         assert row["checksum"] == entry.registration["md5"] != source.registration["md5"]
         assert row["filename"] == f"{outputs}/{entry.primary}"
         assert (row["ppid"], row["rfid"]) == (15, rfid)
+        raw = _diffimages_row(cur, source.instance)
+        assert (raw["version"], row["version"]) == (1, 2)
+        assert raw["rid"] == row["rid"]
         cur.execute(
             "SELECT count(*) FROM product_instances WHERE kind = 'source-catalog' "
             "AND producing_stage = 'finalize' AND run = %s", (run_id,))
@@ -346,23 +350,6 @@ def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
             "SELECT count(*) FROM dependencies WHERE consumer_instance = %s "
             "AND producer_instance = %s", (entry.instance, source.instance))
         assert cur.fetchone()[0] == 1
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "Open ruling conflict (step 2, 2026-09-24): the chain difference -> finalize -> "
-    "register(finalize output) never registers the difference instances, but finalize's "
-    "inputs.products names them, and register_manifest's dependency edge needs a "
-    "product_instances row for each producer (dependencies_producer_instance_fkey)."))
-def test_register_records_a_finalized_instance_whose_difference_was_never_registered(
-        conn, tmp_path, monkeypatch):
-    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
-    with conn.cursor() as cur:
-        rfid = _legacy_refimage(cur)
-    run_id, diff_outputs = _run_difference(
-        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
-    outputs = _run_finalize(conn, tmp_path, run_id, diff_outputs)
-    rc, _ = _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, name="fin")
-    assert rc == int(ExitCode.SUCCESS)
 
 
 # ======================================================================

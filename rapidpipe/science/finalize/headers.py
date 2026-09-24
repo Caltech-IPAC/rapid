@@ -43,10 +43,12 @@ class StampValues:
     attempt and the new difference-image instance; ``finalized_from`` is
     the input instance. ``l2_instance``/``reference_instance`` come from
     the difference manifest's ``inputs.products``; ``differencer`` and
-    ``settings_hash`` from the input instance's logical key;
+    ``settings_hash`` from the input instance's logical key (the
+    difference settings, unchanged); ``finalize_settings_hash`` is this
+    attempt's own resolved settings hash;
     ``source_revision``/``image_digest`` from the difference attempt's
     execution record; ``output_location`` is this attempt's ``--outputs``
-    as given. ``ppid`` maps the differencer to its `pipelines` row,
+    as given, never a local staging directory. ``ppid`` maps the differencer to its `pipelines` row,
     ``infobits`` is ``registration.catalog_outcome_bits``, ``field`` the
     tessellation field of ``registration.centre``, ``diff_filename`` the
     primary member's base name, ``date`` the stamp time (:func:`utc_date`).
@@ -60,6 +62,7 @@ class StampValues:
     reference_instance: str
     differencer: str
     settings_hash: str
+    finalize_settings_hash: str
     source_revision: str
     image_digest: str
     output_location: str
@@ -82,6 +85,7 @@ KEYWORDS: tuple[tuple[str, str | None, str], ...] = (
     ("RPREFINS", "reference_instance", "RAPID reference-image instance id"),
     ("RPDIFFER", "differencer", "Differencer"),
     ("RPSETHSH", "settings_hash", "Difference settings hash"),
+    ("RPFSETHS", "finalize_settings_hash", "Finalize settings hash"),
     ("RPSRCREV", "source_revision", "Difference code revision"),
     ("RPIMGDIG", "image_digest", "Difference attempt image digest"),
     ("RPOUTLOC", "output_location", "Finalize attempt output location"),

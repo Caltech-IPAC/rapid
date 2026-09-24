@@ -14,8 +14,8 @@ fit positions outside the image rejected -> COPY -> optionally CLUSTER and
 ANALYZE (`dev` does this once per date; off by default here).
 
 Inputs. ``--inputs`` is the finalize attempt's output location (chain
-difference -> finalize -> register -> load, supervisor ruling 2026-09-24),
-or a difference attempt's: its completion manifest and files; ``finalize``
+difference -> register -> finalize -> register -> load, supervisor ruling
+2026-09-24), or a difference attempt's: its completion manifest and files; ``finalize``
 republishes the same entries under new instance ids. The stage reads the
 ``difference-image`` entry of the ``[load] differencer`` setting and that instance's two
 ``photutils`` ``source-catalog`` entries (members ``catalog`` and

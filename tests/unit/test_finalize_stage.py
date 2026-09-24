@@ -147,6 +147,79 @@ def test_a_photutils_sign_the_mask_says_was_not_produced_is_absent(tmp_path):
     assert "source-catalog/photutils/negative" not in manifest.inputs.products
 
 
+@pytest.mark.parametrize("keep", [0, 2])
+def test_source_catalogs_pass_through_however_many(tmp_path, keep):
+    inputs = tmp_path / "inputs"
+    build_difference_output(inputs)
+
+    def edit(manifest):
+        diff, *catalogs = manifest["outputs"]
+        manifest["outputs"] = [diff, *catalogs[:keep]]
+    _edit_manifest(inputs, edit)
+    rc, outputs = _run(tmp_path)
+    assert rc == ExitCode.SUCCESS
+    manifest = Manifest.read(outputs / "manifest.json")
+    assert sum(1 for e in manifest.outputs if e.kind == "source-catalog") == keep
+    assert len(manifest.inputs.products) == 1 + keep
+
+
+def test_every_catalog_member_is_copied(tmp_path):
+    rc, outputs = _run(tmp_path)
+    assert rc == ExitCode.SUCCESS
+    source = Manifest.read(tmp_path / "inputs" / "manifest.json")
+    manifest = Manifest.read(outputs / "manifest.json")
+    photutils = [e for e in manifest.outputs if e.key.get("catalog_type") == "photutils"]
+    assert {m.role for e in photutils for m in e.members} == {
+        "catalog", "finder", "residual", "parquet"}
+    by_instance = {e.instance: e for e in source.outputs}
+    for entry in manifest.outputs[1:]:
+        assert entry.members == by_instance[entry.registration["copied_from"]].members
+
+
+def test_an_sfft_bundle_keeps_its_kernel_and_stamps_ppid_16(tmp_path):
+    rc, outputs = _run(tmp_path, differencer="sfft")
+    assert rc == ExitCode.SUCCESS
+    source = Manifest.read(tmp_path / "inputs" / "manifest.json").outputs[0]
+    diff = Manifest.read(outputs / "manifest.json").outputs[0]
+    assert {m.role for m in diff.members} == {"difference", "uncertainty", "psf", "kernel"}
+    kernel = next(m for m in diff.members if m.role == "kernel")
+    assert kernel == next(m for m in source.members if m.role == "kernel")
+    header = fits.getheader(outputs / diff.primary)
+    assert (header["PPID"], header["RPDIFFER"]) == (16, "sfft")
+
+
+def test_the_key_keeps_the_difference_settings_hash_and_rpfseths_is_finalize_s(tmp_path):
+    rc, outputs = _run(tmp_path)
+    assert rc == ExitCode.SUCCESS
+    manifest = Manifest.read(outputs / "manifest.json")
+    diff = manifest.outputs[0]
+    record = json.loads((outputs / manifest.execution_record).read_text())
+    header = fits.getheader(outputs / diff.primary)
+    assert diff.key["settings_hash"] == header["RPSETHSH"] == (
+        Manifest.read(tmp_path / "inputs" / "manifest.json").outputs[0].key["settings_hash"])
+    assert header["RPFSETHS"] == "sha256:" + record["settings_hash"]
+    assert header["RPFSETHS"] != header["RPSETHSH"]
+
+
+def test_rpoutloc_is_the_s3_location_as_given_not_the_staging_directory(tmp_path, monkeypatch):
+    import rapidpipe.products.storage as storage_module
+    from tests.unit.fakes3 import FakeS3
+
+    fake = FakeS3()
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+    inputs = tmp_path / "inputs"
+    build_difference_output(inputs)
+    location = "s3://out-bucket/runs/r1/finalize/u1/a1"
+    assert finalize.main(_argv(inputs, location)) == ExitCode.SUCCESS
+    manifest = Manifest.from_dict(json.loads(
+        fake._objects[("out-bucket", "runs/r1/finalize/u1/a1/manifest.json")]))
+    diff = manifest.outputs[0]
+    stamped = tmp_path / "stamped.fits"
+    stamped.write_bytes(fake._objects[("out-bucket", f"runs/r1/finalize/u1/a1/{diff.primary}")])
+    assert fits.getheader(stamped)["RPOUTLOC"] == location
+
+
 def _drop(kind_type_sign):
     def edit(manifest):
         manifest["outputs"] = [
@@ -158,8 +231,8 @@ def _drop(kind_type_sign):
 @pytest.mark.parametrize("edit", [
     pytest.param(lambda m: m.update(stage="admit"), id="not-a-difference-manifest"),
     pytest.param(lambda m: m["unit"].update(kind="field"), id="wrong-unit-kind"),
-    pytest.param(_drop(("source-catalog", "sextractor", "negative")), id="missing-sextractor"),
-    pytest.param(_drop(("source-catalog", "photutils", "positive")), id="missing-photutils"),
+    pytest.param(lambda m: m["outputs"].append(dict(
+        m["outputs"][1], instance="01ARZ3NDEKTSV4RRFFQ69G5FAY")), id="two-catalogs-one-type-and-sign"),
     pytest.param(_drop(("difference-image", None, None)), id="no-difference-entry"),
     pytest.param(lambda m: m["outputs"].append(dict(m["outputs"][0], instance="01ARZ3NDEKTSV4RRFFQ69G5FAV")),
                  id="two-difference-entries"),
@@ -183,7 +256,7 @@ def test_bad_inputs_exit_65(tmp_path, edit):
 def test_a_tampered_member_exits_65(tmp_path):
     inputs = tmp_path / "inputs"
     build_difference_output(inputs)
-    catalog = inputs / "work" / "diffimage_masked.txt"
+    catalog = inputs / "work" / "zogy_diffimage_masked.txt"
     catalog.write_text(catalog.read_text().replace("1 10.0", "1 11.0"))
     rc, _ = _run(tmp_path)
     assert rc == ExitCode.INPUT_REJECTED
