@@ -316,9 +316,14 @@ def test_reconcile_batches_describe_jobs_at_100(monkeypatch):
             return False
 
         def execute(self, query, params=None):
-            pass
+            self._query = query
 
         def fetchall(self):
+            # The repair pass (rapidpipe.launch.batch
+            # ._repair_stranded_succeeded_attempts) queries "JOIN units";
+            # nothing to repair here.
+            if "JOIN units" in self._query:
+                return []
             return rows
 
     class _Conn:
@@ -346,7 +351,8 @@ def test_reconcile_batches_describe_jobs_at_100(monkeypatch):
 
 def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
                     manifest_ok=None, forget=False,
-                    manifest_fetch_error=None, exec_record_fetch_error=None):
+                    manifest_fetch_error=None, exec_record_fetch_error=None,
+                    repair_rows=()):
     """Reconcile exactly one attempt/job and return the Reconciled result.
 
     manifest_ok controls what _fetch_manifest_if_valid returns for a
@@ -355,6 +361,9 @@ def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
     corresponding fetch function raise it instead of returning a value --
     standing in for a launcher-side S3 fetch failure (e.g. AccessDenied)
     reconcile could not resolve.
+    repair_rows, when given, is what the repair pass's "JOIN units" query
+    returns -- rows already stranded 'succeeded'-but-unselected before
+    this reconcile call.
     """
     recorded = {}
 
@@ -366,9 +375,11 @@ def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
             return False
 
         def execute(self, query, params=None):
-            pass
+            self._query = query
 
         def fetchall(self):
+            if "JOIN units" in self._query:
+                return list(repair_rows)
             return [("attempt-1", "loc-1", "job-1")]
 
     class _Conn:
@@ -534,6 +545,90 @@ def test_reconcile_missing_job_id_is_lost(monkeypatch):
     assert result.disposition == "lost"
     assert result.batch_status == "LOST"
     assert recorded["record"] == ("attempt-1", None, "lost", "job-1")
+
+
+# ======================================================================
+# reconcile: repair pass for a pre-existing stranded 'succeeded' attempt
+#
+# Before this fix, record_attempt_result and select_attempt committed
+# separately in the SUCCEEDED+manifest branch above; a process death or a
+# failed second commit between them left an attempt 'succeeded' with its
+# unit neither selected nor complete, and invisible to the main query
+# (disposition IS NULL) forever after. reconcile now also runs
+# _repair_stranded_succeeded_attempts, whose own "JOIN units" query finds
+# exactly that shape and selects it. The main branch's success case now
+# shares one commit for both writes, so this only ever cleans up
+# pre-existing damage.
+# ======================================================================
+
+def _repair_conn(*, main_rows=(), repair_rows=()):
+    """A fake conn answering the main unresolved-attempts query and the
+    repair pass's "JOIN units" query from two canned row lists, keyed off
+    query text exactly as test_reconcile_batches_describe_jobs_at_100 and
+    _reconcile_one do."""
+
+    class _FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, query, params=None):
+            self._query = query
+
+        def fetchall(self):
+            if "JOIN units" in self._query:
+                return list(repair_rows)
+            return list(main_rows)
+
+    class _Conn:
+        def cursor(self):
+            return _FakeCursor()
+
+        def commit(self):
+            pass
+
+    return _Conn()
+
+
+def test_reconcile_repair_pass_selects_stranded_succeeded_attempt(monkeypatch):
+    # No attempt is unresolved (main query empty); the repair query finds
+    # one attempt already 'succeeded' with no selected attempt on its
+    # unit -- the pre-existing-damage case.
+    conn = _repair_conn(repair_rows=[("attempt-9", "job-9")])
+    selected = []
+    monkeypatch.setattr(
+        launch_batch, "select_attempt",
+        lambda conn, attempt_id: selected.append(attempt_id))
+
+    results = launch_batch.reconcile(conn, run_id="r1")
+
+    assert selected == ["attempt-9"]
+    assert len(results) == 1
+    result = results[0]
+    assert result.attempt_id == "attempt-9"
+    assert result.job_id == "job-9"
+    assert result.disposition == "succeeded"
+    assert result.selected is True
+
+
+def test_reconcile_repair_pass_leaves_already_complete_unit_untouched(monkeypatch):
+    # The repair query's own WHERE clause excludes a unit that already
+    # has a selected attempt or is otherwise terminal (exercised against
+    # a real database in tests/db/test_launch.py); at this level that
+    # means the query simply returns no row for it, so there is nothing
+    # for the repair pass to select.
+    conn = _repair_conn(repair_rows=[])
+    selected = []
+    monkeypatch.setattr(
+        launch_batch, "select_attempt",
+        lambda conn, attempt_id: selected.append(attempt_id))
+
+    results = launch_batch.reconcile(conn, run_id="r1")
+
+    assert selected == []
+    assert results == []
 
 
 class _SchemaConn:

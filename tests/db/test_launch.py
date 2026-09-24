@@ -213,6 +213,92 @@ def test_reconcile_succeeded_with_valid_manifest(conn, batch_env):
         assert selected_attempt == submission.attempt_id
 
 
+def test_reconcile_repairs_stranded_succeeded_attempt(conn, batch_env):
+    # Simulates the pre-existing-damage case a split commit between
+    # record_attempt_result and select_attempt used to allow: reconcile
+    # normally (one commit now covers both writes), then manually undo
+    # just the selection, as if the process had died between the two
+    # writes before this fix -- disposition 'succeeded' committed,
+    # selection never was. A later reconcile call finds no unresolved
+    # attempt (disposition is already 'succeeded', not NULL) but must
+    # still repair the unit via the "JOIN units" pass.
+    run_id = _make_run(conn, kind="scratch", max_attempts=2)
+    conn.commit()
+
+    fake_batch = FakeBatch()
+    submission = _submit_one(conn, fake_batch, run_id=run_id, unit_id="reconcile-009/SCA07")
+    conn.commit()
+
+    fake_s3 = FakeS3()
+    manifest = {
+        "schema_version": "1", "run": run_id,
+        "unit": {"kind": "detector-image", "id": "reconcile-009/SCA07"},
+        "stage": "admit", "attempt": submission.attempt_id,
+        "execution_record": f"exec/{submission.attempt_id}.json",
+        "inputs": {"manifest": "x", "products": {}, "result_sets": []},
+        "outputs": [],
+    }
+    bucket = "test-bucket"
+    prefix = submission.output_location[len(f"s3://{bucket}/"):]
+    fake_s3.seed(bucket, f"{prefix}/manifest.json", json.dumps(manifest).encode())
+
+    fake_batch.set_status(submission.job_id, "SUCCEEDED")
+    results = launch_batch.reconcile(
+        conn, run_id=run_id, client=fake_batch, s3_client=fake_s3)
+    conn.commit()
+    assert results[0].disposition == "succeeded"
+    assert results[0].selected is True
+
+    # Undo only the selection -- the disposition write (the first of the
+    # two, per the bug's own timing) stays committed, exactly what a
+    # process death after it but before the second commit would leave.
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE units SET selected_attempt = NULL, state = 'running', "
+            "updated = now() WHERE run = %s AND stage = 'admit' AND unit_id = %s",
+            (run_id, "reconcile-009/SCA07"))
+    conn.commit()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT disposition FROM attempts WHERE id = %s", (submission.attempt_id,))
+        (disposition,) = cur.fetchone()
+        assert disposition == "succeeded"
+        cur.execute(
+            "SELECT state, selected_attempt FROM units WHERE run = %s AND stage = 'admit' "
+            "AND unit_id = %s", (run_id, "reconcile-009/SCA07"))
+        state, selected_attempt = cur.fetchone()
+        assert state == "running"
+        assert selected_attempt is None
+
+    # No attempt is unresolved (disposition already set), so this call
+    # takes reconcile's early-return path straight into the repair pass.
+    repair_results = launch_batch.reconcile(
+        conn, run_id=run_id, client=fake_batch, s3_client=fake_s3)
+    conn.commit()
+
+    assert len(repair_results) == 1
+    repaired = repair_results[0]
+    assert repaired.attempt_id == submission.attempt_id
+    assert repaired.disposition == "succeeded"
+    assert repaired.selected is True
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT state, selected_attempt FROM units WHERE run = %s AND stage = 'admit' "
+            "AND unit_id = %s", (run_id, "reconcile-009/SCA07"))
+        state, selected_attempt = cur.fetchone()
+        assert state == "complete"
+        assert selected_attempt == submission.attempt_id
+
+    # A further reconcile call finds nothing left to repair, and does not
+    # touch the now-complete unit again.
+    idle_results = launch_batch.reconcile(
+        conn, run_id=run_id, client=fake_batch, s3_client=fake_s3)
+    conn.commit()
+    assert idle_results == []
+
+
 def test_reconcile_succeeded_without_manifest_is_failed(conn, batch_env):
     run_id = _make_run(conn, kind="scratch", max_attempts=2)
     conn.commit()

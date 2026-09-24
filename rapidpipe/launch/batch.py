@@ -43,6 +43,7 @@ argument still wins.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -71,6 +72,13 @@ _UNRESOLVED_BATCH_STATUSES = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "R
 _DESCRIBE_JOBS_BATCH_SIZE = 100
 
 _TRANSIENT_FAILURE_CODE = 75
+
+#: Unit states :func:`~rapidpipe.runs.repository.select_attempt` refuses
+#: to touch (mirrors ``rapidpipe.runs.repository._TERMINAL_UNIT_STATES``,
+#: not imported directly since it is private to that module).
+_TERMINAL_UNIT_STATES = ("complete", "failed", "cancelled")
+
+logger = logging.getLogger(__name__)
 
 
 class LaunchError(Exception):
@@ -535,6 +543,12 @@ def reconcile(
     Reconcile never finishes the run, even when every unit is now
     terminal: that is an explicit
     :func:`~rapidpipe.runs.repository.finish_run` call only.
+
+    Before returning, also repairs any attempt of the run left
+    'succeeded' but unselected by a pre-existing split between
+    ``record_attempt_result`` and ``select_attempt`` (the two now commit
+    together, so this only ever cleans up old damage; see
+    :func:`_repair_stranded_succeeded_attempts`).
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -548,7 +562,12 @@ def reconcile(
         rows = cur.fetchall()
 
     if not rows:
-        return []
+        # No attempt is unresolved, but a run with none left can still
+        # hold a pre-existing stranded 'succeeded' attempt from before
+        # the fix above (a unit like that has no disposition IS NULL
+        # attempt to be found by the query just above, so this repair
+        # pass is the only path back to it).
+        return _repair_stranded_succeeded_attempts(conn, run_id=run_id)
 
     attempts_by_job_id = {job_id: (attempt_id, output_location)
                            for attempt_id, output_location, job_id in rows}
@@ -612,11 +631,21 @@ def reconcile(
                 continue
 
             if manifest is not None:
+                # record_attempt_result and select_attempt run in the
+                # same transaction, one commit, so a process death (or a
+                # failed second commit) between them cannot happen: the
+                # unit either stays exactly as it was, or is both
+                # 'succeeded' and selected/complete together (supervisor
+                # step 3, 2026-09-24, WP-F -- a split commit here left a
+                # unit stranded 'succeeded' with no selected attempt,
+                # invisible to the ``disposition IS NULL`` query below
+                # that finds unresolved attempts; see the repair pass at
+                # the end of this function for units already stranded
+                # that way).
                 record_attempt_result(
                     conn, attempt_id, 0, "succeeded", output_location,
                     _execution_record_with_defaults(conn, run_id, execution_record),
                     scheduler_job_id=job_id)
-                conn.commit()
                 select_attempt(conn, attempt_id)
                 conn.commit()
                 results.append(Reconciled(
@@ -666,7 +695,58 @@ def reconcile(
             attempt_id=attempt_id, job_id=job_id, batch_status=status,
             disposition="killed", selected=False))
 
+    results.extend(_repair_stranded_succeeded_attempts(conn, run_id=run_id))
+
     return results
+
+
+def _repair_stranded_succeeded_attempts(conn, *, run_id: str) -> list[Reconciled]:
+    """Select any attempt of ``run_id`` left 'succeeded' but unselected.
+
+    Guards against a pre-existing split between :func:`record_attempt_result`
+    and :func:`select_attempt`: a process death, or a failed second commit,
+    between the two left the attempt permanently ``succeeded`` with its
+    unit neither selected nor terminal -- and invisible to this function's
+    main pass, which only looks at attempts with ``disposition IS NULL``
+    (supervisor step 3, 2026-09-24, WP-F). The main pass above no longer
+    creates new instances of this (it commits both writes together), so
+    this repair pass only ever has pre-existing damage to clean up, and
+    should shrink to nothing as old runs finish reconciling.
+
+    Selecting is the same call the main pass makes, so it enforces the
+    same invariants (``select_attempt`` requires ``disposition ==
+    'succeeded'``, refuses an already-selected or terminal unit) --
+    nothing here bypasses them, it only reaches attempts the main pass's
+    query does not.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.id, a.scheduler_job_id
+            FROM attempts a
+            JOIN units u ON u.id = a.unit
+            WHERE a.run = %s
+              AND a.disposition = 'succeeded'
+              AND u.selected_attempt IS NULL
+              AND u.state NOT IN %s
+            """,
+            (run_id, _TERMINAL_UNIT_STATES),
+        )
+        rows = cur.fetchall()
+
+    repaired: list[Reconciled] = []
+    for attempt_id, job_id in rows:
+        select_attempt(conn, attempt_id)
+        conn.commit()
+        logger.warning(
+            "reconcile: repaired stranded attempt %s (run %s) -- was "
+            "'succeeded' with no selected attempt; selected it now",
+            attempt_id, run_id)
+        repaired.append(Reconciled(
+            attempt_id=attempt_id, job_id=job_id or "", batch_status="SUCCEEDED",
+            disposition="succeeded", selected=True))
+
+    return repaired
 
 
 def cancel(conn, *, attempt_id: str, reason: str, client: Any = None) -> None:
