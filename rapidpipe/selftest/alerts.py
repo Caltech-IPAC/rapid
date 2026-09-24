@@ -302,6 +302,8 @@ def _check(checks: Checks, manifest: Manifest, expected: dict[str, Any],
                  and reg.get("source_set") == SOURCE_SET
                  and reg.get("association_sets") == [ASSOCIATION_SET, ASSOCIATION_SET_2]
                  and reg.get("statistics_sets") == [STATISTICS_SET, STATISTICS_SET_2]
+                 and reg.get("association_set") == ASSOCIATION_SET
+                 and reg.get("statistics_set") == STATISTICS_SET
                  and reg.get("difference") == DIFFERENCE_INSTANCE
                  and reg.get("schema_version") == "00.04",
                  f"alert-container registration block: {reg}")
