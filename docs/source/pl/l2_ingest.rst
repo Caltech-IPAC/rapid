@@ -335,6 +335,91 @@ Each process writes a log to ``$RAPID_WORK/ingestL2Files_thread<N>.out`` and
 returns its counts of files ingested and files failed.
 
 
+Running it continuously
+************************************
+
+``ingestL2Files.py`` is a one-shot: it works out what has not been ingested,
+ingests it, and exits.  ``pipeline/ingestL2FilesDaemon.py`` is what turns that
+into a standing service, so ASDF files arriving in the input bucket are picked
+up without anyone having to start a run by hand:
+
+.. code-block::
+
+   export RAPID_SW=/code
+   export RAPIDL2INPUTBUCKET=socsims-fakesrc-asdf-20260807
+   export RAPIDL2OUTPUTBUCKET=socsims-fakesrc-fits-20260807-lite
+   export RAPID_WORK=/work
+   python3 pipeline/ingestL2FilesDaemon.py 300 >& $RAPID_WORK/ingestL2FilesDaemon.log &
+
+The interval may be given as the first command-line argument, as above, or as
+``INGESTL2FILESINTERVAL``; the argument wins.  Everything the ingest itself
+needs -- buckets, database, work directory -- is read from the environment by
+``ingestL2Files.py``, and the daemon neither reads nor second-guesses it.  It
+only passes the environment through.
+
+Each cycle runs the ingest to completion, so two ingests can never overlap and
+fight over the same work list.
+
+.. important::
+   The interval is measured from the **start** of one cycle to the start of the
+   next, not from the end of one to the start of the next, so the cadence is the
+   interval rather than the interval plus however long the ingest happened to
+   take.  A cycle that outlasts the interval -- a first run over a full bucket
+   certainly will -- is followed immediately by the next one, and the daemon
+   says so in the log rather than trying to catch up on the cycles it missed.
+
+The ingest child inherits the daemon's stdout and stderr, so its output streams
+into the same log, in order; the daemon stamps its own lines with the local time
+so they can be told apart.
+
+=====================================   ==========================================================================
+Variable                                Meaning
+=====================================   ==========================================================================
+``RAPID_SW``                            Root of the RAPID software tree, used to locate
+                                        ``pipeline/ingestL2Files.py`` and to set ``PYTHONPATH`` for it.
+                                        **Required.**
+``INGESTL2FILESINTERVAL``               Seconds from the start of one cycle to the start of the next.  Defaults
+                                        to 300.  Overridden by the command-line argument.
+``RAPIDPYTHON``                         Python interpreter to run the ingest with.  Defaults to the one running
+                                        the daemon, so the two cannot end up in different environments.
+``INGESTL2FILESMAXCYCLES``              Stop after this many cycles, for short tests.  Defaults to no limit.
+``INGESTL2FILESMAXFAILURES``            Stop after this many consecutive failed cycles.  Defaults to 10; set to
+                                        0 to keep trying forever.
+``INGESTL2FILESLOCKFILE``               Lock file that keeps two daemons from running against the same buckets.
+                                        Defaults to ``ingestL2FilesDaemon.lock`` under ``RAPID_WORK``.
+=====================================   ==========================================================================
+
+Two daemons against the same buckets would each build a work list, and every
+file on both would be converted, uploaded and registered twice -- the second
+registration making a needless extra version of each.  The lock file is what
+stops a second one being started by accident; it refuses to start and exits 64.
+
+
+Stopping it
+====================================
+
+``SIGINT`` (control-C), ``SIGTERM`` and ``SIGQUIT`` are trapped.  The daemon
+finishes the ingest that is running and then exits, rather than leaving a file
+half converted or half registered.  Signal a second time to give up on that and
+kill the process immediately.
+
+A control-C from a terminal reaches the ingest child as well, since it shares
+the process group; the daemon notices the child died on a signal and stops
+rather than starting another cycle.
+
+A daemon that stops because its ingest kept failing exits **1**, not 0, so that
+whatever supervises it does not take the stop for a clean shutdown and leave it
+stopped.  A daemon stopped by a signal, or by ``INGESTL2FILESMAXCYCLES``, exits
+0.
+
+.. note::
+   The consecutive-failure limit exists because a daemon that keeps failing is
+   usually misconfigured rather than unlucky, and spinning on that forever only
+   fills the log.  Transient trouble -- the database being restarted, say -- is
+   survived well inside the default of 10, since the ingest that follows it
+   simply succeeds and resets the count.
+
+
 Failure handling
 ************************************
 
