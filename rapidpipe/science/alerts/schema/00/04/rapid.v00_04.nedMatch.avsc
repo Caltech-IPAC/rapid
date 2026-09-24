@@ -1,0 +1,70 @@
+{
+    "namespace": "rapid.v00_04",
+    "name": "nedMatch",
+    "doc": "NED candidate host galaxy near the triggering source",
+    "version": "00.04",
+    "type": "record",
+    "fields": [
+        {
+            "name": "prefName",
+            "type": "string",
+            "doc": "NED preferred object name; the key for any NED lookup (NED has no stable numeric object id in this product)"
+        },
+        {
+            "name": "ra",
+            "type": "double",
+            "doc": "Right ascension of the NED object; ICRS [deg]"
+        },
+        {
+            "name": "dec",
+            "type": "double",
+            "doc": "Declination of the NED object; ICRS [deg]"
+        },
+        {
+            "name": "sep",
+            "type": "float",
+            "doc": "Angular separation from the triggering source position [arcsec]"
+        },
+        {
+            "name": "pa",
+            "type": "float",
+            "doc": "Position angle from the triggering source to the NED object, East of North [deg]"
+        },
+        {
+            "name": "type",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "NED preferred object type (G, GPair, QSO, ...); null when NED has not classified the entry. The host-candidate selection applied at match time is providers.select_host_candidates, recorded here so consumers can re-cut"
+        },
+        {
+            "name": "z",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "NED preferred redshift; null when NED has none. Frame is as published (assumed heliocentric, not CMB-corrected -- NED does not document this); check zFlag before using"
+        },
+        {
+            "name": "zUnc",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in z; null when NED gives none"
+        },
+        {
+            "name": "zFlag",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "NED redshift code: technique (S = spectroscopic, P = photometric, M = modelled) + 2-char method + optional '?' (uncertain), e.g. 'SLS'. Require zFlag[0] == 'S' for a secure host redshift; without this z is not interpretable"
+        }
+    ]
+}

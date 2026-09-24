@@ -147,7 +147,15 @@ def _build_notbest_sids(cur, tables_and_sets: list[tuple[str, str]], run_id: str
     this run. ``UNION``, not ``UNION ALL``, as `dev`'s own comment explains:
     a `sid` occurring in more than one source-set table would otherwise
     violate the temp table's primary key.
+
+    ``ON COMMIT DROP`` only clears the table on a real commit; a caller
+    that shares one connection and transaction across several attempts
+    without ever committing (as ``tests/db``'s rolled-back-transaction
+    fixture does) would otherwise see "relation already exists" on a
+    second attempt, so a prior table of this name is dropped first, as
+    ``rapidpipe.db.objects``'s own temp-table copy helper does.
     """
+    cur.execute("DROP TABLE IF EXISTS pg_temp.notbest_sids")
     cur.execute("CREATE TEMP TABLE notbest_sids (sid bigint PRIMARY KEY) ON COMMIT DROP")
     if tables_and_sets:
         selects = []

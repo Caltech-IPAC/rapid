@@ -1,0 +1,17 @@
+# Settings overlay for the alerts stage's fixture (make stage-alerts).
+#
+# The stage's own defaults (rapidpipe/settings/alerts.toml, dev's values and
+# the lead's 2026-09-24 rulings) apply: ZOGY difference image, reference-
+# catalog match on, KONA and NED off, no Kafka. One change: 17x17 stamps
+# instead of 129x129, so several alerts share one Avro block (fastavro
+# closes a block at 16 000 bytes; a 129x129 float32 cutout alone exceeds
+# it), and the fixture's locator checks cover a multi-record block.
+
+[alerts]
+diff_flavor = "zogy"
+stamp_half_width = 8
+ned = false
+refcat = true
+
+[publish]
+kafka = false

@@ -1,0 +1,41 @@
+{
+  "about": "Inputs and expected products of the statistics stage's fixture (run_fixture.py; make stage-statistics). See tests/fixtures/statistics/README.md for what each value means. Positions are synthetic: object 101 spans the RA 0/360 wrap to exercise dev's mean-vector method, object 102 has one source. Each source is [set, sid, ra, dec, fluxfit]; set 'base' means the base association set's merges row and the base source set, 'delta' the input association set's own.",
+  "inputs": {
+    "field": 4711398,
+    "association_set": "01J8Y6QZ3M00000000000ASC02",
+    "base_set": "01J8Y6QZ3M00000000000ASC01",
+    "source_sets": {
+      "base": {"instance": "01J8Y6QZ3M00000000000SS001", "table": "sources_20270930_7"},
+      "delta": {"instance": "01J8Y6QZ3M00000000000SS002", "table": "sources_20271001_7"}
+    },
+    "objects": [
+      {"aid": 101, "sources": [["base", 1, 359.99995, 0.5, 100.0],
+                               ["delta", 11, 0.00002, 0.50001, 102.0],
+                               ["delta", 12, 0.00008, 0.49999, 98.5]]},
+      {"aid": 102, "sources": [["base", 2, 10.25, -3.5, 55.5]]},
+      {"aid": 103, "sources": [["base", 3, 10.26, -3.51, 20.0],
+                               ["delta", 13, 10.26001, -3.51002, 22.0]]},
+      {"aid": 104, "sources": [["delta", 14, 10.27, -3.52, 7.0],
+                               ["delta", 15, 10.27002, -3.51998, 9.0]]}
+    ],
+    "outside_the_chain": {
+      "association_set": "01J8Y6QZ3M00000000000ASC99",
+      "source_set": "01J8Y6QZ3M00000000000SS003",
+      "table": "sources_20271001_7",
+      "objects": [{"aid": 105, "sources": [[16, 10.3, -3.6, 1.0]]}]
+    }
+  },
+  "expected": {
+    "exit_code": 0,
+    "table": "astroobjectsmeta_4711398",
+    "row_count": 4,
+    "objects_in_set": 4,
+    "nsources": {"101": 3, "102": 1, "103": 2, "104": 2},
+    "made_tables": ["astroobjectsmeta_4711398"],
+    "commits": 1,
+    "chain": ["01J8Y6QZ3M00000000000ASC02", "01J8Y6QZ3M00000000000ASC01"],
+    "source_tables": [["sources_20270930_7", "01J8Y6QZ3M00000000000SS001"],
+                      ["sources_20271001_7", "01J8Y6QZ3M00000000000SS002"]]
+  },
+  "tolerances": {"statistics_abs": 1e-9}
+}
