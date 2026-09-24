@@ -30,3 +30,10 @@ stage-load:
 .PHONY: stage-maintain
 stage-maintain:
 	$(PYTHON) tests/fixtures/maintain/run_fixture.py
+
+# The prune stage's fixture: the not-best merge exclusion into a pruned-set,
+# against the fake database (tests/unit/fakeprunedb.py); runs anywhere. The
+# PostgreSQL path is tests/db/test_prune.py.
+.PHONY: stage-prune
+stage-prune:
+	$(PYTHON) tests/fixtures/prune/run_fixture.py

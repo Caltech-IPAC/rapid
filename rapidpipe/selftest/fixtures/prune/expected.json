@@ -1,0 +1,42 @@
+{
+  "inputs": {
+    "field": 424242,
+    "association": {
+      "instance": "01J8Y6QZ3M0000000000ASSOC",
+      "base": null,
+      "source_sets": ["01J8Y6QZ3M00000000000SS01"]
+    },
+    "source_set_tables": {
+      "01J8Y6QZ3M00000000000SS01": "sources_20260821_7"
+    },
+    "sources": {
+      "sources_20260821_7": [
+        {"sid": 1, "pid": 101, "result_set": "01J8Y6QZ3M00000000000SS01"},
+        {"sid": 2, "pid": 102, "result_set": "01J8Y6QZ3M00000000000SS01"},
+        {"sid": 3, "pid": 103, "result_set": "01J8Y6QZ3M00000000000SS01"}
+      ]
+    },
+    "diffimages": {
+      "101": {"vbest": 1, "run": null},
+      "102": {"vbest": 0, "run": "01J8Y6QZ3M0000000000OTHR"},
+      "103": {"vbest": 0, "run": "__OWN_RUN__"}
+    },
+    "merges": {
+      "424242": [
+        {"aid": 10, "sid": 1, "result_set": "01J8Y6QZ3M0000000000ASSOC"},
+        {"aid": 11, "sid": 1, "result_set": "01J8Y6QZ3M0000000000ASSOC"},
+        {"aid": 12, "sid": 2, "result_set": "01J8Y6QZ3M0000000000ASSOC"},
+        {"aid": 13, "sid": 2, "result_set": "01J8Y6QZ3M0000000000ASSOC"},
+        {"aid": 14, "sid": 3, "result_set": "01J8Y6QZ3M0000000000ASSOC"}
+      ]
+    }
+  },
+  "expected": {
+    "exit_code": 0,
+    "row_count": 2,
+    "base_row_count": 5,
+    "table": "prunedmerges",
+    "rule": "not-best",
+    "excluded_pairs": [[12, 2], [13, 2]]
+  }
+}

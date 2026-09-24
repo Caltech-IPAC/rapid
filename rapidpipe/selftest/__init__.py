@@ -43,6 +43,8 @@ def _fixture_module(stage: str):
         from rapidpipe.selftest import load as module
     elif stage == "maintain":
         from rapidpipe.selftest import maintain as module
+    elif stage == "prune":
+        from rapidpipe.selftest import prune as module
     else:
         raise ValueError(f"no such stage fixture: {stage!r}; known: {', '.join(STAGE_NAMES)}")
     return module

@@ -1,0 +1,17 @@
+# Defaults for the prune stage (rapidpipe.stages.prune), ported from `dev`'s
+# pipeline/pruneNotBestMerges.py (step 1 ruling R6).
+
+[prune]
+# The only pruning rule ported: `dev`'s not-best-merge exclusion
+# (`vbest = 0`), with the run model's own-run clause added (ruling R6:
+# a pair is excluded when its source's difference image is neither
+# promoted current (`vbest > 0`) nor made by this run). Any other value
+# is a usage error (exit 64); there is nowhere else this setting could
+# route to yet. Part of the pruned set's key through the settings hash
+# (ruling R10).
+rule = "not-best"
+# `dev` has no done file for this stage (it deletes in place and always
+# re-derives); the rebuild's done check (ruling R14) reuses a complete
+# pruned set of the same (base, settings_hash) key already written in
+# this run, rather than writing a second one.
+done_check = true
