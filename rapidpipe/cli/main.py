@@ -165,7 +165,7 @@ def _build_parser() -> argparse.ArgumentParser:
     selftest_parser = subparsers.add_parser(
         "selftest",
         help="Run one stage's own packaged fixture and check it: "
-             "rapidpipe selftest --stage difference|finalize|load|maintain|crossmatch|alerts|statistics [--real-tools] "
+             "rapidpipe selftest --stage difference|finalize|load|maintain|crossmatch|alerts|statistics|prune [--real-tools] "
              "[--work-dir DIR] [--output-location s3://... or path]")
     selftest_parser.add_argument(
         "--stage", required=True, choices=SELFTEST_STAGE_NAMES, help="Which stage's fixture to run.")

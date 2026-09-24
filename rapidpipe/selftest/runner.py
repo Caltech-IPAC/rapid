@@ -53,7 +53,7 @@ from rapidpipe.products.storage import parse_location, publish_dir
 #: The stages a fixture exists for today (stage contract, "Local
 #: execution"; ``tests/fixtures/<stage>/``).
 STAGE_NAMES = ("difference", "finalize", "load", "maintain", "crossmatch", "alerts",
-               "statistics")
+               "statistics", "prune")
 
 FIXTURES_ROOT = Path(__file__).resolve().parent / "fixtures"
 
