@@ -887,6 +887,8 @@ if __name__ == '__main__':
                             injection_catalog_list_filename,
                             '--star_galaxy_cut',
                             star_galaxy_cut,
+                            '--saturation_level',
+                            str(saturation_level_sciimage),
                             science_image_filename]
 
         if injections_by_field:

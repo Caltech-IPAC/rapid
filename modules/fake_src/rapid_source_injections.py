@@ -66,13 +66,14 @@ def detect_sources_in_image(image_data, detection_nsigma=10, npixels=8, bkg_box_
     source_cat = SourceCatalog(image_data_bkgsub, segm_deblend)
     source_table = source_cat.to_table()
     source_table['r50'] = source_cat.flux_radius(0.5) # half-light radius [pix] for star/galaxy separation; NaN if unsolvable
+    source_table['peak'] = SourceCatalog(image_data, segm_deblend).max_value # raw peak [DN], not background-subtracted, for the saturation cut
 
     return source_table
 
 def generate_injection_positions_fluxes(source_table, image_size, zeropoint, mag_range=(22.0, 27.0),
                                         size_factor=1.5, edge_buffer=10.0, num_injections=10,
                                         xcolname='x_centroid', ycolname='y_centroid', sizecolname='semimajor_sigma',
-                                        star_galaxy_cut=None):
+                                        star_galaxy_cut=None, saturation_level=None):
     """
     Generate randomized injection positions and fluxes based on detected sources.
 
@@ -97,6 +98,9 @@ def generate_injection_positions_fluxes(source_table, image_size, zeropoint, mag
     star_galaxy_cut : float or None
         If set, only sources whose half-light radius (r50 column) exceeds this multiple of the
         image's PSF half-light radius (10th percentile of r50) are used, i.e. galaxies only
+    saturation_level : float or None
+        If set, sources whose raw peak pixel (peak column) is at or above this level [DN] are
+        excluded; a flat-topped saturated star has an inflated r50 and would pass the galaxy cut
 
 
     Returns:
@@ -115,6 +119,10 @@ def generate_injection_positions_fluxes(source_table, image_size, zeropoint, mag
                (source_table[xcolname].value < xmax - edge_buffer) &
                (source_table[ycolname].value > edge_buffer) &
                (source_table[ycolname].value < ymax - edge_buffer))
+
+    # Drop saturated sources: a flat-topped star has an inflated r50 and would pass the galaxy cut
+    if saturation_level is not None:
+        goodidx &= source_table['peak'].value < saturation_level
 
     # Keep only galaxies
     if star_galaxy_cut is not None:
@@ -331,6 +339,7 @@ def main():
     parser.add_argument('--mag_min', type=float, default=22.0, help='Minimum magnitude for random sources by image.')# Ignored if inj_catalog is provided.')
     parser.add_argument('--mag_max', type=float, default=27.0, help='Maximum magnitude for random sources by image.')# Ignored if inj_catalog is provided.')
     parser.add_argument('--star_galaxy_cut', type=float, default=None, help='Keep only sources whose half-light radius exceeds this multiple of the PSF half-light radius (galaxies) as injection anchors. Ignored unless injections_by_image_flag is set.')
+    parser.add_argument('--saturation_level', type=float, default=None, help='Exclude sources whose raw peak pixel is at or above this level [DN] from the injection anchors. Ignored unless injections_by_image_flag is set.')
 
     args = parser.parse_args()
     input_file = args.input_file
@@ -383,7 +392,8 @@ def main():
 
         xpos_image, ypos_image, fluxes_image = generate_injection_positions_fluxes(source_table, image_size, zeropoint,
                                                                                    mag_range=mag_range, num_injections=num_injections,
-                                                                                   star_galaxy_cut=args.star_galaxy_cut)
+                                                                                   star_galaxy_cut=args.star_galaxy_cut,
+                                                                                   saturation_level=args.saturation_level)
     else:
         xpos_image, ypos_image, fluxes_image = np.array([]), np.array([]), np.array([]) #empty arrays if not using image specific injections
 
