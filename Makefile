@@ -23,3 +23,10 @@ stage-difference:
 .PHONY: stage-load
 stage-load:
 	$(PYTHON) tests/fixtures/load/run_fixture.py
+
+# The finalize stage's fixture: a synthetic difference attempt's products
+# republished with the stamped header (rapidpipe/selftest/support/
+# fakefinalize.py builds the inputs); no tools, no database, runs anywhere.
+.PHONY: stage-finalize
+stage-finalize:
+	$(PYTHON) tests/fixtures/finalize/run_fixture.py

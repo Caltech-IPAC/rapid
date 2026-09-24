@@ -213,8 +213,10 @@ class DifferenceImageRegistration:
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "DifferenceImageRegistration":
+        """Read a block back; ``finalize``'s provenance fields are accepted and
+        left out of the dataclass (:data:`FINALIZE_PROVENANCE_FIELDS`)."""
         known = {f.name for f in fields(cls)}
-        unknown = set(d) - known
+        unknown = set(d) - known - set(FINALIZE_PROVENANCE_FIELDS)
         if unknown:
             raise DifferenceImageRegistrationError(
                 f"difference-image registration has unknown fields: {sorted(unknown)}")
@@ -222,7 +224,7 @@ class DifferenceImageRegistration:
         if missing:
             raise DifferenceImageRegistrationError(
                 f"difference-image registration is missing fields: {sorted(missing)}")
-        return cls(**d)
+        return cls(**{name: d[name] for name in known})
 
     def validate(self, differencer: str) -> None:
         declaration = roles_for(differencer)
@@ -308,6 +310,37 @@ class DifferenceImageRegistration:
             f"reference_rfid must be a positive integer or null, got {self.reference_rfid!r}")
 
 
+#: The two fields ``finalize`` adds to the difference-image block it
+#: republishes (supervisor ruling, 2026-09-24): ``finalized_from``, the
+#: input instance id, and ``revision``, the output revision (2 for a
+#: finalized instance; a block without them is revision 1, as
+#: ``difference`` writes it). Both present or both absent.
+FINALIZE_PROVENANCE_FIELDS = ("finalized_from", "revision")
+
+#: The field ``finalize`` adds to each source-catalog block it copies: the
+#: input instance id.
+SOURCE_CATALOG_PROVENANCE_FIELD = "copied_from"
+
+
+def check_finalize_provenance(registration: Mapping[str, Any]) -> None:
+    """Check ``finalized_from``/``revision`` when a block carries them."""
+    present = [f for f in FINALIZE_PROVENANCE_FIELDS if f in registration]
+    if not present:
+        return
+    _require(
+        len(present) == len(FINALIZE_PROVENANCE_FIELDS),
+        f"a finalized block carries both of {list(FINALIZE_PROVENANCE_FIELDS)}, "
+        f"got only {present}")
+    finalized_from = registration["finalized_from"]
+    _require(
+        isinstance(finalized_from, str) and bool(finalized_from),
+        f"finalized_from must be a non-empty instance id, got {finalized_from!r}")
+    revision = registration["revision"]
+    _require(
+        _is_int(revision) and revision >= 2,
+        f"revision of a finalized block must be an integer >= 2, got {revision!r}")
+
+
 _DIFFERENCE_KEY_FIELDS = ("l2", "reference", "differencer", "settings_hash")
 
 
@@ -339,6 +372,7 @@ def validate_difference_entry(entry: Mapping[str, Any]) -> DifferenceImageRegist
         "'difference' role")
     registration = DifferenceImageRegistration.from_dict(entry.get("registration") or {})
     registration.validate(differencer)
+    check_finalize_provenance(entry.get("registration") or {})
     _require(
         registration.detection_role in {m.get("role") for m in members},
         f"detection_role {registration.detection_role!r} is not a member of "
@@ -372,9 +406,15 @@ def validate_source_catalog_entry(entry: Mapping[str, Any]) -> None:
         primary is not None and primary.get("role") == "catalog",
         "the primary member of a source-catalog entry must be its 'catalog' role")
     registration = entry.get("registration") or {}
-    _require(set(registration) == {"source_count"},
-             f"source-catalog registration must name exactly ['source_count'], "
+    _require(set(registration) in ({"source_count"},
+                                   {"source_count", SOURCE_CATALOG_PROVENANCE_FIELD}),
+             f"source-catalog registration must name exactly ['source_count'], plus "
+             f"{SOURCE_CATALOG_PROVENANCE_FIELD!r} for a finalized copy; "
              f"got {sorted(registration)}")
+    if SOURCE_CATALOG_PROVENANCE_FIELD in registration:
+        copied_from = registration[SOURCE_CATALOG_PROVENANCE_FIELD]
+        _require(isinstance(copied_from, str) and bool(copied_from),
+                 f"copied_from must be a non-empty instance id, got {copied_from!r}")
     count = registration["source_count"]
     _require(_is_int(count) and count >= 0,
              f"source_count must be a non-negative integer, got {count!r}")

@@ -1,0 +1,7 @@
+# Settings overlay for the finalize stage's fixture (make stage-finalize).
+#
+# The stage's defaults (rapidpipe/settings/finalize.toml) apply; the overlay
+# restates ZOGY's pipelines row so the overlay path is exercised.
+
+[pipelines]
+zogy = 15

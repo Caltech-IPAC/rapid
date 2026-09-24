@@ -220,3 +220,39 @@ def test_valid_source_catalog_entry():
 def test_invalid_source_catalog_entry(overrides, match):
     with pytest.raises(DifferenceImageRegistrationError, match=match):
         validate_source_catalog_entry(_catalog_entry(**overrides))
+
+
+# finalize's provenance fields (supervisor ruling, 2026-09-24).
+
+
+def test_finalized_entry_with_provenance_fields_validates():
+    reg = validate_difference_entry(
+        _zogy_entry(finalized_from="01ARZ3NDEKTSV4RRFFQ69G5FAV", revision=2))
+    assert reg.md5 == "9e107d9d372bb6826bd81d3542a419d6"
+    assert not hasattr(reg, "finalized_from")
+
+
+@pytest.mark.parametrize("overrides,match", [
+    ({"finalized_from": "01ARZ3NDEKTSV4RRFFQ69G5FAV"}, "both of"),
+    ({"revision": 2}, "both of"),
+    ({"finalized_from": "", "revision": 2}, "finalized_from"),
+    ({"finalized_from": "X", "revision": 1}, "revision"),
+    ({"finalized_from": "X", "revision": True}, "revision"),
+])
+def test_finalized_entry_with_bad_provenance_rejected(overrides, match):
+    with pytest.raises(DifferenceImageRegistrationError, match=match):
+        validate_difference_entry(_zogy_entry(**overrides))
+
+
+def test_copied_source_catalog_entry_validates():
+    validate_source_catalog_entry(_catalog_entry(
+        registration={"source_count": 412, "copied_from": "01ARZ3NDEKTSV4RRFFQ69G5FAW"}))
+
+
+@pytest.mark.parametrize("registration,match", [
+    ({"source_count": 412, "copied_from": ""}, "copied_from"),
+    ({"source_count": 412, "copied_from": "X", "extra": 1}, "source_count"),
+])
+def test_copied_source_catalog_entry_with_bad_provenance_rejected(registration, match):
+    with pytest.raises(DifferenceImageRegistrationError, match=match):
+        validate_source_catalog_entry(_catalog_entry(registration=registration))

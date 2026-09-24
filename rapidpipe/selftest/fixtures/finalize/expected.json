@@ -1,0 +1,27 @@
+{
+  "about": "Inputs and expected products of the finalize stage's fixture (make stage-finalize; rapidpipe selftest --stage finalize). The inputs are a synthetic difference attempt written by rapidpipe.selftest.support.fakefinalize.build_difference_output; see tests/fixtures/finalize/README.md. Values that depend on the invocation (RPRUN, RPATTMPT, RPINST, RPOUTLOC, DATE) are checked against the manifest and the outputs directory, not fixed here.",
+  "inputs": {"catalog_outcome_bits": 0, "source_rows": 3},
+  "expected": {
+    "exit_code": 0,
+    "entries": {"difference-image": 1, "source-catalog": 4},
+    "roles": ["difference", "psf", "significance", "uncertainty"],
+    "revision": 2,
+    "products_read": ["difference-image",
+                      "source-catalog/photutils/negative", "source-catalog/photutils/positive",
+                      "source-catalog/sextractor/negative", "source-catalog/sextractor/positive"],
+    "stamp": {
+      "RPSTAGE": "finalize",
+      "RPFINFRM": "01J8Y6QZ3MF1NA1E0000000D1F",
+      "RPL2INST": "01J8Y6QZ3MF1NA1E000000012A",
+      "RPREFINS": "01J8Y6QZ3MF1NA1E0000000REF",
+      "RPDIFFER": "zogy",
+      "RPSETHSH": "sha256:4f2a9c0e4f2a9c0e4f2a9c0e4f2a9c0e4f2a9c0e4f2a9c0e4f2a9c0e4f2a9c0e",
+      "RPSRCREV": "0123456789abcdef0123456789abcdef01234567",
+      "RPIMGDIG": "sha256:abababababababababababababababababababababababababababababababab",
+      "PPID": 15,
+      "INFOBITS": 0,
+      "FIELD": 4662268,
+      "DIFFILEN": "diffimage_masked.fits"
+    }
+  }
+}

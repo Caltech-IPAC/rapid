@@ -232,6 +232,20 @@ def test_a_manifest_from_another_stage_exits_65(tmp_path, db):
     assert rc == ExitCode.INPUT_REJECTED
 
 
+def test_a_finalize_manifest_is_read_like_a_difference_one(tmp_path, db):
+    # Chain difference -> finalize -> register -> load (ruling 2026-09-24):
+    # finalize republishes the same entries, so load reads its manifest too.
+    inputs = tmp_path / "inputs"
+    path = build_load_input_set(inputs, {"positive": POSITIVE, "negative": NEGATIVE})
+    manifest = json.loads(path.read_text())
+    manifest["stage"] = "finalize"
+    path.write_text(json.dumps(manifest))
+    rc = load.main(["--run", RUN, "--unit", "u", "--attempt", ATTEMPT,
+                    "--inputs", str(inputs), "--outputs", str(tmp_path / "out")])
+    assert rc == ExitCode.SUCCESS
+    assert db.tables["sources_20260821_7"]
+
+
 def test_a_connection_failure_is_temporary(tmp_path, monkeypatch):
     from rapidpipe.db.connection import ConnectionUnavailable
 

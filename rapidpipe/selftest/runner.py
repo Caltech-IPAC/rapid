@@ -50,9 +50,9 @@ from rapidpipe.db.ids import is_valid_ulid, new_ulid
 from rapidpipe.products.manifest import Manifest, hash_file
 from rapidpipe.products.storage import parse_location, publish_dir
 
-#: The two stages a fixture exists for today (stage contract, "Local
+#: The stages a fixture exists for today (stage contract, "Local
 #: execution"; ``tests/fixtures/<stage>/``).
-STAGE_NAMES = ("difference", "load")
+STAGE_NAMES = ("difference", "finalize", "load")
 
 FIXTURES_ROOT = Path(__file__).resolve().parent / "fixtures"
 

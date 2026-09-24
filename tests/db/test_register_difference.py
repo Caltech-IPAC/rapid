@@ -18,6 +18,7 @@ import json
 import pytest
 
 import rapidpipe.stages.difference as difference
+import rapidpipe.stages.finalize as finalize
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.manifest import Manifest, register_unit_id
 from rapidpipe.runs import repository as repo
@@ -294,6 +295,45 @@ def test_register_writes_an_sfft_instance_under_its_pipelines_row(conn, tmp_path
         row = _diffimages_row(cur, sfft_entry.instance)
         assert row is not None
         assert row["ppid"] == 16
+
+
+def test_register_records_the_finalized_instance(conn, tmp_path, monkeypatch):
+    # Chain difference -> finalize -> register (supervisor ruling 2026-09-24):
+    # register records finalize's new instance, its stamped file and MD5.
+    l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
+    with conn.cursor() as cur:
+        rfid = _legacy_refimage(cur)
+    run_id, diff_outputs = _run_difference(
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
+    source = next(e for e in Manifest.read(diff_outputs / "manifest.json").outputs
+                  if e.kind == "difference-image")
+
+    unit_id = "e20260821001234/SCA07"
+    _make_unit(conn, run_id, stage="finalize", unit_id=unit_id)
+    attempt_id = repo.allocate_attempt(conn, run_id, "finalize", unit_id)
+    outputs = tmp_path / "fin-outputs"
+    rc = finalize.main([
+        "--run", run_id, "--unit", unit_id, "--attempt", attempt_id,
+        "--inputs", str(diff_outputs), "--outputs", str(outputs)])
+    assert rc == int(ExitCode.SUCCESS)
+    manifest = Manifest.read(outputs / "manifest.json")
+    entry = next(e for e in manifest.outputs if e.kind == "difference-image")
+    assert entry.registration["finalized_from"] == source.instance
+
+    rc, registering_attempt = _register_difference(
+        conn, monkeypatch, outputs, run_id, tmp_path, name="fin")
+    assert rc == int(ExitCode.SUCCESS)
+    with conn.cursor() as cur:
+        row = _diffimages_row(cur, entry.instance)
+        assert row is not None
+        assert row["checksum"] == entry.registration["md5"] != source.registration["md5"]
+        assert row["filename"] == f"{outputs}/{entry.primary}"
+        assert (row["ppid"], row["rfid"]) == (15, rfid)
+        assert _diffimages_row(cur, source.instance) is None
+        cur.execute(
+            "SELECT count(*) FROM product_instances WHERE kind = 'source-catalog' "
+            "AND producing_stage = 'finalize' AND run = %s", (run_id,))
+        assert cur.fetchone()[0] == sum(1 for e in manifest.outputs if e.kind == "source-catalog")
 
 
 # ======================================================================
