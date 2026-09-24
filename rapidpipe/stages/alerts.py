@@ -435,6 +435,9 @@ def _entries(*, container_instance: str, alert_set_instance: str, difference: st
             "source_set": sets.source_set,
             "association_sets": list(sets.association_sets),
             "statistics_sets": list(sets.statistics_sets),
+            # the page's singular shape: the first of each list, or null
+            "association_set": sets.association_sets[0],
+            "statistics_set": (sets.statistics_sets or (None,))[0],
         })
     alert_set = OutputEntry(
         kind="alert-set", format_version="1", instance=alert_set_instance,

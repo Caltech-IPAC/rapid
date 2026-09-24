@@ -94,6 +94,8 @@ def test_success_writes_container_outbox_and_both_outputs(tmp_path, monkeypatch,
     assert list(manifest.inputs.result_sets) == RESULT_SETS
     assert container.registration["association_sets"] == [ASSOCIATION_SET, ASSOCIATION_SET_2]
     assert container.registration["statistics_sets"] == [STATISTICS_SET, STATISTICS_SET_2]
+    assert container.registration["association_set"] == ASSOCIATION_SET
+    assert container.registration["statistics_set"] == STATISTICS_SET
     raw = (outputs / container.primary).read_bytes()
     assert [r["diaSourceId"] for r in fastavro.reader(io.BytesIO(raw))] == [103, 104, 105, 106]
     assert [r["record_ordinal"] for r in db.outbox] == [0, 1, 2, 3]
@@ -203,6 +205,7 @@ def test_statistics_set_is_optional(tmp_path, monkeypatch, prepared):
     container = next(e for e in Manifest.read(outputs / "manifest.json").outputs
                      if e.kind == "alert-container")
     assert container.registration["statistics_sets"] == []
+    assert container.registration["statistics_set"] is None
     raw = (outputs / container.primary).read_bytes()
     objects = {r["diaSourceId"]: r["diaObject"] for r in fastavro.reader(io.BytesIO(raw))}
     # no statistics: sigmas null, nDiaSources the merges count (dev's _stats_sql)
@@ -284,7 +287,8 @@ def test_alert_container_validation_refuses_a_missing_summary():
              "members": [{"role": "container", "path": "a.avro"}],
              "registration": {"alert_count": 0, "dropped_count": 0, "schema_version": "00.04",
                               "difference": "x", "source_set": "s", "association_sets": ["a"],
-                              "statistics_sets": []}}
+                              "statistics_sets": [], "association_set": "a",
+                              "statistics_set": None}}
     with pytest.raises(AlertContainerRegistrationError, match="roles"):
         validate_alert_container_entry(entry)
     entry["members"].append({"role": "summary", "path": "a.json"})

@@ -248,3 +248,59 @@ def test_an_object_in_the_base_set_is_found_for_a_detection_in_the_extending_set
         cur.execute("SELECT producer_instance FROM dependencies WHERE consumer_instance = %s",
                     (container.instance,))
         assert ids["base"] in {r[0] for r in cur.fetchall()}
+
+
+def test_two_fields_two_association_sets_and_their_statistics(conn, tmp_path, monkeypatch):
+    """One image over two fields: each field's association and statistics set is named.
+
+    Negative source 1's merges row in the first field's set points at an
+    object missing from that set (an orphan there), but the second field's
+    set associates it with an object of its own, with its own statistics; the
+    object the first field's merges row names exists only in the second set,
+    which is not in the first set's lineage, so it is not borrowed.
+    """
+    run_id, diff_outputs, sets, ids = _seeded_chain(conn, tmp_path, monkeypatch)
+    source_set, association_set, statistics_set = sets
+    field2_set, field2_attempt = _register_set(
+        conn, run_id, stage="crossmatch", kind="association-set",
+        key={"field": 5322, "base": None}, row_count=1, unit_suffix="-5322")
+    field2_stats, field2_stats_attempt = _register_set(
+        conn, run_id, stage="statistics", kind="statistics-set",
+        key={"membership": field2_set}, row_count=1, unit_suffix="-5322")
+    aid2 = 7_000_000_003
+    with conn.cursor() as cur:
+        cur.execute("SELECT ra, dec FROM sources WHERE sid = %s", (ids["orphan"],))
+        ra, dec = cur.fetchone()
+        cur.execute("INSERT INTO merges (aid, sid, run, attempt, result_set) VALUES "
+                    "(%s, %s, %s, %s, %s)",
+                    (aid2, ids["orphan"], run_id, field2_attempt, field2_set))
+        cur.execute("INSERT INTO astroobjects (aid, ra0, dec0, flux0, run, attempt, result_set) "
+                    "VALUES (%s, %s, %s, 100.0, %s, %s, %s), (%s, %s, %s, 100.0, %s, %s, %s)",
+                    (aid2, ra, dec, run_id, field2_attempt, field2_set,
+                     7_000_000_002, ra, dec, run_id, field2_attempt, field2_set))
+        cur.execute("INSERT INTO astroobjectsmeta (aid, meanra, stdevra, meandec, stdevdec, "
+                    "meanflux, stdevflux, nsources, run, attempt, result_set) VALUES "
+                    "(%s, %s, 0.5, %s, 0.25, 100.0, 1.0, 5, %s, %s, %s)",
+                    (aid2, ra, dec, run_id, field2_stats_attempt, field2_stats))
+    named = (source_set, association_set, statistics_set, field2_set, field2_stats)
+    inputs, _ = _input_set(tmp_path, diff_outputs, named)
+    rc, attempt_id, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
+    assert rc == int(ExitCode.SUCCESS)
+
+    manifest = Manifest.read(outputs / "manifest.json")
+    container = next(e for e in manifest.outputs if e.kind == "alert-container")
+    assert container.registration["association_sets"] == [association_set, field2_set]
+    assert container.registration["statistics_sets"] == [statistics_set, field2_stats]
+    assert container.registration["association_set"] == association_set
+    assert container.registration["statistics_set"] == statistics_set
+    raw = (outputs / container.primary).read_bytes()
+    by_sid = {a["diaSourceId"]: a for a in fastavro.reader(io.BytesIO(raw))}
+    assert sorted(by_sid) == sorted([ids["kept"], ids["orphan"]])
+    assert by_sid[ids["kept"]]["diaObject"]["nDiaSources"] == 3
+    assert by_sid[ids["orphan"]]["diaObject"]["diaObjectId"] == aid2
+    assert by_sid[ids["orphan"]]["diaObject"]["nDiaSources"] == 5
+    assert container.registration["dropped_count"] == 1          # only the flagged one
+    with conn.cursor() as cur:
+        cur.execute("SELECT candidate, object FROM alert_outbox WHERE attempt = %s "
+                    "ORDER BY record_ordinal", (attempt_id,))
+        assert dict(cur.fetchall()) == {ids["kept"]: ids["aid"], ids["orphan"]: aid2}
