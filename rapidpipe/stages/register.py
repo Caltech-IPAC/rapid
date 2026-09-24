@@ -5,7 +5,7 @@ from manifests"; per "The manifest": "Each product kind defines the
 registration metadata its manifest entry must carry. `register` validates
 that metadata and writes product rows without reading product contents."
 
-It records four kinds. It registers the enclosing manifest's own
+It records six kinds. It registers the enclosing manifest's own
 instances (`rapidpipe.runs.repository.register_manifest`), then writes
 the legacy rows each kind has, all in one transaction:
 
@@ -18,7 +18,14 @@ the legacy rows each kind has, all in one transaction:
   one `psfs` row through `dev`'s ``addPSF`` (``rapidpipe.db.psfs.register_psf``);
 - `source-catalog` (also `difference`'s): validated and accepted, nothing
   written beyond its instance row -- the products page's "Today's table"
-  for this kind is "none until `load`". It stays independently runnable from whatever
+  for this kind is "none until `load`".
+- `alert-container` and `alert-set` (`alerts`'s manifest): validated and
+  accepted, nothing written beyond their instance rows
+  (``rapidpipe.products.alertcontainer``). The `alerts` stage registers both
+  itself, in the transaction that writes their outbox rows, so registering
+  its manifest again is a no-op replay.
+
+It stays independently runnable from whatever
 stage produced the manifest it reads (stage contract, "The manifest":
 "whether it shares a Batch job with a transform changes nothing about
 attempt identity, completion or retry safety").
@@ -36,6 +43,10 @@ from rapidpipe.db.connection import ConnectionUnavailable
 from rapidpipe.db.diffimages import register_difference_image
 from rapidpipe.db.l2files import register_l2_image
 from rapidpipe.db.psfs import register_psf
+from rapidpipe.products.alertcontainer import (
+    validate_alert_container_entry,
+    validate_alert_set_entry,
+)
 from rapidpipe.products.diffimage import (
     validate_difference_entry,
     validate_source_catalog_entry,
@@ -53,7 +64,8 @@ from rapidpipe.stages.contract import (
 
 #: Product kinds this stage knows how to record. An output entry of any
 #: other kind is InputRejected, naming the kind.
-_KNOWN_KINDS = ("l2-image", "psf", "difference-image", "source-catalog")
+_KNOWN_KINDS = ("l2-image", "psf", "difference-image", "source-catalog",
+                "alert-container", "alert-set")
 
 DECLARATION = StageDeclaration(
     name="register",
@@ -65,7 +77,8 @@ DECLARATION = StageDeclaration(
             "[--settings <toml>] [--dry-run]. --inputs holds the "
             "producing attempt's completion manifest (admit's, naming "
             "l2-image and psf entries, or difference's, naming difference-image "
-            "and source-catalog entries). <unit-id> is always "
+            "and source-catalog entries, or alerts's, naming alert-container "
+            "and alert-set entries). <unit-id> is always "
             "<producing stage>/<producing unit id> (rapidpipe.products."
             "manifest.register_unit_id), derived from that same manifest's "
             "own `stage` and `unit.id` -- a register unit is identified by "
@@ -75,7 +88,8 @@ DECLARATION = StageDeclaration(
         ),
     },
     settings_schema_path=None,
-    consumes=("l2-image", "psf", "difference-image", "source-catalog"),
+    consumes=("l2-image", "psf", "difference-image", "source-catalog",
+              "alert-container", "alert-set"),
     produces=(),
     database_access="read-write",
     resource_defaults={"vcpus": 1, "memory_mib": 1024},
@@ -115,6 +129,10 @@ def _body(context: StageContext) -> StageResult:
                 validate_source_catalog_entry(entry.to_dict())
             elif entry.kind == "psf":
                 validate_psf_entry(entry.to_dict())
+            elif entry.kind == "alert-container":
+                validate_alert_container_entry(entry.to_dict())
+            elif entry.kind == "alert-set":
+                validate_alert_set_entry(entry.to_dict())
         except ValueError as exc:
             raise InputRejected(f"{entry.kind} {entry.instance!r}: {exc}") from exc
 
