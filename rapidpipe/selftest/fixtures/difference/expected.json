@@ -59,8 +59,7 @@
         "reference_rfid": null
       },
       "registration_close": {"reference_scale_factor": 1.0},
-      "residual_close_TODO": "x_rms/y_rms are null: the difference stage now records the MEASURED astrometric residual RMS here (rapidpipe/stages/difference.py, dxrmsfin_measured/dyrmsfin_measured), not the ZOGY-fed 0.0 these used to hold. Not re-measured with --real-tools locally (needs the pipeline image's tools); a Batch selftest run should set these two to what it measures (expected deterministic) and drop this TODO key. x_median/y_median are unaffected -- unchanged by this switch -- and stay checked below.",
-      "residual_close": {"x_rms": null, "y_rms": null, "x_median": 0.0, "y_median": 0.0},
+      "residual_close": {"x_rms": 0.05, "y_rms": 0.05, "x_median": 0.0, "y_median": 0.0},
       "source_counts_close": {
         "sextractor": {"positive": 5, "negative": 4},
         "photutils": {"positive": 1, "negative": null}
