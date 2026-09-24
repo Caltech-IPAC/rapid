@@ -13,6 +13,11 @@ import pytest
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.runs import repository as repo
 
+#: A product kind with no ``dev`` table (not in repository._VBEST_TABLES),
+#: so promotion tests need no ``dev`` row; vbest behaviour is tested with
+#: real ``psfs`` rows in test_run_lifecycle.py.
+TEST_KIND = "test-product"
+
 
 # ======================================================================
 # Helpers: build up a run/unit/attempt/instance chain the tests need.
@@ -63,7 +68,7 @@ def _succeed_and_select(conn, run_id, stage, unit_id):
 
 
 def _register_simple_instance(
-    conn, run_id, stage, attempt_id, instance_id=None, kind="difference-image",
+    conn, run_id, stage, attempt_id, instance_id=None, kind=TEST_KIND,
     logical_key=None, input_products=None,
 ):
     instance_id = instance_id or new_ulid()
@@ -423,7 +428,7 @@ def test_promote_happy_path(conn):
 
     promotion_id = repo.promote(
         conn, who="brusholme", reason="regular operations",
-        changes=[("difference-image", key, None, instance_id)],
+        changes=[(TEST_KIND, key, None, instance_id)],
     )
     assert promotion_id
     with conn.cursor() as cur:
@@ -445,8 +450,8 @@ def test_promote_refuses_whole_request_on_mismatch(conn):
         repo.promote(
             conn, who="brusholme", reason="test",
             changes=[
-                ("difference-image", key_a, None, instance_a),
-                ("difference-image", key_b, new_ulid(), instance_b),  # wrong expected-before
+                (TEST_KIND, key_a, None, instance_a),
+                (TEST_KIND, key_b, new_ulid(), instance_b),  # wrong expected-before
             ],
         )
     # Refused as a whole: instance_a must NOT have been promoted either.
@@ -462,7 +467,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     _, _, _, first_instance = _full_chain_to_current_candidate(conn, run_id, logical_key=key)
     repo.promote(
         conn, who="brusholme", reason="initial",
-        changes=[("difference-image", key, None, first_instance)],
+        changes=[(TEST_KIND, key, None, first_instance)],
     )
 
     # Reprocess: a new instance for the same logical key, from a fresh run.
@@ -470,7 +475,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     _, _, _, second_instance = _full_chain_to_current_candidate(conn, run_id_2, logical_key=key)
     repo.promote(
         conn, who="brusholme", reason="reprocess",
-        changes=[("difference-image", key, first_instance, second_instance)],
+        changes=[(TEST_KIND, key, first_instance, second_instance)],
     )
     with conn.cursor() as cur:
         cur.execute("SELECT custody FROM product_instances WHERE id = %s", (second_instance,))
@@ -480,7 +485,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     # Reversal: promote the inverse mapping.
     repo.promote(
         conn, who="brusholme", reason="reversal",
-        changes=[("difference-image", key, second_instance, first_instance)],
+        changes=[(TEST_KIND, key, second_instance, first_instance)],
     )
     with conn.cursor() as cur:
         cur.execute("SELECT id, custody FROM product_instances WHERE id IN (%s, %s)",

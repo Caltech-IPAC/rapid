@@ -29,12 +29,14 @@ dict shape ``register_manifest`` needs, so no import is required.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Iterable, Sequence
 
 import psycopg2
 import psycopg2.extensions
 
 from rapidpipe.db.ids import new_ulid
+from rapidpipe.products.storage import join, parse_location
 
 #: One fixed advisory-lock key for every promotion, per the runs page,
 #: "Promotion": "All promotions take one transaction-scoped advisory
@@ -46,6 +48,12 @@ _PROMOTION_ADVISORY_LOCK_KEY = 0x52415049445F5052  # "RAPID_PR" in ASCII, as an 
 
 _TERMINAL_UNIT_STATES = ("complete", "failed", "cancelled")
 _TERMINAL_RUN_STATES = ("deleting", "deleted")
+#: Run states that refuse new work (a unit, an input binding, an
+#: attempt): a finished run admits nothing more, and a deleting or deleted
+#: one is fenced (runs page, "Deletion"). Result recording and
+#: registration refuse only ``_TERMINAL_RUN_STATES`` (supervisor step 3,
+#: 2026-09-24, amendment A1).
+_NO_ADMISSION_RUN_STATES = ("finished",) + _TERMINAL_RUN_STATES
 
 
 class RunModelError(Exception):
@@ -69,11 +77,14 @@ class AttemptAlreadyResolved(RunModelError):
 
 
 class RunDeletingOrDeleted(RunModelError):
-    """The run is in state 'deleting' or 'deleted'.
+    """The run is in state 'deleting' or 'deleted' (or, for admission, 'finished').
 
-    Raised by add_unit, bind_unit_inputs and allocate_attempt: "Attempt
-    allocation, input binding and result acceptance use the same run
-    fence and refuse a deleting or deleted run." (runs page, "Deletion").
+    Raised by add_unit, bind_unit_inputs and allocate_attempt (which also
+    refuse a finished run), and by record_attempt_result and
+    register_manifest: "Attempt allocation, input binding and result
+    acceptance use the same run fence and refuse a deleting or deleted
+    run." (runs page, "Deletion"). register_manifest also raises it when a
+    dependency's producer instance belongs to a deleting or deleted run.
     """
 
 
@@ -105,6 +116,33 @@ class DeletionRefused(RunModelError):
     """mark_run_deleting's preconditions were not met."""
 
 
+class RunNotFinishable(RunModelError):
+    """finish_run was called on a run that is not open with every unit terminal."""
+
+
+#: Product kinds whose promotion also maintains ``dev``'s ``vbest`` column,
+#: and the ``dev`` table holding each kind's row (found through that
+#: table's ``instance`` column). The kind strings are the ones the
+#: registration writers and stages use (``rapidpipe/stages/register.py``
+#: ``_KNOWN_KINDS``; ``rapidpipe/stages/difference.py`` for
+#: ``reference-image``). Result sets (``source-catalog`` and the like) and
+#: any other kind have no ``vbest`` and are skipped (supervisor ruling,
+#: step 3, 2026-09-24: "promotion maintains them", products page,
+#: "Registration metadata").
+_VBEST_TABLES = {
+    "l2-image": "l2files",
+    "reference-image": "refimages",
+    "difference-image": "diffimages",
+    "psf": "psfs",
+}
+
+#: How long a scratch run lives before :func:`rapidpipe.runs.cleanup.
+#: expire_runs` may delete it, when ``create_run`` is given no explicit
+#: ``expires_at`` (runs page, "Deletion": scratch runs expire unless
+#: pinned).
+_SCRATCH_DEFAULT_LIFETIME = "14 days"
+
+
 # ======================================================================
 # create_run
 # ======================================================================
@@ -127,6 +165,7 @@ def create_run(
     auto_promote: bool,
     check_policy_ref: str | None,
     seed_run: str | None = None,
+    expires_at: datetime | None = None,
 ) -> str:
     """Create a run and return its id.
 
@@ -138,6 +177,12 @@ def create_run(
     authorise reuse of another run's scratch outputs."); the caller
     supplies whatever configuration it wants copied through the ordinary
     parameters, this function only records the ``seed_run`` lineage.
+
+    ``expires_at`` is when an unpinned scratch run becomes eligible for
+    :func:`rapidpipe.runs.cleanup.expire_runs`. When ``None``, a scratch
+    run expires 14 days after creation (``now() + interval '14 days'``,
+    evaluated in the same statement that sets ``created``) and a
+    production run never expires (NULL).
     """
     if kind not in ("scratch", "production"):
         raise ValueError(f"kind must be 'scratch' or 'production', got {kind!r}")
@@ -157,9 +202,13 @@ def create_run(
                 image_digest, schema_version, settings_overlay_ref,
                 input_selection_ref, lane, resource_profile,
                 database_target, max_attempts_per_unit, auto_promote,
-                check_policy_ref, seed_run
+                check_policy_ref, seed_run, expires_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                COALESCE(
+                    %s::timestamptz,
+                    CASE WHEN %s = 'scratch'
+                         THEN now() + %s::interval END)
             )
             """,
             (
@@ -168,6 +217,7 @@ def create_run(
                 settings_overlay_ref, input_selection_ref, lane,
                 resource_profile, database_target, max_attempts_per_unit,
                 auto_promote, check_policy_ref, seed_run,
+                expires_at, kind, _SCRATCH_DEFAULT_LIFETIME,
             ),
         )
     return run_id
@@ -186,10 +236,23 @@ def _fetch_run_state(cur, run_id: str) -> str:
 
 
 def _refuse_if_run_deleting_or_deleted(cur, run_id: str) -> None:
+    """The result-acceptance fence: refuse a deleting or deleted run.
+
+    Takes the run row ``FOR SHARE``, so a concurrent ``mark_run_deleting``
+    (``FOR UPDATE``) waits for this transaction, and vice versa.
+    """
     state = _fetch_run_state(cur, run_id)
     if state in _TERMINAL_RUN_STATES:
         raise RunDeletingOrDeleted(
             f"run {run_id!r} is {state!r}; refusing")
+
+
+def _refuse_admission(cur, run_id: str) -> None:
+    """The admission fence: refuse a finished, deleting or deleted run."""
+    state = _fetch_run_state(cur, run_id)
+    if state in _NO_ADMISSION_RUN_STATES:
+        raise RunDeletingOrDeleted(
+            f"run {run_id!r} is {state!r}; it admits no new work, refusing")
 
 
 def add_unit(
@@ -201,16 +264,17 @@ def add_unit(
 ) -> None:
     """Add a unit of work to a run.
 
-    Refuses if the run is deleting or deleted (runs page, "Deletion":
-    "Attempt allocation, input binding and result acceptance use the same
-    run fence and refuse a deleting or deleted run."). Unit identity is
+    Refuses if the run is finished, deleting or deleted (runs page,
+    "Deletion": "Attempt allocation, input binding and result acceptance
+    use the same run fence and refuse a deleting or deleted run."; a
+    finished run admits no new work). Unit identity is
     unique within a run and stage (runs page, "Identifiers"); adding the
     same (run, stage, unit_id) twice is a no-op rather than an error,
     since re-declaring the same piece of work is not itself a conflict
     the way a conflicting manifest replay is.
     """
     with conn.cursor() as cur:
-        _refuse_if_run_deleting_or_deleted(cur, run_id)
+        _refuse_admission(cur, run_id)
         cur.execute(
             """
             INSERT INTO units (id, run, stage, unit_kind, unit_id)
@@ -231,13 +295,13 @@ def bind_unit_inputs(
     """Freeze this unit's input bindings.
 
     "Inputs are bound in unit_inputs before execution and retained for
-    retries." (runs page, "Units"). Refuses on a deleting or deleted run,
-    same fence as add_unit. Idempotent per (unit, producer_instance): a
+    retries." (runs page, "Units"). Refuses on a finished, deleting or
+    deleted run, same fence as add_unit. Idempotent per (unit, producer_instance): a
     retry that rebinds the same inputs is a no-op, matching "retained for
     retries" rather than an error on re-bind.
     """
     with conn.cursor() as cur:
-        _refuse_if_run_deleting_or_deleted(cur, run_id)
+        _refuse_admission(cur, run_id)
         cur.execute(
             "SELECT id FROM units WHERE run = %s AND stage = %s AND unit_id = %s",
             (run_id, stage, unit_id),
@@ -264,18 +328,38 @@ def bind_unit_inputs(
 # allocate_attempt
 # ======================================================================
 
+def attempt_output_location(
+    outputs_root: str, run_id: str, stage: str, unit_id: str, attempt_id: str,
+) -> str:
+    """An attempt's exclusive output location:
+    ``<outputs_root>/runs/<run>/<stage>/<unit>/<attempt>`` (runs page,
+    "Storage layout"), for a local directory or an ``s3://`` root alike."""
+    return join(parse_location(outputs_root), f"runs/{run_id}/{stage}/{unit_id}/{attempt_id}")
+
+
 def allocate_attempt(
     conn: psycopg2.extensions.connection,
     run_id: str,
     stage: str,
     unit_id: str,
+    *,
+    outputs_root: str | None = None,
 ) -> str:
     """Allocate a new attempt for a unit and set the unit state to running.
+
+    With ``outputs_root``, the attempt row is inserted with its final
+    output location, :func:`attempt_output_location` -- the attempt id is
+    minted before the INSERT, so no placeholder location is ever
+    committed (supervisor step 3, 2026-09-24, amendment A7). Without it
+    (older callers and tests), the location is the relative placeholder
+    ``runs/<run>/<stage>/<unit>/<attempt>``, which
+    :func:`record_scheduler_job` or :func:`record_attempt_result` later
+    replaces.
 
     Refuses (runs page, "Attempts" and "Deletion"):
       - if the unit is terminal (complete, failed or cancelled) --
         UnitTerminal;
-      - if the run is deleting or deleted -- RunDeletingOrDeleted;
+      - if the run is finished, deleting or deleted -- RunDeletingOrDeleted;
       - if the attempt allowance (``runs.max_attempts_per_unit``,
         "counting the first attempt and all Batch retries") is already
         exhausted for this unit -- AttemptAllowanceExhausted.
@@ -284,9 +368,7 @@ def allocate_attempt(
     concurrent callers cannot both allocate past the allowance.
     """
     with conn.cursor() as cur:
-        run_state = _fetch_run_state(cur, run_id)
-        if run_state in _TERMINAL_RUN_STATES:
-            raise RunDeletingOrDeleted(f"run {run_id!r} is {run_state!r}; refusing")
+        _refuse_admission(cur, run_id)
 
         cur.execute(
             """
@@ -323,13 +405,16 @@ def allocate_attempt(
                 f"at the run's max_attempts_per_unit ({max_attempts})")
 
         attempt_id = new_ulid()
+        output_location = (
+            attempt_output_location(outputs_root, run_id, stage, unit_id, attempt_id)
+            if outputs_root is not None
+            else f"runs/{run_id}/{stage}/{unit_id}/{attempt_id}")
         cur.execute(
             """
             INSERT INTO attempts (id, run, stage, unit, output_location)
             VALUES (%s, %s, %s, %s, %s)
             """,
-            (attempt_id, run_id, stage, unit_row_id,
-             f"runs/{run_id}/{stage}/{unit_id}/{attempt_id}"),
+            (attempt_id, run_id, stage, unit_row_id, output_location),
         )
         cur.execute(
             "UPDATE units SET state = 'running', updated = now() WHERE id = %s",
@@ -368,6 +453,9 @@ def record_attempt_result(
     ``select_attempt``, since "Selection of a successful completed
     attempt makes it complete."
 
+    Refuses (RunDeletingOrDeleted) when the attempt's run is deleting or
+    deleted -- the result-acceptance fence (runs page, "Deletion").
+
     Idempotent per attempt: recording the same disposition and outputs
     twice (an uncertain-commit retry, per the stage contract's "Database
     writes are attempt-scoped and retry-safe") updates the row rather
@@ -388,6 +476,7 @@ def record_attempt_result(
         if row is None:
             raise AttemptNotFound(f"attempt {attempt_id!r} does not exist")
         unit_row_id, attempt_run_id = row
+        _refuse_if_run_deleting_or_deleted(cur, attempt_run_id)
 
         cur.execute(
             """
@@ -654,6 +743,13 @@ def register_manifest(
     for an existing instance id raises :class:`ManifestConflict`
     ("conflicting content for an existing instance id is an error").
 
+    Refuses (:class:`RunDeletingOrDeleted`) when the manifest's run is
+    deleting or deleted, and when a dependency's producer instance
+    belongs to a deleting or deleted run: each producer's run row is
+    locked ``FOR SHARE`` before its edge is written, so the edge and a
+    concurrent ``mark_run_deleting`` of the producer's run cannot both
+    commit (supervisor step 3, 2026-09-24, amendment A1).
+
     Accepts the products page's complete manifest shape (run/unit/stage/
     attempt at the top, ``outputs`` a list of entries each with
     ``kind``, ``format_version``, ``instance``, ``key``, ``primary``,
@@ -673,11 +769,9 @@ def register_manifest(
     input_result_sets = inputs.get("result_sets", []) if isinstance(inputs, dict) else []
 
     with conn.cursor() as cur:
+        _refuse_if_run_deleting_or_deleted(cur, run_id)
         cur.execute("SELECT kind FROM runs WHERE id = %s", (run_id,))
-        row = cur.fetchone()
-        if row is None:
-            raise RunNotFound(f"run {run_id!r} does not exist")
-        (run_kind,) = row
+        (run_kind,) = cur.fetchone()
         custody = _custody_for_run_kind(run_kind)
 
         cur.execute(
@@ -842,6 +936,11 @@ def _register_one_output(
     dependency_producers: list[str] = list(input_products.values()) + list(input_result_sets)
     for producer_instance in dependency_producers:
         cur.execute(
+            "SELECT run FROM product_instances WHERE id = %s", (producer_instance,))
+        producer = cur.fetchone()
+        if producer is not None:
+            _refuse_if_run_deleting_or_deleted(cur, producer[0])
+        cur.execute(
             """
             INSERT INTO dependencies (id, consumer_instance, producer_instance)
             VALUES (%s, %s, %s)
@@ -859,36 +958,64 @@ def promote(
     conn: psycopg2.extensions.connection,
     who: str,
     reason: str,
-    changes: Sequence[tuple[str, dict[str, Any], str | None, str]],
+    changes: Sequence[tuple[str, dict[str, Any], str | None, str | None]],
     check_policy_version: str | None = None,
     check_result_ids: Sequence[str] = (),
+    request_context: dict[str, Any] | None = None,
 ) -> str:
     """Apply a promotion under one advisory lock; return the promotion id.
 
     ``changes`` is a list of ``(kind, logical_key, expected_before_instance_or_None,
-    after_instance)`` tuples (runs page, "Promotion"). Takes
+    after_instance_or_None)`` tuples (runs page, "Promotion"). Takes
     ``pg_advisory_xact_lock`` on one fixed key, then:
 
       1. Checks every expected before-instance (including expected
          absence, i.e. ``None``) against the actual current selection;
          refuses the WHOLE request on any mismatch
-         (:class:`PromotionRefused`).
-      2. Validates each after-instance is a candidate from a selected
-         attempt, with every provenance dependency in project custody
-         (runs page, "Promotion eligibility": "Every provenance
+         (:class:`PromotionRefused`). Also refuses a change whose
+         after-instance equals its before-instance (nothing to change,
+         including ``None`` to ``None``) and a request naming the same
+         (kind, logical_key) twice -- the runs page records exactly one
+         before and after per affected key.
+      2. Validates each non-``None`` after-instance is a candidate from a
+         selected attempt, with every provenance dependency in project
+         custody (runs page, "Promotion eligibility": "Every provenance
          dependency must identify a complete, retained instance in
-         project custody.").
+         project custody."). A ``None`` after-instance is an unselect:
+         there is nothing to validate.
       3. Sets the before rows to candidate and the after rows to
-         current, and records the promotion and its promotion_changes.
+         current, maintains ``dev``'s ``vbest`` for kinds that have one
+         (``vbest = 0`` on the before-instance's row, ``vbest = 1`` on the
+         after-instance's row, found through the kind's table's
+         ``instance`` column; see ``_VBEST_TABLES``), and records the
+         promotion and its promotion_changes (an unselect records
+         ``after_instance`` NULL). ``request_context`` is stored on the
+         promotions row (``{}`` when ``None``); :func:`rollback_promotion`
+         records ``{"rollback_of": <promotion id>}`` there.
 
-    Reversal is calling this function again with the inverse mapping:
-    the caller passes the previous after-instance as the new
-    expected-before, and the previous before-instance as the new
-    after-instance for each key.
+    Reversal is :func:`rollback_promotion`, which calls this function with
+    the inverse mapping: the previous after-instance as the new
+    expected-before, and the previous before-instance (possibly ``None``)
+    as the new after-instance for each key.
     """
+    changes = list(changes)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT pg_advisory_xact_lock(%s)", (_PROMOTION_ADVISORY_LOCK_KEY,))
+
+        seen_keys: set[tuple[str, str]] = set()
+        for kind, logical_key, expected_before, after_instance in changes:
+            key_text = json.dumps(logical_key, sort_keys=True)
+            if (kind, key_text) in seen_keys:
+                raise PromotionRefused(
+                    f"kind={kind!r} key={logical_key!r} appears more than once "
+                    "in one promotion; refusing the whole promotion")
+            seen_keys.add((kind, key_text))
+            if after_instance == expected_before:
+                raise PromotionRefused(
+                    f"kind={kind!r} key={logical_key!r}: the after instance "
+                    f"{after_instance!r} is the same as the before instance; "
+                    "refusing the whole promotion")
 
         # Step 1: check every expected before against the actual current
         # selection. Refuse the whole request on any mismatch.
@@ -908,19 +1035,24 @@ def promote(
                     f"key={logical_key!r} to be {expected_before!r}, but it "
                     f"is {actual_before!r}; refusing the whole promotion")
 
-        # Step 2: validate every after-instance is eligible.
+        # Step 2: validate every after-instance is eligible. An unselect
+        # (after None) has nothing to validate.
         for kind, logical_key, _expected_before, after_instance in changes:
-            _validate_promotion_eligibility(cur, kind, logical_key, after_instance)
+            if after_instance is not None:
+                _validate_promotion_eligibility(cur, kind, logical_key, after_instance)
 
         # Step 3: apply. Before rows (if any) go back to candidate; after
-        # rows become current. Record the promotion and its changes.
+        # rows become current; vbest follows. Record the promotion and
+        # its changes.
         promotion_id = new_ulid()
         cur.execute(
             """
-            INSERT INTO promotions (id, who, reason, check_policy_version, check_result_ids)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO promotions (
+                id, who, reason, check_policy_version, check_result_ids, request_context
+            ) VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (promotion_id, who, reason, check_policy_version, list(check_result_ids)),
+            (promotion_id, who, reason, check_policy_version,
+             list(check_result_ids), json.dumps(request_context or {})),
         )
 
         for kind, logical_key, expected_before, after_instance in changes:
@@ -929,10 +1061,12 @@ def promote(
                     "UPDATE product_instances SET custody = 'candidate' WHERE id = %s",
                     (expected_before,),
                 )
-            cur.execute(
-                "UPDATE product_instances SET custody = 'current' WHERE id = %s",
-                (after_instance,),
-            )
+            if after_instance is not None:
+                cur.execute(
+                    "UPDATE product_instances SET custody = 'current' WHERE id = %s",
+                    (after_instance,),
+                )
+            _maintain_vbest(cur, kind, expected_before, after_instance)
             cur.execute(
                 """
                 INSERT INTO promotion_changes (
@@ -946,12 +1080,67 @@ def promote(
     return promotion_id
 
 
+def _maintain_vbest(
+    cur, kind: str, before_instance: str | None, after_instance: str | None,
+) -> None:
+    """Keep ``dev``'s ``vbest`` in step with one promotion change, in the
+    caller's transaction.
+
+    On rows a run wrote (``run IS NOT NULL``), ``vbest`` is a
+    current-membership flag: 1 while the instance is current, 0 otherwise;
+    nothing else is inferred from it (supervisor step 3, 2026-09-24,
+    amendment A2). So the before-instance's row gets 0 and the
+    after-instance's row gets 1. A row ``dev`` wrote (``run`` NULL, linked
+    to an instance by an import run) keeps ``dev``'s own ``vbest``: it is
+    never rewritten, on promotion or on rollback (amendment to ruling 2).
+
+    Only the kinds in ``_VBEST_TABLES`` have a ``dev`` row; every other
+    kind (result sets, catalogs) is skipped. For a mapped kind, an
+    instance with no row in its table, or with more than one, is refused
+    (:class:`PromotionRefused`). The baseline's CHECK allows 0, 1 and 2;
+    this sets only 0 and 1.
+    """
+    table = _VBEST_TABLES.get(kind)
+    if table is None:
+        return
+    for instance, flag in ((before_instance, 0), (after_instance, 1)):
+        if instance is None:
+            continue
+        # table comes from the fixed mapping above, never from caller input.
+        cur.execute(
+            f"SELECT count(*), count(*) FILTER (WHERE run IS NOT NULL) "
+            f"FROM {table} WHERE instance = %s",
+            (instance,))
+        total, run_written = cur.fetchone()
+        if total == 0:
+            raise PromotionRefused(
+                f"instance {instance!r} of kind {kind!r} has no {table} row; "
+                "refusing (its vbest cannot be kept in step)")
+        if total > 1:
+            raise PromotionRefused(
+                f"instance {instance!r} of kind {kind!r} has {total} {table} "
+                "rows; refusing")
+        if run_written:
+            cur.execute(
+                f"UPDATE {table} SET vbest = %s WHERE instance = %s AND run IS NOT NULL",
+                (flag, instance))
+
+
 def _validate_promotion_eligibility(
     cur, kind: str, logical_key: dict[str, Any], after_instance: str,
 ) -> None:
+    # Trial exception, supervisor step 3, 2026-09-24: the released-image
+    # rule and check-policy validation (required checks passed under the
+    # named policy version) are NOT verified here yet; they land with
+    # steps 5 and 6. Until then a promotion is eligible on the rules below
+    # alone -- this is a recorded deferral, not an acceptance of them.
     cur.execute(
         """
-        SELECT custody FROM product_instances WHERE id = %s
+        SELECT pi.custody, pi.kind, pi.logical_key, pi.deletion_state,
+               rs.instance IS NOT NULL, rs.complete
+        FROM product_instances pi
+        LEFT JOIN result_sets rs ON rs.instance = pi.id
+        WHERE pi.id = %s
         """,
         (after_instance,),
     )
@@ -959,7 +1148,20 @@ def _validate_promotion_eligibility(
     if row is None:
         raise PromotionRefused(
             f"after instance {after_instance!r} for kind={kind!r} does not exist")
-    (custody,) = row
+    custody, actual_kind, actual_key, deletion_state, is_result_set, complete = row
+    if actual_kind != kind or actual_key != logical_key:
+        raise PromotionRefused(
+            f"after instance {after_instance!r} is kind={actual_kind!r} "
+            f"key={actual_key!r}, not the requested kind={kind!r} "
+            f"key={logical_key!r}; refusing")
+    if deletion_state != "retained":
+        raise PromotionRefused(
+            f"after instance {after_instance!r} is {deletion_state!r}, not "
+            "retained; refusing")
+    if is_result_set and not complete:
+        raise PromotionRefused(
+            f"after instance {after_instance!r} is an incomplete result set; "
+            "refusing")
     if custody not in ("candidate", "current"):
         raise PromotionRefused(
             f"after instance {after_instance!r} has custody {custody!r}, "
@@ -1011,16 +1213,211 @@ def _validate_promotion_eligibility(
 
 
 # ======================================================================
+# promote_run / rollback_promotion
+# ======================================================================
+
+def promote_run(
+    conn: psycopg2.extensions.connection,
+    run_id: str,
+    who: str,
+    reason: str,
+    *,
+    kinds: Sequence[str] | None = None,
+    check_policy_version: str | None = None,
+) -> str:
+    """Promote a production run's deliverables; return the promotion id.
+
+    The run must be ``production`` -- a scratch run is refused ("scratch
+    never leaves scratch", runs page, "Runs" and "Custody") -- and not
+    deleting or deleted. Its deliverables are every ``product_instances``
+    row of the run with custody ``candidate`` whose producing attempt is
+    its unit's selected attempt, optionally filtered to ``kinds``. There
+    must be exactly one such candidate per (kind, logical_key): the runs
+    page's promotion replaces exactly one instance per key, so two
+    candidates for one key is refused rather than guessed between. Each
+    change's expected-before is the instance currently ``current`` for
+    that (kind, logical_key), or ``None``; the changes are then applied by
+    :func:`promote`, which takes the promotion lock -- taken here first
+    too, so the expected-befores read below cannot go stale before
+    ``promote`` re-checks them (the transaction-scoped lock is re-entrant).
+    ``request_context`` on the promotions row is ``{"run": run_id}``.
+
+    Refuses (:class:`PromotionRefused`) when there is nothing to promote.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(%s)", (_PROMOTION_ADVISORY_LOCK_KEY,))
+        cur.execute(
+            "SELECT kind, state FROM runs WHERE id = %s FOR SHARE", (run_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise RunNotFound(f"run {run_id!r} does not exist")
+        run_kind, run_state = row
+        if run_kind != "production":
+            raise PromotionRefused(
+                f"run {run_id!r} is a {run_kind!r} run; scratch never leaves "
+                "scratch, only a production run's candidates may be promoted")
+        if run_state in _TERMINAL_RUN_STATES:
+            raise RunDeletingOrDeleted(f"run {run_id!r} is {run_state!r}; refusing")
+
+        query = """
+            SELECT pi.id, pi.kind, pi.logical_key
+            FROM product_instances pi
+            JOIN attempts a ON a.id = pi.producing_attempt
+            JOIN units u ON u.id = a.unit
+            WHERE pi.run = %s
+              AND pi.custody = 'candidate'
+              AND u.selected_attempt = pi.producing_attempt
+        """
+        params: list[Any] = [run_id]
+        if kinds is not None:
+            query += " AND pi.kind = ANY(%s)"
+            params.append(list(kinds))
+        query += " ORDER BY pi.kind, pi.id"
+        cur.execute(query, params)
+        deliverables = cur.fetchall()
+
+        by_key: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
+        for instance_id, kind, logical_key in deliverables:
+            key_text = json.dumps(logical_key, sort_keys=True)
+            if (kind, key_text) in by_key:
+                raise PromotionRefused(
+                    f"run {run_id!r} has more than one candidate for "
+                    f"kind={kind!r} key={logical_key!r} "
+                    f"({by_key[(kind, key_text)][0]!r} and {instance_id!r}); "
+                    "a promotion replaces exactly one instance per key")
+            by_key[(kind, key_text)] = (instance_id, logical_key)
+
+        if not by_key:
+            raise PromotionRefused(
+                f"run {run_id!r} has no candidate from a selected attempt"
+                + (f" of kinds {list(kinds)!r}" if kinds is not None else "")
+                + "; nothing to promote")
+
+        changes: list[tuple[str, dict[str, Any], str | None, str | None]] = []
+        for (kind, _key_text), (instance_id, logical_key) in by_key.items():
+            cur.execute(
+                """
+                SELECT id FROM product_instances
+                WHERE kind = %s AND logical_key = %s AND custody = 'current'
+                """,
+                (kind, json.dumps(logical_key)),
+            )
+            current = cur.fetchone()
+            changes.append((kind, logical_key, current[0] if current else None, instance_id))
+
+    return promote(
+        conn, who, reason, changes,
+        check_policy_version=check_policy_version,
+        request_context={"run": run_id},
+    )
+
+
+def rollback_promotion(
+    conn: psycopg2.extensions.connection,
+    promotion_id: str,
+    who: str,
+    reason: str,
+) -> str:
+    """Reverse one promotion; return the new (reversing) promotion id.
+
+    Reads the promotion's ``promotion_changes`` and applies the inverse
+    mapping through :func:`promote`: for each key, the expected-before is
+    the recorded after-instance and the new after-instance is the
+    recorded before-instance, which may be ``None`` (the key goes back to
+    having no current instance). ``promote`` refuses the whole reversal if
+    any recorded after-selection is no longer current -- a later promotion
+    changed that key, and the runs page reverses a promotion only against
+    the selection it made. The new promotions row records
+    ``request_context = {"rollback_of": promotion_id}``.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM promotions WHERE id = %s", (promotion_id,))
+        if cur.fetchone() is None:
+            raise PromotionRefused(f"promotion {promotion_id!r} does not exist")
+        cur.execute(
+            """
+            SELECT kind, logical_key, before_instance, after_instance
+            FROM promotion_changes WHERE promotion = %s ORDER BY id
+            """,
+            (promotion_id,),
+        )
+        recorded = cur.fetchall()
+    if not recorded:
+        raise PromotionRefused(
+            f"promotion {promotion_id!r} recorded no changes; nothing to roll back")
+
+    inverse = [
+        (kind, logical_key, after_instance, before_instance)
+        for kind, logical_key, before_instance, after_instance in recorded
+    ]
+    return promote(
+        conn, who, reason, inverse,
+        request_context={"rollback_of": promotion_id},
+    )
+
+
+# ======================================================================
+# finish_run
+# ======================================================================
+
+def finish_run(conn: psycopg2.extensions.connection, run_id: str) -> None:
+    """Mark an open run finished: state ``finished``, ``finished_at = now()``.
+
+    Only an explicit call finishes a run -- ``rapidpipe.launch.batch.
+    reconcile`` never does. Refuses (:class:`RunNotFinishable`, with the
+    reason) unless the run is ``open``, has at least one unit, and every
+    unit is terminal (complete, failed or cancelled). Locks the run row
+    so a concurrent ``add_unit`` cannot slip a new unit in between the
+    check and the update.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT state FROM runs WHERE id = %s FOR UPDATE", (run_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise RunNotFound(f"run {run_id!r} does not exist")
+        (state,) = row
+        if state != "open":
+            raise RunNotFinishable(f"run {run_id!r} is {state!r}, not 'open'")
+
+        cur.execute(
+            """
+            SELECT count(*),
+                   count(*) FILTER (WHERE state NOT IN %s)
+            FROM units WHERE run = %s
+            """,
+            (_TERMINAL_UNIT_STATES, run_id),
+        )
+        total, unfinished = cur.fetchone()
+        if total == 0:
+            raise RunNotFinishable(f"run {run_id!r} has no units")
+        if unfinished:
+            raise RunNotFinishable(
+                f"run {run_id!r} has {unfinished} of {total} unit(s) not yet "
+                "complete, failed or cancelled")
+
+        cur.execute(
+            "UPDATE runs SET state = 'finished', finished_at = now() WHERE id = %s",
+            (run_id,),
+        )
+
+
+# ======================================================================
 # mark_run_deleting / mark_run_deleted
 # ======================================================================
 
 def mark_run_deleting(
     conn: psycopg2.extensions.connection, run_id: str, requested_by: str,
+    *,
+    expiry: bool = False,
 ) -> None:
     """Guard and begin deletion of a scratch run.
 
     Locks the run, verifies ``requested_by`` is the owner and the run's
-    kind is 'scratch', refuses if any attempt is queued or running
+    kind is 'scratch' -- or, with ``expiry=True`` (the expiry sweeper, an
+    explicitly authorised actor), replaces the owner check with the expiry
+    predicate re-checked under the lock: not pinned and ``expires_at <
+    now()`` (supervisor step 3, 2026-09-24, amendment A6) -- refuses if any attempt is queued or running
     (disposition IS NULL) or unresolved ('lost'), or if any
     ``unit_inputs``/``dependencies`` row from OUTSIDE the run points at
     one of its instances, then sets state 'deleting' -- all in one
@@ -1028,19 +1425,29 @@ def mark_run_deleting(
     """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT kind, owner, state FROM runs WHERE id = %s FOR UPDATE",
+            """
+            SELECT kind, owner, state, pinned,
+                   expires_at IS NOT NULL AND expires_at < now()
+            FROM runs WHERE id = %s FOR UPDATE
+            """,
             (run_id,),
         )
         row = cur.fetchone()
         if row is None:
             raise RunNotFound(f"run {run_id!r} does not exist")
-        kind, owner, state = row
+        kind, owner, state, pinned, expired = row
 
         if kind != "scratch":
             raise DeletionRefused(
                 f"run {run_id!r} has kind {kind!r}; only a scratch run may "
                 "be deleted")
-        if owner != requested_by:
+        if expiry:
+            if pinned:
+                raise DeletionRefused(f"run {run_id!r} is pinned; the sweeper refuses")
+            if not expired:
+                raise DeletionRefused(
+                    f"run {run_id!r} has not expired; the sweeper refuses")
+        elif owner != requested_by:
             raise DeletionRefused(
                 f"run {run_id!r} is owned by {owner!r}, not {requested_by!r}; "
                 "refusing")
@@ -1102,12 +1509,12 @@ def mark_run_deleted(conn: psycopg2.extensions.connection, run_id: str) -> None:
     """Record that a deleting run's cleanup has completed.
 
     Physical cleanup of the run's S3 object versions and run-scoped
-    science rows is OUT OF SCOPE for this function and this PR; it is
-    the cleanup role's job (runs page, "Deletion": "After the deleting
-    state commits, cleanup idempotently removes the run's object
-    versions and run-scoped science rows, then records completion").
-    This function only performs that final "records completion" step,
-    once the caller has confirmed cleanup succeeded.
+    science rows is not this function's job; it is
+    :func:`rapidpipe.runs.cleanup.delete_run`'s (runs page, "Deletion":
+    "After the deleting state commits, cleanup idempotently removes the
+    run's object versions and run-scoped science rows, then records
+    completion"). This function only performs that final "records
+    completion" step, which ``delete_run`` calls once cleanup succeeded.
     """
     with conn.cursor() as cur:
         cur.execute(

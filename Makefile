@@ -30,3 +30,10 @@ stage-load:
 .PHONY: stage-finalize
 stage-finalize:
 	$(PYTHON) tests/fixtures/finalize/run_fixture.py
+
+# The maintain stage's fixture: CLUSTER/ANALYZE of a sources child table,
+# against the fake database (tests/unit/fakemaintaindb.py); runs anywhere.
+# The PostgreSQL path is tests/db/test_maintain.py.
+.PHONY: stage-maintain
+stage-maintain:
+	$(PYTHON) tests/fixtures/maintain/run_fixture.py
