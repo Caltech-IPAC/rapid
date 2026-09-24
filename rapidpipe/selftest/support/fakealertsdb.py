@@ -219,21 +219,40 @@ class FakeAlertsDatabase:
         return [self._joined(s) for s in sorted(self.sources, key=lambda s: s["sid"])
                 if s["result_set"] == source_set and s["pid"] == pid and s["flags"] == 0]
 
-    def associations(self, statistics_by_association, sids) -> list[dict]:
+    def association_chain(self, instance: str) -> list[str]:
+        """The set and the bases it extends (``key.base``), newest first."""
+        chain: list[str] = []
+        current = instance
+        while current is not None:
+            row = self.product_instances.get(current)
+            if current in chain or row is None or row["kind"] != "association-set":
+                raise ValueError(f"association chain of {instance!r} is broken at {current!r}")
+            chain.append(current)
+            current = (row.get("key") or {}).get("base")
+        return chain
+
+    def associations(self, lineages, statistics_by_association, sids) -> list[dict]:
         rows = []
-        for assoc, stats_set in statistics_by_association.items():
-            objects = {o["aid"]: o for o in self.astroobjects if o["result_set"] == assoc}
+        for root, chain in lineages.items():
+            stats_set = statistics_by_association.get(root)
+            depth = {member: d for d, member in enumerate(chain)}
+            objects: dict[int, dict] = {}
+            for o in sorted((o for o in self.astroobjects if o["result_set"] in depth),
+                            key=lambda o: -depth[o["result_set"]]):
+                objects[o["aid"]] = o          # the newest set, written last, wins
             meta = {m["aid"]: m for m in self.astroobjectsmeta
                     if stats_set is not None and m["result_set"] == stats_set}
-            merges = [m for m in self.merges if m["result_set"] == assoc]
+            merges = [m for m in self.merges if m["result_set"] in depth]
+            seen = set()
             for m in merges:
-                if m["sid"] not in sids:
+                if m["sid"] not in sids or (m["sid"], m["aid"]) in seen:
                     continue
+                seen.add((m["sid"], m["aid"]))
                 obj = objects.get(m["aid"])
                 stats = meta.get(m["aid"]) if obj else None
                 count = sum(1 for m2 in merges if obj and m2["aid"] == obj["aid"])
                 rows.append({
-                    "sid": m["sid"], "merges_aid": m["aid"], "association_set": assoc,
+                    "sid": m["sid"], "merges_aid": m["aid"], "association_set": root,
                     "aid": obj["aid"] if obj else None,
                     "ra0": obj["ra0"] if obj else None, "dec0": obj["dec0"] if obj else None,
                     "stdevra": stats["stdevra"] if stats else None,
@@ -242,18 +261,20 @@ class FakeAlertsDatabase:
                 })
         return sorted(rows, key=lambda r: (r["sid"], r["merges_aid"], r["association_set"]))
 
-    def history(self, objects, min_mjd) -> list[dict]:
-        wanted = {(o[0], int(o[1])) for o in objects}
+    def history(self, lineages, objects, min_mjd) -> list[dict]:
         by_sid = {s["sid"]: s for s in self.sources}
-        rows = []
-        for m in self.merges:
-            if (m["result_set"], m["aid"]) not in wanted:
-                continue
-            s = by_sid.get(m["sid"])
-            if s is None or s["mjdobs"] < min_mjd:
-                continue
-            rows.append({"object_set": m["result_set"], "object_aid": m["aid"], **self._joined(s)})
-        return sorted(rows, key=lambda r: (r["mjdobs"], r["sid"]))
+        rows = {}
+        for root, aid in objects:
+            members = set(lineages[root])
+            for m in self.merges:
+                if m["result_set"] not in members or m["aid"] != aid:
+                    continue
+                s = by_sid.get(m["sid"])
+                if s is None or s["mjdobs"] < min_mjd:
+                    continue
+                rows[(root, aid, s["sid"])] = {"object_set": root, "object_aid": aid,
+                                               **self._joined(s)}
+        return sorted(rows.values(), key=lambda r: (r["mjdobs"], r["sid"]))
 
     # -- writes ----------------------------------------------------------
 

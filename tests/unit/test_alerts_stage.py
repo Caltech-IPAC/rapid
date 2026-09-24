@@ -292,3 +292,60 @@ def test_alert_container_validation_refuses_a_missing_summary():
     entry["registration"]["alert_count"] = -1
     with pytest.raises(AlertContainerRegistrationError):
         validate_alert_container_entry(entry)
+
+
+BASE_SET = "01J8Y6QZ3M00000000000ASSC0"
+
+
+def _extend_from_a_base(seed):
+    """Make the first association set extend a base: as crossmatch leaves them.
+
+    The base holds object 9001 (and a stale copy of 9003), and the merges of
+    9001's earlier detections 50 and 51; the extending set holds only the new
+    detections' merges rows (103, 104 on 9001, 102, 105) and the objects it
+    made itself (9003).
+    """
+    instances = seed["product_instances"]
+    instances[BASE_SET] = {"kind": "association-set", "complete": True,
+                           "key": {"field": 5321, "base": None}}
+    instances[ASSOCIATION_SET]["key"] = {"field": 5321, "base": BASE_SET}
+    for row in seed["merges"]:
+        if row["result_set"] == ASSOCIATION_SET and row["sid"] in (50, 51):
+            row["result_set"] = BASE_SET
+    for row in list(seed["astroobjects"]):
+        if row["result_set"] == ASSOCIATION_SET and row["aid"] == 9001:
+            row["result_set"] = BASE_SET
+        if row["result_set"] == ASSOCIATION_SET and row["aid"] == 9003:
+            seed["astroobjects"].append({**row, "result_set": BASE_SET, "ra0": 0.0, "dec0": 0.0})
+
+
+def test_objects_and_history_resolve_across_the_association_sets_lineage(
+        tmp_path, monkeypatch, prepared):
+    inputs, _, seed = prepared
+    _extend_from_a_base(seed)
+    rc, outputs, db = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == 0
+    manifest = Manifest.read(outputs / "manifest.json")
+    # the base is read, so it is an input
+    assert list(manifest.inputs.result_sets) == RESULT_SETS + [BASE_SET]
+    container = next(e for e in manifest.outputs if e.kind == "alert-container")
+    raw = (outputs / container.primary).read_bytes()
+    alerts_by_sid = {a["diaSourceId"]: a for a in fastavro.reader(io.BytesIO(raw))}
+    # 103 and 104 are new detections of 9001, whose object row is in the base
+    assert sorted(alerts_by_sid) == [103, 104, 105, 106]
+    assert alerts_by_sid[103]["diaObject"]["diaObjectId"] == 9001
+    assert len(alerts_by_sid[103]["prvDiaSources"]) == 2      # 104, and 51 from the base
+    # 9003 is in both sets: the extending (newest) set's row wins
+    assert alerts_by_sid[105]["diaObject"]["ra0"] != 0.0
+    summary = json.loads((outputs / next(m.path for m in container.members
+                                          if m.role == "summary")).read_text())
+    assert {d["sid"]: d["reason"] for d in summary["dropped"]} == {101: "flagged", 102: "orphan"}
+
+
+def test_a_broken_lineage_exits_65(tmp_path, monkeypatch, prepared):
+    inputs, _, seed = prepared
+    seed["product_instances"][ASSOCIATION_SET]["key"] = {"field": 5321,
+                                                         "base": "01J8Y6QZ3M00000000000GONE0"}
+    rc, _, db = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == int(ExitCode.INPUT_REJECTED)
+    assert db.commits == 0

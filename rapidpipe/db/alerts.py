@@ -14,12 +14,14 @@ commits or rolls back.
 - :func:`difference_pid`: the `diffimages` row of the difference instance.
 - :func:`flagged_sources`, :func:`alertable_sources`: `dev`'s ``iter_sources``
   split, ``flags <> 0`` counted and ``flags = 0`` selected, in the source set.
+- :func:`association_chain`: a named association set and the bases it
+  extends (crossmatch's ``logical_key.base``), newest first.
 - :func:`associations`: `dev`'s merges LEFT JOIN astroobjects with the
   statistics columns (``_prefetch_chip`` + ``_stats_sql``), over every named
-  association set (an image can span fields) and the statistics set that
-  describes each.
-- :func:`history`: the objects' sources through merges of their association
-  set, from any source set, `dev`'s previous-detection prefetch.
+  association set's chain (an image can span fields; a set's membership is
+  its rows plus its bases') and the statistics set that describes each.
+- :func:`history`: the objects' sources through merges anywhere in their
+  chain, from any source set, `dev`'s previous-detection prefetch.
 - :func:`attempt_outputs`, :func:`outbox_rows`, :func:`insert_outbox_rows`:
   the outbox and the recovery of an attempt whose commit was uncertain.
 - :func:`set_nalertpackets`: `diffimages.nalertpackets` on the run's own row.
@@ -32,6 +34,8 @@ The instance rows themselves are written by
 from __future__ import annotations
 
 from typing import Any, Sequence
+
+from rapidpipe.db import objects as _objects
 
 #: The `sources` columns `dev`'s ``Source`` record reads, plus the joined
 #: filter name (``band``) and exposure time, as `dev`'s ``s.*`` query gives them.
@@ -102,60 +106,103 @@ def alertable_sources(cur, source_set: str, pid: int) -> list[dict[str, Any]]:
     return _dicts(cur)
 
 
-def associations(cur, statistics_by_association: dict[str, str | None],
-                 sids: Sequence[int]) -> list[dict[str, Any]]:
-    """`dev`'s association prefetch over one or more association sets.
+def association_chain(cur, instance: str) -> list[str]:
+    """The association set and every base it extends, newest first.
 
-    ``statistics_by_association`` maps each named association set to the
-    statistics set that describes it, or None. One row per (sid, merges aid,
-    association set), in sid, aid, set order. ``aid`` is None where the
-    merges row has no astroobjects row in its set (an orphan).
-    ``stdevra``/``stdevdec`` come from the describing statistics set's
-    astroobjectsmeta row; ``nsources`` from it, else the aid's merges count in
-    its association set (`dev`'s ``_stats_sql``).
+    ``rapidpipe.db.objects.association_chain``: crossmatch records the set it
+    extends as ``logical_key.base``; a set's membership is its own rows plus
+    its bases', recursively. ValueError when a link is missing or wrong.
     """
-    if not sids or not statistics_by_association:
+    return _objects.association_chain(cur, instance)
+
+
+def _lineage_arrays(lineages: dict[str, list[str]]) -> tuple[list[str], list[str], list[int]]:
+    named, member, depth = [], [], []
+    for root, chain in lineages.items():
+        for d, instance in enumerate(chain):
+            named.append(root)
+            member.append(instance)
+            depth.append(d)
+    return named, member, depth
+
+
+def associations(cur, lineages: dict[str, list[str]],
+                 statistics_by_association: dict[str, str | None],
+                 sids: Sequence[int]) -> list[dict[str, Any]]:
+    """`dev`'s association prefetch over the named association sets' lineages.
+
+    ``lineages`` maps each named association set to its chain (itself, then
+    the bases it extends, :func:`association_chain`); ``statistics_by_association``
+    maps it to the statistics set describing its membership, or None. A
+    trigger's merges row may be in any set of a chain (a new detection of a
+    known object lands in the newest set), and its object's astroobjects row
+    in any set of the same chain (it stays in the set that first made it);
+    where several sets of the chain hold the aid, the newest wins. One row per
+    (sid, merges aid, named set), in sid, aid, set order; ``association_set``
+    is the named set. ``aid`` is None where no set of the chain holds the
+    object (an orphan). ``nsources`` is the statistics row's, else the aid's
+    merges count across the chain (`dev`'s ``_stats_sql``).
+    """
+    if not sids or not lineages:
         return []
-    assocs = list(statistics_by_association)
-    stats = [statistics_by_association[a] for a in assocs]
+    named, member, depth = _lineage_arrays(lineages)
+    roots = list(lineages)
+    stats = [statistics_by_association.get(r) for r in roots]
     cur.execute(
         """
-        SELECT m.sid, m.aid AS merges_aid, m.result_set AS association_set,
+        WITH lineage(named, member, depth) AS (
+                 SELECT * FROM unnest(%(named)s::text[], %(member)s::text[], %(depth)s::int[])),
+             described(named, stats) AS (
+                 SELECT * FROM unnest(%(roots)s::text[], %(stats)s::text[]))
+        SELECT DISTINCT ON (m.sid, m.aid, lm.named)
+               m.sid, m.aid AS merges_aid, lm.named AS association_set,
                a.aid, a.ra0, a.dec0, am.stdevra, am.stdevdec,
                COALESCE(am.nsources::int,
                         (SELECT count(*) FROM merges m2
-                         WHERE m2.aid = a.aid AND m2.result_set = m.result_set)::int) AS nsources
+                         JOIN lineage l2 ON l2.member = m2.result_set AND l2.named = lm.named
+                         WHERE m2.aid = a.aid)::int) AS nsources
         FROM merges m
-        LEFT JOIN astroobjects a ON a.aid = m.aid AND a.result_set = m.result_set
-        LEFT JOIN unnest(%(assocs)s::text[], %(stats)s::text[]) AS sm(assoc, stats)
-               ON sm.assoc = m.result_set
-        LEFT JOIN astroobjectsmeta am ON am.aid = a.aid AND am.result_set = sm.stats
-        WHERE m.result_set = ANY(%(assocs)s::text[]) AND m.sid = ANY(%(sids)s)
-        ORDER BY m.sid, m.aid, m.result_set
-        """, {"assocs": assocs, "stats": stats, "sids": list(sids)})
+        JOIN lineage lm ON lm.member = m.result_set
+        LEFT JOIN LATERAL (
+            SELECT o.aid, o.ra0, o.dec0 FROM astroobjects o
+            JOIN lineage lo ON lo.member = o.result_set AND lo.named = lm.named
+            WHERE o.aid = m.aid ORDER BY lo.depth LIMIT 1) a ON true
+        LEFT JOIN described st ON st.named = lm.named
+        LEFT JOIN astroobjectsmeta am ON am.aid = a.aid AND am.result_set = st.stats
+        WHERE m.sid = ANY(%(sids)s)
+        ORDER BY m.sid, m.aid, lm.named, lm.depth
+        """, {"named": named, "member": member, "depth": depth, "roots": roots,
+              "stats": stats, "sids": list(sids)})
     return _dicts(cur)
 
 
-def history(cur, objects: Sequence[tuple[str, int]], min_mjd: float) -> list[dict[str, Any]]:
-    """Every source of the objects through their association set's merges, oldest first.
+def history(cur, lineages: dict[str, list[str]], objects: Sequence[tuple[str, int]],
+            min_mjd: float) -> list[dict[str, Any]]:
+    """Every source of the objects through merges anywhere in their set's chain, oldest first.
 
-    ``objects`` are (association set, aid) pairs. The sources may belong to
-    any source set: they are the frozen inputs the association set names.
+    ``objects`` are (named association set, aid) pairs. The sources may
+    belong to any source set: they are the frozen inputs the chain names.
     ``object_set``/``object_aid`` say which object each row belongs to.
     """
     if not objects:
         return []
+    named, member, depth = _lineage_arrays(lineages)
     cur.execute(
         f"""
-        SELECT m.result_set AS object_set, m.aid AS object_aid, {_SOURCE_SELECT}
-        FROM unnest(%s::text[], %s::bigint[]) AS o(result_set, aid)
-        JOIN merges m ON m.result_set = o.result_set AND m.aid = o.aid
+        WITH lineage(named, member, depth) AS (
+                 SELECT * FROM unnest(%s::text[], %s::text[], %s::int[]))
+        SELECT DISTINCT ON (s.mjdobs, s.sid, o.named, o.aid)
+               o.named AS object_set, o.aid AS object_aid, {_SOURCE_SELECT}
+        FROM unnest(%s::text[], %s::bigint[]) AS o(named, aid)
+        JOIN lineage l ON l.named = o.named
+        JOIN merges m ON m.result_set = l.member AND m.aid = o.aid
         JOIN sources s ON s.sid = m.sid
         JOIN filters f ON s.fid = f.fid
         JOIN exposures e ON s.expid = e.expid
         WHERE s.mjdobs >= %s
-        ORDER BY s.mjdobs, s.sid
-        """, ([o[0] for o in objects], [int(o[1]) for o in objects], min_mjd))
+        ORDER BY s.mjdobs, s.sid, o.named, o.aid
+        """, (named, member, depth, [o[0] for o in objects], [int(o[1]) for o in objects],
+              min_mjd))
     return _dicts(cur)
 
 
