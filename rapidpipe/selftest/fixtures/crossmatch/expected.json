@@ -1,0 +1,34 @@
+{
+  "about": "Inputs and expected products of the crossmatch stage's fixture (run_fixture.py; make stage-crossmatch). See tests/fixtures/crossmatch/README.md for what each value means. Field 4662268 is an interior tile with eight neighbours (field_neighbours), holding load's own fixture position (269.45, -28.77); its north edge is dec -28.758562, and field 4658172 is its north neighbour.",
+  "inputs": {
+    "field": 4662268,
+    "table": "sources_20270101_3",
+    "source_sets": {
+      "01J8Y6QZ3M0000000000XSS01": {"expid": 2002, "mjdobs": 61000.1},
+      "01J8Y6QZ3M0000000000XSS02": {"expid": 1001, "mjdobs": 61000.2}
+    },
+    "sources": [
+      {"sid": 101, "set": "01J8Y6QZ3M0000000000XSS01", "ra": 269.45, "dec": -28.77, "fluxfit": 101.5, "flags": 0, "field": 4662268, "note": "new object"},
+      {"sid": 102, "set": "01J8Y6QZ3M0000000000XSS01", "ra": 269.46, "dec": -28.78, "fluxfit": 102.5, "flags": 0, "field": 4662268, "note": "new object"},
+      {"sid": 103, "set": "01J8Y6QZ3M0000000000XSS01", "ra": 269.48, "dec": -28.79, "fluxfit": 103.5, "flags": 0, "field": 4662268, "note": "new object"},
+      {"sid": 104, "set": "01J8Y6QZ3M0000000000XSS01", "ra": 269.49, "dec": -28.80, "fluxfit": 104.5, "flags": 4, "field": 4662268, "note": "flagged: ignored"},
+      {"sid": 105, "set": "01J8Y6QZ3M0000000000XSS01", "ra": 269.46, "dec": -28.78, "fluxfit": 105.5, "flags": 0, "field": 4662268, "note": "same position as 102 in the same exposure: one object, two merges rows"},
+      {"sid": 110, "set": "01J8Y6QZ3M0000000000XSS01", "ra": 269.44, "dec": -28.758566, "fluxfit": 110.5, "flags": 0, "field": 4662268, "note": "new object 4e-6 deg inside the north edge"},
+      {"sid": 106, "set": "01J8Y6QZ3M0000000000XSS02", "ra": 269.450005, "dec": -28.77, "fluxfit": 106.5, "flags": 0, "field": 4662268, "note": "matches 101's object, a later exposure"},
+      {"sid": 107, "set": "01J8Y6QZ3M0000000000XSS02", "ra": 269.48, "dec": -28.789995, "fluxfit": 107.5, "flags": 0, "field": 4662268, "note": "matches 103's object, a later exposure"},
+      {"sid": 108, "set": "01J8Y6QZ3M0000000000XSS02", "ra": 269.50, "dec": -28.81, "fluxfit": 108.5, "flags": 0, "field": 4662268, "note": "new object"},
+      {"sid": 109, "set": "01J8Y6QZ3M0000000000XSS02", "ra": 269.44, "dec": -28.758558, "fluxfit": 109.5, "flags": 0, "field": 4658172, "note": "north neighbour, 8e-6 deg from 110: pass 2"}
+    ]
+  },
+  "expected": {
+    "exit_code": 0,
+    "result_sets_read": ["01J8Y6QZ3M0000000000XSS01", "01J8Y6QZ3M0000000000XSS02"],
+    "row_counts": {"astroobjects": 5, "merges": 9, "merges_pass1": 8, "merges_pass2": 1, "new_objects": 6},
+    "objects_from_sids": [101, 102, 103, 108, 110],
+    "merges": [[101, 101], [102, 102], [103, 103], [102, 105], [110, 110], [101, 106], [103, 107], [108, 108], [110, 109]],
+    "made_tables": ["astroobjects_4662268", "merges_4662268"],
+    "clustered": [4662268],
+    "exposures": 2,
+    "neighbours": 8
+  }
+}
