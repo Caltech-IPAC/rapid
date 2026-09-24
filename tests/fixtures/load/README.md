@@ -17,15 +17,22 @@ manifest and the rows the stage loaded. It exits 0 when every check passes.
 | File | Holds |
 |---|---|
 | `run_fixture.py` | prepare, run, check |
-| `settings.toml` | the settings overlay: a 64x64 detector, so the fit-position bounds are `[-0.5, 64.5]` |
-| `expected.json` | the input catalog rows, the database seed, the expected products, the tolerance |
+| `README.md` | this file |
+
+The fixture *data* -- `settings.toml` (the settings overlay: a 64x64
+detector, so the fit-position bounds are `[-0.5, 64.5]`) and
+`expected.json` (the input catalog rows, the database seed, the expected
+products, the tolerance) -- lives once, under the packaged
+`rapidpipe/selftest/fixtures/load/`: the same copy `rapidpipe selftest
+--stage load` reads inside the pipeline image. This directory keeps no
+copy of its own, so there is nothing here to fall out of sync with it.
 
 ### Inputs
 
 Not committed as files: `run_fixture.py` writes them with
-`tests/unit/fakeloaddb.build_load_input_set` from `expected.json`
-(`inputs.catalogs`). They are a difference attempt's output location as
-`load` reads it:
+`tests/unit/fakeloaddb.build_load_input_set` from the packaged
+`expected.json`'s parameters (`inputs.catalogs`). They are a difference
+attempt's output location as `load` reads it:
 
 - a completion manifest of stage `difference`, naming one ZOGY
   `difference-image` instance and its four `source-catalog` entries;
