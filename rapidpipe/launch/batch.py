@@ -65,6 +65,7 @@ from rapidpipe.runs.repository import (
     add_unit,
     allocate_attempt,
     attempt_output_location,
+    record_attempt_locations,
     record_attempt_result,
     record_reconcile_note,
     record_scheduler_job,
@@ -343,7 +344,10 @@ def submit_unit(
     ``stage`` (the image's entrypoint is ``rapidpipe``, per the stage
     contract's "Invocation" form). The job id Batch returns is then
     recorded on the attempt row with
-    :func:`~rapidpipe.runs.repository.record_scheduler_job`. Commits
+    :func:`~rapidpipe.runs.repository.record_scheduler_job`. The attempt's
+    ``inputs_location`` and ``settings_location`` are recorded
+    (:func:`~rapidpipe.runs.repository.record_attempt_locations`) in the
+    allocation's own transaction (supervisor step 6, 2026-09-24, R7). Commits
     after each repository call, as
     :func:`rapidpipe.runs.local.run_stage_locally` does.
     """
@@ -371,6 +375,10 @@ def submit_unit(
     conn.commit()
 
     attempt_id = allocate_attempt(conn, run_id, stage, unit_id, outputs_root=outputs_root)
+    # Frozen with the allocation, one commit: an attempt whose submission
+    # then fails still records what it would have run with, which is what
+    # a seeded re-run reads back (supervisor step 6, 2026-09-24, R7/R8).
+    record_attempt_locations(conn, attempt_id, inputs_location, settings_location)
     conn.commit()
 
     output_location = attempt_output_location(outputs_root, run_id, stage, unit_id, attempt_id)
@@ -823,6 +831,63 @@ def _repair_stranded_succeeded_attempts(conn, *, run_id: str) -> list[Reconciled
             disposition="succeeded", selected=True))
 
     return repaired
+
+
+#: ``run reconcile --resolve-jobless``'s default ``--older-than`` (R9).
+DEFAULT_JOBLESS_AFTER_SECONDS = 600
+
+
+def resolve_jobless(conn, *, run_id: str, older_than_seconds: float) -> list[Reconciled]:
+    """Record ``lost`` for ``run_id``'s job-less attempts (supervisor step 6,
+    2026-09-24, R9).
+
+    A job-less attempt has ``disposition IS NULL`` and no
+    ``scheduler_job_id``: its allocation committed but the Batch submission
+    (or recording its job id) failed, so :func:`reconcile` never looks at
+    it and ``run cancel`` cannot terminate it. Each one started more than
+    ``older_than_seconds`` ago is recorded ``lost`` through
+    :func:`~rapidpipe.runs.repository.record_attempt_result` (exit code
+    ``None``, an execution record from :func:`_execution_record_with_defaults`,
+    ``reconcile_note`` "no scheduler job after N s"), which returns the unit
+    to ``ready`` while attempts remain and otherwise ``failed``. The row is
+    re-read ``FOR UPDATE`` first and skipped if a job id or a disposition
+    arrived meanwhile. One commit per attempt, as :func:`reconcile` does.
+    Reported as ``Reconciled(job_id="-", batch_status="NOJOB",
+    disposition="lost")``.
+    """
+    if older_than_seconds < 0:
+        raise ValueError(f"older_than_seconds must be >= 0, got {older_than_seconds!r}")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id FROM attempts
+            WHERE run = %s AND disposition IS NULL AND scheduler_job_id IS NULL
+              AND started < now() - make_interval(secs => %s)
+            ORDER BY started, id
+            """,
+            (run_id, float(older_than_seconds)))
+        attempt_ids = [row[0] for row in cur.fetchall()]
+
+    note = f"no scheduler job after {older_than_seconds:g} s"
+    results: list[Reconciled] = []
+    for attempt_id in attempt_ids:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT output_location, disposition, scheduler_job_id FROM attempts "
+                "WHERE id = %s FOR UPDATE", (attempt_id,))
+            output_location, disposition, job_id = cur.fetchone()
+        if disposition is not None or job_id is not None:
+            conn.rollback()
+            continue
+        record_attempt_result(
+            conn, attempt_id, None, "lost", output_location,
+            _execution_record_with_defaults(conn, run_id),
+            scheduler_job_id=None, reconcile_note=note)
+        conn.commit()
+        results.append(Reconciled(
+            attempt_id=attempt_id, job_id="-", batch_status="NOJOB",
+            disposition="lost", selected=False))
+    return results
 
 
 def cancel(conn, *, attempt_id: str, reason: str, client: Any = None) -> None:

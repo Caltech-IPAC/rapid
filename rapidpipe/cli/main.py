@@ -212,16 +212,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "create", help="Create a run and print its id.",
         description="Record a new run and print its id.")
     create_parser.add_argument(
-        "--kind", required=True, choices=("scratch", "production"))
-    create_parser.add_argument("--purpose", required=True)
+        "--kind", default=None, choices=("scratch", "production"),
+        help="Required, except with --only-failed (the seed's kind; if given "
+             "it must match).")
     create_parser.add_argument(
-        "--stages", required=True,
-        help="Comma-separated list of selected stage names.")
+        "--purpose", default=None,
+        help="Required, except with --only-failed (default \"re-run of failed "
+             "units of <seed>: <seed purpose>\").")
+    create_parser.add_argument(
+        "--stages", default=None,
+        help="Comma-separated list of selected stage names. Required, except "
+             "with --only-failed, which takes them from the seed.")
     create_parser.add_argument("--owner", default=None)
-    create_parser.add_argument("--lane", default="local")
-    create_parser.add_argument("--profile", default="local")
+    create_parser.add_argument("--lane", default=None, help="Default local.")
+    create_parser.add_argument("--profile", default=None, help="Default local.")
     create_parser.add_argument("--db-target", default=None)
-    create_parser.add_argument("--max-attempts", type=int, default=1)
+    create_parser.add_argument("--max-attempts", type=int, default=None, help="Default 1.")
     create_parser.add_argument("--settings-overlay-ref", default=None)
     create_parser.add_argument("--input-selection-ref", default=None)
     create_parser.add_argument(
@@ -231,9 +237,10 @@ def _build_parser() -> argparse.ArgumentParser:
              "definition revisions.")
     create_parser.add_argument(
         "--seed", default=None, metavar="RUN_ID",
-        help="Record the run this one was seeded from. Lineage only: the new "
-             "run inherits no configuration from it (give every option "
-             "explicitly) and may not reuse its outputs.")
+        help="Record the run this one was seeded from. Alone, lineage only: the "
+             "new run inherits no configuration from it (give every option "
+             "explicitly) and may not reuse its outputs. With --only-failed, "
+             "the new run re-runs the seed's failed units.")
     create_parser.add_argument(
         "--check-policy", default=None, metavar="NAME@VERSION", dest="check_policy",
         help="The check policy this run's promotions are validated under "
@@ -243,6 +250,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Promote automatically at the end of run start when every check "
              "passes. Refused unless the run's policy is lead-approved and "
              "permits it; no shipped policy does.")
+    create_parser.add_argument(
+        "--only-failed", action="store_true", dest="only_failed",
+        help="With --seed: copy the seed's configuration (kind, owner unless "
+             "--owner, release or revision/digest, settings and input refs, "
+             "lane, profile, database target, max attempts, check policy), "
+             "select its stages from the earliest one holding a non-complete "
+             "unit (failed or cancelled, or left running or ready by a lost, "
+             "killed or job-less attempt), and create one pending unit per "
+             "such unit of that stage; run start then reads each unit's "
+             "inputs and settings from the seed attempt. Refused when the "
+             "seed is deleting or deleted or has no non-complete unit.")
 
     list_parser = run_subparsers.add_parser("list", help="List runs.",
         description="List runs, newest first, optionally filtered.")
@@ -288,6 +306,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "reconcile", help="Reconcile a run's unresolved Batch attempts.",
         description="Record the outcome of every unresolved Batch attempt of a run.")
     reconcile_parser.add_argument("run_id")
+    reconcile_parser.add_argument(
+        "--resolve-jobless", action="store_true", dest="resolve_jobless",
+        help="Also record 'lost' for each attempt with no disposition and no "
+             "scheduler job (its submission failed after allocation) started "
+             "more than --older-than seconds ago; its unit returns to ready "
+             "while attempts remain, else failed.")
+    reconcile_parser.add_argument(
+        "--older-than", type=float, default=None, dest="older_than", metavar="SECONDS",
+        help="With --resolve-jobless: the minimum age of a job-less attempt "
+             f"(default {launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS}).")
 
     cancel_parser = run_subparsers.add_parser(
         "cancel", help="Terminate an attempt's Batch job.",
@@ -436,6 +464,15 @@ def _last_applied_schema_version(cur) -> str | None:
 def _run_create_command(args: argparse.Namespace) -> int:
     from rapidpipe.runs.repository import create_run
 
+    if args.only_failed:
+        return _run_create_only_failed_command(args)
+    missing = [flag for flag, value in (("--kind", args.kind), ("--purpose", args.purpose),
+                                        ("--stages", args.stages)) if value is None]
+    if missing:
+        sys.stderr.write(
+            f"rapidpipe run create: {', '.join(missing)} required (unless --seed "
+            "<run> --only-failed)\n")
+        return int(ExitCode.USAGE)
     owner = args.owner or getpass.getuser()
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
     if not stages:
@@ -484,10 +521,10 @@ def _run_create_command(args: argparse.Namespace) -> int:
                 schema_version=schema_version,
                 settings_overlay_ref=args.settings_overlay_ref,
                 input_selection_ref=args.input_selection_ref,
-                lane=args.lane,
-                resource_profile=args.profile,
+                lane=args.lane or "local",
+                resource_profile=args.profile or "local",
                 database_target=args.db_target or os.environ.get("PGDATABASE", ""),
-                max_attempts_per_unit=args.max_attempts,
+                max_attempts_per_unit=1 if args.max_attempts is None else args.max_attempts,
                 auto_promote=args.auto_promote,
                 check_policy_ref=args.check_policy,
                 release=args.release,
@@ -502,6 +539,107 @@ def _run_create_command(args: argparse.Namespace) -> int:
             conn.rollback()
             raise
 
+    print(run_id)
+    return int(ExitCode.SUCCESS)
+
+
+#: ``run create`` options ``--only-failed`` refuses: the re-run copies each
+#: from the seed (supervisor step 6, 2026-09-24, R7).
+_ONLY_FAILED_COPIED_OPTIONS = (
+    ("--stages", "stages"), ("--release", "release"), ("--lane", "lane"),
+    ("--profile", "profile"), ("--db-target", "db_target"),
+    ("--max-attempts", "max_attempts"),
+    ("--settings-overlay-ref", "settings_overlay_ref"),
+    ("--input-selection-ref", "input_selection_ref"),
+    ("--check-policy", "check_policy"),
+)
+
+
+def _run_create_only_failed_command(args: argparse.Namespace) -> int:
+    """``run create --seed <run> --only-failed``: a run re-running the
+    seed's non-complete units (supervisor step 6, 2026-09-24, R7).
+
+    Configuration is copied from the seed row
+    (:func:`~rapidpipe.runs.repository.failed_rerun_plan`); ``--owner`` and
+    ``--purpose`` may be given, ``--kind`` only if it equals the seed's, and
+    every other configuration option is refused. The run and its seeded
+    units (:func:`~rapidpipe.runs.repository.seed_failed_units`) commit
+    together; the run id is printed on stdout, the seeded units on stderr.
+    """
+    from rapidpipe.runs.repository import create_run, failed_rerun_plan, seed_failed_units
+
+    name = "rapidpipe run create"
+    if args.seed is None:
+        sys.stderr.write(f"{name}: --only-failed requires --seed <run>\n")
+        return int(ExitCode.USAGE)
+    given = [flag for flag, attr in _ONLY_FAILED_COPIED_OPTIONS
+             if getattr(args, attr, None) is not None]
+    if getattr(args, "auto_promote", False):
+        given.append("--auto-promote")
+    if given:
+        sys.stderr.write(
+            f"{name}: {', '.join(given)} not accepted with --only-failed: the "
+            "re-run copies them from the seed\n")
+        return int(ExitCode.USAGE)
+
+    try:
+        cm = connect(application_name="rapidpipe-run-create")
+    except ConnectionConfigError as exc:
+        sys.stderr.write(f"{name}: database configuration error: {exc}\n")
+        return int(ExitCode.USAGE)
+    except ConnectionUnavailable as exc:
+        sys.stderr.write(f"{name}: database unavailable: {exc}\n")
+        return int(ExitCode.TRANSIENT_FAILURE)
+
+    with cm as conn:
+        try:
+            plan = failed_rerun_plan(conn, args.seed)
+            seed = plan.seed
+            if args.kind is not None and args.kind != seed["kind"]:
+                conn.rollback()
+                sys.stderr.write(
+                    f"{name}: --kind {args.kind} differs from seed run {args.seed}'s "
+                    f"kind {seed['kind']}; a --only-failed re-run keeps the seed's kind\n")
+                return int(ExitCode.USAGE)
+            with conn.cursor() as cur:
+                schema_version = _last_applied_schema_version(cur) or "unknown"
+            purpose = args.purpose or (
+                f"re-run of failed units of {args.seed}: {seed['purpose']}"
+                if seed["purpose"] else f"re-run of failed units of {args.seed}")
+            run_id = create_run(
+                conn,
+                kind=seed["kind"],
+                owner=args.owner or seed["owner"],
+                purpose=purpose,
+                selected_stages=plan.stages,
+                code_revision=seed["code_revision"],
+                image_digest=seed["image_digest"],
+                schema_version=schema_version,
+                settings_overlay_ref=seed["settings_overlay_ref"],
+                input_selection_ref=seed["input_selection_ref"],
+                lane=seed["lane"],
+                resource_profile=seed["resource_profile"],
+                database_target=seed["database_target"],
+                max_attempts_per_unit=seed["max_attempts_per_unit"],
+                auto_promote=False,
+                check_policy_ref=seed["check_policy_ref"],
+                release=seed["release"],
+                seed_run=args.seed,
+            )
+            unit_ids = seed_failed_units(conn, seed_run=args.seed, new_run=run_id)
+            conn.commit()
+        except RunModelError as exc:
+            conn.rollback()
+            sys.stderr.write(f"{name}: {exc}\n")
+            return int(ExitCode.USAGE)
+        except BaseException:
+            conn.rollback()
+            raise
+
+    sys.stderr.write(
+        f"seeded {len(unit_ids)} unit(s) from run {args.seed} at stage "
+        f"{plan.stages[0]} (position {plan.position}); stages {','.join(plan.stages)}: "
+        f"{' '.join(unit_ids)}\n")
     print(run_id)
     return int(ExitCode.SUCCESS)
 
@@ -805,6 +943,16 @@ def _run_submit_command(args: argparse.Namespace) -> int:
 
 
 def _run_reconcile_command(args: argparse.Namespace) -> int:
+    resolve_jobless = getattr(args, "resolve_jobless", False)
+    older_than = getattr(args, "older_than", None)
+    if older_than is not None and not resolve_jobless:
+        sys.stderr.write("rapidpipe run reconcile: --older-than needs --resolve-jobless\n")
+        return int(ExitCode.USAGE)
+    if older_than is None:
+        older_than = launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS
+    if older_than < 0:
+        sys.stderr.write("rapidpipe run reconcile: --older-than must be >= 0\n")
+        return int(ExitCode.USAGE)
     try:
         cm = connect(application_name="rapidpipe-run-reconcile")
     except ConnectionConfigError as exc:
@@ -823,12 +971,24 @@ def _run_reconcile_command(args: argparse.Namespace) -> int:
                 sys.stderr.write(f"rapidpipe run reconcile: Batch error: {exc}\n")
                 return int(ExitCode.TRANSIENT_FAILURE)
             raise
+        jobless = []
+        if resolve_jobless:
+            try:
+                jobless = launch_batch.resolve_jobless(
+                    conn, run_id=args.run_id, older_than_seconds=older_than)
+            except RunModelError as exc:
+                conn.rollback()
+                sys.stderr.write(f"rapidpipe run reconcile: {exc}\n")
+                return int(ExitCode.USAGE)
 
     for result in results:
         print(
             f"attempt={result.attempt_id} job={result.job_id} "
             f"status={result.batch_status} disposition={result.disposition} "
             f"selected={result.selected}")
+    # supervisor step 6, 2026-09-24, R9: one line per job-less attempt resolved.
+    for result in jobless:
+        print(f"attempt={result.attempt_id} job=- status=NOJOB disposition=lost")
     return int(ExitCode.SUCCESS)
 
 

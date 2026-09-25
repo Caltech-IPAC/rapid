@@ -42,8 +42,8 @@ Each job definition must run the image built from [`containers/rapid-pipeline`](
 
 #### Running a run from the command line
 
-- `rapidpipe run create ... [--seed <run>]` records the run a new one was seeded from: lineage only, inheriting no configuration.
-- `rapidpipe run start <run> --unit U [--stage S] [--inputs [S=]LOC]... [--settings [S=]LOC]... [--template S=LOC]... [--no-wait] [--interval SEC] [--timeout SEC]` walks the run's selected stages in order for one unit on Batch: a complete stage is skipped, any other gets its next attempt, and each attempt is waited for by reconciling every `--interval` seconds. A transient or lost result that returns the unit to ready gets another attempt within the run's allowance. A stage's inputs are `--inputs S=LOC` (unprefixed: the first stage's), else an input set composed from `--template S=LOC` (refused for `register`, whose inputs are always the producing stage's output), else the selected output of the nearest preceding stage other than `register`. It exits 0 when every stage is complete, 1 when a unit is failed or cancelled, and 75 on `--timeout`; rerunning the same command continues, except on an attempt left running with no Batch job (its submission failed after allocation), which exits 64 and must be resolved by hand.
+- `rapidpipe run create ... [--seed <run>]` records the run a new one was seeded from: lineage only, inheriting no configuration. `--seed <run> --only-failed` re-runs the seed's failed units instead (see Recovery below).
+- `rapidpipe run start <run> --unit U [--stage S] [--inputs [S=]LOC]... [--settings [S=]LOC]... [--template S=LOC]... [--no-wait] [--interval SEC] [--timeout SEC]` walks the run's selected stages in order for one unit on Batch: a complete stage is skipped, any other gets its next attempt, and each attempt is waited for by reconciling every `--interval` seconds. A transient or lost result that returns the unit to ready gets another attempt within the run's allowance. A stage's inputs are `--inputs S=LOC` (unprefixed: the first stage's), else an input set composed from `--template S=LOC` (refused for `register`, whose inputs are always the producing stage's output), else the selected output of the nearest preceding stage other than `register`. It exits 0 when every stage is complete, 1 when a unit is failed or cancelled, and 75 on `--timeout`; rerunning the same command continues, except on an attempt left running with no Batch job (its submission failed after allocation), which exits 64 and names `run reconcile <run> --resolve-jobless`.
 - `rapidpipe run status <run> [--watch] [--interval SEC]` reconciles and prints one line per unit; it exits 0 when all are complete, 1 when any failed or was cancelled, 2 while any is running.
 - `rapidpipe run inputs <run> <stage> --unit U --from-stage P --template LOC [--dest LOC] [--kind l2-image]` copies a template input set's entries and the producer unit's `--kind` entry (under `l2/`) into one prefix, verifies the copied sizes, binds the unit's inputs and commits, then writes its `manifest.json` last (never over an existing one). The input set always lives under the scratch outputs root, for every run kind: the default `--dest` is `<scratch outputs root>/runs/<run>/inputs/<stage>/<unit>`, a `--dest` elsewhere is refused, and `run delete` removes `runs/<run>/inputs/` with the run (refused if that prefix is outside the scratch bucket).
 - `rapidpipe run compare <a> <b>` prints both runs' dispositions, settings and product instances side by side, then `same` (exit 0) or `different` (exit 1).
@@ -55,6 +55,22 @@ rapidpipe run start "$run_id" --unit r0034001002001001001/SCA01 \
     --inputs s3://bucket/deliveries/r0034001002001001001/SCA01 \
     --template difference=s3://bucket/templates/SCA01-W146
 ```
+
+#### Recovery
+
+Every Batch attempt records the inputs and settings locations it was submitted with (`attempts.inputs_location`, `attempts.settings_location`, migration `20260924-10`).
+
+- `rapidpipe run create --seed <run> --only-failed [--purpose P] [--owner O]` creates a run that re-runs the seed's non-complete units: failed or cancelled, or left running or ready by a lost, killed or job-less latest attempt. It copies the seed's configuration (kind, release or revision and digest, settings and input refs, lane, profile, database target, max attempts, check policy). Its stages are the seed's from the earliest position holding such a unit, and it creates one pending unit per such unit of that stage, recording `units.seeded_from_unit`. It refuses a deleting or deleted seed, or one with nothing to re-run.
+- `rapidpipe run start <new run> --unit U` then resolves a seeded unit's inputs as `--inputs`, else `--template`, else the seed unit's latest attempt's recorded inputs (and its settings, unless `--settings` is given), else the preceding stage's output. A seeded `register` unit keeps the seed's unit id. Later stages run as usual.
+- `rapidpipe run reconcile <run> --resolve-jobless [--older-than SECONDS]` also records `lost` for each attempt with no disposition and no Batch job started more than `SECONDS` (default 600) ago. Its unit returns to ready while attempts remain, else failed.
+
+```
+rapidpipe run reconcile "$run_id" --resolve-jobless
+rerun=$(rapidpipe run create --seed "$run_id" --only-failed)
+rapidpipe run start "$rerun" --unit r0034001002001001001/SCA01
+```
+
+A seeded run that starts at a `register` position has no producing stage of its own, so the stage after that `register` needs its inputs given with `--inputs <stage>=LOC`.
 
 #### Running a stage locally
 

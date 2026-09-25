@@ -29,6 +29,7 @@ dict shape ``register_manifest`` needs, so no import is required.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable, Sequence
 
@@ -300,6 +301,7 @@ def add_unit(
     stage: str,
     unit_kind: str,
     unit_id: str,
+    seeded_from_unit: str | None = None,
 ) -> None:
     """Add a unit of work to a run.
 
@@ -311,16 +313,21 @@ def add_unit(
     same (run, stage, unit_id) twice is a no-op rather than an error,
     since re-declaring the same piece of work is not itself a conflict
     the way a conflicting manifest replay is.
+
+    ``seeded_from_unit`` is the seed run's unit (``units.id``) this unit
+    re-runs, set only by :func:`seed_failed_units` (supervisor step 6,
+    2026-09-24, R7); a re-declaration of an existing unit leaves it as it
+    was.
     """
     with conn.cursor() as cur:
         _refuse_admission(cur, run_id)
         cur.execute(
             """
-            INSERT INTO units (id, run, stage, unit_kind, unit_id)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO units (id, run, stage, unit_kind, unit_id, seeded_from_unit)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (run, stage, unit_id) DO NOTHING
             """,
-            (new_ulid(), run_id, stage, unit_kind, unit_id),
+            (new_ulid(), run_id, stage, unit_kind, unit_id, seeded_from_unit),
         )
 
 
@@ -474,6 +481,7 @@ def record_attempt_result(
     output_location: str,
     execution_record: dict[str, Any],
     scheduler_job_id: str | None,
+    reconcile_note: str | None = None,
 ) -> None:
     """Record an attempt's outcome and its execution record.
 
@@ -500,6 +508,11 @@ def record_attempt_result(
     writes are attempt-scoped and retry-safe") updates the row rather
     than erroring, since the caller may legitimately retry the same
     result write after a lost commit acknowledgement.
+
+    ``reconcile_note`` replaces ``attempts.reconcile_note`` (cleared to
+    NULL by default): ``rapidpipe.launch.batch.resolve_jobless`` records
+    why it declared a job-less attempt ``lost`` (supervisor step 6,
+    2026-09-24, R9).
     """
     valid_dispositions = ("succeeded", "failed", "transient", "killed", "lost")
     if disposition not in valid_dispositions:
@@ -521,10 +534,11 @@ def record_attempt_result(
             """
             UPDATE attempts
             SET exit_code = %s, disposition = %s, output_location = %s,
-                scheduler_job_id = %s, ended = now(), reconcile_note = NULL
+                scheduler_job_id = %s, ended = now(), reconcile_note = %s
             WHERE id = %s
             """,
-            (exit_code, disposition, output_location, scheduler_job_id, attempt_id),
+            (exit_code, disposition, output_location, scheduler_job_id, reconcile_note,
+             attempt_id),
         )
 
         cur.execute(
@@ -1763,3 +1777,215 @@ def mark_run_deleted(conn: psycopg2.extensions.connection, run_id: str) -> None:
             "UPDATE runs SET state = 'deleted', deleted_at = now() WHERE id = %s",
             (run_id,),
         )
+
+
+# ======================================================================
+# Recovery: frozen attempt inputs and seeded re-runs of failed units
+# (supervisor step 6, 2026-09-24, R7/R8)
+# ======================================================================
+
+class SeedRefused(RunModelError):
+    """``run create --seed <run> --only-failed`` cannot seed from this run:
+    it is deleting or deleted, or it has no non-complete unit (R7)."""
+
+
+def record_attempt_locations(
+    conn: psycopg2.extensions.connection,
+    attempt_id: str,
+    inputs_location: str,
+    settings_location: str | None,
+) -> None:
+    """Freeze the inputs and settings locations an attempt runs with.
+
+    Called by ``rapidpipe.launch.batch.submit_unit`` in the transaction
+    that allocates the attempt, so even an attempt whose Batch submission
+    then fails carries what it would have run with (supervisor step 6,
+    2026-09-24, R7). A seeded re-run's unit resolves its inputs from here
+    (:func:`seeded_inputs_for_unit`, R8). Refuses (AttemptAlreadyResolved)
+    on an attempt that already has a disposition.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT disposition FROM attempts WHERE id = %s FOR UPDATE", (attempt_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise AttemptNotFound(f"attempt {attempt_id!r} does not exist")
+        if row[0] is not None:
+            raise AttemptAlreadyResolved(
+                f"attempt {attempt_id!r} already has disposition {row[0]!r}; "
+                "refusing to change the locations it ran with")
+        cur.execute(
+            "UPDATE attempts SET inputs_location = %s, settings_location = %s WHERE id = %s",
+            (inputs_location, settings_location, attempt_id))
+
+
+def _stage_producer(stages: Sequence[str], position: int) -> str | None:
+    """The nearest non-register stage before ``position`` -- the stage whose
+    output a ``register`` at ``position`` reads (its unit id is
+    ``<producer>/<unit>``, ``rapidpipe.products.manifest.register_unit_id``)."""
+    for stage in reversed(list(stages[:position])):
+        if stage != "register":
+            return stage
+    return None
+
+
+def _unit_position(stages: Sequence[str], stage: str, unit_id: str) -> int | None:
+    """The position in ``stages`` a unit belongs to, or ``None``.
+
+    ``register`` occurs more than once in a chain, so a register unit is
+    placed by its producing stage (the ``<producer>/`` prefix of its unit
+    id); any other stage by its first occurrence.
+    """
+    if stage == "register":
+        producer = unit_id.split("/", 1)[0]
+        for position, name in enumerate(stages):
+            if name == "register" and _stage_producer(stages, position) == producer:
+                return position
+        return None
+    return list(stages).index(stage) if stage in stages else None
+
+
+def _is_non_complete(state: str, disposition: str | None, job_id: str | None,
+                     has_attempt: bool) -> bool:
+    """R7's non-complete unit: failed or cancelled, or running/ready with a
+    latest attempt that never reached the scheduler or was lost/killed."""
+    if state in ("failed", "cancelled"):
+        return True
+    if state in ("running", "ready") and has_attempt:
+        if disposition is None and job_id is None:
+            return True
+        if disposition in ("lost", "killed"):
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class FailedRerunPlan:
+    """What ``run create --seed <run> --only-failed`` creates (R7): the
+    seed's configuration (``seed``, its ``runs`` columns by name), the
+    seed's stage list from ``position`` on, and the seed units to re-run
+    as ``(units.id, stage, unit_kind, unit_id)``."""
+
+    seed_run: str
+    seed: dict[str, Any]
+    position: int
+    stages: list[str]
+    units: list[tuple[str, str, str, str]]
+
+
+_SEED_COPIED_COLUMNS = (
+    "kind", "owner", "purpose", "selected_stages", "state", "code_revision",
+    "image_digest", "release", "settings_overlay_ref", "input_selection_ref",
+    "lane", "resource_profile", "database_target", "max_attempts_per_unit",
+    "check_policy_ref",
+)
+
+
+def failed_rerun_plan(
+    conn: psycopg2.extensions.connection, seed_run: str,
+) -> FailedRerunPlan:
+    """Work out what a ``--only-failed`` re-run of ``seed_run`` holds (R7).
+
+    The earliest position in the seed's ``selected_stages`` holding a
+    non-complete unit (:func:`_is_non_complete`) starts the new run's
+    stage list; the non-complete units at that position are the ones
+    re-run. Units at later positions are not copied: they start empty and
+    run as usual. Refuses (SeedRefused) when the seed is deleting or
+    deleted or has no non-complete unit in its selected stages; raises
+    RunNotFound for an unknown seed. The seed row is read ``FOR SHARE``,
+    the same fence ``mark_run_deleting`` waits on.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT {', '.join(_SEED_COPIED_COLUMNS)} FROM runs WHERE id = %s FOR SHARE",
+            (seed_run,))
+        row = cur.fetchone()
+        if row is None:
+            raise RunNotFound(f"seed run {seed_run!r} does not exist")
+        seed = dict(zip(_SEED_COPIED_COLUMNS, row))
+        if seed["state"] in _TERMINAL_RUN_STATES:
+            raise SeedRefused(
+                f"seed run {seed_run!r} is {seed['state']!r}; refusing to seed from it")
+        cur.execute(
+            """
+            SELECT u.id, u.stage, u.unit_kind, u.unit_id, u.state,
+                   a.id, a.disposition, a.scheduler_job_id
+            FROM units u
+            LEFT JOIN LATERAL (
+                SELECT id, disposition, scheduler_job_id
+                FROM attempts WHERE unit = u.id
+                ORDER BY started DESC, id DESC LIMIT 1) a ON true
+            WHERE u.run = %s
+            ORDER BY u.created, u.id
+            """,
+            (seed_run,))
+        rows = cur.fetchall()
+
+    stages = list(seed["selected_stages"] or [])
+    placed: list[tuple[int, tuple[str, str, str, str]]] = []
+    for unit_row_id, stage, unit_kind, unit_id, state, attempt, disposition, job in rows:
+        if not _is_non_complete(state, disposition, job, attempt is not None):
+            continue
+        position = _unit_position(stages, stage, unit_id)
+        if position is not None:
+            placed.append((position, (unit_row_id, stage, unit_kind, unit_id)))
+    if not placed:
+        raise SeedRefused(
+            f"seed run {seed_run!r} has no non-complete unit in its selected stages "
+            f"({', '.join(stages) or 'none'}); nothing to re-run")
+    position = min(p for p, _ in placed)
+    return FailedRerunPlan(
+        seed_run, seed, position, stages[position:],
+        [unit for p, unit in placed if p == position])
+
+
+def seed_failed_units(
+    conn: psycopg2.extensions.connection, *, seed_run: str, new_run: str,
+) -> list[str]:
+    """Create ``new_run``'s units for the seed's non-complete units (R7).
+
+    ``new_run`` must already exist, record ``seed_run`` as its seed and
+    select exactly :func:`failed_rerun_plan`'s stage list (the CLI creates
+    it that way, in the same transaction). Each unit keeps the seed unit's
+    stage, unit kind and unit id, starts ``pending`` and records
+    ``seeded_from_unit``. Returns the created units' unit ids.
+    """
+    plan = failed_rerun_plan(conn, seed_run)
+    with conn.cursor() as cur:
+        cur.execute("SELECT seed_run, selected_stages FROM runs WHERE id = %s", (new_run,))
+        row = cur.fetchone()
+    if row is None:
+        raise RunNotFound(f"run {new_run!r} does not exist")
+    if row[0] != seed_run or list(row[1] or []) != plan.stages:
+        raise SeedRefused(
+            f"run {new_run!r} is not a --only-failed re-run of {seed_run!r} (seed "
+            f"{row[0]!r}, stages {list(row[1] or [])}; expected {plan.stages})")
+    for unit_row_id, stage, unit_kind, unit_id in plan.units:
+        add_unit(conn, new_run, stage, unit_kind, unit_id, seeded_from_unit=unit_row_id)
+    return [unit_id for _, _, _, unit_id in plan.units]
+
+
+def seeded_inputs_for_unit(
+    conn: psycopg2.extensions.connection, unit_row_id: str,
+) -> tuple[str | None, str | None]:
+    """``(inputs_location, settings_location)`` of the most recent attempt
+    of the unit ``unit_row_id`` was seeded from, or ``(None, None)``.
+
+    ``(None, None)`` when the unit has no ``seeded_from_unit``, the seed
+    unit has no attempt, or its latest attempt predates the columns
+    (20260924-10); ``run start`` then falls through to its next input
+    rule (supervisor step 6, 2026-09-24, R8).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.inputs_location, a.settings_location
+            FROM units u
+            JOIN attempts a ON a.unit = u.seeded_from_unit
+            WHERE u.id = %s
+            ORDER BY a.started DESC, a.id DESC
+            LIMIT 1
+            """,
+            (unit_row_id,))
+        row = cur.fetchone()
+    return (None, None) if row is None else (row[0], row[1])

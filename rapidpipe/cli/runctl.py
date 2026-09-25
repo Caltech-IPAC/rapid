@@ -115,7 +115,9 @@ def add_parsers(run_subparsers: Any) -> None:
                     "every --interval seconds. A stage's inputs are, in "
                     "order: --inputs <stage>=<loc> (an unprefixed --inputs "
                     "is the first stage's), an input set composed from "
-                    "--template <stage>=<loc>, else the selected output of "
+                    "--template <stage>=<loc>, else, for a unit seeded by run "
+                    "create --only-failed, the seed attempt's recorded inputs "
+                    "(and settings), else the selected output of "
                     "the nearest preceding non-register stage. A unit a "
                     "transient or lost attempt returns to ready gets another "
                     "attempt, within the run's allowance. Exit 0 when every "
@@ -322,6 +324,37 @@ def _unit_row(conn, run_id: str, stage: str, unit_id: str) -> UnitRow | None:
             (run_id, stage, unit_id))
         row = cur.fetchone()
     return None if row is None else UnitRow(*row)
+
+
+def _seeded_unit(conn, run_id: str, stage: str, unit_id: str) -> str | None:
+    """The ``units.id`` of (run, stage, unit_id) when it was seeded from
+    another run's unit (``units.seeded_from_unit`` set), else ``None``."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM units WHERE run = %s AND stage = %s AND unit_id = %s "
+            "AND seeded_from_unit IS NOT NULL", (run_id, stage, unit_id))
+        row = cur.fetchone()
+    return None if row is None else row[0]
+
+
+def _seeded_register_units(conn, run_id: str, unit_id: str) -> list[tuple[str, str]]:
+    """``(units.id, unit_id)`` of the run's seeded ``register`` units for the
+    nominal unit ``unit_id``: register unit ids are ``<producer>/<unit>``
+    (``rapidpipe.products.manifest.register_unit_id``), copied as is from
+    the seed (supervisor step 6, 2026-09-24, R7)."""
+    candidates = [f"{stage}/{unit_id}" for stage in STAGE_NAMES if stage != "register"]
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, unit_id FROM units WHERE run = %s AND stage = 'register' "
+            "AND seeded_from_unit IS NOT NULL AND unit_id = ANY(%s) ORDER BY unit_id",
+            (run_id, candidates))
+        return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+def _seeded_locations(conn, unit_row_id: str) -> tuple[str | None, str | None]:
+    from rapidpipe.runs.repository import seeded_inputs_for_unit
+
+    return seeded_inputs_for_unit(conn, unit_row_id)
 
 
 def _require_run(conn, run_id: str) -> RunRow:
@@ -714,12 +747,58 @@ class _StartWalk:
                 return stage
         return None
 
-    def _inputs_for(self, selected: list[str], position: int, first: int) -> str:
-        stage = selected[position]
+    def _explicit_inputs(self, stage: str, position: int, first: int) -> str | None:
         if position == first and self.inputs_unprefixed is not None:
             return self.inputs_unprefixed
-        if stage in self.inputs_keyed:
-            return self.inputs_keyed[stage]
+        return self.inputs_keyed.get(stage)
+
+    def _explicit_settings(self, stage: str, position: int, first: int) -> str | None:
+        if position == first and self.settings_unprefixed is not None:
+            return self.settings_unprefixed
+        return self.settings_keyed.get(stage)
+
+    def _seeded(self, stage: str, unit_id: str | None) -> tuple[str | None, str | None]:
+        """The seed attempt's (inputs, settings) locations for a seeded unit,
+        else ``(None, None)`` (supervisor step 6, 2026-09-24, R8)."""
+        if unit_id is None:
+            return None, None
+        unit_row_id = _seeded_unit(self.conn, self.args.run_id, stage, unit_id)
+        if unit_row_id is None:
+            return None, None
+        return _seeded_locations(self.conn, unit_row_id)
+
+    def _seeded_register(self, selected: list[str], position: int, first: int,
+                         ) -> tuple[str, str | None, str | None] | None:
+        """For a ``register`` position with no explicit inputs and no
+        producing stage before it in this run (a seeded run starting at a
+        register), the seeded register unit's ``(unit_id, inputs,
+        settings)``: its unit id is the seed's, copied as is, so it is not
+        derived from the inputs' manifest. ``None`` when there is no such
+        unit; more than one is a usage error (supervisor step 6,
+        2026-09-24, R7/R8)."""
+        if (self._explicit_inputs("register", position, first) is not None
+                or self._producer(selected, position) is not None):
+            return None
+        units = _seeded_register_units(self.conn, self.args.run_id, self.args.unit_id)
+        if not units:
+            return None
+        if len(units) > 1:
+            raise _Exit(int(ExitCode.USAGE),
+                        f"run {self.args.run_id} has {len(units)} seeded register units "
+                        f"for unit {self.args.unit_id} ({', '.join(u for _, u in units)}); "
+                        "give --inputs register=<location>")
+        unit_row_id, unit_id = units[0]
+        inputs, settings = _seeded_locations(self.conn, unit_row_id)
+        return unit_id, inputs, settings
+
+    def _inputs_for(self, selected: list[str], position: int, first: int,
+                    unit_id: str | None = None) -> str:
+        """``--inputs`` > ``--template`` > a seeded unit's seed attempt's
+        recorded inputs (R8) > the preceding producing stage's output."""
+        stage = selected[position]
+        explicit = self._explicit_inputs(stage, position, first)
+        if explicit is not None:
+            return explicit
         producer = self._producer(selected, position)
         if stage in self.templates:
             if producer is None:
@@ -730,6 +809,9 @@ class _StartWalk:
                 self.conn, run_id=self.args.run_id, stage=stage,
                 unit_id=self.args.unit_id, from_stage=producer,
                 template=self.templates[stage], reuse_existing=True)
+        seeded_inputs, _ = self._seeded(stage, unit_id)
+        if seeded_inputs is not None:
+            return seeded_inputs
         if producer is None:
             raise _Exit(int(ExitCode.USAGE),
                         f"stage {stage!r} has no preceding producing stage in the run; "
@@ -738,10 +820,21 @@ class _StartWalk:
             self.conn, run_id=self.args.run_id, unit_id=self.args.unit_id,
             upstream_stage=producer)
 
-    def _settings_for(self, stage: str, position: int, first: int) -> str | None:
-        if position == first and self.settings_unprefixed is not None:
-            return self.settings_unprefixed
-        return self.settings_keyed.get(stage)
+    def _settings_for(self, stage: str, position: int, first: int,
+                      unit_id: str | None = None) -> str | None:
+        """``--settings`` > a seeded unit's seed attempt's recorded settings
+        location when its inputs came from the seed too (R8) > none.
+        A seed attempt recorded with no settings ran with the defaults, so
+        ``None`` from it is kept."""
+        explicit = self._explicit_settings(stage, position, first)
+        if explicit is not None:
+            return explicit
+        if (self._explicit_inputs(stage, position, first) is None
+                and stage not in self.templates):
+            seeded_inputs, seeded_settings = self._seeded(stage, unit_id)
+            if seeded_inputs is not None:
+                return seeded_settings
+        return None
 
     def _wait(self, stage: str, unit_id: str, attempt_id: str, deadline: float) -> UnitRow:
         """Reconcile every ``--interval`` seconds until ``attempt_id`` has a
@@ -783,7 +876,20 @@ class _StartWalk:
             stage = selected[position]
             declaration = _declaration(stage)
             inputs_location: str | None = None
-            if stage == "register":
+            settings_location: str | None = None
+            settings_resolved = False
+            seeded_register = (self._seeded_register(selected, position, first)
+                               if stage == "register" else None)
+            if seeded_register is not None:
+                # R7/R8: the seeded unit's id is the seed's, not derived.
+                unit_id, inputs_location, settings_location = seeded_register
+                settings_resolved = inputs_location is not None
+                explicit_settings = self._explicit_settings(stage, position, first)
+                if explicit_settings is not None:
+                    settings_location = explicit_settings
+                if inputs_location is None:
+                    inputs_location = self._inputs_for(selected, position, first, unit_id)
+            elif stage == "register":
                 inputs_location = self._inputs_for(selected, position, first)
                 unit_id = _main_module()._resolve_register_unit_id(
                     unit_id_arg=None, inputs_location_arg=inputs_location)
@@ -822,18 +928,23 @@ class _StartWalk:
                             "submission failed after the attempt was allocated); "
                             "reconcile cannot resolve it and run cancel cannot "
                             "terminate it, so it must be resolved by hand: check "
-                            "Batch for a job named for the attempt, then record the "
-                            "attempt's result before rerunning run start")
+                            "Batch for a job named for the attempt, then run "
+                            f"'rapidpipe run reconcile {args.run_id} --resolve-jobless' "
+                            "to record it lost before rerunning run start")
                     print(f"{stage} {unit_id} attempt {attempt_id} already in flight",
                           flush=True)
                 else:
                     if inputs_location is None:
-                        inputs_location = self._inputs_for(selected, position, first)
+                        inputs_location = self._inputs_for(
+                            selected, position, first, unit_id)
+                    if not settings_resolved:
+                        settings_location = self._settings_for(
+                            stage, position, first, unit_id)
                     submission = launch_batch.submit_unit(
                         self.conn, run_id=args.run_id, stage=stage,
                         unit_kind=declaration.unit, unit_id=unit_id,
                         inputs_location=inputs_location,
-                        settings_location=self._settings_for(stage, position, first))
+                        settings_location=settings_location)
                     attempt_id, job_id = submission.attempt_id, submission.job_id
                     outputs = submission.output_location
 
