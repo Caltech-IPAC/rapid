@@ -56,6 +56,7 @@ does is repeated here for the one environment pair it needs.
 
 from __future__ import annotations
 
+import getpass
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -162,6 +163,61 @@ def _default_s3_client() -> Any:
     from rapidpipe.products import storage
 
     return storage.s3_client()
+
+
+#: The environment variable naming the IAM role ``run delete`` and ``run
+#: expire`` assume for their S3 deletes (supervisor ruling R7c). Unset,
+#: they use the caller's own credentials, as before.
+CLEANUP_ROLE_ENV = "RAPIDPIPE_CLEANUP_ROLE_ARN"
+
+
+class CleanupRoleError(Exception):
+    """Assuming the cleanup role failed (or boto3 is missing).
+
+    Deliberately not a :class:`RunModelError`: the CLI maps it to exit 75,
+    retryable, not to a 64 refusal -- an STS failure says nothing about the
+    run.
+    """
+
+
+def _boto3_client(service: str, **kwargs: Any) -> Any:
+    """``boto3.client(service, **kwargs)``; a module-level indirection so
+    tests can monkeypatch it with a fake STS/S3 factory, and so boto3 is
+    imported only when a cleanup role is actually configured."""
+    import boto3
+
+    return boto3.client(service, **kwargs)
+
+
+def cleanup_s3_client() -> Any:
+    """An S3 client acting as ``RAPIDPIPE_CLEANUP_ROLE_ARN``, or ``None``.
+
+    When the variable is set, assumes the role with STS (session name
+    ``rapidpipe-cleanup-<user>``, truncated to STS's 64-character limit)
+    and returns an S3 client built from the temporary credentials, for
+    :func:`delete_run`/:func:`expire_runs`'s ``s3_client=``. When unset,
+    returns ``None`` and those functions fall back to
+    :func:`_default_s3_client`, the caller's own credentials. Any failure
+    raises :class:`CleanupRoleError` with the underlying message.
+    """
+    role_arn = os.environ.get(CLEANUP_ROLE_ENV)
+    if not role_arn:
+        return None
+    session_name = f"rapidpipe-cleanup-{getpass.getuser()}"[:64]
+    try:
+        sts = _boto3_client("sts")
+        credentials = sts.assume_role(
+            RoleArn=role_arn, RoleSessionName=session_name)["Credentials"]
+        return _boto3_client(
+            "s3",
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+        )
+    except Exception as exc:  # noqa: BLE001 - ImportError, ClientError, KeyError alike
+        raise CleanupRoleError(
+            f"could not assume the cleanup role named by {CLEANUP_ROLE_ENV}: "
+            f"{type(exc).__name__}: {exc}") from exc
 
 
 def _run_row(cur, run_id: str) -> tuple[str, str, str]:
