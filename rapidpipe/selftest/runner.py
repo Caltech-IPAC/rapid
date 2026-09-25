@@ -58,7 +58,7 @@ from rapidpipe.products.storage import parse_location, publish_dir
 #: execution"; ``tests/fixtures/<stage>/``). ``photometry`` and ``export``
 #: are declared stubs (supervisor step 8, 2026-09-24, ruling R9): their
 #: fixtures assert exit 69 and no published manifest, not a completed run.
-STAGE_NAMES = ("difference", "finalize", "load", "maintain", "crossmatch", "alerts",
+STAGE_NAMES = ("reference", "difference", "finalize", "load", "maintain", "crossmatch", "alerts",
                "statistics", "prune", "photometry", "export")
 
 FIXTURES_ROOT = Path(__file__).resolve().parent / "fixtures"

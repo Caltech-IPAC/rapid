@@ -40,7 +40,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _fixture_module(stage: str):
-    if stage == "difference":
+    if stage == "reference":
+        from rapidpipe.selftest import reference as module
+    elif stage == "difference":
         from rapidpipe.selftest import difference as module
     elif stage == "finalize":
         from rapidpipe.selftest import finalize as module

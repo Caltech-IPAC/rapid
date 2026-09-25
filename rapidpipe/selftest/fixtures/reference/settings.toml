@@ -1,0 +1,18 @@
+# Settings overlay for the reference stage's fixture (make stage-reference;
+# rapidpipe selftest --stage reference).
+#
+# The stage's own defaults (rapidpipe/settings/reference.toml, dev's
+# values) apply except where set here. The mosaic is 128x128 at dev's
+# 0.11 arcsec pixel instead of 7000x7000, so the real awaicgen and
+# SExtractor finish in seconds; its centre stays the tessellation tile
+# centre (the default), which the fixture's frames are built around. The
+# clipped-statistics correction is seeded so the numbers repeat. The
+# selftest appends [paths] cfg_path pointing at the checkout's cdf/ when
+# the tools are faked; with the real tools the image's /code/cdf applies.
+
+[mosaic]
+naxis1 = 128
+naxis2 = 128
+
+[statistics]
+clip_correction_seed = 20260924

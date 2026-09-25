@@ -1,0 +1,202 @@
+# Default settings for the `reference` stage.
+#
+# Every value below is the `dev` default the ported step reads, taken from
+# origin/dev's cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini (the
+# master config the reference launcher reads, section named beside each
+# table), unless the comment says it is new. Port principle (lead,
+# 2026-09-22): minimise differences to `dev`; a mechanism that can be
+# designed in but left unused is designed in, off by default. Rulings:
+# supervisor step 8, 2026-09-24, R1-R6.
+
+[paths]
+# `dev`: rapid_sw = "/code", cfg_path = rapid_sw + "/cdf" (hard-coded in
+# awsBatchSubmitJobs_runSingleReferenceImagePipeline.py); the SExtractor
+# parameter, filter and star/galaxy files are the packaged
+# cdf/rapidSexParamsRefImage.inp, cdf/rapidSexRefImageFilter.conv and
+# cdf/rapidSexRefImageStarGalaxyClassifier.nnw (referenceImageSubs.py
+# generateSExtractorReferenceImageCatalog). The pipeline image copies the
+# repository to /code.
+rapid_sw = "/code"
+cfg_path = "/code/cdf"
+# `dev` calls both by bare name on PATH (rapid-awaicgen and
+# rapid-sextractor RPMs install into /opt/rapid/bin).
+awaicgen = "awaicgen"
+sextractor = "sex"
+# Where the published products go, beneath the attempt's output location.
+# New (`dev` works in the job's current directory). The reformatted
+# inputs and awaicgen's list files are written to a scratch directory
+# outside the output location and never published, as `dev` never uploads
+# them (referenceImageSubs.py: upload_inputs = False).
+work_subdirectory = "ref"
+
+[selection]
+# [REF_IMAGE] min_n_images_to_coadd, max_n_images_to_coadd. Fewer input
+# frames than min_frames is an input rejection (exit 65); frames past
+# max_frames in manifest order are not coadded (`dev` breaks its loop).
+min_frames = 2
+max_frames = 25
+
+[instrument]
+# [INSTRUMENT] (socsims values), as difference.toml.
+sca_gain = 2.0
+sca_readout_noise = 9.4
+
+[mosaic]
+# [REF_IMAGE] naxis1_refimage, naxis2_refimage, cdelt1_refimage,
+# cdelt2_refimage, crota2_refimage. `dev`'s launcher sets awaicgen's
+# -X/-Y to |cdelt1| * naxis1 and |cdelt1| * naxis2 (degrees) and -C to
+# crota2; awaicgen truncates size / pixel scale to the pixel count, so
+# cdelt is kept exactly as `dev` writes it rather than derived from the
+# 0.11 arcsec pixel scale ([awaicgen] awaicgen_pixelscale_absolute).
+naxis1 = 7000
+naxis2 = 7000
+cdelt1 = -0.000030555555556
+cdelt2 = 0.000030555555556
+rotation = 0.0
+# Mosaic centre, degrees. Empty (the default) = the centre of the unit's
+# Roman tessellation tile from the closed-form tessellation
+# (rapidpipe.science.spatial.field_center), as `dev`'s launcher uses
+# roman_tessellation_db.get_center_sky_position(rtid). New as a setting.
+ra_center = ""
+dec_center = ""
+
+[awaicgen]
+# [AWAICGEN], every key `dev`'s launcher passes through, with `dev`'s
+# values. awaicgen_mosaic_size_x/_y, awaicgen_ra_center/_dec_center and
+# awaicgen_mosaic_rotation are "to_be_filled_by_script" in the ini and are
+# filled from [mosaic] as `dev`'s launcher fills them.
+awaicgen_input_images_list_file = "refimage_sci_inputs.txt"
+awaicgen_input_uncert_list_file = "refimage_unc_inputs.txt"
+awaicgen_pixelscale_factor = 1.0
+awaicgen_pixelscale_absolute = 0.11
+awaicgen_mos_cellsize_factor = 0.5
+awaicgen_drizzle_factor = 1.0
+awaicgen_inv_var_weight_flag = 0
+awaicgen_pixelflux_scale_flag = 1
+awaicgen_simple_coadd_flag = 1
+awaicgen_num_threads = 2
+awaicgen_unc_sigfigs_retained = 1
+awaicgen_output_mosaic_image_file = "awaicgen_output_mosaic_image.fits"
+awaicgen_output_mosaic_cov_map_file = "awaicgen_output_mosaic_cov_map.fits"
+awaicgen_output_mosaic_uncert_image_file = "awaicgen_output_mosaic_uncert_image.fits"
+awaicgen_debug = 0
+awaicgen_verbose = 1
+# The reference-image zero point per filter (AB, the socsim medians; see
+# the ini's comment block), keyed by the RAPID filter name lower-cased;
+# either spelling of a frame's FILTER resolves (`dev`'s
+# get_reference_image_zeropoint). The scalar is the fallback for a filter
+# with no entry of its own.
+zprefimg_r062 = 25.8939023158
+zprefimg_z087 = 25.5924495668
+zprefimg_y106 = 25.6351909166
+zprefimg_j129 = 25.6306327632
+zprefimg_h158 = 25.6549325807
+zprefimg_f184 = 25.1999194557
+zprefimg_k213 = 25.1449429981
+zprefimg_w146 = 26.8630336165
+zprefimg = 17.0
+
+[psfcat]
+# [PSFCAT_REFIMAGE]. `dev`'s Photutils reference catalog needs a
+# reference PSF input the input set does not carry yet; designed in, off,
+# not produced in this build (R3). true is refused (exit 64). The table's
+# other values are `dev`'s, kept for when it is ported.
+enabled = false
+n_clip_sigma = "3.0"
+n_thresh_sigma = "5"
+fwhm = "2.0"
+fit_shape = "(17, 17)"
+aperture_radius = "8"
+sharplo = "0.2"
+sharphi = "1.0"
+roundlo = "-1.0"
+roundhi = "1.0"
+min_separation = "1.0"
+output_psfcat_filename = "refimage_psfcat.txt"
+output_psfcat_finder_filename = "refimage_psfcat_finder.txt"
+output_psfcat_residual_filename = "refimage_psfcat_residual.fits"
+
+[fake_sources]
+# [FAKE_SOURCES]. Fake-source injection into the reference inputs is a
+# test-only branch in `dev` and is not ported; true is refused (exit 64).
+inject_fake_sources_flag = false
+
+[statistics]
+# New: seed for the clipped-statistics correction factor's Monte Carlo
+# draw (as difference.toml). Negative reproduces `dev`, which draws from
+# numpy.random unseeded.
+clip_correction_seed = -1
+
+# [SEXTRACTOR_REFIMAGE] verbatim (generated from the ini; configparser's
+# lower-case keys). The per-call values `dev` fills in -- detection and
+# input image, WEIGHT_IMAGE, PARAMETERS_NAME, FILTER_NAME, STARNNW_NAME,
+# CATALOG_NAME -- are set by the stage exactly as
+# generateSExtractorReferenceImageCatalog sets them; the params, filter
+# and nnw files come from [paths] cfg_path.
+[sextractor_refimage]
+sextractor_input_image = "fill_in_by_launch_script"
+sextractor_catalog_name = "fill_in_by_launch_script"
+sextractor_catalog_type = "ASCII_HEAD"
+sextractor_parameters_name = "fill_in_by_pipeline_script"
+sextractor_detect_type = "CCD"
+sextractor_detect_minarea = "5"
+sextractor_detect_maxarea = "0"
+sextractor_thresh_type = "RELATIVE"
+sextractor_detect_thresh = "2.5"
+sextractor_analysis_thresh = "2.5"
+sextractor_filter = "Y"
+sextractor_filter_name = "fill_in_by_pipeline_script"
+sextractor_filter_thresh = "100"
+sextractor_deblend_nthresh = "4"
+sextractor_deblend_mincont = "0.005"
+sextractor_clean = "Y"
+sextractor_clean_param = "1.0"
+sextractor_mask_type = "CORRECT"
+sextractor_weight_type = "MAP_RMS,MAP_RMS"
+sextractor_rescale_weights = "Y"
+sextractor_weight_image = "weight.fits"
+sextractor_weight_gain = "N,N"
+sextractor_weight_thresh = "1000000"
+sextractor_flag_image = "fill_in_by_launch_script"
+sextractor_flag_type = "OR"
+sextractor_phot_apertures = "2.0,3.0,4.0,6.0,10.0,14.0"
+sextractor_phot_autoparams = "2.5,3.5"
+sextractor_phot_petroparams = "2.0,3.5"
+sextractor_phot_autoapers = "0.0,0.0"
+sextractor_phot_fluxfrac = "0.25,0.5,0.75,0.85,0.95,0.99,0.999"
+sextractor_satur_level = "100000.0"
+sextractor_satur_key = "SATURATE"
+sextractor_mag_zeropoint = "0.0"
+sextractor_mag_gamma = "4.0"
+sextractor_gain = "999999999999999.9"
+sextractor_gain_key = "GAIN"
+sextractor_pixel_scale = "0"
+sextractor_seeing_fwhm = "1.2"
+sextractor_starnnw_name = "fill_in_by_pipeline_script"
+sextractor_back_type = "AUTO"
+sextractor_back_value = "0.0"
+sextractor_back_size = "512"
+sextractor_back_filtersize = "3"
+sextractor_backphoto_type = "LOCAL"
+sextractor_backphoto_thick = "15"
+sextractor_back_filtthresh = "0.0"
+sextractor_checkimage_type = "NONE"
+sextractor_checkimage_name = "check.fits"
+sextractor_memory_objstack = "3000"
+sextractor_memory_pixstack = "300000"
+sextractor_memory_bufsize = "1024"
+sextractor_assoc_name = "sky.list"
+sextractor_assoc_data = "2,3,4"
+sextractor_assoc_params = "2,3,4"
+sextractor_assoccoord_type = "PIXEL"
+sextractor_assoc_radius = "2.0"
+sextractor_assoc_type = "NEAREST"
+sextractor_assocselec_type = "MATCHED"
+sextractor_verbose_type = "NORMAL"
+sextractor_header_suffix = ".head"
+sextractor_write_xml = "N"
+sextractor_nthreads = "1"
+sextractor_fits_unsigned = "N"
+sextractor_interp_maxxlag = "16"
+sextractor_interp_maxylag = "16"
+sextractor_interp_type = "ALL"
