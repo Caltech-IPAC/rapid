@@ -54,10 +54,13 @@ rows carry ``field``).
 
 Output. One ``catalog-export`` file product
 (:mod:`rapidpipe.products.catalogexport`): key ``{field, export_type
-"sources", result_set <the first named source set>, settings_hash}``,
-members every file of the catalog directory, primary its root
-``properties`` file, registration ``{row_count, export_type,
-hats_version, source_sets, healpix_order, partition_count, md5}``. The
+"sources", selection <SHA-256 digest of the sorted, distinct source_sets>,
+settings_hash}`` (ruling R13: the digest, not just the first named source
+set, so a differently-ordered but identical selection shares a key and a
+different selection does not), members every file of the catalog
+directory, primary its root ``properties`` file, registration
+``{row_count, export_type, hats_version, source_sets, healpix_order,
+partition_count, md5}``. The
 stage writes no rows (``database_access = "read"``); `register` records
 the instance only.
 
@@ -92,6 +95,7 @@ from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.catalogexport import (
     CATALOG_EXPORT_KIND,
     role_for,
+    selection_digest,
     validate_catalog_export_entry,
 )
 from rapidpipe.products.manifest import Manifest, OutputEntry, member_for_file
@@ -533,7 +537,8 @@ def _body(context: StageContext) -> StageResult:
 
     if not catalog_dir.is_dir():
         raise StageError(f"hats-import wrote no catalog directory {catalog_dir}")
-    key = {"field": field, "export_type": export["catalog_type"], "result_set": source_sets[0],
+    key = {"field": field, "export_type": export["catalog_type"],
+           "selection": selection_digest(source_sets),
            "settings_hash": context.settings_hash}
     entry = catalog_entry(catalog_dir, context.outputs_dir, key=key,
                           format_version=hats["format_version"], row_count=row_count,

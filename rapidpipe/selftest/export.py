@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from rapidpipe.db.ids import is_valid_ulid
-from rapidpipe.products.catalogexport import validate_catalog_export_entry
+from rapidpipe.products.catalogexport import selection_digest, validate_catalog_export_entry
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture, fixture_dir
 from rapidpipe.selftest.support.fakeexport import (
@@ -82,7 +82,7 @@ def _check(checks: Checks, manifest: Manifest, expected: dict[str, Any],
 
     key = entry.key
     checks.check(key.get("field") == int(UNIT_ID) and key.get("export_type") == spec["export_type"]
-                 and key.get("result_set") == spec["source_sets"][0],
+                 and key.get("selection") == selection_digest(spec["source_sets"]),
                  f"catalog-export key: got {key}")
     reg = entry.registration
     checks.check(reg.get("row_count") == spec["row_count"],

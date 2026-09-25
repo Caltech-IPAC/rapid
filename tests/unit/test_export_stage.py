@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 import rapidpipe.stages.export as export
-from rapidpipe.products.catalogexport import role_for, validate_catalog_export_entry
+from rapidpipe.products.catalogexport import role_for, selection_digest, validate_catalog_export_entry
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.selftest.support.fakeexport import (
     ASSOCIATION_SET_INSTANCE,
@@ -334,16 +334,17 @@ def _fake_catalog(outputs: Path) -> Path:
     return catalog
 
 
-def _key():
-    return {"field": int(UNIT_ID), "export_type": "sources", "result_set": SOURCE_SET_INSTANCE,
-            "settings_hash": "a" * 64}
+def _key(source_sets=(SOURCE_SET_INSTANCE,)):
+    return {"field": int(UNIT_ID), "export_type": "sources",
+            "selection": selection_digest(source_sets), "settings_hash": "a" * 64}
 
 
 def test_catalog_entry_shape(tmp_path):
     catalog = _fake_catalog(tmp_path)
-    entry = export.catalog_entry(catalog, tmp_path, key=_key(), format_version="1",
+    source_sets = [SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE]
+    entry = export.catalog_entry(catalog, tmp_path, key=_key(source_sets), format_version="1",
                                  row_count=100, hats_version="0.11.0",
-                                 source_sets=[SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE])
+                                 source_sets=source_sets)
     assert entry.kind == "catalog-export" and entry.primary == "hats/sources_hats_catalog/properties"
     reg = entry.registration
     assert set(reg) == {"row_count", "export_type", "hats_version", "source_sets",
@@ -367,7 +368,7 @@ def test_catalog_entry_refuses_a_row_count_mismatch(tmp_path):
     (lambda e: e["key"].update(export_type="light-curves"), "export_type"),
     (lambda e: e.update(primary=next(m["path"] for m in e["members"] if m["role"] == "metadata")), "primary"),
     (lambda e: e["registration"].update(partition_count=5), "partition_count"),
-    (lambda e: e["registration"].update(source_sets=[SECOND_SOURCE_SET_INSTANCE]), "first of"),
+    (lambda e: e["registration"].update(source_sets=[SECOND_SOURCE_SET_INSTANCE]), "selection must be"),
     (lambda e: e["registration"].update(row_count=0), "row_count"),
     (lambda e: e["registration"].pop("md5"), "registration must name exactly"),
     (lambda e: e["members"][0].update(role="bundle"), "roles"),
@@ -406,7 +407,9 @@ def test_stage_with_a_stub_import_writes_the_manifest(tmp_path, fake_db, monkeyp
     assert rc == int(ExitCode.SUCCESS)
     manifest = Manifest.read(outputs / "manifest.json")
     (entry,) = manifest.outputs
-    assert entry.key["field"] == int(UNIT_ID) and entry.key["result_set"] == SOURCE_SET_INSTANCE
+    assert entry.key["field"] == int(UNIT_ID)
+    assert entry.key["selection"] == selection_digest(
+        [SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE])
     assert entry.key["export_type"] == "sources" and len(entry.key["settings_hash"]) == 64
     assert entry.registration["source_sets"] == [SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE]
     assert entry.registration["hats_version"] == "0.0.stub"
@@ -415,6 +418,34 @@ def test_stage_with_a_stub_import_writes_the_manifest(tmp_path, fake_db, monkeyp
     assert fake_db.queries[0]["source_sets"] == [SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE]
     assert len(seen["csv"][0]) == 101 and seen["csv"][0][0] == DEV_SOURCES_COLS
     assert not [p for p in outputs.iterdir() if p.name.startswith(".export-")]
+
+
+def test_selection_digest_is_order_independent_but_membership_sensitive():
+    """WP-G (ruling R13): [A, B] and [B, A] digest the same; [A, B] and [A, C] differ."""
+    a, b, c = SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE, UNNAMED_SOURCE_SET_INSTANCE
+    assert selection_digest([a, b]) == selection_digest([b, a])
+    assert selection_digest([a, b]) != selection_digest([a, c])
+
+
+def test_stage_key_is_the_same_regardless_of_named_result_set_order(tmp_path, fake_db, monkeypatch):
+    """WP-G (ruling R13): before, ``export.py`` keyed on ``source_sets[0]`` alone, so a
+    run named [A, B] and one named [B, A] got different keys though they export the same
+    selection; now both share one key, and a different selection gets a different one."""
+    def _stub(csv_paths, hats, output_path, tmp_dir):
+        _fake_catalog(output_path.parent)
+        return "0.0.stub"
+    monkeypatch.setattr(export, "build_hats_catalog", _stub)
+
+    rc_ab, outputs_ab = _run(tmp_path / "ab", result_sets=[
+        SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE, ASSOCIATION_SET_INSTANCE])
+    rc_ba, outputs_ba = _run(tmp_path / "ba", result_sets=[
+        SECOND_SOURCE_SET_INSTANCE, SOURCE_SET_INSTANCE, ASSOCIATION_SET_INSTANCE])
+    assert (rc_ab, rc_ba) == (int(ExitCode.SUCCESS), int(ExitCode.SUCCESS))
+
+    key_ab = Manifest.read(outputs_ab / "manifest.json").outputs[0].key
+    key_ba = Manifest.read(outputs_ba / "manifest.json").outputs[0].key
+    assert key_ab == key_ba
+    assert key_ab["selection"] == selection_digest([SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE])
 
 
 @needs_hats
