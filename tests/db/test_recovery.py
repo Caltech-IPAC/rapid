@@ -1,4 +1,5 @@
-"""Recovery (supervisor step 6, 2026-09-24, R7-R9) against a real
+"""Recovery (supervisor step 6, 2026-09-24, R7-R9 and the Codex plan-review
+amendments B1-B4) against a real
 PostgreSQL with the migrations applied: the 20260924-10 columns,
 ``submit_unit`` freezing an attempt's inputs and settings, ``run create
 --seed <run> --only-failed``, ``run start`` resolving a seeded unit's
@@ -69,6 +70,7 @@ def fake_batch(monkeypatch):
     monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION", "test-def-prod")
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", OUTPUTS_ROOT)
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION", OUTPUTS_ROOT + "-prod")
+    monkeypatch.delenv("RAPIDPIPE_BATCH_JOB_NAME_PREFIX", raising=False)
     fake = FakeBatch()
     monkeypatch.setattr(launch_batch, "batch_client", lambda: fake)
     return fake
@@ -290,7 +292,7 @@ def test_only_failed_places_a_register_unit_by_its_producing_stage(
         ("register", f"{failed_register}/{UNIT}")]
 
 
-def test_only_failed_counts_lost_and_cancelled_units_and_takes_the_earliest_position(
+def test_only_failed_seeds_non_complete_units_at_every_position_from_the_earliest(
         held, cli_db, capsys):
     seed = _seed_run(held)
     _complete(held, seed, "admit", UNIT)
@@ -305,8 +307,9 @@ def test_only_failed_counts_lost_and_cancelled_units_and_takes_the_earliest_posi
     code, run_id, err = _create(capsys, "--seed", seed, "--only-failed")
     assert code == 0, err
     assert _one(held, "SELECT selected_stages FROM runs WHERE id = %s", (run_id,)) == (CHAIN,)
-    assert _all(held, "SELECT stage, unit_id FROM units WHERE run = %s", (run_id,)) == [
-        ("admit", "U-lost")]
+    # B2: every non-complete unit is seeded, wherever it sits.
+    assert _all(held, "SELECT stage, unit_id FROM units WHERE run = %s ORDER BY unit_id",
+                (run_id,)) == [("difference", "U-cancel"), ("admit", "U-lost")]
 
 
 def test_only_failed_refusals(held, cli_db, capsys):
@@ -403,9 +406,15 @@ def test_start_seed_attempt_without_recorded_inputs_falls_through(
                     "WHERE run = %s", (seed,))
     _, run_id, _ = _create(capsys, "--seed", seed, "--only-failed")
     code, _, err = _start(capsys, run_id)
-    assert code == 64
-    assert "has no preceding producing stage" in err
-    assert fake_batch.submitted == []
+    # Falls through to the preceding stage's output: admit, which the
+    # production seed completed (its outputs are project custody).
+    assert code == 0, err
+    _, flags = _submitted_flags(fake_batch)
+    seed_admit = _one(held, """
+        SELECT a.output_location FROM units u JOIN attempts a ON a.id = u.selected_attempt
+        WHERE u.run = %s AND u.stage = 'admit' AND u.unit_id = %s""", (seed, UNIT))[0]
+    assert flags["--inputs"] == seed_admit
+    assert "--settings" not in flags
 
 
 def test_start_seeded_register_keeps_the_seed_unit_id(held, cli_db, fake_batch, capsys):
@@ -449,7 +458,7 @@ def test_seeded_inputs_for_unit_reads_the_latest_seed_attempt(held):
 # run reconcile --resolve-jobless (R9)
 # ======================================================================
 
-def test_resolve_jobless_records_lost_and_returns_the_unit_by_allowance(held):
+def test_resolve_jobless_records_lost_and_returns_the_unit_by_allowance(held, fake_batch):
     run_id = _make_run(held, kind="scratch", max_attempts=2)
     first = _attempt(held, run_id, "admit", "u1", inputs="s3://in/1", job=None)
     with_job = _attempt(held, run_id, "admit", "u2", inputs="s3://in/2")
@@ -459,12 +468,14 @@ def test_resolve_jobless_records_lost_and_returns_the_unit_by_allowance(held):
     results = launch_batch.resolve_jobless(held, run_id=run_id, older_than_seconds=600)
     assert [(r.attempt_id, r.job_id, r.batch_status, r.disposition) for r in results] == [
         (first, "-", "NOJOB", "lost")]
+    # B3: both job-less attempts were looked up by name first.
+    assert [c for c in fake_batch.calls if c[0] == "list_jobs"] == [
+        ("list_jobs", f"rapid-admit-{first}"), ("list_jobs", f"rapid-admit-{young}")]
     assert _one(held, "SELECT disposition, exit_code, reconcile_note FROM attempts "
                       "WHERE id = %s", (first,)) == ("lost", None, "no scheduler job after 600 s")
     assert _one(held, "SELECT settings_hash, source_revision FROM execution_records "
                       "WHERE attempt = %s", (first,)) == ("unknown", "unknown")
-    states = dict(_all(held, "SELECT unit_id, state FROM units WHERE run = %s", (run_id,)))
-    assert states == {"u1": "ready", "u2": "running", "u3": "running"}
+    assert _states(held, run_id) == {"u1": "ready", "u2": "running", "u3": "running"}
     for untouched in (with_job, young):
         assert _one(held, "SELECT disposition FROM attempts WHERE id = %s",
                     (untouched,)) == (None,)
@@ -474,26 +485,57 @@ def test_resolve_jobless_records_lost_and_returns_the_unit_by_allowance(held):
     _age_attempts(held, run_id)
     results = launch_batch.resolve_jobless(held, run_id=run_id, older_than_seconds=600)
     assert {r.attempt_id for r in results} == {second, young}
-    assert states_after(held, run_id)["u1"] == "failed"
+    assert _states(held, run_id)["u1"] == "failed"
 
 
-def states_after(conn, run_id):
+def _states(conn, run_id):
     return dict(_all(conn, "SELECT unit_id, state FROM units WHERE run = %s", (run_id,)))
 
 
-def test_run_reconcile_resolve_jobless_prints_one_line_per_attempt(held, cli_db, capsys):
+def test_resolve_jobless_repairs_a_found_job_and_leaves_an_ambiguous_one(held, fake_batch):
+    run_id = _make_run(held, kind="scratch", max_attempts=2)
+    found = _attempt(held, run_id, "admit", "u1", inputs="s3://in/1", job=None)
+    twice = _attempt(held, run_id, "admit", "u2", inputs="s3://in/2", job=None)
+    job_id = fake_batch.add_job(f"rapid-admit-{found}")
+    ambiguous = [fake_batch.add_job(f"rapid-admit-{twice}") for _ in range(2)]
+    _age_attempts(held, run_id)
+
+    results = launch_batch.resolve_jobless(held, run_id=run_id, older_than_seconds=600)
+    assert [(r.attempt_id, r.job_id, r.batch_status, r.disposition) for r in results] == [
+        (found, job_id, "REPAIRED", None),
+        (twice, ",".join(ambiguous), "AMBIGUOUS", None)]
+    assert _one(held, "SELECT scheduler_job_id, disposition FROM attempts WHERE id = %s",
+                (found,)) == (job_id, None)
+    assert _one(held, "SELECT scheduler_job_id, disposition FROM attempts WHERE id = %s",
+                (twice,)) == (None, None)
+    # The repaired attempt is now the ordinary reconcile's to resolve.
+    fake_batch.set_status(job_id, "FAILED", container_exit_code=75)
+    reconciled = launch_batch.reconcile(held, run_id=run_id)
+    assert [(r.attempt_id, r.disposition) for r in reconciled] == [(found, "transient")]
+
+
+def test_run_reconcile_resolve_jobless_prints_one_line_per_attempt(
+        held, cli_db, fake_batch, capsys):
     run_id = _make_run(held, kind="scratch", max_attempts=2)
     attempt = _attempt(held, run_id, "admit", "u1", inputs="s3://in/1", job=None)
+    repaired = _attempt(held, run_id, "admit", "u2", inputs="s3://in/2", job=None)
+    job_id = fake_batch.add_job(f"rapid-admit-{repaired}")
     _age_attempts(held, run_id, seconds=120)
 
     assert cli.main(["run", "reconcile", run_id]) == 0
     assert capsys.readouterr().out == ""
 
     assert cli.main(["run", "reconcile", run_id, "--resolve-jobless"]) == 0
-    assert capsys.readouterr().out == ""  # 120 s is younger than the default 600 s
+    # u1: 120 s is younger than the default 600 s; u2's job is found and
+    # then reconciled (still RUNNING) in the same command.
+    assert capsys.readouterr().out == (
+        f"attempt={repaired} job={job_id} status=REPAIRED\n"
+        f"attempt={repaired} job={job_id} status=RUNNING disposition=None selected=False\n")
 
     assert cli.main(["run", "reconcile", run_id, "--resolve-jobless", "--older-than", "60"]) == 0
-    assert capsys.readouterr().out == f"attempt={attempt} job=- status=NOJOB disposition=lost\n"
+    assert capsys.readouterr().out == (
+        f"attempt={attempt} job=- status=NOJOB disposition=lost\n"
+        f"attempt={repaired} job={job_id} status=RUNNING disposition=None selected=False\n")
     assert _one(held, "SELECT reconcile_note FROM attempts WHERE id = %s", (attempt,)) == (
         "no scheduler job after 60 s",)
 
@@ -509,3 +551,166 @@ def test_start_names_resolve_jobless_for_a_jobless_attempt(held, cli_db, fake_ba
     code, _, err = _start(capsys, run_id, "--inputs", "s3://in/1")
     assert code == 64
     assert f"rapidpipe run reconcile {run_id} --resolve-jobless" in err
+
+
+# ======================================================================
+# Codex amendments B1 (bindings, scratch seeds), B2 (every position,
+# inherited stages) and B4 (seeded register keeps its id)
+# ======================================================================
+
+def _instance(held, run_id, stage, unit_id):
+    """A registered product instance from a completed attempt of ``run_id``."""
+    from .test_repository import _register_simple_instance
+
+    attempt_id = _complete(held, run_id, stage, unit_id)
+    return _register_simple_instance(held, run_id, stage, attempt_id,
+                                     logical_key={"unit": f"{run_id}/{unit_id}"})
+
+
+def _bindings(held, run_id, stage, unit_id):
+    return [r[0] for r in _all(held, """
+        SELECT ui.producer_instance FROM unit_inputs ui JOIN units u ON u.id = ui.unit
+        WHERE u.run = %s AND u.stage = %s AND u.unit_id = %s ORDER BY 1""",
+        (run_id, stage, unit_id))]
+
+
+def test_production_seed_copies_the_seed_units_input_bindings(held, cli_db, capsys):
+    seed = _seed_with_failed_difference(held)
+    reference = _instance(held, _make_run(held, kind="production"), "difference", "ref")
+    own = _instance(held, seed, "difference", "own")
+    repo.bind_unit_inputs(held, seed, "difference", UNIT, [reference, own])
+    code, run_id, err = _create(capsys, "--seed", seed, "--only-failed")
+    assert code == 0, err
+    assert _bindings(held, run_id, "difference", UNIT) == sorted([reference, own])
+
+
+def test_scratch_seed_reruns_every_stage_carrying_only_first_stage_inputs(
+        held, cli_db, fake_batch, capsys):
+    seed = _seed_run(held, kind="scratch")
+    admit = _attempt(held, seed, "admit", UNIT, inputs="s3://deliveries/U",
+                     settings="s3://settings/admit.toml")
+    _finish(held, seed, admit, "succeeded", select=True, exit_code=0)
+    killed = _attempt(held, seed, "difference", UNIT, inputs="s3://scratch/P/inputs/diff")
+    _finish(held, seed, killed, "killed")
+    foreign = _instance(held, _make_run(held, kind="production"), "admit", "other")
+    own = _instance(held, seed, "admit", "own")
+    repo.bind_unit_inputs(held, seed, "admit", UNIT, [foreign, own])
+    # A failed difference unit with no admit unit in the seed is not carried.
+    lone = _attempt(held, seed, "difference", "U-lone", inputs="s3://scratch/P/x")
+    _finish(held, seed, lone, "failed", exit_code=1)
+
+    code, run_id, err = _create(capsys, "--seed", seed, "--only-failed")
+    assert code == 0, err
+    assert "not carried" in err and "U-lone" in err
+    assert _one(held, "SELECT selected_stages, kind FROM runs WHERE id = %s", (run_id,)) == (
+        CHAIN, "scratch")
+    assert _all(held, "SELECT stage, unit_id FROM units WHERE run = %s", (run_id,)) == [
+        ("admit", UNIT)]
+    assert _bindings(held, run_id, "admit", UNIT) == [foreign]  # never the seed's own
+
+    code, _, err = _start(capsys, run_id)
+    assert code == 0, err
+    command, flags = _submitted_flags(fake_batch)
+    assert command[:2] == ["stage", "admit"]
+    assert (flags["--inputs"], flags["--settings"]) == (
+        "s3://deliveries/U", "s3://settings/admit.toml")
+
+
+def _production_seed_with_later_failures(held):
+    """UNIT failed at difference; U2 completed through register(difference)
+    and failed at load; U3 completed difference and failed at register."""
+    seed = _seed_run(held)
+    for unit in (UNIT, "U2", "U3"):
+        _complete(held, seed, "admit", unit)
+        _complete(held, seed, "register", f"admit/{unit}")
+    failed = _attempt(held, seed, "difference", UNIT, inputs="s3://scratch/P6/inputs/diff")
+    _finish(held, seed, failed, "killed")
+    for unit in ("U2", "U3"):
+        _complete(held, seed, "difference", unit, inputs=f"s3://scratch/P6/inputs/{unit}")
+    _complete(held, seed, "register", "difference/U2")
+    failed = _attempt(held, seed, "load", "U2", inputs="s3://products/P6/difference/U2")
+    _finish(held, seed, failed, "failed", exit_code=1)
+    failed = _attempt(held, seed, "register", "difference/U3",
+                      inputs="s3://products/P6/difference/U3")
+    _finish(held, seed, failed, "failed", exit_code=1)
+    return seed
+
+
+def test_only_failed_production_seeds_every_position(held, cli_db, capsys):
+    seed = _production_seed_with_later_failures(held)
+    code, run_id, err = _create(capsys, "--seed", seed, "--only-failed")
+    assert code == 0, err
+    assert _one(held, "SELECT selected_stages FROM runs WHERE id = %s", (run_id,)) == (
+        ["difference", "register", "load"],)
+    assert sorted(_all(held, "SELECT stage, unit_id FROM units WHERE run = %s", (run_id,))) == [
+        ("difference", UNIT), ("load", "U2"), ("register", "difference/U3")]
+
+
+def test_start_inherits_stages_the_seed_completed(held, cli_db, fake_batch, capsys):
+    seed = _production_seed_with_later_failures(held)
+    _, run_id, _ = _create(capsys, "--seed", seed, "--only-failed")
+
+    code = cli.main(["run", "start", run_id, "--unit", "U2", "--no-wait"])
+    out, err = capsys.readouterr()
+    assert code == 0, err
+    assert f"difference U2 inherited from seed {seed}" in out
+    assert f"register U2 inherited from seed {seed}" in out
+    command, flags = _submitted_flags(fake_batch)
+    assert command[:2] == ["stage", "load"]
+    assert flags["--inputs"] == "s3://products/P6/difference/U2"
+
+
+def test_start_seeded_register_at_a_later_position_keeps_the_seed_unit_id(
+        held, cli_db, fake_batch, capsys):
+    """B4: register has a producing stage (difference) in the new run, but
+    its seeded unit's id and inputs are the seed's, not derived."""
+    seed = _production_seed_with_later_failures(held)
+    _, run_id, _ = _create(capsys, "--seed", seed, "--only-failed")
+
+    code = cli.main(["run", "start", run_id, "--unit", "U3", "--no-wait"])
+    out, err = capsys.readouterr()
+    assert code == 0, err
+    assert f"difference U3 inherited from seed {seed}" in out
+    command, flags = _submitted_flags(fake_batch)
+    assert command[:2] == ["stage", "register"]
+    assert flags["--unit"] == "difference/U3"
+    assert flags["--inputs"] == "s3://products/P6/difference/U3"
+
+    # With register done, load reads difference's output from the seed:
+    # the producer was inherited from a production seed.
+    attempt = _one(held, "SELECT id FROM attempts WHERE run = %s", (run_id,))[0]
+    _finish(held, run_id, attempt, "succeeded", select=True, exit_code=0)
+    code = cli.main(["run", "start", run_id, "--unit", "U3", "--no-wait"])
+    out, err = capsys.readouterr()
+    assert code == 0, err
+    assert f"difference U3 inherited from seed {seed}" in out
+    assert "register difference/U3 already complete" in out
+    command, flags = _submitted_flags(fake_batch)
+    seed_difference = _one(held, """
+        SELECT a.output_location FROM units u JOIN attempts a ON a.id = u.selected_attempt
+        WHERE u.run = %s AND u.stage = 'difference' AND u.unit_id = 'U3'""", (seed,))[0]
+    assert command[:2] == ["stage", "load"]
+    assert flags["--inputs"] == seed_difference
+
+
+def test_start_after_a_first_position_register_reads_the_seeds_producer(
+        held, cli_db, fake_batch, capsys):
+    seed = _seed_run(held)
+    _complete(held, seed, "admit", UNIT)
+    _complete(held, seed, "register", f"admit/{UNIT}")
+    _complete(held, seed, "difference", UNIT)
+    failed = _attempt(held, seed, "register", f"difference/{UNIT}",
+                      inputs="s3://products/P6/difference/out")
+    _finish(held, seed, failed, "failed", exit_code=1)
+    _, run_id, _ = _create(capsys, "--seed", seed, "--only-failed")
+    _start(capsys, run_id)
+    attempt = _one(held, "SELECT id FROM attempts WHERE run = %s", (run_id,))[0]
+    _finish(held, run_id, attempt, "succeeded", select=True, exit_code=0)
+
+    code, out, err = _start(capsys, run_id)
+    assert code == 0, err
+    command, flags = _submitted_flags(fake_batch)
+    assert command[:2] == ["stage", "load"]
+    assert flags["--inputs"] == _one(held, """
+        SELECT a.output_location FROM units u JOIN attempts a ON a.id = u.selected_attempt
+        WHERE u.run = %s AND u.stage = 'difference'""", (seed,))[0]

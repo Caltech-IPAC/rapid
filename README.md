@@ -60,17 +60,17 @@ rapidpipe run start "$run_id" --unit r0034001002001001001/SCA01 \
 
 Every Batch attempt records the inputs and settings locations it was submitted with (`attempts.inputs_location`, `attempts.settings_location`, migration `20260924-10`).
 
-- `rapidpipe run create --seed <run> --only-failed [--purpose P] [--owner O]` creates a run that re-runs the seed's non-complete units: failed or cancelled, or left running or ready by a lost, killed or job-less latest attempt. It copies the seed's configuration (kind, release or revision and digest, settings and input refs, lane, profile, database target, max attempts, check policy). Its stages are the seed's from the earliest position holding such a unit, and it creates one pending unit per such unit of that stage, recording `units.seeded_from_unit`. It refuses a deleting or deleted seed, or one with nothing to re-run.
-- `rapidpipe run start <new run> --unit U` then resolves a seeded unit's inputs as `--inputs`, else `--template`, else the seed unit's latest attempt's recorded inputs (and its settings, unless `--settings` is given), else the preceding stage's output. A seeded `register` unit keeps the seed's unit id. Later stages run as usual.
-- `rapidpipe run reconcile <run> --resolve-jobless [--older-than SECONDS]` also records `lost` for each attempt with no disposition and no Batch job started more than `SECONDS` (default 600) ago. Its unit returns to ready while attempts remain, else failed.
+- `rapidpipe run create --seed <run> --only-failed [--purpose P] [--owner O]` creates a run that re-runs the seed's non-complete units: failed or cancelled, or left running or ready by a lost, killed or job-less latest attempt. It copies the seed's configuration (kind, release or revision and digest, settings and input refs, lane, profile, database target, max attempts, check policy). It refuses a deleting or deleted seed, or one with nothing to re-run. What it re-runs depends on the seed's kind:
+  - **Production seed.** Its outputs are project custody, which a re-run may consume. The stages are the seed's from the earliest position holding a non-complete unit. Every non-complete unit is seeded wherever it sits: a pending unit with `units.seeded_from_unit` set and the seed unit's input bindings copied, so the deletion fence protects what the re-run reads.
+  - **Scratch seed.** Its outputs are usable only within its own run. Every stage is re-run from the first. Only the first stage's units for the failed unit ids are seeded, carrying that stage's recorded inputs and settings. No seed output is read.
+- `rapidpipe run start <new run> --unit U` then resolves a seeded unit's inputs as `--inputs`, else `--template`, else the seed unit's latest attempt's recorded inputs (and its settings, unless `--settings` is given), else the preceding stage's output. A seeded `register` unit keeps the seed's unit id. A stage with no unit for U here or earlier, but a seeded unit for U later, prints `<stage> U inherited from seed <seed>` and is skipped: U completed it in the seed. A stage whose producer was inherited from a production seed reads that producer's selected output in the seed.
+- `rapidpipe run reconcile <run> --resolve-jobless [--older-than SECONDS]` looks up each attempt with no disposition and no Batch job on the job queue, by the job name `run start` submits under. One job found is recorded on the attempt and reconciled (`status=REPAIRED`). More than one is left alone (`status=AMBIGUOUS`). With none, an attempt started more than `SECONDS` (default 600) ago is recorded `lost` (`status=NOJOB`), and its unit returns to ready while attempts remain, else failed.
 
 ```
 rapidpipe run reconcile "$run_id" --resolve-jobless
 rerun=$(rapidpipe run create --seed "$run_id" --only-failed)
 rapidpipe run start "$rerun" --unit r0034001002001001001/SCA01
 ```
-
-A seeded run that starts at a `register` position has no producing stage of its own, so the stage after that `register` needs its inputs given with `--inputs <stage>=LOC`.
 
 #### Running a stage locally
 

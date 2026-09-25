@@ -4,7 +4,7 @@ must run whether or not boto3 is installed.
 Only the operations ``rapidpipe.launch.batch`` calls are implemented:
 ``describe_job_definitions`` (a released run's revision must be ACTIVE;
 ``job_definitions`` maps ``name:revision`` to a status, and one not in it
-is not found), ``submit_job``, ``describe_jobs`` (returning whatever
+is not found), ``submit_job``, ``list_jobs`` (exact JOB_NAME filter), ``describe_jobs`` (returning whatever
 statuses the test configured, omitting any job id the test never
 registered -- standing in for a job Batch itself has forgotten about),
 and ``terminate_job``. ``calls`` records each operation's name and its
@@ -85,6 +85,31 @@ class FakeBatch:
         self.calls.append(("describe_jobs", tuple(jobs)))
         found = [self._jobs[job_id] for job_id in jobs if job_id in self._jobs]
         return {"jobs": found}
+
+    def list_jobs(self, *, jobQueue: str, filters: list[dict[str, Any]] | None = None,
+                  nextToken: str | None = None, **_: Any) -> dict[str, Any]:
+        """Jobs by exact JOB_NAME filter, every status, one per page (so a
+        caller's nextToken loop is exercised); only the JOB_NAME filter is
+        implemented."""
+        name = next(f["values"][0] for f in filters or [] if f["name"] == "JOB_NAME")
+        self.calls.append(("list_jobs", name))
+        matches = [{"jobId": job["jobId"], "jobName": job["jobName"],
+                    "status": job.get("status", "SUBMITTED")}
+                   for job in self._jobs.values() if job.get("jobName", "").lower() == name.lower()]
+        start = int(nextToken or 0)
+        page = matches[start:start + 1]
+        response: dict[str, Any] = {"jobSummaryList": page}
+        if start + 1 < len(matches):
+            response["nextToken"] = str(start + 1)
+        return response
+
+    def add_job(self, job_name: str) -> str:
+        """Test setup: a job Batch holds under ``job_name`` that nothing
+        recorded (a submission whose response never reached the caller)."""
+        job_id = f"job-{next(self._id_counter)}"
+        self._jobs[job_id] = {"jobId": job_id, "jobName": job_name, "status": "RUNNING",
+                              "attempts": []}
+        return job_id
 
     def terminate_job(self, *, jobId: str, reason: str, **_: Any) -> dict:
         self.calls.append(("terminate_job", jobId))

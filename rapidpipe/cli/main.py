@@ -252,15 +252,21 @@ def _build_parser() -> argparse.ArgumentParser:
              "permits it; no shipped policy does.")
     create_parser.add_argument(
         "--only-failed", action="store_true", dest="only_failed",
-        help="With --seed: copy the seed's configuration (kind, owner unless "
-             "--owner, release or revision/digest, settings and input refs, "
-             "lane, profile, database target, max attempts, check policy), "
-             "select its stages from the earliest one holding a non-complete "
-             "unit (failed or cancelled, or left running or ready by a lost, "
-             "killed or job-less attempt), and create one pending unit per "
-             "such unit of that stage; run start then reads each unit's "
-             "inputs and settings from the seed attempt. Refused when the "
-             "seed is deleting or deleted or has no non-complete unit.")
+        help="With --seed: re-run the seed's non-complete units (failed or "
+             "cancelled, or left running or ready by a lost, killed or "
+             "job-less attempt), copying the seed's configuration (kind, "
+             "owner unless --owner, release or revision/digest, settings and "
+             "input refs, lane, profile, database target, max attempts, "
+             "check policy). A production seed: the stages start at the "
+             "earliest one holding a non-complete unit, every non-complete "
+             "unit is seeded wherever it sits, its input bindings are "
+             "copied, and run start reads its inputs and settings from the "
+             "seed attempt; stages a unit completed in the seed are "
+             "inherited, not re-run. A scratch seed (its outputs may not "
+             "feed another run): every stage is re-run from the first, and "
+             "only the first stage's recorded inputs and settings are "
+             "carried. Refused when the seed is deleting or deleted or has "
+             "no non-complete unit.")
 
     list_parser = run_subparsers.add_parser("list", help="List runs.",
         description="List runs, newest first, optionally filtered.")
@@ -308,10 +314,13 @@ def _build_parser() -> argparse.ArgumentParser:
     reconcile_parser.add_argument("run_id")
     reconcile_parser.add_argument(
         "--resolve-jobless", action="store_true", dest="resolve_jobless",
-        help="Also record 'lost' for each attempt with no disposition and no "
-             "scheduler job (its submission failed after allocation) started "
-             "more than --older-than seconds ago; its unit returns to ready "
-             "while attempts remain, else failed.")
+        help="First look up each attempt with no disposition and no scheduler "
+             "job (its submission failed after allocation) on the Batch queue "
+             "by the job name submit uses: one job found is recorded on the "
+             "attempt (REPAIRED) and reconciled; more than one is left "
+             "(AMBIGUOUS); none, and the attempt started more than "
+             "--older-than seconds ago, records it 'lost' (NOJOB), and its "
+             "unit returns to ready while attempts remain, else failed.")
     reconcile_parser.add_argument(
         "--older-than", type=float, default=None, dest="older_than", metavar="SECONDS",
         help="With --resolve-jobless: the minimum age of a job-less attempt "
@@ -637,9 +646,13 @@ def _run_create_only_failed_command(args: argparse.Namespace) -> int:
             raise
 
     sys.stderr.write(
-        f"seeded {len(unit_ids)} unit(s) from run {args.seed} at stage "
-        f"{plan.stages[0]} (position {plan.position}); stages {','.join(plan.stages)}: "
+        f"seeded {len(unit_ids)} unit(s) from {seed['kind']} run {args.seed}; stages "
+        f"{','.join(plan.stages)} (from seed position {plan.position}): "
         f"{' '.join(unit_ids)}\n")
+    if plan.uncarried:
+        sys.stderr.write(
+            f"not carried (no {plan.stages[0]} unit in the seed; give --inputs to run "
+            f"start): {' '.join(plan.uncarried)}\n")
     print(run_id)
     return int(ExitCode.SUCCESS)
 
@@ -964,31 +977,35 @@ def _run_reconcile_command(args: argparse.Namespace) -> int:
 
     with cm as conn:
         try:
+            # supervisor step 6, 2026-09-24, R9 with amendment B3: look for
+            # each job-less attempt's Batch job first, so a repaired one is
+            # reconciled by the ordinary pass just below.
+            jobless = (launch_batch.resolve_jobless(
+                conn, run_id=args.run_id, older_than_seconds=older_than)
+                if resolve_jobless else [])
             results = launch_batch.reconcile(conn, run_id=args.run_id)
+        except (RunModelError, MissingEnvironmentVariable) as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run reconcile: {exc}\n")
+            return int(ExitCode.USAGE)
         except Exception as exc:  # noqa: BLE001 - Batch/botocore-shaped errors
             if _is_batch_error(exc):
                 conn.rollback()
                 sys.stderr.write(f"rapidpipe run reconcile: Batch error: {exc}\n")
                 return int(ExitCode.TRANSIENT_FAILURE)
             raise
-        jobless = []
-        if resolve_jobless:
-            try:
-                jobless = launch_batch.resolve_jobless(
-                    conn, run_id=args.run_id, older_than_seconds=older_than)
-            except RunModelError as exc:
-                conn.rollback()
-                sys.stderr.write(f"rapidpipe run reconcile: {exc}\n")
-                return int(ExitCode.USAGE)
 
+    for result in jobless:
+        if result.batch_status == "NOJOB":
+            print(f"attempt={result.attempt_id} job=- status=NOJOB disposition=lost")
+        else:  # REPAIRED or AMBIGUOUS
+            print(f"attempt={result.attempt_id} job={result.job_id} "
+                  f"status={result.batch_status}")
     for result in results:
         print(
             f"attempt={result.attempt_id} job={result.job_id} "
             f"status={result.batch_status} disposition={result.disposition} "
             f"selected={result.selected}")
-    # supervisor step 6, 2026-09-24, R9: one line per job-less attempt resolved.
-    for result in jobless:
-        print(f"attempt={result.attempt_id} job=- status=NOJOB disposition=lost")
     return int(ExitCode.SUCCESS)
 
 

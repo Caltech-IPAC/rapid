@@ -283,6 +283,7 @@ class RunRow:
     selected_stages: list[str]
     state: str
     settings_overlay_ref: str | None
+    seed_run: str | None = None
 
 
 @dataclass(frozen=True)
@@ -300,12 +301,12 @@ class UnitRow:
 def _run_row(conn, run_id: str) -> RunRow | None:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT kind, selected_stages, state, settings_overlay_ref "
+            "SELECT kind, selected_stages, state, settings_overlay_ref, seed_run "
             "FROM runs WHERE id = %s", (run_id,))
         row = cur.fetchone()
     if row is None:
         return None
-    return RunRow(row[0], list(row[1] or []), row[2], row[3])
+    return RunRow(row[0], list(row[1] or []), row[2], row[3], row[4])
 
 
 def _unit_row(conn, run_id: str, stage: str, unit_id: str) -> UnitRow | None:
@@ -337,17 +338,19 @@ def _seeded_unit(conn, run_id: str, stage: str, unit_id: str) -> str | None:
     return None if row is None else row[0]
 
 
-def _seeded_register_units(conn, run_id: str, unit_id: str) -> list[tuple[str, str]]:
-    """``(units.id, unit_id)`` of the run's seeded ``register`` units for the
-    nominal unit ``unit_id``: register unit ids are ``<producer>/<unit>``
-    (``rapidpipe.products.manifest.register_unit_id``), copied as is from
-    the seed (supervisor step 6, 2026-09-24, R7)."""
-    candidates = [f"{stage}/{unit_id}" for stage in STAGE_NAMES if stage != "register"]
+def _units_at(conn, run_id: str, stage: str, unit_ids: list[str], *,
+              seeded_only: bool = False) -> list[tuple[str, str]]:
+    """``(units.id, unit_id)`` of the run's ``stage`` units among
+    ``unit_ids`` (only those with ``seeded_from_unit`` set, if
+    ``seeded_only``)."""
+    if not unit_ids:
+        return []
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, unit_id FROM units WHERE run = %s AND stage = 'register' "
-            "AND seeded_from_unit IS NOT NULL AND unit_id = ANY(%s) ORDER BY unit_id",
-            (run_id, candidates))
+            "SELECT id, unit_id FROM units WHERE run = %s AND stage = %s "
+            "AND unit_id = ANY(%s) AND (NOT %s OR seeded_from_unit IS NOT NULL) "
+            "ORDER BY unit_id",
+            (run_id, stage, list(unit_ids), seeded_only))
         return [(row[0], row[1]) for row in cur.fetchall()]
 
 
@@ -767,19 +770,51 @@ class _StartWalk:
             return None, None
         return _seeded_locations(self.conn, unit_row_id)
 
+    def _candidate_unit_ids(self, selected: list[str], position: int) -> list[str]:
+        """The unit ids ``--unit`` stands for at ``position``: itself, or for a
+        ``register`` ``<producer>/<unit>`` -- any producing stage's when no
+        producing stage precedes it in this run (a seeded run starting at a
+        register)."""
+        unit_id = self.args.unit_id
+        if selected[position] != "register":
+            return [unit_id]
+        producer = self._producer(selected, position)
+        if producer is not None:
+            return [f"{producer}/{unit_id}"]
+        return [f"{stage}/{unit_id}" for stage in STAGE_NAMES if stage != "register"]
+
+    def _inherited(self, selected: list[str], position: int, first: int) -> bool:
+        """Whether a seeded run inherits this position's result from its seed
+        (supervisor step 6, 2026-09-24, Codex amendment B2): no unit row for
+        the unit here or at any earlier position, no explicit inputs, and a
+        seeded unit for it at a later position -- its upstream completed in
+        the seed."""
+        run_id = self.args.run_id
+        if self.run.seed_run is None:
+            return False
+        if self._explicit_inputs(selected[position], position, first) is not None:
+            return False
+        for earlier in range(position + 1):
+            if _units_at(self.conn, run_id, selected[earlier],
+                         self._candidate_unit_ids(selected, earlier)):
+                return False
+        return any(
+            _units_at(self.conn, run_id, selected[later],
+                      self._candidate_unit_ids(selected, later), seeded_only=True)
+            for later in range(position + 1, len(selected)))
+
     def _seeded_register(self, selected: list[str], position: int, first: int,
                          ) -> tuple[str, str | None, str | None] | None:
-        """For a ``register`` position with no explicit inputs and no
-        producing stage before it in this run (a seeded run starting at a
-        register), the seeded register unit's ``(unit_id, inputs,
-        settings)``: its unit id is the seed's, copied as is, so it is not
-        derived from the inputs' manifest. ``None`` when there is no such
-        unit; more than one is a usage error (supervisor step 6,
-        2026-09-24, R7/R8)."""
-        if (self._explicit_inputs("register", position, first) is not None
-                or self._producer(selected, position) is not None):
+        """For a ``register`` position with no explicit inputs, the seeded
+        register unit's ``(unit_id, inputs, settings)`` when this run has
+        one for the unit here: its unit id is the seed's, copied as is, so
+        it is not derived from the inputs' manifest (supervisor step 6,
+        2026-09-24, R7/R8; Codex amendment B4). ``None`` when there is no
+        such unit; more than one is a usage error."""
+        if self._explicit_inputs("register", position, first) is not None:
             return None
-        units = _seeded_register_units(self.conn, self.args.run_id, self.args.unit_id)
+        units = _units_at(self.conn, self.args.run_id, "register",
+                          self._candidate_unit_ids(selected, position), seeded_only=True)
         if not units:
             return None
         if len(units) > 1:
@@ -813,12 +848,45 @@ class _StartWalk:
         if seeded_inputs is not None:
             return seeded_inputs
         if producer is None:
+            producer = self._seed_producer(selected, position)
+        if producer is None:
             raise _Exit(int(ExitCode.USAGE),
                         f"stage {stage!r} has no preceding producing stage in the run; "
                         f"give its inputs with --inputs {stage}=<location>")
         return launch_batch.resolve_inputs_from_stage(
-            self.conn, run_id=self.args.run_id, unit_id=self.args.unit_id,
+            self.conn, run_id=self._producer_run(producer), unit_id=self.args.unit_id,
             upstream_stage=producer)
+
+    def _production_seed(self) -> RunRow | None:
+        seed_run = self.run.seed_run
+        if seed_run is None:
+            return None
+        seed = _run_row(self.conn, seed_run)
+        return seed if seed is not None and seed.kind == "production" else None
+
+    def _seed_producer(self, selected: list[str], position: int) -> str | None:
+        """For a run seeded from a production run, whose stage list is a
+        suffix of the seed's, the producing stage before ``position`` in the
+        seed's list (e.g. ``load`` after a first-position ``register``
+        reads the seed's ``difference``); ``None`` otherwise."""
+        seed = self._production_seed()
+        if seed is None:
+            return None
+        offset = len(seed.selected_stages) - len(selected)
+        if offset < 0 or seed.selected_stages[offset:] != selected:
+            return None
+        return self._producer(seed.selected_stages, offset + position)
+
+    def _producer_run(self, producer: str) -> str:
+        """The run whose ``producer`` output this run reads: its own, or --
+        when the producer's unit was inherited from a production seed (no
+        unit row here) -- the seed, whose outputs are project custody
+        (Codex amendments B1/B2). A scratch seed's outputs never feed
+        another run."""
+        run_id = self.args.run_id
+        if _units_at(self.conn, run_id, producer, [self.args.unit_id]):
+            return run_id
+        return self.run.seed_run if self._production_seed() is not None else run_id
 
     def _settings_for(self, stage: str, position: int, first: int,
                       unit_id: str | None = None) -> str | None:
@@ -858,7 +926,7 @@ class _StartWalk:
 
     def run(self) -> int:
         args = self.args
-        run = _require_run(self.conn, args.run_id)
+        run = self.run = _require_run(self.conn, args.run_id)
         selected = run.selected_stages
         if args.stage is not None:
             positions = [i for i, s in enumerate(selected) if s == args.stage]
@@ -875,6 +943,10 @@ class _StartWalk:
         for position in positions:
             stage = selected[position]
             declaration = _declaration(stage)
+            if self._inherited(selected, position, first):
+                print(f"{stage} {args.unit_id} inherited from seed {run.seed_run}",
+                      flush=True)
+                continue
             inputs_location: str | None = None
             settings_location: str | None = None
             settings_resolved = False
