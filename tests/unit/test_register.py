@@ -14,6 +14,7 @@ import json
 import pytest
 
 import rapidpipe.stages.register as register_module
+from rapidpipe.products.catalogexport import selection_digest
 from rapidpipe.stages.contract import ExitCode
 from rapidpipe.stages.register import DECLARATION, main
 
@@ -260,11 +261,12 @@ def test_bad_reference_manifest_exits_65_without_connecting(tmp_path, monkeypatc
 def _catalog_export_entry():
     sha = "sha256:" + "0" * 64
     root = "hats/sources_hats_catalog"
+    source_sets = ["01ARZ3NDEKTSV4RRFFQ69G5FS1"]
     return {
         "kind": "catalog-export", "format_version": "1",
         "instance": "01ARZ3NDEKTSV4RRFFQ69G5FC1",
         "key": {"field": 4711398, "export_type": "sources",
-                "result_set": "01ARZ3NDEKTSV4RRFFQ69G5FS1", "settings_hash": "a" * 64},
+                "selection": selection_digest(source_sets), "settings_hash": "a" * 64},
         "primary": f"{root}/properties",
         "members": [
             {"role": "hats", "path": f"{root}/properties", "bytes": 10, "sha256": sha},
@@ -274,7 +276,7 @@ def _catalog_export_entry():
              "sha256": sha},
         ],
         "registration": {"row_count": 200, "export_type": "sources", "hats_version": "0.11.0",
-                         "source_sets": ["01ARZ3NDEKTSV4RRFFQ69G5FS1"], "healpix_order": 3,
+                         "source_sets": source_sets, "healpix_order": 3,
                          "partition_count": 1, "md5": "0" * 32},
     }
 

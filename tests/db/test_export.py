@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import rapidpipe.stages.export as export
+from rapidpipe.products.catalogexport import selection_digest
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.selftest.support.fakeexport import build_export_input_set
 from rapidpipe.stages.contract import ExitCode
@@ -99,7 +100,8 @@ def test_stage_main_exports_the_named_set(conn, tmp_path, monkeypatch):
     assert rc == int(ExitCode.SUCCESS)
     (entry,) = Manifest.read(outputs / "manifest.json").outputs
     assert entry.kind == "catalog-export"
-    assert entry.key["result_set"] == source_set
+    assert entry.key["selection"] == selection_digest([source_set])
+    assert "result_set" not in entry.key
     assert entry.registration["row_count"] == len(rows)
     assert entry.registration["source_sets"] == [source_set]
     assert entry.registration["partition_count"] >= 1

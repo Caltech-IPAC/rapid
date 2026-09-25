@@ -4,11 +4,21 @@ The products page's "File products" table: a `catalog-export` is a field
 product, a HATS (Hierarchical Adaptive Tiling Scheme) catalog directory
 made by `export` from named result sets; "Today's table": none, exported.
 Its field list, fixed with the `export` port (supervisor step 8,
-2026-09-24, ruling R12):
+2026-09-24, ruling R12), then corrected (supervisor step 8, 2026-09-24,
+ruling R13 -- ``export.py`` keyed a multi-source-set export by
+``source_sets[0]`` alone, so [A,B] and [A,C] shared a key and [B,A]
+differed from [A,B]):
 
 - key: ``field`` (the unit), ``export_type`` (``"sources"`` today; the
-  light-curve catalog is the next port), ``result_set`` (the first named
-  source set) and ``settings_hash``;
+  light-curve catalog is the next port), ``selection`` (the full 64-hex
+  SHA-256 digest over the sorted, distinct ``source_sets`` instance ids,
+  newline-joined -- :func:`selection_digest`, mirroring the reference-image
+  selection digest's sorted-newline-joined-ids rule,
+  :mod:`rapidpipe.science.reference.identity`; unlike that digest, the
+  settings hash is not folded in here, since it is already the key's own
+  field) and ``settings_hash``; sorting makes ``selection`` a function of
+  the source-set selection as a set, so [A,B] and [B,A] are one logical
+  key and [A,B] and [A,C] are different ones;
 - members: every file under the HATS catalog directory, with one of three
   roles -- ``hats`` for the catalog's root ``properties`` and
   ``hats.properties`` files, ``partition`` for each ``Npix=*.parquet``
@@ -18,10 +28,10 @@ Its field list, fixed with the `export` port (supervisor step 8,
   root ``properties`` file (``hats.properties`` where a hats version writes
   only that);
 - registration: ``row_count``, ``export_type``, ``hats_version``,
-  ``source_sets`` (one or more instance ids, the first equal to the key's
-  ``result_set``), ``healpix_order`` (the highest partition order written),
-  ``partition_count`` (the number of ``partition`` members) and ``md5`` (of
-  the primary member).
+  ``source_sets`` (one or more instance ids, manifest order; the key's
+  ``selection`` is their digest), ``healpix_order`` (the highest partition
+  order written), ``partition_count`` (the number of ``partition``
+  members) and ``md5`` (of the primary member).
 
 `register` validates a `catalog-export` entry and writes nothing beyond its
 instance row, like `source-catalog` and `alert-container`.
@@ -31,13 +41,14 @@ This module imports nothing from `rapidpipe` outside `rapidpipe.products`.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import PurePosixPath
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 CATALOG_EXPORT_KIND = "catalog-export"
 
-KEY_FIELDS = ("field", "export_type", "result_set", "settings_hash")
+KEY_FIELDS = ("field", "export_type", "selection", "settings_hash")
 ROLES = ("hats", "partition", "metadata")
 REGISTRATION_FIELDS = ("row_count", "export_type", "hats_version", "source_sets",
                        "healpix_order", "partition_count", "md5")
@@ -64,6 +75,19 @@ def _is_count(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def selection_digest(source_sets: Iterable[str]) -> str:
+    """The key's ``selection``: SHA-256 hex over the sorted, distinct ``source_sets`` ids.
+
+    Mirrors :func:`rapidpipe.science.reference.identity.selection_digest`'s
+    sorted, newline-joined-ids formula (ruling R13); it does not fold in a
+    settings hash, since ``settings_hash`` is already the catalog-export
+    key's own field. Order-independent (``[A, B]`` and ``[B, A]`` digest
+    the same) but membership-sensitive (``[A, B]`` and ``[A, C]`` differ).
+    """
+    ids = sorted(set(str(s) for s in source_sets))
+    return hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()
+
+
 def role_for(relative_path: str) -> str:
     """The member role of a file at ``relative_path`` inside a HATS catalog directory."""
     pure = PurePosixPath(relative_path)
@@ -85,8 +109,8 @@ def validate_catalog_export_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
              f"got {key['field']!r}")
     _require(key["export_type"] in EXPORT_TYPES,
              f"key export_type must be one of {list(EXPORT_TYPES)}, got {key['export_type']!r}")
-    _require(isinstance(key["result_set"], str) and bool(key["result_set"]),
-             "key result_set must be a non-empty instance id")
+    _require(isinstance(key["selection"], str) and _HEX64_RE.match(key["selection"]) is not None,
+             "key selection must be a SHA-256 hex digest")
     _require(isinstance(key["settings_hash"], str)
              and _HEX64_RE.match(key["settings_hash"]) is not None,
              "key settings_hash must be a SHA-256 hex digest")
@@ -117,8 +141,8 @@ def validate_catalog_export_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
              and all(isinstance(s, str) and s for s in source_sets)
              and len(set(source_sets)) == len(source_sets),
              f"source_sets must be a list of distinct instance ids, got {source_sets!r}")
-    _require(source_sets[0] == key["result_set"],
-             "the key's result_set must be the first of source_sets")
+    _require(key["selection"] == selection_digest(source_sets),
+             "the key's selection must be the sorted source_sets digest")
     _require(_is_count(registration["healpix_order"]),
              f"healpix_order must be a non-negative integer, got {registration['healpix_order']!r}")
     _require(registration["partition_count"] == roles.count("partition"),
