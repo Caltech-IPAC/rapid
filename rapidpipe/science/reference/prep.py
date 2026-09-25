@@ -57,6 +57,16 @@ def filter_spellings(name: str) -> set[str]:
     return spellings
 
 
+def rapid_filter_name(name: str) -> str:
+    """The RAPID spelling of ``name`` (``F146`` -> ``W146``; ``W146`` unchanged).
+
+    FITS ``FILTER`` headers and the ``filters`` table carry the RAPID
+    spelling; a name in neither map is returned upper-cased.
+    """
+    upper = str(name).strip().upper()
+    return ROMAN_TO_RAPID_FILTER_NAMES.get(upper, upper)
+
+
 def same_filter(a: str, b: str) -> bool:
     """True when ``a`` and ``b`` name one filter in either spelling."""
     return bool(filter_spellings(a) & filter_spellings(b))

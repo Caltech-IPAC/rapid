@@ -28,7 +28,7 @@ from rapidpipe.stages.contract import ExitCode
 
 RUN = "01J8Y6QZ3M0000000000000RUN"
 ATTEMPT = "01J8Y6QZ3M00000000000000A1"
-UNIT = f"{RTID}/F146"
+UNIT = f"{RTID}/W146"
 
 
 @pytest.fixture(autouse=True)
@@ -121,7 +121,9 @@ def test_bad_unit_id_is_a_usage_error(tmp_path, unit):
 
 
 def test_parse_unit():
-    assert reference.parse_unit("4711398/F146") == (4711398, "F146")
+    assert reference.parse_unit("4711398/F146") == (4711398, "W146")
+    assert reference.parse_unit("4711398/W146") == (4711398, "W146")
+    assert reference.parse_unit("4711398/F184") == (4711398, "F184")
 
 
 # ----------------------------------------------------------------------
@@ -141,7 +143,7 @@ def test_full_run_publishes_the_ruled_manifest(tmp_path):
 
     constituents = [f[0] for f in FRAMES]
     record = json.loads((outputs / manifest.execution_record).read_text())
-    assert ref.key == {"field": str(RTID), "filter": "F146", "recipe": "awaicgen",
+    assert ref.key == {"field": str(RTID), "filter": "W146", "recipe": "awaicgen",
                        "version": selection_digest(constituents, record["settings_hash"])}
     assert [m.role for m in ref.members] == ["image", "coverage", "uncertainty"]
     assert ref.primary == "ref/awaicgen_output_mosaic_image.fits"
@@ -158,7 +160,7 @@ def test_full_run_publishes_the_ruled_manifest(tmp_path):
     assert cat.key == {"reference": ref.instance, "catalog_type": "sextractor"}
     assert cat.primary == "ref/awaicgen_output_mosaic_refimsexcat.txt"
     assert sorted(cat.registration) == sorted(reference.CATALOG_REGISTRATION_FIELDS)
-    assert cat.registration["source_count"] == r["nsexcatsources"] == 4
+    assert cat.registration["source_count"] == r["nsxcatsources"] == 4
 
     assert manifest.inputs.products == {
         "l2-image/001": constituents[0], "l2-image/002": constituents[1],
@@ -234,10 +236,43 @@ def test_a_frame_without_exptime_is_rejected(tmp_path):
     assert code == ExitCode.INPUT_REJECTED
 
 
-def test_the_unit_filter_may_use_either_spelling(tmp_path):
-    code, outputs = _run(tmp_path, unit=f"{RTID}/W146")
+def test_the_unit_filter_may_use_either_spelling_and_is_normalised(tmp_path):
+    code, outputs = _run(tmp_path, unit=f"{RTID}/F146")
     assert code == ExitCode.SUCCESS
-    assert Manifest.read(outputs / "manifest.json").outputs[0].key["filter"] == "W146"
+    entry = Manifest.read(outputs / "manifest.json").outputs[0]
+    assert entry.key["filter"] == "W146" and entry.registration["filter"] == "W146"
+
+
+def test_a_frame_whose_filter_uses_the_roman_spelling_is_accepted(tmp_path):
+    code, _ = _run(tmp_path, edit=lambda m, i: _rewrite_frame(i, m, 1, FILTER="F146"))
+    assert code == ExitCode.SUCCESS
+
+
+def test_an_empty_reference_catalog_is_rejected(tmp_path, monkeypatch):
+    from rapidpipe.selftest.support import fakedifftools
+
+    def empty_catalog(self, args, cwd):
+        names = fakedifftools._params(args[args.index("-PARAMETERS_NAME") + 1])
+        (cwd / args[args.index("-CATALOG_NAME") + 1]).write_text(
+            "".join(f"#{i + 1:4d} {p}\n" for i, p in enumerate(names)))
+    monkeypatch.setattr(fakedifftools.FakeToolRunner, "_sextractor", empty_catalog)
+    code, outputs = _run(tmp_path)
+    assert code == ExitCode.INPUT_REJECTED
+    assert not (outputs / "manifest.json").exists()
+
+
+def test_the_bundle_keeps_awaicgens_wcs(tmp_path):
+    code, outputs = _run(tmp_path)
+    assert code == 0
+    entry = Manifest.read(outputs / "manifest.json").outputs[0]
+    for member in entry.members:
+        with fits.open(outputs / member.path) as hdul:
+            assert len(hdul) == 1
+            hdr = hdul[0].header
+        assert (hdr["CTYPE1"], hdr["CTYPE2"]) == ("RA---TAN", "DEC--TAN")
+        assert not any(k.startswith(("PV1_", "PV2_", "A_", "B_")) for k in hdr)
+        assert (hdr["CRVAL1"], hdr["CRVAL2"]) == (entry.registration["ra_center"],
+                                                  entry.registration["dec_center"])
 
 
 def test_a_corrupt_member_is_rejected(tmp_path):

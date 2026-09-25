@@ -7,6 +7,9 @@ called on the mosaic and again on its uncertainty image: ``BUNIT``,
 then the HDU rewritten as a float32 ``PrimaryHDU`` with astropy's
 ``CHECKSUM``/``DATASUM``.
 
+The WCS awaicgen wrote is kept as is (the header is rewritten, never
+re-derived): no PV or SIP is added.
+
 Departures (R4): ``FID`` is not stamped (a database id; `register`
 derives it from the filter name); the run model's identifiers are added
 with the names the finalize stamp uses -- ``RPRUN``, ``RPATTMPT``,

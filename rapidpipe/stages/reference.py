@@ -17,14 +17,19 @@ uncertainty and image statistics (``measure``) -> SExtractor on the mosaic
 with the uncertainty as weight, and its FWHM statistics (``catalog``) ->
 the header stamp on the mosaic and its uncertainty image (``header``).
 
-Unit: ``field``, id ``<rtid>/<filter>`` (R1), e.g. ``4711398/F146``. A bad
-unit id is a usage error (64).
+Unit: ``field``, id ``<rtid>/<filter>`` (R1), e.g. ``4711398/W146``. The
+filter may be given in either spelling (``F146`` or ``W146``) and is
+normalised to the RAPID spelling FITS ``FILTER`` headers and the
+``filters`` table carry (`dev`'s ``roman_to_rapid_filter_names``); the
+logical key and the registration block use the RAPID spelling. A bad unit
+id is a usage error (64).
 
 Inputs (R2). ``--inputs`` is an input-set manifest (unit kind ``field``)
 listing N ``l2-image`` entries, member role ``image`` (the delivered
 ``.fits.gz``) -- the selection, in the order the launcher chose (`dev`:
 ``get_overlapping_l2files``, ordered by mjdobs then distance). Every
-frame's HDU 1 ``FILTER`` must name the unit's filter (either spelling),
+frame's HDU 1 ``FILTER``, normalised to the RAPID spelling, must equal the
+unit's,
 N must be at least ``[selection] min_frames``, and at most
 ``[selection] max_frames`` are coadded, in manifest order; frames past
 that are named in the execution record's notes. Any other entry kind, a
@@ -34,9 +39,20 @@ field: selection is the launcher's.
 
 Outputs (R5, R6). One ``reference-image`` entry: primary member ``image``
 (``ref/awaicgen_output_mosaic_image.fits``), members ``coverage`` and
-``uncertainty``; key ``{"field", "filter", "recipe": "awaicgen",
-"version": <selection digest>}``; the registration block R6 fixes
-(:func:`registration_block`). One ``reference-catalog`` entry: member
+``uncertainty``; key ``{"field", "filter" (RAPID spelling), "recipe": "awaicgen",
+"version": <selection digest, 64 hex>}``; the registration block R6 fixes
+(:func:`registration_block`), with the SExtractor count named
+``nsxcatsources`` as the ``refimmeta`` column is. ``zero_point`` is the
+zero point the coadd was scaled to, also stamped as ``MAGZP``; the
+difference stage today uses its own ``[awaicgen] zprefimg`` setting for
+gain matching and does not read ``MAGZP`` (a residual the supervisor
+records). All three bundle members are PRIMARY-HDU images carrying
+awaicgen's output WCS unchanged (TAN, no PV/SIP: the difference stage
+resamples the reference with SWarp assuming no distortion); the stamp
+adds keywords to the image and uncertainty headers and never touches the
+WCS. The catalog is written with the packaged
+``cdf/rapidSexParamsRefImage.inp``, the parameter file the difference
+stage reads it by (``FWHM_IMAGE``). One ``reference-catalog`` entry: member
 ``catalog`` (``ref/awaicgen_output_mosaic_refimsexcat.txt``), key
 ``{"reference": <instance>, "catalog_type": "sextractor"}``, registration
 ``md5``, ``status``, ``catalog_type``, ``source_count``. ``inputs.products``
@@ -66,8 +82,9 @@ Departures from `dev`, each a ruling:
   ordered ``constituents`` list replaces the CSV, and `register` writes
   the rows (R7).
 - `dev` never checks a tool's exit code; this stage fails (70) when
-  awaicgen or SExtractor leaves no output, and when the catalog has no
-  sources (`dev`'s ``nanmin`` raises there too).
+  awaicgen or SExtractor leaves no output. A catalog with no sources (no
+  FWHM) is rejected (65): `dev`'s ``nanmin`` raises there, and the
+  difference stage cannot use such a reference.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
@@ -176,12 +193,16 @@ _UNIT_RE = re.compile(r"^([1-9][0-9]*)/([A-Za-z0-9]+)$")
 
 
 def parse_unit(unit_id: str) -> tuple[int, str]:
-    """``<rtid>/<filter>`` -> ``(rtid, filter)``; a bad id is a usage error (64)."""
+    """``<rtid>/<filter>`` -> ``(rtid, RAPID filter name)``; a bad id is a usage error (64).
+
+    Either spelling of the filter is accepted and normalised (``F146`` ->
+    ``W146``).
+    """
     match = _UNIT_RE.match(unit_id)
     if match is None:
         raise UsageError(
-            f"reference unit id must be '<rtid>/<filter>' (e.g. '4711398/F146'), got {unit_id!r}")
-    return int(match.group(1)), match.group(2)
+            f"reference unit id must be '<rtid>/<filter>' (e.g. '4711398/W146'), got {unit_id!r}")
+    return int(match.group(1)), prep.rapid_filter_name(match.group(2))
 
 
 def _positive_int(settings: dict[str, Any], table: str, key: str) -> int:
@@ -373,7 +394,8 @@ def read_selection(context: StageContext, unit_filter: str, checked: _Checked) -
             raise InputRejected(
                 f"l2-image {entry.instance!r} ({name}) is not a readable two-HDU FITS file: "
                 f"{exc}") from exc
-        if frame_header.filter is None or not prep.same_filter(frame_header.filter, unit_filter):
+        if (frame_header.filter is None
+                or prep.rapid_filter_name(frame_header.filter) != unit_filter):
             raise InputRejected(
                 f"l2-image {entry.instance!r} ({name}): FILTER {frame_header.filter!r} is not "
                 f"the unit's filter {unit_filter!r}")
@@ -420,7 +442,7 @@ def registration_block(*, md5: str, field_id: int, exposure_filter: str,
         "fwhmmedpix": fwhm.fwhmmedpix,
         "fwhmminpix": fwhm.fwhmminpix,
         "fwhmmaxpix": fwhm.fwhmmaxpix,
-        "nsexcatsources": fwhm.nsexcatsources,
+        "nsxcatsources": fwhm.nsxcatsources,
         "npucatsources": None,
         "settings_hash": settings_hash,
     })
@@ -433,7 +455,7 @@ REGISTRATION_FIELDS = (
     "constituents", "nframes", "mjdobs_min", "mjdobs_max", "jd_start", "jd_end",
     "total_exptime", "zero_point", "cov5percent", "medncov", "medpixunc", "npixnan",
     "clmean", "clstddev", "clnoutliers", "gmedian", "datascale", "gmin", "gmax",
-    "fwhmmedpix", "fwhmminpix", "fwhmmaxpix", "nsexcatsources", "npucatsources",
+    "fwhmmedpix", "fwhmminpix", "fwhmmaxpix", "nsxcatsources", "npucatsources",
     "settings_hash",
 )
 
@@ -533,11 +555,13 @@ def _body(context: StageContext) -> StageResult:
     try:
         fwhm = catalog.fwhm_statistics(o(catalog_name), paths["cfg_path"] + "/" + catalog.PARAMS_FILE)
     except ValueError as exc:
-        raise StageError(f"reference catalog {catalog_name} has no usable FWHM_IMAGE: {exc}") from exc
+        raise InputRejected(
+            f"reference catalog {catalog_name} has no sources with a usable FWHM_IMAGE "
+            f"(the coadd of this selection yields no reference): {exc}") from exc
 
     # The header stamp, on the image and its uncertainty image.
     instance = new_ulid()
-    exposure_filter = selection.coadded[0].header.filter
+    exposure_filter = unit_filter   # RAPID spelling; every frame's FILTER normalises to it
     stamp = header.StampValues(
         field=rtid, exposure_filter=str(exposure_filter),
         cov5percent=measurements.cov5percent, nframes=len(prepared),
@@ -572,10 +596,10 @@ def _body(context: StageContext) -> StageResult:
         key={"reference": instance, "catalog_type": CATALOG_TYPE},
         members=(catalog_member,), primary=catalog_member.path,
         registration={"md5": _md5_of_file(o(catalog_name)), "status": STATUS,
-                      "catalog_type": CATALOG_TYPE, "source_count": fwhm.nsexcatsources})
+                      "catalog_type": CATALOG_TYPE, "source_count": fwhm.nsxcatsources})
 
     log.info("reference: %s/%s coadded %d frames -> %s (version %s), %d catalog sources",
-             rtid, unit_filter, len(constituents), instance, digest, fwhm.nsexcatsources)
+             rtid, unit_filter, len(constituents), instance, digest, fwhm.nsxcatsources)
     notes: dict[str, Any] = {}
     if selection.not_coadded:
         notes["not_coadded"] = selection.not_coadded

@@ -47,8 +47,8 @@ from rapidpipe.selftest.support.fakedifftools import FakeToolRunner
 # ----------------------------------------------------------------------
 
 RTID = 4711398
-UNIT_FILTER = "F146"
-HEADER_FILTER = "W146"     # the RAPID spelling; the unit's F146 must match it
+UNIT_FILTER = "W146"       # the RAPID spelling, as the headers and filters table carry
+HEADER_FILTER = "W146"
 #: Tile 4711398's centre (``rapidpipe.science.spatial.field_center``).
 TILE_CENTRE = (267.53906, -29.827858)
 NAXIS = 96

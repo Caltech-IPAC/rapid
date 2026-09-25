@@ -65,6 +65,14 @@ def test_same_filter_accepts_both_spellings_only():
     assert not prep.same_filter("F146", "F184")
 
 
+def test_rapid_filter_name_normalises_to_the_rapid_spelling():
+    assert prep.rapid_filter_name("F146") == "W146"
+    assert prep.rapid_filter_name(" w146 ") == "W146"
+    assert prep.rapid_filter_name("F062") == "R062"
+    assert prep.rapid_filter_name("F184") == "F184"
+    assert prep.rapid_filter_name("X999") == "X999"
+
+
 def test_mjd_to_jd():
     assert prep.convert_mjd_to_jd(61679.086) == 61679.086 + 2400000.5
 
@@ -214,7 +222,7 @@ def test_fwhm_statistics_as_dev(tmp_path):
                    "1.0 2.0 5\n2.0 4.0 5\n3.0 nan 5\n4.0 3.0 5\n")
     stats = catalog.fwhm_statistics(cat, params)
     assert (stats.fwhmmedpix, stats.fwhmminpix, stats.fwhmmaxpix) == (3.0, 2.0, 4.0)
-    assert stats.nsexcatsources == 4
+    assert stats.nsxcatsources == 4
     assert stats.fwhm_ref == 3.0
 
 
@@ -318,7 +326,7 @@ def test_stamp_writes_devs_keywords_without_fid_plus_the_run_model(tmp_path):
 
 def test_selection_digest_is_the_ruled_formula():
     ids = ["01B", "01A", "01C"]
-    expected = hashlib.sha256(("01A\n01B\n01C\n" + "ab" * 32).encode()).hexdigest()[:16]
+    expected = hashlib.sha256(("01A\n01B\n01C\n" + "ab" * 32).encode()).hexdigest()
     assert identity.selection_digest(ids, "ab" * 32) == expected
     assert identity.selection_digest(ids, "sha256:" + "ab" * 32) == expected
 
@@ -328,7 +336,7 @@ def test_selection_digest_ignores_order_but_not_membership_or_settings():
     assert identity.selection_digest(["b", "a"], "s1") == base
     assert identity.selection_digest(["a", "c"], "s1") != base
     assert identity.selection_digest(["a", "b"], "s2") != base
-    assert len(base) == 16 and int(base, 16) >= 0
+    assert len(base) == 64 and int(base, 16) >= 0
 
 
 def test_logical_key():

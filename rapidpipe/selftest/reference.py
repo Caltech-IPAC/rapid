@@ -141,8 +141,8 @@ def _check(checks: Checks, manifest: Manifest, expected: dict[str, Any],
     checks.check(cat.registration.get("status") == 1
                  and cat.registration.get("catalog_type") == "sextractor",
                  "catalog status 1, catalog_type sextractor")
-    checks.check(cat.registration.get("source_count") == registration.get("nsexcatsources"),
-                 "catalog source_count equals nsexcatsources")
+    checks.check(cat.registration.get("source_count") == registration.get("nsxcatsources"),
+                 "catalog source_count equals nsxcatsources")
 
     # inputs.products: each constituent.
     expected_products = {f"l2-image/{i:03d}": c for i, c in enumerate(constituents, start=1)}
