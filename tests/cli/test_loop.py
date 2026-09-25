@@ -426,24 +426,83 @@ def test_loop_exits_75_while_another_loop_holds_the_schedule(
     assert _rows(db, world["schedule"]) == []
 
 
-def test_loop_retry_failed_reopens_the_date_and_resumes_its_run(
+def test_loop_retry_failed_re_runs_the_failed_units_on_a_seeded_run(
         cli, db, fake_batch, fake_s3, world, monkeypatch):
-    _FakeStages(db, fake_batch, fake_s3, fail=("statistics", "102")).install(monkeypatch)
-    assert cli("loop", "run", "--spec", world["spec"]).rc == 1
-    ((_, run_id, state, _, _),) = _rows(db, world["schedule"])
-    assert state == "failed"
+    stages = _FakeStages(db, fake_batch, fake_s3, fail=("statistics", "102"))
+    stages.install(monkeypatch)
+    assert cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01").rc == 1
+    ((_, run1, state, _, record),) = _rows(db, world["schedule"])
+    assert state == "failed" and "statistics 102" in record["failure"]
+    # Codex 7-2: field 101's chain ran to the end although 102 failed.
+    with db.cursor() as cur:
+        cur.execute("SELECT stage, unit_id, state FROM units WHERE run = %s "
+                    "AND stage IN ('statistics', 'prune', 'alerts')", (run1,))
+        assert sorted(cur.fetchall()) == [("prune", "101", "complete"),
+                                          ("statistics", "101", "complete"),
+                                          ("statistics", "102", "failed")]
 
-    stopped = cli("loop", "run", "--spec", world["spec"])
+    stopped = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01")
     assert stopped.rc == 1 and "(skipped)" in stopped.out
 
-    retried = cli("loop", "run", "--spec", world["spec"], "--retry-failed")
-    assert f"date=2027-10-01 run={run_id} reopened (--retry-failed)" in retried.out
-    assert f"date=2027-10-01 run={run_id} resumed" in retried.out
-    assert "already complete" in retried.out
-    # statistics 102 is a failed unit, so the date fails again, on the same run.
-    assert retried.rc == 1
-    ((_, again, state, _, _),) = _rows(db, world["schedule"])
-    assert (again, state) == (run_id, "failed")
+    stages.fail = None  # the cause is fixed
+    retried = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01",
+                  "--retry-failed")
+    assert retried.rc == 0, retried.err + retried.out
+    ((_, run2, state, promotion, record),) = _rows(db, world["schedule"])
+    assert run2 != run1 and state == "complete"
+    assert f"date=2027-10-01 run={run2} reopened (--retry-failed, seeded from {run1})" \
+        in retried.out
+    assert record["run"] == run2 and record["previous_runs"] == [run1]
+    assert record["previous_failures"][0]["run"] == run1
+    assert "failure" not in record
     with db.cursor() as cur:
-        cur.execute("SELECT count(*) FROM runs WHERE release = %s", (world["tag"],))
-        assert cur.fetchone()[0] == 1
+        cur.execute("SELECT seed_run, selected_stages, state FROM runs WHERE id = %s", (run2,))
+        assert cur.fetchone() == (run1, ["statistics", "prune", "alerts"], "finished")
+        # The seeded run holds only what its seed left: the failed statistics
+        # unit (seeded), and the prune and alerts units that never ran.
+        cur.execute("SELECT stage, unit_id, state, seeded_from_unit IS NOT NULL FROM units "
+                    "WHERE run = %s ORDER BY stage, unit_id", (run2,))
+        assert cur.fetchall() == [("alerts", UNIT, "complete", False),
+                                  ("prune", "102", "complete", False),
+                                  ("statistics", "102", "complete", True)]
+    # Inherited results are read from the seed: 101's association set.
+    alerts_in = _read(fake_s3, f"s3://{FAKE_BUCKET}/scratch/runs/{run2}/inputs/alerts/"
+                               f"{UNIT}/manifest.json")
+    assert record["association_sets"]["101"] in alerts_in["inputs"]["result_sets"]
+    assert record["promotion"]
+
+
+def test_loop_a_finished_run_with_units_missing_fails_the_date(
+        cli, db, fake_batch, fake_s3, world, monkeypatch):
+    stages = _FakeStages(db, fake_batch, fake_s3)
+    stages.install(monkeypatch)
+    stages.stop_after = "load"
+    with pytest.raises(KeyboardInterrupt):
+        cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01")
+    ((_, run_id, state, _, _),) = _rows(db, world["schedule"])
+    assert state == "open"
+    repository.finish_run(db.connection, run_id)  # finished elsewhere, part-way
+
+    result = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01")
+    assert result.rc == 1, result.err + result.out
+    ((_, again, state, promotion, record),) = _rows(db, world["schedule"])
+    assert (again, state, promotion) == (run_id, "failed", None)
+    reason = record["reason"]
+    assert reason.startswith(f"run {run_id} is finished but the date's units are not all "
+                             "complete: maintain 29990101/SCA01 (absent), crossmatch 101 "
+                             "(absent)")
+    assert f"alerts {UNIT} (absent)" in reason
+    with db.cursor() as cur:
+        cur.execute("SELECT count(*) FROM promotions WHERE request_context->>'run' = %s",
+                    (run_id,))
+        assert cur.fetchone()[0] == 0
+
+    # Nothing failed, so the seeded path has nothing to re-run: the date
+    # stays failed with its refusal.
+    retried = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01",
+                  "--retry-failed")
+    assert retried.rc == 1, retried.err + retried.out
+    ((_, again, state, _, record),) = _rows(db, world["schedule"])
+    assert (again, state) == (run_id, "failed")
+    assert record["reason"].startswith("--retry-failed: ")
+    assert "nothing to re-run" in record["reason"]

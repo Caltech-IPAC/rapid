@@ -26,8 +26,19 @@ uses. The rulings this module implements, one line each:
   ``resolve_jobless`` once and the walk is retried once; still job-less, the
   date fails (row ``failed``, ``record.jobless_attempt``, exit 1).
 - A4: one loop per schedule (``pg_try_advisory_lock``, exit 75 when held); a
-  ``failed`` row stops the loop unless ``--retry-failed`` reopens it and
-  resumes its run; the row's completion commits with ``finish_run``.
+  ``failed`` row stops the loop unless ``--retry-failed`` reopens it: a new
+  run seeded from the row's run through step 6's ``run create --seed <run>
+  --only-failed`` path (the row repointed to it, the old run id appended to
+  ``record.previous_runs``), then resumed; the row's completion commits with
+  ``finish_run``.
+- Codex 7-2: within a date every unit a phase can run is walked before the
+  date fails (the detector-image chains, then maintain, then the field
+  chains, then alerts), so a seeded re-run, whose stage list starts at its
+  earliest non-complete position, holds every unit still to run; each
+  field's crossmatch input set carries every source set of the date (the
+  neighbour pass needs neighbouring fields' rows); a date whose run is no
+  longer open completes only when every unit its plan requires is
+  ``complete`` (in the run, or inherited from the runs it was seeded from).
 - R6: once every unit is complete the policy's checks are run and recorded
   and the run is promoted (``promote_run``, ``who="scheduler"``,
   ``check_policy`` = the spec's, else the run's, else the default); a refusal
@@ -275,13 +286,17 @@ class LoopTools:
     ``write_manifest(manifest, location)``, ``exists(location, rel)``,
     ``copy(src, src_rel, dst, dst_rel)`` and ``size(location, rel)``
     (``rapidpipe.cli.runctl._Storage``); ``inputs_root(run_id)`` is
-    ``<scratch root>/runs/<run>/inputs``; ``out`` prints a line."""
+    ``<scratch root>/runs/<run>/inputs``; ``out`` prints a line;
+    ``create_seeded_run(conn, seed) -> run id`` is ``run create --seed <run>
+    --only-failed`` (``rapidpipe.cli.main.create_only_failed_run``, no
+    commit; a refusal is a ``RunModelError``)."""
 
     walk: Callable[..., int]
     create_run: Callable[..., str]
     storage: Any
     inputs_root: Callable[[str], str]
     out: Callable[[str], None] = field(default=lambda line: print(line, flush=True))
+    create_seeded_run: Callable[..., str] | None = None
 
 
 # ======================================================================
@@ -369,13 +384,43 @@ def unlock(conn, schedule: str) -> None:
     conn.commit()
 
 
-def reopen_row(conn, schedule: str, processing_date: _dt.date) -> None:
-    """``--retry-failed``: a failed row back to ``open``, its run kept (A4)."""
+def repoint_row(conn, schedule: str, processing_date: _dt.date, run_id: str,
+                record: dict[str, Any]) -> None:
+    """``--retry-failed``: a failed row back to ``open`` on its seeded re-run
+    ``run_id`` (Codex 7-2). Does not commit."""
     with conn.cursor() as cur:
-        cur.execute("UPDATE loop_dates SET state = 'open', ended_at = NULL "
+        cur.execute("UPDATE loop_dates SET run = %s, state = 'open', ended_at = NULL, "
+                    "promotion = NULL, record = %s "
                     "WHERE schedule = %s AND processing_date = %s AND state = 'failed'",
-                    (schedule, processing_date))
-    conn.commit()
+                    (run_id, json.dumps(record, default=str), schedule, processing_date))
+
+
+def run_lineage(conn, run_id: str) -> tuple[tuple[str, ...], list[str]]:
+    """``((run, its seed, the seed's seed, ...), run's selected stages)``."""
+    chain: list[str] = []
+    stages: list[str] | None = None
+    current: str | None = run_id
+    while current is not None and current not in chain:
+        with conn.cursor() as cur:
+            cur.execute("SELECT seed_run, selected_stages FROM runs WHERE id = %s", (current,))
+            row = cur.fetchone()
+        if row is None:
+            raise LoopError(f"run {current} does not exist")
+        chain.append(current)
+        if stages is None:
+            stages = list(row[1] or [])
+        current = row[0]
+    return tuple(chain), stages or []
+
+
+def unit_state(conn, run_id: str, stage: str, unit_id: str) -> tuple[str, bool] | None:
+    """``(state, seeded)`` of the run's (stage, unit_id), or ``None``."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT state, seeded_from_unit IS NOT NULL FROM units "
+                    "WHERE run = %s AND stage = %s AND unit_id = %s",
+                    (run_id, stage, unit_id))
+        row = cur.fetchone()
+    return None if row is None else (row[0], bool(row[1]))
 
 
 def _insert_row(conn, schedule: str, processing_date: _dt.date, run_id: str,
@@ -550,7 +595,10 @@ def input_set_manifest(run_id: str, unit: Unit, outputs: Sequence[OutputEntry],
 
 def crossmatch_inputs(run_id: str, field_id: int, source_sets: Sequence[OutputEntry],
                       base: OutputEntry | None) -> Manifest:
-    """Crossmatch's input set for one field: the source sets, plus the base."""
+    """Crossmatch's input set for one field: every source set of the date
+    (crossmatch filters by field itself, and its neighbour pass reads
+    neighbouring fields' rows from the supplied sets; Codex 7-2), plus the
+    field's base."""
     outputs = list(source_sets) + ([base] if base is not None else [])
     return input_set_manifest(run_id, Unit(kind="field", id=str(field_id)), outputs,
                               [o.instance for o in outputs])
@@ -672,6 +720,189 @@ def _finish_row(conn, spec: LoopSpec, date: _dt.date, run_id: str, record: dict[
     return EXIT_OK
 
 
+def _fail_row(conn, spec: LoopSpec, date: _dt.date, run_id: str, record: dict[str, Any],
+              out: Callable[[str], None], **fields: Any) -> int:
+    record.update(units=unit_records(conn, run_id), **fields)
+    _update_row(conn, spec.schedule, date, state="failed", promotion=None, record=record)
+    conn.commit()
+    reason = fields.get("failure") or fields.get("reason")
+    out(f"date={date} run={run_id} state=failed reason={reason}")
+    return EXIT_FAILED
+
+
+# ----------------------------------------------------------------------
+# The date's run, seeded or not (Codex 7-2)
+# ----------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RunView:
+    """The date's run as the walk sees it. ``chain`` is the run, then the run
+    it was seeded from by ``--retry-failed``, and so on; ``offset`` is the
+    position in :data:`SELECTED_STAGES` the run's own stage list starts at (a
+    production seed's re-run selects the suffix from its earliest
+    non-complete position, step 6 R7). A unit the run has no row for is
+    inherited when the nearest run of the chain holding it has it
+    ``complete``; its output is read there (a production run's outputs are
+    project custody)."""
+
+    run: str
+    chain: tuple[str, ...]
+    offset: int
+
+    @property
+    def seeded(self) -> bool:
+        return len(self.chain) > 1
+
+
+def run_view(conn, run_id: str) -> RunView:
+    chain, stages = run_lineage(conn, run_id)
+    offset = len(SELECTED_STAGES) - len(stages)
+    if offset < 0 or tuple(stages) != SELECTED_STAGES[offset:]:
+        raise LoopError(f"run {run_id} selects {', '.join(stages) or 'no stages'}; the loop "
+                        f"walks {', '.join(SELECTED_STAGES)} or a suffix of it")
+    return RunView(run=run_id, chain=chain, offset=offset)
+
+
+def _holder(conn, view: RunView, stage: str, unit_id: str) -> tuple[str, str] | None:
+    """``(run, state)`` of the nearest run of the chain with the unit, or ``None``."""
+    for run_id in view.chain:
+        found = unit_state(conn, run_id, stage, unit_id)
+        if found is not None:
+            return run_id, found[0]
+    return None
+
+
+def _inherited(conn, view: RunView, stage: str, unit_id: str) -> bool:
+    """The unit completed in a run this one was seeded from and has no row here."""
+    if not view.seeded or unit_state(conn, view.run, stage, unit_id) is not None:
+        return False
+    found = _holder(conn, view, stage, unit_id)
+    return found is not None and found[1] == "complete"
+
+
+def _output(conn, view: RunView, stage: str, unit_id: str) -> str:
+    """The unit's selected output, from the run of the chain holding it."""
+    run_id = view.run
+    if view.seeded:
+        found = _holder(conn, view, stage, unit_id)
+        if found is not None:
+            run_id = found[0]
+    return selected_output(conn, run_id, stage, unit_id)
+
+
+def _producer_position(position: int) -> int:
+    return next(p for p in reversed(range(position)) if SELECTED_STAGES[p] != "register")
+
+
+def image_units(unit: str) -> list[tuple[int, str, str]]:
+    """``(position, stage, unit id)`` of one detector image's chain; a
+    ``register`` unit is ``<producing stage>/<unit>``."""
+    units = []
+    for position in IMAGE_CHAIN:
+        stage = SELECTED_STAGES[position]
+        if stage == "register":
+            units.append((position, stage,
+                          f"{SELECTED_STAGES[_producer_position(position)]}/{unit}"))
+        else:
+            units.append((position, stage, unit))
+    return units
+
+
+def _loads(conn, storage: Any, view: RunView, day: LoopDate
+           ) -> tuple[dict[str, tuple[str, list[OutputEntry]]],
+                      dict[str, list[tuple[str, OutputEntry]]]]:
+    """Per detector image its load output and source sets; per maintain unit
+    ``<yyyymmdd>/SCA<nn>`` the (load output, source set) pairs it maintains."""
+    loads: dict[str, tuple[str, list[OutputEntry]]] = {}
+    for image in day.detector_images:
+        load_loc = _output(conn, view, "load", image.unit)
+        entries = [o for o in storage.read_manifest(load_loc).outputs if o.kind == "source-set"]
+        if not entries:
+            raise LoopError(f"{load_loc}/manifest.json has no source-set entry")
+        loads[image.unit] = (load_loc, entries)
+    by_maintain: dict[str, list[tuple[str, OutputEntry]]] = {}
+    for load_loc, entries in loads.values():
+        for entry in entries:
+            mu = maintain_unit_id(str(entry.registration.get("table", "")))
+            by_maintain.setdefault(mu, []).append((load_loc, entry))
+    return loads, by_maintain
+
+
+def _fields(conn, loads: dict[str, tuple[str, list[OutputEntry]]], date: _dt.date
+            ) -> tuple[list[int], list[OutputEntry], dict[str, set[int]]]:
+    """The date's fields, every source set of the date (image order, once
+    each), and per image the fields its source sets have rows in."""
+    fields: set[int] = set()
+    sources: dict[str, OutputEntry] = {}
+    image_fields: dict[str, set[int]] = {}
+    for unit, (_, entries) in loads.items():
+        for entry in entries:
+            sources.setdefault(entry.instance, entry)
+            for f in source_set_fields(conn, str(entry.registration["table"]), entry.instance):
+                fields.add(f)
+                image_fields.setdefault(unit, set()).add(f)
+    if not fields:
+        raise LoopError(f"date {date}: the loaded source sets have no fields")
+    return sorted(fields), list(sources.values()), image_fields
+
+
+def incomplete_units(conn, storage: Any, view: RunView, day: LoopDate) -> list[str]:
+    """Every unit the date's plan requires that is not ``complete`` in the
+    run (or inherited complete from its seeds), as ``"<stage> <unit>
+    (<state>|absent)"``: per image admit, register, difference, finalize,
+    register, load; maintain; per field crossmatch, statistics, prune; per
+    image alerts (Codex 7-2). Without every load, maintain's units and the
+    fields cannot be known, and that is said instead."""
+    missing: list[str] = []
+
+    def check(stage: str, unit_id: str) -> None:
+        found = _holder(conn, view, stage, unit_id)
+        if found is None:
+            missing.append(f"{stage} {unit_id} (absent)")
+        elif found[1] != "complete":
+            missing.append(f"{stage} {unit_id} ({found[1]})")
+
+    for image in day.detector_images:
+        for _, stage, unit_id in image_units(image.unit):
+            check(stage, unit_id)
+    if missing:
+        missing.append("maintain, crossmatch, statistics and prune units (unknown until "
+                       "every load is complete)")
+    else:
+        loads, by_maintain = _loads(conn, storage, view, day)
+        for mu in by_maintain:
+            check("maintain", mu)
+        fields, _, _ = _fields(conn, loads, day.processing_date)
+        for f in fields:
+            for stage in ("crossmatch", "statistics", "prune"):
+                check(stage, str(f))
+    for image in day.detector_images:
+        check("alerts", image.unit)
+    return missing
+
+
+def _phase(items: Sequence[Any], body: Callable[[Any], None]) -> None:
+    """Walk every item of one phase; a failed item does not stop the others,
+    but the phase then fails the date with every item's reason (Codex 7-2:
+    a seeded re-run then holds every unit still to run). A timeout or any
+    other error propagates at once."""
+    failures: list[_Stop] = []
+    for item in items:
+        try:
+            body(item)
+        except _Stop as stop:
+            if stop.code != EXIT_FAILED:
+                raise
+            failures.append(stop)
+    if failures:
+        raise _Stop(EXIT_FAILED, "; ".join(str(f) for f in failures),
+                    jobless=next((f.jobless for f in failures if f.jobless), None))
+
+
+# ----------------------------------------------------------------------
+# One date
+# ----------------------------------------------------------------------
+
 def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                  interval: float, timeout: float) -> int:
     """Walk one date to complete or failed; return its exit code (0 or 1);
@@ -691,12 +922,21 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
         _insert_row(conn, schedule, date, run_id, record)
         conn.commit()
         out(f"date={date} run={run_id} created")
+        view = RunView(run=run_id, chain=(run_id,), offset=0)
     else:
         run_id = row.run
         record = dict(row.record)
         out(f"date={date} run={run_id} resumed")
-        if run_state(conn, run_id) != "open":
-            # A4: the run was finished before the row was: complete the row.
+        view = run_view(conn, run_id)
+        state = run_state(conn, run_id)
+        if state != "open":
+            # A4: the run was finished before the row was. Codex 7-2: complete
+            # the row only when every unit the date's plan requires is.
+            missing = incomplete_units(conn, storage, view, day)
+            if missing:
+                return _fail_row(conn, spec, date, run_id, record, out, reason=(
+                    f"run {run_id} is {state} but the date's units are not all complete: "
+                    + ", ".join(missing)))
             record.setdefault("resumed_after_finish", True)
             return _finish_row(conn, spec, date, run_id, record, out)
 
@@ -737,33 +977,67 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                        or "none resolvable yet"))
                 resolved = True
         if rc != 0:
-            stages = ",".join(SELECTED_STAGES[p] for p in positions)
+            stages = ",".join(SELECTED_STAGES[p + view.offset] for p in positions)
             raise _Stop(EXIT_FAILED, f"{stages} {unit_id} did not complete (exit {rc})")
+
+    def position(absolute: int, stage: str, unit_id: str) -> int:
+        """``absolute`` in the run's own stage list; a unit before the run's
+        first stage that its seeds did not complete cannot run here."""
+        if absolute < view.offset:
+            raise _Stop(EXIT_FAILED, f"{stage} {unit_id} is not complete in the runs "
+                                     f"{view.run} was seeded from ({', '.join(view.chain[1:])})"
+                                     f", and {view.run} does not select it")
+        return absolute - view.offset
+
+    def inherited(stage: str, unit_id: str) -> bool:
+        return _inherited(conn, view, stage, unit_id)
+
+    def image_chain(image: DetectorImage) -> None:
+        settings = [s for s in (image.admit_settings,) if s]
+        difference_settings = ([f"difference={image.difference_settings}"]
+                               if image.difference_settings else [])
+        template = [f"difference={image.difference_template}"]
+        if not view.seeded:
+            walk(image.unit, IMAGE_CHAIN, inputs=[image.delivery],
+                 settings=settings + difference_settings, templates=template)
+            return
+        # A seeded re-run: one position at a time, skipping what the seeds
+        # completed; a seeded unit takes its seed attempt's inputs and
+        # settings (step 6 R8), any other unit its producer's output.
+        for absolute, stage, unit_id in image_units(image.unit):
+            if inherited(stage, unit_id):
+                continue
+            here = [position(absolute, stage, unit_id)]
+            found = unit_state(conn, view.run, stage, unit_id)
+            if found is not None and found[1]:
+                walk(image.unit, here)
+            elif stage == "admit":
+                walk(image.unit, here, inputs=[image.delivery], settings=settings)
+            elif stage == "difference":
+                if unit_state(conn, view.run, "admit", image.unit) is None:
+                    raise _Stop(EXIT_FAILED, f"difference {image.unit} reads an input set "
+                                             "composed from admit's output, which is in a "
+                                             f"seed of {view.run}; it cannot be composed "
+                                             "across runs")
+                walk(image.unit, here, settings=difference_settings, templates=template)
+            else:
+                producer = _producer_position(absolute)
+                producer_unit = next(u for p, _, u in image_units(image.unit) if p == producer)
+                walk(image.unit, here, inputs=[_output(conn, view, SELECTED_STAGES[producer],
+                                                       producer_unit)])
 
     try:
         # (b) the detector-image chain, admit..load, per image (A1: register
         # follows finalize only; load reads finalize's output).
-        loads: dict[str, tuple[str, list[OutputEntry]]] = {}
-        for image in day.detector_images:
-            settings = [s for s in (image.admit_settings,) if s]
-            if image.difference_settings:
-                settings.append(f"difference={image.difference_settings}")
-            walk(image.unit, IMAGE_CHAIN, inputs=[image.delivery], settings=settings,
-                 templates=[f"difference={image.difference_template}"])
-            load_loc = selected_output(conn, run_id, "load", image.unit)
-            entries = [o for o in storage.read_manifest(load_loc).outputs
-                       if o.kind == "source-set"]
-            if not entries:
-                raise LoopError(f"{load_loc}/manifest.json has no source-set entry")
-            loads[image.unit] = (load_loc, entries)
+        _phase(day.detector_images, image_chain)
+        loads, by_maintain = _loads(conn, storage, view, day)
 
         # (c) maintain per <yyyymmdd>/SCA<nn>.
-        by_maintain: dict[str, list[tuple[str, OutputEntry]]] = {}
-        for unit, (load_loc, entries) in loads.items():
-            for entry in entries:
-                mu = maintain_unit_id(str(entry.registration.get("table", "")))
-                by_maintain.setdefault(mu, []).append((load_loc, entry))
-        for mu, items in by_maintain.items():
+        def maintain(item: tuple[str, list[tuple[str, OutputEntry]]]) -> None:
+            mu, items = item
+            if inherited("maintain", mu):
+                return
+            here = [position(MAINTAIN, "maintain", mu)]
             if len({loc for loc, _ in items}) == 1:
                 inputs = items[0][0]
             else:
@@ -773,98 +1047,101 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                     manifest=input_set_manifest(
                         run_id, Unit(kind="detector-date", id=mu), [e for _, e in items],
                         [e.instance for _, e in items]))
-            walk(mu, [MAINTAIN], inputs=[inputs])
+            walk(mu, here, inputs=[inputs])
 
-        # (d) per field: crossmatch (source sets + base) -> statistics -> prune.
-        field_sets: dict[int, list[OutputEntry]] = {}
-        image_fields: dict[str, set[int]] = {}
-        for unit, (_, entries) in loads.items():
-            for entry in entries:
-                for f in source_set_fields(conn, str(entry.registration["table"]),
-                                           entry.instance):
-                    field_sets.setdefault(f, []).append(entry)
-                    image_fields.setdefault(unit, set()).add(f)
-        fields = sorted(field_sets)
-        if not fields:
-            raise LoopError(f"date {date}: the loaded source sets have no fields")
+        _phase(list(by_maintain.items()), maintain)
+
+        # (d) per field: crossmatch (every source set of the date + the
+        # field's base) -> statistics -> prune.
+        fields, sources, image_fields = _fields(conn, loads, date)
         previous = previous_complete_rows(conn, schedule, date)
         association: dict[int, str] = {}
         statistics: dict[int, str] = {}
         bases: dict[str, str | None] = {}
         base_detail: dict[str, Any] = {}
-        for f in fields:
+
+        def field_chain(f: int) -> None:
+            unit = str(f)
             base = base_for_field(conn, storage, previous, f)
-            bases[str(f)] = base.entry.instance if base is not None else None
-            base_detail[str(f)] = None if base is None else {
+            bases[unit] = base.entry.instance if base is not None else None
+            base_detail[unit] = None if base is None else {
                 "run": base.run, "processing_date": str(base.processing_date),
                 "base_promoted": base.promoted}
-            xm_inputs = _bind_and_write(
-                conn, storage, run_id=run_id, stage="crossmatch", unit_id=str(f),
-                dest=f"{tools.inputs_root(run_id)}/crossmatch/{f}",
-                manifest=crossmatch_inputs(run_id, f, field_sets[f],
-                                           base.entry if base is not None else None))
-            walk(str(f), [CROSSMATCH], inputs=[xm_inputs])
-            xm_out = selected_output(conn, run_id, "crossmatch", str(f))
+            if not inherited("crossmatch", unit):
+                here = [position(CROSSMATCH, "crossmatch", unit)]
+                xm_inputs = _bind_and_write(
+                    conn, storage, run_id=run_id, stage="crossmatch", unit_id=unit,
+                    dest=f"{tools.inputs_root(run_id)}/crossmatch/{f}",
+                    manifest=crossmatch_inputs(run_id, f, sources,
+                                               base.entry if base is not None else None))
+                walk(unit, here, inputs=[xm_inputs])
+            xm_out = _output(conn, view, "crossmatch", unit)
             sets = [o.instance for o in storage.read_manifest(xm_out).outputs
                     if o.kind == "association-set"]
             if len(sets) != 1:
                 raise LoopError(f"{xm_out}/manifest.json has {len(sets)} association sets")
             association[f] = sets[0]
-            walk(str(f), [STATISTICS], inputs=[xm_out])
-            st_out = selected_output(conn, run_id, "statistics", str(f))
+            if not inherited("statistics", unit):
+                walk(unit, [position(STATISTICS, "statistics", unit)], inputs=[xm_out])
+            st_out = _output(conn, view, "statistics", unit)
             st_sets = [o.instance for o in storage.read_manifest(st_out).outputs
                        if o.kind == "statistics-set"]
             if len(st_sets) > 1:
                 raise LoopError(f"{st_out}/manifest.json has {len(st_sets)} statistics sets")
             if st_sets:
                 statistics[f] = st_sets[0]
-            walk(str(f), [PRUNE], inputs=[xm_out])
+            if not inherited("prune", unit):
+                walk(unit, [position(PRUNE, "prune", unit)], inputs=[xm_out])
+
+        _phase(fields, field_chain)
 
         # (e) alerts per detector image (A5, stages/alerts.py's input rules).
         alerts: dict[str, dict[str, Any]] = {}
-        for image in day.detector_images:
-            fin_loc = selected_output(conn, run_id, "finalize", image.unit)
-            fin = storage.read_manifest(fin_loc)
-            diffs = [o for o in fin.outputs if o.kind == "difference-image"]
-            if len(diffs) != 1:
-                raise LoopError(f"{fin_loc}/manifest.json has {len(diffs)} difference-image "
-                                "entries; expected one")
-            own_sources = alert_source_set(loads[image.unit][1], diffs[0].instance)
-            template = storage.read_manifest(image.difference_template)
-            refcats = [o for o in template.outputs if o.kind == "reference-catalog"]
-            if len(refcats) > 1:
-                raise LoopError(f"{image.difference_template}/manifest.json has "
-                                f"{len(refcats)} reference-catalog entries")
-            dest = f"{tools.inputs_root(run_id)}/alerts/{image.unit}"
-            own_fields = sorted(image_fields.get(image.unit, ()))
-            result_sets = alert_result_sets(own_sources, [association[f] for f in own_fields],
-                                            [statistics[f] for f in own_fields
-                                             if f in statistics])
-            manifest = None
-            if not storage.exists(parse_location(dest), "manifest.json"):
-                _copy_members(storage, fin_loc, diffs[0], dest)
-                for refcat in refcats:
-                    _copy_members(storage, image.difference_template, refcat, dest)
-                manifest = input_set_manifest(run_id, fin.unit, [diffs[0], *refcats],
-                                              result_sets)
-            _bind_and_write(conn, storage, run_id=run_id, stage="alerts", unit_id=image.unit,
-                            dest=dest, manifest=manifest)
-            walk(image.unit, [ALERTS], inputs=[dest])
-            al_out = selected_output(conn, run_id, "alerts", image.unit)
+
+        def image_alerts(image: DetectorImage) -> None:
+            if not inherited("alerts", image.unit):
+                here = [position(ALERTS, "alerts", image.unit)]
+                fin_loc = _output(conn, view, "finalize", image.unit)
+                fin = storage.read_manifest(fin_loc)
+                diffs = [o for o in fin.outputs if o.kind == "difference-image"]
+                if len(diffs) != 1:
+                    raise LoopError(f"{fin_loc}/manifest.json has {len(diffs)} "
+                                    "difference-image entries; expected one")
+                own_sources = alert_source_set(loads[image.unit][1], diffs[0].instance)
+                template = storage.read_manifest(image.difference_template)
+                refcats = [o for o in template.outputs if o.kind == "reference-catalog"]
+                if len(refcats) > 1:
+                    raise LoopError(f"{image.difference_template}/manifest.json has "
+                                    f"{len(refcats)} reference-catalog entries")
+                dest = f"{tools.inputs_root(run_id)}/alerts/{image.unit}"
+                own_fields = sorted(image_fields.get(image.unit, ()))
+                result_sets = alert_result_sets(
+                    own_sources, [association[f] for f in own_fields],
+                    [statistics[f] for f in own_fields if f in statistics])
+                manifest = None
+                if not storage.exists(parse_location(dest), "manifest.json"):
+                    _copy_members(storage, fin_loc, diffs[0], dest)
+                    for refcat in refcats:
+                        _copy_members(storage, image.difference_template, refcat, dest)
+                    manifest = input_set_manifest(run_id, fin.unit, [diffs[0], *refcats],
+                                                  result_sets)
+                _bind_and_write(conn, storage, run_id=run_id, stage="alerts",
+                                unit_id=image.unit, dest=dest, manifest=manifest)
+                walk(image.unit, here, inputs=[dest])
+            al_out = _output(conn, view, "alerts", image.unit)
             containers = [o.instance for o in storage.read_manifest(al_out).outputs
                           if o.kind == "alert-container"]
             alerts[image.unit] = {"instance": containers[0] if containers else None,
                                   "location": al_out}
+
+        _phase(day.detector_images, image_alerts)
     except _Stop as stop:
         if stop.code == EXIT_TIMEOUT:
             raise
-        record.update(units=unit_records(conn, run_id), failure=str(stop))
+        fields_failed: dict[str, Any] = {"failure": str(stop)}
         if stop.jobless:
-            record["jobless_attempt"] = stop.jobless
-        _update_row(conn, schedule, date, state="failed", promotion=None, record=record)
-        conn.commit()
-        out(f"date={date} run={run_id} state=failed reason={stop}")
-        return stop.code
+            fields_failed["jobless_attempt"] = stop.jobless
+        return _fail_row(conn, spec, date, run_id, record, out, **fields_failed)
     except Exception as exc:
         if getattr(exc, "code", None) == EXIT_TIMEOUT:
             conn.rollback()
@@ -877,6 +1154,43 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                   statistics_sets={str(f): i for f, i in statistics.items()},
                   alerts=alerts)
     return _finish_row(conn, spec, date, run_id, record, out)
+
+
+#: Keys of a failed row's record that describe the failed run, moved to
+#: ``previous_failures`` when ``--retry-failed`` repoints the row.
+_FAILURE_KEYS = ("failure", "reason", "jobless_attempt")
+
+
+def retry_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> int:
+    """``--retry-failed`` on a ``failed`` row (A4, Codex 7-2): create a run
+    seeded from the row's run through step 6's ``run create --seed <run>
+    --only-failed`` path (``tools.create_seeded_run``), repoint the row to it
+    (``open``), append the old run to ``record.previous_runs``, and commit
+    both together; the caller then resumes the date as usual. A refusal
+    (nothing to re-run, a deleting seed) leaves the row ``failed`` with the
+    message as ``record.reason`` and returns 1."""
+    date, out = row.processing_date, tools.out
+    record = dict(row.record)
+    if tools.create_seeded_run is None:
+        raise LoopError("--retry-failed needs run create's --only-failed path")
+    try:
+        new_run = tools.create_seeded_run(conn, row.run)
+    except repository.RunModelError as exc:
+        conn.rollback()
+        record["reason"] = f"--retry-failed: {exc}"
+        _update_row(conn, spec.schedule, date, state="failed", promotion=None, record=record)
+        conn.commit()
+        out(f"date={date} run={row.run} state=failed reason={record['reason']}")
+        return EXIT_FAILED
+    failed = {k: record.pop(k) for k in _FAILURE_KEYS if k in record}
+    record.pop("units", None)  # the old run's; the new run's are recorded at the end
+    record.setdefault("previous_failures", []).append({"run": row.run, **failed})
+    record["previous_runs"] = [*record.get("previous_runs", []), row.run]
+    record["run"] = new_run
+    repoint_row(conn, spec.schedule, date, new_run, record)
+    conn.commit()
+    out(f"date={date} run={new_run} reopened (--retry-failed, seeded from {row.run})")
+    return EXIT_OK
 
 
 # ======================================================================
@@ -912,14 +1226,15 @@ def run_loop(conn, spec: LoopSpec, tools: LoopTools, *, dates: Sequence[_dt.date
         for day in chosen:
             row = loop_row(conn, spec.schedule, day.processing_date)
             if row is not None and row.state == "failed" and retry_failed:
-                reopen_row(conn, spec.schedule, day.processing_date)
-                tools.out(f"date={day.processing_date} run={row.run} reopened (--retry-failed)")
+                code = retry_date(conn, spec, row, tools)
+                if code != EXIT_OK:
+                    return code
             elif row is not None and row.state != "open":
                 tools.out(f"date={day.processing_date} run={row.run} state={row.state} "
                           "(skipped)")
                 if row.state == "failed":
                     tools.out(f"date={day.processing_date}: failed; stopping before later "
-                              "dates (--retry-failed resumes its run)")
+                              "dates (--retry-failed re-runs its failed units)")
                     return EXIT_FAILED
                 continue
             try:

@@ -3,7 +3,8 @@
 The loop itself is ``rapidpipe.launch.loop``; this module parses the
 command line and hands the loop the CLI's own code paths
 (:class:`rapidpipe.launch.loop.LoopTools`): ``run start``'s walk
-(``runctl.walk_unit``), ``run create --release`` (``main.create_run_record``)
+(``runctl.walk_unit``), ``run create --release`` (``main.create_run_record``),
+``run create --seed <run> --only-failed`` (``main.create_only_failed_run``)
 and the storage helper ``run inputs`` uses (``runctl._Storage``), because
 ``rapidpipe.launch`` may not import ``rapidpipe.cli``.
 
@@ -57,7 +58,9 @@ def add_parser(subparsers: Any) -> None:
     run.add_argument("--date", action="append", type=_date, default=[], dest="dates",
                      metavar="YYYY-MM-DD", help="Only this spec date. Repeatable.")
     run.add_argument("--retry-failed", action="store_true",
-                     help="Reopen a failed date and resume its run (default: a failed "
+                     help="Reopen a failed date on a new run seeded from its run (run "
+                          "create --seed <run> --only-failed: the failed units re-run, "
+                          "the completed ones inherited) and walk it (default: a failed "
                           "date stops the loop with exit 1).")
     run.add_argument("--dry-run", action="store_true",
                      help="Print the plan (as 'loop plan') and change nothing.")
@@ -86,7 +89,8 @@ def _tools() -> launch_loop.LoopTools:
     main = runctl._main_module()
     return launch_loop.LoopTools(
         walk=runctl.walk_unit, create_run=main.create_run_record,
-        storage=runctl._Storage(), inputs_root=runctl.inputs_root)
+        storage=runctl._Storage(), inputs_root=runctl.inputs_root,
+        create_seeded_run=lambda conn, seed: main.create_only_failed_run(conn, seed)[0])
 
 
 def _usage_errors() -> tuple[type[BaseException], ...]:
