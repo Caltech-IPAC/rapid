@@ -5,7 +5,7 @@ Repository for RAPID (***R***oman ***A***lerts ***P***romptly from ***I***mage *
 
 ## Repository rules
 
-This repository is public and portable. Account identifiers, bucket names and hostnames are injected at deploy time and are never committed here. Bulk data artifacts (product listings, large generated files) are referenced, with the command to reproduce them, not committed. The design authority for this repository's boundaries and stage interfaces is the [specification](https://roman-rapid.readthedocs.io/en/latest/system/specification.html).
+This repository is public and portable. Account identifiers, bucket names and hostnames are injected at deploy time and are never committed here. Bulk data artifacts (product listings, large generated files) are referenced, with the command to reproduce them, not committed. The design authority for this repository's boundaries and stage interfaces is the [specification](https://roman-rapid.readthedocs.io/en/latest/system/specification.html). [AGENTS.md](AGENTS.md) has the same rules in the form a coding agent needs, plus the package map, migrations and test/CI conventions.
 
 ### Package
 
