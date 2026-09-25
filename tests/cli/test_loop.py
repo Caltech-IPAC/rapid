@@ -219,7 +219,12 @@ def world(db, fake_batch, fake_s3, batch_env, monkeypatch):
         {"kind": "l1-image", "format_version": "1", "instance": new_ulid(),
          "key": {"unit": UNIT}, "primary": "l1/raw.fits",
          "members": [_member(fake_s3, delivery_prefix, "l1/raw.fits", b"RAW" * 4)]}])
-    fake_s3.seed(FAKE_BUCKET, f"{delivery_prefix}/manifest.json", json.dumps(delivery).encode())
+
+    def seed_delivery():
+        fake_s3.seed(FAKE_BUCKET, f"{delivery_prefix}/manifest.json",
+                     json.dumps(delivery).encode())
+
+    seed_delivery()
 
     spec_key = f"control/loop/{schedule}.toml"
     fake_s3.seed(FAKE_BUCKET, spec_key, f"""
@@ -248,7 +253,8 @@ difference_template = "{TEMPLATE}"
 
     state = {"tag": tag, "digest": DIGEST, "schedule": schedule,
              "spec": f"s3://{FAKE_BUCKET}/{spec_key}",
-             "template": {o["kind"]: o["instance"] for o in template["outputs"]}}
+             "template": {o["kind"]: o["instance"] for o in template["outputs"]},
+             "seed_delivery": seed_delivery}
     yield state
 
     with conn.cursor() as cur:
@@ -502,6 +508,15 @@ def test_loop_a_failed_unit_fails_the_date_and_leaves_later_dates(
     assert [(d, s) for d, _, s, _, _ in rows] == [("2027-10-01", "failed")]
     assert "statistics 102" in rows[0][4]["failure"]
 
+    # A unit failed, so a plain rerun does not reopen the date: it stays
+    # failed on its run (--retry-failed's seeded path is the way on).
+    rerun = cli("loop", "run", "--spec", world["spec"])
+    assert rerun.rc == 1, rerun.err + rerun.out
+    assert "reopened" not in rerun.out and "(skipped)" in rerun.out
+    assert "skip (failed)" in cli("loop", "plan", "--spec", world["spec"]).out
+    ((_, run_id, state, _, record),) = _rows(db, world["schedule"])
+    assert (run_id, state) == (rows[0][1], "failed") and "reopened" not in record
+
 
 def test_loop_refuses_a_release_that_is_not_complete(cli, db, fake_batch, fake_s3, world):
     with db.cursor() as cur:
@@ -695,3 +710,20 @@ def test_loop_a_refused_input_manifest_fails_the_date(
     with db.cursor() as cur:
         cur.execute("SELECT count(*) FROM units WHERE run = %s", (run_id,))
         assert cur.fetchone()[0] == 0
+    assert "reopen" in cli("loop", "plan", "--spec", world["spec"]).out.splitlines()[0]
+
+    # The delivery arrives. The date failed on a refusal, with no failed
+    # unit, so a plain rerun reopens it on the same run and completes it.
+    world["seed_delivery"]()
+    rerun = cli("loop", "run", "--spec", world["spec"])
+    assert rerun.rc == 0, rerun.err + rerun.out
+    assert f"date=2027-10-01 run={run_id} reopened" in rerun.out
+    rows = _rows(db, world["schedule"])
+    assert [(d, r, s) for d, r, s, _, _ in rows] == [("2027-10-01", run_id, "complete"),
+                                                     ("2027-10-02", rows[1][1], "complete")]
+    record = rows[0][4]
+    assert len(record["reopened"]) == 1 and "failure" not in record
+    assert "inputs refused" in record["previous_failures"][0]["failure"]
+    with db.cursor() as cur:
+        cur.execute("SELECT count(*) FROM runs WHERE release = %s", (world["tag"],))
+        assert cur.fetchone()[0] == 2  # one per date: no seeded re-run
