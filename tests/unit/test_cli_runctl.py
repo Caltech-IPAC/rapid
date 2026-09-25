@@ -768,13 +768,26 @@ class _FakeSTS:
     def __init__(self, fail=False):
         self.fail = fail
         self.calls = []
+        self.durations = []
 
-    def assume_role(self, *, RoleArn, RoleSessionName):
+    def assume_role(self, *, RoleArn, RoleSessionName, DurationSeconds=None):
         self.calls.append((RoleArn, RoleSessionName))
+        self.durations.append(DurationSeconds)
         if self.fail:
             raise FakeClientError("AccessDenied", "not allowed")
         return {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK",
                                 "SessionToken": "ST"}}
+
+
+class _SweepConn(_Conn):
+    """expire_runs's candidate listing returns ``rows``."""
+
+    def __init__(self, rows):
+        super().__init__()
+        self.rows = rows
+
+    def cursor(self):
+        return _Cursor(self.rows)
 
 
 @pytest.fixture()
@@ -804,6 +817,7 @@ def test_cleanup_s3_client_assumes_the_role(monkeypatch, fake_boto3):
     client = cleanup.cleanup_s3_client()
     assert fake_boto3["sts"].calls == [
         ("arn:example:role/rapid-cleanup", "rapidpipe-cleanup-tester")]
+    assert fake_boto3["sts"].durations == [3600]
     assert fake_boto3["s3"] == [(client, {"aws_access_key_id": "AK",
                                           "aws_secret_access_key": "SK",
                                           "aws_session_token": "ST"})]
@@ -821,8 +835,8 @@ def test_expire_prints_one_report_per_run_with_the_cleanup_client(
     monkeypatch.setenv("RAPIDPIPE_CLEANUP_ROLE_ARN", "arn")
     seen = {}
 
-    def _expire_runs(conn, *, now=None, s3_client=None, scratch_bucket=None):
-        seen.update(now=now, s3_client=s3_client)
+    def _expire_runs(conn, *, now=None, s3_client_factory=None, scratch_bucket=None):
+        seen.update(now=now, s3_client=s3_client_factory())
         return [cleanup.DeletionReport(run_id="R1", objects_deleted=2),
                 cleanup.DeletionReport(run_id="R2", refused="pinned meanwhile")]
 
@@ -837,7 +851,45 @@ def test_expire_prints_one_report_per_run_with_the_cleanup_client(
     assert fake_conn.committed == 1
 
 
-def test_expire_bad_now_is_a_usage_error():
+def test_expire_sweep_assumes_the_role_once_per_run(monkeypatch, fake_boto3):
+    """Each expired run gets fresh credentials: the fake STS is called once
+    per run in a sweep of two, and each run gets its own client."""
+    monkeypatch.setenv("RAPIDPIPE_CLEANUP_ROLE_ARN", "arn")
+    conn = _SweepConn([("R1", "o"), ("R2", "o")])
+    clients = []
+
+    def _delete_run(conn, run_id, requested_by, *, s3_client=None, scratch_bucket=None,
+                    expiry=False):
+        clients.append(s3_client)
+        return cleanup.DeletionReport(run_id=run_id)
+
+    monkeypatch.setattr(cleanup, "delete_run", _delete_run)
+    reports = cleanup.expire_runs(
+        conn, s3_client_factory=cleanup.cleanup_s3_client_factory())
+    assert [r.run_id for r in reports] == ["R1", "R2"]
+    assert len(fake_boto3["sts"].calls) == 2
+    assert clients == [made for made, _ in fake_boto3["s3"]]
+    assert clients[0] is not clients[1]
+
+
+def test_expire_sweep_records_a_role_failure_after_the_first_run(monkeypatch, fake_boto3):
+    monkeypatch.setenv("RAPIDPIPE_CLEANUP_ROLE_ARN", "arn")
+    conn = _SweepConn([("R1", "o"), ("R2", "o")])
+    monkeypatch.setattr(cleanup, "delete_run",
+                        lambda conn, run_id, *a, **k: cleanup.DeletionReport(run_id=run_id))
+    factory = cleanup.cleanup_s3_client_factory()
+    fake_boto3["sts"].fail = True
+    reports = cleanup.expire_runs(conn, s3_client_factory=factory)
+    assert reports[0].refused is None
+    assert "could not assume the cleanup role" in reports[1].refused
+
+
+def test_cleanup_s3_client_factory_unset_is_none(monkeypatch, fake_boto3):
+    monkeypatch.delenv("RAPIDPIPE_CLEANUP_ROLE_ARN", raising=False)
+    assert cleanup.cleanup_s3_client_factory() is None
+
+
+
     with pytest.raises(SystemExit) as exc:
         cli.main(["run", "expire", "--now", "yesterday"])
     assert exc.value.code == 2
