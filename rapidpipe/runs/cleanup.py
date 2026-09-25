@@ -63,7 +63,7 @@ import getpass
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 import psycopg2.extensions
 
@@ -173,6 +173,10 @@ def _default_s3_client() -> Any:
 #: they use the caller's own credentials, as before.
 CLEANUP_ROLE_ENV = "RAPIDPIPE_CLEANUP_ROLE_ARN"
 
+# The cleanup role's MaxSessionDuration is 3600 s, so this is also the most
+# STS will grant; asked for explicitly rather than left to STS's default.
+CLEANUP_SESSION_SECONDS = 3600
+
 
 class CleanupRoleError(Exception):
     """Assuming the cleanup role failed (or boto3 is missing).
@@ -196,12 +200,18 @@ def cleanup_s3_client() -> Any:
     """An S3 client acting as ``RAPIDPIPE_CLEANUP_ROLE_ARN``, or ``None``.
 
     When the variable is set, assumes the role with STS (session name
-    ``rapidpipe-cleanup-<user>``, truncated to STS's 64-character limit)
-    and returns an S3 client built from the temporary credentials, for
-    :func:`delete_run`/:func:`expire_runs`'s ``s3_client=``. When unset,
-    returns ``None`` and those functions fall back to
-    :func:`_default_s3_client`, the caller's own credentials. Any failure
-    raises :class:`CleanupRoleError` with the underlying message.
+    ``rapidpipe-cleanup-<user>``, truncated to STS's 64-character limit;
+    ``DurationSeconds`` :data:`CLEANUP_SESSION_SECONDS`) and returns an S3
+    client built from the temporary credentials, for :func:`delete_run`'s
+    ``s3_client=``. When unset, returns ``None`` and :func:`delete_run`
+    falls back to :func:`_default_s3_client`, the caller's own
+    credentials. Any failure raises :class:`CleanupRoleError` with the
+    underlying message.
+
+    The credentials do not refresh: they expire an hour after this call.
+    One :func:`delete_run` must therefore finish within the hour, or its
+    run is left ``deleting`` (a later ``run delete`` resumes it). A sweep
+    uses :func:`cleanup_s3_client_factory` for fresh credentials per run.
     """
     role_arn = os.environ.get(CLEANUP_ROLE_ENV)
     if not role_arn:
@@ -210,7 +220,8 @@ def cleanup_s3_client() -> Any:
     try:
         sts = _boto3_client("sts")
         credentials = sts.assume_role(
-            RoleArn=role_arn, RoleSessionName=session_name)["Credentials"]
+            RoleArn=role_arn, RoleSessionName=session_name,
+            DurationSeconds=CLEANUP_SESSION_SECONDS)["Credentials"]
         return _boto3_client(
             "s3",
             aws_access_key_id=credentials["AccessKeyId"],
@@ -221,6 +232,29 @@ def cleanup_s3_client() -> Any:
         raise CleanupRoleError(
             f"could not assume the cleanup role named by {CLEANUP_ROLE_ENV}: "
             f"{type(exc).__name__}: {exc}") from exc
+
+
+def cleanup_s3_client_factory() -> Callable[[], Any] | None:
+    """A callable making a fresh :func:`cleanup_s3_client` per call, or
+    ``None`` when ``RAPIDPIPE_CLEANUP_ROLE_ARN`` is unset.
+
+    For :func:`expire_runs`'s ``s3_client_factory=``, which calls it once
+    per run, so each run's delete starts with a full hour of credentials
+    rather than the remainder of one session shared by the whole sweep.
+    The first client is made here, eagerly, so a role that cannot be
+    assumed raises :class:`CleanupRoleError` before the sweep starts; the
+    first call hands that client out, and every later call assumes the
+    role again.
+    """
+    first = cleanup_s3_client()
+    if first is None:
+        return None
+    pending = [first]
+
+    def make() -> Any:
+        return pending.pop() if pending else cleanup_s3_client()
+
+    return make
 
 
 def _run_row(cur, run_id: str) -> tuple[str, str, str]:
@@ -447,6 +481,7 @@ def expire_runs(
     *,
     now: datetime | None = None,
     s3_client: Any = None,
+    s3_client_factory: Callable[[], Any] | None = None,
     scratch_bucket: str | None = None,
 ) -> list[DeletionReport]:
     """Delete every expired scratch run; return one report per run tried.
@@ -462,7 +497,16 @@ def expire_runs(
     under the run's row lock -- a run pinned after this listing is
     refused there. A refusal or cleanup failure is rolled back, caught and
     recorded in that run's report (``refused``), and the sweep moves on.
+
+    ``s3_client_factory`` (:func:`cleanup_s3_client_factory`), when given,
+    is called once per run for that run's ``s3_client``, so expiring
+    credentials bound one run's delete, not the whole sweep. A
+    :class:`CleanupRoleError` from it is recorded in that run's report
+    before the run is touched, and the sweep moves on. Give it or
+    ``s3_client``, not both.
     """
+    if s3_client is not None and s3_client_factory is not None:
+        raise ValueError("give s3_client or s3_client_factory, not both")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -481,9 +525,17 @@ def expire_runs(
 
     reports: list[DeletionReport] = []
     for run_id, _owner in candidates:
+        client = s3_client
+        if s3_client_factory is not None:
+            try:
+                client = s3_client_factory()
+            except CleanupRoleError as exc:
+                reports.append(DeletionReport(
+                    run_id=run_id, refused=f"{exc}; the run was not touched"))
+                continue
         try:
             reports.append(delete_run(
-                conn, run_id, EXPIRY_ACTOR, s3_client=s3_client,
+                conn, run_id, EXPIRY_ACTOR, s3_client=client,
                 scratch_bucket=scratch_bucket, expiry=True))
         except RunModelError as exc:
             conn.rollback()

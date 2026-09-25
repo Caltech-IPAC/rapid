@@ -1017,7 +1017,8 @@ def _expire_command(args: argparse.Namespace) -> int:
 
     main = _main_module()
     try:
-        s3_client = cleanup.cleanup_s3_client()
+        # Fresh role credentials per run (they last an hour and do not refresh).
+        s3_client_factory = cleanup.cleanup_s3_client_factory()
     except cleanup.CleanupRoleError as exc:
         sys.stderr.write(f"rapidpipe run expire: {exc}\n")
         return int(ExitCode.TRANSIENT_FAILURE)
@@ -1032,7 +1033,8 @@ def _expire_command(args: argparse.Namespace) -> int:
 
     return main._run_model_command(
         "expire",
-        lambda conn: cleanup.expire_runs(conn, now=args.now, s3_client=s3_client),
+        lambda conn: cleanup.expire_runs(
+            conn, now=args.now, s3_client_factory=s3_client_factory),
         print_result=print_reports)
 
 
