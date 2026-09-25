@@ -231,6 +231,33 @@ A ``float16`` ASDF array (``err`` and the variances, in current
 ``roman_datamodels``) is widened to ``float32``, because FITS has no
 half-precision floating-point format.
 
+The scaling is done in ``float32``, the type the file is written in, rather than
+through ``float64``.  Going through ``float64`` doubled the working set of every
+array for no gain: the result is rounded back to ``float32`` regardless, and
+``float32`` carries about seven significant digits, far beyond what these data
+are known to.
+
+
+Memory
+====================================
+
+At the real SCA size of 4088 x 4088 each array is 67 MB as ``float32``, and an
+L2 file has ten of them.  Assembling the whole set in memory to hand to
+``writeto`` made a single conversion peak at 1.7 GB, and this script runs
+``NUM_CORES`` conversions at once.
+
+The file is therefore written one HDU at a time, each array being released
+before the next is read, and the ASDF file is opened memory-mapped so that
+reading an array does not also buy a permanent heap copy of it -- mapped pages
+are file backed, and the kernel can drop them again under pressure, which heap
+copies cannot be.  Together these bring the peak to about 950 MB, of which
+170 MB is the Python interpreter and its imports.
+
+The HDUs are written to a temporary name and moved into place only once the last
+one is down.  A partly written file would be worse than no file at all, since the
+registration that follows would checksum it and register it as though it were
+complete.
+
 
 The photometric zeropoint
 ************************************

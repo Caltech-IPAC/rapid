@@ -991,103 +991,97 @@ def asdf_table_nodes(dm):
     return nodes
 
 
-def build_image_hdus(dm,primary_hdr,exptime):
+def build_image_hdu(node_name,array,primary_hdr,wcs_header,science_shape,exptime):
 
     '''
-    Return the list of image HDUs, the science image first, each converted from the DN/s of
-    the L2 product into DN by the exponent of EXPTIME that its units call for, and each array
-    of the science image's shape carrying the same WCS.
+    Return the image HDU for one ASDF array, converted from the DN/s of the L2 product into
+    the DN the pipeline works in by the exponent of EXPTIME that its units call for, and
+    carrying the science WCS if it is laid out like the science image.
+
+    One HDU at a time, rather than a list of all of them, because at the real SCA size of
+    4088 x 4088 each array is 67 MB as float32 and there are ten of them; holding the whole
+    set in memory to hand to writeto is what made a single conversion peak at 1.7 GB, and
+    num_cores of those at once is what a machine does not have.
     '''
 
-    hdus = []
+    extname = "SCI" if node_name == science_node_name else node_name.upper()
 
-    image_nodes = asdf_image_nodes(dm)
+    exponent = exptime_scaling_exponent.get(node_name,0)
 
-    if len(image_nodes) == 0 or image_nodes[0][0] != science_node_name:
-        print(f"*** Error: ASDF file has no {science_node_name} array")
-        return None
-
-    science_shape = image_nodes[0][1].shape
-
-    wcs_header = gwcs_to_fits_sip_header(dm.meta.wcs,science_shape,sip_distortion_degree)
-
-    for node_name,array in image_nodes:
-
-        extname = "SCI" if node_name == science_node_name else node_name.upper()
-
-        exponent = exptime_scaling_exponent.get(node_name,0)
-
-        if exponent == 0:
-            data = np.array(array)
-        else:
-            data = np.array(array,dtype=np.float64) * (float(exptime) ** exponent)
-            data = data.astype(np.float32)
+    if exponent == 0:
 
 
         # FITS has no half-precision floating-point format, so a float16 ASDF array is
         # widened rather than silently truncated to an integer type by the writer.
 
-        if data.dtype == np.float16:
-            data = data.astype(np.float32)
-
-
-        # Only an array laid out like the science image can share its WCS; a reference-pixel
-        # border or an amplifier array covers different pixels and would be mislocated by it.
-
-        if array.shape == science_shape:
-            hdr = build_science_header(primary_hdr,wcs_header,array.shape,extname)
+        if array.dtype == np.float16:
+            data = np.array(array,dtype=np.float32)
         else:
-            hdr = fits.Header()
-            hdr["EXTNAME"] = extname
+            data = np.array(array)
 
-        hdr["ASDFNODE"] = (node_name,"node this array came from in the ASDF file")
-
-        if exponent == 0:
-
-            # An unscaled array keeps whatever unit the ASDF file gave it.  A data-quality
-            # array or a segmentation map has none, and is left without a BUNIT rather than
-            # given a made-up one.
-
-            unit = str(getattr(array,"unit","")).strip()
-
-            if unit:
-                hdr["BUNIT"] = (unit,"units of this array")
-
-        elif exponent == 1:
-            hdr["BUNIT"] = ("DN","units of this array")
-        else:
-            hdr["BUNIT"] = ("DN**2","units of this array")
-
-        hdr["EXPTSCAL"] = (float(exptime) ** exponent,"factor applied to convert from the ASDF units")
-
-        hdus.append(fits.ImageHDU(data=data,header=hdr,name=extname))
-
-    return hdus
+    else:
 
 
-def build_table_hdus(dm):
+        # Read straight into the float32 the file is written in and scale in place.  Going
+        # through float64 doubled the working set of every array for no gain: the result is
+        # rounded back to float32 regardless, and float32 carries about seven significant
+        # digits, far beyond what these data are known to.
+
+        data = np.array(array,dtype=np.float32)
+
+        data *= np.float32(float(exptime) ** exponent)
+
+
+    # Only an array laid out like the science image can share its WCS; a reference-pixel
+    # border or an amplifier array covers different pixels and would be mislocated by it.
+
+    if array.shape == science_shape:
+        hdr = build_science_header(primary_hdr,wcs_header,array.shape,extname)
+    else:
+        hdr = fits.Header()
+        hdr["EXTNAME"] = extname
+
+    hdr["ASDFNODE"] = (node_name,"node this array came from in the ASDF file")
+
+    if exponent == 0:
+
+        # An unscaled array keeps whatever unit the ASDF file gave it.  A data-quality
+        # array or a segmentation map has none, and is left without a BUNIT rather than
+        # given a made-up one.
+
+        unit = str(getattr(array,"unit","")).strip()
+
+        if unit:
+            hdr["BUNIT"] = (unit,"units of this array")
+
+    elif exponent == 1:
+        hdr["BUNIT"] = ("DN","units of this array")
+    else:
+        hdr["BUNIT"] = ("DN**2","units of this array")
+
+    hdr["EXPTSCAL"] = (float(exptime) ** exponent,"factor applied to convert from the ASDF units")
+
+    return fits.ImageHDU(data=data,header=hdr,name=extname)
+
+
+def build_table_hdu(node_name,table):
 
     '''
-    Return the list of binary-table HDUs for the tabular nodes of the ASDF file.
+    Return the binary-table HDU for one tabular ASDF node, or None if it could not be
+    converted, which costs that table rather than the whole file.
     '''
 
-    hdus = []
+    extname = node_name.upper()
 
-    for node_name,table in asdf_table_nodes(dm):
+    try:
+        hdu = fits.BinTableHDU(data=Table(table),name=extname)
+    except Exception as e:
+        print(f"*** Warning: Could not convert ASDF table {node_name} to a FITS table ({e}); skipping...")
+        return None
 
-        extname = node_name.upper()
+    hdu.header["ASDFNODE"] = (node_name,"node this table came from in the ASDF file")
 
-        try:
-            hdu = fits.BinTableHDU(data=Table(table),name=extname)
-        except Exception as e:
-            print(f"*** Warning: Could not convert ASDF table {node_name} to a FITS table ({e}); skipping...")
-            continue
-
-        hdu.header["ASDFNODE"] = (node_name,"node this table came from in the ASDF file")
-
-        hdus.append(hdu)
-
-    return hdus
+    return hdu
 
 
 def asdf_to_fits(asdf_path,fits_path):
@@ -1100,7 +1094,14 @@ def asdf_to_fits(asdf_path,fits_path):
 
     print(f"Reading {asdf_path}...")
 
-    dm = rdm.open(asdf_path)
+
+    # Memory-mapped, so that reading an array does not also buy a permanent heap copy of it.
+    # roman_datamodels caches every node it is asked for, and at the real SCA size the ten
+    # arrays of an L2 file are most of a gigabyte; mapped, their pages are file backed and
+    # the kernel can drop them again once each has been converted and written.  Every array
+    # is copied into its HDU before dm is closed, so nothing outlives the mapping.
+
+    dm = rdm.open(asdf_path,memmap=True)
 
     try:
         return build_fits_file(dm,asdf_path,fits_path)
@@ -1134,25 +1135,82 @@ def build_fits_file(dm,asdf_path,fits_path):
 
     exptime = primary_hdr["EXPTIME"]
 
-    image_hdus = build_image_hdus(dm,primary_hdr,exptime)
+    image_nodes = asdf_image_nodes(dm)
 
-    if image_hdus is None:
-        print(f"*** Error: Could not build the image HDUs for {asdf_path}")
+    if len(image_nodes) == 0 or image_nodes[0][0] != science_node_name:
+        print(f"*** Error: ASDF file has no {science_node_name} array")
         return False
 
-    table_hdus = build_table_hdus(dm)
+    science_shape = image_nodes[0][1].shape
+
+    wcs_header = gwcs_to_fits_sip_header(dm.meta.wcs,science_shape,sip_distortion_degree)
 
 
-    # The primary HDU holds keywords only, so it is given no data at all.
+    # The file is written one HDU at a time rather than assembled into an HDUList and handed
+    # to writeto, so that only one image array is ever in memory.  At the real SCA size the
+    # whole set is well over a gigabyte, and this script runs num_cores conversions at once.
+    #
+    # A partly written file is worse than no file, since the registration that follows would
+    # checksum and register it, so the HDUs go to a temporary name and are moved into place
+    # only once the last one is down.
 
-    primary_hdu = fits.PrimaryHDU(header=primary_hdr)
+    partial_fits_path = fits_path + ".partial"
 
-    hdul = fits.HDUList([primary_hdu] + image_hdus + table_hdus)
+    if os.path.exists(partial_fits_path):
+        os.remove(partial_fits_path)
 
-    hdul.writeto(fits_path,overwrite=True,checksum=True)
+    extnames = []
 
-    print(f"Wrote {fits_path} with {len(hdul)} HDUs: " +
-          ",".join([hdu.name for hdu in hdul]))
+    try:
+
+
+        # The primary HDU holds keywords only, so it is given no data at all.  It is written
+        # with writeto rather than appended because fits.append refuses a None data argument;
+        # with no data to write there is nothing to gain from appending it anyway.
+
+        fits.HDUList([fits.PrimaryHDU(header=primary_hdr)]).writeto(partial_fits_path,
+                                                                    overwrite=True,
+                                                                    checksum=True)
+
+        extnames.append("PRIMARY")
+
+        for node_name,array in image_nodes:
+
+            hdu = build_image_hdu(node_name,array,primary_hdr,wcs_header,science_shape,exptime)
+
+            fits.append(partial_fits_path,hdu.data,hdu.header,checksum=True)
+
+            extnames.append(hdu.name)
+
+
+            # Drop this array before reading the next one, which is the whole point of
+            # writing incrementally.
+
+            del hdu
+
+        for node_name,table in asdf_table_nodes(dm):
+
+            hdu = build_table_hdu(node_name,table)
+
+            if hdu is None:
+                continue
+
+            fits.append(partial_fits_path,hdu.data,hdu.header,checksum=True)
+
+            extnames.append(hdu.name)
+
+            del hdu
+
+    except Exception:
+
+        if os.path.exists(partial_fits_path):
+            os.remove(partial_fits_path)
+
+        raise
+
+    os.replace(partial_fits_path,fits_path)
+
+    print(f"Wrote {fits_path} with {len(extnames)} HDUs: " + ",".join(extnames))
 
     return True
 
@@ -1852,7 +1910,8 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
         local_fits_file = f"{subdir_work}/" + os.path.basename(s3_object_name)[:-len(".gz")]
         local_gzipped_fits_file = local_fits_file + ".gz"
 
-        local_files = [local_asdf_file,local_fits_file,local_gzipped_fits_file]
+        local_files = [local_asdf_file,local_fits_file,local_fits_file + ".partial",
+                       local_gzipped_fits_file]
 
         try:
 
