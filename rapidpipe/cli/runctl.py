@@ -115,9 +115,11 @@ def add_parsers(run_subparsers: Any) -> None:
                     "order: --inputs <stage>=<loc> (an unprefixed --inputs "
                     "is the first stage's), an input set composed from "
                     "--template <stage>=<loc>, else the selected output of "
-                    "the nearest preceding non-register stage. Exit 0 when "
-                    "every stage is complete, 1 when an attempt failed, 75 "
-                    "on --timeout (rerun the printed command to continue).")
+                    "the nearest preceding non-register stage. A unit a "
+                    "transient or lost attempt returns to ready gets another "
+                    "attempt, within the run's allowance. Exit 0 when every "
+                    "stage is complete, 1 when a unit is failed or cancelled, "
+                    "75 on --timeout (rerun the printed command to continue).")
     start.add_argument("run_id", help="The run.")
     start.add_argument(
         "--unit", required=True, dest="unit_id",
@@ -185,8 +187,10 @@ def add_parsers(run_subparsers: Any) -> None:
         help="Location (local or s3://) of the template input set's manifest.json.")
     inputs.add_argument(
         "--dest", default=None,
-        help="Where to write the input set (default: <outputs root for the "
-             "run's kind>/runs/<run>/inputs/<stage>/<unit>).")
+        help="Where to write the input set (default: <scratch outputs root>"
+             "/runs/<run>/inputs/<stage>/<unit>, for every run kind: an input "
+             "set is a staged working copy, not a product). Must be under "
+             "<scratch outputs root>/runs/<run>/inputs/.")
     inputs.add_argument(
         "--kind", default="l2-image",
         help="The producer output entry kind to take (default l2-image).")
@@ -460,10 +464,37 @@ def _registered_instances(conn, instance_ids: list[str]) -> list[str]:
     return [i for i in instance_ids if i in found]
 
 
-def default_inputs_dest(run_kind: str, run_id: str, stage: str, unit_id: str) -> str:
-    """``<outputs root for the run's kind>/runs/<run>/inputs/<stage>/<unit>``."""
-    root = launch_batch.outputs_root_for(run_kind)
-    return join(parse_location(root), f"runs/{run_id}/inputs/{stage}/{unit_id}")
+def inputs_root(run_id: str) -> str:
+    """``<scratch outputs root>/runs/<run>/inputs`` -- for every run kind.
+
+    An input set is a staged working copy, not a product, so it always
+    lives under the scratch root (``RAPIDPIPE_OUTPUTS_ROOT_SCRATCH``, else
+    ``RAPIDPIPE_OUTPUTS_ROOT``), never the production root: the launcher's
+    role can read the products bucket but not write it. ``run delete``
+    removes this prefix with the run (``rapidpipe.runs.cleanup``).
+    """
+    root = launch_batch.outputs_root_for("scratch")
+    return join(parse_location(root), f"runs/{run_id}/inputs")
+
+
+def default_inputs_dest(run_id: str, stage: str, unit_id: str) -> str:
+    """``<scratch outputs root>/runs/<run>/inputs/<stage>/<unit>``."""
+    return f"{inputs_root(run_id)}/{stage}/{unit_id}"
+
+
+def _require_under_inputs_root(dest: str, run_id: str) -> None:
+    """Refuse (64) a ``--dest`` outside ``<scratch root>/runs/<run>/inputs/``."""
+    root = inputs_root(run_id)
+    if parse_location(root).is_s3():
+        inside = dest.rstrip("/").startswith(root + "/")
+    else:
+        root_path = Path(root).resolve()
+        dest_path = Path(dest).resolve()
+        inside = dest_path != root_path and root_path in dest_path.parents
+    if not inside:
+        raise _Exit(int(ExitCode.USAGE),
+                    f"--dest {dest} is not under {root}/; an input set lives under "
+                    "the scratch outputs root's runs/<run>/inputs/")
 
 
 def _rehome_under_l2(entry: OutputEntry) -> tuple[OutputEntry, list[tuple[str, str]]]:
@@ -517,8 +548,9 @@ def compose_inputs(
     returned as is.
     """
     storage = storage or _Storage()
-    run = _require_run(conn, run_id)
-    dest_text = dest or default_inputs_dest(run.kind, run_id, stage, unit_id)
+    _require_run(conn, run_id)
+    dest_text = dest or default_inputs_dest(run_id, stage, unit_id)
+    _require_under_inputs_root(dest_text, run_id)
     dest_loc = parse_location(dest_text)
     if storage.exists(dest_loc, "manifest.json"):
         if reuse_existing:
@@ -689,10 +721,9 @@ class _StartWalk:
             return self.settings_unprefixed
         return self.settings_keyed.get(stage)
 
-    def _wait(self, stage: str, unit_id: str, attempt_id: str) -> UnitRow:
+    def _wait(self, stage: str, unit_id: str, attempt_id: str, deadline: float) -> UnitRow:
         """Reconcile every ``--interval`` seconds until ``attempt_id`` has a
-        disposition; :class:`_Exit` 75 after ``--timeout``."""
-        deadline = now() + self.args.timeout
+        disposition; :class:`_Exit` 75 once ``deadline`` passes."""
         while True:
             results = _reconcile(self.conn, self.args.run_id)
             status = next((r.batch_status for r in results if r.attempt_id == attempt_id), None)
@@ -737,40 +768,65 @@ class _StartWalk:
             else:
                 unit_id = args.unit_id
 
-            row = _unit_row(self.conn, args.run_id, stage, unit_id)
-            if row is not None and row.state == "complete":
-                print(f"{stage} {unit_id} already complete", flush=True)
-                continue
+            # One deadline per stage, covering every attempt it takes: a
+            # transient or lost result returns the unit to 'ready' and the
+            # loop allocates the next attempt (the allowance decides).
+            deadline = now() + args.timeout
+            first_look = True
+            while True:
+                row = _unit_row(self.conn, args.run_id, stage, unit_id)
+                if row is not None and row.state == "complete":
+                    if first_look:
+                        print(f"{stage} {unit_id} already complete", flush=True)
+                    break
+                first_look = False
+                if row is not None and row.state in ("failed", "cancelled"):
+                    print(f"{stage} {unit_id} is {row.state}", flush=True)
+                    print(f"run={args.run_id} state=failed", flush=True)
+                    return 1
 
-            if (row is not None and row.state == "running" and row.last_attempt
-                    and row.last_disposition is None):
-                attempt_id, job_id, outputs = row.last_attempt, row.last_job, row.last_output
-                print(f"{stage} {unit_id} attempt {attempt_id} already in flight", flush=True)
-            else:
-                if inputs_location is None:
-                    inputs_location = self._inputs_for(selected, position, first)
-                submission = launch_batch.submit_unit(
-                    self.conn, run_id=args.run_id, stage=stage,
-                    unit_kind=declaration.unit, unit_id=unit_id,
-                    inputs_location=inputs_location,
-                    settings_location=self._settings_for(stage, position, first))
-                attempt_id, job_id = submission.attempt_id, submission.job_id
-                outputs = submission.output_location
+                if (row is not None and row.state == "running" and row.last_attempt
+                        and row.last_disposition is None):
+                    attempt_id, job_id, outputs = row.last_attempt, row.last_job, row.last_output
+                    print(f"{stage} {unit_id} attempt {attempt_id} already in flight",
+                          flush=True)
+                else:
+                    if inputs_location is None:
+                        inputs_location = self._inputs_for(selected, position, first)
+                    submission = launch_batch.submit_unit(
+                        self.conn, run_id=args.run_id, stage=stage,
+                        unit_kind=declaration.unit, unit_id=unit_id,
+                        inputs_location=inputs_location,
+                        settings_location=self._settings_for(stage, position, first))
+                    attempt_id, job_id = submission.attempt_id, submission.job_id
+                    outputs = submission.output_location
 
-            if args.no_wait:
-                print(f"attempt={attempt_id} job={job_id} outputs={outputs}")
-                print(f"continue: {_continue_command(args)}")
-                print(f"run={args.run_id} state=submitted", flush=True)
-                return int(ExitCode.SUCCESS)
+                if args.no_wait:
+                    print(f"attempt={attempt_id} job={job_id} outputs={outputs}")
+                    print(f"continue: {_continue_command(args)}")
+                    print(f"run={args.run_id} state=submitted", flush=True)
+                    return int(ExitCode.SUCCESS)
 
-            final = self._wait(stage, unit_id, attempt_id)
-            print(_attempt_line(stage, unit_id, attempt_id, final.last_job or job_id,
-                                final.last_disposition, final.last_output or outputs),
-                  flush=True)
-            if final.last_disposition != "succeeded" or final.state != "complete":
+                final = self._wait(stage, unit_id, attempt_id, deadline)
+                print(_attempt_line(stage, unit_id, attempt_id, final.last_job or job_id,
+                                    final.last_disposition, final.last_output or outputs),
+                      flush=True)
+                if final.last_disposition == "succeeded" and final.state == "complete":
+                    break
+                if final.state == "ready":
+                    if now() >= deadline:
+                        raise _Exit(int(ExitCode.TRANSIENT_FAILURE),
+                                    f"timed out after {args.timeout:g}s: {stage} {unit_id} "
+                                    f"is ready again after a {final.last_disposition} "
+                                    "attempt; continue with: "
+                                    f"{_continue_command(args)}")
+                    print(f"{stage} {unit_id} is ready again after a "
+                          f"{final.last_disposition} attempt; allocating another",
+                          flush=True)
+                    continue
                 print(f"run={args.run_id} state=failed", flush=True)
                 return 1
-            if args.stage is not None:
+            if args.stage is not None and not first_look:
                 break
 
         print(f"run={args.run_id} state=complete", flush=True)

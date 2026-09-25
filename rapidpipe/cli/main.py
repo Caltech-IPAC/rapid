@@ -226,8 +226,9 @@ def _build_parser() -> argparse.ArgumentParser:
              "definition revisions.")
     create_parser.add_argument(
         "--seed", default=None, metavar="RUN_ID",
-        help="Record the run this one was seeded from (configuration lineage "
-             "only; it authorises no reuse of that run's outputs).")
+        help="Record the run this one was seeded from. Lineage only: the new "
+             "run inherits no configuration from it (give every option "
+             "explicitly) and may not reuse its outputs.")
 
     list_parser = run_subparsers.add_parser("list", help="List runs.",
         description="List runs, newest first, optionally filtered.")

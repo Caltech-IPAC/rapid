@@ -27,6 +27,9 @@ What is removed, and only for rows whose ``run`` is this run:
   ``s3://`` output location, which must be in the scratch bucket and
   under ``runs/<run>/`` (checked for every attempt before anything is
   marked or removed);
+- every S3 object version under ``<scratch outputs root>/runs/<run>/inputs/``,
+  where ``rapidpipe run inputs`` stages the run's composed input sets
+  (when that root is an ``s3://`` location in the scratch bucket);
 - ``dev`` science rows in ``sources`` (the inheritance parent: a DELETE
   on it reaches every ``sources_<date>_<sca>`` child, which carry ``run``
   since 20260923-04), ``diffimmeta``, ``diffimages``, ``l2filemeta``,
@@ -228,9 +231,26 @@ def _run_row(cur, run_id: str) -> tuple[str, str, str]:
     return row
 
 
+def _inputs_prefix(run_id: str) -> tuple[str, str] | None:
+    """(bucket, ``<scratch root prefix>/runs/<run>/inputs/``): where ``rapidpipe
+    run inputs`` stages the run's composed input sets, always under the
+    scratch outputs root. ``None`` when that root is unset or not ``s3://``."""
+    root = (os.environ.get("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH")
+            or os.environ.get("RAPIDPIPE_OUTPUTS_ROOT"))
+    if not root:
+        return None
+    location = parse_location(root)
+    if not location.is_s3():
+        return None
+    base = f"{location.prefix}/" if location.prefix else ""
+    return location.bucket, f"{base}runs/{run_id}/inputs/"  # type: ignore[return-value]
+
+
 def _s3_prefixes(conn, run_id: str, scratch_bucket: str | None) -> list[tuple[str, str]]:
     """Every (bucket, key prefix ending '/') of the run's ``s3://`` attempt
-    outputs, all checked before any is deleted."""
+    outputs, all checked before any is deleted, plus the run's composed
+    input sets (:func:`_inputs_prefix`) when that prefix is in the scratch
+    bucket."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id, output_location FROM attempts "
@@ -238,11 +258,14 @@ def _s3_prefixes(conn, run_id: str, scratch_bucket: str | None) -> list[tuple[st
             (run_id,),
         )
         rows = cur.fetchall()
-    if not rows:
+    inputs = _inputs_prefix(run_id)
+    if not rows and inputs is None:
         return []
 
     bucket_allowed = scratch_bucket or _default_scratch_bucket()
     prefixes: list[tuple[str, str]] = []
+    if inputs is not None and inputs[0] == bucket_allowed:
+        prefixes.append(inputs)
     for attempt_id, output_location in rows:
         location = parse_location(output_location)
         if location.bucket != bucket_allowed:

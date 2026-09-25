@@ -7,4 +7,5 @@ __pycache__/
 
 *.egg-info/
 _build/
+
 .venv/

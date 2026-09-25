@@ -151,10 +151,14 @@ class World:
                 queue = self.outcomes.get(stage, [])
                 disposition = queue.pop(0) if queue else "succeeded"
                 attempt["disposition"] = disposition
+                # As record_attempt_result: transient/lost return the unit to
+                # ready while attempts remain; failed/killed are terminal.
                 if disposition == "succeeded":
                     u["state"], u["selected"] = "complete", attempt["id"]
-                else:
+                elif disposition in ("transient", "lost"):
                     u["state"] = "ready" if len(u["attempts"]) < self.max_attempts else "failed"
+                else:
+                    u["state"] = "failed"
                 results.append(launch_batch.Reconciled(
                     attempt["id"], attempt["job"],
                     "SUCCEEDED" if disposition == "succeeded" else "FAILED",
@@ -264,29 +268,61 @@ def test_start_stage_not_selected_exits_64(world, capsys):
     assert "not one of run R's selected stages" in capsys.readouterr().err
 
 
-def test_start_failure_exits_1_then_a_rerun_retries_within_the_allowance(world, capsys):
-    w = world(["admit", "register"], max_attempts=2)
+def test_start_failed_attempt_exits_1(world, capsys):
+    w = world(["admit", "register"], max_attempts=3)
     w.outcomes["admit"] = ["failed"]
-    argv = ["run", "start", "R", "--unit", "U", "--inputs", "s3://deliv/U"]
-    assert cli.main(argv) == 1
+    assert cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://deliv/U"]) == 1
     out = capsys.readouterr().out.splitlines()
     assert "stage=admit unit=U attempt=A1 job=job-1 disposition=failed" in out[-2]
     assert out[-1] == "run=R state=failed"
-    assert w.unit("admit", "U")["state"] == "ready"
-
-    assert cli.main(argv) == 0
-    assert [(s["stage"], s["unit"]) for s in w.submits] == [
-        ("admit", "U"), ("admit", "U"), ("register", "admit/U")]
+    assert [s["stage"] for s in w.submits] == ["admit"]
 
 
-def test_start_on_a_failed_unit_is_refused_64(world, capsys):
+def test_start_transient_result_gets_another_attempt_in_the_same_invocation(world, capsys):
+    w = world(["admit", "register"], max_attempts=3)
+    w.outcomes["admit"] = ["transient", "lost"]
+    assert cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://deliv/U"]) == 0
+    assert [(s["stage"], s["unit"], s["inputs"]) for s in w.submits] == [
+        ("admit", "U", "s3://deliv/U"), ("admit", "U", "s3://deliv/U"),
+        ("admit", "U", "s3://deliv/U"), ("register", "admit/U", "s3://b/runs/R/admit/U/A3")]
+    out = capsys.readouterr().out
+    assert "admit U is ready again after a transient attempt; allocating another" in out
+    assert "admit U is ready again after a lost attempt; allocating another" in out
+
+
+def test_start_transient_until_the_allowance_is_used_exits_1(world, capsys):
+    w = world(["admit"], max_attempts=2)
+    w.outcomes["admit"] = ["transient", "transient"]
+    assert cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://d"]) == 1
+    assert len(w.submits) == 2
+    assert w.unit("admit", "U")["state"] == "failed"
+
+
+def test_start_retries_share_one_timeout(world, capsys):
+    w = world(["admit"], max_attempts=10)
+    w.polls_to_finish = 2
+    w.outcomes["admit"] = ["transient"] * 9
+    rc = cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://d",
+                   "--interval", "30", "--timeout", "100"])
+    # Attempts resolve at t=30, 60, 90 and 120; the fourth is past the
+    # 100 s deadline, so no fifth attempt is allocated.
+    assert rc == 75
+    assert len(w.submits) == 4
+    assert "is ready again after a transient attempt; continue with" in capsys.readouterr().err
+
+
+def test_start_on_a_failed_or_cancelled_unit_exits_1_without_submitting(world, capsys):
     w = world(["admit"], max_attempts=1)
     w.outcomes["admit"] = ["failed"]
     argv = ["run", "start", "R", "--unit", "U", "--inputs", "s3://deliv/U"]
     assert cli.main(argv) == 1
     assert w.unit("admit", "U")["state"] == "failed"
-    assert cli.main(argv) == 64
-    assert "is 'failed'" in capsys.readouterr().err
+    capsys.readouterr()
+    assert cli.main(argv) == 1
+    assert capsys.readouterr().out.splitlines() == ["admit U is failed", "run=R state=failed"]
+    w.unit("admit", "U")["state"] = "cancelled"
+    assert cli.main(argv) == 1
+    assert len(w.submits) == 1
 
 
 def test_start_waits_on_an_attempt_already_in_flight(world, capsys):
@@ -500,6 +536,8 @@ def compose_env(tmp_path, monkeypatch, fake_conn):
         outputs=(_entry("l2-image", "L2NEW", producer, {"deep/dir/science.fits": b"science"}),),
     ), producer)
 
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH", str(tmp_path / "outputs"))
+    monkeypatch.delenv("RAPIDPIPE_OUTPUTS_ROOT", raising=False)
     calls = {"add_unit": [], "bind": []}
     monkeypatch.setattr(runctl, "_run_row",
                         lambda conn, run_id: runctl.RunRow("scratch", [], "open", None)
@@ -514,11 +552,12 @@ def compose_env(tmp_path, monkeypatch, fake_conn):
                             calls["bind"].append((run_id, stage, unit_id, list(instances))))
     monkeypatch.setattr(runctl, "_registered_instances",
                         lambda conn, ids: [i for i in ids if i in ("L2NEW", "REF1")])
-    return {"template": template, "producer": producer, "calls": calls, "tmp": tmp_path}
+    return {"template": template, "producer": producer, "calls": calls, "tmp": tmp_path,
+            "dest": tmp_path / "outputs/runs/R/inputs/difference/U"}
 
 
 def test_inputs_composes_a_local_input_set(compose_env, fake_conn, capsys):
-    dest = compose_env["tmp"] / "dest"
+    dest = compose_env["dest"]
     rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
                    "--template", str(compose_env["template"]), "--dest", str(dest)])
     assert rc == 0
@@ -547,8 +586,8 @@ def test_inputs_composes_a_local_input_set(compose_env, fake_conn, capsys):
 
 
 def test_inputs_refuses_to_overwrite_an_existing_manifest(compose_env, capsys):
-    dest = compose_env["tmp"] / "dest"
-    dest.mkdir()
+    dest = compose_env["dest"]
+    dest.mkdir(parents=True)
     (dest / "manifest.json").write_text("{}")
     rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
                    "--template", str(compose_env["template"]), "--dest", str(dest)])
@@ -558,7 +597,7 @@ def test_inputs_refuses_to_overwrite_an_existing_manifest(compose_env, capsys):
 
 def test_inputs_size_mismatch_exits_1(compose_env, capsys):
     (compose_env["template"] / "ref/image.fits").write_bytes(b"short")
-    dest = compose_env["tmp"] / "dest"
+    dest = compose_env["dest"]
     rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
                    "--template", str(compose_env["template"]), "--dest", str(dest)])
     assert rc == 1
@@ -569,18 +608,45 @@ def test_inputs_size_mismatch_exits_1(compose_env, capsys):
 def test_inputs_missing_template_manifest_exits_64(compose_env, capsys):
     rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
                    "--template", str(compose_env["tmp"] / "nowhere"),
-                   "--dest", str(compose_env["tmp"] / "dest")])
+                   "--dest", str(compose_env["dest"])])
     assert rc == 64
     assert "no manifest.json at" in capsys.readouterr().err
 
 
-def test_inputs_default_dest_is_under_the_outputs_root(compose_env, monkeypatch, capsys):
-    root = compose_env["tmp"] / "outputs"
-    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH", str(root))
+def test_inputs_default_dest_is_the_scratch_root_for_every_run_kind(
+        compose_env, monkeypatch, capsys):
+    monkeypatch.setattr(runctl, "_run_row",
+                        lambda conn, run_id: runctl.RunRow("production", [], "open", None))
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION", str(compose_env["tmp"] / "products"))
     rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
                    "--template", str(compose_env["template"])])
     assert rc == 0
-    assert (root / "runs/R/inputs/difference/U/manifest.json").exists()
+    assert (compose_env["dest"] / "manifest.json").exists()
+    assert not (compose_env["tmp"] / "products").exists()
+
+
+@pytest.mark.parametrize("dest", ["elsewhere", "outputs/runs/R/inputs",
+                                  "outputs/runs/OTHER/inputs/x", "outputs/runs/R/difference/U"])
+def test_inputs_dest_outside_the_run_inputs_root_is_refused(compose_env, capsys, dest):
+    target = compose_env["tmp"] / dest
+    rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
+                   "--template", str(compose_env["template"]), "--dest", str(target)])
+    assert rc == 64
+    assert "is not under" in capsys.readouterr().err
+    assert compose_env["calls"]["add_unit"] == []
+    assert not (target / "manifest.json").exists()
+
+
+def test_inputs_admission_fence_fires_before_any_copy(compose_env, monkeypatch, capsys):
+    def _refuse(*_a, **_k):
+        raise repository.RunDeletingOrDeleted("run 'R' is 'deleting'; it admits no new work")
+
+    monkeypatch.setattr(repository, "add_unit", _refuse)
+    rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
+                   "--template", str(compose_env["template"])])
+    assert rc == 64
+    assert "admits no new work" in capsys.readouterr().err
+    assert not compose_env["dest"].exists()
 
 
 def test_inputs_over_s3_copies_server_side(compose_env, monkeypatch, capsys):
@@ -595,18 +661,22 @@ def test_inputs_over_s3_copies_server_side(compose_env, monkeypatch, capsys):
     from rapidpipe.products import storage
 
     monkeypatch.setattr(storage, "s3_client", lambda: s3)
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH", "s3://dst/root")
+    dest = "s3://dst/root/runs/R/inputs/set"
     rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
-                   "--template", "s3://src/template", "--dest", "s3://dst/set"])
+                   "--template", "s3://src/template", "--dest", dest])
     assert rc == 0
     copies = [key for op, key in s3.calls if op == "copy_object"]
-    assert sorted(copies) == ["set/l2/science.fits", "set/psf/sci.fits", "set/ref/image.fits"]
-    assert [op for op, key in s3.calls if key == "set/manifest.json"][-1] == "upload_file"
-    written = json.loads(s3._objects[("dst", "set/manifest.json")])
+    assert sorted(copies) == ["root/runs/R/inputs/set/l2/science.fits",
+                             "root/runs/R/inputs/set/psf/sci.fits",
+                             "root/runs/R/inputs/set/ref/image.fits"]
+    assert [op for op, key in s3.calls if key == "root/runs/R/inputs/set/manifest.json"][-1] == "upload_file"
+    written = json.loads(s3._objects[("dst", "root/runs/R/inputs/set/manifest.json")])
     assert written["outputs"][0]["primary"] == "l2/science.fits"
 
     # A second compose into the same prefix is refused.
     assert cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
-                     "--template", "s3://src/template", "--dest", "s3://dst/set"]) == 64
+                     "--template", "s3://src/template", "--dest", dest]) == 64
 
 
 # ======================================================================
