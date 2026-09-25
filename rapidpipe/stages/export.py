@@ -35,6 +35,12 @@ least one.
 Outputs (not written by this build): one ``catalog-export`` file product
 (a HATS bundle), per the products page.
 
+``--dry-run`` also runs this input-set validation (via ``run_stage``'s
+``validate_inputs`` hook), rejecting an input manifest naming no result
+sets with exit 65 -- unlike most stages, whose ``body`` (and so its own
+shape checks) never runs under ``--dry-run`` at all, since the science
+this stage would otherwise run does not exist to skip.
+
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli``.
@@ -172,6 +178,14 @@ def _named_result_sets(manifest: Manifest) -> tuple[str, ...]:
 # ----------------------------------------------------------------------
 
 
+def _validate_inputs(context: StageContext) -> None:
+    """``run_stage``'s pre-dry-run hook: the same named-result-set check
+    ``_body`` runs, so ``--dry-run`` rejects an input manifest naming no
+    result sets (exit 65) instead of validating only the generic manifest
+    shape, as most other stages' dry-run does."""
+    _named_result_sets(context.input_manifest)
+
+
 def _body(context: StageContext) -> StageResult:
     _check_settings(context.settings)
     named = _named_result_sets(context.input_manifest)
@@ -182,7 +196,7 @@ def _body(context: StageContext) -> StageResult:
 
 
 def main(argv: list[str]) -> int:
-    return run_stage(DECLARATION, _body, argv)
+    return run_stage(DECLARATION, _body, argv, validate_inputs=_validate_inputs)
 
 
 if __name__ == "__main__":

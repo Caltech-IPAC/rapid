@@ -464,6 +464,8 @@ def run_stage(
     declaration: StageDeclaration,
     body: Callable[[StageContext], StageResult],
     argv: Sequence[str],
+    *,
+    validate_inputs: Callable[[StageContext], None] | None = None,
 ) -> int:
     """Parse argv under the one invocation form, run ``body``, return an exit code.
 
@@ -479,6 +481,20 @@ def run_stage(
     ``inputs.manifest`` set to the ``--inputs`` location -- validates it,
     and publishes it to ``--outputs``. If ``body`` raises, no manifest is
     written.
+
+    ``validate_inputs``, when given, is called with the built
+    :class:`StageContext` once, after the generic input manifest has been
+    parsed and *before* the ``--dry-run`` return -- so it runs on every
+    invocation, dry-run or not, and a stage-shape problem it raises (via
+    the usual :class:`InputRejected`/:class:`UsageError` family) is caught
+    by ``--dry-run`` too, not just a real run. This lets a stage whose
+    ``body`` cannot itself run under ``--dry-run`` (most of the science
+    stages just validate the generic manifest and stop there) still check
+    its own declared shape -- required product kinds present, a named
+    result set -- ahead of time. Most stages leave it unset: the generic
+    checks above (a parseable ``manifest.json``) already cover what
+    ``--dry-run`` promises for them. Unset, ``run_stage`` behaves exactly
+    as before.
     """
     declaration.validate()
     # Before argv is parsed there is no run/attempt id yet; a plain logger
@@ -602,11 +618,19 @@ def run_stage(
             declaration.name, context.run_id, context.unit_id,
             context.attempt_id, context.dry_run)
 
+        if validate_inputs is not None:
+            validate_inputs(context)
+
         if args.dry_run:
+            planned_inputs = ", ".join(
+                f"{entry.kind}:{entry.instance}" for entry in input_manifest.outputs) or "(none)"
+            planned_result_sets = ", ".join(input_manifest.inputs.result_sets) or "(none)"
             logger.info(
-                "stage=%s run=%s unit=%s attempt=%s exit=%s dry-run validated",
+                "stage=%s run=%s unit=%s attempt=%s exit=%s dry-run validated; "
+                "planned inputs: [%s]; planned result sets: [%s]; outputs -> %s",
                 declaration.name, context.run_id, context.unit_id,
-                context.attempt_id, int(ExitCode.SUCCESS))
+                context.attempt_id, int(ExitCode.SUCCESS),
+                planned_inputs, planned_result_sets, context.outputs_location)
             return int(ExitCode.SUCCESS)
 
         result = body(context)

@@ -69,6 +69,15 @@ def test_dry_run_exits_0_and_writes_nothing(tmp_path):
     assert not outputs.exists() or not any(outputs.iterdir())
 
 
+def test_dry_run_missing_result_sets_exits_65(tmp_path):
+    # --dry-run runs the same named-result-set check as a real invocation
+    # (run_stage's validate_inputs hook), so an input manifest naming no
+    # result sets is rejected before the "dry-run validated" success path.
+    rc, outputs = _run(tmp_path, "--dry-run", result_sets=())
+    assert rc == int(ExitCode.INPUT_REJECTED)
+    assert not outputs.exists() or not any(outputs.iterdir())
+
+
 def test_valid_invocation_exits_69_and_writes_no_manifest(tmp_path):
     rc, outputs = _run(tmp_path)
     assert rc == int(ExitCode.NOT_IMPLEMENTED) == 69
