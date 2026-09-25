@@ -679,6 +679,55 @@ def test_inputs_over_s3_copies_server_side(compose_env, monkeypatch, capsys):
                      "--template", "s3://src/template", "--dest", dest]) == 64
 
 
+def test_inputs_binds_and_commits_before_the_manifest_is_written(
+        compose_env, monkeypatch, fake_conn, capsys):
+    """A manifest write that fails leaves the bindings committed and no
+    manifest, so a retry composes again rather than reusing an unbound set."""
+    dest = compose_env["dest"]
+    real_write = runctl._Storage.write_manifest
+    seen = {}
+
+    def _fail_once(self, manifest, location):
+        if not seen:
+            seen["bind_at_write"] = list(compose_env["calls"]["bind"])
+            seen["committed_at_write"] = fake_conn.committed
+            raise OSError("disk went away")
+        return real_write(self, manifest, location)
+
+    monkeypatch.setattr(runctl._Storage, "write_manifest", _fail_once)
+    kw = dict(run_id="R", stage="difference", unit_id="U", from_stage="admit",
+              template=str(compose_env["template"]), dest=str(dest))
+    with pytest.raises(OSError):
+        runctl.compose_inputs(fake_conn, **kw)
+    assert seen["bind_at_write"] == [("R", "difference", "U", ["L2NEW", "REF1"])]
+    assert seen["committed_at_write"] == 1
+    assert not (dest / "manifest.json").exists()
+    assert runctl.compose_inputs(fake_conn, **kw) == str(dest)
+    assert (dest / "manifest.json").exists()
+
+
+def test_start_reuse_of_an_existing_manifest_rebinds_and_commits(
+        compose_env, fake_conn, capsys):
+    """A manifest left without its bindings (the pre-fix ordering, or a
+    rolled-back bind) is re-bound when ``run start`` reuses it."""
+    dest = compose_env["dest"]
+    assert cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage",
+                     "admit", "--template", str(compose_env["template"]),
+                     "--dest", str(dest)]) == 0
+    calls = compose_env["calls"]
+    calls["add_unit"].clear()
+    calls["bind"].clear()          # as if the first bind had been rolled back
+    committed = fake_conn.committed
+    out = runctl.compose_inputs(
+        fake_conn, run_id="R", stage="difference", unit_id="U", from_stage="admit",
+        template=str(compose_env["template"]), dest=str(dest), reuse_existing=True)
+    assert out == str(dest)
+    assert calls["add_unit"] == [("R", "difference", "detector-image", "U")]
+    assert calls["bind"] == [("R", "difference", "U", ["L2NEW", "REF1"])]
+    assert fake_conn.committed == committed + 1
+    assert "(already composed)" in capsys.readouterr().out
+
+
 # ======================================================================
 # run expire, run delete and the cleanup role; run create --seed
 # ======================================================================
