@@ -9,8 +9,9 @@ and the storage helper ``run inputs`` uses (``runctl._Storage``), because
 
 Exit codes: 0 every processed date complete; 1 a date failed (later dates
 not started); 64 a usage error or refusal (a malformed spec, a release that
-is not complete, any ``RunModelError``); 75 a timeout or transient error
-(rerun the same command to resume the open date).
+is not complete, any ``RunModelError``); 75 a timeout, a transient error, or
+another loop holding the schedule's advisory lock (rerun the same command to
+resume the open date).
 """
 
 from __future__ import annotations
@@ -55,6 +56,9 @@ def add_parser(subparsers: Any) -> None:
     run.add_argument("--spec", required=True, help="The loop spec's location.")
     run.add_argument("--date", action="append", type=_date, default=[], dest="dates",
                      metavar="YYYY-MM-DD", help="Only this spec date. Repeatable.")
+    run.add_argument("--retry-failed", action="store_true",
+                     help="Reopen a failed date and resume its run (default: a failed "
+                          "date stops the loop with exit 1).")
     run.add_argument("--dry-run", action="store_true",
                      help="Print the plan (as 'loop plan') and change nothing.")
     run.add_argument("--interval", type=runctl._positive_seconds, default=30.0,
@@ -99,7 +103,7 @@ def _run(args: argparse.Namespace) -> int:
     return runctl._with_connection(
         "run", lambda conn: launch_loop.run_loop(
             conn, spec, _tools(), dates=args.dates, dry_run=args.dry_run,
-            interval=args.interval, timeout=args.timeout),
+            interval=args.interval, timeout=args.timeout, retry_failed=args.retry_failed),
         prog="rapidpipe loop", usage_errors=_usage_errors())
 
 

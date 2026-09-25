@@ -68,6 +68,7 @@ class _FakeStages:
         self.db, self.fake_batch, self.fake_s3 = db, fake_batch, fake_s3
         self.fail = fail  # (stage, unit_id) to give a FAILED job
         self.execution_record = execution_record  # written as exec/<attempt>.json
+        self.finalized: dict[str, str] = {}  # unit -> finalized difference instance
         self.stop_after = None  # stage whose first completion raises KeyboardInterrupt
 
     def _outputs(self, run_id, stage, unit_id, attempt_id, prefix):
@@ -77,7 +78,9 @@ class _FakeStages:
                      "key": {"unit": unit_id}, "primary": "l2/image.fits",
                      "members": [_member(s3, prefix, "l2/image.fits", b"L2" * 8)]}]
         if stage == "finalize":
-            return [{"kind": "difference-image", "format_version": "1", "instance": new_ulid(),
+            self.finalized[unit_id] = new_ulid()
+            return [{"kind": "difference-image", "format_version": "1",
+                     "instance": self.finalized[unit_id],
                      "key": {"unit": unit_id}, "primary": "diff/final.fits",
                      "members": [_member(s3, prefix, "diff/final.fits", b"DIFF" * 5)]}]
         if stage == "load":
@@ -87,7 +90,8 @@ class _FakeStages:
                     cur.execute(f"INSERT INTO {TABLE} (field, result_set) VALUES (%s, %s)",
                                 (f, instance))
             return [{"kind": "source-set", "format_version": "1", "instance": instance,
-                     "key": {"difference": new_ulid()}, "primary": None, "members": [],
+                     "key": {"difference": self.finalized[unit_id]}, "primary": None,
+                     "members": [],
                      "registration": {"table": TABLE, "row_count": len(FIELDS)}}]
         if stage == "crossmatch":
             return [{"kind": "association-set", "format_version": "1", "instance": new_ulid(),
@@ -267,7 +271,9 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     assert [r[0] for r in runs] == [run1, run2]
     for r in runs:
         assert r[1:6] == ("production", "scheduler-test", "prompt", world["tag"], "finished")
-        assert r[6][7:] == ["maintain", "crossmatch", "statistics", "prune", "alerts"]
+        # A1: the raw difference is never registered.
+        assert r[6] == ["admit", "register", "difference", "finalize", "register", "load",
+                        "maintain", "crossmatch", "statistics", "prune", "alerts"]
         assert (r[7], r[8]) == (world["spec"], 2)
     assert runs[0][9] == f"processing date 2027-10-01 (schedule {world['schedule']})"
 
@@ -279,6 +285,8 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     for f in FIELDS:
         first_set = record1["association_sets"][str(f)]
         assert record2["base_sets"][str(f)] == first_set
+        assert record2["bases"][str(f)] == {"run": run1, "processing_date": "2027-10-01",
+                                            "base_promoted": True}
         manifest = _read(fake_s3, f"s3://{FAKE_BUCKET}/scratch/runs/{run2}/inputs/"
                                   f"crossmatch/{f}/manifest.json")
         bases = [o for o in manifest["outputs"] if o["kind"] == "association-set"]
@@ -308,6 +316,8 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
         stages = {(u["stage"], u["unit"]) for u in record["units"]}
         assert ("maintain", "29990101/SCA01") in stages
         assert ("crossmatch", "101") in stages and ("prune", "102") in stages
+        registers = sorted(u for s, u in stages if s == "register")
+        assert registers == [f"admit/{UNIT}", f"finalize/{UNIT}"]
         assert all(u["state"] == "complete" and u["attempt"] and u["job"]
                    for u in record["units"])
         assert record["promotion"]  # a promotion id or "refused: ..."
@@ -392,3 +402,43 @@ def test_loop_refuses_a_release_that_is_not_complete(cli, db, fake_batch, fake_s
     assert result.rc == 64
     assert "not complete" in result.err
     assert _rows(db, world["schedule"]) == []
+
+
+def test_loop_exits_75_while_another_loop_holds_the_schedule(
+        cli, db, fake_batch, fake_s3, world, monkeypatch):
+    _FakeStages(db, fake_batch, fake_s3).install(monkeypatch)
+    with db.cursor() as cur:  # db's connection is autocommit: a session lock
+        cur.execute("SELECT pg_advisory_lock(hashtext('rapidpipe.loop:' || %s))",
+                    (world["schedule"],))
+    try:
+        result = cli("loop", "run", "--spec", world["spec"])
+    finally:
+        with db.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(hashtext('rapidpipe.loop:' || %s))",
+                        (world["schedule"],))
+    assert result.rc == 75
+    assert f"another loop holds schedule {world['schedule']}" in result.out
+    assert _rows(db, world["schedule"]) == []
+
+
+def test_loop_retry_failed_reopens_the_date_and_resumes_its_run(
+        cli, db, fake_batch, fake_s3, world, monkeypatch):
+    _FakeStages(db, fake_batch, fake_s3, fail=("statistics", "102")).install(monkeypatch)
+    assert cli("loop", "run", "--spec", world["spec"]).rc == 1
+    ((_, run_id, state, _, _),) = _rows(db, world["schedule"])
+    assert state == "failed"
+
+    stopped = cli("loop", "run", "--spec", world["spec"])
+    assert stopped.rc == 1 and "(skipped)" in stopped.out
+
+    retried = cli("loop", "run", "--spec", world["spec"], "--retry-failed")
+    assert f"date=2027-10-01 run={run_id} reopened (--retry-failed)" in retried.out
+    assert f"date=2027-10-01 run={run_id} resumed" in retried.out
+    assert "already complete" in retried.out
+    # statistics 102 is a failed unit, so the date fails again, on the same run.
+    assert retried.rc == 1
+    ((_, again, state, _, _),) = _rows(db, world["schedule"])
+    assert (again, state) == (run_id, "failed")
+    with db.cursor() as cur:
+        cur.execute("SELECT count(*) FROM runs WHERE release = %s", (world["tag"],))
+        assert cur.fetchone()[0] == 1
