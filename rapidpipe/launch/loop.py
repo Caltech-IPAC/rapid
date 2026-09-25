@@ -1014,11 +1014,13 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
             elif stage == "admit":
                 walk(image.unit, here, inputs=[image.delivery], settings=settings)
             elif stage == "difference":
-                if unit_state(conn, view.run, "admit", image.unit) is None:
+                # run start composes the template against admit's output in
+                # this run or, inherited, in its (production) seed; no further.
+                admit = _holder(conn, view, "admit", image.unit)
+                if admit is None or admit[0] not in view.chain[:2]:
                     raise _Stop(EXIT_FAILED, f"difference {image.unit} reads an input set "
-                                             "composed from admit's output, which is in a "
-                                             f"seed of {view.run}; it cannot be composed "
-                                             "across runs")
+                                             "composed from admit's output, which is not in "
+                                             f"{view.run} or its seed {view.chain[1]}")
                 walk(image.unit, here, settings=difference_settings, templates=template)
             else:
                 producer = _producer_position(absolute)
