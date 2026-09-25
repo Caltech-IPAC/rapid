@@ -146,7 +146,7 @@ def test_register_writes_refimages_refimmeta_refimimages_refimcatalogs(
                      "fwhmmaxpix"):
             assert meta[name] == pytest.approx(block[name], rel=1e-6), name
         assert (meta["npixnan"], meta["clnoutliers"]) == (block["npixnan"], block["clnoutliers"])
-        assert meta["nsxcatsources"] == block["nsxcatsources"]
+        assert meta["nsxcatsources"] == block["nsexcatsources"]   # dev's block spelling
         assert meta["npucatsources"] is None   # no Photutils catalog: null, never 0
 
         cur.execute(

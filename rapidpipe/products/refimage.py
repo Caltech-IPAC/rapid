@@ -16,9 +16,10 @@ difference image's was:
   instance ids coadded), and the measurements `dev` writes to `refimmeta`
   under `dev`'s own names (``nframes`` ... ``npucatsources``), plus the
   frame-range and zero-point values the header carries and
-  ``settings_hash``. The two catalog counts use the `refimmeta` column
-  spellings, ``nsxcatsources`` and ``npucatsources`` (supervisor
-  amendment to R6, 2026-09-24); ``npucatsources`` is null when the
+  ``settings_hash``. The SExtractor count keeps `dev`'s block spelling
+  ``nsexcatsources`` (``registerCompletedJobsInDB.py``'s
+  ``[REF_IMAGE] nsexcatsources``), written to the column
+  ``refimmeta.nsxcatsources``; ``npucatsources`` is null when the
   Photutils reference catalog is off (``[psfcat] enabled = false``, the
   default), and `refimmeta` stores that null
   (20260924-09-refimmeta-npucatsources-nullable.sql).
@@ -75,8 +76,10 @@ REFERENCE_IMAGE_ROLES = ("image", "coverage", "uncertainty")
 #: `dev`'s ``roman_to_rapid_filter_names`` (``modules/utils/
 #: rapid_pipeline_subs.py``): Roman filter designations to the RAPID names
 #: that FITS FILTER headers and the `filters` table carry. F184 is spelled
-#: the same either way. The `reference` stage carries its own copy
-#: (``rapidpipe.science.reference.prep``); products may not import science.
+#: the same either way. The `reference` stage carries the same map in
+#: ``rapidpipe.science.reference.prep`` (PR #128, not yet merged when this
+#: landed); products may not import science, so this is a second copy
+#: until the two are reconciled at merge.
 ROMAN_TO_RAPID_FILTER_NAMES: dict[str, str] = {
     "F062": "R062",
     "F087": "Z087",
@@ -146,7 +149,7 @@ _FLOAT_FIELDS = (
     "fwhmminpix", "fwhmmaxpix",
 )
 #: The block's counts (`refimmeta`'s ``integer``/``smallint`` columns).
-_COUNT_FIELDS = ("npixnan", "clnoutliers", "nsxcatsources")
+_COUNT_FIELDS = ("npixnan", "clnoutliers", "nsexcatsources")
 
 
 @dataclass(frozen=True)
@@ -183,7 +186,7 @@ class ReferenceImageRegistration:
     fwhmmedpix: float
     fwhmminpix: float
     fwhmmaxpix: float
-    nsxcatsources: int
+    nsexcatsources: int
     npucatsources: int | None
     settings_hash: str
 

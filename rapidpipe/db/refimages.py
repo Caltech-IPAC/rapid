@@ -91,13 +91,17 @@ REFERENCE_RECIPE_PPIDS: dict[str, int] = {"awaicgen": 12}
 
 #: `refimmeta` columns filled from the block's field of the same name, by
 #: column type: ``real`` (compared after rounding to float4 on replay),
-#: ``double precision`` and integer.
+#: ``double precision`` and integer. The one whose block field is spelled
+#: differently is in :data:`_META_RENAMED`.
 _META_REAL = ("clmean", "clstddev", "gmedian", "datascale", "gmin", "gmax",
               "cov5percent", "medncov", "medpixunc", "fwhmmedpix", "fwhmminpix",
               "fwhmmaxpix")
-_META_INT = ("nframes", "npixnan", "clnoutliers", "nsxcatsources", "npucatsources")
+_META_INT = ("nframes", "npixnan", "clnoutliers", "npucatsources")
 #: `refimmeta` double-precision columns and the block fields they hold.
 _META_DOUBLE = {"mjdobsmin": "mjdobs_min", "mjdobsmax": "mjdobs_max"}
+#: Integer `refimmeta` columns whose block field keeps `dev`'s block
+#: spelling: ``nsexcatsources`` -> ``nsxcatsources``.
+_META_RENAMED = {"nsxcatsources": "nsexcatsources"}
 
 
 def _as_real(value: float) -> float:
@@ -143,7 +147,7 @@ def _replay_differences(cur, rfid: int, registration: ReferenceImageRegistration
         if held != said:
             differences.append(f"refimages.{name} {held!r} != {said!r}")
 
-    columns = _META_REAL + _META_INT + tuple(_META_DOUBLE)
+    columns = _META_REAL + _META_INT + tuple(_META_DOUBLE) + tuple(_META_RENAMED)
     cur.execute(f"SELECT {', '.join(columns)} FROM refimmeta WHERE rfid = %s", (rfid,))
     row = cur.fetchone()
     if row is None:
@@ -153,6 +157,7 @@ def _replay_differences(cur, rfid: int, registration: ReferenceImageRegistration
         said: dict[str, Any] = {c: _as_real(getattr(registration, c)) for c in _META_REAL}
         said.update({c: getattr(registration, c) for c in _META_INT})
         said.update({c: getattr(registration, f) for c, f in _META_DOUBLE.items()})
+        said.update({c: getattr(registration, f) for c, f in _META_RENAMED.items()})
         # A real comes back in its shortest text form, parsed as a double:
         # round both sides to float4 before comparing.
         for column in _META_REAL:
@@ -257,7 +262,7 @@ def register_reference_image(
              registration.gmin, registration.gmax, registration.cov5percent,
              registration.medncov, registration.medpixunc, registration.fwhmmedpix,
              registration.fwhmminpix, registration.fwhmmaxpix,
-             registration.nsxcatsources, registration.npucatsources))
+             registration.nsexcatsources, registration.npucatsources))
 
         for rid in rids:
             cur.execute(

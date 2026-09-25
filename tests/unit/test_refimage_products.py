@@ -41,7 +41,7 @@ def reference_image_registration(*, constituents=None, field=4711398, filter_="W
         "npixnan": 12, "clmean": 0.004, "clstddev": 0.03, "clnoutliers": 118,
         "gmedian": 0.003, "datascale": 0.028, "gmin": -0.4, "gmax": 812.0,
         "fwhmmedpix": 1.9, "fwhmminpix": 1.2, "fwhmmaxpix": 7.5,
-        "nsxcatsources": 5321, "npucatsources": npucatsources,
+        "nsexcatsources": 5321, "npucatsources": npucatsources,
         "settings_hash": "sha256:" + "5" * 64,
     }
 
@@ -158,8 +158,8 @@ def _mutated(mutate):
     (lambda e: e["registration"].update(gmax="big"), "gmax must be a finite number"),
     (lambda e: e["registration"].update(fwhmmedpix=float("inf")), "fwhmmedpix must be a finite"),
     (lambda e: e["registration"].update(npixnan=1.5), "npixnan must be a non-negative integer"),
-    (lambda e: e["registration"].update(nsxcatsources=-1), "nsxcatsources must be"),
-    (lambda e: e["registration"].update(nsexcatsources=1), "unknown fields"),
+    (lambda e: e["registration"].update(nsexcatsources=-1), "nsexcatsources must be"),
+    (lambda e: e["registration"].update(nsxcatsources=1), "unknown fields"),
     (lambda e: e["registration"].update(npucatsources=-1), "npucatsources must be"),
     (lambda e: e["registration"].update(mjdobs_min=61680.0), "is after mjdobs_max"),
     (lambda e: e["registration"].update(jd_end=2461679.0), "is after jd_end"),
