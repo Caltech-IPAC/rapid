@@ -1,0 +1,104 @@
+# cli-behaviour: the rapidpipe CLI's behavioural suite (tests/cli), black
+# box -- argv in, exit code / stdout / stderr and database state out --
+# against a real PostgreSQL with the run-model migration applied and
+# Batch/S3 faked (tests/unit/fakebatch.py, tests/unit/fakes3.py).
+#
+# The postgres service, Q3C install, client install, database creation and
+# migration-apply steps below are copied verbatim from db-migrations.yml
+# rather than factored out or depended on: this job must stay runnable and
+# understandable on its own, even if db-migrations.yml's steps ever change
+# shape, and GitHub Actions has no first-class way to share steps between
+# workflow files without a composite action this repository does not
+# otherwise need. The duplication is deliberate.
+name: cli-behaviour
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-behaviour-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cli-behaviour:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: throwaway-ci-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      # Throwaway password, this job's service container only -- never a
+      # real credential, never used outside this ephemeral database.
+      PGPASSWORD: throwaway-ci-password
+
+    steps:
+      - name: check out rapid
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+
+      - name: install Q3C into the service container
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "ancestor=postgres:18" --format '{{.ID}}' | head -1)
+          if [ -z "$cid" ]; then
+            cid=$(docker ps --format '{{.ID}} {{.Image}}' | grep -i postgres | head -1 | cut -d' ' -f1)
+          fi
+          docker exec "$cid" apt-get update -qq
+          docker exec "$cid" apt-get install -y --no-install-recommends postgresql-18-q3c
+
+      - name: install postgresql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: create the empty target database
+        run: |
+          PGDATABASE=postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE rapid"
+
+      - name: apply the migration stream
+        env:
+          PGDATABASE: rapid
+        run: |
+          database/apply-migrations.sh
+
+      - name: set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: install rapidpipe and its test dependencies
+        run: |
+          pip install -e . --no-deps
+          # Same set db-migrations.yml and unit-tests.yml install, for the
+          # same reasons (see unit-tests.yml's comment): psycopg2-binary
+          # for rapidpipe.db/rapidpipe.runs, numpy/astropy for admit's FITS
+          # handling, healpy for rapidpipe.science.spatial, fastavro/scipy
+          # for the alerts stage -- this suite imports rapidpipe.cli.main,
+          # which reaches all of them by import even where a given test
+          # never exercises that stage directly.
+          pip install psycopg2-binary pytest numpy astropy healpy fastavro scipy
+
+      - name: run the CLI behavioural suite
+        env:
+          PGDATABASE: rapid
+        run: |
+          python -m pytest tests/cli -q -rs
