@@ -112,6 +112,24 @@ CRDS_PATH, CRDS_SERVER_URL
                         Only needed if the gWCS has to be assigned here; the
                         simulated inputs already carry a correct gWCS.
 
+Timing
+------
+
+Each major step of each file is timed, and every one of those lines reads
+
+    Elapsed time in seconds to <step> = <seconds> (<ASDF file>)
+
+so that one grep collects a single step across a whole run and the elapsed times
+can be summed or averaged straight out of the log:
+
+    grep "^Elapsed time in seconds to convert" ingestL2Files.log
+
+The file in parentheses is the input ASDF object name throughout, including on
+the steps that handle the FITS file, so every line belonging to one unit of work
+carries the same identifier.  It is what makes the log usable at all: NUM_CORES
+workers share one output stream and their lines interleave.
+
+
 Exit codes
 ----------
 
@@ -1845,6 +1863,30 @@ def get_ingested_l2file_times(dbh):
 # Methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
+def log_elapsed_time(action,start_time,l2_file):
+
+    '''
+    Report how long one step of one file's ingest took, and return the time it ended, which is
+    the start of the next step.
+
+    Every line reads
+
+        Elapsed time in seconds to <action> = <seconds> (<file>)
+
+    The common opening is what makes the log greppable: one grep collects a single step across
+    a whole run, and the elapsed times can be summed or averaged straight out of it.  The file
+    in parentheses is what makes that possible at all, since num_cores workers share this
+    output stream and their lines interleave; without it a line could not be attributed to the
+    file it describes.
+    '''
+
+    end_time = time.time()
+
+    print(f"Elapsed time in seconds to {action} = {end_time - start_time} ({l2_file})")
+
+    return end_time
+
+
 def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None):
 
     '''
@@ -1918,6 +1960,13 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
         local_files = [local_asdf_file,local_fits_file,local_fits_file + ".partial",
                        local_gzipped_fits_file]
 
+
+        # The clock each major step below is timed from.  Every step advances it to its own
+        # end, so the steps partition the file's ingest between them rather than each being
+        # measured from the start.
+
+        step_start_time = time.time()
+
         try:
 
             if s3_object_name in reusable_output_fits_files:
@@ -1931,9 +1980,15 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
                 s3_client.download_file(bucket_name_output,s3_object_name,local_gzipped_fits_file)
 
+                step_start_time = log_elapsed_time("download already-converted FITS file from S3 bucket",
+                                                   step_start_time,input_asdf_file)
+
                 with gzip.open(local_gzipped_fits_file,'rb') as fh_in:
                     with open(local_fits_file,'wb') as fh_out:
                         shutil.copyfileobj(fh_in,fh_out)
+
+                step_start_time = log_elapsed_time("gunzip already-converted FITS file",
+                                                   step_start_time,input_asdf_file)
 
             else:
 
@@ -1941,6 +1996,9 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
                 # Download the ASDF file from the input S3 bucket.
 
                 s3_client.download_file(bucket_name_input,input_asdf_file,local_asdf_file)
+
+                step_start_time = log_elapsed_time("download ASDF file from S3 bucket",
+                                                   step_start_time,input_asdf_file)
 
 
                 # Gunzip it, if it is gzipped.  roman_datamodels reads only uncompressed ASDF.
@@ -1955,6 +2013,9 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
                     local_files.append(gunzipped_asdf_file)
 
+                    step_start_time = log_elapsed_time("gunzip ASDF file",
+                                                       step_start_time,input_asdf_file)
+
                 else:
 
                     gunzipped_asdf_file = local_asdf_file
@@ -1964,6 +2025,9 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
                 converted = asdf_to_fits(gunzipped_asdf_file,local_fits_file)
 
+                step_start_time = log_elapsed_time("convert ASDF file to FITS file",
+                                                   step_start_time,input_asdf_file)
+
                 if not converted:
                     raise RuntimeError(f"Could not convert {input_asdf_file}")
 
@@ -1972,11 +2036,17 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
                 gzip_file(local_fits_file,local_gzipped_fits_file)
 
+                step_start_time = log_elapsed_time("gzip FITS file",
+                                                   step_start_time,input_asdf_file)
+
 
                 # Upload the gzipped file to the output S3 bucket.
 
                 uploaded = util.upload_files_to_s3_bucket(s3_client,bucket_name_output,
                                                           [local_gzipped_fits_file],[s3_object_name])
+
+                step_start_time = log_elapsed_time("upload FITS file to S3 bucket",
+                                                   step_start_time,input_asdf_file)
 
                 if not uploaded:
                     raise RuntimeError(f"Could not upload {s3_object_name} to {bucket_name_output}")
@@ -1988,6 +2058,9 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
             registered = register_fits_file(dbh,roman_tessellation_db,
                                             local_fits_file,local_gzipped_fits_file,s3_object_name)
+
+            step_start_time = log_elapsed_time("register L2 file in database",
+                                               step_start_time,input_asdf_file)
 
             if not registered:
                 raise RuntimeError(f"Could not register {s3_object_name} in the database")
@@ -2013,13 +2086,16 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
                 if os.path.exists(local_file):
                     os.remove(local_file)
 
+            log_elapsed_time("clean up work directory for L2 file",
+                             step_start_time,input_asdf_file)
 
-        # Code-timing benchmark.
 
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to ingest L2 file = {diff_time_benchmark}\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
+        # The whole file, timed from where the previous file left off, so that these totals
+        # account for every second the worker spent rather than only the steps above.
+
+        thread_start_time_benchmark = log_elapsed_time("ingest L2 file",
+                                                       thread_start_time_benchmark,
+                                                       input_asdf_file)
 
         fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
         fh.flush()

@@ -380,6 +380,46 @@ back on the next run's work list either way, neither having got an ``L2Files``
 row.
 
 
+Timing
+====================================
+
+Each major step of each file is timed, and every one of those lines reads
+
+.. code-block::
+
+   Elapsed time in seconds to <step> = <seconds> (<ASDF file>)
+
+so that one ``grep`` collects a single step across a whole run and the elapsed
+times can be summed or averaged straight out of the log:
+
+.. code-block::
+
+   grep "^Elapsed time in seconds to convert" ingestL2Files.log
+
+The steps reported per file are: downloading the ASDF file, gunzipping it,
+converting it to FITS, gzipping the FITS, uploading it, registering it in the
+database, cleaning up the work directory, and the whole file as
+``ingest L2 file``.  A file taken back from the output bucket instead of
+converted (see `Reusing a converted file`_) reports downloading and gunzipping
+that FITS in place of the four middle steps.  The steps partition the file's
+time between them, so they sum to the ``ingest L2 file`` total.
+
+.. note::
+   The file in parentheses is the input ASDF object name throughout, including
+   on the steps that handle the FITS file, so that every line belonging to one
+   unit of work carries the same identifier.  It is what makes the log usable
+   at all: ``NUM_CORES`` workers share one output stream and their lines
+   interleave, so without it a line could not be attributed to the file it
+   describes.
+
+   The limiting-magnitude computation, and the PSF download it may need, fall
+   inside ``register L2 file in database`` rather than being reported
+   separately.
+
+A file that fails still reports the steps it got through, and its cleanup and
+total, so a failure can be placed in the sequence rather than merely noticed.
+
+
 Running it continuously
 ************************************
 
