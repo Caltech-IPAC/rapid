@@ -12,7 +12,16 @@ writes into a real ``sources_<yyyymmdd>_<sca>`` table (two fields), and
 crossmatch an ``association-set`` registered in ``product_instances`` --
 which the real stage does itself, and which is how the next date finds
 its base (R5). Everything else writes an empty-output manifest or a
-result-set entry.
+result-set entry. The stages that register their own outputs (load,
+crossmatch, statistics, prune, alerts) register them here too; register
+is not faked, so admit's l2-image and finalize's difference image stay
+unregistered.
+
+Every test uses the launcher's real input-manifest read
+(``real_input_manifest``; supervisor step 9, R4): the delivery and the
+difference template are seeded with manifests, the template registered
+under a producer run of its own, so each unit's ``unit_inputs`` rows are
+written at submission and asserted.
 """
 
 from __future__ import annotations
@@ -37,6 +46,8 @@ UNIT = "r0034001002001001001/SCA01"
 PROD_DEF = "rapid-production:7"
 DIGEST = "sha256:" + "b" * 64
 
+pytestmark = pytest.mark.real_input_manifest
+
 
 def _sha(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
@@ -54,6 +65,11 @@ def _manifest(run_id, stage, unit_id, attempt_id, outputs, unit_kind="detector-i
         "inputs": {"manifest": "x", "products": {}, "result_sets": []},
         "outputs": outputs,
     }
+
+
+#: Stages whose real implementation registers its own outputs
+#: (``register_manifest`` in rapidpipe/stages/<stage>.py).
+SELF_REGISTERING = ("load", "crossmatch", "statistics", "prune", "alerts")
 
 
 def _prefix(location: str) -> str:
@@ -140,8 +156,8 @@ class _FakeStages:
                     self.fake_s3.seed(FAKE_BUCKET, f"{prefix}/exec/{attempt_id}.json",
                                       json.dumps(self.execution_record).encode())
                 self.fake_batch.set_status(job_id, "SUCCEEDED")
-                if stage == "crossmatch":
-                    # The real stage registers its association set itself.
+                if stage in SELF_REGISTERING:
+                    # The real stage registers its own outputs.
                     repository.register_manifest(self.db.connection, manifest,
                                                  registering_attempt_id=attempt_id)
             result = original(conn, run_id)
@@ -173,8 +189,18 @@ def world(db, fake_batch, fake_s3, batch_env, monkeypatch):
         cur.execute(f"CREATE TABLE IF NOT EXISTS {TABLE} (field integer, result_set text)")
     fake_batch.job_definitions[PROD_DEF] = "ACTIVE"
 
+    # The difference template is an earlier run's registered product (R4:
+    # the difference and alerts units bind its instances at submission).
+    conn = db.connection
+    template_run = repository.create_run(
+        conn, "scratch", "test", "loop template producer", ["difference"], "a" * 40,
+        None, "20260924-11-loop-dates.sql", None, None, "prompt", "default", "rapid",
+        1, False, None)
+    repository.add_unit(conn, template_run, "difference", "detector-image", UNIT)
+    template_attempt = repository.allocate_attempt(conn, template_run, "difference", UNIT)
+    conn.commit()
     template_prefix = _prefix(TEMPLATE)
-    template = _manifest("template", "input-set", UNIT, new_ulid(), [
+    template = _manifest(template_run, "difference", UNIT, template_attempt, [
         {"kind": "l2-image", "format_version": "1", "instance": new_ulid(),
          "key": {"unit": UNIT}, "primary": "l2/old.fits",
          "members": [_member(fake_s3, template_prefix, "l2/old.fits", b"OLD")]},
@@ -183,6 +209,17 @@ def world(db, fake_batch, fake_s3, batch_env, monkeypatch):
          "members": [_member(fake_s3, template_prefix, "ref/cat.txt", b"REFCAT")]},
     ])
     fake_s3.seed(FAKE_BUCKET, f"{template_prefix}/manifest.json", json.dumps(template).encode())
+    repository.register_manifest(conn, template, registering_attempt_id=template_attempt)
+    conn.commit()
+
+    # admit's input: a delivery manifest naming one raw image that no run
+    # registered, so the real reader (R4) accepts it and binds nothing.
+    delivery_prefix = _prefix(DELIVERY)
+    delivery = _manifest("delivery", "delivery", UNIT, new_ulid(), [
+        {"kind": "l1-image", "format_version": "1", "instance": new_ulid(),
+         "key": {"unit": UNIT}, "primary": "l1/raw.fits",
+         "members": [_member(fake_s3, delivery_prefix, "l1/raw.fits", b"RAW" * 4)]}])
+    fake_s3.seed(FAKE_BUCKET, f"{delivery_prefix}/manifest.json", json.dumps(delivery).encode())
 
     spec_key = f"control/loop/{schedule}.toml"
     fake_s3.seed(FAKE_BUCKET, spec_key, f"""
@@ -209,10 +246,11 @@ delivery = "{DELIVERY}"
 difference_template = "{TEMPLATE}"
 """.encode())
 
-    state = {"tag": tag, "digest": DIGEST, "schedule": schedule, "spec": f"s3://{FAKE_BUCKET}/{spec_key}"}
+    state = {"tag": tag, "digest": DIGEST, "schedule": schedule,
+             "spec": f"s3://{FAKE_BUCKET}/{spec_key}",
+             "template": {o["kind"]: o["instance"] for o in template["outputs"]}}
     yield state
 
-    conn = db.connection
     with conn.cursor() as cur:
         cur.execute("SELECT run, promotion FROM loop_dates WHERE schedule = %s", (schedule,))
         rows = cur.fetchall()
@@ -228,6 +266,7 @@ difference_template = "{TEMPLATE}"
         cur.execute(f"DELETE FROM {TABLE} WHERE result_set IN "
                     "(SELECT id FROM product_instances WHERE run = ANY(%s))", (runs,))
     _delete_run_rows(conn, runs + [r for r, _ in rows if r not in runs], promotions)
+    _delete_run_rows(conn, [template_run], [])
     with conn.cursor() as cur:
         if made_table:
             cur.execute(f"DROP TABLE {TABLE}")
@@ -243,6 +282,15 @@ def _rows(db, schedule):
         cur.execute("SELECT processing_date::text, run, state, promotion, record "
                     "FROM loop_dates WHERE schedule = %s ORDER BY processing_date", (schedule,))
         return cur.fetchall()
+
+
+def _bound(db, run_id, stage, unit_id) -> set[str]:
+    """The instances ``unit_inputs`` binds to one unit (R4)."""
+    with db.cursor() as cur:
+        cur.execute("SELECT ui.producer_instance FROM unit_inputs ui JOIN units u "
+                    "ON u.id = ui.unit WHERE u.run = %s AND u.stage = %s AND u.unit_id = %s",
+                    (run_id, stage, unit_id))
+        return {row[0] for row in cur.fetchall()}
 
 
 def _read(fake_s3, location):
@@ -321,6 +369,40 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
                         Key=f"scratch/runs/{run2}/inputs/alerts/{UNIT}/diff/final.fits")
     assert record2["alerts"][UNIT]["instance"]
 
+    # R4 under the real manifest reader: every unit binds, at submission,
+    # the registered instances its input set names.
+    template = world["template"]
+    for run in (run1, run2):
+        # difference's composed input set is admit's l2-image (not
+        # registered by the fakes) in place of the template's, plus the
+        # template's reference catalog, an earlier run's registered product.
+        assert _bound(db, run, "difference", UNIT) == {template["reference-catalog"]}
+        # admit's delivery manifest names nothing registered.
+        assert _bound(db, run, "admit", UNIT) == set()
+    for f in FIELDS:
+        sources = [o["instance"] for o in _read(
+            fake_s3, f"s3://{FAKE_BUCKET}/scratch/runs/{run1}/inputs/crossmatch/{f}/"
+                     "manifest.json")["outputs"]]
+        assert _bound(db, run1, "crossmatch", str(f)) == set(sources)
+        # The second date's crossmatch also binds its base: the first
+        # date's association set, another run's result set.
+        manifest = _read(fake_s3, f"s3://{FAKE_BUCKET}/scratch/runs/{run2}/inputs/"
+                                  f"crossmatch/{f}/manifest.json")
+        assert _bound(db, run2, "crossmatch", str(f)) == set(manifest["inputs"]["result_sets"])
+        assert record1["association_sets"][str(f)] in _bound(db, run2, "crossmatch", str(f))
+        # statistics and prune bind the field's association set.
+        for stage in ("statistics", "prune"):
+            assert _bound(db, run2, stage, str(f)) == {record2["association_sets"][str(f)]}
+    # alerts binds its source set, and per field the association, statistics
+    # and pruned sets (#144), plus the template's reference catalog; the
+    # finalized difference image is not registered by the fakes.
+    alerts_bound = _bound(db, run2, "alerts", UNIT)
+    assert alerts_bound == set(alerts_in["inputs"]["result_sets"]) | {
+        template["reference-catalog"]}
+    for f in FIELDS:
+        assert {record2["pruned_sets"][str(f)], record2["statistics_sets"][str(f)],
+                record2["association_sets"][str(f)]} <= alerts_bound
+
     # The record's shape.
     for record in (record1, record2):
         assert {"spec", "release", "run", "units", "fields", "base_sets", "alerts",
@@ -336,9 +418,12 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     for _, _, _, promotion, record in rows:
         assert promotion is not None and record["promotion"] == promotion
         # Step 6's gate: the default policy (the spec names none) checks
-        # difference-image and source-set candidates; the fakes register none.
+        # difference-image and source-set candidates. The fakes register the
+        # date's source set (as load does) but no difference image, so the
+        # one check is the advisory catalog count, which does not block.
         assert record["promotion_gate"] == "check policy rebuild-trial@1"
-        assert record["checks"] == []
+        assert [(c["check"], c["required"]) for c in record["checks"]] == [
+            ("catalog-counts-vs-reference@1", False)]
     with db.cursor() as cur:
         cur.execute("SELECT who, reason, request_context->>'run' FROM promotions "
                     "WHERE id = ANY(%s) ORDER BY happened_at", ([r[3] for r in rows],))
@@ -398,6 +483,14 @@ def test_loop_resumes_an_interrupted_date_with_the_same_run(
         cur.execute("SELECT count(*) FROM attempts WHERE run = %s AND stage = 'admit'",
                     (run_id,))
         assert cur.fetchone()[0] == 1
+    # R4 across the interruption: difference bound before it, crossmatch and
+    # alerts after it, each under the real manifest reader.
+    assert _bound(db, run_id, "difference", UNIT) == {world["template"]["reference-catalog"]}
+    record = row[4]
+    for f in FIELDS:
+        assert record["association_sets"][str(f)] in _bound(db, run_id, "alerts", UNIT)
+        assert record["pruned_sets"][str(f)] in _bound(db, run_id, "alerts", UNIT)
+        assert len(_bound(db, run_id, "crossmatch", str(f))) == 1  # the date's source set
 
 
 def test_loop_a_failed_unit_fails_the_date_and_leaves_later_dates(
@@ -480,6 +573,19 @@ def test_loop_retry_failed_re_runs_the_failed_units_on_a_seeded_run(
                                f"{UNIT}/manifest.json")
     assert record["association_sets"]["101"] in alerts_in["inputs"]["result_sets"]
     assert record["promotion"]
+    # R4 on the seeded run: statistics 102 (seeded; it re-reads its seed
+    # attempt's input location) binds the seed's association set for 102;
+    # alerts binds both fields' pruned sets, 101's inherited from the seed.
+    assert _bound(db, run2, "statistics", "102") == {record["association_sets"]["102"]}
+    alerts_bound = _bound(db, run2, "alerts", UNIT)
+    assert alerts_bound == set(alerts_in["inputs"]["result_sets"]) | {
+        world["template"]["reference-catalog"]}
+    with db.cursor() as cur:
+        cur.execute("SELECT id, run FROM product_instances WHERE id = ANY(%s)",
+                    ([record["pruned_sets"][str(f)] for f in FIELDS],))
+        producers = dict(cur.fetchall())
+    assert producers == {record["pruned_sets"]["101"]: run1, record["pruned_sets"]["102"]: run2}
+    assert set(producers) <= alerts_bound
 
 
 def test_loop_a_finished_run_with_units_missing_fails_the_date(
@@ -516,3 +622,76 @@ def test_loop_a_finished_run_with_units_missing_fails_the_date(
     assert (again, state) == (run_id, "failed")
     assert record["reason"].startswith("--retry-failed: ")
     assert "nothing to re-run" in record["reason"]
+
+
+class _LostResponseClientError(Exception):
+    """Named to end in ``ClientError`` (``rapidpipe.cli.main._BATCH_ERROR_NAMES``):
+    a Batch-shaped failure, which the loop exits 75 on."""
+
+
+def test_loop_resolves_a_jobless_attempt_and_keeps_its_bindings(
+        cli, db, fake_batch, fake_s3, world, monkeypatch):
+    # Batch accepts crossmatch 101's job but the response never arrives:
+    # the attempt (and its inputs, bound before allocation) is committed,
+    # job-less. loop run exits 75; the rerun resolves it through step 6's
+    # resolver (the job is found by name and attached) and completes.
+    _FakeStages(db, fake_batch, fake_s3).install(monkeypatch)
+    original = fake_batch.submit_job
+    lost = []
+
+    def submit_job(**kwargs):
+        response = original(**kwargs)
+        if not lost and "-crossmatch-" in kwargs["jobName"]:
+            lost.append(response["jobId"])
+            raise _LostResponseClientError("simulated lost submit response")
+        return response
+
+    monkeypatch.setattr(fake_batch, "submit_job", submit_job)
+    first = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01")
+    assert first.rc == 75, first.err + first.out
+    ((_, run_id, state, _, _),) = _rows(db, world["schedule"])
+    assert state == "open"
+    with db.cursor() as cur:
+        cur.execute("SELECT a.id FROM attempts a JOIN units u ON u.id = a.unit WHERE "
+                    "a.run = %s AND u.stage = 'crossmatch' AND a.scheduler_job_id IS NULL",
+                    (run_id,))
+        ((jobless,),) = cur.fetchall()
+        cur.execute("SELECT unit_id FROM units WHERE run = %s AND stage = 'crossmatch'",
+                    (run_id,))
+        ((field,),) = cur.fetchall()
+    bound = _bound(db, run_id, "crossmatch", field)
+    assert len(bound) == 1  # the date's source set, bound before the allocation
+
+    resumed = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01")
+    assert resumed.rc == 0, resumed.err + resumed.out
+    assert f"resolved job-less attempts: {jobless}=REPAIRED" in resumed.out
+    ((_, again, state, _, record),) = _rows(db, world["schedule"])
+    assert (again, state) == (run_id, "complete")
+    assert record["jobless_resolved"] == [{"attempt": jobless, "status": "REPAIRED",
+                                           "job": lost[0]}]
+    assert _bound(db, run_id, "crossmatch", field) == bound
+    with db.cursor() as cur:
+        cur.execute("SELECT count(*) FROM attempts a JOIN units u ON u.id = a.unit "
+                    "WHERE a.run = %s AND u.stage = 'crossmatch' AND u.unit_id = %s",
+                    (run_id, field))
+        assert cur.fetchone()[0] == 1
+
+
+def test_loop_a_refused_input_manifest_fails_the_date(
+        cli, db, fake_batch, fake_s3, world, monkeypatch):
+    # The delivery's manifest is gone: run start's launcher refuses admit
+    # (InputsRefused, exit 65) before writing anything. The loop records the
+    # date failed with the message and does not start later dates.
+    _FakeStages(db, fake_batch, fake_s3).install(monkeypatch)
+    del fake_s3._objects[(FAKE_BUCKET, f"{_prefix(DELIVERY)}/manifest.json")]
+    result = cli("loop", "run", "--spec", world["spec"])
+    assert result.rc == 1, result.err + result.out
+    ((date, run_id, state, promotion, record),) = _rows(db, world["schedule"])
+    assert (date, state, promotion) == ("2027-10-01", "failed", None)
+    assert f"admit,register,difference,finalize,register,load {UNIT}: inputs refused: " \
+        in record["failure"]
+    assert f"{DELIVERY}/manifest.json" in record["failure"]
+    assert fake_batch.submitted == []
+    with db.cursor() as cur:
+        cur.execute("SELECT count(*) FROM units WHERE run = %s", (run_id,))
+        assert cur.fetchone()[0] == 0
