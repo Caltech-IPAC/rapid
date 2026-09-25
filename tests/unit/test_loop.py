@@ -893,3 +893,38 @@ def test_run_view_refuses_a_run_whose_stages_are_not_a_suffix(monkeypatch):
     monkeypatch.setattr(loop, "run_lineage", lambda conn, run: (("R", "S"), ["prune", "alerts"]))
     view = loop.run_view(object(), "R")
     assert (view.offset, view.seeded) == (9, True)
+
+
+@pytest.mark.parametrize("chain, admit_in, walked", [
+    (("RUN3", "RUN2"), "RUN2", True),
+    (("RUN3", "RUN2", "RUN1"), "RUN1", False),
+])
+def test_a_seeded_re_run_composes_difference_against_its_seeds_admit_only(
+        monkeypatch, chain, admit_in, walked):
+    """RUN3 re-runs register(admit/U) (stages from position 1): difference
+    has no row anywhere, so it runs in RUN3 with the template, which run
+    start composes against admit's output in RUN3 or its seed, no further."""
+    spec, tools, storage, walks, created, updates = _world(monkeypatch)
+    unit = spec.dates[0].detector_images[0].unit
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN3", state="open"))
+    monkeypatch.setattr(loop, "run_lineage",
+                        lambda conn, run: (chain, list(loop.SELECTED_STAGES[1:])))
+
+    def unit_state(conn, run, stage, u):
+        if (stage, u) == ("register", f"admit/{unit}"):
+            return ("pending", True) if run == "RUN3" else ("failed", False)
+        if stage == "admit":
+            return ("complete", False) if run == admit_in else None
+        return None
+
+    monkeypatch.setattr(loop, "unit_state", unit_state)
+    # The register completes; difference (when walked) fails, ending the chain.
+    tools.walk = lambda conn, **kw: (walks.append(kw), 0 if kw["positions"] == [0] else 1)[1]
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 1
+    assert walks[0]["positions"] == [0] and walks[0]["inputs"] == []  # the seeded register
+    if walked:
+        assert walks[1]["positions"] == [1]
+        assert walks[1]["templates"] == ["difference=s3://b/control/step3/P1/inputs"]
+    else:
+        assert len(walks) == 1
+        assert "not in RUN3 or its seed RUN2" in updates["record"]["failure"]
