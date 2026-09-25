@@ -140,7 +140,9 @@ def add_parsers(run_subparsers: Any) -> None:
     start.add_argument(
         "--template", action="append", default=[], metavar="STAGE=LOC",
         help="Compose STAGE's input set from this template input-set manifest "
-             "and the preceding stage's output (see 'run inputs'). Repeatable.")
+             "and the preceding stage's output (see 'run inputs'). Repeatable. "
+             "Refused for register, whose inputs are always the producing "
+             "stage's output.")
     start.add_argument(
         "--no-wait", action="store_true",
         help="Submit the first stage that needs it, print the command that "
@@ -518,6 +520,14 @@ def _rehome_under_l2(entry: OutputEntry) -> tuple[OutputEntry, list[tuple[str, s
         registration=dict(entry.registration)), moves
 
 
+# register derives its unit id from its inputs' manifest (``<stage>/<unit>``),
+# so a composed set (stage ``input-set``) would admit ``register/U`` and then
+# submit ``register/input-set/U``.
+_REGISTER_TEMPLATE_REFUSAL = (
+    "--template is refused for register: register's inputs are always the "
+    "producing stage's output; use --inputs, or --template on the producer")
+
+
 def compose_inputs(
     conn,
     *,
@@ -549,6 +559,8 @@ def compose_inputs(
     reused: its registered instances are re-bound (idempotent) and
     committed, so a reuse always leaves the unit bound.
     """
+    if stage == "register":
+        raise _Exit(int(ExitCode.USAGE), _REGISTER_TEMPLATE_REFUSAL)
     storage = storage or _Storage()
     _require_run(conn, run_id)
     dest_text = dest or default_inputs_dest(run_id, stage, unit_id)
@@ -692,6 +704,8 @@ class _StartWalk:
         self.inputs_unprefixed, self.inputs_keyed = _split_keyed(args.inputs, "--inputs")
         self.settings_unprefixed, self.settings_keyed = _split_keyed(args.settings, "--settings")
         _, self.templates = _split_keyed(args.template, "--template", allow_unprefixed=False)
+        if "register" in self.templates:
+            raise _Exit(int(ExitCode.USAGE), _REGISTER_TEMPLATE_REFUSAL)
 
     def _producer(self, selected: list[str], position: int) -> str | None:
         for stage in reversed(selected[:position]):
