@@ -313,7 +313,7 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
     monkeypatch.setattr(repository, "bind_unit_inputs", lambda *a, **k: None)
     monkeypatch.setattr(repository, "finish_run", lambda conn, run: None)
     monkeypatch.setattr(loop, "_promote", lambda conn, run, spec, date: (
-        "P1", "P1", "released-image only"))
+        "P1", "P1", "check policy rebuild-trial@1", []))
     tools = loop.LoopTools(walk=walk, create_run=create_run, storage=storage,
                            inputs_root=lambda run: f"s3://b/scratch/runs/{run}/inputs",
                            out=lambda line: None)
@@ -360,7 +360,7 @@ def test_process_date_walks_the_chain_and_records_the_date(monkeypatch):
         "association_sets": {"5": "AS2"},
         "statistics_sets": {"5": "ST2"},
         "alerts": {unit: {"instance": "AC2", "location": "s3://b/out/alerts"}},
-        "promotion": "P1", "promotion_gate": "released-image only"}
+        "promotion": "P1", "promotion_gate": "check policy rebuild-trial@1", "checks": []}
 
 
 def test_process_date_a_failed_unit_fails_the_date(monkeypatch):
@@ -474,41 +474,85 @@ def test_run_loop_dry_run_only_plans(monkeypatch):
 # Promotion
 # ======================================================================
 
-def test_promote_records_a_refusal_as_a_science_outcome(monkeypatch):
-    def refuse(conn, run_id, who, reason, **kwargs):
-        assert (who, reason) == ("scheduler", "processing date 2027-10-01")
-        raise repository.PromotionRefused("check failed")
+class _Recorded:
+    def __init__(self, outcome):
+        self.id, self.check_name, self.version = "C1", "difference-image-statistics", "1"
+        self.instance, self.required, self.outcome = "DI1", True, outcome
 
-    monkeypatch.setattr(repository, "promote_run", refuse)
+
+def _gate(monkeypatch, *, promote, recorded=("passed",)):
+    from rapidpipe.checks import runner
+
+    seen = {}
+
+    class Policy:
+        ref = "rebuild-trial@1"
+
+    def resolve(conn, run_id, explicit=None):
+        seen["explicit"] = explicit
+        return Policy()
+
+    def run_checks(conn, run_id, policy, *, who=None, **_):
+        seen["who"] = who
+        return [_Recorded(o) for o in recorded]
+
+    monkeypatch.setattr(runner, "resolve_run_policy", resolve)
+    monkeypatch.setattr(runner, "run_policy_checks", run_checks)
+    monkeypatch.setattr(repository, "promote_run", promote)
     monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
+    return seen, Policy
+
+
+def test_promote_runs_the_policys_checks_then_promotes_under_it(monkeypatch):
+    got = {}
+
+    def promote_run(conn, run_id, who, reason, *, kinds=None, check_policy=None,
+                    allow_unreleased=False):
+        got.update(who=who, reason=reason, policy=check_policy.ref)
+        return "P1"
+
+    seen, _ = _gate(monkeypatch, promote=promote_run)
     conn = _Conn()
-    spec = loop.parse_spec(SPEC, "x")
-    assert loop._promote(conn, "R", spec, dt.date(2027, 10, 1)) == (
-        None, "refused: check failed", "released-image only")
+    promotion, text, gate, checks = loop._promote(conn, "R", loop.parse_spec(SPEC, "x"),
+                                                  dt.date(2027, 10, 1))
+    assert (promotion, text, gate) == ("P1", "P1", "check policy rebuild-trial@1")
+    assert checks == [{"id": "C1", "check": "difference-image-statistics@1",
+                       "instance": "DI1", "required": True, "outcome": "passed"}]
+    assert seen == {"explicit": "rebuild-trial@1", "who": "scheduler"}
+    assert got == {"who": "scheduler", "reason": "processing date 2027-10-01",
+                   "policy": "rebuild-trial@1"}
+
+
+def test_promote_records_a_refusal_as_a_science_outcome(monkeypatch):
+    def refuse(conn, run_id, who, reason, *, kinds=None, check_policy=None,
+               allow_unreleased=False):
+        raise repository.PromotionRefused("required check difference-image-statistics failed")
+
+    _gate(monkeypatch, promote=refuse, recorded=("failed",))
+    conn = _Conn()
+    promotion, text, gate, checks = loop._promote(conn, "R", loop.parse_spec(SPEC, "x"),
+                                                  dt.date(2027, 10, 1))
+    assert promotion is None and text.startswith("refused: required check")
+    assert checks[0]["outcome"] == "failed"
     assert conn.rollbacks == 1
 
 
-def test_promote_passes_the_check_policy_when_the_promotion_path_takes_one(monkeypatch):
-    seen = {}
-
-    def promote_run(conn, run_id, who, reason, *, kinds=None, check_policy=None):
-        seen["policy"] = check_policy
-        return "P1"
+def test_promote_without_the_gate_is_released_image_only(monkeypatch):
+    def promote_run(conn, run_id, who, reason, *, kinds=None, allow_unreleased=False):
+        return "P2"
 
     monkeypatch.setattr(repository, "promote_run", promote_run)
     monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
-    spec = loop.parse_spec(SPEC, "x")
-    assert loop._promote(_Conn(), "R", spec, dt.date(2027, 10, 1)) == (
-        "P1", "P1", "check policy rebuild-trial@1")
-    assert seen["policy"] == "rebuild-trial@1"
+    assert loop._promote(_Conn(), "R", loop.parse_spec(SPEC, "x"), dt.date(2027, 10, 1)) == (
+        "P2", "P2", "released-image only", [])
 
 
 def test_promote_a_missing_run_is_not_a_refusal(monkeypatch):
-    def missing(*a, **k):
+    def missing(conn, run_id, who, reason, *, kinds=None, check_policy=None,
+                allow_unreleased=False):
         raise repository.RunNotFound("no run")
 
-    monkeypatch.setattr(repository, "promote_run", missing)
-    monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
+    _gate(monkeypatch, promote=missing)
     with pytest.raises(repository.RunNotFound):
         loop._promote(_Conn(), "R", loop.parse_spec(SPEC, "x"), dt.date(2027, 10, 1))
 
@@ -593,8 +637,8 @@ def test_process_date_resumes_a_finished_run_by_completing_the_row(monkeypatch):
 
 
 def test_promote_reuses_the_runs_existing_promotion(monkeypatch):
+    _gate(monkeypatch, promote=lambda *a, **k: pytest.fail("promoted"))
     monkeypatch.setattr(loop, "run_promotion", lambda conn, run: "P0")
-    monkeypatch.setattr(repository, "promote_run", lambda *a, **k: pytest.fail("promoted"))
     assert loop._promote(_Conn(), "R", loop.parse_spec(SPEC, "x"), dt.date(2027, 10, 1))[0] \
         == "P0"
 

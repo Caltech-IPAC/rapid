@@ -27,10 +27,11 @@ uses. The rulings this module implements, one line each:
 - A4: one loop per schedule (``pg_try_advisory_lock``, exit 75 when held); a
   ``failed`` row stops the loop unless ``--retry-failed`` reopens it and
   resumes its run; the row's completion commits with ``finish_run``.
-- R6: once every unit is complete the run is promoted (``promote_run``,
-  ``who="scheduler"``, under the spec's check policy when the promotion path
-  accepts one); a refusal is recorded on the row, not a failure of the date;
-  the run is finished either way.
+- R6: once every unit is complete the policy's checks are run and recorded
+  and the run is promoted (``promote_run``, ``who="scheduler"``,
+  ``check_policy`` = the spec's, else the run's, else the default); a refusal
+  is recorded on the row, not a failure of the date; the run is finished
+  either way.
 - R7: ``loop_dates`` (migration 20260924-11) holds per date the run, the
   state, the promotion and a JSON record of what ran.
 
@@ -597,18 +598,51 @@ def alert_result_sets(source: OutputEntry, associations: Sequence[str],
 
 
 def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
-             ) -> tuple[str | None, str, str]:
-    """(promotion id or None, the record's ``promotion`` text, ``promotion_gate``)."""
-    kwargs: dict[str, Any] = {}
+             ) -> tuple[str | None, str, str, list[dict[str, Any]]]:
+    """(promotion id or None, the record's ``promotion`` text, ``promotion_gate``,
+    the checks run) (R6).
+
+    With step 6's gate (``promote_run`` takes ``check_policy``): resolve the
+    policy (the spec's, else the run's, else the default), run its checks
+    over the run's candidates as ``scheduler`` through
+    ``rapidpipe.checks.runner`` (recorded, committed), then promote under it.
+    Without it: promote under the released-image rule only. A run already
+    promoted (a resumed date) reuses that promotion. A refusal is returned,
+    not raised."""
     existing = run_promotion(conn, run_id)
-    if "check_policy" in inspect.signature(repository.promote_run).parameters:
-        kwargs["check_policy"] = spec.check_policy
-        gate = f"check policy {spec.check_policy}" if spec.check_policy else "check policy (none)"
-    else:
+    kwargs: dict[str, Any] = {}
+    checks: list[dict[str, Any]] = []
+    if "check_policy" not in inspect.signature(repository.promote_run).parameters:
         gate = "released-image only"
-    if existing is not None:
-        # A resumed date whose run was promoted before the loop stopped.
-        return existing, existing, gate
+        if existing is not None:
+            return existing, existing, gate, checks
+    else:
+        from rapidpipe.checks.registry import CheckError
+        from rapidpipe.checks.runner import (
+            CheckUsageError,
+            resolve_run_policy,
+            run_policy_checks,
+        )
+
+        try:
+            policy = resolve_run_policy(conn, run_id, spec.check_policy)
+        except CheckError as exc:
+            conn.rollback()
+            return None, f"refused: {exc}", "check policy (unloadable)", checks
+        gate = f"check policy {policy.ref}"
+        if existing is not None:
+            # A resumed date whose run was promoted before the loop stopped.
+            return existing, existing, gate, checks
+        try:
+            recorded = run_policy_checks(conn, run_id, policy, who="scheduler")
+        except (CheckError, CheckUsageError) as exc:
+            conn.rollback()
+            return None, f"refused: {exc}", gate, checks
+        conn.commit()
+        checks = [{"id": c.id, "check": f"{c.check_name}@{c.version}",
+                   "instance": c.instance, "required": c.required, "outcome": c.outcome}
+                  for c in recorded]
+        kwargs["check_policy"] = policy
     try:
         promotion = repository.promote_run(
             conn, run_id, "scheduler", f"processing date {processing_date}", **kwargs)
@@ -616,20 +650,20 @@ def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
         raise
     except repository.RunModelError as exc:
         conn.rollback()
-        return None, f"refused: {exc}", gate
+        return None, f"refused: {exc}", gate, checks
     conn.commit()
-    return promotion, promotion, gate
+    return promotion, promotion, gate, checks
 
 
 def _finish_row(conn, spec: LoopSpec, date: _dt.date, run_id: str, record: dict[str, Any],
                 out: Callable[[str], None]) -> int:
     """(f)+(g): promote (or reuse the run's promotion, or record a refusal),
     then ``finish_run`` and the row's completion in one transaction (A4)."""
-    promotion_id, promotion_text, gate = _promote(conn, run_id, spec, date)
+    promotion_id, promotion_text, gate, checks = _promote(conn, run_id, spec, date)
     if run_state(conn, run_id) == "open":
         repository.finish_run(conn, run_id)
     record.update(units=unit_records(conn, run_id), promotion=promotion_text,
-                  promotion_gate=gate)
+                  promotion_gate=gate, checks=checks)
     _update_row(conn, spec.schedule, date, state="complete", promotion=promotion_id,
                 record=record)
     conn.commit()
