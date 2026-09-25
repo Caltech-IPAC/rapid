@@ -17,7 +17,8 @@ function runs inside the caller's transaction: none commits or rolls back.
 - :func:`copy_sources`: `dev`'s bulk COPY of the loader's CSV file.
 - :func:`find_complete_source_set`: the rebuild's form of `dev`'s
   ``source_dbload_jid<jid>.done`` check -- a complete source set for the
-  same logical key already written in this run.
+  same logical key already written in this run by this attempt or by an
+  attempt that succeeded (supervisor step 9 ruling R1).
 - :func:`cluster_and_analyze`: `dev`'s CLUSTER and ANALYZE, through
   ``cluster_sources_child_table``.
 
@@ -139,9 +140,13 @@ def count_result_set_rows(cur, table: str, result_set: str) -> int:
 
 
 def find_complete_source_set(
-    cur, run_id: str, logical_key: dict[str, Any],
+    cur, run_id: str, logical_key: dict[str, Any], attempt_id: str,
 ) -> tuple[str, int | None] | None:
-    """The earliest complete, retained `source-set` for ``logical_key`` in ``run_id``.
+    """The earliest reusable complete, retained `source-set` for ``logical_key`` in ``run_id``.
+
+    Reusable (supervisor step 9 ruling R1): its producing attempt is
+    ``attempt_id`` (the caller) or an attempt whose disposition is
+    ``succeeded``; a set an attempt committed before failing is not reused.
 
     Returns ``(instance, row_count)``, or ``None`` when there is none.
     """
@@ -149,11 +154,13 @@ def find_complete_source_set(
         """
         SELECT pi.id, rs.row_count FROM product_instances pi
         JOIN result_sets rs ON rs.instance = pi.id
+        JOIN attempts a ON a.id = pi.producing_attempt
         WHERE pi.kind = 'source-set' AND pi.run = %s AND pi.logical_key = %s::jsonb
           AND rs.complete AND pi.deletion_state = 'retained'
+          AND (a.id = %s OR a.disposition = 'succeeded')
         ORDER BY pi.id LIMIT 1
         """,
-        (run_id, json.dumps(logical_key)))
+        (run_id, json.dumps(logical_key), attempt_id))
     row = cur.fetchone()
     return (row[0], row[1]) if row is not None else None
 

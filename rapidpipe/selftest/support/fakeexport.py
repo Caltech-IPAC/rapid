@@ -128,7 +128,8 @@ class FakeExportDatabase:
         self.queries: list[dict[str, Any]] = []
         self.rows_read = 0
 
-    def result_set_states(self, instances: list[str]) -> dict[str, dict[str, Any]]:
+    def result_set_states(self, instances: list[str],
+                          run_id: str | None = None) -> dict[str, dict[str, Any]]:
         return {i: dict(self.instances[i]) for i in instances if i in self.instances}
 
     def source_rows(self, source_sets: list[str], columns: tuple[str, ...], *,

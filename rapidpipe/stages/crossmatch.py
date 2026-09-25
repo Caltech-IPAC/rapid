@@ -54,7 +54,11 @@ ON CONFLICT DO NOTHING``, which drops repeats within one attempt (two
 unmatched sources at one position in one exposure make one object, as
 `dev`'s ``pruneRedundantMerges`` would leave). With ``[crossmatch]
 done_check`` on, a complete set already written in this run for the same
-logical key is reused and nothing is written (ruling R14). Two attempts on
+logical key is reused and nothing is written (ruling R14), only when its
+producing attempt is this attempt or one that succeeded (supervisor step 9
+ruling R1). Every set read (source sets, the base chain) must be readable
+by this run (supervisor step 9 ruling R2,
+``rapidpipe.db.objects.assert_readable_result_set``). Two attempts on
 one field are serialised by ``pg_advisory_xact_lock`` (ruling R13).
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
@@ -191,17 +195,18 @@ class PostgresCrossmatchDatabase:
         with self.conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (ADVISORY_LOCK_CLASS, field))
 
-    def source_set_table(self, instance: str) -> tuple[str, int | None]:
+    def source_set_table(self, instance: str, run_id: str) -> tuple[str, int | None]:
         with self.conn.cursor() as cur:
-            return _objects.source_set_table(cur, instance)
+            return _objects.source_set_table(cur, instance, run_id)
 
-    def association_chain(self, instance: str) -> list[str]:
+    def association_chain(self, instance: str, run_id: str) -> list[str]:
         with self.conn.cursor() as cur:
-            return _objects.association_chain(cur, instance)
+            return _objects.association_chain(cur, instance, run_id)
 
-    def find_complete_result_set(self, kind: str, run_id: str, key: dict[str, Any]):
+    def find_complete_result_set(self, kind: str, run_id: str, key: dict[str, Any],
+                                 attempt_id: str):
         with self.conn.cursor() as cur:
-            return _objects.find_complete_result_set(cur, kind, run_id, key)
+            return _objects.find_complete_result_set(cur, kind, run_id, key, attempt_id)
 
     def ensure_field_object_tables(self, field: int) -> bool:
         with self.conn.cursor() as cur:
@@ -439,11 +444,13 @@ def _body(context: StageContext) -> StageResult:
     try:
         with open_database() as db:
             db.lock_field(field)
-            sets = [(db.source_set_table(instance)[0], instance) for instance in source_set_ids]
-            chain = db.association_chain(base_id) if base_id else []
+            sets = [(db.source_set_table(instance, context.run_id)[0], instance)
+                    for instance in source_set_ids]
+            chain = db.association_chain(base_id, context.run_id) if base_id else []
 
             if xm["done_check"]:
-                existing = db.find_complete_result_set("association-set", context.run_id, key)
+                existing = db.find_complete_result_set("association-set", context.run_id, key,
+                                                       context.attempt_id)
                 if existing is not None:
                     instance, row_count = existing
                     log.warning("association set %s for this key is already complete in this "

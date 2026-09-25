@@ -48,7 +48,9 @@ Inputs. ``--inputs`` is an input-set manifest (stage ``input-set``, unit
 association set is checked (registered, complete) and recorded in
 ``result_sets_read`` and the execution notes, never read: the source
 catalog does not use it. Every named set must be registered, complete and
-retained, else exit 65. The source sets' field is not checked against the
+retained, and this run's own or a production run's selected output
+(``rapidpipe.db.objects.assert_readable_result_set``, supervisor step 9
+ruling R2), else exit 65. The source sets' field is not checked against the
 unit (a source set's key names its difference instance, not a field; the
 rows carry ``field``).
 
@@ -89,6 +91,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from rapidpipe.db import connection as _connection_module
+from rapidpipe.db import objects as _objects
 from rapidpipe.db import sources as _sources_db
 from rapidpipe.db.connection import ConnectionUnavailable
 from rapidpipe.db.ids import new_ulid
@@ -177,9 +180,18 @@ class PostgresExportDatabase:
     def __init__(self, conn) -> None:
         self.conn = conn
 
-    def result_set_states(self, instances: list[str]) -> dict[str, dict[str, Any]]:
+    def result_set_states(self, instances: list[str], run_id: str) -> dict[str, dict[str, Any]]:
+        """Each named set's state; ValueError unless run ``run_id`` may read every one that exists.
+
+        The read rule is ``rapidpipe.db.objects.assert_readable_result_set``
+        (supervisor step 9 ruling R2).
+        """
         with self.conn.cursor() as cur:
-            return _sources_db.result_set_states(cur, instances)
+            found = _sources_db.result_set_states(cur, instances)
+            for instance in instances:
+                if instance in found:
+                    _objects.assert_readable_result_set(cur, instance, run_id)
+            return found
 
     def source_rows(self, source_sets: list[str], columns: tuple[str, ...], *,
                     flags_zero_only: bool) -> Iterator[tuple]:
@@ -513,7 +525,7 @@ def _body(context: StageContext) -> StageResult:
         work = Path(work_name)
         try:
             with open_database() as db:
-                found = db.result_set_states(list(named))
+                found = db.result_set_states(list(named), context.run_id)
                 source_sets, association_sets = classify_result_sets(named, found)
                 rows = db.source_rows(source_sets, tuple(columns),
                                       flags_zero_only=export["flags_zero_only"])

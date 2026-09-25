@@ -96,13 +96,13 @@ class FakePruneDatabase:
         self.commits = 0
         self.on_commit = None
 
-    def find_complete_pruned_set(self, run_id, key):
+    def find_complete_pruned_set(self, run_id, key, attempt_id=None):
         for instance, s in sorted(self.pruned_sets.items()):
             if s["run"] == run_id and s["key"] == key and s["complete"]:
                 return instance, s["row_count"]
         return None
 
-    def association_chain(self, instance: str) -> list[str]:
+    def association_chain(self, instance: str, run_id: str | None = None) -> list[str]:
         chain: list[str] = []
         current = instance
         while current is not None:
@@ -122,7 +122,7 @@ class FakePruneDatabase:
                 seen.setdefault(source_set, None)
         return list(seen)
 
-    def source_set_table(self, instance: str) -> tuple[str, int | None]:
+    def source_set_table(self, instance: str, run_id: str | None = None) -> tuple[str, int | None]:
         if instance not in self.source_set_tables:
             raise ValueError(f"no source-set result set with instance {instance!r}")
         return self.source_set_tables[instance], None

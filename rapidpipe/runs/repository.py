@@ -117,6 +117,17 @@ class ManifestConflict(RunModelError):
     """A manifest entry conflicts with an already-registered instance id."""
 
 
+class DependencyRefused(ManifestConflict):
+    """A manifest names another run's result set that this run may not consume.
+
+    Supervisor step 9 ruling R2: another run's result set is a dependency
+    only when it is complete and retained, its custody is ``candidate`` or
+    ``current`` and its producing attempt is the selected attempt of its
+    unit. A subclass of :class:`ManifestConflict`, so the existing refusal
+    path of a conflicting manifest handles it.
+    """
+
+
 class PromotionRefused(RunModelError):
     """A promotion request failed validation; the whole request is refused."""
 
@@ -811,7 +822,12 @@ def register_manifest(
     belongs to a deleting or deleted run: each producer's run row is
     locked ``FOR SHARE`` before its edge is written, so the edge and a
     concurrent ``mark_run_deleting`` of the producer's run cannot both
-    commit (supervisor step 3, 2026-09-24, amendment A1).
+    commit (supervisor step 3, 2026-09-24, amendment A1). Refuses
+    (:class:`DependencyRefused`) a dependency on another run's result set
+    (a producer with a ``result_sets`` row) unless it is complete and
+    retained, its custody is ``candidate`` or ``current``, and its
+    producing attempt is its unit's selected attempt (supervisor step 9,
+    2026-09-25, ruling R2). File products are not governed by R2.
 
     Accepts the products page's complete manifest shape (run/unit/stage/
     attempt at the top, ``outputs`` a list of entries each with
@@ -863,6 +879,33 @@ def register_manifest(
                 input_products=input_products,
                 input_result_sets=input_result_sets,
             )
+
+
+def _refuse_foreign_dependency(
+    producer_instance: str, run_id: str, producer_run: str, custody: str,
+    deletion_state: str, is_result_set: bool, complete: bool, selected: bool,
+) -> None:
+    """Refuse a dependency on another run's result set that ruling R2 does not allow.
+
+    The same rule as ``rapidpipe.db.objects.assert_readable_result_set``
+    (supervisor step 9, 2026-09-25, R2), applied to a result set outside
+    ``run_id``: complete and retained, custody ``candidate`` or
+    ``current``, produced by its unit's selected attempt.
+    """
+    where = f"input {producer_instance!r} of run {producer_run!r}"
+    if deletion_state != "retained":
+        raise DependencyRefused(f"{where} is {deletion_state}; run {run_id!r} may not depend on it")
+    if not (is_result_set and complete):
+        raise DependencyRefused(f"{where} is not a complete result set; run {run_id!r} "
+                                f"may not depend on it")
+    if custody not in ("candidate", "current"):
+        raise DependencyRefused(
+            f"{where} has custody {custody!r}: another run's scratch output is not an "
+            f"input run {run_id!r} may depend on")
+    if not selected:
+        raise DependencyRefused(
+            f"{where} was produced by an attempt that is not its unit's selected attempt; "
+            f"run {run_id!r} may not depend on it")
 
 
 def _entry_instance_id(entry: dict[str, Any]) -> str:
@@ -1010,10 +1053,21 @@ def _register_one_output(
     dependency_producers: list[str] = list(input_products.values()) + list(input_result_sets)
     for producer_instance in dependency_producers:
         cur.execute(
-            "SELECT run FROM product_instances WHERE id = %s", (producer_instance,))
+            """
+            SELECT pi.run, pi.custody, pi.deletion_state, rs.instance IS NOT NULL,
+                   COALESCE(rs.complete, false),
+                   COALESCE(u.selected_attempt = pi.producing_attempt, false)
+            FROM product_instances pi
+            LEFT JOIN result_sets rs ON rs.instance = pi.id
+            LEFT JOIN attempts a ON a.id = pi.producing_attempt
+            LEFT JOIN units u ON u.id = a.unit
+            WHERE pi.id = %s
+            """, (producer_instance,))
         producer = cur.fetchone()
         if producer is not None:
             _refuse_if_run_deleting_or_deleted(cur, producer[0])
+            if producer[0] != run_id and producer[3]:
+                _refuse_foreign_dependency(producer_instance, run_id, *producer)
         cur.execute(
             """
             INSERT INTO dependencies (id, consumer_instance, producer_instance)

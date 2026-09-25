@@ -178,8 +178,8 @@ class PostgresAlertsDatabase:
     def outbox_rows(self, instance: str) -> list[dict[str, Any]]:
         return self._call(_alerts_db.outbox_rows, instance)
 
-    def result_set_kinds(self, instances: list[str]) -> dict[str, dict[str, Any]]:
-        return self._call(_alerts_db.result_set_kinds, instances)
+    def result_set_kinds(self, instances: list[str], run_id: str) -> dict[str, dict[str, Any]]:
+        return self._call(_alerts_db.result_set_kinds, instances, run_id)
 
     def difference_pid(self, instance: str) -> int:
         return self._call(_alerts_db.difference_pid, instance)
@@ -190,8 +190,8 @@ class PostgresAlertsDatabase:
     def alertable_sources(self, source_set: str, pid: int) -> list[dict[str, Any]]:
         return self._call(_alerts_db.alertable_sources, source_set, pid)
 
-    def association_chain(self, instance: str) -> list[str]:
-        return self._call(_alerts_db.association_chain, instance)
+    def association_chain(self, instance: str, run_id: str) -> list[str]:
+        return self._call(_alerts_db.association_chain, instance, run_id)
 
     def associations(self, lineages: dict[str, list[str]], fields: dict[str, int],
                      statistics_by_association: dict[str, str | None],
@@ -581,7 +581,10 @@ def _body(context: StageContext) -> StageResult:
 
     try:
         with open_database() as db:
-            kinds = db.result_set_kinds(list(result_sets_read))
+            try:
+                kinds = db.result_set_kinds(list(result_sets_read), context.run_id)
+            except ValueError as exc:
+                raise InputRejected(str(exc)) from exc
             sets = _classify_result_sets(result_sets_read, kinds, difference.instance)
             # R5: the pairs a named pruned set lists are left out of every
             # association and history read of its base; no pruned set, no
@@ -596,7 +599,7 @@ def _body(context: StageContext) -> StageResult:
                 # detection of a known object has its merges row in the newest
                 # set and its object in the set that first made it. A set's
                 # rows are in its field's standalone per-field tables.
-                lineages = {a: db.association_chain(a) for a in sets.association_sets}
+                lineages = {a: db.association_chain(a, context.run_id) for a in sets.association_sets}
                 fields = {a: _alerts_db.set_field(kinds[a]["key"]) for a in sets.association_sets}
             except ValueError as exc:
                 raise InputRejected(str(exc)) from exc

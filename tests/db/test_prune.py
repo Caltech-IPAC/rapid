@@ -27,6 +27,7 @@ from rapidpipe.stages.contract import ExitCode
 
 from .test_load import _registered_difference, _run_load
 from .test_objects_child_tables import _result_set
+from .attempt_helpers import set_disposition
 from .test_register_l2 import _NoCloseNoCommitConnProxy
 from .test_repository import _make_run
 
@@ -184,10 +185,11 @@ def test_done_check_reuses_the_pruned_set_within_the_run(conn, tmp_path, monkeyp
     _write_crossmatch_manifest(inputs, run_id=run_id, attempt_id="cx-attempt", field=field,
                                association_instance=association, key=key)
 
-    rc, _, first = _run_prune(conn, monkeypatch, tmp_path, run_id, inputs, unit_id=str(field),
-                              name="first")
+    rc, first_attempt, first = _run_prune(conn, monkeypatch, tmp_path, run_id, inputs,
+                                          unit_id=str(field), name="first")
     assert rc == 0
     first_instance = Manifest.read(first / "manifest.json").outputs[0].instance
+    set_disposition(conn, first_attempt, "succeeded")  # ruling R1: only a succeeded set is reused
 
     rc, _, second = _run_prune(conn, monkeypatch, tmp_path, run_id, inputs, unit_id=str(field),
                                name="second")

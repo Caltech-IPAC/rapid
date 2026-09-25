@@ -31,6 +31,7 @@ from rapidpipe.stages.contract import ExitCode
 from tests.unit.fakeloaddb import finder_row, main_row, write_photutils_catalogs
 
 from .test_load import _run_load
+from .attempt_helpers import set_disposition
 from .test_register_difference import (
     _admitted_l2,
     _legacy_refimage,
@@ -201,9 +202,10 @@ def test_a_second_attempt_makes_a_second_set_with_the_same_aids(conn, tmp_path, 
 
 def test_done_check_reuses_the_set(conn, tmp_path, monkeypatch):
     run_id, load_outputs = _loaded_source_set(conn, tmp_path, monkeypatch)
-    rc, _, first = _run_crossmatch(conn, monkeypatch, tmp_path, run_id, load_outputs,
-                                   name="first")
+    rc, first_attempt, first = _run_crossmatch(conn, monkeypatch, tmp_path, run_id,
+                                               load_outputs, name="first")
     assert rc == 0
+    set_disposition(conn, first_attempt, "succeeded")  # ruling R1: only a succeeded set is reused
     rc, _, second = _run_crossmatch(conn, monkeypatch, tmp_path, run_id, load_outputs,
                                     name="second")
     assert rc == 0
@@ -234,7 +236,8 @@ def test_a_base_is_read_as_catalog(conn, tmp_path, monkeypatch):
         "astroobjects": 0, "merges": 4, "merges_pass1": 3, "merges_pass2": 1, "new_objects": 0}
     assert base["instance"] in manifest.inputs.result_sets
     with conn.cursor() as cur:
-        assert objects.association_chain(cur, entry.instance) == [entry.instance, base["instance"]]
+        assert objects.association_chain(cur, entry.instance, run_id) == [
+            entry.instance, base["instance"]]
         cur.execute("SELECT producer_instance FROM dependencies WHERE consumer_instance = %s",
                     (entry.instance,))
         assert base["instance"] in {r[0] for r in cur.fetchall()}

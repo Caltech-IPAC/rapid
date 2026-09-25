@@ -33,8 +33,13 @@ caller's transaction: none commits or rolls back.
   "whatever is current".
 - :func:`find_complete_result_set`: the rebuild's done check for the three
   field stages, a complete set of the same kind and key in the same run
-  (ruling R14), as :func:`rapidpipe.db.sources.find_complete_source_set` is
-  for `load`.
+  (ruling R14) whose producing attempt is the calling attempt or one that
+  succeeded (supervisor step 9 ruling R1), as
+  :func:`rapidpipe.db.sources.find_complete_source_set` is for `load`.
+- :func:`assert_readable_result_set`: the cross-run read rule for result
+  sets (supervisor step 9 ruling R2), used by :func:`source_set_table`,
+  :func:`association_chain` and the set resolution of statistics, prune,
+  alerts and export.
 - :func:`insert_pruned_merges`: a `pruned-set`'s excluded pairs, the rows
   `dev`'s ``pruneNotBestMerges`` deletes in place (step 1 ruling R6).
 
@@ -190,30 +195,82 @@ def count_result_set_rows(cur, table: str, result_set: str) -> int:
     return int(cur.fetchone()[0])
 
 
-def source_set_table(cur, instance: str) -> tuple[str, int | None]:
+#: The result-set kinds the cross-run read rule governs (ruling R2).
+READABLE_KINDS: tuple[str, ...] = ("source-set", "association-set", "statistics-set",
+                                   "pruned-set")
+
+#: The custody states in which another run's result set may be read: a
+#: production run's output (ruling R2).
+FOREIGN_READABLE_CUSTODY: tuple[str, ...] = ("candidate", "current")
+
+_READABLE_SQL = """
+    SELECT pi.kind, pi.run, pi.custody, pi.deletion_state, rs.complete, rs.row_count,
+           pi.logical_key::text,
+           COALESCE(u.selected_attempt = pi.producing_attempt, false)
+    FROM product_instances pi
+    LEFT JOIN result_sets rs ON rs.instance = pi.id
+    LEFT JOIN attempts a ON a.id = pi.producing_attempt
+    LEFT JOIN units u ON u.id = a.unit
+    WHERE pi.id = %s
+"""
+
+
+def assert_readable_result_set(
+    cur, instance: str, run_id: str, *, kind: str | None = None,
+) -> dict[str, Any]:
+    """Refuse (:class:`ValueError`) a result set ``run_id`` may not read; else describe it.
+
+    The rule (supervisor step 9 ruling R2): a stage of run ``run_id`` may
+    read a result set only when it is complete and retained and either
+    (a) it belongs to ``run_id``, or (b) its custody is ``candidate`` or
+    ``current`` (a production run's output) and its producing attempt is
+    the selected attempt of that attempt's unit. Another run's scratch set,
+    or a set from an unselected attempt, is refused; the stage maps the
+    ValueError to InputRejected (exit 65). With ``kind``, a set of any other
+    kind is refused too.
+
+    Returns ``{kind, run, custody, row_count, key}`` (``key`` the decoded
+    logical key).
+    """
+    cur.execute(_READABLE_SQL, (instance,))
+    row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"no result set with instance {instance!r}")
+    (found_kind, owner, custody, deletion_state, complete, row_count, key_text,
+     selected) = row
+    if kind is not None and found_kind != kind:
+        raise ValueError(f"{instance!r} is a {found_kind}, not a {kind}")
+    if not complete or deletion_state != "retained":
+        raise ValueError(
+            f"{found_kind} {instance!r} is not complete and retained "
+            f"(complete={complete}, deletion_state={deletion_state})")
+    if owner != run_id:
+        if custody not in FOREIGN_READABLE_CUSTODY:
+            raise ValueError(
+                f"{found_kind} {instance!r} belongs to run {owner!r} with custody {custody!r}: "
+                f"another run's scratch result set is not readable by run {run_id!r}")
+        if not selected:
+            raise ValueError(
+                f"{found_kind} {instance!r} of run {owner!r} was produced by an attempt that "
+                f"is not its unit's selected attempt: not readable by run {run_id!r}")
+    key = json.loads(key_text) if isinstance(key_text, str) else (key_text or {})
+    return {"kind": found_kind, "run": owner, "custody": custody, "row_count": row_count,
+            "key": key if isinstance(key, dict) else {}}
+
+
+def source_set_table(cur, instance: str, run_id: str) -> tuple[str, int | None]:
     """The ``sources`` child table a `source-set` instance's rows live in, and its row count.
 
     Follows the instance's logical key to its difference instance, that
     instance's ``diffimages`` row, and the ``l2files`` row's ``dateobs`` and
     ``sca`` (`dev`'s ``sources_<yyyymmdd>_<sca>``). Raises
-    :class:`ValueError` (the stage maps it to InputRejected) when the
-    instance is not a complete, retained `source-set`, or any link is missing.
+    :class:`ValueError` (the stage maps it to InputRejected) when run
+    ``run_id`` may not read the instance as a `source-set`
+    (:func:`assert_readable_result_set`), or any link is missing.
     """
-    cur.execute(
-        """
-        SELECT pi.logical_key->>'difference', rs.complete, pi.deletion_state, rs.row_count
-        FROM product_instances pi JOIN result_sets rs ON rs.instance = pi.id
-        WHERE pi.id = %s AND pi.kind = 'source-set'
-        """,
-        (instance,))
-    row = cur.fetchone()
-    if row is None:
-        raise ValueError(f"no source-set result set with instance {instance!r}")
-    difference, complete, deletion_state, row_count = row
-    if not complete or deletion_state != "retained":
-        raise ValueError(
-            f"source-set {instance!r} is not complete and retained "
-            f"(complete={complete}, deletion_state={deletion_state})")
+    state = assert_readable_result_set(cur, instance, run_id, kind="source-set")
+    difference = state["key"].get("difference")
+    row_count = state["row_count"]
     if not difference:
         raise ValueError(f"source-set {instance!r} names no difference instance in its key")
     cur.execute(
@@ -231,36 +288,29 @@ def source_set_table(cur, instance: str) -> tuple[str, int | None]:
     return sources.child_table_name(sources.obs_date_of(dateobs), sca), row_count
 
 
-def association_chain(cur, instance: str) -> list[str]:
+def association_chain(cur, instance: str, run_id: str) -> list[str]:
     """``instance`` and its bases, recursively: the association sets a crossmatch pass reads.
 
     Follows ``product_instances.logical_key->>'base'`` (a nullable
     association-set instance id) until it is null. Returns the ids in order,
     ``instance`` first. Raises :class:`ValueError` (the stage maps it to
     InputRejected) when a link is missing, is not an `association-set`, is
-    not retained, or the chain loops.
+    not readable by run ``run_id`` (:func:`assert_readable_result_set`:
+    complete, retained, and this run's or a selected production set), or
+    the chain loops.
     """
     chain: list[str] = []
     current: str | None = instance
     while current is not None:
         if current in chain:
             raise ValueError(f"association chain of {instance!r} loops at {current!r}")
-        cur.execute(
-            "SELECT kind, deletion_state, logical_key->>'base' FROM product_instances "
-            "WHERE id = %s",
-            (current,))
-        row = cur.fetchone()
-        if row is None:
-            raise ValueError(f"association chain of {instance!r}: no instance {current!r}")
-        kind, deletion_state, base = row
-        if kind != "association-set":
-            raise ValueError(
-                f"association chain of {instance!r}: {current!r} is a {kind}, not an association-set")
-        if deletion_state != "retained":
-            raise ValueError(
-                f"association chain of {instance!r}: {current!r} is {deletion_state}, not retained")
+        try:
+            state = assert_readable_result_set(cur, current, run_id, kind="association-set")
+        except ValueError as exc:
+            raise ValueError(f"association chain of {instance!r}: {exc}") from None
         chain.append(current)
-        current = base or None
+        base = state["key"].get("base")
+        current = base if isinstance(base, str) and base else None
     return chain
 
 
@@ -276,9 +326,15 @@ def set_rows_clause(alias: str, chain: Iterable[str]) -> tuple[str, tuple]:
 
 
 def find_complete_result_set(
-    cur, kind: str, run_id: str, logical_key: dict[str, Any],
+    cur, kind: str, run_id: str, logical_key: dict[str, Any], attempt_id: str,
 ) -> tuple[str, int | None] | None:
-    """The earliest complete, retained result set of ``kind`` for ``logical_key`` in ``run_id``.
+    """The earliest reusable complete, retained result set of ``kind`` for ``logical_key`` in ``run_id``.
+
+    Reusable (supervisor step 9 ruling R1): its producing attempt is
+    ``attempt_id`` (the caller) or an attempt whose disposition is
+    ``succeeded``. A set left by an attempt that committed rows and then
+    failed, or by another attempt still without a disposition, is not
+    reused: the retry writes a new set under its own instance.
 
     Returns ``(instance, row_count)``, or ``None`` when there is none.
     """
@@ -286,11 +342,13 @@ def find_complete_result_set(
         """
         SELECT pi.id, rs.row_count FROM product_instances pi
         JOIN result_sets rs ON rs.instance = pi.id
+        JOIN attempts a ON a.id = pi.producing_attempt
         WHERE pi.kind = %s AND pi.run = %s AND pi.logical_key = %s::jsonb
           AND rs.complete AND pi.deletion_state = 'retained'
+          AND (a.id = %s OR a.disposition = 'succeeded')
         ORDER BY pi.id LIMIT 1
         """,
-        (kind, run_id, json.dumps(logical_key)))
+        (kind, run_id, json.dumps(logical_key), attempt_id))
     row = cur.fetchone()
     return (row[0], row[1]) if row is not None else None
 

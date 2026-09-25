@@ -42,7 +42,9 @@ run, this attempt and the result-set instance. The instance row, its
 is either complete or absent; an association set whose membership has no
 ``merges`` rows gives an empty set, still complete. With
 ``[statistics] done_check`` on, a complete statistics set with the same key
-already written in this run is reused (ruling R14).
+already written in this run is reused (ruling R14), only when its
+producing attempt is this attempt or one that succeeded (supervisor step 9
+ruling R1).
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
@@ -132,9 +134,9 @@ class PostgresStatisticsDatabase:
     def __init__(self, conn) -> None:
         self.conn = conn
 
-    def association_chain(self, instance: str) -> list[str]:
+    def association_chain(self, instance: str, run_id: str) -> list[str]:
         with self.conn.cursor() as cur:
-            return _objects.association_chain(cur, instance)
+            return _objects.association_chain(cur, instance, run_id)
 
     def chain_source_sets(self, chain: Sequence[str]) -> list[str]:
         """The source-set instances named by every set of ``chain``, sorted, each once.
@@ -169,13 +171,14 @@ class PostgresStatisticsDatabase:
             found.update(source_sets)
         return sorted(found)
 
-    def source_set_table(self, instance: str) -> str:
+    def source_set_table(self, instance: str, run_id: str) -> str:
         with self.conn.cursor() as cur:
-            return _objects.source_set_table(cur, instance)[0]
+            return _objects.source_set_table(cur, instance, run_id)[0]
 
-    def find_complete_statistics_set(self, run_id: str, key: dict[str, Any]):
+    def find_complete_statistics_set(self, run_id: str, key: dict[str, Any], attempt_id: str):
         with self.conn.cursor() as cur:
-            return _objects.find_complete_result_set(cur, "statistics-set", run_id, key)
+            return _objects.find_complete_result_set(cur, "statistics-set", run_id, key,
+                                                     attempt_id)
 
     def ensure_astroobjectsmeta_table(self, field: int) -> bool:
         with self.conn.cursor() as cur:
@@ -333,17 +336,17 @@ def _body(context: StageContext) -> StageResult:
 
     try:
         with open_database() as db:
-            chain = db.association_chain(association.instance)
+            chain = db.association_chain(association.instance, context.run_id)
             source_sets = db.chain_source_sets(chain)
             if not source_sets:
                 # dev: "no source tables" -> exit 7.
                 raise InputRejected(
                     f"association set {association.instance!r} and its bases name no source "
                     f"sets: there are no sources to compute statistics from")
-            source_tables = [(db.source_set_table(s), s) for s in source_sets]
+            source_tables = [(db.source_set_table(s, context.run_id), s) for s in source_sets]
 
             if settings["statistics"]["done_check"]:
-                existing = db.find_complete_statistics_set(context.run_id, key)
+                existing = db.find_complete_statistics_set(context.run_id, key, context.attempt_id)
                 if existing is not None:
                     instance, row_count = existing
                     log.warning("statistics set %s for association set %s is already written "

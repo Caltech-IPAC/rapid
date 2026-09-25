@@ -10,7 +10,8 @@ and ``astroobjectsmeta_<f>`` are standalone per-field tables and are read by
 name, the field taken from the association set's logical key. Every function runs inside the caller's transaction: none
 commits or rolls back.
 
-- :func:`result_set_kinds`: each named result set's kind, completeness and key.
+- :func:`result_set_kinds`: each named result set's kind, completeness and key,
+  each refused unless the reading run may read it (supervisor step 9 ruling R2).
 - :func:`difference_pid`: the `diffimages` row of the difference instance.
 - :func:`flagged_sources`, :func:`alertable_sources`: `dev`'s ``iter_sources``
   split, ``flags <> 0`` counted and ``flags = 0`` selected, in the source set.
@@ -69,11 +70,15 @@ def _dicts(cur) -> list[dict[str, Any]]:
     return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
-def result_set_kinds(cur, instances: Sequence[str]) -> dict[str, dict[str, Any]]:
+def result_set_kinds(cur, instances: Sequence[str], run_id: str) -> dict[str, dict[str, Any]]:
     """``{instance: {kind, complete, key}}`` for each named result set that exists.
 
     An instance with no `product_instances` row is absent from the result;
-    one with no `result_sets` row has ``complete`` None.
+    one with no `result_sets` row has ``complete`` None. Every instance that
+    exists must be readable by run ``run_id``
+    (``rapidpipe.db.objects.assert_readable_result_set``: complete, retained,
+    and this run's or a production run's selected output), else
+    :class:`ValueError` (the stage maps it to InputRejected).
     """
     cur.execute(
         """
@@ -81,8 +86,12 @@ def result_set_kinds(cur, instances: Sequence[str]) -> dict[str, dict[str, Any]]
         FROM product_instances pi LEFT JOIN result_sets rs ON rs.instance = pi.id
         WHERE pi.id = ANY(%s)
         """, (list(instances),))
-    return {row[0]: {"kind": row[1], "complete": row[2], "key": row[3]}
-            for row in cur.fetchall()}
+    found = {row[0]: {"kind": row[1], "complete": row[2], "key": row[3]}
+             for row in cur.fetchall()}
+    for instance in instances:
+        if instance in found:
+            _objects.assert_readable_result_set(cur, instance, run_id)
+    return found
 
 
 def difference_pid(cur, instance: str) -> int:
@@ -116,14 +125,15 @@ def alertable_sources(cur, source_set: str, pid: int) -> list[dict[str, Any]]:
     return _dicts(cur)
 
 
-def association_chain(cur, instance: str) -> list[str]:
+def association_chain(cur, instance: str, run_id: str) -> list[str]:
     """The association set and every base it extends, newest first.
 
     ``rapidpipe.db.objects.association_chain``: crossmatch records the set it
     extends as ``logical_key.base``; a set's membership is its own rows plus
-    its bases', recursively. ValueError when a link is missing or wrong.
+    its bases', recursively. ValueError when a link is missing, wrong, or not
+    readable by run ``run_id`` (ruling R2).
     """
-    return _objects.association_chain(cur, instance)
+    return _objects.association_chain(cur, instance, run_id)
 
 
 def set_field(key: Any) -> int:

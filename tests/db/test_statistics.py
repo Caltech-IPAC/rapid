@@ -31,6 +31,7 @@ from rapidpipe.selftest.support.fakestatisticsdb import build_statistics_input_s
 from rapidpipe.stages.contract import ExitCode
 
 from .test_load import _registered_difference, _run_load
+from .attempt_helpers import set_disposition
 from .test_register_l2 import _NoCloseNoCommitConnProxy
 
 FIELD = 999999903   # a field no real per-field table has
@@ -156,7 +157,9 @@ def test_statistics_writes_one_row_per_object_and_one_complete_set(conn, tmp_pat
         cur.execute("SELECT relpersistence FROM pg_class WHERE relname = %s", (TABLE,))
         assert cur.fetchone() == ("u",)
 
-    # A second attempt on the same membership reuses the set: no second row per object.
+    # A second attempt on the same membership reuses the set: no second row per object
+    # (ruling R1: the first attempt succeeded).
+    set_disposition(conn, attempt_id, "succeeded")
     rc, _, again = _run_statistics(conn, monkeypatch, tmp_path, run_id, association,
                                    name="again", source_sets=[source_set])
     assert rc == int(ExitCode.SUCCESS)

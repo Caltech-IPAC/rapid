@@ -101,7 +101,7 @@ def test_copy_loads_rows_with_their_run_columns(conn):
         # The parent sees the child's rows (dev's reason for inheritance).
         cur.execute("SELECT count(*) FROM sources WHERE result_set = %s", (instance,))
         assert cur.fetchone()[0] == 2
-        assert sources.find_complete_source_set(cur, run_id, key) == (instance, 2)
+        assert sources.find_complete_source_set(cur, run_id, key, attempt_id) == (instance, 2)
 
 
 def test_run_columns_are_all_or_nothing_on_a_child(conn):
