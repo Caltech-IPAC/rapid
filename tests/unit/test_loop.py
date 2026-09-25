@@ -797,6 +797,30 @@ def test_process_date_other_refusals_propagate(monkeypatch):
         loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10)
 
 
+def test_process_date_an_input_refusal_fails_the_date_with_its_message(monkeypatch):
+    # Step 9 R4: run start's launcher refuses a unit whose input manifest is
+    # absent or unreadable (InputsRefused, exit 65). The loop fails the date
+    # with the message instead of ending the whole loop with the row open.
+    from rapidpipe.runs.inputs import InputsRefused
+
+    spec, tools, storage, walks, created, updates = _world(monkeypatch)
+    conn = _Conn()
+
+    def walk(*a, positions, **k):
+        if positions == loop.IMAGE_CHAIN:
+            raise InputsRefused("input manifest not found: s3://d/manifest.json; "
+                                "refusing to submit")
+        return 0
+
+    tools.walk = walk
+    assert loop.process_date(conn, spec, spec.dates[0], tools, interval=1, timeout=10) == 1
+    assert updates["state"] == "failed"
+    failure = updates["record"]["failure"]
+    assert failure.startswith("admit,register,difference,finalize,register,load ")
+    assert "inputs refused: input manifest not found: s3://d/manifest.json" in failure
+    assert conn.rollbacks >= 1
+
+
 def test_process_date_resumes_a_finished_run_by_completing_the_row(monkeypatch):
     # Every unit the date requires is complete (_world's unit_state).
     spec, tools, storage, walks, created, updates = _world(monkeypatch)
