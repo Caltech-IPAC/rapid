@@ -301,6 +301,7 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
     monkeypatch.setattr(loop, "selected_output",
                         lambda conn, run, stage, unit: f"s3://b/out/{stage}")
     monkeypatch.setattr(loop, "source_set_fields", lambda conn, table, instance: [5])
+    monkeypatch.setattr(loop, "readable_result_set", lambda conn, instance, run, kind: None)
     monkeypatch.setattr(loop, "previous_complete_rows",
                         lambda conn, s, d: [] if previous is None else [previous])
     monkeypatch.setattr(loop, "base_entry", lambda conn, st, prev, f: (
@@ -631,11 +632,102 @@ def test_base_for_field_walks_back_to_the_newest_date_that_has_the_field(monkeyp
     storage = _Storage({f"s3://b/{r}": _manifest([_entry("association-set", i,
                                                          {"field": 5})])
                         for r, (i, _) in found.items()})
-    base = loop.base_for_field(object(), storage, rows, 5)
+    monkeypatch.setattr(loop, "readable_result_set", lambda conn, instance, run, kind: None)
+    base = loop.base_for_field(object(), storage, rows, 5, "RUN4")
     assert (base.entry.instance, base.run, str(base.processing_date), base.promoted) == (
         "AS2", "RUN2", "2027-10-02", False)
-    assert loop.base_for_field(object(), storage, rows[2:], 5).promoted is True
-    assert loop.base_for_field(object(), storage, [], 5) is None
+    assert loop.base_for_field(object(), storage, rows[2:], 5, "RUN4").promoted is True
+    assert loop.base_for_field(object(), storage, [], 5, "RUN4") is None
+
+
+def _bases_world(monkeypatch, refused):
+    rows = [_row("2027-10-03", run="RUN3"), _row("2027-10-02", run="RUN2"),
+            _row("2027-10-01", run="RUN1")]
+    found = {"RUN3": ("AS3", "s3://b/RUN3"), "RUN2": ("AS2", "s3://b/RUN2"),
+             "RUN1": ("AS1", "s3://b/RUN1")}
+    reads = []
+
+    def readable(conn, instance, run_id, kind):
+        reads.append((instance, run_id, kind))
+        if instance in refused:
+            raise ValueError(refused[instance])
+
+    monkeypatch.setattr(loop, "base_instance", lambda conn, run, field: found.get(run))
+    monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
+    monkeypatch.setattr(loop, "readable_result_set", readable)
+    storage = _Storage({f"s3://b/{r}": _manifest([_entry("association-set", i, {"field": 5})])
+                        for r, (i, _) in found.items()})
+    return rows, storage, reads
+
+
+def test_base_for_field_checks_the_read_rule_with_the_new_run_as_reader(monkeypatch):
+    """R2 (Codex 9-2): the chosen base passes assert_readable_result_set for the date's run."""
+    rows, storage, reads = _bases_world(monkeypatch, {})
+    base = loop.base_for_field(object(), storage, rows, 5, "RUN4")
+    assert base.entry.instance == "AS3"
+    assert reads == [("AS3", "RUN4", "association-set")]
+
+
+def test_base_for_field_skips_an_unreadable_base_to_the_next_earlier_date(monkeypatch):
+    """A base the new run may not read is not eligible: the walk goes on, and says why."""
+    rows, storage, reads = _bases_world(monkeypatch, {
+        "AS3": "association-set 'AS3' is not complete and retained",
+        "AS2": "not its unit's selected attempt"})
+    skipped = []
+    base = loop.base_for_field(object(), storage, rows, 5, "RUN4", skipped)
+    assert (base.entry.instance, base.run) == ("AS1", "RUN1")
+    assert [(s["run"], s["instance"]) for s in skipped] == [("RUN3", "AS3"), ("RUN2", "AS2")]
+    assert "not complete and retained" in skipped[0]["reason"]
+    assert [r[0] for r in reads] == ["AS3", "AS2", "AS1"]
+
+
+def test_base_for_field_is_none_when_no_earlier_base_is_readable(monkeypatch):
+    rows, storage, _ = _bases_world(monkeypatch, {"AS3": "x", "AS2": "y", "AS1": "z"})
+    assert loop.base_for_field(object(), storage, rows, 5, "RUN4") is None
+
+
+def test_process_date_records_a_skipped_base(monkeypatch):
+    spec, tools, storage, walks, created, updates = _world(
+        monkeypatch, previous=_row(run="RUN1"))
+
+    def readable(conn, instance, run, kind):
+        if instance == "AS1":
+            raise ValueError("another run's scratch result set")
+
+    monkeypatch.setattr(loop, "readable_result_set", readable)
+    rc = loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10)
+    assert rc == 0
+    record = updates["record"]
+    assert record["base_sets"] == {"5": None}
+    assert record["bases_skipped"]["5"][0]["instance"] == "AS1"
+    assert "scratch" in record["bases_skipped"]["5"][0]["reason"]
+
+
+def test_field_discovery_reads_only_a_readable_source_set(monkeypatch):
+    """R2 (Codex 9-2): the source set is checked, as the date's run, before its rows are read."""
+    spec, tools, *_ = _world(monkeypatch)
+    order = []
+    monkeypatch.setattr(loop, "readable_result_set",
+                        lambda conn, instance, run, kind: order.append(
+                            ("check", instance, run, kind)))
+    monkeypatch.setattr(loop, "source_set_fields",
+                        lambda conn, table, instance: order.append(("read", instance)) or [5])
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
+    assert order[:2] == [("check", "S1", "RUN2", "source-set"), ("read", "S1")]
+
+
+def test_an_unreadable_own_source_set_is_a_loop_error(monkeypatch):
+    spec, tools, *_ = _world(monkeypatch)
+
+    def readable(conn, instance, run, kind):
+        if kind == "source-set":
+            raise ValueError("source-set 'S1' is not complete and retained")
+
+    monkeypatch.setattr(loop, "readable_result_set", readable)
+    monkeypatch.setattr(loop, "source_set_fields",
+                        lambda conn, table, instance: pytest.fail("rows read before the check"))
+    with pytest.raises(loop.LoopError, match="may not read the source set S1"):
+        loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10)
 
 
 def test_process_date_a_jobless_attempt_is_resolved_then_walked_again(monkeypatch):

@@ -9,9 +9,11 @@ of the run gets a SUCCEEDED job and a manifest shaped like its stage's
 (``_FakeStages``): admit an ``l2-image`` bundle, finalize a
 ``difference-image`` bundle, load a ``source-set`` whose rows the test
 writes into a real ``sources_<yyyymmdd>_<sca>`` table (two fields), and
-crossmatch an ``association-set`` registered in ``product_instances`` --
-which the real stage does itself, and which is how the next date finds
-its base (R5). Everything else writes an empty-output manifest or a
+crossmatch an ``association-set``, both registered in ``product_instances``
+-- which the real stages do themselves; the loop reads a source set's
+fields, and chooses a base, only when its run may read the set
+(supervisor step 9 R2), and the association set is how the next date
+finds its base (R5). Everything else writes an empty-output manifest or a
 result-set entry.
 """
 
@@ -140,8 +142,8 @@ class _FakeStages:
                     self.fake_s3.seed(FAKE_BUCKET, f"{prefix}/exec/{attempt_id}.json",
                                       json.dumps(self.execution_record).encode())
                 self.fake_batch.set_status(job_id, "SUCCEEDED")
-                if stage == "crossmatch":
-                    # The real stage registers its association set itself.
+                if stage in ("load", "crossmatch"):
+                    # The real stages register their result sets themselves.
                     repository.register_manifest(self.db.connection, manifest,
                                                  registering_attempt_id=attempt_id)
             result = original(conn, run_id)
@@ -336,9 +338,13 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     for _, _, _, promotion, record in rows:
         assert promotion is not None and record["promotion"] == promotion
         # Step 6's gate: the default policy (the spec names none) checks
-        # difference-image and source-set candidates; the fakes register none.
+        # difference-image and source-set candidates. The fake load registers
+        # its source set, as the real stage does (R2: the loop reads only
+        # registered, readable sets), so the policy's optional catalog check
+        # runs on it; it is not required, and the promotion stands.
         assert record["promotion_gate"] == "check policy rebuild-trial@1"
-        assert record["checks"] == []
+        assert [(c["check"], c["required"]) for c in record["checks"]] == [
+            ("catalog-counts-vs-reference@1", False)]
     with db.cursor() as cur:
         cur.execute("SELECT who, reason, request_context->>'run' FROM promotions "
                     "WHERE id = ANY(%s) ORDER BY happened_at", ([r[3] for r in rows],))

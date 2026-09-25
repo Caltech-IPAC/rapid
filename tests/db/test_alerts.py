@@ -25,17 +25,20 @@ import json
 import shutil
 
 import fastavro
+import pytest
 
 import rapidpipe.stages.alerts as alerts
 from rapidpipe.db import alerts as alerts_db
+from rapidpipe.db import objects as objects_db
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.manifest import Manifest, register_unit_id
 from rapidpipe.runs import repository as repo
 from rapidpipe.stages.contract import ExitCode
 
+from .attempt_helpers import succeed_and_select
 from .test_load import _registered_difference, _run_load
 from .test_register_l2 import _NoCloseNoCommitConnProxy, _run_register
-from .test_repository import _make_unit
+from .test_repository import _make_run, _make_unit
 
 ALERTS_UNIT = "e20260821001234/SCA07"
 
@@ -408,8 +411,9 @@ def test_the_exclusion_applies_only_with_the_pruned_set_named(conn, tmp_path, mo
     fields = {association_set: 5321}
     objects = [(association_set, ids["aid"])]
     with conn.cursor() as cur:
-        unpruned = alerts_db.history(cur, lineages, fields, objects, 0.0)
-        applied = alerts_db.history(cur, lineages, fields, objects, 0.0,
+        readable = [sets[0]]
+        unpruned = alerts_db.history(cur, lineages, fields, objects, 0.0, source_sets=readable)
+        applied = alerts_db.history(cur, lineages, fields, objects, 0.0, source_sets=readable,
                                     pruned_by_association={association_set: pruned})
         assert {r["sid"] for r in unpruned} == {ids["kept"], ids["flagged"], ids["orphan"]}
         assert {r["sid"] for r in applied} == {ids["kept"], ids["orphan"]}
@@ -418,7 +422,7 @@ def test_the_exclusion_applies_only_with_the_pruned_set_named(conn, tmp_path, mo
         for label, pm in (("unpruned", None), ("applied", {association_set: pruned})):
             rows = alerts_db.associations(cur, lineages, fields, {association_set: None},
                                           [ids["kept"], ids["flagged"]],
-                                          pruned_by_association=pm)
+                                          source_sets=readable, pruned_by_association=pm)
             counts[label] = {r["sid"]: r["nsources"] for r in rows}
         assert counts["unpruned"] == {ids["kept"]: 3, ids["flagged"]: 3}
         # the flagged pair is excluded: no association, and not counted
@@ -457,7 +461,7 @@ def test_a_pair_pruned_under_one_association_set_stays_under_another(
         fields = {set_a: 5321, set_b: 5321}
         pruned = {set_a: pruned_a, set_b: pruned_b}
         rows = alerts_db.history(cur, lineages, fields, [(set_a, ids["aid"]), (set_b, ids["aid"])],
-                                 0.0, pruned_by_association=pruned)
+                                 0.0, source_sets=[sets[0]], pruned_by_association=pruned)
         by_set = {}
         for r in rows:
             by_set.setdefault(r["object_set"], set()).add(r["sid"])
@@ -465,7 +469,158 @@ def test_a_pair_pruned_under_one_association_set_stays_under_another(
         assert by_set[set_b] == {ids["kept"]}
         assoc = alerts_db.associations(cur, lineages, fields, {set_a: None, set_b: None},
                                        [ids["kept"], ids["flagged"]],
-                                       pruned_by_association=pruned)
+                                       source_sets=[sets[0]], pruned_by_association=pruned)
         got = {(r["association_set"], r["sid"]): r["nsources"] for r in assoc}
         assert got == {(set_a, ids["kept"]): 3, (set_a, ids["flagged"]): 3,
                        (set_b, ids["kept"]): 1}
+
+
+# ----------------------------------------------------------------------
+# Supervisor step 9 R2 (Codex 9-2): history reads only readable source sets
+# ----------------------------------------------------------------------
+
+
+def _foreign_history(conn, tmp_path, monkeypatch, *, source_state="selected",
+                     named_by_base=True):
+    """The loop's shape: the alerts run's association set extends another
+    (production) run's association set, whose key names that run's source
+    set, which holds an earlier detection of the kept source's object.
+
+    ``source_state``: ``selected`` (a production candidate set from its
+    unit's selected attempt: readable), ``unselected`` (its load attempt was
+    never selected) or ``scratch`` (its custody is scratch). With
+    ``named_by_base`` False the base's key names no source set, so the
+    earlier detection is outside the readable list.
+    Returns (run, diff outputs, sets, ids) with ids["history"], ids["foreign_sources"],
+    ids["foreign_base"].
+    """
+    run_id, diff_outputs, sets, ids = _seeded_chain(conn, tmp_path, monkeypatch)
+    source_set, association_set, _ = sets
+    producer = _make_run(conn, kind="production", selected_stages=["load", "crossmatch"],
+                         max_attempts=3)
+    _make_unit(conn, producer, stage="load", unit_id="load-earlier")
+    load_attempt = repo.allocate_attempt(conn, producer, "load", "load-earlier")
+    foreign_sources = new_ulid()
+    repo.register_manifest(conn, {
+        "run": producer, "stage": "load", "attempt": load_attempt,
+        "inputs": {"products": {}, "result_sets": []},
+        "outputs": [{"kind": "source-set", "format_version": "1", "instance": foreign_sources,
+                     "key": {"difference": new_ulid(), "catalog_type": "photutils"},
+                     "primary": None, "members": [], "registration": {}, "row_count": 1}],
+    }, registering_attempt_id=load_attempt)
+    if source_state != "unselected":
+        succeed_and_select(conn, load_attempt)
+    if source_state == "scratch":
+        with conn.cursor() as cur:
+            cur.execute("UPDATE product_instances SET custody = 'scratch' WHERE id = %s",
+                        (foreign_sources,))
+    base_key = {"field": 5321, "base": None,
+                "source_sets": [foreign_sources] if named_by_base else [],
+                "settings_hash": "sha256:" + "1" * 64}
+    _make_unit(conn, producer, stage="crossmatch", unit_id="5321")
+    xm_attempt = repo.allocate_attempt(conn, producer, "crossmatch", "5321")
+    foreign_base = new_ulid()
+    repo.register_manifest(conn, {
+        "run": producer, "stage": "crossmatch", "attempt": xm_attempt,
+        "inputs": {"products": {}, "result_sets": []},
+        "outputs": [{"kind": "association-set", "format_version": "1", "instance": foreign_base,
+                     "key": base_key, "primary": None, "members": [], "registration": {},
+                     "row_count": 1}],
+    }, registering_attempt_id=xm_attempt)
+    succeed_and_select(conn, xm_attempt)
+    with conn.cursor() as cur:
+        # The alerts run's association set extends the foreign base.
+        cur.execute("UPDATE product_instances SET logical_key = logical_key || %s::jsonb "
+                    "WHERE id = %s",
+                    (json.dumps({"base": foreign_base, "source_sets": [source_set]}),
+                     association_set))
+        # An earlier detection of the kept source, a day before, in the foreign source set.
+        table, _ = objects_db.source_set_table(cur, source_set, run_id)
+        cur.execute(f"CREATE TEMP TABLE earlier ON COMMIT DROP AS SELECT * FROM {table} "
+                    "WHERE sid = %s", (ids["kept"],))
+        cur.execute("UPDATE earlier SET sid = nextval('sources_sid_seq'), id = id + 100000, "
+                    "mjdobs = mjdobs - 1, run = %s, attempt = %s, result_set = %s",
+                    (producer, load_attempt, foreign_sources))
+        cur.execute(f"INSERT INTO {table} SELECT * FROM earlier RETURNING sid")
+        history_sid = cur.fetchone()[0]
+        cur.execute("DROP TABLE earlier")
+        cur.execute("INSERT INTO merges_5321 (aid, sid, run, attempt, result_set) VALUES "
+                    "(%s, %s, %s, %s, %s)",
+                    (ids["aid"], history_sid, producer, xm_attempt, foreign_base))
+    return run_id, diff_outputs, sets, {**ids, "history": history_sid,
+                                        "foreign_sources": foreign_sources,
+                                        "foreign_base": foreign_base}
+
+
+def _prv_sids(outputs):
+    manifest = Manifest.read(outputs / "manifest.json")
+    container = next(e for e in manifest.outputs if e.kind == "alert-container")
+    raw = (outputs / container.primary).read_bytes()
+    return {a["diaSourceId"]: {p["diaSourceId"] for p in (a["prvDiaSources"] or [])}
+            for a in fastavro.reader(io.BytesIO(raw))}
+
+
+def test_the_loop_case_reads_history_from_the_earlier_dates_selected_source_set(
+        conn, tmp_path, monkeypatch):
+    """Date 2's alerts over date 1's selected candidate sets: the earlier detection is history."""
+    run_id, diff_outputs, sets, ids = _foreign_history(conn, tmp_path, monkeypatch)
+    with conn.cursor() as cur:
+        lineages = {sets[1]: alerts_db.association_chain(cur, sets[1], run_id)}
+        assert lineages[sets[1]] == [sets[1], ids["foreign_base"]]
+        assert alerts_db.readable_source_sets(cur, lineages, sets[0], run_id) == [
+            sets[0], ids["foreign_sources"]]
+    inputs, _ = _input_set(tmp_path, diff_outputs, sets)
+    rc, _, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
+    assert rc == int(ExitCode.SUCCESS)
+    assert ids["history"] in _prv_sids(outputs)[ids["kept"]]
+
+
+@pytest.mark.parametrize("source_state", ["unselected", "scratch"])
+def test_a_chain_naming_an_unreadable_foreign_source_set_exits_65(
+        conn, tmp_path, monkeypatch, source_state):
+    """Codex 9-2: a selected base whose key names another run's scratch source
+    set, or one from an unselected attempt, is refused before any source is read."""
+    run_id, diff_outputs, sets, ids = _foreign_history(conn, tmp_path, monkeypatch,
+                                                       source_state=source_state)
+    with conn.cursor() as cur:
+        lineages = {sets[1]: alerts_db.association_chain(cur, sets[1], run_id)}
+        match = "scratch" if source_state == "scratch" else "selected attempt"
+        with pytest.raises(ValueError, match=match):
+            alerts_db.readable_source_sets(cur, lineages, sets[0], run_id)
+    inputs, _ = _input_set(tmp_path, diff_outputs, sets)
+    rc, attempt_id, _ = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
+    assert rc == int(ExitCode.INPUT_REJECTED)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM alert_outbox WHERE attempt = %s", (attempt_id,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_a_history_row_outside_the_readable_source_sets_never_appears(
+        conn, tmp_path, monkeypatch):
+    """A merges pair in the chain whose source's set no chain key names is not history."""
+    run_id, diff_outputs, sets, ids = _foreign_history(conn, tmp_path, monkeypatch,
+                                                       named_by_base=False)
+    association_set = sets[1]
+    with conn.cursor() as cur:
+        lineages = {association_set: alerts_db.association_chain(cur, association_set, run_id)}
+        readable = alerts_db.readable_source_sets(cur, lineages, sets[0], run_id)
+        assert readable == [sets[0]]
+        fields = {association_set: 5321}
+        objects_ = [(association_set, ids["aid"])]
+        restricted = alerts_db.history(cur, lineages, fields, objects_, 0.0,
+                                       source_sets=readable)
+        widened = alerts_db.history(cur, lineages, fields, objects_, 0.0,
+                                    source_sets=readable + [ids["foreign_sources"]])
+        assert ids["history"] not in {r["sid"] for r in restricted}
+        assert ids["history"] in {r["sid"] for r in widened}
+        # The merges-count fallback counts only readable sources too.
+        counts = {label: {r["sid"]: r["nsources"] for r in alerts_db.associations(
+                      cur, lineages, fields, {association_set: None}, [ids["kept"]],
+                      source_sets=s)}
+                  for label, s in (("restricted", readable),
+                                   ("widened", readable + [ids["foreign_sources"]]))}
+        assert counts["widened"][ids["kept"]] == counts["restricted"][ids["kept"]] + 1
+    inputs, _ = _input_set(tmp_path, diff_outputs, sets)
+    rc, _, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
+    assert rc == int(ExitCode.SUCCESS)
+    assert ids["history"] not in _prv_sids(outputs)[ids["kept"]]

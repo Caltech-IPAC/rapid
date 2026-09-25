@@ -233,6 +233,29 @@ class FakeAlertsDatabase:
             current = (row.get("key") or {}).get("base")
         return chain
 
+    def readable_source_sets(self, lineages, source_set: str, run_id: str | None = None
+                             ) -> list[str]:
+        """The named source set, then every one the chains' keys name (``source_sets``).
+
+        As PostgreSQL does, each must be a registered, complete source set
+        (the fake has no runs or custody: ``readable`` False on a seeded
+        instance stands for a set the reading run may not read, R2).
+        """
+        readable = [source_set]
+        for chain in lineages.values():
+            for member in chain:
+                key = self.product_instances.get(member, {}).get("key") or {}
+                for instance in key.get("source_sets") or []:
+                    if instance not in readable:
+                        readable.append(instance)
+        for instance in readable:
+            row = self.product_instances.get(instance)
+            if (row is None or row["kind"] != "source-set" or row.get("complete") is not True
+                    or row.get("readable", True) is not True):
+                raise ValueError(f"source set named by the association chains: {instance!r} "
+                                 "is not readable")
+        return readable
+
     def registered_instances(self, instances) -> set[str]:
         return {i for i in instances if i in self.product_instances}
 
@@ -243,10 +266,11 @@ class FakeAlertsDatabase:
                 if pruned is not None and p["result_set"] == pruned}
 
     def associations(self, lineages, fields, statistics_by_association, sids, *,
-                     pruned_by_association=None) -> list[dict]:
+                     source_sets, pruned_by_association=None) -> list[dict]:
         """As PostgreSQL does: each named set's field tables only (every seeded
         merges/astroobjects/astroobjectsmeta row names its ``field``), less the
-        pairs its pruned set lists."""
+        pairs its pruned set lists; the fallback count only over ``source_sets``' sources."""
+        readable_sids = {s["sid"] for s in self.sources if s["result_set"] in source_sets}
         rows = []
         for root, chain in lineages.items():
             excluded = self._excluded(pruned_by_association, root)
@@ -270,7 +294,8 @@ class FakeAlertsDatabase:
                 seen.add((m["sid"], m["aid"]))
                 obj = objects.get(m["aid"])
                 stats = meta.get(m["aid"]) if obj else None
-                count = len({m2["sid"] for m2 in merges if obj and m2["aid"] == obj["aid"]})
+                count = len({m2["sid"] for m2 in merges if obj and m2["aid"] == obj["aid"]
+                             and m2["sid"] in readable_sids})
                 rows.append({
                     "sid": m["sid"], "merges_aid": m["aid"], "association_set": root,
                     "aid": obj["aid"] if obj else None,
@@ -282,8 +307,8 @@ class FakeAlertsDatabase:
         return sorted(rows, key=lambda r: (r["sid"], r["merges_aid"], r["association_set"]))
 
     def history(self, lineages, fields, objects, min_mjd, *,
-                pruned_by_association=None) -> list[dict]:
-        by_sid = {s["sid"]: s for s in self.sources}
+                source_sets, pruned_by_association=None) -> list[dict]:
+        by_sid = {s["sid"]: s for s in self.sources if s["result_set"] in source_sets}
         rows = {}
         for root, aid in objects:
             members = set(lineages[root])

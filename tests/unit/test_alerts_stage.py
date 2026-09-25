@@ -23,6 +23,7 @@ from rapidpipe.products.alertcontainer import (
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.selftest.alerts import (
     ASSOCIATION_SET_2,
+    OTHER_SOURCE_SET,
     RESULT_SETS,
     STATISTICS_SET_2,
     UNNAMED_ASSOCIATION_SET,
@@ -314,8 +315,10 @@ def _extend_from_a_base(seed):
     """
     instances = seed["product_instances"]
     instances[BASE_SET] = {"kind": "association-set", "complete": True,
-                           "key": {"field": 5321, "base": None}}
-    instances[ASSOCIATION_SET]["key"] = {"field": 5321, "base": BASE_SET}
+                           "key": {"field": 5321, "base": None,
+                                   "source_sets": [OTHER_SOURCE_SET]}}
+    instances[ASSOCIATION_SET]["key"] = {"field": 5321, "base": BASE_SET,
+                                         "source_sets": [SOURCE_SET]}
     for row in seed["merges"]:
         if row["result_set"] == ASSOCIATION_SET and row["sid"] in (50, 51):
             row["result_set"] = BASE_SET
@@ -528,6 +531,41 @@ def test_the_fake_scopes_a_pruned_set_to_its_own_association_set(prepared):
     lineages = {ASSOCIATION_SET: db.association_chain(ASSOCIATION_SET)}
     fields = {ASSOCIATION_SET: 5321}
     rows = db.history(lineages, fields, [(ASSOCIATION_SET, 9001)], 0.0,
+                      source_sets=[SOURCE_SET, OTHER_SOURCE_SET],
                       pruned_by_association={ASSOCIATION_SET: None,
                                              ASSOCIATION_SET_2: "01J8Y6QZ3M00000000000PRUN2"})
     assert 51 in {r["sid"] for r in rows}
+
+
+@pytest.mark.parametrize("change", ["unreadable", "incomplete", "missing"])
+def test_a_chain_naming_an_unreadable_source_set_exits_65(tmp_path, monkeypatch, prepared,
+                                                          change):
+    """R2 (Codex 9-2): history sources come only from source sets the run may read."""
+    inputs, _, seed = prepared
+    _extend_from_a_base(seed)
+    instances = seed["product_instances"]
+    if change == "unreadable":
+        instances[OTHER_SOURCE_SET]["readable"] = False
+    elif change == "incomplete":
+        instances[OTHER_SOURCE_SET]["complete"] = False
+    else:
+        del instances[OTHER_SOURCE_SET]
+    rc, _, db = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == int(ExitCode.INPUT_REJECTED)
+    assert db.commits == 0 and db.outbox == []
+
+
+def test_the_fake_reads_history_only_from_the_readable_source_sets(prepared):
+    """A merges pair whose source is outside ``source_sets`` gives no history row."""
+    _, _, seed = prepared
+    _extend_from_a_base(seed)
+    db = FakeAlertsDatabase(seed)
+    lineages = {ASSOCIATION_SET: db.association_chain(ASSOCIATION_SET)}
+    assert db.readable_source_sets(lineages, SOURCE_SET) == [SOURCE_SET, OTHER_SOURCE_SET]
+    fields = {ASSOCIATION_SET: 5321}
+    everything = db.history(lineages, fields, [(ASSOCIATION_SET, 9001)], 0.0,
+                            source_sets=[SOURCE_SET, OTHER_SOURCE_SET])
+    named_only = db.history(lineages, fields, [(ASSOCIATION_SET, 9001)], 0.0,
+                            source_sets=[SOURCE_SET])
+    assert 51 in {r["sid"] for r in everything}
+    assert 51 not in {r["sid"] for r in named_only}

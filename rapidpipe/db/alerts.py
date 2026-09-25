@@ -24,8 +24,12 @@ commits or rolls back.
   its rows plus its bases') and the statistics set that describes each,
   read from step 1's standalone per-field tables ``merges_<f>``,
   ``astroobjects_<f>``, ``astroobjectsmeta_<f>`` by name, as `dev` reads them.
+- :func:`readable_source_sets`: the source sets alerts may read sources
+  from: the named one and every one the named association sets' chains
+  name (``logical_key.source_sets``), each refused unless the reading run
+  may read it (R2; Codex 9-2).
 - :func:`history`: the objects' sources through merges anywhere in their
-  chain, from any source set, `dev`'s previous-detection prefetch.
+  chain, from those source sets only, `dev`'s previous-detection prefetch.
 - Both :func:`associations` and :func:`history` leave out every (aid, sid)
   pair a named pruned set lists in ``prunedmerges`` for that association set
   (supervisor step 9, R5): a pruned set is its base minus those pairs, and
@@ -136,6 +140,29 @@ def association_chain(cur, instance: str, run_id: str) -> list[str]:
     return _objects.association_chain(cur, instance, run_id)
 
 
+def readable_source_sets(cur, lineages: dict[str, list[str]], source_set: str,
+                         run_id: str) -> list[str]:
+    """The source sets the alerts stage may read sources from, the named one first.
+
+    The named ``source_set`` and every `source-set` the chains in
+    ``lineages`` name (:func:`rapidpipe.db.objects.chain_source_sets`), each
+    passed through ``rapidpipe.db.objects.assert_readable_result_set`` for
+    run ``run_id`` (supervisor step 9 ruling R2): a chain whose keys name
+    another run's scratch source set, or one from an unselected attempt, is
+    refused with :class:`ValueError` (the stage maps it to InputRejected).
+    :func:`associations` and :func:`history` read sources from these sets
+    only.
+    """
+    members = list(dict.fromkeys(m for chain in lineages.values() for m in chain))
+    readable = list(dict.fromkeys([source_set] + _objects.chain_source_sets(cur, members)))
+    for instance in readable:
+        try:
+            _objects.assert_readable_result_set(cur, instance, run_id, kind="source-set")
+        except ValueError as exc:
+            raise ValueError(f"source set named by the association chains: {exc}") from None
+    return readable
+
+
 def set_field(key: Any) -> int:
     """The tessellation field an association set's logical key names (``field``, as crossmatch writes it).
 
@@ -189,6 +216,7 @@ def _pruned(pruned_by_association: dict[str, str | None] | None, named: str) -> 
 def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
                  statistics_by_association: dict[str, str | None],
                  sids: Sequence[int], *,
+                 source_sets: Sequence[str],
                  pruned_by_association: dict[str, str | None] | None = None,
                  ) -> list[dict[str, Any]]:
     """`dev`'s association prefetch over the named association sets' lineages.
@@ -210,7 +238,9 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
     (aid, sid) pair present in a base and its extension counts once.
     ``pruned_by_association`` maps a named set to the pruned set applied to it
     (or None): a pair that pruned set lists in ``prunedmerges`` is neither a
-    trigger's association nor counted in the fallback (R5).
+    trigger's association nor counted in the fallback (R5). The fallback
+    counts only sources of ``source_sets`` (:func:`readable_source_sets`,
+    R2); the triggers' ``sids`` are the named source set's.
     """
     if not sids or not lineages:
         return []
@@ -232,7 +262,9 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
                    m.sid, m.aid AS merges_aid, a.aid, a.ra0, a.dec0, {stats_select},
                    (SELECT count(DISTINCT m2.sid) FROM {merges} m2
                     WHERE m2.aid = a.aid AND m2.result_set = ANY(%(chain)s::text[])
-                      AND {m2_not_pruned})::int
+                      AND {m2_not_pruned}
+                      AND EXISTS (SELECT 1 FROM sources s2 WHERE s2.sid = m2.sid
+                                  AND s2.result_set = ANY(%(source_sets)s::text[])))::int
                        AS merges_count
             FROM {merges} m
             JOIN unnest(%(chain)s::text[]) WITH ORDINALITY AS lm(member, depth)
@@ -250,6 +282,7 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
                         m_not_pruned=sql.SQL(_NOT_PRUNED.format(alias="m")),
                         m2_not_pruned=sql.SQL(_NOT_PRUNED.format(alias="m2"))),
             {"chain": list(chain), "stats": stats, "sids": list(sids),
+             "source_sets": list(source_sets),
              "pruned": _pruned(pruned_by_association, named)})
         for row in _dicts(cur):
             meta_nsources = row.pop("meta_nsources")
@@ -263,13 +296,15 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
 
 def history(cur, lineages: dict[str, list[str]], fields: dict[str, int],
             objects: Sequence[tuple[str, int]], min_mjd: float, *,
+            source_sets: Sequence[str],
             pruned_by_association: dict[str, str | None] | None = None,
             ) -> list[dict[str, Any]]:
     """Every source of the objects through merges anywhere in their set's chain, oldest first.
 
     ``objects`` are (named association set, aid) pairs, read from that set's
-    field's ``merges_<f>``. The sources may belong to any source set: they are
-    the frozen inputs the chain names. ``object_set``/``object_aid`` say which
+    field's ``merges_<f>``. The sources may belong to any of ``source_sets``
+    (:func:`readable_source_sets`: the frozen inputs the chain names, each
+    readable by the run, R2), and to no other. ``object_set``/``object_aid`` say which
     object each row belongs to. A pair the named set's pruned set lists in
     ``prunedmerges`` (``pruned_by_association``) is not history (R5).
     """
@@ -288,11 +323,13 @@ def history(cur, lineages: dict[str, list[str]], fields: dict[str, int],
             JOIN filters f ON s.fid = f.fid
             JOIN exposures e ON s.expid = e.expid
             WHERE m.result_set = ANY(%(chain)s::text[]) AND m.aid = ANY(%(aids)s::bigint[])
+              AND s.result_set = ANY(%(source_sets)s::text[])
               AND s.mjdobs >= %(min_mjd)s AND {not_pruned}
             ORDER BY s.mjdobs, s.sid, m.aid
             """).format(source_select=sql.SQL(_SOURCE_SELECT), merges=merges,
                         not_pruned=sql.SQL(_NOT_PRUNED.format(alias="m"))),
             {"chain": list(chain), "aids": aids, "min_mjd": min_mjd,
+             "source_sets": list(source_sets),
              "pruned": _pruned(pruned_by_association, named)})
         for row in _dicts(cur):
             row["object_set"] = named
