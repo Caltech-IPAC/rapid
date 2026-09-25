@@ -40,9 +40,11 @@ class _Conn:
 
 
 def _row(**over):
-    row = {"scalefacref": 1.07, "dxrmsfin": 0.21, "dyrmsfin": 0.19, "dxmedianfin": 0.02,
-           "dymedianfin": -0.03, "nsexcatsources": 123456,
-           "source_counts": {"sextractor": {"positive": 1000, "negative": 900}}}
+    # The control run's values in rapid_rebuild (live-values correction).
+    row = {"scalefacref": 17572.896, "dxrmsfin": 0.25, "dyrmsfin": 0.56, "dxmedianfin": 0.004,
+           "dymedianfin": -0.48, "nsexcatsources": 21749,
+           "source_counts": {"sextractor": {"positive": 21749, "negative": 55451},
+                             "photutils": {"positive": 85079, "negative": 58599}}}
     row.update(over)
     return (row["scalefacref"], row["dxrmsfin"], row["dyrmsfin"], row["dxmedianfin"],
             row["dymedianfin"], row["nsexcatsources"], row["source_counts"])
@@ -55,20 +57,29 @@ def _params(policy):
 def test_control_like_values_pass_trial_and_fail_strict():
     passed = difference_image_statistics(_Conn([_row()]), "I", _params("rebuild-trial@1"))
     assert passed.outcome == "passed" and passed.detail["failing"] == []
-    assert passed.detail["measurements"]["sextractor_pos_neg_ratio"] == pytest.approx(1000 / 900)
+    assert passed.detail["measurements"]["sextractor_pos_neg_ratio"] == pytest.approx(21749 / 55451)
     failed = difference_image_statistics(_Conn([_row()]), "I", _params("rebuild-strict@1"))
     assert failed.outcome == "failed"
-    assert failed.detail["failing"] == ["scalefacref", "dxrmsfin", "dyrmsfin", "nsexcatsources"]
+    assert failed.detail["failing"] == ["scalefacref", "dxrmsfin", "dyrmsfin", "abs_dymedianfin",
+                                        "nsexcatsources", "sextractor_pos_neg_ratio"]
     assert failed.detail["bounds"]["dxrmsfin"] == [None, 0.01]
 
 
 @pytest.mark.parametrize("override, failing", [
-    ({"dxmedianfin": -0.7}, "abs_dxmedianfin"),
-    ({"dymedianfin": 0.6}, "abs_dymedianfin"),
-    ({"nsexcatsources": 49999}, "nsexcatsources"),
-    ({"scalefacref": 5.5}, "scalefacref"),
+    ({"dxmedianfin": -1.5}, "abs_dxmedianfin"),
+    ({"dymedianfin": 1.2}, "abs_dymedianfin"),
+    ({"dxrmsfin": 2.5}, "dxrmsfin"),
+    ({"nsexcatsources": 999}, "nsexcatsources"),
+    ({"nsexcatsources": 1000001}, "nsexcatsources"),
+    ({"scalefacref": 2e5}, "scalefacref"),
+    ({"scalefacref": 1e-4}, "scalefacref"),
     ({"source_counts": {"sextractor": {"positive": 10, "negative": 0}}},
      "sextractor_pos_neg_ratio"),
+    ({"source_counts": {"sextractor": {"positive": 21749, "negative": 1000}}},
+     "sextractor_pos_neg_ratio"),
+    ({"scalefacref": float("nan")}, "scalefacref"),
+    ({"dyrmsfin": float("inf")}, "dyrmsfin"),
+    ({"dxmedianfin": None}, "abs_dxmedianfin"),
 ])
 def test_each_bound_can_fail(override, failing):
     result = difference_image_statistics(_Conn([_row(**override)]), "I",
@@ -101,3 +112,10 @@ def test_result_line_format():
         'instance=I1 kind=difference-image key={"exposure":7,"sca":3} '
         "check=difference-image-statistics@1 required=true outcome=failed "
         "nsexcatsources=5 outside [50000, 500000]")
+
+
+def test_a_non_finite_measurement_is_recorded_as_text_and_named():
+    result = difference_image_statistics(_Conn([_row(scalefacref=float("nan"))]), "I",
+                                         _params("rebuild-trial@1"))
+    assert result.detail["measurements"]["scalefacref"] == "nan"
+    assert result.summary == "scalefacref=nan not finite"

@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from rapidpipe.checks import policy as policy_mod
 from rapidpipe.checks import registry
-from rapidpipe.checks.policy import Policy, PolicyCheck, load_policy
+from rapidpipe.checks.policy import PolicyCheck, load_policy, load_policy_file
 from rapidpipe.checks.registry import CheckResult
 from rapidpipe.checks.runner import (
     Candidate,
@@ -42,11 +42,22 @@ from .test_repository import _make_run, _make_unit, _register_simple_instance
 TRIAL = "rebuild-trial@1"
 STRICT = "rebuild-strict@1"
 
-#: diffimmeta values inside rebuild-trial@1's bounds and outside
-#: rebuild-strict@1's (the control run's shape).
-GOOD_STATS = {"scalefacref": 1.07, "dxrmsfin": 0.21, "dyrmsfin": 0.19,
-              "dxmedianfin": 0.02, "dymedianfin": -0.03, "nsexcatsources": 123456,
-              "source_counts": {"sextractor": {"positive": 1000, "negative": 900}}}
+#: The control run's diffimmeta values in rapid_rebuild (supervisor step 6,
+#: live-values correction): inside rebuild-trial@1's bounds, outside
+#: rebuild-strict@1's.
+GOOD_STATS = {"scalefacref": 17572.896, "dxrmsfin": 0.25, "dyrmsfin": 0.56,
+              "dxmedianfin": 0.004, "dymedianfin": -0.48, "nsexcatsources": 21749,
+              "source_counts": {"sextractor": {"positive": 21749, "negative": 55451},
+                                "photutils": {"positive": 85079, "negative": 58599}}}
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "checks"
+
+
+def _fixture_policy(monkeypatch, ref):
+    """Install a tests/fixtures/checks policy (never shipped) by its ref."""
+    policy = load_policy_file(FIXTURES / f"{ref}.toml")
+    monkeypatch.setitem(policy_mod._FIXTURE_POLICIES, ref, policy)
+    return policy
 
 
 # ======================================================================
@@ -200,10 +211,11 @@ def test_difference_statistics_pass_trial_fail_strict_and_record_everything(conn
     detail = rows[1][4]
     assert detail["policy"] == STRICT
     assert detail["params"] == load_policy(STRICT).checks[0].params
-    assert detail["measurements"]["nsexcatsources"] == 123456
+    assert detail["measurements"]["nsexcatsources"] == 21749
     assert detail["bounds"]["nsexcatsources"] == [0, 1000]
-    assert set(detail["failing"]) == {"nsexcatsources", "scalefacref", "dxrmsfin", "dyrmsfin"}
-    assert "nsexcatsources=123456 outside [0, 1000]" in detail["summary"]
+    assert detail["failing"] == ["scalefacref", "dxrmsfin", "dyrmsfin", "abs_dymedianfin",
+                                 "nsexcatsources", "sextractor_pos_neg_ratio"]
+    assert "nsexcatsources=21749 outside [0, 1000]" in detail["summary"]
     assert rows[0][4]["who"] == "tester"
     assert rows[0][4]["summary"] == "7 measurements within bounds"
 
@@ -211,7 +223,7 @@ def test_difference_statistics_pass_trial_fail_strict_and_record_everything(conn
 def test_difference_statistics_ratio_only_when_source_counts_present(conn):
     run_id = _make_run(conn)
     lopsided = _diff_candidate(
-        conn, run_id, stats={"source_counts": {"sextractor": {"positive": 900, "negative": 100}}})
+        conn, run_id, stats={"source_counts": {"sextractor": {"positive": 90000, "negative": 100}}})
     absent = _diff_candidate(conn, run_id, stats={"source_counts": None})
     results = {r.instance: r for r in run_policy_checks(conn, run_id, load_policy(TRIAL))}
     assert results[lopsided].outcome == "failed"
@@ -249,70 +261,149 @@ def test_a_raising_check_is_recorded_failed_with_the_error(conn, monkeypatch):
 
 
 # ======================================================================
-# catalog-counts-vs-reference@1
+# catalog-counts-vs-reference@1: reference by science identity
 # ======================================================================
 
-def _catalog(conn, run_id, instance, policy=TRIAL, **params):
-    pc = load_policy(policy).checks[1]
+def _l2(conn, run_id, *, expid, sca, fid):
+    """A registered l2-image instance with an ``l2files`` row carrying
+    (expid, sca, fid). Its reference-table foreign keys are dropped and its
+    other NOT NULL columns filled with placeholders, inside the
+    never-committed transaction."""
+    attempt_id = _selected_attempt(conn, run_id, stage="admit")
+    instance = _register_simple_instance(conn, run_id, "admit", attempt_id, kind="l2-image",
+                                         logical_key={"k": new_ulid()})
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT conname FROM pg_constraint
+            WHERE contype = 'f' AND conrelid = 'l2files'::regclass
+              AND confrelid NOT IN ('runs'::regclass, 'attempts'::regclass,
+                                    'product_instances'::regclass)
+            """)
+        for (constraint,) in cur.fetchall():
+            cur.execute(f"ALTER TABLE l2files DROP CONSTRAINT {constraint}")
+        cur.execute("SELECT coalesce(max(rid), 0) + 1 FROM l2files")
+        (rid,) = cur.fetchone()
+        values = {"rid": rid, "expid": expid, "sca": sca, "fid": fid, "version": 1, "vbest": 0,
+                  "run": run_id, "attempt": attempt_id, "instance": instance}
+        cur.execute(
+            """
+            SELECT column_name, data_type FROM information_schema.columns
+            WHERE table_name = 'l2files' AND is_nullable = 'NO' AND column_default IS NULL
+            """)
+        for column, data_type in cur.fetchall():
+            if column in values:
+                continue
+            if "timestamp" in data_type:
+                values[column] = "2026-09-24T00:00:00"
+            elif "char" in data_type or data_type == "text":
+                values[column] = "x"
+            else:
+                values[column] = 0
+        columns = list(values)
+        cur.execute(
+            f"INSERT INTO l2files ({', '.join(columns)}) "
+            f"VALUES ({', '.join(['%s'] * len(columns))})",
+            [values[c] for c in columns])
+    return instance
+
+
+def _chain(conn, run_id, *, identity=(7001, 3, 1), rows, catalog_type="sextractor",
+           complete=True):
+    """l2 -> difference-image -> source-set, keyed as the live stages key
+    them; returns the source-set instance."""
+    expid, sca, fid = identity
+    l2 = _l2(conn, run_id, expid=expid, sca=sca, fid=fid)
+    attempt_id = _selected_attempt(conn, run_id)
+    diff = _register_simple_instance(
+        conn, run_id, "difference", attempt_id, kind="difference-image",
+        logical_key={"l2": l2, "reference": "REF", "differencer": "sfft",
+                     "settings_hash": new_ulid()})
+    return _source_set(conn, run_id, key={"difference": diff, "catalog_type": catalog_type},
+                       rows=rows, complete=complete)
+
+
+def _catalog(conn, instance, policy=TRIAL, **params):
+    pc = load_policy(policy).find_check("catalog-counts-vs-reference@1")
     return run_check(conn, _candidate(conn, instance), pc, policy_ref=policy,
                      params={**pc.params, **params} if params else None)
 
 
+def _promote_source_sets(conn, run_id):
+    return repo.promote_run(conn, run_id, "t", "reference", kinds=["source-set"])
+
+
+def _identity_triple():
+    return (random.randrange(10**6, 10**9), 3, 1)
+
+
 def test_catalog_counts_missing_reference_passes_trial_fails_strict(conn):
     run_id = _make_run(conn)
-    instance = _source_set(conn, run_id, key={"k": new_ulid()}, rows=100)
-    trial = _catalog(conn, run_id, instance)
-    strict = _catalog(conn, run_id, instance, STRICT)
+    instance = _chain(conn, run_id, identity=_identity_triple(), rows=100)
+    trial = _catalog(conn, instance)
+    strict = _catalog(conn, instance, STRICT)
     assert (trial.outcome, strict.outcome) == ("passed", "failed")
     assert trial.required is False
-    assert trial.detail["reference"] == {"instance": None, "chosen_as": "current",
-                                         "row_count": None}
+    assert trial.detail["reference"]["instance"] is None
 
 
-def test_catalog_counts_against_the_current_instance(conn):
-    key = {"k": new_ulid()}
-    old_run = _make_run(conn)
-    old = _source_set(conn, old_run, key=key, rows=1000)
-    repo.promote_run(conn, old_run, "t", "first")
+def test_catalog_counts_against_the_current_instance_of_the_same_identity(conn):
+    identity = _identity_triple()
+    control = _make_run(conn)
+    reference = _chain(conn, control, identity=identity, rows=1000)
+    _promote_source_sets(conn, control)
+    # Not references: another sca, and the other catalog type.
+    decoy = _make_run(conn)
+    _chain(conn, decoy, identity=(identity[0], 4, 1), rows=5)
+    _chain(conn, decoy, identity=identity, rows=5, catalog_type="photutils")
+    _promote_source_sets(conn, decoy)
+
     run_id = _make_run(conn)
-    near = _source_set(conn, run_id, key=key, rows=1080)
-    result = _catalog(conn, run_id, near)
-    assert result.outcome == "passed"
-    assert result.detail["reference"]["instance"] == old
+    candidate = _chain(conn, run_id, identity=identity, rows=1080)
+    result = _catalog(conn, candidate)
+    assert result.outcome == "passed", result.summary
+    assert result.detail["reference"] == {"instance": reference, "run": control,
+                                          "chosen_as": "current", "row_count": 1000}
+    assert result.detail["identity"] == {"expid": identity[0], "sca": 3, "fid": 1,
+                                         "catalog_type": "sextractor"}
     assert result.detail["measurements"]["relative_difference"] == pytest.approx(0.08)
-    far = _catalog(conn, run_id, near, tolerance=0.05)
-    assert far.outcome == "failed" and far.detail["failing"] == ["relative_difference"]
+    tight = _catalog(conn, candidate, tolerance=0.05)
+    assert tight.outcome == "failed" and tight.detail["failing"] == ["relative_difference"]
 
 
-def test_catalog_counts_when_the_candidate_is_current_uses_the_previous_current(conn):
-    key = {"k": new_ulid()}
-    old_run = _make_run(conn)
-    old = _source_set(conn, old_run, key=key, rows=1000)
-    repo.promote_run(conn, old_run, "t", "first")
+def test_catalog_counts_never_use_the_candidates_own_run(conn):
+    identity = _identity_triple()
     run_id = _make_run(conn)
-    new = _source_set(conn, run_id, key=key, rows=2000)
-    repo.promote_run(conn, run_id, "t", "second")
-    result = _catalog(conn, run_id, new)
-    assert result.detail["reference"]["instance"] == old
-    assert result.detail["reference"]["chosen_as"].startswith("previous current")
-    assert result.outcome == "failed"
+    candidate = _chain(conn, run_id, identity=identity, rows=10)
+    _promote_source_sets(conn, run_id)
+    result = _catalog(conn, candidate, STRICT)
+    assert result.detail["reference"]["instance"] is None
+    assert result.outcome == "failed"      # missing_reference = fail
 
 
 def test_catalog_counts_against_a_named_reference_run(conn):
-    key = {"k": new_ulid()}
-    control = _make_run(conn)
-    _source_set(conn, control, key=key, rows=500)
+    identity = _identity_triple()
+    control = _make_run(conn)          # never promoted: named explicitly
+    reference = _chain(conn, control, identity=identity, rows=500)
     run_id = _make_run(conn)
-    instance = _source_set(conn, run_id, key=key, rows=500)
-    result = _catalog(conn, run_id, instance, reference_run=control)
+    candidate = _chain(conn, run_id, identity=identity, rows=500)
+    result = _catalog(conn, candidate, reference_run=control)
     assert result.outcome == "passed"
+    assert result.detail["reference"]["instance"] == reference
     assert result.detail["reference"]["chosen_as"] == f"run {control}"
+    other = _make_run(conn)
+    absent = _catalog(conn, candidate, reference_run=other)
+    assert absent.outcome == "failed" and absent.detail["failing"] == ["reference"]
 
 
-def test_catalog_counts_refuse_an_incomplete_candidate(conn):
+def test_catalog_counts_fail_an_incomplete_or_unresolvable_candidate(conn):
     run_id = _make_run(conn)
-    instance = _source_set(conn, run_id, key={"k": new_ulid()}, rows=5, complete=False)
-    assert _catalog(conn, run_id, instance).outcome == "failed"
+    incomplete = _chain(conn, run_id, identity=_identity_triple(), rows=5, complete=False)
+    assert _catalog(conn, incomplete).outcome == "failed"
+    loose = _source_set(conn, run_id, key={"k": new_ulid()}, rows=5)
+    result = _catalog(conn, loose)
+    assert result.outcome == "failed"
+    assert result.detail["failing"] == ["identity"]
 
 
 # ======================================================================
@@ -394,15 +485,13 @@ def test_a_failed_advisory_check_does_not_refuse(conn):
 
 
 def test_an_unapproved_policy_admits_no_promotion(conn, monkeypatch):
-    unapproved = replace(load_policy(TRIAL), name="unapproved", approval="none",
-                         approved_by=None)
-    monkeypatch.setitem(policy_mod._FIXTURE_POLICIES, "unapproved@1", unapproved)
+    _fixture_policy(monkeypatch, "unapproved@1")
     run_id = _make_run(conn)
     _source_set(conn, run_id, key={"k": new_ulid()}, rows=10)
     _savepoint_raises(conn, repo.PromotionRefused,
                       lambda: repo.promote_run(conn, run_id, "t", "go",
                                                check_policy="unapproved@1"),
-                      match="is not approved")
+                      match="check policy unapproved@1 is not approved; refusing")
     _savepoint_raises(conn, repo.PromotionRefused,
                       lambda: repo.promote_run(conn, run_id, "t", "go",
                                                check_policy="nosuch@1"),
@@ -473,25 +562,19 @@ def test_maybe_auto_promote_is_off_for_an_ordinary_run(conn):
     assert recorded_checks(conn, run_id) == []
 
 
-def _auto_policy(base: str, name: str) -> Policy:
-    return replace(load_policy(base), name=name, approval="lead",
-                   approved_by="lead-login", auto_promote=True)
-
-
 def test_maybe_auto_promote_with_a_permitting_policy_checks_and_promotes(conn, monkeypatch):
-    monkeypatch.setitem(policy_mod._FIXTURE_POLICIES, "auto@1", _auto_policy(TRIAL, "auto"))
-    run_id = _make_run(conn, auto_promote=True, check_policy_ref="auto@1")
+    _fixture_policy(monkeypatch, "auto-trial@1")
+    run_id = _make_run(conn, auto_promote=True, check_policy_ref="auto-trial@1")
     diff = _diff_candidate(conn, run_id)
     outcome = maybe_auto_promote(conn, run_id)
     assert outcome.status == "promoted", outcome.message
     assert _custody(conn, diff) == "current"
     version, ids = _promotion(conn, outcome.promotion_id)
-    assert version == "auto@1" and ids == [outcome.checks[0].id]
+    assert version == "auto-trial@1" and ids == [outcome.checks[0].id]
 
 
 def test_maybe_auto_promote_refused_keeps_the_check_rows(conn, monkeypatch):
-    monkeypatch.setitem(policy_mod._FIXTURE_POLICIES, "auto-strict@1",
-                        _auto_policy(STRICT, "auto-strict"))
+    _fixture_policy(monkeypatch, "auto-strict@1")
     run_id = _make_run(conn, auto_promote=True, check_policy_ref="auto-strict@1")
     diff = _diff_candidate(conn, run_id)
     outcome = maybe_auto_promote(conn, run_id)
@@ -502,8 +585,8 @@ def test_maybe_auto_promote_refused_keeps_the_check_rows(conn, monkeypatch):
 
 
 def test_maybe_auto_promote_skips_while_units_are_incomplete(conn, monkeypatch):
-    monkeypatch.setitem(policy_mod._FIXTURE_POLICIES, "auto@1", _auto_policy(TRIAL, "auto"))
-    run_id = _make_run(conn, auto_promote=True, check_policy_ref="auto@1")
+    _fixture_policy(monkeypatch, "auto-trial@1")
+    run_id = _make_run(conn, auto_promote=True, check_policy_ref="auto-trial@1")
     _diff_candidate(conn, run_id)
     _make_unit(conn, run_id, unit_id=new_ulid())   # pending
     outcome = maybe_auto_promote(conn, run_id)
@@ -558,16 +641,16 @@ def test_check_run_and_show_print_one_line_per_result(conn, cli_conn, capsys):
 
     assert cli_conn.main(["check", "run", run_id, "--policy", STRICT]) == 1
     out = capsys.readouterr().out
-    assert "required=true outcome=failed scalefacref=1.07 outside [0.99, 1.01]; " in out
-    assert "dxrmsfin=0.21 > 0.01; " in out
-    assert out.rstrip().endswith("nsexcatsources=123456 outside [0, 1000]")
+    assert "required=true outcome=failed scalefacref=17572.9 outside [0.99, 1.01]; " in out
+    assert "dxrmsfin=0.25 > 0.01; " in out
+    assert out.rstrip().endswith("sextractor_pos_neg_ratio=0.39222 outside [0.9, 1.1]")
 
     assert cli_conn.main(["check", "run", run_id, "--check", "difference-image-statistics@1",
-                          "--param", "n_max=1e9", "--param", "scalefacref_hi=2",
+                          "--param", "n_max=1e9", "--param", "scalefacref_hi=1e6",
                           "--instance", diff]) == 0
     capsys.readouterr()
     (row,) = [r for r in recorded_checks(conn, run_id) if r.detail["params"]["n_max"] == 1e9]
-    assert row.detail["params"]["scalefacref_hi"] == 2
+    assert row.detail["params"]["scalefacref_hi"] == 1e6
 
     assert cli_conn.main(["check", "show", run_id, "--instance", diff]) == 0
     shown = capsys.readouterr().out.splitlines()

@@ -63,7 +63,7 @@ def test_check_list_names_checks_and_policies(capsys):
     assert [line.split()[0] for line in out] == [
         "check=catalog-counts-vs-reference@1", "check=difference-image-statistics@1",
         "policy=rebuild-strict@1", "policy=rebuild-trial@1"]
-    assert ("policy=rebuild-trial@1 approval=trial approved_by=supervisor-step-6 "
+    assert ("policy=rebuild-trial@1 approval=trial approved_by=rusholme "
             "auto_promote=false checks=difference-image-statistics@1(required),"
             "catalog-counts-vs-reference@1(advisory)") in out
 

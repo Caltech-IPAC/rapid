@@ -67,9 +67,10 @@ def test_rebuild_trial_bounds_and_flags():
     assert (trial.approval, trial.auto_promote) == ("trial", False)
     diff = trial.find_check("difference-image-statistics@1")
     assert diff.required and diff.kind == "difference-image"
-    assert diff.params == {"scalefacref_lo": 0.2, "scalefacref_hi": 5.0, "rms_max": 1.0,
-                           "median_max": 0.5, "n_min": 50000, "n_max": 500000,
-                           "ratio_lo": 0.5, "ratio_hi": 2.0}
+    assert diff.params == {"scalefacref_lo": 1e-3, "scalefacref_hi": 1e5, "rms_max": 2.0,
+                           "median_max": 1.0, "n_min": 1000, "n_max": 1000000,
+                           "ratio_lo": 0.1, "ratio_hi": 10.0}
+    assert trial.approved_by == "rusholme"
     catalog = trial.find_check("catalog-counts-vs-reference@1")
     assert not catalog.required
     assert catalog.params == {"tolerance": 0.10, "missing_reference": "pass",
@@ -80,8 +81,11 @@ def test_rebuild_trial_bounds_and_flags():
 def test_rebuild_strict_is_tighter():
     strict = load_policy("rebuild-strict@1")
     diff = strict.find_check("difference-image-statistics@1").params
-    assert (diff["n_max"], diff["scalefacref_lo"], diff["scalefacref_hi"], diff["rms_max"]) == (
-        1000, 0.99, 1.01, 0.01)
+    assert diff == {"scalefacref_lo": 0.99, "scalefacref_hi": 1.01, "rms_max": 0.01,
+                    "median_max": 0.01, "n_min": 0, "n_max": 1000,
+                    "ratio_lo": 0.9, "ratio_hi": 1.1}
+    assert (strict.approval, strict.approved_by, strict.auto_promote) == (
+        "trial", "rusholme", False)
     catalog = strict.find_check("catalog-counts-vs-reference@1").params
     assert (catalog["tolerance"], catalog["missing_reference"]) == (0.0001, "fail")
 
@@ -143,3 +147,15 @@ def test_load_policy_file(tmp_path):
     path = tmp_path / "p.toml"
     path.write_bytes(source.read_bytes())
     assert policy_mod.load_policy_file(path).ref == "rebuild-strict@1"
+
+
+def test_the_test_fixture_policies_load_and_are_not_shipped():
+    from pathlib import Path
+
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures" / "checks"
+    auto = policy_mod.load_policy_file(fixtures / "auto-trial@1.toml")
+    assert policy_permits_auto_promote(auto)
+    assert not policy_permits_promotion(policy_mod.load_policy_file(fixtures / "unapproved@1.toml"))
+    assert policy_permits_auto_promote(
+        policy_mod.load_policy_file(fixtures / "auto-strict@1.toml"))
+    assert "auto-trial@1" not in shipped_policies()

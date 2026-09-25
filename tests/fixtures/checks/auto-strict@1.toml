@@ -1,0 +1,35 @@
+# Test fixture only, never shipped in the package (supervisor step 6, A1):
+# rebuild-strict@1's checks with approval "lead" and auto_promote = true.
+name = "auto-strict"
+version = "1"
+description = "Test fixture."
+approval = "lead"
+approved_by = "rusholme-lead-fixture"
+auto_promote = true
+
+[[checks]]
+name = "difference-image-statistics"
+version = "1"
+kind = "difference-image"
+required = true
+
+[checks.params]
+scalefacref_lo = 0.99
+scalefacref_hi = 1.01
+rms_max = 0.01
+median_max = 0.01
+n_min = 0
+n_max = 1000
+ratio_lo = 0.9
+ratio_hi = 1.1
+
+[[checks]]
+name = "catalog-counts-vs-reference"
+version = "1"
+kind = "source-set"
+required = false
+
+[checks.params]
+tolerance = 0.0001
+missing_reference = "fail"
+reference_run = ""

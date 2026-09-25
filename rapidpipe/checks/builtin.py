@@ -18,6 +18,15 @@ _DIFF_PARAMS = ("scalefacref_lo", "scalefacref_hi", "rms_max", "median_max",
                 "n_min", "n_max", "ratio_lo", "ratio_hi")
 
 
+def _num(value: Any) -> float | None:
+    """A measurement as a float, ``None`` when null."""
+    return None if value is None else float(value)
+
+
+def _abs(value: float | None) -> float | None:
+    return None if value is None else abs(value)
+
+
 def _fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.6g}"
@@ -59,12 +68,12 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
 
     # (measurement, value, lo, hi); None bounds are open.
     tests: list[tuple[str, Any, Any, Any]] = [
-        ("scalefacref", float(scalefacref), params["scalefacref_lo"], params["scalefacref_hi"]),
-        ("dxrmsfin", float(dxrms), None, params["rms_max"]),
-        ("dyrmsfin", float(dyrms), None, params["rms_max"]),
-        ("abs_dxmedianfin", abs(float(dxmed)), None, params["median_max"]),
-        ("abs_dymedianfin", abs(float(dymed)), None, params["median_max"]),
-        ("nsexcatsources", int(nsex), params["n_min"], params["n_max"]),
+        ("scalefacref", _num(scalefacref), params["scalefacref_lo"], params["scalefacref_hi"]),
+        ("dxrmsfin", _num(dxrms), None, params["rms_max"]),
+        ("dyrmsfin", _num(dyrms), None, params["rms_max"]),
+        ("abs_dxmedianfin", _abs(_num(dxmed)), None, params["median_max"]),
+        ("abs_dymedianfin", _abs(_num(dymed)), None, params["median_max"]),
+        ("nsexcatsources", None if nsex is None else int(nsex), params["n_min"], params["n_max"]),
     ]
     notes: list[str] = []
     sextractor = (source_counts or {}).get("sextractor") if isinstance(source_counts, dict) else None
@@ -80,12 +89,15 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
     bounds: dict[str, list[Any]] = {}
     failing: list[str] = []
     for name, value, lo, hi in tests:
-        measurements[name] = value if not (isinstance(value, float) and math.isinf(value)) else "inf"
+        # A null or non-finite measurement fails whatever its bounds
+        # (supervisor step 6, 2026-09-24, live-values correction).
+        finite = value is not None and math.isfinite(value)
+        measurements[name] = value if finite or value is None else str(value)
         bounds[name] = [lo, hi]
-        if (lo is not None and value < lo) or (hi is not None and value > hi):
+        if not finite or (lo is not None and value < lo) or (hi is not None and value > hi):
             failing.append(name)
-    measurements["dxmedianfin"] = float(dxmed)
-    measurements["dymedianfin"] = float(dymed)
+    measurements["dxmedianfin"] = _num(dxmed)
+    measurements["dymedianfin"] = _num(dymed)
     measurements["source_counts"] = source_counts
 
     if failing:
@@ -93,7 +105,9 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
         for name, value, lo, hi in tests:
             if name not in failing:
                 continue
-            if lo is None:
+            if value is None or not math.isfinite(value):
+                parts.append(f"{name}={_fmt(value)} not finite")
+            elif lo is None:
                 parts.append(f"{name}={_fmt(value)} > {_fmt(hi)}")
             elif hi is None:
                 parts.append(f"{name}={_fmt(value)} < {_fmt(lo)}")
@@ -110,43 +124,75 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
     return CheckResult(outcome, detail, summary)
 
 
-def _selected_instance_of_run(cur, run_id: str, kind: str, key_json: str) -> list[str]:
+def _identity(cur, source_set_key: dict[str, Any]) -> tuple[int, int, int] | None:
+    """``(expid, sca, fid)`` of the exposure a source set's chain reaches:
+    key.difference -> that difference-image instance's key.l2 -> the
+    ``l2files`` row carrying that instance. ``None`` when any link is
+    missing."""
+    difference = source_set_key.get("difference")
+    if not difference:
+        return None
     cur.execute(
         """
-        SELECT pi.id
-        FROM product_instances pi
-        JOIN attempts a ON a.id = pi.producing_attempt
-        JOIN units u ON u.id = a.unit
-        WHERE pi.run = %s AND pi.kind = %s AND pi.logical_key = %s::jsonb
-          AND u.selected_attempt = pi.producing_attempt
-        ORDER BY pi.id
+        SELECT l.expid, l.sca, l.fid
+        FROM product_instances d
+        JOIN l2files l ON l.instance::text = d.logical_key->>'l2'
+        WHERE d.id = %s AND d.kind = 'difference-image'
         """,
-        (run_id, kind, key_json),
+        (difference,),
     )
-    return [r[0] for r in cur.fetchall()]
+    rows = cur.fetchall()
+    return tuple(rows[0]) if len(rows) == 1 else None
+
+
+#: Source-set instances of one catalog type, from runs other than the
+#: candidate's, whose chain reaches the given (expid, sca, fid).
+_SAME_IDENTITY = """
+    SELECT s.id, s.run, s.custody
+    FROM product_instances s
+    JOIN product_instances d ON d.id::text = s.logical_key->>'difference'
+                            AND d.kind = 'difference-image'
+    JOIN l2files l ON l.instance::text = d.logical_key->>'l2'
+    WHERE s.kind = %s
+      AND s.logical_key->>'catalog_type' = %s
+      AND s.run <> %s
+      AND l.expid = %s AND l.sca = %s AND l.fid = %s
+"""
 
 
 @check("catalog-counts-vs-reference", "1", kind="source-set",
        params=("tolerance", "missing_reference", "reference_run"))
 def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) -> CheckResult:
-    """Result-set row count within a fractional tolerance of the reference's.
+    """Result-set row count within a fractional tolerance of a reference's.
 
-    The candidate's ``result_sets.row_count`` against the reference
-    instance's for the same kind and logical key. The reference is the
-    run ``reference_run``'s instance for the key (selected attempt) when
-    that param is non-empty; otherwise the key's current instance, or --
-    when the candidate itself is current -- the before-instance of the
-    latest promotion that made it current. Passes when |cand - ref| / ref
-    <= tolerance; with no usable reference the outcome is
-    ``missing_reference`` (``pass`` or ``fail``).
+    Logical keys are per run, so the reference is found by science
+    identity (supervisor step 6, 2026-09-24, live-values correction): the
+    candidate source set's ``key.difference`` -> that difference image's
+    ``key.l2`` -> its ``l2files`` row -> ``(expid, sca, fid)``. The
+    reference is a source set of the same ``catalog_type`` from another
+    run whose chain reaches the same triple: the ``reference_run``'s
+    (selected attempt) when that param is non-empty, else the most
+    recently published one with custody ``current``. Passes when
+    |cand - ref| / ref <= tolerance; with no reference the outcome is
+    ``missing_reference`` (``pass`` or ``fail``); a named reference run
+    with no such instance fails.
     """
     tolerance = float(params["tolerance"])
     missing = params["missing_reference"]
     reference_run = params.get("reference_run") or None
+    detail: dict[str, Any] = {"bounds": {"tolerance": tolerance, "missing_reference": missing,
+                                         "reference_run": reference_run},
+                              "measurements": {}, "failing": []}
+
+    def fail(reason: str, failing: str) -> CheckResult:
+        detail.update(reason=reason, failing=[failing])
+        return CheckResult("failed", detail, reason)
+
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT pi.kind, pi.logical_key, rs.instance IS NOT NULL, rs.complete, rs.row_count
+            SELECT pi.kind, pi.logical_key, pi.run, rs.instance IS NOT NULL, rs.complete,
+                   rs.row_count
             FROM product_instances pi
             LEFT JOIN result_sets rs ON rs.instance = pi.id
             WHERE pi.id = %s
@@ -155,57 +201,55 @@ def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) 
         )
         row = cur.fetchone()
         if row is None:
-            return CheckResult("failed", {"reason": "instance does not exist"},
-                               "instance does not exist")
-        kind, logical_key, is_result_set, complete, cand_count = row
-        key_json = json.dumps(logical_key, sort_keys=True)
-        detail: dict[str, Any] = {"bounds": {"tolerance": tolerance,
-                                             "missing_reference": missing,
-                                             "reference_run": reference_run},
-                                  "measurements": {"candidate_row_count": cand_count},
-                                  "failing": []}
-        if not is_result_set or not complete or cand_count is None:
-            reason = ("not a result set" if not is_result_set
-                      else "result set is incomplete" if not complete
-                      else "result set has no row count")
-            detail.update(reason=reason, failing=["candidate_row_count"])
-            return CheckResult("failed", detail, reason)
+            return fail("instance does not exist", "candidate")
+        kind, logical_key, run, is_result_set, complete, cand_count = row
+        detail["measurements"]["candidate_row_count"] = cand_count
+        if not is_result_set:
+            return fail("not a result set", "candidate_row_count")
+        if not complete:
+            return fail("result set is incomplete", "candidate_row_count")
+        if cand_count is None:
+            return fail("result set has no row count", "candidate_row_count")
+        catalog_type = (logical_key or {}).get("catalog_type")
+        identity = _identity(cur, logical_key or {})
+        if catalog_type is None or identity is None:
+            return fail("cannot resolve the candidate's science identity (key.catalog_type, "
+                        "key.difference -> key.l2 -> l2files)", "identity")
+        expid, sca, fid = identity
+        detail["identity"] = {"expid": expid, "sca": sca, "fid": fid,
+                              "catalog_type": catalog_type}
 
-        reference: str | None = None
-        how: str
+        query_args = [kind, catalog_type, run, expid, sca, fid]
         if reference_run:
-            found = _selected_instance_of_run(cur, reference_run, kind, key_json)
-            how = f"run {reference_run}"
-            if len(found) > 1:
-                detail.update(reason=f"reference run {reference_run} has {len(found)} "
-                                     "instances for this key", failing=["reference"])
-                return CheckResult("failed", detail, detail["reason"])
-            reference = found[0] if found else None
+            cur.execute(
+                _SAME_IDENTITY + """
+                  AND s.run = %s
+                  AND EXISTS (SELECT 1 FROM attempts a JOIN units u ON u.id = a.unit
+                              WHERE a.id = s.producing_attempt
+                                AND u.selected_attempt = s.producing_attempt)
+                ORDER BY s.published_at DESC, s.id DESC
+                """,
+                query_args + [reference_run],
+            )
+            found = cur.fetchall()
+            chosen_as = f"run {reference_run}"
+            if len(found) != 1:
+                detail["reference"] = {"instance": None, "run": reference_run,
+                                       "chosen_as": chosen_as}
+                return fail(f"reference run {reference_run} has {len(found)} source sets "
+                            "for this identity", "reference")
         else:
             cur.execute(
-                "SELECT id FROM product_instances WHERE kind = %s AND logical_key = %s::jsonb "
-                "AND custody = 'current'",
-                (kind, key_json),
+                _SAME_IDENTITY + """
+                  AND s.custody = 'current'
+                ORDER BY s.published_at DESC, s.id DESC
+                LIMIT 1
+                """,
+                query_args,
             )
-            current = cur.fetchone()
-            reference = current[0] if current else None
-            how = "current"
-            if reference == instance_id:
-                cur.execute(
-                    """
-                    SELECT pc.before_instance
-                    FROM promotion_changes pc
-                    JOIN promotions p ON p.id = pc.promotion
-                    WHERE pc.kind = %s AND pc.logical_key = %s::jsonb
-                      AND pc.after_instance = %s
-                    ORDER BY p.happened_at DESC, p.id DESC
-                    LIMIT 1
-                    """,
-                    (kind, key_json, instance_id),
-                )
-                previous = cur.fetchone()
-                reference = previous[0] if previous else None
-                how = "previous current (the candidate is current)"
+            found = cur.fetchall()
+            chosen_as = "current"
+        reference, ref_run = (found[0][0], found[0][1]) if found else (None, None)
 
         ref_count = None
         if reference is not None:
@@ -214,18 +258,21 @@ def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) 
             ref_row = cur.fetchone()
             if ref_row is not None and ref_row[0] and ref_row[1] is not None:
                 ref_count = int(ref_row[1])
-    detail["reference"] = {"instance": reference, "chosen_as": how, "row_count": ref_count}
+    detail["reference"] = {"instance": reference, "run": ref_run, "chosen_as": chosen_as,
+                           "row_count": ref_count}
     detail["measurements"]["reference_row_count"] = ref_count
 
     if ref_count is None:
-        reason = (f"no reference ({how}: none)" if reference is None
-                  else f"reference {reference} ({how}) has no complete row count")
-        outcome = "passed" if missing == "pass" else "failed"
+        if reference is not None and reference_run:
+            return fail(f"reference {reference} has no complete row count", "reference")
+        reason = ("no reference (no current source set of this identity in another run)"
+                  if reference is None
+                  else f"reference {reference} has no complete row count")
         detail["reason"] = reason
-        if outcome == "failed":
-            detail["failing"] = ["reference"]
-        return CheckResult(outcome, detail,
-                           f"{reason}; missing_reference={missing}")
+        if missing == "pass":
+            return CheckResult("passed", detail, f"{reason}; missing_reference=pass")
+        detail["failing"] = ["reference"]
+        return CheckResult("failed", detail, f"{reason}; missing_reference=fail")
 
     cand_count = int(cand_count)
     if ref_count == 0:
@@ -233,7 +280,7 @@ def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) 
     else:
         relative = abs(cand_count - ref_count) / ref_count
     detail["measurements"]["relative_difference"] = relative if math.isfinite(relative) else "inf"
-    summary = (f"rows={cand_count} reference={ref_count} ({how}) "
+    summary = (f"rows={cand_count} reference={ref_count} (run {ref_run}) "
                f"relative={relative:.4g} tolerance={tolerance:g}")
     if relative <= tolerance:
         return CheckResult("passed", detail, summary)

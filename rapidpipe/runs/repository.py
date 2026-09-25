@@ -1206,6 +1206,15 @@ def _validate_check_policy(
     ids relied on, or raises :class:`PromotionRefused` (supervisor step 6,
     2026-09-24, R4, A1, A2).
 
+    Requiredness is the policy's own flag, never the ``checks.required``
+    column (which records what the check ran as; A2). Only a row whose
+    ``detail.params`` equal the policy's params for that check qualifies,
+    and of those the latest (``happened_at`` desc, ``id`` desc) decides
+    (R4 amendment, 19:50): the outcome depends on the bounds, so a run
+    checked under ``rebuild-strict@1`` after ``rebuild-trial@1`` must not
+    poison a trial promotion, and a pass under looser ``--param`` bounds
+    must not admit one.
+
     Runs inside the promotion transaction with the advisory lock held; the
     rows relied on are read FOR SHARE so they cannot change under the
     promotion. A check row inserted after this read is not seen (recorded
@@ -1213,8 +1222,7 @@ def _validate_check_policy(
     """
     if not policy_permits_promotion(policy):
         raise PromotionRefused(
-            f"check policy {policy.ref} is not approved (approval "
-            f"{policy.approval!r}); refusing")
+            f"check policy {policy.ref} is not approved; refusing")
     relied_on: list[str] = []
     for kind, instance in after_instances:
         for policy_check in policy.checks_for_kind(kind):
@@ -1545,12 +1553,13 @@ def rollback_promotion(
     the selection it made. The new promotions row records
     ``request_context = {"rollback_of": promotion_id}``.
 
-    The released-image rule and the check-policy gate are not re-applied
-    (no ``check_policy`` is passed; the row records none): a rollback
-    restores a selection that was current before, admitted by that earlier
-    promotion's own checks (or its recorded exception) (supervisor step 6,
-    2026-09-24, R4 and amendment A4). The other eligibility rules still
-    apply.
+    Rollback skips check-policy revalidation (supervisor step 6,
+    2026-09-24, R4 and amendment A4): no ``check_policy`` is passed, so the
+    row records none. As before (supervisor step 5, R8) it also skips the
+    released-image rule. Every other validation in :func:`promote` still
+    runs: the expected-before check, and each restored instance's
+    eligibility (candidate from a selected attempt, retained, complete if a
+    result set, dependencies in project custody, retained and complete).
     """
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM promotions WHERE id = %s", (promotion_id,))

@@ -5,8 +5,11 @@
 name = "rebuild-strict"
 version = "1"
 description = "Strict demonstration policy: bounds the control run cannot meet, so promotion under it is refused."
+# Trial approval recorded by supervisor step 6 under the 2026-09-24 grant;
+# lead re-approval pending (plan-review amendment A1). Approved like trial
+# so that a refusal under it is the failed required check, not the approval.
 approval = "trial"
-approved_by = "supervisor-step-6"
+approved_by = "rusholme"
 auto_promote = false
 
 [[checks]]
@@ -19,11 +22,11 @@ required = true
 scalefacref_lo = 0.99
 scalefacref_hi = 1.01
 rms_max = 0.01
-median_max = 0.5
+median_max = 0.01
 n_min = 0
 n_max = 1000
-ratio_lo = 0.5
-ratio_hi = 2.0
+ratio_lo = 0.9
+ratio_hi = 1.1
 
 [[checks]]
 name = "catalog-counts-vs-reference"
