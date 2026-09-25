@@ -298,10 +298,6 @@ def test_crossmatch_of_date_2_extends_date_1s_selected_set(conn, tmp_path, monke
     inputs = _with_base(tmp_path, load_outputs, date1_outputs, "date2-inputs")
     date2 = _make_run(conn, kind="production", selected_stages=["crossmatch"])
 
-    # Date 1 not yet reconciled: its sets come from unselected attempts -> refused (65).
-    rc, _, _ = _run_crossmatch(conn, monkeypatch, tmp_path, date2, inputs, name="refused")
-    assert rc == int(ExitCode.INPUT_REJECTED)
-
     # Date 1 complete: load and crossmatch selected, as the loop requires.
     succeed_and_select(conn, _producing_attempt(conn, source_set.instance))
     succeed_and_select(conn, date1_attempt)
@@ -331,4 +327,17 @@ def test_crossmatch_refuses_another_runs_scratch_base(conn, tmp_path, monkeypatc
     inputs = _with_base(tmp_path, load_outputs, date1_outputs, "scratch-base-inputs")
     reader = _make_run(conn, kind="scratch", selected_stages=["crossmatch"])
     rc, _, _ = _run_crossmatch(conn, monkeypatch, tmp_path, reader, inputs, name="reader")
+    assert rc == int(ExitCode.INPUT_REJECTED)
+
+
+def test_crossmatch_refuses_date_1s_sets_before_their_attempts_are_selected(
+        conn, tmp_path, monkeypatch):
+    # A refusal rolls back the test's transaction, so it is the last step.
+    date1, load_outputs = _loaded_source_set(conn, tmp_path, monkeypatch)
+    rc, _, date1_outputs = _run_crossmatch(conn, monkeypatch, tmp_path, date1, load_outputs,
+                                           name="date1")
+    assert rc == 0
+    inputs = _with_base(tmp_path, load_outputs, date1_outputs, "unselected-inputs")
+    date2 = _make_run(conn, kind="production", selected_stages=["crossmatch"])
+    rc, _, _ = _run_crossmatch(conn, monkeypatch, tmp_path, date2, inputs, name="refused")
     assert rc == int(ExitCode.INPUT_REJECTED)
