@@ -329,6 +329,10 @@ def test_only_failed_refusals(held, cli_db, capsys):
                            "--max-attempts", "2")
     assert code == 64 and "--stages, --max-attempts not accepted with --only-failed" in err
 
+    code, _, err = _create(capsys, "--seed", seed, "--only-failed",
+                           "--check-policy", "rebuild-strict@1", "--auto-promote")
+    assert code == 64 and "--check-policy, --auto-promote not accepted" in err
+
     code, _, err = _create(capsys, "--seed", "0" * 26, "--only-failed")
     assert code == 64 and "does not exist" in err
 
