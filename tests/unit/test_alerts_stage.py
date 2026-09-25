@@ -382,3 +382,26 @@ def test_an_association_set_without_an_integer_field_exits_65(tmp_path, monkeypa
     rc, _, db = _run(tmp_path, monkeypatch, inputs, seed)
     assert rc == int(ExitCode.INPUT_REJECTED)
     assert db.commits == 0
+
+
+def test_merges_count_fallback_counts_a_pair_in_base_and_extension_once(
+        tmp_path, monkeypatch, prepared):
+    """No statistics set named: nDiaSources is the distinct sources across the chain."""
+    inputs, _, seed = prepared
+    _extend_from_a_base(seed)
+    # (9003, 105) in the extension, and the same pair in its base
+    pair = next(m for m in seed["merges"]
+                if m["result_set"] == ASSOCIATION_SET and m["sid"] == 105)
+    seed["merges"].append({**pair, "result_set": BASE_SET})
+    manifest = _manifest_inputs(inputs)
+    manifest["inputs"]["result_sets"] = [SOURCE_SET, ASSOCIATION_SET, ASSOCIATION_SET_2]
+    _rewrite(inputs, manifest)
+    rc, outputs, _ = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == 0
+    container = next(e for e in Manifest.read(outputs / "manifest.json").outputs
+                     if e.kind == "alert-container")
+    raw = (outputs / container.primary).read_bytes()
+    by_sid = {a["diaSourceId"]: a for a in fastavro.reader(io.BytesIO(raw))}
+    assert by_sid[105]["diaObject"]["nDiaSources"] == 1
+    # 9001: 103, 104 in the extension, 50, 51 in the base -- four distinct sources
+    assert by_sid[103]["diaObject"]["nDiaSources"] == 4

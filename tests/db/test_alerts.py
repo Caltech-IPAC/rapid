@@ -60,12 +60,13 @@ def _register_set(conn, run_id, *, stage, kind, key, row_count, unit_suffix=""):
     return instance, attempt_id
 
 
-def _seeded_chain(conn, tmp_path, monkeypatch, *, extend_base=False):
+def _seeded_chain(conn, tmp_path, monkeypatch, *, extend_base=False, duplicate_pair=False):
     """Everything up to the alerts invocation: returns (run, diff outputs, sets, sids).
 
     With ``extend_base``, the association set extends a base set as crossmatch
     leaves them: the object row stays in the base that made it, the new
-    detection's merges rows are in the extending set.
+    detection's merges rows are in the extending set. With ``duplicate_pair``
+    too, the kept source's (aid, sid) merges row is also in the base.
     """
     run_id, diff_outputs = _registered_difference(conn, tmp_path, monkeypatch)
     rc, _, load_outputs = _run_load(conn, monkeypatch, tmp_path, run_id, diff_outputs)
@@ -98,6 +99,10 @@ def _seeded_chain(conn, tmp_path, monkeypatch, *, extend_base=False):
                     "(%s, %s, %s, %s, %s), (%s, %s, %s, %s, %s)",
                     (aid, kept["sid"], run_id, assoc_attempt, association_set,
                      orphan_aid, orphan["sid"], run_id, assoc_attempt, association_set))
+        if duplicate_pair:
+            cur.execute("INSERT INTO merges_5321 (aid, sid, run, attempt, result_set) VALUES "
+                        "(%s, %s, %s, %s, %s)",
+                        (aid, kept["sid"], run_id, base_attempt, base_set))
         object_set, object_attempt = ((base_set, base_attempt) if extend_base
                                       else (association_set, assoc_attempt))
         cur.execute("INSERT INTO astroobjects_5321 (aid, ra0, dec0, flux0, run, attempt, "
@@ -238,7 +243,7 @@ def test_an_unknown_result_set_kind_exits_65(conn, tmp_path, monkeypatch):
 def test_an_object_in_the_base_set_is_found_for_a_detection_in_the_extending_set(
         conn, tmp_path, monkeypatch):
     run_id, diff_outputs, sets, ids = _seeded_chain(conn, tmp_path, monkeypatch,
-                                                    extend_base=True)
+                                                    extend_base=True, duplicate_pair=True)
     inputs, difference = _input_set(tmp_path, diff_outputs, sets)
     rc, attempt_id, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
     assert rc == int(ExitCode.SUCCESS)
@@ -316,3 +321,24 @@ def test_two_fields_two_association_sets_and_their_statistics(conn, tmp_path, mo
         cur.execute("SELECT candidate, object FROM alert_outbox WHERE attempt = %s "
                     "ORDER BY record_ordinal", (attempt_id,))
         assert dict(cur.fetchall()) == {ids["kept"]: ids["aid"], ids["orphan"]: aid2}
+
+
+def test_the_merges_count_fallback_counts_a_duplicated_pair_once(conn, tmp_path, monkeypatch):
+    """No statistics set named: nDiaSources falls back to the distinct sources across the chain.
+
+    The kept source's (aid, sid) pair is in the base and in its extension;
+    it is one source, so nDiaSources is 1.
+    """
+    run_id, diff_outputs, sets, ids = _seeded_chain(conn, tmp_path, monkeypatch,
+                                                    extend_base=True, duplicate_pair=True)
+    source_set, association_set, _ = sets
+    inputs, _ = _input_set(tmp_path, diff_outputs, (source_set, association_set))
+    rc, _, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
+    assert rc == int(ExitCode.SUCCESS)
+    container = next(e for e in Manifest.read(outputs / "manifest.json").outputs
+                     if e.kind == "alert-container")
+    raw = (outputs / container.primary).read_bytes()
+    alerts_read = list(fastavro.reader(io.BytesIO(raw)))
+    assert [a["diaSourceId"] for a in alerts_read] == [ids["kept"]]
+    assert alerts_read[0]["diaObject"]["nDiaSources"] == 1
+    assert alerts_read[0]["diaObject"]["raSigma"] is None

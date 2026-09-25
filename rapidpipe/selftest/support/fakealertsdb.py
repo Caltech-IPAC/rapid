@@ -258,7 +258,7 @@ class FakeAlertsDatabase:
                 seen.add((m["sid"], m["aid"]))
                 obj = objects.get(m["aid"])
                 stats = meta.get(m["aid"]) if obj else None
-                count = sum(1 for m2 in merges if obj and m2["aid"] == obj["aid"])
+                count = len({m2["sid"] for m2 in merges if obj and m2["aid"] == obj["aid"]})
                 rows.append({
                     "sid": m["sid"], "merges_aid": m["aid"], "association_set": root,
                     "aid": obj["aid"] if obj else None,
