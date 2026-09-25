@@ -795,6 +795,20 @@ class _StartWalk:
                 if (row is not None and row.state == "running" and row.last_attempt
                         and row.last_disposition is None):
                     attempt_id, job_id, outputs = row.last_attempt, row.last_job, row.last_output
+                    if job_id is None:
+                        # Allocation committed but the Batch submit or
+                        # record_scheduler_job failed: reconcile skips an
+                        # attempt without a job id, so waiting never ends,
+                        # and run cancel needs a job id too.
+                        raise _Exit(
+                            int(ExitCode.USAGE),
+                            f"run {args.run_id} stage {stage} unit {unit_id}: attempt "
+                            f"{attempt_id} is running but has no scheduler job (its "
+                            "submission failed after the attempt was allocated); "
+                            "reconcile cannot resolve it and run cancel cannot "
+                            "terminate it, so it must be resolved by hand: check "
+                            "Batch for a job named for the attempt, then record the "
+                            "attempt's result before rerunning run start")
                     print(f"{stage} {unit_id} attempt {attempt_id} already in flight",
                           flush=True)
                 else:
