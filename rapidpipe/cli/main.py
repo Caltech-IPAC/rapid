@@ -609,19 +609,74 @@ _ONLY_FAILED_COPIED_OPTIONS = (
 )
 
 
-def _run_create_only_failed_command(args: argparse.Namespace) -> int:
-    """``run create --seed <run> --only-failed``: a run re-running the
-    seed's non-complete units (supervisor step 6, 2026-09-24, R7).
+class OnlyFailedKindMismatch(RunModelError):
+    """``run create --seed <run> --only-failed --kind K`` with K not the seed's kind."""
+
+
+def create_only_failed_run(
+    conn,
+    seed_run: str,
+    *,
+    owner: str | None = None,
+    purpose: str | None = None,
+    kind: str | None = None,
+):
+    """``run create --seed <run> --only-failed``'s one code path (the
+    processing-date loop's ``--retry-failed`` uses it too): a run re-running
+    the seed's non-complete units (supervisor step 6, 2026-09-24, R7).
 
     Configuration is copied from the seed row
-    (:func:`~rapidpipe.runs.repository.failed_rerun_plan`); ``--owner`` and
-    ``--purpose`` may be given, ``--kind`` only if it equals the seed's, and
-    every other configuration option is refused. The run and its seeded
-    units (:func:`~rapidpipe.runs.repository.seed_failed_units`) commit
-    together; the run id is printed on stdout, the seeded units on stderr.
+    (:func:`~rapidpipe.runs.repository.failed_rerun_plan`); ``owner`` and
+    ``purpose`` may be given, ``kind`` only if it equals the seed's
+    (:class:`OnlyFailedKindMismatch` otherwise). Creates the run and its
+    seeded units (:func:`~rapidpipe.runs.repository.seed_failed_units`);
+    does not commit. Returns ``(run id, plan, seeded unit ids)``; a refusal
+    is a :class:`RunModelError` (``SeedRefused``, ``RunNotFound``).
     """
     from rapidpipe.runs.repository import create_run, failed_rerun_plan, seed_failed_units
 
+    plan = failed_rerun_plan(conn, seed_run)
+    seed = plan.seed
+    if kind is not None and kind != seed["kind"]:
+        raise OnlyFailedKindMismatch(
+            f"--kind {kind} differs from seed run {seed_run}'s kind {seed['kind']}; a "
+            "--only-failed re-run keeps the seed's kind")
+    with conn.cursor() as cur:
+        schema_version = _last_applied_schema_version(cur) or "unknown"
+    purpose = purpose or (
+        f"re-run of failed units of {seed_run}: {seed['purpose']}"
+        if seed["purpose"] else f"re-run of failed units of {seed_run}")
+    run_id = create_run(
+        conn,
+        kind=seed["kind"],
+        owner=owner or seed["owner"],
+        purpose=purpose,
+        selected_stages=plan.stages,
+        code_revision=seed["code_revision"],
+        image_digest=seed["image_digest"],
+        schema_version=schema_version,
+        settings_overlay_ref=seed["settings_overlay_ref"],
+        input_selection_ref=seed["input_selection_ref"],
+        lane=seed["lane"],
+        resource_profile=seed["resource_profile"],
+        database_target=seed["database_target"],
+        max_attempts_per_unit=seed["max_attempts_per_unit"],
+        auto_promote=False,
+        check_policy_ref=seed["check_policy_ref"],
+        release=seed["release"],
+        seed_run=seed_run,
+    )
+    unit_ids = seed_failed_units(conn, seed_run=seed_run, new_run=run_id)
+    return run_id, plan, unit_ids
+
+
+def _run_create_only_failed_command(args: argparse.Namespace) -> int:
+    """``run create --seed <run> --only-failed``: :func:`create_only_failed_run`
+    from the command line. ``--owner`` and ``--purpose`` may be given,
+    ``--kind`` only if it equals the seed's, and every other configuration
+    option is refused. The run and its seeded units commit together; the run
+    id is printed on stdout, the seeded units on stderr.
+    """
     name = "rapidpipe run create"
     if args.seed is None:
         sys.stderr.write(f"{name}: --only-failed requires --seed <run>\n")
@@ -647,40 +702,8 @@ def _run_create_only_failed_command(args: argparse.Namespace) -> int:
 
     with cm as conn:
         try:
-            plan = failed_rerun_plan(conn, args.seed)
-            seed = plan.seed
-            if args.kind is not None and args.kind != seed["kind"]:
-                conn.rollback()
-                sys.stderr.write(
-                    f"{name}: --kind {args.kind} differs from seed run {args.seed}'s "
-                    f"kind {seed['kind']}; a --only-failed re-run keeps the seed's kind\n")
-                return int(ExitCode.USAGE)
-            with conn.cursor() as cur:
-                schema_version = _last_applied_schema_version(cur) or "unknown"
-            purpose = args.purpose or (
-                f"re-run of failed units of {args.seed}: {seed['purpose']}"
-                if seed["purpose"] else f"re-run of failed units of {args.seed}")
-            run_id = create_run(
-                conn,
-                kind=seed["kind"],
-                owner=args.owner or seed["owner"],
-                purpose=purpose,
-                selected_stages=plan.stages,
-                code_revision=seed["code_revision"],
-                image_digest=seed["image_digest"],
-                schema_version=schema_version,
-                settings_overlay_ref=seed["settings_overlay_ref"],
-                input_selection_ref=seed["input_selection_ref"],
-                lane=seed["lane"],
-                resource_profile=seed["resource_profile"],
-                database_target=seed["database_target"],
-                max_attempts_per_unit=seed["max_attempts_per_unit"],
-                auto_promote=False,
-                check_policy_ref=seed["check_policy_ref"],
-                release=seed["release"],
-                seed_run=args.seed,
-            )
-            unit_ids = seed_failed_units(conn, seed_run=args.seed, new_run=run_id)
+            run_id, plan, unit_ids = create_only_failed_run(
+                conn, args.seed, owner=args.owner, purpose=args.purpose, kind=args.kind)
             conn.commit()
         except RunModelError as exc:
             conn.rollback()
@@ -690,6 +713,7 @@ def _run_create_only_failed_command(args: argparse.Namespace) -> int:
             conn.rollback()
             raise
 
+    seed = plan.seed
     sys.stderr.write(
         f"seeded {len(unit_ids)} unit(s) from {seed['kind']} run {args.seed}; stages "
         f"{','.join(plan.stages)} (from seed position {plan.position}): "
