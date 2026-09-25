@@ -415,6 +415,7 @@ def _loop_world(monkeypatch, rows, results):
     monkeypatch.setattr(loop, "process_date", process)
     monkeypatch.setattr(loop, "try_lock", lambda conn, schedule: True)
     monkeypatch.setattr(loop, "unlock", lambda conn, schedule: None)
+    monkeypatch.setattr(loop, "reopenable", lambda conn, row: False)
     tools = loop.LoopTools(walk=None, create_run=None, storage=None, inputs_root=None,
                            out=lambda line: None)
     return spec, tools, calls
@@ -445,6 +446,64 @@ def test_run_loop_a_failed_row_stops_before_later_dates(monkeypatch):
                                      {"2027-10-02": 0})
     assert loop.run_loop(object(), spec, tools) == 1
     assert calls == []
+
+
+def test_run_loop_reopens_a_failed_row_with_no_failed_units_on_the_same_run(monkeypatch):
+    failed = _row(state="failed", record={"run": "RUN1", "failure": "admit U: inputs refused",
+                                          "units": []})
+    spec, tools, calls = _loop_world(monkeypatch, {"2027-10-01": failed},
+                                     {"2027-10-01": 0, "2027-10-02": 0})
+    monkeypatch.setattr(loop, "reopenable", lambda conn, row: row.state == "failed")
+    repointed = {}
+    monkeypatch.setattr(loop, "repoint_row", lambda conn, s, d, run, record: repointed.update(
+        date=str(d), run=run, record=record))
+    conn = _Conn()
+    assert loop.run_loop(conn, spec, tools) == 0  # no --retry-failed needed
+    assert calls == ["2027-10-01", "2027-10-02"]
+    assert repointed["run"] == "RUN1" and repointed["date"] == "2027-10-01"
+    record = repointed["record"]
+    assert "failure" not in record and "units" not in record
+    assert record["previous_failures"] == [{"run": "RUN1",
+                                            "failure": "admit U: inputs refused"}]
+    assert len(record["reopened"]) == 1
+    assert conn.commits == 1
+
+
+class _UnitsConn(_Conn):
+    """``reopenable``'s one query: whether the run has a failed unit."""
+
+    def __init__(self, failed_units):
+        super().__init__()
+        self.failed_units = failed_units
+
+    def cursor(self):
+        conn = self
+
+        class _Cur:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params):
+                assert "state IN ('failed', 'cancelled')" in sql
+
+            def fetchone(self):
+                return (1,) if conn.failed_units else None
+
+        return _Cur()
+
+
+@pytest.mark.parametrize("state, run_state, failed_units, expected", [
+    ("failed", "open", False, True),
+    ("failed", "open", True, False),       # a unit failed: --retry-failed's path
+    ("failed", "finished", False, False),  # a finished run takes no new units
+    ("complete", "open", False, False),
+])
+def test_reopenable(monkeypatch, state, run_state, failed_units, expected):
+    monkeypatch.setattr(loop, "run_state", lambda conn, run: run_state)
+    assert loop.reopenable(_UnitsConn(failed_units), _row(state=state)) is expected
 
 
 def test_run_loop_exits_75_on_a_timeout(monkeypatch):

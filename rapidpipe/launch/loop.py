@@ -40,7 +40,9 @@ uses. The rulings this module implements, one line each:
   run seeded from the row's run through step 6's ``run create --seed <run>
   --only-failed`` path (the row repointed to it, the old run id appended to
   ``record.previous_runs``), then resumed; the row's completion commits with
-  ``finish_run``.
+  ``finish_run``. A ``failed`` row whose run is open with no failed or
+  cancelled unit (a refusal, not a unit's failure) is reopened on the same
+  run by any ``loop run`` (``record.reopened`` gets the time) and resumed.
 - Codex 7-2: within a date every unit a phase can run is walked before the
   date fails (the detector-image chains, then maintain, then the field
   chains, then alerts), so a seeded re-run, whose stage list starts at its
@@ -1248,6 +1250,38 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
 _FAILURE_KEYS = ("failure", "reason", "jobless_attempt")
 
 
+def reopenable(conn, row: LoopRow) -> bool:
+    """A ``failed`` row whose run can simply be resumed (step 9, R4
+    follow-up): the run is still ``open`` and has no ``failed`` or
+    ``cancelled`` unit -- the date failed on a refusal (an input manifest
+    refused before submission, or a later stage's composition refused with
+    every existing unit complete), not on a unit. A row whose run has a
+    failed unit takes ``--retry-failed``'s seeded path instead; a finished
+    run cannot take new units, so its row is not reopened either."""
+    if row.state != "failed" or run_state(conn, row.run) != "open":
+        return False
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM units WHERE run = %s AND state IN ('failed', 'cancelled') "
+                    "LIMIT 1", (row.run,))
+        return cur.fetchone() is None
+
+
+def reopen_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> None:
+    """Reopen a :func:`reopenable` row on the same run: ``open`` again, its
+    failure moved to ``previous_failures`` and the reopen's time appended to
+    ``record.reopened``, committed; the caller then resumes the date."""
+    record = dict(row.record)
+    failed = {k: record.pop(k) for k in _FAILURE_KEYS if k in record}
+    record.pop("units", None)
+    record.setdefault("previous_failures", []).append({"run": row.run, **failed})
+    record["reopened"] = [*record.get("reopened", []),
+                          _dt.datetime.now(_dt.timezone.utc).isoformat()]
+    repoint_row(conn, spec.schedule, row.processing_date, row.run, record)
+    conn.commit()
+    tools.out(f"date={row.processing_date} run={row.run} reopened (failed with no failed "
+              "units; resuming the same run)")
+
+
 def retry_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> int:
     """``--retry-failed`` on a ``failed`` row (A4, Codex 7-2): create a run
     seeded from the row's run through step 6's ``run create --seed <run>
@@ -1312,7 +1346,9 @@ def run_loop(conn, spec: LoopSpec, tools: LoopTools, *, dates: Sequence[_dt.date
     try:
         for day in chosen:
             row = loop_row(conn, spec.schedule, day.processing_date)
-            if row is not None and row.state == "failed" and retry_failed:
+            if row is not None and reopenable(conn, row):
+                reopen_date(conn, spec, row, tools)
+            elif row is not None and row.state == "failed" and retry_failed:
                 code = retry_date(conn, spec, row, tools)
                 if code != EXIT_OK:
                     return code
@@ -1351,6 +1387,8 @@ def plan(conn, spec: LoopSpec, tools: LoopTools, *,
             action, run = "create", None
         elif row.state == "open":
             action, run = "resume", row.run
+        elif reopenable(conn, row):
+            action, run = "reopen", row.run
         else:
             action, run = f"skip ({row.state})", row.run
         previous_rows = previous_complete_rows(conn, spec.schedule, day.processing_date)
