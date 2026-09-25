@@ -393,6 +393,21 @@ def test_start_duplicate_or_unprefixed_template_is_refused(world, capsys):
     assert "--inputs given twice for stage 'admit'" in capsys.readouterr().err
 
 
+def test_start_attempt_running_without_a_scheduler_job_exits_64(world, capsys):
+    """Allocation committed but submit/record_scheduler_job failed: reconcile
+    never resolves it, so start refuses instead of polling to timeout."""
+    w = world(["admit"])
+    u = w.unit("admit", "U")
+    u["attempts"].append({"id": "A9", "disposition": None, "job": None,
+                          "out": "s3://b/runs/R/admit/U/A9", "polls": 0})
+    u["state"] = "running"
+    assert cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://d"]) == 64
+    err = capsys.readouterr().err
+    assert "run R stage admit unit U: attempt A9" in err
+    assert "no scheduler job" in err and "resolved by hand" in err
+    assert w.submits == [] and w.reconciles == 0
+
+
 def test_start_batch_error_exits_75(world, monkeypatch, capsys):
     world(["admit"])
 
