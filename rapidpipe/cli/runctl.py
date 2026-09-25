@@ -59,6 +59,7 @@ from rapidpipe.launch.batch import (
 )
 from rapidpipe.products.manifest import Manifest, ManifestError, Member, OutputEntry, Unit
 from rapidpipe.products.storage import Location, LocationError, join, parse_location
+from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.repository import RunModelError
 from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
 
@@ -263,6 +264,10 @@ def _with_connection(command: str, body: Callable[[Any], int], *,
             conn.rollback()
             sys.stderr.write(f"{prog} {command}: {exc}\n")
             return exc.code
+        except InputsRefused as exc:
+            conn.rollback()
+            sys.stderr.write(f"{prog} {command}: {exc}\n")
+            return int(ExitCode.INPUT_REJECTED)
         except (RunModelError, DependencyIncomplete, MissingEnvironmentVariable,
                 main.RegisterUnitIdError, LocationError, ManifestError, *usage_errors) as exc:
             conn.rollback()

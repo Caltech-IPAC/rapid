@@ -622,6 +622,98 @@ def test_mark_run_deleting_refuses_outside_dependency(conn):
         repo.mark_run_deleting(conn, run_id, requested_by="brusholme")
 
 
+# R3 (supervisor step 9, 2026-09-25): the guard counts only LIVE
+# consumers; a deleted consumer's tombstones stop blocking its producer.
+
+def _delete_scratch_run(conn, run_id):
+    """What cleanup.delete_run does to the run-model rows: fence, mark the
+    run's instances deleted, record completion (no S3, no science rows)."""
+    repo.mark_run_deleting(conn, run_id, requested_by="brusholme")
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE product_instances SET deletion_state = 'deleted' WHERE run = %s",
+            (run_id,))
+    repo.mark_run_deleted(conn, run_id)
+
+
+def _run_state(conn, run_id):
+    with conn.cursor() as cur:
+        cur.execute("SELECT state FROM runs WHERE id = %s", (run_id,))
+        return cur.fetchone()[0]
+
+
+def test_a_deleted_consumers_dependency_edge_no_longer_blocks_the_producer(conn):
+    producer_run = _make_run(conn, kind="scratch")
+    _, _, _, producer_instance = _full_chain_to_current_candidate(
+        conn, producer_run, logical_key={"unit": "e001/SCA01", "v": "r3-dep"})
+
+    consumer_run = _make_run(conn, kind="scratch")
+    stage, unit_id = _make_unit(conn, consumer_run)
+    attempt_id = _succeed_and_select(conn, consumer_run, stage, unit_id)
+    _register_simple_instance(
+        conn, consumer_run, stage, attempt_id,
+        logical_key={"unit": "e001/SCA01", "v": "r3-dep-consumer"},
+        input_products={"difference-image": producer_instance})
+
+    # B alive: A refuses.
+    with pytest.raises(repo.DeletionRefused, match="dependency"):
+        repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
+    assert _run_state(conn, producer_run) == "open"
+
+    _delete_scratch_run(conn, consumer_run)
+    repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
+    assert _run_state(conn, producer_run) == "deleting"
+    # The tombstone edge is kept as history.
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM dependencies WHERE producer_instance = %s",
+                    (producer_instance,))
+        assert cur.fetchone() == (1,)
+
+
+def test_a_deleted_consumers_unit_inputs_no_longer_block_the_producer(conn):
+    producer_run = _make_run(conn, kind="scratch")
+    _, _, _, producer_instance = _full_chain_to_current_candidate(
+        conn, producer_run, logical_key={"unit": "e001/SCA01", "v": "r3-ui"})
+
+    consumer_run = _make_run(conn, kind="scratch")
+    stage, unit_id = _make_unit(conn, consumer_run)
+    repo.bind_unit_inputs(conn, consumer_run, stage, unit_id, [producer_instance])
+    _succeed_and_select(conn, consumer_run, stage, unit_id)
+
+    with pytest.raises(repo.DeletionRefused, match="unit_inputs"):
+        repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
+
+    # A consumer that is only 'deleting' (cleanup not finished) still blocks.
+    repo.mark_run_deleting(conn, consumer_run, requested_by="brusholme")
+    with pytest.raises(repo.DeletionRefused, match="unit_inputs"):
+        repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
+
+    repo.mark_run_deleted(conn, consumer_run)
+    repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
+    assert _run_state(conn, producer_run) == "deleting"
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM unit_inputs WHERE producer_instance = %s",
+                    (producer_instance,))
+        assert cur.fetchone() == (1,)
+
+
+def test_a_live_consumer_in_another_run_still_blocks_after_a_third_run_is_deleted(conn):
+    producer_run = _make_run(conn, kind="scratch")
+    _, _, _, producer_instance = _full_chain_to_current_candidate(
+        conn, producer_run, logical_key={"unit": "e001/SCA01", "v": "r3-mixed"})
+    consumers = []
+    for _ in range(2):
+        run_id = _make_run(conn, kind="scratch")
+        stage, unit_id = _make_unit(conn, run_id)
+        repo.bind_unit_inputs(conn, run_id, stage, unit_id, [producer_instance])
+        _succeed_and_select(conn, run_id, stage, unit_id)
+        consumers.append(run_id)
+
+    _delete_scratch_run(conn, consumers[0])
+    with pytest.raises(repo.DeletionRefused, match="1 unit_inputs"):
+        repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
+
+
 def test_mark_run_deleted_refuses_if_not_deleting(conn):
     run_id = _make_run(conn, kind="scratch")
     with pytest.raises(repo.DeletionRefused):

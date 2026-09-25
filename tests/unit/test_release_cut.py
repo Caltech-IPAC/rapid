@@ -279,3 +279,58 @@ def test_verify_passes_then_reports_a_moved_remote_tag_and_live_drift(setup, tmp
     problems = core.verify(db, "rebuild-v0.1", repo, hooks, out=lambda _l: None)
     assert any("different sha256" in p for p in problems)
     assert any("live job definitions" in p for p in problems)
+
+
+# ----------------------------------------------------------------------
+# R8 (supervisor step 9, 2026-09-25): concurrent cuts are serialised by
+# the record -- no new cut while a releases row is not complete, unless
+# --resume names it.
+# ----------------------------------------------------------------------
+
+def test_a_new_cut_is_refused_before_tagging_while_a_release_is_unfinished(setup):
+    repo, hooks, log, db = setup
+    (hooks / "fail-deploy").write_text("")
+    with pytest.raises(HookFailed):
+        _cut(db, repo, hooks)
+    assert db.release("rebuild-v0.1")["state"] == "built"
+    (hooks / "fail-deploy").unlink()
+    log.write_text("")
+
+    with pytest.raises(ReleaseRefused,
+                       match=r"rebuild-v0\.1 \(state 'built'\) is not complete.*"
+                             r"--resume rebuild-v0\.1"):
+        _cut(db, repo, hooks)
+    # Refused before tagging: no second tag locally or at the remote, no
+    # hook ran, no row written.
+    assert git(repo, "tag", "-l").split() == ["rebuild-v0.1"]
+    assert "rebuild-v0.2" not in git(repo, "ls-remote", "--tags", "origin")
+    assert log_lines(log) == []
+    assert db.release("rebuild-v0.2") is None
+    # An explicit --tag for a new release is refused the same way.
+    with pytest.raises(ReleaseRefused, match="rebuild-v0.1"):
+        _cut(db, repo, hooks, tag="rebuild-v0.2")
+
+
+def test_resume_of_the_unfinished_release_is_allowed_and_then_a_new_cut_proceeds(setup):
+    repo, hooks, _log, db = setup
+    (hooks / "fail-deploy").write_text("")
+    with pytest.raises(HookFailed):
+        _cut(db, repo, hooks)
+    (hooks / "fail-deploy").unlink()
+
+    release, _ = _cut(db, repo, hooks, resume="rebuild-v0.1")
+    assert release.state == "complete"
+    release, _ = _cut(db, repo, hooks)
+    assert release.tag == "rebuild-v0.2"
+    assert release.state == "complete"
+
+
+def test_resume_of_a_different_tag_is_refused_while_another_is_unfinished(setup):
+    repo, hooks, _log, db = setup
+    _cut(db, repo, hooks)                        # rebuild-v0.1 complete
+    (hooks / "fail-deploy").write_text("")
+    with pytest.raises(HookFailed):
+        _cut(db, repo, hooks)                    # rebuild-v0.2 stuck at built
+    (hooks / "fail-deploy").unlink()
+    with pytest.raises(ReleaseRefused, match=r"rebuild-v0\.2 \(state 'built'\)"):
+        _cut(db, repo, hooks, resume="rebuild-v0.1")
