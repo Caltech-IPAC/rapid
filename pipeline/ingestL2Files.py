@@ -2258,6 +2258,7 @@ if __name__ == '__main__':
 
     if os.getenv('ROMANTESSELLATIONDBNAME') is None:
         print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
+        print("terminating_exitcode =",exit_code_config)
         exit(exit_code_config)
 
 
@@ -2265,6 +2266,7 @@ if __name__ == '__main__':
 
     if not os.path.isdir(subdir_work):
         print(f"*** Error: Work directory {subdir_work} does not exist; quitting...")
+        print("terminating_exitcode =",exit_code_no_input)
         exit(exit_code_no_input)
 
 
@@ -2273,6 +2275,7 @@ if __name__ == '__main__':
     dbh = db.RAPIDDB()
 
     if dbh.exit_code >= 64:
+        print("terminating_exitcode =",dbh.exit_code)
         exit(dbh.exit_code)
 
     ingested_l2file_times = {}
@@ -2288,6 +2291,7 @@ if __name__ == '__main__':
             dbh.close()
 
             print("*** Error: Cannot tell what has already been ingested; quitting...")
+            print("terminating_exitcode =",exit_code)
             exit(exit_code)
 
         print(f"n_ingested_fits_files = {len(ingested_l2file_times)}")
@@ -2385,6 +2389,7 @@ if __name__ == '__main__':
 
     if len(input_asdf_files) == 0:
         print("Nothing to ingest; exiting...")
+        print("terminating_exitcode =",0)
         exit(0)
 
 
