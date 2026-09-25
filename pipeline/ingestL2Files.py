@@ -129,6 +129,12 @@ the steps that handle the FITS file, so every line belonging to one unit of work
 carries the same identifier.  It is what makes the log usable at all: NUM_CORES
 workers share one output stream and their lines interleave.
 
+The top-level steps partition the file's time and sum to "ingest L2 file".  Two
+further steps -- the limiting-magnitude computation and the PSF download it
+needs -- are reported from INSIDE "register L2 file in database" and are already
+counted in it, so summing every line in the log double-counts them.  Sum the
+top-level steps, or grep one step at a time.
+
 
 Exit codes
 ----------
@@ -446,6 +452,34 @@ science_image_keywords = ["FILTER",
                           "SWNAME",
                           "SWVERS",
                           "CREATED"]
+
+
+#-------------------------------------------------------------------------------------------------------------
+# Reporting of elapsed times.
+#-------------------------------------------------------------------------------------------------------------
+
+def log_elapsed_time(action,start_time,l2_file):
+
+    '''
+    Report how long one step of one file's ingest took, and return the time it ended, which is
+    the start of the next step.
+
+    Every line reads
+
+        Elapsed time in seconds to <action> = <seconds> (<file>)
+
+    The common opening is what makes the log greppable: one grep collects a single step across
+    a whole run, and the elapsed times can be summed or averaged straight out of it.  The file
+    in parentheses is what makes that possible at all, since num_cores workers share this
+    output stream and their lines interleave; without it a line could not be attributed to the
+    file it describes.
+    '''
+
+    end_time = time.time()
+
+    print(f"Elapsed time in seconds to {action} = {end_time - start_time} ({l2_file})")
+
+    return end_time
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -1410,13 +1444,18 @@ def register_exposure(dbh,roman_tessellation_db,header,wcs):
 psf_file_cache = {}
 
 
-def get_psf_file(dbh,fid,sca):
+def get_psf_file(dbh,fid,sca,l2_file):
 
     '''
     Local path of the science-image PSF for a filter and SCA, or None if there is none.
 
     The PSF comes from the PSFs database table, the same source the science pipeline uses, so
     the limiting magnitude is computed with the very PSF the photometry will later use.
+
+    `l2_file` names the file being ingested, for the timing line.  Only a download is timed,
+    not a cache hit: the cache is keyed by filter and SCA, so after the first few files every
+    call returns immediately, and reporting that would bury the downloads that actually cost
+    something under tens of thousands of lines saying nothing happened.
     '''
 
     key = (fid,sca)
@@ -1442,8 +1481,13 @@ def get_psf_file(dbh,fid,sca):
 
     local_psf_filename = f"{subdir_work}/psf_fid{fid}_sca{sca}_pid{os.getpid()}.fits"
 
+    psf_download_start_time = time.time()
+
     download_cmd = ['aws','s3','cp',s3_full_name_psf,local_psf_filename]
     exitcode_from_download_cmd = util.execute_command(download_cmd)
+
+    log_elapsed_time(f"download PSF file for fid,sca = {fid},{sca} from S3 bucket",
+                     psf_download_start_time,l2_file)
 
     if exitcode_from_download_cmd != 0 or not os.path.exists(local_psf_filename):
         print(f"*** Warning: Could not download PSF {s3_full_name_psf}; "
@@ -1456,7 +1500,7 @@ def get_psf_file(dbh,fid,sca):
     return local_psf_filename
 
 
-def compute_limmag(dbh,fits_filename,fid,sca):
+def compute_limmag(dbh,fits_filename,fid,sca,l2_file):
 
     '''
     The 5-sigma point-source limiting magnitude of an L2 file, or None.
@@ -1465,12 +1509,18 @@ def compute_limmag(dbh,fits_filename,fid,sca):
     is left to rapid_data_analysis, which reads both from the header.  Returns None rather
     than raising, because a limiting magnitude that cannot be computed must leave the column
     NULL without stopping the ingest of an otherwise good file.
+
+    The timing covers the computation alone; the PSF download, which happens once per filter
+    and SCA rather than once per file, times itself in get_psf_file.  Both are reported inside
+    the registration step, not beside it.
     '''
 
-    psf_filename = get_psf_file(dbh,fid,sca)
+    psf_filename = get_psf_file(dbh,fid,sca,l2_file)
 
     if psf_filename is None:
         return None
+
+    limmag_start_time = time.time()
 
     try:
         limmag_dict = rda.compute_limiting_magnitude_for_l2_image(fits_filename,
@@ -1479,20 +1529,27 @@ def compute_limmag(dbh,fits_filename,fid,sca):
     except Exception as e:
         print(f"*** Warning: Could not compute limiting magnitude for {fits_filename} ({e}); "
               "registering a NULL")
+        log_elapsed_time("compute limiting magnitude for L2 file",limmag_start_time,l2_file)
         return None
 
     limmag = limmag_dict["maglimit"]
 
     print(f"limmag = {limmag}")
 
+    log_elapsed_time("compute limiting magnitude for L2 file",limmag_start_time,l2_file)
+
     return limmag
 
 
-def register_l2file(dbh,roman_tessellation_db,header,wcs,fits_filename,s3_object_name,expid,fid):
+def register_l2file(dbh,roman_tessellation_db,header,wcs,fits_filename,s3_object_name,expid,fid,
+                    l2_file):
 
     '''
     Insert the record of this L2 file in the L2Files database table, and return its rid,
     version, registered filename and checksum.
+
+    `l2_file` is the name this file is known by in the log, carried down only so that the
+    limiting-magnitude timing below reads the same as every other step of the same file.
     '''
 
     key = "DATE-OBS"
@@ -1627,7 +1684,7 @@ def register_l2file(dbh,roman_tessellation_db,header,wcs,fits_filename,s3_object
     # Compute the limiting magnitude while the FITS file is still on local disk; the caller
     # deletes it as soon as registration finishes.
 
-    limmag = compute_limmag(dbh,fits_filename,fid,sca)
+    limmag = compute_limmag(dbh,fits_filename,fid,sca,l2_file)
 
     dbh.add_l2file_fifth_order(expid,sca,field,overlapfields,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
@@ -1707,7 +1764,8 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
     dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9,fid,sca,mjdobs)
 
 
-def register_fits_file(dbh,roman_tessellation_db,local_fits_file,local_gzipped_fits_file,s3_object_name):
+def register_fits_file(dbh,roman_tessellation_db,local_fits_file,local_gzipped_fits_file,
+                       s3_object_name,l2_file):
 
     '''
     Register one converted L2 FITS file in the Exposures, L2Files and L2FileMeta database
@@ -1729,7 +1787,7 @@ def register_fits_file(dbh,roman_tessellation_db,local_fits_file,local_gzipped_f
 
     rid,version,filename,checksum = register_l2file(dbh,roman_tessellation_db,header,wcs,
                                                     local_gzipped_fits_file,s3_object_name,
-                                                    expid,fid)
+                                                    expid,fid,l2_file)
 
     if rid is None:
         return False
@@ -1862,29 +1920,6 @@ def get_ingested_l2file_times(dbh):
 #-------------------------------------------------------------------------------------------------------------
 # Methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
-
-def log_elapsed_time(action,start_time,l2_file):
-
-    '''
-    Report how long one step of one file's ingest took, and return the time it ended, which is
-    the start of the next step.
-
-    Every line reads
-
-        Elapsed time in seconds to <action> = <seconds> (<file>)
-
-    The common opening is what makes the log greppable: one grep collects a single step across
-    a whole run, and the elapsed times can be summed or averaged straight out of it.  The file
-    in parentheses is what makes that possible at all, since num_cores workers share this
-    output stream and their lines interleave; without it a line could not be attributed to the
-    file it describes.
-    '''
-
-    end_time = time.time()
-
-    print(f"Elapsed time in seconds to {action} = {end_time - start_time} ({l2_file})")
-
-    return end_time
 
 
 def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None):
@@ -2057,7 +2092,12 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
             # file it points at is actually in the bucket.
 
             registered = register_fits_file(dbh,roman_tessellation_db,
-                                            local_fits_file,local_gzipped_fits_file,s3_object_name)
+                                            local_fits_file,local_gzipped_fits_file,
+                                            s3_object_name,input_asdf_file)
+
+            # This total contains the PSF download and the limiting-magnitude computation,
+            # which report themselves separately from inside it.  They are nested, not
+            # additional, so the top-level steps still partition the file's time.
 
             step_start_time = log_elapsed_time("register L2 file in database",
                                                step_start_time,input_asdf_file)

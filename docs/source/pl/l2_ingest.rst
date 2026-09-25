@@ -396,13 +396,32 @@ times can be summed or averaged straight out of the log:
 
    grep "^Elapsed time in seconds to convert" ingestL2Files.log
 
-The steps reported per file are: downloading the ASDF file, gunzipping it,
-converting it to FITS, gzipping the FITS, uploading it, registering it in the
-database, cleaning up the work directory, and the whole file as
+The top-level steps reported per file are: downloading the ASDF file, gunzipping
+it, converting it to FITS, gzipping the FITS, uploading it, registering it in
+the database, cleaning up the work directory, and the whole file as
 ``ingest L2 file``.  A file taken back from the output bucket instead of
 converted (see `Reusing a converted file`_) reports downloading and gunzipping
-that FITS in place of the four middle steps.  The steps partition the file's
+that FITS in place of the four middle steps.  These steps partition the file's
 time between them, so they sum to the ``ingest L2 file`` total.
+
+Two further steps are reported from *inside* ``register L2 file in database``,
+that step having turned out to hold the two things whose cost is least
+predictable:
+
+``compute limiting magnitude for L2 file``
+   The photometry over the whole science image, per file.
+
+``download PSF file for fid,sca = <fid>,<sca> from S3 bucket``
+   The PSF that photometry needs.  Reported only when a download actually
+   happens: the PSF is cached per filter and SCA, so after the first few files
+   every call returns immediately, and reporting those would bury the downloads
+   that cost something under tens of thousands of lines saying nothing did.
+
+.. warning::
+   These two are **nested inside** the registration step, not beside it.  They
+   are already counted in ``register L2 file in database``, so adding every
+   ``Elapsed time`` line in the log together double-counts them.  Sum the
+   top-level steps, or grep one step at a time.
 
 .. note::
    The file in parentheses is the input ASDF object name throughout, including
@@ -412,12 +431,12 @@ time between them, so they sum to the ``ingest L2 file`` total.
    interleave, so without it a line could not be attributed to the file it
    describes.
 
-   The limiting-magnitude computation, and the PSF download it may need, fall
-   inside ``register L2 file in database`` rather than being reported
-   separately.
 
 A file that fails still reports the steps it got through, and its cleanup and
-total, so a failure can be placed in the sequence rather than merely noticed.
+total, so a failure can be placed in the sequence rather than merely noticed.  A
+limiting magnitude that could not be computed is timed too, so that a file whose
+photometry failed does not leave a gap in the sequence; one that was skipped for
+want of a registered PSF reports nothing, having done nothing.
 
 
 Running it continuously
