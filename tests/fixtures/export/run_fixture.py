@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """The export stage's fixture: prepare, run, check. ``make stage-export``.
 
-``export`` is a declared stub (supervisor step 8, 2026-09-24, ruling R9):
-a valid invocation exits 69 and publishes no manifest, so "PASS" here
-means exactly that, not a completed run -- see
-``rapidpipe/selftest/export.py`` and
+``export`` is the real HATS source-catalog export (supervisor step 8,
+2026-09-24, ruling R12): a fake database, hats-import run for real, one
+``catalog-export`` checked -- see ``rapidpipe/selftest/export.py`` and
 ``rapidpipe/selftest/fixtures/export/expected.json``.
 
 A thin CLI over :mod:`rapidpipe.selftest`, which holds the actual
@@ -14,9 +13,9 @@ fixture data this reads (``expected.json``, ``settings.toml``) is the
 packaged copy under ``rapidpipe/selftest/fixtures/export/`` -- this
 directory holds only this thin reference, not a second copy.
 
-Exit 0 when every check passes, 1 otherwise. The stage runs no external
-tool and opens no database connection in this build, so ``--tools``
-changes only the label.
+Exit 0 when every check passes, 1 otherwise. hats-import runs for real
+either way and the database is always the fake, so ``--tools`` changes
+only the label.
 """
 
 from __future__ import annotations

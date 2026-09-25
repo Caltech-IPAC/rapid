@@ -88,9 +88,9 @@ stage-reference:
 stage-photometry:
 	$(PYTHON) tests/fixtures/photometry/run_fixture.py
 
-# The export stage's fixture: a declared stub (supervisor step 8,
-# 2026-09-24, ruling R9) -- a structurally valid input-set manifest still
-# exits 69 and publishes no manifest; no tools, no database, runs anywhere.
+# The export stage's fixture (supervisor step 8, 2026-09-24, ruling R12):
+# a fake database of ~200 sources in named source sets, and hats-import run
+# for real (needs hats-import installed) into one catalog-export.
 .PHONY: stage-export
 stage-export:
 	$(PYTHON) tests/fixtures/export/run_fixture.py

@@ -9,7 +9,7 @@ check its exit code, manifest and products against ``expected.json``'s
 values. This module holds that shape once, as :class:`FixtureRunner`, and
 :mod:`rapidpipe.selftest.difference` / :mod:`rapidpipe.selftest.load`
 supply each stage's own prepare/check details. A stub stage's fixture
-(:mod:`rapidpipe.selftest.photometry`, :mod:`rapidpipe.selftest.export`)
+(:mod:`rapidpipe.selftest.photometry`)
 declares ``expected.json``'s ``exit_code`` as 69 instead of 0: ``check``
 is never called (there is no manifest to check against), and
 :func:`run_fixture` instead asserts that no manifest was published.
@@ -55,9 +55,9 @@ from rapidpipe.products.manifest import Manifest, hash_file
 from rapidpipe.products.storage import parse_location, publish_dir
 
 #: The stages a fixture exists for today (stage contract, "Local
-#: execution"; ``tests/fixtures/<stage>/``). ``photometry`` and ``export``
-#: are declared stubs (supervisor step 8, 2026-09-24, ruling R9): their
-#: fixtures assert exit 69 and no published manifest, not a completed run.
+#: execution"; ``tests/fixtures/<stage>/``). ``photometry`` is a
+#: declared stub (supervisor step 8, 2026-09-24, ruling R9): its fixture
+#: asserts exit 69 and no published manifest, not a completed run.
 STAGE_NAMES = ("reference", "difference", "finalize", "load", "maintain", "crossmatch", "alerts",
                "statistics", "prune", "photometry", "export")
 

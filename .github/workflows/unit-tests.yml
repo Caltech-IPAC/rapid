@@ -33,6 +33,11 @@
 # pipeline image carries scipy through photutils; requirements.txt does not
 # name it, as it does not name photutils).
 #
+# hats-import is installed the same way: the export stage (ruling R12)
+# builds its HATS catalog with it (pulling in hats and dask), and its
+# unit tests and stage fixture run it for real; they skip where it is
+# absent, so this line is what makes CI exercise the real import.
+#
 # actions/checkout is pinned by SHA per this repo's existing convention
 # (see .github/workflows/public-safety.yml); actions/setup-python is
 # pinned the same way.
@@ -65,8 +70,8 @@ jobs:
       - name: install rapidpipe
         run: pip install -e . --no-deps
 
-      - name: install pytest, psycopg2-binary, numpy, astropy, healpy, fastavro and scipy
-        run: pip install pytest psycopg2-binary numpy astropy healpy fastavro scipy
+      - name: install pytest, psycopg2-binary, numpy, astropy, healpy, fastavro, scipy and hats-import
+        run: pip install pytest psycopg2-binary numpy astropy healpy fastavro scipy hats-import
 
       - name: run rapidpipe unit tests
         run: python -m pytest tests/unit -q

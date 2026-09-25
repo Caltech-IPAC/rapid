@@ -161,3 +161,47 @@ def find_complete_source_set(
 def cluster_and_analyze(cur, obs_date: str, sca: int) -> None:
     """`dev`'s ``CLUSTER ... USING <table>_radec_idx`` and ``ANALYZE`` on one child table."""
     cur.execute("SELECT cluster_sources_child_table(%s, %s)", (obs_date, int(sca)))
+
+
+#: The ``sources`` columns a set-scoped read (:func:`iter_set_rows`) may
+#: select: `sid`, `dev`'s loaded columns and the run columns. Column names
+#: are interpolated into SQL, so anything else is refused.
+READABLE_COLUMNS: tuple[str, ...] = ("sid",) + COLUMNS
+
+
+def result_set_states(cur, instances: list[str]) -> dict[str, dict[str, Any]]:
+    """``{instance: {kind, complete, deletion_state, row_count}}`` for each named set that exists.
+
+    An instance with no `product_instances` row is absent from the result;
+    one with no `result_sets` row has ``complete`` None.
+    """
+    cur.execute(
+        """
+        SELECT pi.id, pi.kind, rs.complete, pi.deletion_state, rs.row_count
+        FROM product_instances pi LEFT JOIN result_sets rs ON rs.instance = pi.id
+        WHERE pi.id = ANY(%s)
+        """, (list(instances),))
+    return {row[0]: {"kind": row[1], "complete": row[2], "deletion_state": row[3],
+                     "row_count": row[4]} for row in cur.fetchall()}
+
+
+def iter_set_rows(conn, source_sets: list[str], columns: tuple[str, ...], *,
+                  flags_zero_only: bool, batch_rows: int = 10000):
+    """Yield ``columns`` of the ``sources`` rows of ``source_sets``, by ``sid``.
+
+    The set-scoped form of `dev`'s export dump
+    (``generateSourceHATSCatalog.py``: ``SELECT <sources_cols> FROM sources
+    WHERE sid >= .. AND sid <= .. ORDER BY sid``): the rows of the named
+    sets through the parent ``sources`` table, as ``alerts`` reads them,
+    optionally only ``flags = 0``. A server-side (named) cursor streams the
+    rows in batches of ``batch_rows`` inside the caller's transaction.
+    """
+    unknown = [c for c in columns if c not in READABLE_COLUMNS]
+    if unknown or not columns:
+        raise ValueError(f"not readable sources columns: {unknown or '(none)'}")
+    where = "result_set = ANY(%s)" + (" AND flags = 0" if flags_zero_only else "")
+    with conn.cursor(name="export_sources") as cur:
+        cur.itersize = batch_rows
+        cur.execute(f"SELECT {', '.join(columns)} FROM sources WHERE {where} ORDER BY sid",
+                    (list(source_sets),))
+        yield from cur
