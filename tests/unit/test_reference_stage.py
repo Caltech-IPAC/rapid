@@ -160,7 +160,7 @@ def test_full_run_publishes_the_ruled_manifest(tmp_path):
     assert cat.key == {"reference": ref.instance, "catalog_type": "sextractor"}
     assert cat.primary == "ref/awaicgen_output_mosaic_refimsexcat.txt"
     assert sorted(cat.registration) == sorted(reference.CATALOG_REGISTRATION_FIELDS)
-    assert cat.registration["source_count"] == r["nsxcatsources"] == 4
+    assert cat.registration["source_count"] == r["nsexcatsources"] == 4
 
     assert manifest.inputs.products == {
         "l2-image/001": constituents[0], "l2-image/002": constituents[1],

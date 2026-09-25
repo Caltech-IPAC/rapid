@@ -76,7 +76,7 @@ class FwhmStatistics:
     fwhmmedpix: float
     fwhmminpix: float
     fwhmmaxpix: float
-    nsxcatsources: int
+    nsexcatsources: int
     fwhm_ref: float           # the median with `dev`'s 2.0 fallback; logged, not recorded
 
 
@@ -87,7 +87,7 @@ def fwhm_statistics(catalog_path: Path, params_path: str | Path) -> FwhmStatisti
     in `dev`; the stage reports that as its own error.
     """
     vals_refimage = parse_ascii_text_sextractor_catalog(catalog_path, params_path, ["FWHM_IMAGE"])
-    nsxcatsources_refimage = len(vals_refimage)
+    nsexcatsources_refimage = len(vals_refimage)
 
     vals_fwhm = [float(val[0]) for val in vals_refimage]
     np_vals_fwhm = np.array(vals_fwhm)
@@ -105,5 +105,5 @@ def fwhm_statistics(catalog_path: Path, params_path: str | Path) -> FwhmStatisti
 
     return FwhmStatistics(
         fwhmmedpix=float(fwhm_ref_medpix), fwhmminpix=float(fwhm_ref_minpix),
-        fwhmmaxpix=float(fwhm_ref_maxpix), nsxcatsources=int(nsxcatsources_refimage),
+        fwhmmaxpix=float(fwhm_ref_maxpix), nsexcatsources=int(nsexcatsources_refimage),
         fwhm_ref=float(fwhm_ref))

@@ -222,7 +222,7 @@ def test_fwhm_statistics_as_dev(tmp_path):
                    "1.0 2.0 5\n2.0 4.0 5\n3.0 nan 5\n4.0 3.0 5\n")
     stats = catalog.fwhm_statistics(cat, params)
     assert (stats.fwhmmedpix, stats.fwhmminpix, stats.fwhmmaxpix) == (3.0, 2.0, 4.0)
-    assert stats.nsxcatsources == 4
+    assert stats.nsexcatsources == 4
     assert stats.fwhm_ref == 3.0
 
 

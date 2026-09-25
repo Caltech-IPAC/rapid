@@ -41,9 +41,9 @@ Outputs (R5, R6). One ``reference-image`` entry: primary member ``image``
 (``ref/awaicgen_output_mosaic_image.fits``), members ``coverage`` and
 ``uncertainty``; key ``{"field", "filter" (RAPID spelling), "recipe": "awaicgen",
 "version": <selection digest, 64 hex>}``; the registration block R6 fixes
-(:func:`registration_block`), with the SExtractor count named
-``nsxcatsources`` as the ``refimmeta`` column is. ``zero_point`` is the
-zero point the coadd was scaled to, also stamped as ``MAGZP``; the
+(:func:`registration_block`); the SExtractor count is the block's
+``nsexcatsources``, which `register` writes to ``refimmeta.nsxcatsources``.
+``zero_point`` is the zero point the coadd was scaled to, also stamped as ``MAGZP``; the
 difference stage today uses its own ``[awaicgen] zprefimg`` setting for
 gain matching and does not read ``MAGZP`` (a residual the supervisor
 records). All three bundle members are PRIMARY-HDU images carrying
@@ -442,7 +442,7 @@ def registration_block(*, md5: str, field_id: int, exposure_filter: str,
         "fwhmmedpix": fwhm.fwhmmedpix,
         "fwhmminpix": fwhm.fwhmminpix,
         "fwhmmaxpix": fwhm.fwhmmaxpix,
-        "nsxcatsources": fwhm.nsxcatsources,
+        "nsexcatsources": fwhm.nsexcatsources,
         "npucatsources": None,
         "settings_hash": settings_hash,
     })
@@ -455,7 +455,7 @@ REGISTRATION_FIELDS = (
     "constituents", "nframes", "mjdobs_min", "mjdobs_max", "jd_start", "jd_end",
     "total_exptime", "zero_point", "cov5percent", "medncov", "medpixunc", "npixnan",
     "clmean", "clstddev", "clnoutliers", "gmedian", "datascale", "gmin", "gmax",
-    "fwhmmedpix", "fwhmminpix", "fwhmmaxpix", "nsxcatsources", "npucatsources",
+    "fwhmmedpix", "fwhmminpix", "fwhmmaxpix", "nsexcatsources", "npucatsources",
     "settings_hash",
 )
 
@@ -596,10 +596,10 @@ def _body(context: StageContext) -> StageResult:
         key={"reference": instance, "catalog_type": CATALOG_TYPE},
         members=(catalog_member,), primary=catalog_member.path,
         registration={"md5": _md5_of_file(o(catalog_name)), "status": STATUS,
-                      "catalog_type": CATALOG_TYPE, "source_count": fwhm.nsxcatsources})
+                      "catalog_type": CATALOG_TYPE, "source_count": fwhm.nsexcatsources})
 
     log.info("reference: %s/%s coadded %d frames -> %s (version %s), %d catalog sources",
-             rtid, unit_filter, len(constituents), instance, digest, fwhm.nsxcatsources)
+             rtid, unit_filter, len(constituents), instance, digest, fwhm.nsexcatsources)
     notes: dict[str, Any] = {}
     if selection.not_coadded:
         notes["not_coadded"] = selection.not_coadded

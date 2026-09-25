@@ -6,7 +6,7 @@
     "constituents", "nframes", "mjdobs_min", "mjdobs_max", "jd_start", "jd_end",
     "total_exptime", "zero_point", "cov5percent", "medncov", "medpixunc", "npixnan",
     "clmean", "clstddev", "clnoutliers", "gmedian", "datascale", "gmin", "gmax",
-    "fwhmmedpix", "fwhmminpix", "fwhmmaxpix", "nsxcatsources", "npucatsources",
+    "fwhmmedpix", "fwhmminpix", "fwhmmaxpix", "nsexcatsources", "npucatsources",
     "settings_hash"
   ],
   "fake": {
@@ -27,7 +27,7 @@
       "gmedian": {"close": 7.16640043258667}, "datascale": {"close": 0.09278655052185059},
       "gmin": {"close": 6.632583141326904}, "gmax": {"close": 70.07355499267578},
       "fwhmmedpix": {"close": 2.4}, "fwhmminpix": {"close": 2.4}, "fwhmmaxpix": {"close": 2.4},
-      "nsxcatsources": 4, "npucatsources": null
+      "nsexcatsources": 4, "npucatsources": null
     },
     "stamp": {
       "BUNIT": "DN/s", "FIELD": 4711398, "FILTER": "W146", "NFRAMES": 3,
@@ -48,7 +48,7 @@
       "cov5percent": [15.0, 50.0], "medncov": [0.0, 3.0],
       "clmean": [5.0, 9.5],
       "fwhmmedpix": [1.0, 8.0],
-      "nsxcatsources": [2, 40], "npucatsources": null
+      "nsexcatsources": [2, 40], "npucatsources": null
     },
     "stamp": {
       "BUNIT": "DN/s", "FIELD": 4711398, "FILTER": "W146", "NFRAMES": 3,
