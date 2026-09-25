@@ -177,8 +177,9 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
     several hold the aid, the newest wins. One row per (sid, merges aid, named
     set), in sid, aid, set order; ``association_set`` is the named set.
     ``aid`` is None where no set of the chain holds the object (an orphan).
-    ``nsources`` is the statistics row's, else the aid's merges count across
-    the chain (`dev`'s ``_stats_sql``).
+    ``nsources`` is the statistics row's, else the number of distinct sources
+    the aid has in merges across the chain (`dev`'s ``_stats_sql``); an
+    (aid, sid) pair present in a base and its extension counts once.
     """
     if not sids or not lineages:
         return []
@@ -198,7 +199,7 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
             """
             SELECT DISTINCT ON (m.sid, m.aid)
                    m.sid, m.aid AS merges_aid, a.aid, a.ra0, a.dec0, {stats_select},
-                   (SELECT count(*) FROM {merges} m2
+                   (SELECT count(DISTINCT m2.sid) FROM {merges} m2
                     WHERE m2.aid = a.aid AND m2.result_set = ANY(%(chain)s::text[]))::int
                        AS merges_count
             FROM {merges} m
