@@ -38,6 +38,12 @@ sets).
 Outputs (not written by this build): one ``light-curve`` result set per
 request, per the products page.
 
+``--dry-run`` also runs this input-set validation (via ``run_stage``'s
+``validate_inputs`` hook), rejecting a missing declared kind or object
+set with exit 65 -- unlike most stages, whose ``body`` (and so its own
+shape checks) never runs under ``--dry-run`` at all, since the science
+this stage would otherwise run does not exist to skip.
+
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli``.
@@ -205,6 +211,14 @@ def _read_input_set(manifest: Manifest) -> _InputSet:
 # ----------------------------------------------------------------------
 
 
+def _validate_inputs(context: StageContext) -> None:
+    """``run_stage``'s pre-dry-run hook: the same input-set shape check
+    ``_body`` runs, so ``--dry-run`` rejects a missing declared kind or
+    object set (exit 65) instead of validating only the generic manifest
+    shape, as most other stages' dry-run does."""
+    _read_input_set(context.input_manifest)
+
+
 def _body(context: StageContext) -> StageResult:
     _check_settings(context.settings)
     inputs = _read_input_set(context.input_manifest)
@@ -216,7 +230,7 @@ def _body(context: StageContext) -> StageResult:
 
 
 def main(argv: list[str]) -> int:
-    return run_stage(DECLARATION, _body, argv)
+    return run_stage(DECLARATION, _body, argv, validate_inputs=_validate_inputs)
 
 
 if __name__ == "__main__":

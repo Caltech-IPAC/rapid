@@ -67,6 +67,20 @@ def test_dry_run_exits_0_and_writes_nothing(tmp_path):
     assert not outputs.exists() or not any(outputs.iterdir())
 
 
+def test_dry_run_missing_kind_exits_65(tmp_path):
+    # --dry-run runs the same input-set shape check as a real invocation
+    # (run_stage's validate_inputs hook), so a missing declared kind is
+    # rejected before the "dry-run validated" success path, not after.
+    inputs = tmp_path / "inputs"
+    path = build_photometry_input_set(inputs)
+    manifest = json.loads(path.read_text())
+    manifest["outputs"] = [e for e in manifest["outputs"] if e["kind"] != "psf"]
+    path.write_text(json.dumps(manifest))
+    rc, outputs = _run(tmp_path, "--dry-run")
+    assert rc == int(ExitCode.INPUT_REJECTED)
+    assert not outputs.exists() or not any(outputs.iterdir())
+
+
 def test_valid_invocation_exits_69_and_writes_no_manifest(tmp_path):
     rc, outputs = _run(tmp_path)
     assert rc == int(ExitCode.NOT_IMPLEMENTED) == 69
