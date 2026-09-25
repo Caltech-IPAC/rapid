@@ -29,7 +29,8 @@ What is removed, and only for rows whose ``run`` is this run:
   marked or removed);
 - every S3 object version under ``<scratch outputs root>/runs/<run>/inputs/``,
   where ``rapidpipe run inputs`` stages the run's composed input sets
-  (when that root is an ``s3://`` location in the scratch bucket);
+  (when that root is an ``s3://`` location; one outside the scratch
+  bucket is refused, like an attempt's);
 - ``dev`` science rows in ``sources`` (the inheritance parent: a DELETE
   on it reaches every ``sources_<date>_<sca>`` child, which carry ``run``
   since 20260923-04), ``diffimmeta``, ``diffimages``, ``l2filemeta``,
@@ -283,8 +284,9 @@ def _inputs_prefix(run_id: str) -> tuple[str, str] | None:
 def _s3_prefixes(conn, run_id: str, scratch_bucket: str | None) -> list[tuple[str, str]]:
     """Every (bucket, key prefix ending '/') of the run's ``s3://`` attempt
     outputs, all checked before any is deleted, plus the run's composed
-    input sets (:func:`_inputs_prefix`) when that prefix is in the scratch
-    bucket."""
+    input sets (:func:`_inputs_prefix`). Either outside the scratch bucket
+    raises :class:`DeletionRefused`: staged inputs are refused like an
+    attempt's outputs, never silently left behind."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id, output_location FROM attempts "
@@ -298,7 +300,12 @@ def _s3_prefixes(conn, run_id: str, scratch_bucket: str | None) -> list[tuple[st
 
     bucket_allowed = scratch_bucket or _default_scratch_bucket()
     prefixes: list[tuple[str, str]] = []
-    if inputs is not None and inputs[0] == bucket_allowed:
+    if inputs is not None:
+        if inputs[0] != bucket_allowed:
+            raise DeletionRefused(
+                f"run {run_id!r} stages its input sets under "
+                f"s3://{inputs[0]}/{inputs[1]}, outside the scratch bucket "
+                f"{bucket_allowed!r}; refusing")
         prefixes.append(inputs)
     for attempt_id, output_location in rows:
         location = parse_location(output_location)
