@@ -423,3 +423,49 @@ def test_the_exclusion_applies_only_with_the_pruned_set_named(conn, tmp_path, mo
         assert counts["unpruned"] == {ids["kept"]: 3, ids["flagged"]: 3}
         # the flagged pair is excluded: no association, and not counted
         assert counts["applied"] == {ids["kept"]: 2}
+
+
+def test_a_pair_pruned_under_one_association_set_stays_under_another(
+        conn, tmp_path, monkeypatch):
+    """Codex 9-1 amendment to R5: the exclusion is per association set. B's
+    pruned set lists (aid, flagged); A's pruned set lists nothing. A's
+    history and fallback count keep the pair; B's leave it out."""
+    run_id, _, sets, ids, _ = _pruned_chain(conn, tmp_path, monkeypatch)
+    set_a = sets[1]
+    set_b, b_attempt = _register_set(conn, run_id, stage="crossmatch", kind="association-set",
+                                     key={"field": 5321, "base": None}, row_count=2,
+                                     unit_suffix="-b")
+    pruned_a, _ = _register_set(conn, run_id, stage="prune", kind="pruned-set",
+                                key={"base": set_a, "settings_hash": "sha256:a"}, row_count=0,
+                                unit_suffix="-a")
+    pruned_b, prune_b_attempt = _register_set(
+        conn, run_id, stage="prune", kind="pruned-set",
+        key={"base": set_b, "settings_hash": "sha256:b"}, row_count=1, unit_suffix="-pb")
+    from rapidpipe.db.objects import insert_pruned_merges
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO merges_5321 (aid, sid, run, attempt, result_set) VALUES "
+                    "(%s, %s, %s, %s, %s), (%s, %s, %s, %s, %s)",
+                    (ids["aid"], ids["kept"], run_id, b_attempt, set_b,
+                     ids["aid"], ids["flagged"], run_id, b_attempt, set_b))
+        cur.execute("INSERT INTO astroobjects_5321 (aid, ra0, dec0, flux0, run, attempt, "
+                    "result_set) SELECT aid, ra0, dec0, flux0, %s, %s, %s FROM astroobjects_5321 "
+                    "WHERE aid = %s AND result_set = %s",
+                    (run_id, b_attempt, set_b, ids["aid"], ids["base"]))
+        assert insert_pruned_merges(cur, [(ids["aid"], ids["flagged"])], pruned_b, set_b,
+                                    run_id, prune_b_attempt) == 1
+        lineages = {set_a: [set_a, ids["base"]], set_b: [set_b]}
+        fields = {set_a: 5321, set_b: 5321}
+        pruned = {set_a: pruned_a, set_b: pruned_b}
+        rows = alerts_db.history(cur, lineages, fields, [(set_a, ids["aid"]), (set_b, ids["aid"])],
+                                 0.0, pruned_by_association=pruned)
+        by_set = {}
+        for r in rows:
+            by_set.setdefault(r["object_set"], set()).add(r["sid"])
+        assert by_set[set_a] == {ids["kept"], ids["flagged"], ids["orphan"]}
+        assert by_set[set_b] == {ids["kept"]}
+        assoc = alerts_db.associations(cur, lineages, fields, {set_a: None, set_b: None},
+                                       [ids["kept"], ids["flagged"]],
+                                       pruned_by_association=pruned)
+        got = {(r["association_set"], r["sid"]): r["nsources"] for r in assoc}
+        assert got == {(set_a, ids["kept"]): 3, (set_a, ids["flagged"]): 3,
+                       (set_b, ids["kept"]): 1}
