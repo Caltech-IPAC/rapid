@@ -60,7 +60,8 @@ def test_declaration_validates():
     DECLARATION.validate()
     assert DECLARATION.name == "register"
     assert DECLARATION.consumes == ("l2-image", "psf", "difference-image", "source-catalog",
-                                    "alert-container", "alert-set")
+                                    "alert-container", "alert-set", "reference-image",
+                                    "reference-catalog")
     assert DECLARATION.produces == ()
     assert DECLARATION.database_access == "read-write"
 
@@ -200,3 +201,53 @@ def test_bad_difference_manifest_exits_65_without_connecting(tmp_path, monkeypat
 
     monkeypatch.setattr(register_module, "connect", _raise_if_called)
     assert main(_argv(diff_outputs, tmp_path / "register-outputs")) == int(ExitCode.INPUT_REJECTED)
+
+
+# ----------------------------------------------------------------------
+# reference-image / reference-catalog (supervisor step 8, ruling R7)
+# ----------------------------------------------------------------------
+
+def _reference_outputs():
+    from .test_refimage_products import reference_catalog_entry, reference_image_entry
+    # Catalog first on purpose: register must still write the image first.
+    return [reference_catalog_entry(), reference_image_entry()]
+
+
+def test_reference_manifest_registers_the_image_before_its_catalog(tmp_path, monkeypatch):
+    inputs_dir = tmp_path / "inputs"
+    _write_manifest(inputs_dir, _reference_outputs())
+    conn = _FakeConn()
+    order = []
+    monkeypatch.setattr(register_module, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr(register_module, "register_manifest", lambda *a, **k: None)
+    monkeypatch.setattr(register_module, "register_reference_image",
+                        lambda c, **kw: order.append(("image", kw)))
+    monkeypatch.setattr(register_module, "register_reference_catalog",
+                        lambda c, **kw: order.append(("catalog", kw)))
+
+    assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.SUCCESS)
+    assert conn.committed
+    assert [name for name, _ in order] == ["image", "catalog"]
+    image_call = order[0][1]
+    assert (image_call["run_id"], image_call["output_location"]) == ("r1", str(inputs_dir))
+    assert image_call["attempt_id"] == "register-attempt-1"
+    assert order[1][1]["output_location"] == str(inputs_dir)
+
+
+@pytest.mark.parametrize("edit", [
+    lambda outputs: outputs[1]["registration"].update(constituents=[]),
+    lambda outputs: outputs[1]["key"].update(recipe="swarp"),
+    lambda outputs: outputs[0]["key"].update(catalog_type="photutils"),
+    lambda outputs: outputs[0]["registration"].pop("md5"),
+])
+def test_bad_reference_manifest_exits_65_without_connecting(tmp_path, monkeypatch, edit):
+    outputs = _reference_outputs()
+    edit(outputs)
+    inputs_dir = tmp_path / "inputs"
+    _write_manifest(inputs_dir, outputs)
+
+    def _raise_if_called(*args, **kwargs):
+        raise AssertionError("register must refuse a malformed manifest before connecting")
+
+    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.INPUT_REJECTED)

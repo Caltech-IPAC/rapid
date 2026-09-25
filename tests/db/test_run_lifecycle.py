@@ -436,7 +436,7 @@ def test_delete_run_removes_only_this_runs_objects_and_rows(conn):
     assert report.run_id == run_id and not report.already_deleted
     assert (report.objects_deleted, report.versions_deleted) == (2, 4)
     assert report.rows_deleted["psfs"] == 1
-    assert set(report.rows_deleted) == set(cleanup.SCIENCE_TABLES)
+    assert set(report.rows_deleted) == set(cleanup.RFID_SCOPED_TABLES + cleanup.SCIENCE_TABLES)
     assert report.instances_marked == 1
     assert s3.remaining(SCRATCH_BUCKET, prefix + "/") == []
     assert len(s3.remaining(SCRATCH_BUCKET, other_prefix + "/")) == 4
