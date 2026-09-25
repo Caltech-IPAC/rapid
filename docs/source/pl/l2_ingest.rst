@@ -363,7 +363,21 @@ For example, to ingest the GBTDS socsims with fake sources injected:
    python3 pipeline/ingestL2Files.py
 
 Each process writes a log to ``$RAPID_WORK/ingestL2Files_thread<N>.out`` and
-returns its counts of files ingested and files failed.
+returns its counts of files ingested and files failed.  The run totals those
+across the processes and ends with a summary:
+
+.. code-block::
+
+   Number of L2 files on the work list = 4096
+   Number of L2 files ingested = 4093
+   Number of L2 files failed = 3
+   Elapsed time in seconds to ingest L2 files = 21447.2
+
+A fourth line, ``Number of L2 files not attempted``, appears only when a worker
+died holding part of the work list.  Those files differ from the failed ones:
+the failed were attempted and skipped, these were never looked at.  Both are
+back on the next run's work list either way, neither having got an ``L2Files``
+row.
 
 
 Running it continuously

@@ -2040,14 +2040,21 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
     dbh.close()
 
-    return f"Finish normally for index_thread = {index_thread}: n_ingested = {n_ingested}, n_failed = {n_failed}"
+    # The counts go back as numbers rather than only inside a message, so that the main
+    # program can total them across the workers and say what the run as a whole did.
+
+    return index_thread,n_ingested,n_failed
 
 
 def execute_parallel_processes(asdf_files_list,num_cores=None,reusable_output_fits_files=None):
 
     '''
-    Run the work list across num_cores processes, and return the exit code the run should end
-    with: 0 if every worker finished, and otherwise a code describing how they did not.
+    Run the work list across num_cores processes, and return (exit code, files ingested, files
+    failed) totalled over the workers.  The exit code is 0 if every worker finished, and
+    otherwise a code describing how they did not.
+
+    A worker that dies contributes no counts, so the two totals describe the files actually
+    attempted rather than the whole work list; the caller says how many were left untouched.
 
     A worker that does not finish is a different thing from a file that fails.  A failed file
     is logged, skipped, and picked up by the next run, and does not make the run a failure.  A
@@ -2075,13 +2082,22 @@ def execute_parallel_processes(asdf_files_list,num_cores=None,reusable_output_fi
 
     n_failed_workers = 0
 
+    n_ingested_total = 0
+    n_failed_total = 0
+
     worker_exit_code = None
 
     for index,future in enumerate(futures):
 
         try:
 
-            print(future.result())
+            index_thread,n_ingested,n_failed = future.result()
+
+            n_ingested_total += n_ingested
+            n_failed_total += n_failed
+
+            print(f"Finish normally for index_thread = {index_thread}: "
+                  f"n_ingested = {n_ingested}, n_failed = {n_failed}")
 
 
         # BaseException, not Exception: run_single_core_job quits with exit() when it cannot
@@ -2105,14 +2121,14 @@ def execute_parallel_processes(asdf_files_list,num_cores=None,reusable_output_fi
                     worker_exit_code = e.code
 
     if n_failed_workers == 0:
-        return 0
+        return 0,n_ingested_total,n_failed_total
 
     exit_code = worker_exit_code if worker_exit_code is not None else exit_code_worker_failed
 
     print(f"*** Error: {n_failed_workers} of {num_cores} worker(s) did not finish, so part of "
           f"the work list was not attempted; exiting {exit_code}...")
 
-    return exit_code
+    return exit_code,n_ingested_total,n_failed_total
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -2275,8 +2291,9 @@ if __name__ == '__main__':
 
     if num_cores > 1:
 
-        exit_code = execute_parallel_processes(sorted_input_asdf_files,num_cores,
-                                               reusable_output_fits_files)
+        exit_code,n_ingested,n_failed = execute_parallel_processes(sorted_input_asdf_files,
+                                                                   num_cores,
+                                                                   reusable_output_fits_files)
 
     else:
 
@@ -2285,10 +2302,20 @@ if __name__ == '__main__':
 
         exit_code = 0
 
+        n_ingested = 0
+        n_failed = 0
+
         thread_index = 0
 
         try:
-            print(run_single_core_job(sorted_input_asdf_files,thread_index,reusable_output_fits_files))
+
+            index_thread,n_ingested,n_failed = run_single_core_job(sorted_input_asdf_files,
+                                                                   thread_index,
+                                                                   reusable_output_fits_files)
+
+            print(f"Finish normally for index_thread = {index_thread}: "
+                  f"n_ingested = {n_ingested}, n_failed = {n_failed}")
+
         except BaseException as e:
             print(f"*** Error in thread index {thread_index} = {type(e).__name__}: {e}")
             if isinstance(e,SystemExit) and isinstance(e.code,int) and e.code >= 64:
@@ -2299,8 +2326,26 @@ if __name__ == '__main__':
                   f"not attempted; exiting {exit_code}...")
 
 
-    # Code-timing benchmark.  Printed whatever happened above, so that a run that lost a
-    # worker still says how long it took and how far it got.
+    # What the run actually did.  Printed whatever happened above, so that a run that lost a
+    # worker still says how far it got.
+
+    n_not_attempted = len(sorted_input_asdf_files) - n_ingested - n_failed
+
+    print("")
+    print("Number of L2 files on the work list =",len(sorted_input_asdf_files))
+    print("Number of L2 files ingested =",n_ingested)
+    print("Number of L2 files failed =",n_failed)
+
+
+    # Only ever non-zero when a worker died holding part of the work list.  Those files were
+    # not attempted at all, as against the failed ones that were attempted and skipped; both
+    # are back on the next run's work list, since neither got an L2Files row.
+
+    if n_not_attempted != 0:
+        print("Number of L2 files not attempted =",n_not_attempted)
+
+
+    # Code-timing benchmark.
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds to ingest L2 files =",
