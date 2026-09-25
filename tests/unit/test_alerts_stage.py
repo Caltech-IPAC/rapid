@@ -516,3 +516,18 @@ def test_one_pruned_set_per_association_set_is_accepted():
     assert sets.pruned_by_association == {"A1": None, "A2": "P2"}
     assert sets.pruned_sets == ("P2",)
     assert alerts._classify_result_sets(("S", "A1"), found, "D").pruned_sets == ()
+
+
+def test_the_fake_scopes_a_pruned_set_to_its_own_association_set(prepared):
+    """Codex 9-1 amendment: a pair pruned under B stays when reading A."""
+    _, _, seed = prepared
+    _extend_from_a_base(seed)
+    _pruned(seed, base=ASSOCIATION_SET_2, instance="01J8Y6QZ3M00000000000PRUN2",
+            pairs=((9001, 51),))
+    db = FakeAlertsDatabase(seed)
+    lineages = {ASSOCIATION_SET: db.association_chain(ASSOCIATION_SET)}
+    fields = {ASSOCIATION_SET: 5321}
+    rows = db.history(lineages, fields, [(ASSOCIATION_SET, 9001)], 0.0,
+                      pruned_by_association={ASSOCIATION_SET: None,
+                                             ASSOCIATION_SET_2: "01J8Y6QZ3M00000000000PRUN2"})
+    assert 51 in {r["sid"] for r in rows}
