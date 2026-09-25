@@ -104,7 +104,7 @@ a `tests/db` test, not only a mocked `tests/unit` one.
 
 | Suite | Workflow | Runs against |
 |---|---|---|
-| `tests/unit` | `unit-tests.yml` | No database; `rapidpipe.db`/`rapidpipe.runs` import `psycopg2` but tests mock it. Run locally: `python -m pytest tests/unit -q` in an interpreter that has `pip install -r requirements.txt pytest` — requirements.txt is the one dependency authority, and an existing environment (a conda env with the science stack) is preferred over a per-checkout venv (Ben, 2026-09-21: "use existing envs, no venvs"). |
+| `tests/unit` | `unit-tests.yml` | No database; `rapidpipe.db`/`rapidpipe.runs` import `psycopg2` but tests mock it. Run locally: `python -m pytest tests/unit -q` in any interpreter that has `pip install -r requirements.txt pytest`; requirements.txt is the one dependency authority (pyproject.toml reads it, the CI workflows install from it). No per-checkout venv is needed or assumed. |
 | `tests/db` | `db-migrations.yml` | Real PostgreSQL 18 + Q3C service container, migrations applied first. Needs a live PostgreSQL; there is none on the laptop, so this suite is CI-only for a laptop-based agent. |
 | `tests/cli` | `cli-behaviour.yml` | Real PostgreSQL 18 + Q3C, Batch and S3 faked (`tests/unit/fakebatch.py`, `fakes3.py`). Black-box: argv in, exit code/stdout/stderr/database state out. CI-only, same reason. |
 | n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version` and `stage admit --help`. Proves the build recipe only, not the production science environment. |
