@@ -581,6 +581,7 @@ def compose_inputs(
     kind: str = "l2-image",
     reuse_existing: bool = False,
     storage: _Storage | None = None,
+    producer_run: str | None = None,
 ) -> str:
     """Compose ``stage``'s input set for ``unit_id``; return its location.
 
@@ -599,6 +600,10 @@ def compose_inputs(
     ``reuse_existing`` (``run start``, rerun after an interruption)
     reused: its registered instances are re-bound (idempotent) and
     committed, so a reuse always leaves the unit bound.
+
+    ``producer_run`` (default ``run_id``) is the run whose ``from_stage``
+    unit is read: a seeded run's production seed when the producer was
+    inherited from it (``run start``).
     """
     if stage == "register":
         raise _Exit(int(ExitCode.USAGE), _REGISTER_TEMPLATE_REFUSAL)
@@ -624,7 +629,7 @@ def compose_inputs(
 
     template_manifest = storage.read_manifest(template)
     producer_text = launch_batch.resolve_inputs_from_stage(
-        conn, run_id=run_id, unit_id=unit_id, upstream_stage=from_stage)
+        conn, run_id=producer_run or run_id, unit_id=unit_id, upstream_stage=from_stage)
     producer = storage.read_manifest(producer_text)
     candidates = [o for o in producer.outputs if o.kind == kind]
     if len(candidates) != 1:
@@ -785,13 +790,19 @@ class _StartWalk:
 
     def _candidate_unit_ids(self, selected: list[str], position: int) -> list[str]:
         """The unit ids ``--unit`` stands for at ``position``: itself, or for a
-        ``register`` ``<producer>/<unit>`` -- any producing stage's when no
-        producing stage precedes it in this run (a seeded run starting at a
-        register)."""
+        ``register`` ``<producer>/<unit>``. With no producing stage before it
+        in this run (a seeded run starting at a register), the producer is
+        the one before the matching position in the seed's stage list, so a
+        leading ``register`` stands for ``register(admit)``, never a later
+        register unit such as ``difference/<unit>`` (Codex diff review of
+        step 6). Only when the seed's list does not end with this run's
+        does it fall back to any producing stage's."""
         unit_id = self.args.unit_id
         if selected[position] != "register":
             return [unit_id]
         producer = self._producer(selected, position)
+        if producer is None:
+            producer = self._seed_producer(selected, position, any_seed_kind=True)
         if producer is not None:
             return [f"{producer}/{unit_id}"]
         return [f"{stage}/{unit_id}" for stage in STAGE_NAMES if stage != "register"]
@@ -799,13 +810,16 @@ class _StartWalk:
     def _inherited(self, selected: list[str], position: int, first: int) -> bool:
         """Whether a seeded run inherits this position's result from its seed
         (supervisor step 6, 2026-09-24, Codex amendment B2): no unit row for
-        the unit here or at any earlier position, no explicit inputs, and a
-        seeded unit for it at a later position -- its upstream completed in
-        the seed."""
+        the unit here or at any earlier position, no explicit inputs or
+        ``--template`` for this stage (an explicit template asks for the
+        stage to run; Codex diff review of step 6), and a seeded unit for it
+        at a later position -- its upstream completed in the seed."""
         run_id = self.args.run_id
         if self.run.seed_run is None:
             return False
         if self._explicit_inputs(selected[position], position, first) is not None:
+            return False
+        if selected[position] in self.templates:
             return False
         for earlier in range(position + 1):
             if _units_at(self.conn, run_id, selected[earlier],
@@ -850,13 +864,16 @@ class _StartWalk:
         producer = self._producer(selected, position)
         if stage in self.templates:
             if producer is None:
+                producer = self._seed_producer(selected, position)
+            if producer is None:
                 raise _Exit(int(ExitCode.USAGE),
                             f"--template {stage}=... needs a preceding producing stage "
                             "in the run's selected stages; there is none")
             return compose_inputs(
                 self.conn, run_id=self.args.run_id, stage=stage,
                 unit_id=self.args.unit_id, from_stage=producer,
-                template=self.templates[stage], reuse_existing=True)
+                template=self.templates[stage], reuse_existing=True,
+                producer_run=self._producer_run(producer))
         seeded_inputs, _ = self._seeded(stage, unit_id)
         if seeded_inputs is not None:
             return seeded_inputs
@@ -877,12 +894,19 @@ class _StartWalk:
         seed = _run_row(self.conn, seed_run)
         return seed if seed is not None and seed.kind == "production" else None
 
-    def _seed_producer(self, selected: list[str], position: int) -> str | None:
+    def _seed_producer(self, selected: list[str], position: int, *,
+                       any_seed_kind: bool = False) -> str | None:
         """For a run seeded from a production run, whose stage list is a
         suffix of the seed's, the producing stage before ``position`` in the
         seed's list (e.g. ``load`` after a first-position ``register``
-        reads the seed's ``difference``); ``None`` otherwise."""
-        seed = self._production_seed()
+        reads the seed's ``difference``); ``None`` otherwise.
+        ``any_seed_kind`` accepts a scratch seed too: for naming a unit,
+        not for reading the seed's outputs."""
+        if any_seed_kind:
+            seed = (None if self.run.seed_run is None
+                    else _run_row(self.conn, self.run.seed_run))
+        else:
+            seed = self._production_seed()
         if seed is None:
             return None
         offset = len(seed.selected_stages) - len(selected)

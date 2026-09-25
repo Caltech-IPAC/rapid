@@ -555,8 +555,53 @@ def test_mark_run_deleting_refuses_running_attempt(conn):
     run_id = _make_run(conn, kind="scratch")
     stage, unit_id = _make_unit(conn, run_id)
     repo.allocate_attempt(conn, run_id, stage, unit_id)  # left running, disposition NULL
-    with pytest.raises(repo.DeletionRefused):
+    with pytest.raises(repo.DeletionRefused, match=r"1 unresolved \(queued or running\) attempt"):
         repo.mark_run_deleting(conn, run_id, requested_by="brusholme")
+
+
+def _record_lost(conn, run_id, stage, unit_id):
+    """Allocate an attempt and record it ``lost`` (no job, no exit code),
+    as ``run reconcile --resolve-jobless`` does."""
+    attempt_id = repo.allocate_attempt(conn, run_id, stage, unit_id)
+    repo.record_attempt_result(
+        conn, attempt_id, exit_code=None, disposition="lost",
+        output_location=f"runs/{run_id}/{stage}/{unit_id}/{attempt_id}",
+        execution_record={"source_revision": "abc123", "schema_version": "1",
+                          "settings_hash": "sha256:xyz"},
+        scheduler_job_id=None, reconcile_note="no scheduler job after 0 s")
+    return attempt_id
+
+
+def test_mark_run_deleting_allows_a_lost_attempt_whose_unit_then_completed(conn):
+    """R10 (supervisor step 6, 2026-09-24): a ``lost`` attempt is a recorded
+    resolution, so a unit re-attempted to completion after it deletes
+    cleanly (the live scratch run 01M3BA39VQ6BWZN876YNZW609Y was refused)."""
+    run_id = _make_run(conn, kind="scratch")
+    stage, unit_id = _make_unit(conn, run_id)
+    _record_lost(conn, run_id, stage, unit_id)
+    _succeed_and_select(conn, run_id, stage, unit_id)
+    with conn.cursor() as cur:
+        cur.execute("SELECT state FROM units WHERE run = %s", (run_id,))
+        assert cur.fetchone() == ("complete",)
+        cur.execute("SELECT disposition FROM attempts WHERE run = %s ORDER BY started, id",
+                    (run_id,))
+        assert sorted(r[0] for r in cur.fetchall()) == ["lost", "succeeded"]
+    repo.mark_run_deleting(conn, run_id, requested_by="brusholme")
+    with conn.cursor() as cur:
+        cur.execute("SELECT state FROM runs WHERE id = %s", (run_id,))
+        assert cur.fetchone() == ("deleting",)
+
+
+def test_mark_run_deleting_allows_a_lost_attempt_alone(conn):
+    """R10: a unit left ``ready`` after a ``lost`` attempt has nothing
+    running; only ``disposition IS NULL`` blocks deletion."""
+    run_id = _make_run(conn, kind="scratch")
+    stage, unit_id = _make_unit(conn, run_id)
+    _record_lost(conn, run_id, stage, unit_id)
+    repo.mark_run_deleting(conn, run_id, requested_by="brusholme")
+    with conn.cursor() as cur:
+        cur.execute("SELECT state FROM runs WHERE id = %s", (run_id,))
+        assert cur.fetchone() == ("deleting",)
 
 
 def test_mark_run_deleting_refuses_outside_dependency(conn):

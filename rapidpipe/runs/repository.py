@@ -1663,10 +1663,16 @@ def mark_run_deleting(
     explicitly authorised actor), replaces the owner check with the expiry
     predicate re-checked under the lock: not pinned and ``expires_at <
     now()`` (supervisor step 3, 2026-09-24, amendment A6) -- refuses if any attempt is queued or running
-    (disposition IS NULL) or unresolved ('lost'), or if any
+    (disposition IS NULL), or if any
     ``unit_inputs``/``dependencies`` row from OUTSIDE the run points at
     one of its instances, then sets state 'deleting' -- all in one
     transaction (runs page, "Deletion").
+
+    A ``lost`` attempt does not block deletion (supervisor step 6,
+    2026-09-24, R10): it is a recorded resolution, never "still running"
+    -- reconcile records it only when Batch does not return the job at
+    all, and ``--resolve-jobless`` only after finding no job named for
+    the attempt. Only ``disposition IS NULL`` counts as unresolved.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -1702,15 +1708,15 @@ def mark_run_deleting(
         cur.execute(
             """
             SELECT count(*) FROM attempts
-            WHERE run = %s AND (disposition IS NULL OR disposition = 'lost')
+            WHERE run = %s AND disposition IS NULL
             """,
             (run_id,),
         )
         (unresolved,) = cur.fetchone()
         if unresolved:
             raise DeletionRefused(
-                f"run {run_id!r} has {unresolved} queued, running or "
-                "unresolved ('lost') attempt(s); refusing")
+                f"run {run_id!r} has {unresolved} unresolved (queued or running) attempt(s) "
+                "with no recorded disposition; refusing")
 
         # Any unit_inputs or dependencies row from OUTSIDE this run
         # pointing at one of its instances.

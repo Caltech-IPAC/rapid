@@ -119,3 +119,20 @@ def test_a_non_finite_measurement_is_recorded_as_text_and_named():
                                          _params("rebuild-trial@1"))
     assert result.detail["measurements"]["scalefacref"] == "nan"
     assert result.summary == "scalefacref=nan not finite"
+
+
+@pytest.mark.parametrize("override", [
+    {"dxmedianfin": float("nan")}, {"dymedianfin": float("-inf")},
+    {"dxmedianfin": float("inf"), "dymedianfin": float("nan")},
+])
+def test_non_finite_signed_medians_are_recorded_as_text(override):
+    """Codex diff review of step 6: the signed medians reached detail raw,
+    so a NaN median made the failed row unrecordable (jsonb has no NaN)."""
+    import json
+
+    result = difference_image_statistics(_Conn([_row(**override)]), "I",
+                                         _params("rebuild-trial@1"))
+    assert result.outcome == "failed"
+    for name, value in override.items():
+        assert result.detail["measurements"][name] == str(value)
+    json.dumps(result.detail, allow_nan=False)  # raises ValueError on a raw NaN
