@@ -22,6 +22,9 @@ of the ``stage`` group, with ``stage list`` and ``stage describe``
   (``rapidpipe.runs.cleanup.delete_run``); ``pin`` / ``unpin`` -- keep a
   scratch run from expiring, or release it (``cleanup.pin_run``).
 
+``rapidpipe loop run|plan|show`` is the scheduled processing-date loop
+(``rapidpipe.cli.loopctl`` over ``rapidpipe.launch.loop``).
+
 ``rapidpipe check list|run|show`` (``rapidpipe.cli.checkctl``) lists the
 registered checks and shipped check policies, runs a policy's checks over
 a run's candidates recording each result, and shows recorded results
@@ -76,7 +79,7 @@ from rapidpipe.launch.batch import (
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_id
 from rapidpipe.products.storage import fetch_object, parse_location
-from rapidpipe.cli import checkctl, runctl, stagectl
+from rapidpipe.cli import checkctl, loopctl, runctl, stagectl
 from rapidpipe.release import __main__ as release_cli
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
@@ -392,6 +395,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     checkctl.add_parser(subparsers)
 
+    loopctl.add_parser(subparsers)
+
     return parser
 
 
@@ -470,9 +475,76 @@ def _last_applied_schema_version(cur) -> str | None:
     return row[0] if row else None
 
 
-def _run_create_command(args: argparse.Namespace) -> int:
+class ReleaseNotComplete(Exception):
+    """``run create --release`` (and ``loop run``) named a release that is
+    absent or not ``complete``; the run is not created."""
+
+
+def create_run_record(
+    conn,
+    *,
+    kind: str,
+    owner: str,
+    purpose: str,
+    stages: Sequence[str],
+    release: str | None,
+    lane: str,
+    profile: str,
+    db_target: str | None,
+    max_attempts: int,
+    settings_overlay_ref: str | None = None,
+    input_selection_ref: str | None = None,
+    check_policy_ref: str | None = None,
+    auto_promote: bool = False,
+    seed: str | None = None,
+) -> str:
+    """``run create``'s one code path (``rapidpipe loop run`` uses it too):
+    with ``release``, the run's source revision and image digest are the
+    ``releases`` row's, and a release that is absent or not ``complete``
+    raises :class:`ReleaseNotComplete`; without, the checkout's revision
+    and ``RAPIDPIPE_IMAGE_DIGEST``. Does not commit."""
     from rapidpipe.runs.repository import create_run
 
+    with conn.cursor() as cur:
+        schema_version = _last_applied_schema_version(cur) or "unknown"
+        release_row = None
+        if release is not None:
+            cur.execute(
+                "SELECT state, source_revision, image_digest FROM releases "
+                "WHERE tag = %s", (release,))
+            release_row = cur.fetchone()
+    if release is not None:
+        if release_row is None or release_row[0] != "complete":
+            state = "absent" if release_row is None else release_row[0]
+            raise ReleaseNotComplete(f"release {release} is {state}, not complete; refusing")
+        _, code_revision, image_digest = release_row
+    else:
+        code_revision = _source_revision_or_unknown()
+        image_digest = os.environ.get("RAPIDPIPE_IMAGE_DIGEST")
+
+    return create_run(
+        conn,
+        kind=kind,
+        owner=owner,
+        purpose=purpose,
+        selected_stages=list(stages),
+        code_revision=code_revision,
+        image_digest=image_digest,
+        schema_version=schema_version,
+        settings_overlay_ref=settings_overlay_ref,
+        input_selection_ref=input_selection_ref,
+        lane=lane,
+        resource_profile=profile,
+        database_target=db_target or os.environ.get("PGDATABASE", ""),
+        max_attempts_per_unit=max_attempts,
+        auto_promote=auto_promote,
+        check_policy_ref=check_policy_ref,
+        release=release,
+        seed_run=seed,
+    )
+
+
+def _run_create_command(args: argparse.Namespace) -> int:
     if args.only_failed:
         return _run_create_only_failed_command(args)
     missing = [flag for flag, value in (("--kind", args.kind), ("--purpose", args.purpose),
@@ -499,47 +571,20 @@ def _run_create_command(args: argparse.Namespace) -> int:
 
     with cm as conn:
         try:
-            with conn.cursor() as cur:
-                schema_version = _last_applied_schema_version(cur) or "unknown"
-                if args.release is not None:
-                    cur.execute(
-                        "SELECT state, source_revision, image_digest FROM releases "
-                        "WHERE tag = %s", (args.release,))
-                    release_row = cur.fetchone()
-            if args.release is not None:
-                if release_row is None or release_row[0] != "complete":
-                    state = "absent" if release_row is None else release_row[0]
-                    sys.stderr.write(
-                        f"rapidpipe run create: release {args.release} is {state}, "
-                        "not complete; refusing\n")
-                    conn.rollback()
-                    return 2
-                _, code_revision, image_digest = release_row
-            else:
-                code_revision = _source_revision_or_unknown()
-                image_digest = os.environ.get("RAPIDPIPE_IMAGE_DIGEST")
-
-            run_id = create_run(
-                conn,
-                kind=args.kind,
-                owner=owner,
-                purpose=args.purpose,
-                selected_stages=stages,
-                code_revision=code_revision,
-                image_digest=image_digest,
-                schema_version=schema_version,
+            run_id = create_run_record(
+                conn, kind=args.kind, owner=owner, purpose=args.purpose, stages=stages,
+                release=args.release, lane=args.lane or "local",
+                profile=args.profile or "local", db_target=args.db_target,
+                max_attempts=1 if args.max_attempts is None else args.max_attempts,
                 settings_overlay_ref=args.settings_overlay_ref,
                 input_selection_ref=args.input_selection_ref,
-                lane=args.lane or "local",
-                resource_profile=args.profile or "local",
-                database_target=args.db_target or os.environ.get("PGDATABASE", ""),
-                max_attempts_per_unit=1 if args.max_attempts is None else args.max_attempts,
-                auto_promote=args.auto_promote,
                 check_policy_ref=args.check_policy,
-                release=args.release,
-                seed_run=args.seed,
-            )
+                auto_promote=args.auto_promote, seed=args.seed)
             conn.commit()
+        except ReleaseNotComplete as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run create: {exc}\n")
+            return 2
         except RunModelError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run create: {exc}\n")
@@ -1213,6 +1258,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "check":
         return checkctl.dispatch(args)
+
+    if args.command == "loop":
+        return loopctl.dispatch(args)
 
     parser.print_help()
     return int(ExitCode.SUCCESS) if args.command is None else int(ExitCode.USAGE)

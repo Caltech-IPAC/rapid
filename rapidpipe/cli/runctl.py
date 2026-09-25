@@ -240,15 +240,19 @@ def _connect(command: str):
         raise _Exit(int(ExitCode.TRANSIENT_FAILURE), f"database unavailable: {exc}") from exc
 
 
-def _with_connection(command: str, body: Callable[[Any], int]) -> int:
+def _with_connection(command: str, body: Callable[[Any], int], *,
+                     prog: str = "rapidpipe run",
+                     usage_errors: tuple[type[BaseException], ...] = ()) -> int:
     """Connect, run ``body(conn)``, and map exceptions to exit codes.
 
     ``body`` commits what it wants kept; anything raised rolls back.
+    ``prog`` prefixes the messages (``rapidpipe loop`` shares this);
+    ``usage_errors`` are further exception types that exit 64.
     """
     try:
         cm = _connect(command)
     except _Exit as exc:
-        sys.stderr.write(f"rapidpipe run {command}: {exc}\n")
+        sys.stderr.write(f"{prog} {command}: {exc}\n")
         return exc.code
 
     main = _main_module()
@@ -257,21 +261,21 @@ def _with_connection(command: str, body: Callable[[Any], int]) -> int:
             return body(conn)
         except _Exit as exc:
             conn.rollback()
-            sys.stderr.write(f"rapidpipe run {command}: {exc}\n")
+            sys.stderr.write(f"{prog} {command}: {exc}\n")
             return exc.code
         except (RunModelError, DependencyIncomplete, MissingEnvironmentVariable,
-                main.RegisterUnitIdError, LocationError, ManifestError) as exc:
+                main.RegisterUnitIdError, LocationError, ManifestError, *usage_errors) as exc:
             conn.rollback()
-            sys.stderr.write(f"rapidpipe run {command}: {exc}\n")
+            sys.stderr.write(f"{prog} {command}: {exc}\n")
             return int(ExitCode.USAGE)
         except ReleaseDefinitionRefused as exc:
             conn.rollback()
-            sys.stderr.write(f"rapidpipe run {command}: {exc}\n")
+            sys.stderr.write(f"{prog} {command}: {exc}\n")
             return 1
         except Exception as exc:  # noqa: BLE001 - AWS/botocore-shaped errors
             if main._is_batch_error(exc):
                 conn.rollback()
-                sys.stderr.write(f"rapidpipe run {command}: AWS error: {exc}\n")
+                sys.stderr.write(f"{prog} {command}: AWS error: {exc}\n")
                 return int(ExitCode.TRANSIENT_FAILURE)
             conn.rollback()
             raise
@@ -735,9 +739,18 @@ def _attempt_line(stage: str, unit_id: str, attempt: str, job: str | None,
 
 
 class _StartWalk:
-    def __init__(self, conn, args: argparse.Namespace):
+    """``run start``'s walk. ``positions`` (indexes into the run's selected
+    stages) restricts the walk to those occurrences, in order, for a caller
+    that walks one run with different units per stage (the processing-date
+    loop, ``rapidpipe.launch.loop``); ``continue_hint`` replaces the
+    ``run start`` command a timeout message names."""
+
+    def __init__(self, conn, args: argparse.Namespace, *,
+                 positions: list[int] | None = None, continue_hint: str | None = None):
         self.conn = conn
         self.args = args
+        self.positions = positions
+        self.continue_hint = continue_hint
         self.inputs_unprefixed, self.inputs_keyed = _split_keyed(args.inputs, "--inputs")
         self.settings_unprefixed, self.settings_keyed = _split_keyed(args.settings, "--settings")
         _, self.templates = _split_keyed(args.template, "--template", allow_unprefixed=False)
@@ -921,14 +934,24 @@ class _StartWalk:
                 raise _Exit(int(ExitCode.TRANSIENT_FAILURE),
                             f"timed out after {self.args.timeout:g}s waiting for attempt "
                             f"{attempt_id} ({stage} {unit_id}); continue with: "
-                            f"{_continue_command(self.args)}")
+                            f"{self._continue()}")
             sleep(self.args.interval)
+
+    def _continue(self) -> str:
+        return self.continue_hint or _continue_command(self.args)
 
     def run(self) -> int:
         args = self.args
         run = self.run = _require_run(self.conn, args.run_id)
         selected = run.selected_stages
-        if args.stage is not None:
+        if self.positions is not None:
+            positions = list(self.positions)
+            bad = [i for i in positions if not 0 <= i < len(selected)]
+            if bad:
+                raise _Exit(int(ExitCode.USAGE),
+                            f"positions {bad} are outside run {args.run_id}'s "
+                            f"{len(selected)} selected stages")
+        elif args.stage is not None:
             positions = [i for i, s in enumerate(selected) if s == args.stage]
             if not positions:
                 raise _Exit(int(ExitCode.USAGE),
@@ -1038,7 +1061,7 @@ class _StartWalk:
                                     f"timed out after {args.timeout:g}s: {stage} {unit_id} "
                                     f"is ready again after a {final.last_disposition} "
                                     "attempt; continue with: "
-                                    f"{_continue_command(args)}")
+                                    f"{self._continue()}")
                     print(f"{stage} {unit_id} is ready again after a "
                           f"{final.last_disposition} attempt; allocating another",
                           flush=True)
@@ -1076,6 +1099,35 @@ def maybe_auto_promote(conn, run_id: str) -> None:
         return
     conn.commit()
     print(outcome.message, flush=True)
+
+
+def walk_unit(
+    conn,
+    *,
+    run_id: str,
+    unit_id: str,
+    positions: list[int] | None = None,
+    inputs: Iterable[str] = (),
+    settings: Iterable[str] = (),
+    templates: Iterable[str] = (),
+    interval: float = 30.0,
+    timeout: float = 14400.0,
+    continue_hint: str | None = None,
+) -> int:
+    """``run start``'s walk as a callable: the same :class:`_StartWalk`
+    over ``run_id`` for ``unit_id``, restricted to ``positions`` of the
+    run's selected stages when given. ``inputs``/``settings``/``templates``
+    take ``run start``'s ``[<stage>=]<loc>`` forms (unprefixed = the first
+    walked position). Returns 0 (complete) or 1 (a unit failed or was
+    cancelled); raises :class:`_Exit` 75 on ``timeout`` and 64 on a
+    refusal. The processing-date loop (``rapidpipe.launch.loop``) is given
+    this function by ``rapidpipe loop`` rather than importing it, since
+    ``rapidpipe.launch`` may not import ``rapidpipe.cli``."""
+    args = argparse.Namespace(
+        run_id=run_id, unit_id=unit_id, stage=None, inputs=list(inputs),
+        settings=list(settings), template=list(templates), no_wait=False,
+        interval=interval, timeout=timeout)
+    return _StartWalk(conn, args, positions=positions, continue_hint=continue_hint).run()
 
 
 def _start_command(args: argparse.Namespace) -> int:
