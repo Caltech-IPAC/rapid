@@ -214,6 +214,8 @@ difference_template = "{TEMPLATE}"
         cur.execute("SELECT id FROM promotions WHERE request_context->>'run' = ANY(%s)", (runs,))
         promotions = [r[0] for r in cur.fetchall()]
         cur.execute("DELETE FROM loop_dates WHERE schedule = %s", (schedule,))
+        cur.execute("DELETE FROM checks WHERE instance IN "
+                    "(SELECT id FROM product_instances WHERE run = ANY(%s))", (runs,))
         cur.execute("DELETE FROM unit_inputs WHERE unit IN "
                     "(SELECT id FROM units WHERE run = ANY(%s))", (runs,))
         cur.execute(f"DELETE FROM {TABLE} WHERE result_set IN "
@@ -323,7 +325,10 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
         assert record["promotion"]  # a promotion id or "refused: ..."
     for _, _, _, promotion, record in rows:
         assert promotion is not None and record["promotion"] == promotion
-        assert record["promotion_gate"] == "released-image only"
+        # Step 6's gate: the default policy (the spec names none) checks
+        # difference-image and source-set candidates; the fakes register none.
+        assert record["promotion_gate"] == "check policy rebuild-trial@1"
+        assert record["checks"] == []
     with db.cursor() as cur:
         cur.execute("SELECT who, reason, request_context->>'run' FROM promotions "
                     "WHERE id = ANY(%s) ORDER BY happened_at", ([r[3] for r in rows],))
