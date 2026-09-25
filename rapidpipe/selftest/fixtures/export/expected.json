@@ -1,7 +1,22 @@
 {
-  "about": "Inputs and expected outcome of the export stage's fixture (make stage-export; rapidpipe selftest --stage export). export is a declared stub (supervisor step 8, 2026-09-24, ruling R9): a structurally valid input-set manifest still exits 69 and publishes no manifest, never 0. The inputs are rapidpipe.selftest.support.fakeexport.build_export_input_set.",
-  "inputs": {},
+  "about": "Inputs and expected outcome of the export stage's fixture (make stage-export; rapidpipe selftest --stage export). The real export port (supervisor step 8, 2026-09-24, ruling R12): a fake database (rapidpipe.selftest.support.fakeexport) holds two named source sets (120 + 80 sources scattered 0.01 deg around one position, every tenth flagged), one source set that is not named (its rows must not be read) and one named association set (recorded, unused); hats-import runs for real with and without --real-tools. flags_zero_only is off (dev's default), so all 200 named rows are exported.",
+  "inputs": {
+    "result_sets": {
+      "01J8Y6QZ3MF1NA1E00000000S1": {"kind": "source-set", "rows": 120},
+      "01J8Y6QZ3MF1NA1E00000000S2": {"kind": "source-set", "rows": 80},
+      "01J8Y6QZ3MF1NA1E00000000S9": {"kind": "source-set", "rows": 50},
+      "01J8Y6QZ3MF1NA1E00000000A1": {"kind": "association-set"}
+    },
+    "named": ["01J8Y6QZ3MF1NA1E00000000S1", "01J8Y6QZ3MF1NA1E00000000S2",
+              "01J8Y6QZ3MF1NA1E00000000A1"]
+  },
   "expected": {
-    "exit_code": 69
+    "exit_code": 0,
+    "row_count": 200,
+    "min_partition_count": 1,
+    "source_sets": ["01J8Y6QZ3MF1NA1E00000000S1", "01J8Y6QZ3MF1NA1E00000000S2"],
+    "association_sets": ["01J8Y6QZ3MF1NA1E00000000A1"],
+    "catalog_dir": "hats/sources_hats_catalog",
+    "export_type": "sources"
   }
 }

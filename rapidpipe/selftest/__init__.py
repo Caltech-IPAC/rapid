@@ -6,10 +6,11 @@ rapidpipe.cli.main``), as ``rapidpipe selftest --stage difference|finalize|load|
 [--real-tools] [--work-dir DIR] [--output-location s3://... or path]``.
 The fixture gate then runs as a submitted Batch job whose execution
 record is the evidence -- no separate test harness needs installing
-inside the image. ``photometry`` and ``export`` are declared stubs
-(supervisor step 8, 2026-09-24, ruling R9): their fixtures assert exit 69
-and no published manifest, the same either side of ``--real-tools`` since
-neither ever invokes a real tool or database.
+inside the image. ``photometry`` is a declared stub
+(supervisor step 8, 2026-09-24, ruling R9): its fixture asserts exit 69
+and no published manifest, the same either side of ``--real-tools``.
+``export`` (ruling R12) runs hats-import for real either side of it,
+against a fake database.
 
 :mod:`rapidpipe.selftest.runner` holds the prepare/run/check machinery
 shared with ``make stage-<name>`` (``tests/fixtures/<stage>/

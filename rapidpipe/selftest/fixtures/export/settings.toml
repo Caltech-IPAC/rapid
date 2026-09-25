@@ -1,8 +1,9 @@
-# Settings overlay for the export stage's fixture (make stage-export).
+# Settings overlay for the export stage's fixture (make stage-export;
+# rapidpipe selftest --stage export).
 #
-# The stage's defaults (rapidpipe/settings/export.toml) already pass
-# _check_settings; this overlay restates one value so the overlay path is
-# exercised, as finalize's and alerts' fixtures do.
+# dev's defaults (rapidpipe/settings/export.toml) otherwise: the overlay
+# only runs the dask cluster as threads in the stage's own process, to
+# keep a 200-row selftest fast and free of worker-process start-up.
 
-[export]
-catalog_type = "sources"
+[hats]
+dask_processes = false

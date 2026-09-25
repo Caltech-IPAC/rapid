@@ -61,7 +61,7 @@ def test_declaration_validates():
     assert DECLARATION.name == "register"
     assert DECLARATION.consumes == ("l2-image", "psf", "difference-image", "source-catalog",
                                     "alert-container", "alert-set", "reference-image",
-                                    "reference-catalog")
+                                    "reference-catalog", "catalog-export")
     assert DECLARATION.produces == ()
     assert DECLARATION.database_access == "read-write"
 
@@ -245,6 +245,58 @@ def test_bad_reference_manifest_exits_65_without_connecting(tmp_path, monkeypatc
     edit(outputs)
     inputs_dir = tmp_path / "inputs"
     _write_manifest(inputs_dir, outputs)
+
+    def _raise_if_called(*args, **kwargs):
+        raise AssertionError("register must refuse a malformed manifest before connecting")
+
+    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.INPUT_REJECTED)
+
+
+# ----------------------------------------------------------------------
+# catalog-export (supervisor step 8, ruling R12): instance row only
+# ----------------------------------------------------------------------
+
+def _catalog_export_entry():
+    sha = "sha256:" + "0" * 64
+    root = "hats/sources_hats_catalog"
+    return {
+        "kind": "catalog-export", "format_version": "1",
+        "instance": "01ARZ3NDEKTSV4RRFFQ69G5FC1",
+        "key": {"field": 4711398, "export_type": "sources",
+                "result_set": "01ARZ3NDEKTSV4RRFFQ69G5FS1", "settings_hash": "a" * 64},
+        "primary": f"{root}/properties",
+        "members": [
+            {"role": "hats", "path": f"{root}/properties", "bytes": 10, "sha256": sha},
+            {"role": "partition", "path": f"{root}/dataset/Norder=3/Dir=0/Npix=450.parquet",
+             "bytes": 10, "sha256": sha},
+            {"role": "metadata", "path": f"{root}/partition_info.csv", "bytes": 10,
+             "sha256": sha},
+        ],
+        "registration": {"row_count": 200, "export_type": "sources", "hats_version": "0.11.0",
+                         "source_sets": ["01ARZ3NDEKTSV4RRFFQ69G5FS1"], "healpix_order": 3,
+                         "partition_count": 1, "md5": "0" * 32},
+    }
+
+
+def test_catalog_export_registers_the_instance_row_only(tmp_path, monkeypatch):
+    inputs_dir = tmp_path / "inputs"
+    _write_manifest(inputs_dir, [_catalog_export_entry()])
+    conn = _FakeConn()
+    registered = []
+    monkeypatch.setattr(register_module, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr(register_module, "register_manifest",
+                        lambda c, manifest, **kw: registered.append(manifest))
+    assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.SUCCESS)
+    assert conn.committed
+    assert [o["kind"] for o in registered[0]["outputs"]] == ["catalog-export"]
+
+
+def test_bad_catalog_export_exits_65_without_connecting(tmp_path, monkeypatch):
+    entry = _catalog_export_entry()
+    entry["registration"]["partition_count"] = 2
+    inputs_dir = tmp_path / "inputs"
+    _write_manifest(inputs_dir, [entry])
 
     def _raise_if_called(*args, **kwargs):
         raise AssertionError("register must refuse a malformed manifest before connecting")

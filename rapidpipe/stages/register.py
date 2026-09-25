@@ -5,7 +5,7 @@ from manifests"; per "The manifest": "Each product kind defines the
 registration metadata its manifest entry must carry. `register` validates
 that metadata and writes product rows without reading product contents."
 
-It records eight kinds. It registers the enclosing manifest's own
+It records nine kinds. It registers the enclosing manifest's own
 instances (`rapidpipe.runs.repository.register_manifest`), then writes
 the legacy rows each kind has, all in one transaction:
 
@@ -31,6 +31,9 @@ the legacy rows each kind has, all in one transaction:
   (``rapidpipe.products.alertcontainer``). The `alerts` stage registers both
   itself, in the transaction that writes their outbox rows, so registering
   its manifest again is a no-op replay.
+- `catalog-export` (`export`'s manifest): validated and accepted, nothing
+  written beyond its instance row (``rapidpipe.products.catalogexport``;
+  products page: "none; exported").
 
 It stays independently runnable from whatever
 stage produced the manifest it reads (stage contract, "The manifest":
@@ -55,6 +58,7 @@ from rapidpipe.products.alertcontainer import (
     validate_alert_container_entry,
     validate_alert_set_entry,
 )
+from rapidpipe.products.catalogexport import validate_catalog_export_entry
 from rapidpipe.products.diffimage import (
     validate_difference_entry,
     validate_source_catalog_entry,
@@ -78,7 +82,7 @@ from rapidpipe.stages.contract import (
 #: other kind is InputRejected, naming the kind.
 _KNOWN_KINDS = ("l2-image", "psf", "difference-image", "source-catalog",
                 "alert-container", "alert-set", "reference-image",
-                "reference-catalog")
+                "reference-catalog", "catalog-export")
 
 #: Kinds whose rows other kinds' rows reference, written first: a
 #: reference-catalog's `refimcatalogs` row needs its reference image's
@@ -98,7 +102,7 @@ DECLARATION = StageDeclaration(
             "l2-image and psf entries, or difference's, naming difference-image "
             "and source-catalog entries, or alerts's, naming alert-container "
             "and alert-set entries, or reference's, naming reference-image "
-            "and reference-catalog entries). <unit-id> is always "
+            "and reference-catalog entries, or export's, naming a catalog-export entry). <unit-id> is always "
             "<producing stage>/<producing unit id> (rapidpipe.products."
             "manifest.register_unit_id), derived from that same manifest's "
             "own `stage` and `unit.id` -- a register unit is identified by "
@@ -110,7 +114,7 @@ DECLARATION = StageDeclaration(
     settings_schema_path=None,
     consumes=("l2-image", "psf", "difference-image", "source-catalog",
               "alert-container", "alert-set", "reference-image",
-              "reference-catalog"),
+              "reference-catalog", "catalog-export"),
     produces=(),
     database_access="read-write",
     resource_defaults={"vcpus": 1, "memory_mib": 1024},
@@ -158,6 +162,8 @@ def _body(context: StageContext) -> StageResult:
                 validate_reference_image_entry(entry.to_dict())
             elif entry.kind == "reference-catalog":
                 validate_reference_catalog_entry(entry.to_dict())
+            elif entry.kind == "catalog-export":
+                validate_catalog_export_entry(entry.to_dict())
         except ValueError as exc:
             raise InputRejected(f"{entry.kind} {entry.instance!r}: {exc}") from exc
 
