@@ -145,11 +145,36 @@ def test_inputs_prefix_is_included_for_a_run_with_no_s3_attempts(monkeypatch):
     assert cleanup._s3_prefixes(_AttemptsConn([]), "R", None) == [("scratch", "runs/R/inputs/")]
 
 
-def test_inputs_prefix_skipped_without_an_s3_scratch_root_or_in_another_bucket(monkeypatch):
+def test_inputs_prefix_skipped_without_an_s3_scratch_root(monkeypatch):
     for name in ("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH", "RAPIDPIPE_OUTPUTS_ROOT"):
         monkeypatch.delenv(name, raising=False)
     assert cleanup._s3_prefixes(_AttemptsConn([]), "R", None) == []
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH", "/tmp/local-root")
     assert cleanup._s3_prefixes(_AttemptsConn([]), "R", "scratch") == []
-    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH", "s3://elsewhere/p")
-    assert cleanup._s3_prefixes(_AttemptsConn([]), "R", "scratch") == []
+
+
+def test_inputs_prefix_outside_the_scratch_bucket_is_refused(monkeypatch):
+    """Configuration drift (scratch bucket != the outputs root's bucket)
+    refuses deletion rather than marking the run deleted with its staged
+    inputs left behind -- even when every attempt's prefix passes."""
+    _scratch_env(monkeypatch, root="s3://elsewhere/p")
+    conn = _AttemptsConn([("A", "s3://scratch/p/runs/R/admit/u/A")])
+    with pytest.raises(cleanup.DeletionRefused, match="s3://elsewhere/p/runs/R/inputs/"):
+        cleanup._s3_prefixes(conn, "R", "scratch")
+
+
+def test_delete_run_refuses_before_marking_when_the_inputs_prefix_is_elsewhere(monkeypatch):
+    """The refusal comes from the first preflight, so the run is never
+    marked 'deleting' and nothing is committed or removed."""
+    _scratch_env(monkeypatch, root="s3://elsewhere/p")
+    marked = []
+    monkeypatch.setattr(cleanup, "_run_row", lambda cur, run_id: ("scratch", "me", "open"))
+    monkeypatch.setattr(cleanup, "mark_run_deleting", lambda *a, **k: marked.append(a))
+    monkeypatch.setattr(cleanup, "_blocking_references", lambda conn, run_id: [])
+    s3 = FakeVersionedS3()
+    s3.seed("elsewhere", "p/runs/R/inputs/difference/u/manifest.json")
+    conn = _AttemptsConn([])
+    with pytest.raises(cleanup.DeletionRefused, match="outside the scratch bucket"):
+        cleanup.delete_run(conn, "R", "me", s3_client=s3, scratch_bucket="scratch")
+    assert marked == []
+    assert len(s3.remaining("elsewhere", "p/runs/R/")) == 1
