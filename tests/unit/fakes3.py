@@ -1,10 +1,11 @@
 """A minimal in-memory stand-in for a boto3 S3 client, for tests that must
 run whether or not boto3 is installed.
 
-Only the four operations ``rapidpipe.products.storage`` calls are
-implemented: ``put_object`` (test setup), ``get_object``, ``list_objects_v2``
-(with ``Prefix`` and ``ContinuationToken``/``IsTruncated`` pagination),
-``upload_file`` and ``download_file``. ``calls`` records each operation's
+Only the operations ``rapidpipe.products.storage`` and ``rapidpipe run
+inputs`` call are implemented: ``put_object`` (test setup), ``get_object``,
+``list_objects_v2`` (with ``Prefix`` and ``ContinuationToken``/``IsTruncated``
+pagination), ``upload_file``, ``download_file``, ``head_object`` (a missing
+key raises a ``404`` client error) and ``copy_object``. ``calls`` records each operation's
 name and its key argument, in order, so a test can assert on upload order
 (e.g. "manifest.json last").
 """
@@ -120,6 +121,25 @@ class FakeS3:
             raise FakeClientError("NoSuchKey") from None
         with open(filename, "wb") as fh:
             fh.write(data)
+
+    def head_object(self, *, Bucket: str, Key: str, **_: Any) -> dict:
+        self.calls.append(("head_object", Key))
+        try:
+            data = self._objects[(Bucket, Key)]
+        except KeyError:
+            raise FakeClientError("404", "Not Found") from None
+        return {"ContentLength": len(data)}
+
+    def copy_object(
+        self, *, Bucket: str, Key: str, CopySource: dict[str, str], **_: Any,
+    ) -> dict:
+        self.calls.append(("copy_object", Key))
+        try:
+            data = self._objects[(CopySource["Bucket"], CopySource["Key"])]
+        except KeyError:
+            raise FakeClientError("NoSuchKey") from None
+        self._objects[(Bucket, Key)] = data
+        return {}
 
 
 class FakeVersionedS3:
