@@ -1,0 +1,7 @@
+{
+  "about": "Inputs and expected outcome of the export stage's fixture (make stage-export; rapidpipe selftest --stage export). export is a declared stub (supervisor step 8, 2026-09-24, ruling R9): a structurally valid input-set manifest still exits 69 and publishes no manifest, never 0. The inputs are rapidpipe.selftest.support.fakeexport.build_export_input_set.",
+  "inputs": {},
+  "expected": {
+    "exit_code": 69
+  }
+}

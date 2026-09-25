@@ -80,3 +80,17 @@ REFERENCE_TOOLS ?= fake
 .PHONY: stage-reference
 stage-reference:
 	$(PYTHON) tests/fixtures/reference/run_fixture.py --tools $(REFERENCE_TOOLS)
+
+# The photometry stage's fixture: a declared stub (supervisor step 8,
+# 2026-09-24, ruling R9) -- a structurally valid input-set manifest still
+# exits 69 and publishes no manifest; no tools, no database, runs anywhere.
+.PHONY: stage-photometry
+stage-photometry:
+	$(PYTHON) tests/fixtures/photometry/run_fixture.py
+
+# The export stage's fixture: a declared stub (supervisor step 8,
+# 2026-09-24, ruling R9) -- a structurally valid input-set manifest still
+# exits 69 and publishes no manifest; no tools, no database, runs anywhere.
+.PHONY: stage-export
+stage-export:
+	$(PYTHON) tests/fixtures/export/run_fixture.py

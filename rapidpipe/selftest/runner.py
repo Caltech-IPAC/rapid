@@ -8,7 +8,11 @@ with fresh run and attempt ids (the same invocation Batch uses), and
 check its exit code, manifest and products against ``expected.json``'s
 values. This module holds that shape once, as :class:`FixtureRunner`, and
 :mod:`rapidpipe.selftest.difference` / :mod:`rapidpipe.selftest.load`
-supply each stage's own prepare/check details.
+supply each stage's own prepare/check details. A stub stage's fixture
+(:mod:`rapidpipe.selftest.photometry`, :mod:`rapidpipe.selftest.export`)
+declares ``expected.json``'s ``exit_code`` as 69 instead of 0: ``check``
+is never called (there is no manifest to check against), and
+:func:`run_fixture` instead asserts that no manifest was published.
 
 The fixture *data* (``expected.json``, ``settings.toml``) is packaged
 under ``rapidpipe/selftest/fixtures/<stage>/`` so it ships inside the
@@ -51,9 +55,11 @@ from rapidpipe.products.manifest import Manifest, hash_file
 from rapidpipe.products.storage import parse_location, publish_dir
 
 #: The stages a fixture exists for today (stage contract, "Local
-#: execution"; ``tests/fixtures/<stage>/``).
+#: execution"; ``tests/fixtures/<stage>/``). ``photometry`` and ``export``
+#: are declared stubs (supervisor step 8, 2026-09-24, ruling R9): their
+#: fixtures assert exit 69 and no published manifest, not a completed run.
 STAGE_NAMES = ("reference", "difference", "finalize", "load", "maintain", "crossmatch", "alerts",
-               "statistics", "prune")
+               "statistics", "prune", "photometry", "export")
 
 FIXTURES_ROOT = Path(__file__).resolve().parent / "fixtures"
 
@@ -279,6 +285,14 @@ def run_fixture(fx: StageFixture, *, tools: str, python: str, repo_root: Path,
         if manifest is not None:
             context = CheckContext(inputs=inputs, outputs=outputs_path, work_dir=work_dir, tools=tools)
             fx.check(checks, manifest, expected, context)
+    elif exit_code == spec.get("exit_code"):
+        # A fixture whose expected outcome is itself non-zero (a declared
+        # stub stage's fixed contract exit code, stage contract: "If body
+        # raises, no manifest is written") -- there is no manifest to run
+        # fx.check against, so this is the whole check.
+        manifest_path = outputs_path / "manifest.json"
+        checks.check(not manifest_path.exists(),
+                     f"no manifest published (exit {exit_code}, as expected)")
 
     if upload_location is not None and outputs_path.exists():
         upload_target = parse_location(upload_location)

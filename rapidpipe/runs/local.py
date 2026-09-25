@@ -73,7 +73,8 @@ def disposition_for(exit_code: int, manifest_ok: bool) -> str:
     - a negative exit code (the subprocess was killed by a signal, per
       ``subprocess.Popen.returncode``'s convention): ``killed``.
     - exit 75 (``TRANSIENT_FAILURE``): ``transient``.
-    - exit 64, 65, 70, or any other non-negative code: ``failed``.
+    - exit 64, 65, 69 (declared, not implemented in this build), 70, or
+      any other non-negative code: ``failed``.
     """
     if exit_code < 0:
         return "killed"

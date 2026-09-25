@@ -1,0 +1,51 @@
+# Default settings for the export stage (rapidpipe.stages.export).
+#
+# `export` is a declared stub in this build (supervisor step 8,
+# 2026-09-24, ruling R9): it validates its arguments, these settings and
+# its input manifest exactly like a real stage, then exits 69 ("declared,
+# not implemented in this build") without running any science. These keys
+# reserve the parameter names the eventual port of `dev`'s HATS builders
+# would read -- pipeline/generateLightCurveHATSCatalog.py (catalog_type
+# "light-curves") and pipeline/generateSourceHATSCatalog.py (catalog_type
+# "sources"), both origin/dev, both driven by their `[HATS_CATALOGS]`
+# section of awsBatchSubmitJobs_launchSingleSciencePipeline.ini; an
+# overlay (--settings) may change values, never add keys: an unknown key
+# fails with exit 64, the same as for any other stage.
+#
+# HATS stands for Hierarchical Adaptive Tiling Scheme (dev's catalog
+# format, via `hats`/`hats-import`/`lsdb`; rapid_systems'
+# containers/rapid-pipeline build.sh already carries these in the
+# rapid-python conda-lock environment).
+
+[export]
+# Which catalog this attempt exports: "sources" (dev's
+# generateSourceHATSCatalog.py, a source-set/dumped `sources` rows) or
+# "light-curves" (dev's generateLightCurveHATSCatalog.py, an
+# association-set/statistics-set dump joining AstroObjects, Merges and
+# Sources into one light curve per object).
+catalog_type = "sources"
+
+[hats]
+# The HATS output format version this build's port would write.
+format_version = "1"
+
+# hats-import's ImportArguments healpix order range (dev:
+# lowest_healpix_order, highest_healpix_order).
+lowest_healpix_order = 0
+highest_healpix_order = 7
+
+# dask worker count for the hats-import pipeline (dev: n_workers).
+n_workers = 4
+
+# RA/Dec column names in the dumped rows (dev: sources_ra_col/
+# sources_dec_col for "sources"; lc_ra_col/lc_dec_col for "light-curves" --
+# one name here since this build never runs either dump).
+ra_col = "ra"
+dec_col = "dec"
+
+# Column lists dev dumps before import (dev: sources_cols for "sources";
+# lc_astroobjects_cols + lc_sources_cols + lc_df_join_index for
+# "light-curves", joining AstroObjects and Sources on this column). Empty
+# here: the eventual port fixes these per catalog_type.
+columns = []
+join_column = "aid"

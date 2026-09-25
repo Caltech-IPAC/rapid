@@ -1,0 +1,76 @@
+# Default settings for the photometry stage (rapidpipe.stages.photometry).
+#
+# `photometry` is a declared stub in this build (supervisor step 8,
+# 2026-09-24, ruling R9): it validates its arguments, these settings and
+# its input manifest exactly like a real stage, then exits 69 ("declared,
+# not implemented in this build") without running any science. These keys
+# reserve the parameter names the eventual port of `dev`'s forced
+# photometry would read, traced to
+# pipeline/forcedPhotometryForField.py's `[FORCED_PHOTOMETRY]` section of
+# awsBatchSubmitJobs_launchSingleSciencePipeline.ini (origin/dev); an
+# overlay (--settings) may change values, never add keys: an unknown key
+# fails with exit 64, the same as for any other stage.
+#
+# dev's own exit/warning codes (forcedPhotometryForField.py header
+# comment), kept here for the eventual port -- this build never raises
+# them, it always exits 69:
+#   0   success
+#   52  10K input-file limit reached; resubmit with a later JD range
+#   54  insufficient number of background pixels
+#   55  too many bad pixels
+#   56  one or more epochs' photometry may be impacted by bad/NaN pixels
+#   57  one or more epochs had no reference-catalog source within 5 arcsec
+#   58  one or more epochs had no reference-image PSF-catalog in the archive
+#   60  one or more epochs had upsampled diff-image PSF dims not odd integers
+#   61  one or more epochs had diff-image cutouts off the image or near an edge
+#   62  requested start JD was before survey start and was reset
+#   63  no records (epochs) returned by the database query
+#   64  catastrophic error
+#   65  requested end JD is before the official survey start date
+#   255 database connection or query execution error
+
+[photometry]
+# The PSF `dev` fits against: the SFFT difference-image PSF, falling back
+# to the corresponding reference-image PSF when the diff-image PSF is not
+# available (dev's forcedPhotometryForField.py module docstring). This
+# build's `psf` input-set entries carry whichever `dev` would have used;
+# the stage never actually resolves this choice.
+psf_source = "difference-then-reference"
+
+# diff-image cutout side length [native pixels]; also sets the PSF stamp
+# size (dev: stampsz).
+stampsz = 21
+
+# upsampling factor for stamp image pixels, on a side (dev: stampupsamplefac).
+stampupsamplefac = 1
+
+# diameter of the aperture for aperture photometry [native pixels] (dev: apdiam).
+apdiam = 8.0
+
+# correction factor for the PSF-fit flux uncertainty, for consistency with
+# the expected uncertainty in magnitude (~1.0857/snr) (dev: corrunc).
+corrunc = 1.0
+
+# SNR threshold for PSF-fit and aperture SNRs, used to compute a possible
+# correction for biases in the PSF flux (dev: snrforcor).
+snrforcor = 10.0
+
+# minimum number of good aperture-to-PSF-fit flux ratios needed before a
+# flux correction is computed (dev: minnumrats).
+minnumrats = 5
+
+# apply dev's filter-dependent corrections to PSF-fit fluxes for
+# consistency with aperture fluxes (dev: applyflxcorr, 0/1).
+applyflxcorr = false
+
+# maximum matching radius for the nearest reference-image PSF-catalog
+# source, in arcsec (dev: refmatchrad).
+refmatchrad = 5.0
+
+# maximum tolerable fraction of bad pixels in a difference-image cutout;
+# above this the epoch is skipped (dev: maxbadpixfrac).
+maxbadpixfrac = 0.5
+
+# minimum percent overlap of the difference image onto the field (sky
+# tile) for an epoch to be used (dev: minimum_percent_overlap_area).
+minimum_percent_overlap_area = 50.0

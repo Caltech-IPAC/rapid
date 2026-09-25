@@ -1,0 +1,8 @@
+# Settings overlay for the photometry stage's fixture (make stage-photometry).
+#
+# The stage's defaults (rapidpipe/settings/photometry.toml) already pass
+# _check_settings; this overlay restates one value so the overlay path is
+# exercised, as finalize's and alerts' fixtures do.
+
+[photometry]
+psf_source = "difference-then-reference"

@@ -1,0 +1,8 @@
+# Settings overlay for the export stage's fixture (make stage-export).
+#
+# The stage's defaults (rapidpipe/settings/export.toml) already pass
+# _check_settings; this overlay restates one value so the overlay path is
+# exercised, as finalize's and alerts' fixtures do.
+
+[export]
+catalog_type = "sources"

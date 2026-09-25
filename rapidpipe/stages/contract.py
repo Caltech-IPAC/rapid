@@ -81,7 +81,7 @@ DB_ACCESS_LEVELS = ("none", "read", "read-write")
 
 
 class ExitCode(IntEnum):
-    """The stage contract's five exit codes and the caller's action.
+    """The stage contract's six exit codes and the caller's action.
 
     Values and meanings are fixed by the contract's "Exit codes" table;
     do not renumber or add to this list without a contract change.
@@ -98,6 +98,16 @@ class ExitCode(IntEnum):
     """A declared input was absent, corrupt or incompatible once its
     storage was reached. Caller's action: fail, no retry."""
 
+    NOT_IMPLEMENTED = 69
+    """Declared, not implemented in this build: the stage has a real
+    :class:`StageDeclaration` and validates its arguments, settings and
+    input manifest like any other stage, but its science has not been
+    ported yet (supervisor step 8, 2026-09-24, ruling R9). sysexits'
+    EX_UNAVAILABLE; chosen over 64 (which would misreport a correct
+    invocation as a usage error) and 70 (which calls for investigation of
+    something unexpected, when the absence is deliberate and known).
+    Caller's action: fail, no retry."""
+
     STAGE_ERROR = 70
     """Unclassified stage error; stop for investigation.
     Caller's action: fail, no retry."""
@@ -108,7 +118,7 @@ class ExitCode(IntEnum):
 
 
 class StageContractError(Exception):
-    """Base class for the four exceptions ``run_stage`` maps to exit codes."""
+    """Base class for the five exceptions ``run_stage`` maps to exit codes."""
 
     exit_code: ExitCode
 
@@ -123,6 +133,20 @@ class InputRejected(StageContractError):
     """A declared input is absent, corrupt or incompatible. Maps to 65."""
 
     exit_code = ExitCode.INPUT_REJECTED
+
+
+class NotImplementedInBuild(StageContractError):
+    """The stage is declared but its science is not ported in this build.
+
+    Raised only after argument, settings and input-manifest validation
+    all pass -- a stub stage still rejects a bad invocation the same way
+    a real one would (64/65), and only refuses the work itself once the
+    request is otherwise valid. Maps to 69; ``run_stage`` writes no
+    manifest when this (or any) exception is raised, per the contract's
+    "If ``body`` raises, no manifest is written."
+    """
+
+    exit_code = ExitCode.NOT_IMPLEMENTED
 
 
 class StageError(StageContractError):
@@ -149,7 +173,7 @@ class StageDeclaration:
     ``consumes`` and ``produces`` name the product kinds the stage requires
     and writes; ``settings_schema_path`` is the stage's
     ``settings/<name>.toml`` defaults file, or ``None`` if it declares no
-    settings. ``supported_exit_codes`` must be a subset of the five defined
+    settings. ``supported_exit_codes`` must be a subset of the six defined
     in :class:`ExitCode`, and 0 is always implicitly supported.
     """
 
@@ -440,6 +464,8 @@ def run_stage(
     declaration: StageDeclaration,
     body: Callable[[StageContext], StageResult],
     argv: Sequence[str],
+    *,
+    validate_inputs: Callable[[StageContext], None] | None = None,
 ) -> int:
     """Parse argv under the one invocation form, run ``body``, return an exit code.
 
@@ -455,6 +481,20 @@ def run_stage(
     ``inputs.manifest`` set to the ``--inputs`` location -- validates it,
     and publishes it to ``--outputs``. If ``body`` raises, no manifest is
     written.
+
+    ``validate_inputs``, when given, is called with the built
+    :class:`StageContext` once, after the generic input manifest has been
+    parsed and *before* the ``--dry-run`` return -- so it runs on every
+    invocation, dry-run or not, and a stage-shape problem it raises (via
+    the usual :class:`InputRejected`/:class:`UsageError` family) is caught
+    by ``--dry-run`` too, not just a real run. This lets a stage whose
+    ``body`` cannot itself run under ``--dry-run`` (most of the science
+    stages just validate the generic manifest and stop there) still check
+    its own declared shape -- required product kinds present, a named
+    result set -- ahead of time. Most stages leave it unset: the generic
+    checks above (a parseable ``manifest.json``) already cover what
+    ``--dry-run`` promises for them. Unset, ``run_stage`` behaves exactly
+    as before.
     """
     declaration.validate()
     # Before argv is parsed there is no run/attempt id yet; a plain logger
@@ -578,11 +618,19 @@ def run_stage(
             declaration.name, context.run_id, context.unit_id,
             context.attempt_id, context.dry_run)
 
+        if validate_inputs is not None:
+            validate_inputs(context)
+
         if args.dry_run:
+            planned_inputs = ", ".join(
+                f"{entry.kind}:{entry.instance}" for entry in input_manifest.outputs) or "(none)"
+            planned_result_sets = ", ".join(input_manifest.inputs.result_sets) or "(none)"
             logger.info(
-                "stage=%s run=%s unit=%s attempt=%s exit=%s dry-run validated",
+                "stage=%s run=%s unit=%s attempt=%s exit=%s dry-run validated; "
+                "planned inputs: [%s]; planned result sets: [%s]; outputs -> %s",
                 declaration.name, context.run_id, context.unit_id,
-                context.attempt_id, int(ExitCode.SUCCESS))
+                context.attempt_id, int(ExitCode.SUCCESS),
+                planned_inputs, planned_result_sets, context.outputs_location)
             return int(ExitCode.SUCCESS)
 
         result = body(context)
