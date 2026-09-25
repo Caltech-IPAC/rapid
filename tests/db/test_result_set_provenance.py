@@ -100,6 +100,86 @@ def test_done_check_reuses_only_its_own_or_a_succeeded_attempts_set(conn, kind):
         assert found(second) == (instance, 1)
 
 
+@pytest.mark.parametrize("disposition", [None, "failed", "transient", "lost", "killed"])
+def test_done_check_never_reuses_another_attempts_set_unless_it_succeeded(conn, disposition):
+    run_id = _run(conn, "scratch")
+    unit_id = _unit(conn, run_id, "crossmatch")
+    key = {"field": FIELD, "settings_hash": new_ulid()}
+    first, _ = _register_set(conn, run_id, "crossmatch", unit_id, key=key)
+    if disposition is not None:
+        set_disposition(conn, first, disposition)
+    retry = repo.allocate_attempt(conn, run_id, "crossmatch", unit_id)
+    with conn.cursor() as cur:
+        assert objects.find_complete_result_set(
+            cur, "association-set", run_id, key, retry) is None
+
+
+def test_a_succeeded_but_unselected_set_is_reused_in_run_and_refused_across_runs(conn):
+    producer = _run(conn, "production")
+    unit_id = _unit(conn, producer, "crossmatch")
+    key = {"field": FIELD, "base": None, "settings_hash": new_ulid()}
+    first, instance = _register_set(conn, producer, "crossmatch", unit_id, key=key)
+    set_disposition(conn, first, "succeeded")          # succeeded, never selected
+    retry = repo.allocate_attempt(conn, producer, "crossmatch", unit_id)
+    reader = _run(conn, "production")
+    with conn.cursor() as cur:
+        # R1: the retry in the same run reuses it...
+        assert objects.find_complete_result_set(
+            cur, "association-set", producer, key, retry) == (instance, 1)
+        # ...and the reuse leaves its producing provenance alone.
+        cur.execute("SELECT producing_attempt, custody FROM product_instances WHERE id = %s",
+                    (instance,))
+        assert cur.fetchone() == (first, "candidate")
+        # R2: another run may not read it, its producer not being selected.
+        with pytest.raises(ValueError, match="not its unit's selected attempt"):
+            objects.assert_readable_result_set(cur, instance, reader)
+        with pytest.raises(ValueError, match="not its unit's selected attempt"):
+            objects.association_chain(cur, instance, reader)
+
+
+def test_a_reused_set_keeps_its_producing_attempt(conn, tmp_path, monkeypatch):
+    run_id, load_outputs = _loaded_source_set(conn, tmp_path, monkeypatch)
+    rc, first_attempt, first = _run_crossmatch(conn, monkeypatch, tmp_path, run_id,
+                                               load_outputs, name="first")
+    assert rc == 0
+    set_disposition(conn, first_attempt, "succeeded")
+    rc, _, second = _run_crossmatch(conn, monkeypatch, tmp_path, run_id, load_outputs,
+                                    name="second")
+    assert rc == 0
+    instance = _output(first)[1].instance
+    assert _output(second)[1].instance == instance
+    with conn.cursor() as cur:
+        cur.execute("SELECT producing_attempt, registering_attempt FROM product_instances "
+                    "WHERE id = %s", (instance,))
+        assert cur.fetchone() == (first_attempt, first_attempt)
+
+
+def test_every_link_and_every_named_source_set_is_checked(conn):
+    """A readable head does not carry an unreadable base or source set with it."""
+    reader = _run(conn, "production")
+    scratch = _run(conn, "scratch")
+    # A selected scratch source set, named by a production set's key.
+    load_unit = _unit(conn, scratch, "load")
+    load_attempt, private_sources = _register_set(
+        conn, scratch, "load", load_unit, kind="source-set",
+        key={"difference": new_ulid(), "catalog_type": "photutils"})
+    succeed_and_select(conn, load_attempt)
+    _, _, base = _production_set(conn, select=False)   # unselected base
+    head_run = _run(conn, "production")
+    head_unit = _unit(conn, head_run, "crossmatch")
+    head_attempt, head = _register_set(
+        conn, head_run, "crossmatch", head_unit,
+        key={"field": FIELD, "base": base, "source_sets": [private_sources],
+             "settings_hash": "h"})
+    succeed_and_select(conn, head_attempt)
+    with conn.cursor() as cur:
+        objects.assert_readable_result_set(cur, head, reader)      # the head alone is fine
+        with pytest.raises(ValueError, match=f"'{base}'.*selected"):
+            objects.association_chain(cur, head, reader)
+        with pytest.raises(ValueError, match="scratch"):
+            objects.source_set_table(cur, private_sources, reader)
+
+
 def test_load_done_check_reuses_only_its_own_or_a_succeeded_attempts_set(conn):
     run_id = _run(conn, "scratch")
     unit_id = _unit(conn, run_id, "load")
