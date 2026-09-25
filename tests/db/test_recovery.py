@@ -718,3 +718,99 @@ def test_start_after_a_first_position_register_reads_the_seeds_producer(
     assert flags["--inputs"] == _one(held, """
         SELECT a.output_location FROM units u JOIN attempts a ON a.id = u.selected_attempt
         WHERE u.run = %s AND u.stage = 'difference'""", (seed,))[0]
+
+
+# ======================================================================
+# Codex diff review of step 6: the leading register position of a seeded
+# run, and an explicit --template on an inheritable stage
+# ======================================================================
+
+def _seed_failed_at_both_registers(held):
+    """UNIT failed at register(admit); U3 completed difference and failed
+    at register(difference). The re-run's stages start at the first
+    register: [register, difference, register, load]."""
+    seed = _seed_run(held)
+    _complete(held, seed, "admit", UNIT)
+    failed = _attempt(held, seed, "register", f"admit/{UNIT}", inputs="s3://products/P6/admit/U")
+    _finish(held, seed, failed, "failed", exit_code=1)
+    _complete(held, seed, "admit", "U3")
+    _complete(held, seed, "register", "admit/U3")
+    _complete(held, seed, "difference", "U3", inputs="s3://scratch/P6/inputs/U3")
+    failed = _attempt(held, seed, "register", "difference/U3",
+                      inputs="s3://products/P6/difference/U3")
+    _finish(held, seed, failed, "failed", exit_code=1)
+    return seed
+
+
+def test_a_leading_register_position_inherits_register_admit_not_a_later_register_unit(
+        held, cli_db, fake_batch, capsys):
+    seed = _seed_failed_at_both_registers(held)
+    code, run_id, err = _create(capsys, "--seed", seed, "--only-failed")
+    assert code == 0, err
+    assert _one(held, "SELECT selected_stages FROM runs WHERE id = %s", (run_id,)) == (
+        ["register", "difference", "register", "load"],)
+    assert sorted(_all(held, "SELECT stage, unit_id FROM units WHERE run = %s", (run_id,))) == [
+        ("register", f"admit/{UNIT}"), ("register", "difference/U3")]
+
+    # U3: position 0 stands for register(admit/U3), which the seed completed;
+    # it and difference are inherited, and the seeded register(difference/U3)
+    # runs at position 2.
+    code = cli.main(["run", "start", run_id, "--unit", "U3", "--no-wait"])
+    out, err = capsys.readouterr()
+    assert code == 0, err
+    assert f"register U3 inherited from seed {seed}" in out
+    assert f"difference U3 inherited from seed {seed}" in out
+    command, flags = _submitted_flags(fake_batch)
+    assert command[:2] == ["stage", "register"]
+    assert flags["--unit"] == "difference/U3"
+    assert flags["--inputs"] == "s3://products/P6/difference/U3"
+
+    # With register(difference/U3) done, the walk goes on to load -- it
+    # neither re-runs difference nor skips the registration.
+    attempt = _one(held, "SELECT id FROM attempts WHERE run = %s", (run_id,))[0]
+    _finish(held, run_id, attempt, "succeeded", select=True, exit_code=0)
+    code = cli.main(["run", "start", run_id, "--unit", "U3", "--no-wait"])
+    out, err = capsys.readouterr()
+    assert code == 0, err
+    assert "register difference/U3 already complete" in out
+    command, flags = _submitted_flags(fake_batch)
+    assert command[:2] == ["stage", "load"]
+    assert _one(held, "SELECT count(*) FROM units WHERE run = %s AND stage = 'difference'",
+                (run_id,)) == (0,)
+
+    # UNIT: its seeded register(admit/UNIT) still runs at position 0.
+    code = cli.main(["run", "start", run_id, "--unit", UNIT, "--no-wait"])
+    out, err = capsys.readouterr()
+    assert code == 0, err
+    command, flags = _submitted_flags(fake_batch)
+    assert command[:2] == ["stage", "register"]
+    assert flags["--unit"] == f"admit/{UNIT}"
+
+
+def test_an_explicit_template_disables_inheritance(held, cli_db, fake_batch, capsys,
+                                                   monkeypatch):
+    """U2's difference would be inherited from the seed (a seeded load unit
+    follows), but ``--template difference=...`` asks for it to run: the
+    template is composed against the seed's producer (admit) and difference
+    is submitted with it."""
+    from rapidpipe.cli import runctl
+
+    seed = _production_seed_with_later_failures(held)
+    _, run_id, _ = _create(capsys, "--seed", seed, "--only-failed")
+    calls = []
+
+    def _compose(conn, **kwargs):
+        calls.append(kwargs)
+        return "s3://composed/U2"
+
+    monkeypatch.setattr(runctl, "compose_inputs", _compose)
+    code = cli.main(["run", "start", run_id, "--unit", "U2", "--no-wait",
+                     "--template", "difference=s3://tmpl/ref"])
+    out, err = capsys.readouterr()
+    assert code == 0, err
+    assert "difference U2 inherited" not in out
+    assert [(c["stage"], c["from_stage"], c["producer_run"], c["template"]) for c in calls] == [
+        ("difference", "admit", seed, "s3://tmpl/ref")]
+    command, flags = _submitted_flags(fake_batch)
+    assert command[:2] == ["stage", "difference"]
+    assert flags["--inputs"] == "s3://composed/U2"

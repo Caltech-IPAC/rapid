@@ -27,6 +27,15 @@ def _abs(value: float | None) -> float | None:
     return None if value is None else abs(value)
 
 
+def _recordable(value: float | None) -> float | str | None:
+    """A measurement as ``detail`` records it: a finite float or ``None``
+    as is, a non-finite one (NaN, Infinity) as text -- jsonb has no NaN,
+    so a raw non-finite float would make the row unrecordable."""
+    if value is None or math.isfinite(value):
+        return value
+    return str(value)
+
+
 def _fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.6g}"
@@ -92,12 +101,14 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
         # A null or non-finite measurement fails whatever its bounds
         # (supervisor step 6, 2026-09-24, live-values correction).
         finite = value is not None and math.isfinite(value)
-        measurements[name] = value if finite or value is None else str(value)
+        measurements[name] = _recordable(value)
         bounds[name] = [lo, hi]
         if not finite or (lo is not None and value < lo) or (hi is not None and value > hi):
             failing.append(name)
-    measurements["dxmedianfin"] = _num(dxmed)
-    measurements["dymedianfin"] = _num(dymed)
+    # The signed medians, sanitised like every other measurement (Codex
+    # diff review of step 6: a raw NaN here made the failed row unrecordable).
+    measurements["dxmedianfin"] = _recordable(_num(dxmed))
+    measurements["dymedianfin"] = _recordable(_num(dymed))
     measurements["source_counts"] = source_counts
 
     if failing:

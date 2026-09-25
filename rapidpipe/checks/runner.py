@@ -9,6 +9,7 @@ the call.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Sequence
@@ -102,6 +103,18 @@ def run_candidates(conn, run_id: str) -> list[Candidate]:
         return [Candidate(i, k, key) for i, k, key in cur.fetchall()]
 
 
+def _finite_json(value: Any) -> Any:
+    """``value`` with every non-finite float (NaN, Infinity), at any depth
+    of dicts, lists and tuples, replaced by its text."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _finite_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_json(v) for v in value]
+    return value
+
+
 def run_check(conn, candidate: Candidate, policy_check: PolicyCheck, *,
               policy_ref: str, params: dict[str, Any] | None = None,
               who: str | None = None) -> RecordedCheck:
@@ -131,10 +144,25 @@ def run_check(conn, candidate: Candidate, policy_check: PolicyCheck, *,
             message = f"{type(exc).__name__}: {exc}"
             result = CheckResult("failed", {"error": message}, f"check raised {message}")
 
+        outcome = result.outcome
         detail = dict(result.detail)
         detail.update(policy=policy_ref, params=params, summary=result.summary)
         if who:
             detail["who"] = who
+        try:
+            detail_json = json.dumps(detail, default=str, allow_nan=False)
+        except ValueError as exc:
+            # jsonb has no NaN/Infinity: a detail carrying one would fail the
+            # INSERT below and lose the row. Record a failed check whose
+            # detail keeps the evidence with non-finite floats as text, and
+            # the error (R1: a check is recorded failed, never nothing).
+            outcome = "failed"
+            message = f"{type(exc).__name__}: {exc}"
+            detail = _finite_json(detail)
+            detail.update(error=f"detail not recordable as JSON: {message}",
+                          summary=f"check detail not recordable ({message}); "
+                                  f"check reported {result.outcome}: {result.summary}")
+            detail_json = json.dumps(detail, default=str, allow_nan=False)
         check_id = new_ulid()
         cur.execute(
             """
@@ -143,12 +171,12 @@ def run_check(conn, candidate: Candidate, policy_check: PolicyCheck, *,
             RETURNING happened_at
             """,
             (check_id, candidate.id, policy_check.name, policy_check.version,
-             policy_check.required, result.outcome, json.dumps(detail, default=str)),
+             policy_check.required, outcome, detail_json),
         )
         (happened_at,) = cur.fetchone()
     return RecordedCheck(check_id, candidate.id, candidate.kind, candidate.logical_key,
                          policy_check.name, policy_check.version, policy_check.required,
-                         result.outcome, detail, happened_at)
+                         outcome, detail, happened_at)
 
 
 def run_policy_checks(conn, run_id: str, policy: Policy, *, instance: str | None = None,

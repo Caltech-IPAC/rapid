@@ -260,6 +260,46 @@ def test_a_raising_check_is_recorded_failed_with_the_error(conn, monkeypatch):
     assert "UndefinedTable" in detail["error"]
 
 
+def test_non_finite_medians_record_the_failed_check(conn):
+    """Codex diff review of step 6 (P1): NaN/Infinity signed medians are
+    recorded as text, so the failed check's row is written, not lost to a
+    jsonb error."""
+    run_id = _make_run(conn)
+    instance = _diff_candidate(conn, run_id, stats={"dxmedianfin": float("nan"),
+                                                    "dymedianfin": float("inf")})
+    (result,) = run_policy_checks(conn, run_id, load_policy(TRIAL))
+    assert result.outcome == "failed"
+    ((_n, _v, _r, outcome, detail),) = _check_rows(conn, instance)
+    assert outcome == "failed"
+    assert detail["measurements"]["dxmedianfin"] == "nan"
+    assert detail["measurements"]["dymedianfin"] == "inf"
+    assert detail["failing"] == ["abs_dxmedianfin", "abs_dymedianfin"]
+
+
+def test_a_check_detail_with_a_raw_nan_is_recorded_failed_with_the_error(conn, monkeypatch):
+    """The recording path serialises with allow_nan=False: a stray NaN in a
+    check's detail records a failed row carrying the error and the evidence
+    (non-finite values as text), never a lost row."""
+    def stray(conn, instance_id, params):
+        return CheckResult("passed", {"measurements": {"x": float("nan"), "y": [1.0, float("inf")]}},
+                           "all fine")
+
+    registry._load_builtins()
+    monkeypatch.setitem(registry._REGISTRY, "stray@1", registry.RegisteredCheck(
+        "stray", "1", "difference-image", (), stray))
+    run_id = _make_run(conn)
+    instance = _diff_candidate(conn, run_id)
+    result = run_check(conn, _candidate(conn, instance),
+                       PolicyCheck("stray", "1", "difference-image", True, {}),
+                       policy_ref="fixture@1")
+    assert result.outcome == "failed"
+    ((name, _v, _req, outcome, detail),) = _check_rows(conn, instance)
+    assert (name, outcome) == ("stray", "failed")
+    assert "not recordable" in detail["error"] and "Out of range float" in detail["error"]
+    assert detail["measurements"] == {"x": "nan", "y": [1.0, "inf"]}
+    assert "check reported passed: all fine" in detail["summary"]
+
+
 # ======================================================================
 # catalog-counts-vs-reference@1: reference by science identity
 # ======================================================================

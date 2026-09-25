@@ -225,7 +225,7 @@ def test_start_walks_every_stage_in_order_with_inputs_by_precedence(world, monke
     ]
     assert composed == [{"run_id": "R", "stage": "difference", "unit_id": "U",
                          "from_stage": "admit", "template": "s3://tmpl/ref",
-                         "reuse_existing": True}]
+                         "reuse_existing": True, "producer_run": "R"}]
     out = capsys.readouterr().out.splitlines()
     assert ("stage=admit unit=U attempt=A1 job=job-1 disposition=succeeded "
             "outputs=s3://b/runs/R/admit/U/A1") in out
