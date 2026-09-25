@@ -56,6 +56,7 @@ def test_settings_are_read_from_the_alerts_section():
     assert s["ppid"] == 15
     assert s["diff_flavor"] == "sfft"
     assert s["refcat_match"] is True and s["ned_match"] is False
+    assert s["lvs_match"] is True                  # absent -> on, like refcat
     assert s["kona_file"] is None                  # blank -> association off
     assert s["upload_to_s3_bucket"] is False
     assert s["archive_codec"] == "deflate"
@@ -188,10 +189,10 @@ def fake_make_provider(monkeypatch, chip_data):
     made = []
 
     def _make(diff_flavor="sfft", kona_file=None, refcat=True, ned=True,
-              ned_source=None):
+              ned_source=None, lvs=True):
         provider = AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor,
                                      kona_lookup=None, refcat=refcat,
-                                     ned_reader=None)
+                                     ned_reader=None, lvs_reader=None)
         made.append(provider)
         return provider
 

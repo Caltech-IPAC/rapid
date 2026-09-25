@@ -401,6 +401,50 @@ class NedMatch:
 
 
 @dataclass
+class LvsMatch:
+    """One NED-LVS galaxy near a detection.
+
+    Built by match_lvscat() from the local NED-LVS table (see the NED-LVS
+    cross-match section below); becomes one entry of the alert's
+    lvsMatches array. NED-LVS is NED's vetted local-volume galaxy sample
+    (D < 1000 Mpc) carrying the distances, angular diameters, photometry,
+    SFR and stellar mass the object directory lacks. The NED-LVS `objname`
+    column is the object directory's `prefname`, so it is stored as
+    `prefname` here and emitted as `prefName`, both exactly as in NedMatch,
+    and the two arrays join by it. Every other attribute is named after its
+    NED-LVS FITS column (Cook et al. 2023).
+    """
+    prefname: str        # NED preferred name (NED-LVS `objname`; == NedMatch.prefname)
+    ra: float            # NED position, ICRS [deg]
+    dec: float
+    sep: float           # angular separation from the detection [arcsec]
+    pa: float            # position angle detection -> galaxy, E of N [deg]
+    objtype: str | None = None      # NED preferred type (G, GPair, ...)
+    z: float | None = None          # fiducial heliocentric redshift
+    z_unc: float | None = None
+    z_tech: str | None = None       # SPEC, PHOT, UNKN, INFD, MOD
+    z_qual: bool = False            # True = redshift flagged unreliable
+    DistMpc: float | None = None    # the distance NED-LVS adopts [Mpc]
+    DistMpc_unc: float | None = None
+    DistMpc_method: str | None = None   # "Redshift" or "zIndependent"
+    Diam: float | None = None       # major-axis angular diameter 2a [arcsec]
+    Diam_ba: float | None = None    # minor/major axis ratio
+    Diam_pa: float | None = None    # ellipse position angle, E of N [deg]
+    Diam_qual: bool = False         # True = diameter flagged highly uncertain
+    ebv: float | None = None        # foreground E(B-V) [mag]
+    m_Ks: float | None = None       # 2MASS Ks, Vega [mag]
+    m_Ks_unc: float | None = None
+    m_W1: float | None = None       # WISE W1, Vega [mag]
+    m_W1_unc: float | None = None
+    m_NUV: float | None = None      # GALEX NUV, AB [mag]
+    m_NUV_unc: float | None = None
+    SFR_hybrid: float | None = None     # FUV+W4 star-formation rate [Msun/yr]
+    SFR_hybrid_unc: float | None = None
+    Mstar: float | None = None      # stellar mass from W1 [Msun]
+    Mstar_unc: float | None = None
+
+
+@dataclass
 class Cutouts:
     """Raw FITS bytes for the three image stamps (any may be missing).
 
@@ -1330,6 +1374,172 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
 
 
 # ---------------------------------------------------------------------------
+# NED-LVS cross-match
+#
+# The nearest NED-LVS galaxies to each detection. NED-LVS is NED's vetted
+# local-volume sample (D < 1000 Mpc, ~2.1 M galaxies) and carries what the
+# object directory lacks: adopted distances, angular diameters, photometry,
+# SFR and stellar mass. Ingested by alerts/ned_catalog.py (ingest-lvs) into
+# <prefix>/lvs/nedlvs.parquet and read by alerts/ned_reader.py LvsReader,
+# which holds the whole table in memory and answers the NED reader's cone
+# contract (NedSliceReader). The geometry (_nearest_within), the per-chip
+# cone (chip_cone) and the three-state null/[]/populated contract are the
+# NED cross-match's, reused as they are; only the columns and the match
+# record differ. Every LVS row is a galaxy, so there is no selection step.
+#
+# Nearest LVS_MATCH_NMAX within LVS_MATCH_RADIUS_ARCSEC for now. The planned
+# follow-up is a directional-light-radius criterion built from Diam,
+# Diam_ba and Diam_pa -- which is why those columns are carried.
+# ---------------------------------------------------------------------------
+
+# Maximum separation for a reported match. Wider than NED's 10": LVS
+# galaxies are nearby and subtend arcminutes, so a transient at a real
+# physical offset from its host sits well outside 10" -- and at LVS's ~51
+# objects/deg^2 the chance-coincidence rate rho*pi*r^2 at 30" is 0.011 per
+# detection (NED's at 10" is ~1). Keeps a chip's cone (318" + 30" + slack)
+# under NED_CONE_MAX_ARCSEC.
+LVS_MATCH_RADIUS_ARCSEC = 30.0
+
+# Keep at most this many matches, nearest first.
+LVS_MATCH_NMAX = 3
+
+# Columns the matcher works in: the NED-LVS FITS names, as the parquet
+# keeps them and as the LvsMatch attributes are spelled. The reader delivers
+# exactly these -- missing numerics as NaN, missing strings as None,
+# logicals as bool. Only prefname-equivalent/ra/dec are required; the rest
+# are filled with nulls when a backend lacks them.
+LVS_STRING_COLUMNS = ("objname", "objtype", "z_tech", "DistMpc_method")
+LVS_BOOL_COLUMNS = ("z_qual", "Diam_qual")
+LVS_NUMERIC_COLUMNS = ("ra", "dec", "z", "z_unc",
+                       "DistMpc", "DistMpc_unc", "Diam", "Diam_ba", "Diam_pa",
+                       "ebv", "m_Ks", "m_Ks_unc", "m_W1", "m_W1_unc",
+                       "m_NUV", "m_NUV_unc", "SFR_hybrid", "SFR_hybrid_unc",
+                       "Mstar", "Mstar_unc")
+LVS_COLUMNS = LVS_STRING_COLUMNS + LVS_BOOL_COLUMNS + LVS_NUMERIC_COLUMNS
+LVS_REQUIRED_COLUMNS = ("objname", "ra", "dec")
+
+
+def build_lvscat(table: dict[str, Any]) -> NedCatalog | None:
+    """Build the match tree over a NED-LVS slice.
+
+    Parameters
+    ----------
+    table : dict
+        Column arrays keyed by LVS_COLUMNS. objname/ra/dec required; the
+        rest filled with nulls (NaN / None / False) when absent.
+
+    Returns
+    -------
+    NedCatalog or None
+        The tree-built slice (the container is shared with NED: columns,
+        coords, row count); None (with a logged warning) when required
+        columns are missing -- the cross-match then degrades to "not run".
+        An empty slice has coords=None and matches to [].
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    missing = [c for c in LVS_REQUIRED_COLUMNS if c not in table]
+    if missing:
+        logger.warning("NED-LVS slice is missing required columns %s; "
+                       "cross-match skipped", missing)
+        return None
+
+    n = len(np.asarray(table["objname"], dtype=object))
+    columns: dict[str, np.ndarray] = {}
+    for name in LVS_COLUMNS:
+        if name in LVS_NUMERIC_COLUMNS:
+            dtype, fill = float, np.nan
+        elif name in LVS_BOOL_COLUMNS:
+            dtype, fill = bool, False
+        else:
+            dtype, fill = object, None
+        values = table[name] if name in table else np.full(n, fill, dtype=dtype)
+        columns[name] = np.asarray(values, dtype=dtype)
+    logger.debug("NED-LVS slice: %d rows", n)
+
+    coords = (SkyCoord(columns["ra"] * u.deg, columns["dec"] * u.deg)
+              if n else None)
+    return NedCatalog(columns=columns, coords=coords, n_input=n)
+
+
+def _lvs_match_from_row(columns: dict[str, np.ndarray], row: int,
+                        sep: float, pa: float) -> LvsMatch:
+    """Build one LvsMatch from slice row `row` at the given sep/PA.
+
+    Absent values become None, never NaN or "" (the schema types them as
+    nullable unions). The LvsMatch attributes are the column names (except
+    objname -> prefname), so the optional fields are assembled by name from
+    the three column groups.
+    """
+    def text(name: str) -> str | None:
+        value = columns[name][row]
+        return (str(value).strip() or None) if value is not None else None
+
+    def number(name: str) -> float | None:
+        value = float(columns[name][row])
+        return value if np.isfinite(value) else None
+
+    optional: dict[str, Any] = {}
+    optional.update({name: text(name) for name in LVS_STRING_COLUMNS
+                     if name != "objname"})
+    optional.update({name: bool(columns[name][row]) for name in LVS_BOOL_COLUMNS})
+    optional.update({name: number(name) for name in LVS_NUMERIC_COLUMNS
+                     if name not in ("ra", "dec")})
+    return LvsMatch(prefname=str(columns["objname"][row]),
+                    ra=float(columns["ra"][row]), dec=float(columns["dec"][row]),
+                    sep=sep, pa=pa, **optional)
+
+
+def match_lvscat(ra: Any, dec: Any, catalog: NedCatalog,
+                 radius_arcsec: float = LVS_MATCH_RADIUS_ARCSEC,
+                 n_max: int = LVS_MATCH_NMAX,
+                 ) -> list[list[LvsMatch]]:
+    """Match detection positions against a NED-LVS slice.
+
+    match_nedcat() with the LVS row builder: one KD-tree query for the
+    n_max nearest galaxies of every detection within `radius_arcsec` (see
+    _nearest_within). A result of length n_max means the neighborhood may
+    extend beyond what is reported.
+
+    Parameters
+    ----------
+    ra, dec : float or array-like
+        Detection position(s), ICRS [deg].
+    catalog : NedCatalog
+        The slice from build_lvscat().
+    radius_arcsec : float, optional
+        Maximum separation to report.
+    n_max : int, optional
+        Keep at most this many matches, nearest first.
+
+    Returns
+    -------
+    list of list of LvsMatch
+        Per detection, in input order, nearest-first and at most `n_max`
+        long. An empty list means "no LVS galaxy within the radius";
+        "could not run" is signalled by the provider, not here.
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    ra = np.atleast_1d(np.asarray(ra, dtype=float))
+    dec = np.atleast_1d(np.asarray(dec, dtype=float))
+    results: list[list[LvsMatch]] = [[] for _ in range(ra.size)]
+
+    coords = catalog.coords
+    if coords is None:
+        return results  # no LVS galaxies in this slice
+
+    src = SkyCoord(ra * u.deg, dec * u.deg)
+    for i, cat_idx, sep_arcsec, pa_deg in _nearest_within(src, coords,
+                                                          radius_arcsec, n_max):
+        results[i].append(_lvs_match_from_row(catalog.columns, cat_idx,
+                                              sep_arcsec, pa_deg))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # The alert data provider
 #
 # One provider. The RAPID database is effectively a fast index over the
@@ -1354,7 +1564,8 @@ class AlertDataProvider:
 
     def __init__(self, db: Any, diff_flavor: str = "sfft",
                  kona_lookup: Any = None, refcat: bool = True,
-                 ned_reader: "NedSliceReader | None" = None) -> None:
+                 ned_reader: "NedSliceReader | None" = None,
+                 lvs_reader: "NedSliceReader | None" = None) -> None:
         """
         Parameters
         ----------
@@ -1381,6 +1592,10 @@ class AlertDataProvider:
             section). While None -- the KONA convention: no callable, no
             matching -- get_ned_matches() reports "not run" and nedMatches
             stays null.
+        lvs_reader : NedSliceReader, optional
+            The same contract over the NED-LVS table (columns LVS_COLUMNS;
+            see the NED-LVS cross-match section). While None,
+            get_lvs_matches() reports "not run" and lvsMatches stays null.
 
         Raises
         ------
@@ -1445,6 +1660,13 @@ class AlertDataProvider:
         self._ned_pid: int | None = None
         self._ned: NedCatalog | None = None
         self._chip_nedmatches: dict[int, list[NedMatch]] = {}
+        # NED-LVS cross-match state: the same shape as NED's (see
+        # _match_chip_lvs), over the reader that holds the whole LVS table.
+        self.lvs_reader = lvs_reader
+        self.lvs_enabled = lvs_reader is not None
+        self._lvs_pid: int | None = None
+        self._lvs: NedCatalog | None = None
+        self._chip_lvsmatches: dict[int, list[LvsMatch]] = {}
 
     def close(self) -> None:
         """Remove locally staged S3 products.
@@ -1458,6 +1680,8 @@ class AlertDataProvider:
         self._chip_refmatches.clear()
         self._ned = None
         self._chip_nedmatches.clear()
+        self._lvs = None
+        self._chip_lvsmatches.clear()
         self._staging_tmp.cleanup()
 
     def __enter__(self) -> "AlertDataProvider":
@@ -1720,6 +1944,7 @@ class AlertDataProvider:
         self._prefetch_chip(pid, sources)
         self._match_chip_refcat(pid, sources)
         self._match_chip_ned(pid, sources)
+        self._match_chip_lvs(pid, sources)
         yield from sources
 
     def _prefetch_chip(self, pid: int, sources: list[Source],
@@ -2458,3 +2683,97 @@ class AlertDataProvider:
         if catalog is None:
             return None
         return match_nedcat(detection.ra, detection.dec, catalog)[0]
+
+    # -- NED-LVS cross-match ------------------------------------------------
+    # The NED methods above, over the LVS reader, radius, builder and
+    # matcher; see the NED-LVS cross-match section for what differs.
+
+    def _fetch_lvscat(self, ra0: float, dec0: float,
+                      radius: float) -> NedCatalog | None:
+        """Fetch the NED-LVS slice for one query cone and build its tree.
+
+        None (with a logged warning) when the reader returned None or
+        raised -- the cross-match then reports "not run"; an empty slice
+        is a NedCatalog with coords=None, which matches to [].
+        """
+        assert self.lvs_reader is not None
+        try:
+            table = self.lvs_reader(ra0, dec0, radius)
+        except Exception as exc:
+            logger.warning("NED-LVS query failed for cone (%.5f, %.5f) r=%.1f\" "
+                           "(%s: %s); NED-LVS matching not run", ra0, dec0, radius,
+                           type(exc).__name__, str(exc).splitlines()[0] if str(exc) else "")
+            logger.debug("NED-LVS query failure traceback", exc_info=True)
+            return None
+        if table is None:
+            logger.warning("NED-LVS reader returned no slice for cone "
+                           "(%.5f, %.5f) r=%.1f\"; NED-LVS matching not run",
+                           ra0, dec0, radius)
+            return None
+        return build_lvscat(table)
+
+    def _lvscat_for_chip(self, pid: int, ra0: float, dec0: float,
+                         radius: float) -> NedCatalog | None:
+        """The (cached per pid) NED-LVS slice for a chip's query cone."""
+        if self._lvs_pid == pid:
+            return self._lvs
+        self._lvs = None
+        self._lvs_pid = pid
+        self._lvs = self._fetch_lvscat(ra0, dec0, radius)
+        return self._lvs
+
+    def _match_chip_lvs(self, pid: int, sources: list[Source]) -> None:
+        """Cross-match every chip detection against NED-LVS.
+
+        As _match_chip_ned: one slice fetch and one vectorized
+        match_lvscat() pass, results per sid in _chip_lvsmatches. Off-chip
+        detections (NED_CONE_MAX_ARCSEC) are excluded the same way and end
+        up "not run"; the NED pass already warned about them, so this one
+        only notes it at DEBUG.
+        """
+        self._chip_lvsmatches = {}
+        if not self.lvs_enabled or not sources:
+            return
+        ra = np.array([s.ra for s in sources])
+        dec = np.array([s.dec for s in sources])
+        ra0, dec0, radius, inliers = chip_cone(
+            ra, dec, LVS_MATCH_RADIUS_ARCSEC + NED_CONE_SLACK_ARCSEC)
+        n_out = int((~inliers).sum())
+        if n_out:
+            logger.debug("pid=%s: %d of %d detections excluded from the "
+                         "NED-LVS cone (off-chip positions)", pid, n_out, len(sources))
+            if not inliers.any():
+                return
+        catalog = self._lvscat_for_chip(pid, ra0, dec0, radius)
+        if catalog is None:
+            return
+        results = match_lvscat(ra[inliers], dec[inliers], catalog)
+        sids = [s.sid for s, ok in zip(sources, inliers) if ok]
+        self._chip_lvsmatches = dict(zip(sids, results))
+
+    def get_lvs_matches(self, detection: Source) -> list[LvsMatch] | None:
+        """The nearest NED-LVS galaxies to a detection.
+
+        These become the alert's lvsMatches array. In the batch flow the
+        whole chip was already matched in one pass (see _match_chip_lvs);
+        the single-alert flow fetches a slice around just this detection.
+
+        Returns
+        -------
+        list of LvsMatch or None
+            Galaxies within LVS_MATCH_RADIUS_ARCSEC (at most LVS_MATCH_NMAX,
+            nearest first); an empty list when matching ran and found
+            nothing nearby; None when it could not run (disabled, or the
+            LVS table could not be read).
+        """
+        if not self.lvs_enabled:
+            return None
+        if self._chip_pid is not None and self._chip_pid == detection.pid:
+            return self._chip_lvsmatches.get(detection.sid)
+        ra0, dec0, radius = bounding_cone(
+            detection.ra, detection.dec,
+            LVS_MATCH_RADIUS_ARCSEC + NED_CONE_SLACK_ARCSEC)
+        catalog = self._fetch_lvscat(ra0, dec0, radius)
+        if catalog is None:
+            return None
+        return match_lvscat(detection.ra, detection.dec, catalog)[0]

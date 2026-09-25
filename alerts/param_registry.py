@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeAlias
 
-VERSION = "00.04"
+VERSION = "00.05"
 
 # Keep for type checking and function hints
 AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
@@ -619,6 +619,91 @@ NED_MATCH_PARAMS = (
 
 
 # ---------------------------------------------------------------------------
+# lvsMatch -- NED-LVS (Local Volume Sample) galaxy near the triggering
+# source, built from providers.LvsMatch. Same *Match envelope as nedMatch;
+# prefName is the same NED preferred name, so the two arrays join by it.
+#
+# NED-LVS is NED's vetted galaxy sample within 1000 Mpc, carrying what the
+# object directory lacks: adopted distances, angular diameters, photometry,
+# SFR and stellar mass (Cook et al. 2023, DOI 10.26132/NED8). Every row is a
+# galaxy, so there is no host-candidate selection. Types follow the source
+# precision (E = float, D = double); every emitted measurement carries its
+# uncertainty; the two quality flags keep NED-LVS's polarity (True = bad).
+# ---------------------------------------------------------------------------
+
+_LVS_SRC = "computed at assembly from the local NED-LVS table (providers.match_lvscat)"
+
+LVS_MATCH_PARAMS = (
+    Param("prefName",      "string",           "NED preferred object name (NED-LVS objname); the same name as "
+                                               "nedMatch.prefName, so the two arrays join by it",
+                        IMPLEMENTED, _LVS_SRC, attr="prefname"),
+    Param("ra",            "double",           "Right ascension of the galaxy; ICRS [deg]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("dec",           "double",           "Declination of the galaxy; ICRS [deg]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("sep",           "float",            "Angular separation from the triggering source position [arcsec]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("pa",            "float",            "Position angle from the triggering source to the galaxy, "
+                                               "East of North [deg]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("objType",       ["null", "string"], "NED preferred object type (G, GPair, ...)",
+                        IMPLEMENTED, _LVS_SRC, attr="objtype"),
+    Param("z",             ["null", "float"],  "NED-LVS fiducial redshift, heliocentric; null when none",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("zUnc",          ["null", "float"],  "Uncertainty in z; null when unpublished",
+                        IMPLEMENTED, _LVS_SRC, attr="z_unc"),
+    Param("zTech",         ["null", "string"], "How z was measured: SPEC, PHOT, UNKN, INFD (inferred) or MOD "
+                                               "(modelled); the redshift-quality handle",
+                        IMPLEMENTED, _LVS_SRC, attr="z_tech"),
+    Param("zQual",         "boolean",          "NED-LVS redshift quality flag: True = flagged UNRELIABLE "
+                                               "(NED-LVS polarity, kept as published)",
+                        IMPLEMENTED, _LVS_SRC, attr="z_qual"),
+    Param("distMpc",       ["null", "float"],  "The distance NED-LVS adopts for this galaxy [Mpc]",
+                        IMPLEMENTED, _LVS_SRC, attr="DistMpc"),
+    Param("distMpcUnc",    ["null", "float"],  "Uncertainty in distMpc [Mpc]",
+                        IMPLEMENTED, _LVS_SRC, attr="DistMpc_unc"),
+    Param("distMethod",    ["null", "string"], "Which measurement distMpc came from: 'Redshift' (from z; 99% "
+                                               "of galaxies) or 'zIndependent' (a NED-D measurement -- "
+                                               "Cepheids, TRGB, SNe Ia, ...; distMpc is then that value)",
+                        IMPLEMENTED, _LVS_SRC, attr="DistMpc_method"),
+    Param("diam",          ["null", "float"],  "Angular major-axis diameter 2a; null when NED-LVS has no "
+                                               "fiducial diameter (~19% of galaxies) [arcsec]",
+                        IMPLEMENTED, _LVS_SRC, attr="Diam"),
+    Param("diamBA",        ["null", "float"],  "Minor-to-major axis ratio of the diameter ellipse",
+                        IMPLEMENTED, _LVS_SRC, attr="Diam_ba"),
+    Param("diamPA",        ["null", "float"],  "Position angle of the diameter ellipse, East of North [deg]",
+                        IMPLEMENTED, _LVS_SRC, attr="Diam_pa"),
+    Param("diamQual",      "boolean",          "NED-LVS diameter quality flag: True = flagged HIGHLY UNCERTAIN "
+                                               "(NED-LVS polarity, kept as published)",
+                        IMPLEMENTED, _LVS_SRC, attr="Diam_qual"),
+    Param("ebv",           ["null", "float"],  "Foreground Milky Way reddening E(B-V), Schlafly & Finkbeiner "
+                                               "2011 [mag]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("magKs",         ["null", "float"],  "2MASS Ks apparent magnitude, Vega system [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_Ks"),
+    Param("magKsUnc",      ["null", "float"],  "Uncertainty in magKs [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_Ks_unc"),
+    Param("magW1",         ["null", "float"],  "WISE W1 apparent magnitude, Vega system [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_W1"),
+    Param("magW1Unc",      ["null", "float"],  "Uncertainty in magW1 [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_W1_unc"),
+    Param("magNUV",        ["null", "float"],  "GALEX NUV apparent magnitude, AB system [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_NUV"),
+    Param("magNUVUnc",     ["null", "float"],  "Uncertainty in magNUV [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_NUV_unc"),
+    Param("sfr",           ["null", "double"], "Star-formation rate from the FUV+W4 hybrid scaling relation "
+                                               "[Msun/yr]",
+                        IMPLEMENTED, _LVS_SRC, attr="SFR_hybrid"),
+    Param("sfrUnc",        ["null", "double"], "Uncertainty in sfr [Msun/yr]",
+                        IMPLEMENTED, _LVS_SRC, attr="SFR_hybrid_unc"),
+    Param("mStar",         ["null", "double"], "Stellar mass from the W1 luminosity scaling relation [Msun]",
+                        IMPLEMENTED, _LVS_SRC, attr="Mstar"),
+    Param("mStarUnc",      ["null", "double"], "Uncertainty in mStar [Msun]",
+                        IMPLEMENTED, _LVS_SRC, attr="Mstar_unc"),
+)
+
+
+# ---------------------------------------------------------------------------
 # alert (top level) -- structural params, filled by produce.assemble_alert(),
 # ---------------------------------------------------------------------------
 
@@ -676,6 +761,15 @@ ALERT_PARAMS = (
                                 "providers.select_host_candidates -- an unrestricted NED match is "
                                 "~98% non-galaxy at this depth",
                         IMPLEMENTED, "produce.assemble_alert() via provider.get_ned_matches()"),
+    Param("lvsMatches",         ["null", {"type": "array", "items": "@lvsMatch"}],
+                                "Nearest NED-LVS galaxies (max 3, nearest first) within "
+                                "LVS_MATCH_RADIUS_ARCSEC (30 arcsec) of the triggering source -- NED's "
+                                "vetted local-volume sample (D < 1000 Mpc) with distances, angular "
+                                "diameters, photometry, SFR and stellar mass; null if matching was "
+                                "not run (disabled, or the table unavailable), empty if none within "
+                                "the radius; a full array (3) means the neighborhood may extend "
+                                "beyond what is reported. Joins to nedMatches by prefName",
+                        IMPLEMENTED, "produce.assemble_alert() via provider.get_lvs_matches()"),
 
     # --- Image cutouts ----------------------------------------------------------
     Param("cutoutDifference",   ["null", "bytes"],   "FITS cutout of difference image",
@@ -704,6 +798,7 @@ RECORDS = (
     Record("ssMatch",         "Known solar system object predicted near the triggering source (stub)", SS_MATCH_PARAMS),
     Record("refMatch",        "Reference-image catalog source near the triggering source",             REF_MATCH_PARAMS),
     Record("nedMatch",        "NED candidate host galaxy near the triggering source",                  NED_MATCH_PARAMS),
+    Record("lvsMatch",        "NED-LVS local-volume galaxy near the triggering source",                LVS_MATCH_PARAMS),
     Record("alert",           "Top-level alert record",                                  ALERT_PARAMS),
 )
 

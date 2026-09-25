@@ -103,7 +103,7 @@ def main():
 
     dia_object = build("diaObject", {
         "diaObjectId": 310000001, "ra0": 9.9024, "dec0": -44.1355,
-        "raErr": 1.4e-5, "decErr": 1.4e-5, "nDiaSources": 2,
+        "raSigma": 1.4e-5, "decSigma": 1.4e-5, "nDiaSources": 2,
         "firstDiaSourceMjd": 62305.25, "lastDiaSourceMjd": 62310.25,
         "validityStartMjd": 62310.25,
     })

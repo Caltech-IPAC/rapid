@@ -22,14 +22,14 @@ from pathlib import Path
 
 # Support both `python -m alerts.cli` (module) and `python cli.py` (script).
 if __package__:
-    from .ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader
+    from .ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader, LvsReader
     from .produce import batch_produce, open_alert_archive, produce_alert
     from .providers import AlertDataProvider
 else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from alerts.ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader
+    from alerts.ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader, LvsReader
     from alerts.produce import (batch_produce, open_alert_archive,
                                       produce_alert)
     from alerts.providers import AlertDataProvider
@@ -90,11 +90,40 @@ def build_ned_reader(ned_source: str | None,
         return None
 
 
+def build_lvs_reader(ned_source: str | None,
+                     enabled: bool = True) -> "LvsReader | None":
+    """Open the local NED-LVS table for the provider, or None to leave it off.
+
+    The table lives under the same root as the NED copy (``<ned_source>/lvs/``,
+    built by ``alerts.ned_catalog ingest-lvs``). Same degrade-not-fail rule
+    as build_ned_reader: a table that cannot be opened is logged as a
+    warning and lvsMatches stays null.
+
+    Parameters
+    ----------
+    ned_source : str or None
+        The NED root, ``s3://bucket/prefix`` or a local directory. None
+        means off.
+    enabled : bool, optional
+        False turns NED-LVS matching off regardless of `ned_source`.
+    """
+    if not enabled or not ned_source:
+        return None
+    try:
+        return LvsReader(ned_source)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "NED-LVS matching off: could not open the NED-LVS table under %s "
+            "(%s: %s)", ned_source, type(exc).__name__, exc)
+        return None
+
+
 def make_provider(diff_flavor: str = "sfft",
                   kona_file: str | Path | None = None,
                   refcat: bool = True,
                   ned: bool = True,
-                  ned_source: str | None = DEFAULT_NED_SOURCE) -> AlertDataProvider:
+                  ned_source: str | None = DEFAULT_NED_SOURCE,
+                  lvs: bool = True) -> AlertDataProvider:
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
 
@@ -121,6 +150,11 @@ def make_provider(diff_flavor: str = "sfft",
         a logged warning and null nedMatches (see build_ned_reader). To
         use a different NED backend, construct AlertDataProvider with
         ``ned_reader=`` directly.
+    lvs : bool, optional
+        Cross-match detections against the local NED-LVS table under the
+        same root (``<ned_source>/lvs/``; the whole table held in memory
+        per process). On by default; when off, or when the table cannot be
+        opened, lvsMatches stays null (see build_lvs_reader).
 
     Returns
     -------
@@ -140,6 +174,7 @@ def make_provider(diff_flavor: str = "sfft",
     # NED is on by default; --no-ned turns it off, and a copy that cannot
     # be opened degrades to null nedMatches with a warning.
     ned_reader = build_ned_reader(ned_source, enabled=ned)
+    lvs_reader = build_lvs_reader(ned_source, enabled=lvs)
 
     # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
     repo_root = Path(__file__).resolve().parents[1]
@@ -155,7 +190,7 @@ def make_provider(diff_flavor: str = "sfft",
             "group allows it)")
     return AlertDataProvider(db, diff_flavor=diff_flavor,
                              kona_lookup=kona_lookup, refcat=refcat,
-                             ned_reader=ned_reader)
+                             ned_reader=ned_reader, lvs_reader=lvs_reader)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -218,8 +253,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ned-source", metavar="PREFIX",
                         default=DEFAULT_NED_SOURCE,
                         help="the local NED copy: s3://bucket/prefix or a "
-                             "directory holding objectdir_hp6/ (built by "
-                             "alerts/ned_catalog.py); default %(default)s")
+                             "directory holding objectdir_hp6/ and lvs/ (built "
+                             "by alerts/ned_catalog.py); default %(default)s")
+    parser.add_argument("--no-lvs", action="store_true",
+                        help="skip the NED-LVS cross-match (lvsMatches stays "
+                             "null); on by default, reading lvs/nedlvs.parquet "
+                             "under --ned-source")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="diagnostic verbosity on stderr; quiet by "
@@ -244,7 +283,8 @@ def main(argv: list[str] | None = None) -> int:
                              kona_file=args.kona_file,
                              refcat=not args.no_refcat,
                              ned=not args.no_ned,
-                             ned_source=args.ned_source)
+                             ned_source=args.ned_source,
+                             lvs=not args.no_lvs)
 
     # Make producer, if kafka arg is True
     producer = None

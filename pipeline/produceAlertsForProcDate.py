@@ -103,6 +103,7 @@ def read_alert_settings(config_input):
         'refcat_match': alerts.getboolean('refcat_match', fallback=True),
         'ned_match': alerts.getboolean('ned_match', fallback=True),
         'ned_source': alerts.get('ned_source', fallback=DEFAULT_NED_SOURCE).strip() or None,
+        'lvs_match': alerts.getboolean('lvs_match', fallback=True),
         'kona_file': kona_file,
         'archive_filename_base': alerts.get('archive_filename_base', fallback='alerts_jid'),
         'archive_codec': alerts.get('archive_codec', fallback='deflate'),
@@ -295,7 +296,8 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
                                      kona_file=settings['kona_file'],
                                      refcat=settings['refcat_match'],
                                      ned=settings['ned_match'],
-                                     ned_source=settings['ned_source'])
+                                     ned_source=settings['ned_source'],
+                                     lvs=settings['lvs_match'])
         except SystemExit as e:
             raise RuntimeError(f"*** Error opening alert data provider in index_thread={index_thread}: {e}")
 

@@ -43,11 +43,12 @@ import fastavro.write
 from fastavro.types import Schema
 
 from .param_registry import (ALERT_PARAMS, DIA_FORCED_SOURCE_PARAMS, DIA_OBJECT_PARAMS,
-                     DIA_SOURCE_PARAMS, NED_MATCH_PARAMS, REF_MATCH_PARAMS,
-                     SS_MATCH_PARAMS, RECORDS, VERSION, Param, Status, is_nullable)
+                     DIA_SOURCE_PARAMS, LVS_MATCH_PARAMS, NED_MATCH_PARAMS,
+                     REF_MATCH_PARAMS, SS_MATCH_PARAMS, RECORDS, VERSION, Param,
+                     Status, is_nullable)
 from .providers import (PRV_WINDOW_DAYS, AlertDataProvider, AssociationError,
-                        Source, ForcedPhot, NedMatch, ObjectRecord, RefMatch,
-                        SSMatch)
+                        Source, ForcedPhot, LvsMatch, NedMatch, ObjectRecord,
+                        RefMatch, SSMatch)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ BUILDER_DATA_CLASSES = {
     "ssMatch": SSMatch,
     "refMatch": RefMatch,
     "nedMatch": NedMatch,
+    "lvsMatch": LvsMatch,
 }
 
 # Every match record ("ssMatch", "refMatch", future "gaiaMatch", ...) must
@@ -291,6 +293,22 @@ def build_ned_match(match: NedMatch) -> dict[str, Any]:
     return build_record(NED_MATCH_PARAMS, match)
 
 
+def build_lvs_match(match: LvsMatch) -> dict[str, Any]:
+    """Build an lvsMatch record dict from a providers.LvsMatch.
+
+    Parameters
+    ----------
+    match : providers.LvsMatch
+        One NED-LVS galaxy matched near the detection.
+
+    Returns
+    -------
+    dict
+        lvsMatch param name -> value, per the registry.
+    """
+    return build_record(LVS_MATCH_PARAMS, match)
+
+
 # ---------------------------------------------------------------------------
 # Alert assembly
 # ---------------------------------------------------------------------------
@@ -381,6 +399,10 @@ def assemble_alert_for_source(provider: AlertDataProvider,
     # (see providers.select_host_candidates for what qualifies).
     ned_matches = provider.get_ned_matches(source)
 
+    # NED-LVS cross-match: same three states; the nearest local-volume
+    # galaxies with distances, diameters, photometry, SFR and stellar mass.
+    lvs_matches = provider.get_lvs_matches(source)
+
     cutouts = provider.get_cutouts(source)
 
     alert = {
@@ -397,6 +419,8 @@ def assemble_alert_for_source(provider: AlertDataProvider,
         "refGalaxyMatches": ref_galaxy_matches,
         "nedMatches": (None if ned_matches is None
                        else [build_ned_match(m) for m in ned_matches]),
+        "lvsMatches": (None if lvs_matches is None
+                       else [build_lvs_match(m) for m in lvs_matches]),
         "cutoutDifference": cutouts.difference,
         "cutoutScience": cutouts.science,
         "cutoutReference": cutouts.template,
@@ -626,7 +650,7 @@ def produce_alert(provider: AlertDataProvider, sid: int,
 # ran and found nothing, populated) BatchStats tallies, and the cutouts it
 # counts as present. Both name top-level keys of the assembled alert dict.
 MATCH_FIELDS = ("ssMatches", "refStarMatches", "refGalaxyMatches",
-                "nedMatches")
+                "nedMatches", "lvsMatches")
 CUTOUT_FIELDS = ("cutoutDifference", "cutoutScience", "cutoutReference")
 
 

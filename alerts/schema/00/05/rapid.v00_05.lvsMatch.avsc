@@ -1,0 +1,233 @@
+{
+    "namespace": "rapid.v00_05",
+    "name": "lvsMatch",
+    "doc": "NED-LVS local-volume galaxy near the triggering source",
+    "version": "00.05",
+    "type": "record",
+    "fields": [
+        {
+            "name": "prefName",
+            "type": "string",
+            "doc": "NED preferred object name (NED-LVS objname); the same name as nedMatch.prefName, so the two arrays join by it"
+        },
+        {
+            "name": "ra",
+            "type": "double",
+            "doc": "Right ascension of the galaxy; ICRS [deg]"
+        },
+        {
+            "name": "dec",
+            "type": "double",
+            "doc": "Declination of the galaxy; ICRS [deg]"
+        },
+        {
+            "name": "sep",
+            "type": "float",
+            "doc": "Angular separation from the triggering source position [arcsec]"
+        },
+        {
+            "name": "pa",
+            "type": "float",
+            "doc": "Position angle from the triggering source to the galaxy, East of North [deg]"
+        },
+        {
+            "name": "objType",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "NED preferred object type (G, GPair, ...)"
+        },
+        {
+            "name": "z",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "NED-LVS fiducial redshift, heliocentric; null when none"
+        },
+        {
+            "name": "zUnc",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in z; null when unpublished"
+        },
+        {
+            "name": "zTech",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "How z was measured: SPEC, PHOT, UNKN, INFD (inferred) or MOD (modelled); the redshift-quality handle"
+        },
+        {
+            "name": "zQual",
+            "type": "boolean",
+            "doc": "NED-LVS redshift quality flag: True = flagged UNRELIABLE (NED-LVS polarity, kept as published)"
+        },
+        {
+            "name": "distMpc",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "The distance NED-LVS adopts for this galaxy [Mpc]"
+        },
+        {
+            "name": "distMpcUnc",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in distMpc [Mpc]"
+        },
+        {
+            "name": "distMethod",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Which measurement distMpc came from: 'Redshift' (from z; 99% of galaxies) or 'zIndependent' (a NED-D measurement -- Cepheids, TRGB, SNe Ia, ...; distMpc is then that value)"
+        },
+        {
+            "name": "diam",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Angular major-axis diameter 2a; null when NED-LVS has no fiducial diameter (~19% of galaxies) [arcsec]"
+        },
+        {
+            "name": "diamBA",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minor-to-major axis ratio of the diameter ellipse"
+        },
+        {
+            "name": "diamPA",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Position angle of the diameter ellipse, East of North [deg]"
+        },
+        {
+            "name": "diamQual",
+            "type": "boolean",
+            "doc": "NED-LVS diameter quality flag: True = flagged HIGHLY UNCERTAIN (NED-LVS polarity, kept as published)"
+        },
+        {
+            "name": "ebv",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Foreground Milky Way reddening E(B-V), Schlafly & Finkbeiner 2011 [mag]"
+        },
+        {
+            "name": "magKs",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "2MASS Ks apparent magnitude, Vega system [mag]"
+        },
+        {
+            "name": "magKsUnc",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in magKs [mag]"
+        },
+        {
+            "name": "magW1",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "WISE W1 apparent magnitude, Vega system [mag]"
+        },
+        {
+            "name": "magW1Unc",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in magW1 [mag]"
+        },
+        {
+            "name": "magNUV",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "GALEX NUV apparent magnitude, AB system [mag]"
+        },
+        {
+            "name": "magNUVUnc",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in magNUV [mag]"
+        },
+        {
+            "name": "sfr",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "Star-formation rate from the FUV+W4 hybrid scaling relation [Msun/yr]"
+        },
+        {
+            "name": "sfrUnc",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "Uncertainty in sfr [Msun/yr]"
+        },
+        {
+            "name": "mStar",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "Stellar mass from the W1 luminosity scaling relation [Msun]"
+        },
+        {
+            "name": "mStarUnc",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "Uncertainty in mStar [Msun]"
+        }
+    ]
+}

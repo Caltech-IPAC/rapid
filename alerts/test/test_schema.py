@@ -28,8 +28,8 @@ from alerts.param_registry import RECORDS, VERSION, Status
 from alerts.produce import (assemble_alert, build_dia_source,
                                   build_dia_forced_source, load_schema,
                                   serialize_alert)
-from alerts.providers import (Cutouts, ForcedPhot, NedMatch, ObjectRecord,
-                                    RefMatch, Source, SSMatch)
+from alerts.providers import (Cutouts, ForcedPhot, LvsMatch, NedMatch,
+                                    ObjectRecord, RefMatch, Source, SSMatch)
 
 
 def make_detection(sid, mjd, aid=None):
@@ -91,6 +91,23 @@ class MinimalProvider:
                 NedMatch(prefname="SDSS J100024.10+021159.9", ra=150.1008,
                          dec=2.2, sep=2.9, pa=90.0, ptype="G")]
 
+    def get_lvs_matches(self, detection):
+        # the first is the same galaxy as nedMatches[0] (joins by prefName)
+        # with every field set; the second has only the required ones and
+        # an unreliable-redshift flag, exercising every nullable field
+        return [LvsMatch(prefname="2MASX J10002400+0212000", ra=150.1002,
+                         dec=2.2, sep=0.7, pa=90.0, objtype="G",
+                         z=0.0312, z_unc=0.0001, z_tech="SPEC", z_qual=False,
+                         DistMpc=135.2,
+                         DistMpc_unc=9.5, DistMpc_method="zIndependent",
+                         Diam=42.0, Diam_ba=0.6, Diam_pa=45.0, Diam_qual=False,
+                         ebv=0.02, m_Ks=11.3, m_Ks_unc=0.05, m_W1=11.9,
+                         m_W1_unc=0.02, m_NUV=16.4, m_NUV_unc=0.03,
+                         SFR_hybrid=1.5, SFR_hybrid_unc=0.3,
+                         Mstar=3.2e10, Mstar_unc=5e9),
+                LvsMatch(prefname="UGC 00001", ra=150.1010, dec=2.2,
+                         sep=3.6, pa=90.0, z_qual=True)]
+
     def get_cutouts(self, detection):
         return Cutouts(difference=b"FAKE_DIFF", science=b"FAKE_SCI",
                        template=None)
@@ -139,6 +156,18 @@ def test_assembled_alert_semantics(alert):
     assert alert["nedMatches"][1]["z"] is None
     assert alert["nedMatches"][1]["zUnc"] is None
     assert alert["nedMatches"][1]["zFlag"] is None
+    # NED-LVS cross-match: matched path; the first entry is nedMatches[0]
+    # seen through NED-LVS, joined by prefName
+    assert alert["lvsMatches"][0]["prefName"] == alert["nedMatches"][0]["prefName"]
+    assert alert["lvsMatches"][0]["distMpc"] == pytest.approx(135.2)
+    assert alert["lvsMatches"][0]["distMethod"] == "zIndependent"
+    assert alert["lvsMatches"][0]["diam"] == pytest.approx(42.0)
+    assert alert["lvsMatches"][0]["mStar"] == pytest.approx(3.2e10)
+    assert alert["lvsMatches"][0]["zQual"] is False
+    assert alert["lvsMatches"][1]["zQual"] is True
+    assert alert["lvsMatches"][1]["objType"] is None
+    assert alert["lvsMatches"][1]["diam"] is None
+    assert alert["lvsMatches"][1]["mStar"] is None
 
 
 def test_time_processed_stamped_at_assembly():
@@ -187,6 +216,21 @@ def test_ned_match_ran_clean_is_empty_not_null():
     provider.get_ned_matches = lambda detection: []
     alert = assemble_alert(provider, 9999)
     assert alert["nedMatches"] == []
+
+
+def test_lvs_match_not_run_stays_null():
+    """lvsMatches = None must mean "not run" (disabled or table unavailable)."""
+    provider = MinimalProvider()
+    provider.get_lvs_matches = lambda detection: None
+    alert = assemble_alert(provider, 9999)
+    assert alert["lvsMatches"] is None
+
+
+def test_lvs_match_ran_clean_is_empty_not_null():
+    provider = MinimalProvider()
+    provider.get_lvs_matches = lambda detection: []
+    alert = assemble_alert(provider, 9999)
+    assert alert["lvsMatches"] == []
 
 
 def test_ss_association_not_run_stays_null():

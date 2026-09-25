@@ -167,6 +167,33 @@ def fake_ned_reader(table, coverage=True, log=None):
     return _read
 
 
+def make_lvs_table(entries):
+    """Column arrays keyed by providers.LVS_COLUMNS from a list of dicts.
+
+    The in-memory stand-in for a NED-LVS slice, as LvsReader returns it
+    (fake_ned_reader serves it unchanged: it only needs ra/dec). Requires
+    "ra", "dec"; "objname" defaults to LVS0001.., "objtype" to "G", the
+    other strings to None, numerics to NaN, the two quality flags to False.
+    """
+    from alerts.providers import (LVS_BOOL_COLUMNS, LVS_NUMERIC_COLUMNS,
+                                  LVS_STRING_COLUMNS)
+
+    def column(name, default, dtype):
+        return np.array([e.get(name, default(i) if callable(default) else default)
+                         for i, e in enumerate(entries, start=1)], dtype=dtype)
+
+    table = {}
+    for name in LVS_STRING_COLUMNS:
+        default = ((lambda i: f"LVS{i:04d}") if name == "objname"
+                   else "G" if name == "objtype" else None)
+        table[name] = column(name, default, object)
+    for name in LVS_BOOL_COLUMNS:
+        table[name] = column(name, False, bool)
+    for name in LVS_NUMERIC_COLUMNS:
+        table[name] = column(name, np.nan, float)
+    return table
+
+
 @pytest.fixture(scope="session")
 def tpv_header():
     # Linear terms lifted from a real RAPID chip; distortion terms are
@@ -516,20 +543,22 @@ def chip_data(tpv_header, job_dir):
 def make_provider(chip_data):
     """Factory for independent AlertDataProviders over the same fake chip.
 
-    kona_lookup and ned_reader are passed through to the provider (see
-    providers.py), so tests can inject solar-system predictions for the
-    fake chip's exposure (expid 42) and a NED slice (fake_ned_reader)
-    without any KONA or network machinery.
+    kona_lookup, ned_reader and lvs_reader are passed through to the
+    provider (see providers.py), so tests can inject solar-system
+    predictions for the fake chip's exposure (expid 42) and NED / NED-LVS
+    slices (fake_ned_reader over make_ned_table / make_lvs_table) without
+    any KONA or network machinery.
     """
     from alerts.providers import AlertDataProvider
 
     providers = []
 
     def _make(diff_flavor="sfft", kona_lookup=None, refcat=True,
-              ned_reader=None):
+              ned_reader=None, lvs_reader=None):
         provider = AlertDataProvider(
             FakeDB(chip_data), diff_flavor=diff_flavor,
-            kona_lookup=kona_lookup, refcat=refcat, ned_reader=ned_reader)
+            kona_lookup=kona_lookup, refcat=refcat, ned_reader=ned_reader,
+            lvs_reader=lvs_reader)
         providers.append(provider)
         return provider
 

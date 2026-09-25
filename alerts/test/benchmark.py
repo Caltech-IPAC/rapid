@@ -294,6 +294,12 @@ class TimedProvider:
         return self._timed("get_ned_matches", detection.sid,
                            lambda: self.inner.get_ned_matches(detection))
 
+    def get_lvs_matches(self, detection):
+        # as get_ned_matches: the chip's one NED-LVS slice + match pass is
+        # timed inside iter_sources_prefetch; this is the per-source lookup
+        return self._timed("get_lvs_matches", detection.sid,
+                           lambda: self.inner.get_lvs_matches(detection))
+
     def get_cutouts(self, detection):
         return self._timed("get_cutouts", detection.sid,
                            lambda: self.inner.get_cutouts(detection))
