@@ -81,7 +81,7 @@ DB_ACCESS_LEVELS = ("none", "read", "read-write")
 
 
 class ExitCode(IntEnum):
-    """The stage contract's five exit codes and the caller's action.
+    """The stage contract's six exit codes and the caller's action.
 
     Values and meanings are fixed by the contract's "Exit codes" table;
     do not renumber or add to this list without a contract change.
@@ -98,6 +98,16 @@ class ExitCode(IntEnum):
     """A declared input was absent, corrupt or incompatible once its
     storage was reached. Caller's action: fail, no retry."""
 
+    NOT_IMPLEMENTED = 69
+    """Declared, not implemented in this build: the stage has a real
+    :class:`StageDeclaration` and validates its arguments, settings and
+    input manifest like any other stage, but its science has not been
+    ported yet (supervisor step 8, 2026-09-24, ruling R9). sysexits'
+    EX_UNAVAILABLE; chosen over 64 (which would misreport a correct
+    invocation as a usage error) and 70 (which calls for investigation of
+    something unexpected, when the absence is deliberate and known).
+    Caller's action: fail, no retry."""
+
     STAGE_ERROR = 70
     """Unclassified stage error; stop for investigation.
     Caller's action: fail, no retry."""
@@ -108,7 +118,7 @@ class ExitCode(IntEnum):
 
 
 class StageContractError(Exception):
-    """Base class for the four exceptions ``run_stage`` maps to exit codes."""
+    """Base class for the five exceptions ``run_stage`` maps to exit codes."""
 
     exit_code: ExitCode
 
@@ -123,6 +133,20 @@ class InputRejected(StageContractError):
     """A declared input is absent, corrupt or incompatible. Maps to 65."""
 
     exit_code = ExitCode.INPUT_REJECTED
+
+
+class NotImplementedInBuild(StageContractError):
+    """The stage is declared but its science is not ported in this build.
+
+    Raised only after argument, settings and input-manifest validation
+    all pass -- a stub stage still rejects a bad invocation the same way
+    a real one would (64/65), and only refuses the work itself once the
+    request is otherwise valid. Maps to 69; ``run_stage`` writes no
+    manifest when this (or any) exception is raised, per the contract's
+    "If ``body`` raises, no manifest is written."
+    """
+
+    exit_code = ExitCode.NOT_IMPLEMENTED
 
 
 class StageError(StageContractError):
@@ -149,7 +173,7 @@ class StageDeclaration:
     ``consumes`` and ``produces`` name the product kinds the stage requires
     and writes; ``settings_schema_path`` is the stage's
     ``settings/<name>.toml`` defaults file, or ``None`` if it declares no
-    settings. ``supported_exit_codes`` must be a subset of the five defined
+    settings. ``supported_exit_codes`` must be a subset of the six defined
     in :class:`ExitCode`, and 0 is always implicitly supported.
     """
 

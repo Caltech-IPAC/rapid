@@ -35,6 +35,8 @@ from rapidpipe.stages.contract import ExitCode
     (64, False, "failed"),
     (65, True, "failed"),
     (65, False, "failed"),
+    (69, True, "failed"),
+    (69, False, "failed"),
     (70, True, "failed"),
     (70, False, "failed"),
     (75, True, "transient"),
