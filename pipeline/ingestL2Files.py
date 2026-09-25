@@ -155,10 +155,11 @@ The run announces the code on the way out as
 
     terminating_exitcode = <code>
 
-so a log can be grepped for how a run ended.  The configuration checks that run
-as this module is imported quit before the main program begins and so do not
-print it; nor does a worker process, whose code is announced by the main program
-that actually terminates on it.
+so a log can be grepped for how a run ended.  Every path that ends the process
+prints it, including the configuration checks that quit as this module is
+imported.  A worker process does not, and should not: it is not what terminates
+the run, and its code is announced by the main program on its own way out, so
+the log carries exactly one such line per run.
 
 Usage:
 
@@ -251,10 +252,12 @@ def get_int_from_env(name,default,minimum=None):
         value = int(value_str)
     except ValueError:
         print(f"*** Error: Env. var. {name} = {value_str} is not an integer; quitting...")
+        print("terminating_exitcode =",exit_code_config)
         exit(exit_code_config)
 
     if minimum is not None and value < minimum:
         print(f"*** Error: Env. var. {name} = {value} is less than {minimum}; quitting...")
+        print("terminating_exitcode =",exit_code_config)
         exit(exit_code_config)
 
     return value
@@ -283,12 +286,14 @@ bucket_name_input = os.getenv('RAPIDL2INPUTBUCKET')
 
 if bucket_name_input is None:
     print("*** Error: Env. var. RAPIDL2INPUTBUCKET not set; quitting...")
+    print("terminating_exitcode =",exit_code_config)
     exit(exit_code_config)
 
 bucket_name_output = os.getenv('RAPIDL2OUTPUTBUCKET')
 
 if bucket_name_output is None:
     print("*** Error: Env. var. RAPIDL2OUTPUTBUCKET not set; quitting...")
+    print("terminating_exitcode =",exit_code_config)
     exit(exit_code_config)
 
 input_prefix = os.getenv('RAPIDL2INPUTPREFIX')
@@ -325,6 +330,7 @@ sip_distortion_degree = get_int_from_env('SIPDISTORTIONDEGREE',database_sip_degr
 if sip_distortion_degree > database_sip_degree:
     print(f"*** Error: Env. var. SIPDISTORTIONDEGREE = {sip_distortion_degree} is above the "
           f"order the L2Files table stores ({database_sip_degree}); quitting...")
+    print("terminating_exitcode =",exit_code_config)
     exit(exit_code_config)
 
 print("sip_distortion_degree =",sip_distortion_degree)

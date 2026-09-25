@@ -558,14 +558,18 @@ Whichever it is, the run announces it on the way out:
 so a log can be grepped for how a run ended without going back to the shell that
 started it -- which for a run under the daemon is no longer there to ask.
 
+Every path that ends the process prints it, including the configuration checks
+that quit as the module is imported -- the two bucket names, the SIP-degree
+ceiling, and any numeric environment variable that fails to parse -- which are
+the most likely way a run ends badly and so the ones it would be least useful to
+leave silent.
+
 .. note::
-   Two paths do not print it, both of them deliberate.  A worker process that
-   quits with its own code does not: its code reaches the main program through
-   the process pool and is announced there, by the process that is actually
-   terminating.  And the configuration checks that run as the module is imported
-   -- the two bucket names, the SIP-degree ceiling, and any of the numeric
-   environment variables failing to parse -- quit before the main program
-   begins.
+   A worker process that quits with its own code does not print the line, and
+   should not: the worker is not what terminates the run.  Its code reaches the
+   main program through the process pool, and the main program announces it on
+   its own way out, so the log carries exactly one ``terminating_exitcode`` line
+   per run.
 
 .. note::
    The consecutive-failure limit exists because a daemon that keeps failing is
