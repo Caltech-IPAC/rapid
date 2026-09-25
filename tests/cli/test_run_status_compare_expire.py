@@ -168,7 +168,7 @@ class _FakeSTS:
         self.fail = fail
         self.calls: list[tuple[str, str]] = []
 
-    def assume_role(self, *, RoleArn: str, RoleSessionName: str):
+    def assume_role(self, *, RoleArn: str, RoleSessionName: str, DurationSeconds: int = 3600):
         self.calls.append((RoleArn, RoleSessionName))
         if self.fail:
             raise FakeClientError("AccessDenied", "not allowed")
