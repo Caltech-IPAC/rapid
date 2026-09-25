@@ -83,6 +83,10 @@ EMPTY_RESULT_SETS = [EMPTY_SOURCE_SET, ASSOCIATION_SET, STATISTICS_SET]
 _SETS = {"association": ASSOCIATION_SET, "association_2": ASSOCIATION_SET_2,
          "unnamed_association": UNNAMED_ASSOCIATION_SET, "statistics": STATISTICS_SET,
          "statistics_2": STATISTICS_SET_2, "unnamed_statistics": UNNAMED_STATISTICS_SET}
+#: The field whose per-field tables (merges_<f>, astroobjects_<f>,
+#: astroobjectsmeta_<f>) hold each set's rows.
+_FIELDS = {"association": 5321, "association_2": 5322, "unnamed_association": 5321,
+           "statistics": 5321, "statistics_2": 5322, "unnamed_statistics": 5321}
 
 
 def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Path, dict[str, str]]:
@@ -136,11 +140,16 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
             OTHER_SOURCE_SET: {"kind": "source-set", "complete": True,
                                "key": {"difference": "01J8Y6QZ3M00000000000D1F0",
                                        "catalog_type": "photutils"}},
-            ASSOCIATION_SET: {"kind": "association-set", "complete": True, "key": {"field": "5321"}},
+            ASSOCIATION_SET: {"kind": "association-set", "complete": True,
+                              "key": {"field": 5321, "base": None}},
             ASSOCIATION_SET_2: {"kind": "association-set", "complete": True,
-                                "key": {"field": "5322"}},
+                                "key": {"field": 5322, "base": None}},
             UNNAMED_ASSOCIATION_SET: {"kind": "association-set", "complete": True,
-                                      "key": {"field": "5321"}},
+                                      "key": {"field": 5321, "base": None}},
+            DIFFERENCE_INSTANCE: {"kind": "difference-image", "complete": None,
+                                  "key": {"differencer": "zogy"}},
+            REFERENCE_CATALOG_INSTANCE: {"kind": "reference-catalog", "complete": None,
+                                         "key": {"catalog_type": "sextractor"}},
             STATISTICS_SET: {"kind": "statistics-set", "complete": True,
                              "key": {"membership": ASSOCIATION_SET}},
             STATISTICS_SET_2: {"kind": "statistics-set", "complete": True,
@@ -152,13 +161,13 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
         "sources": sources,
         "filters": spec["filters"],
         "exposures": spec["exposures"],
-        "merges": [{"aid": aid, "sid": sid, "result_set": _SETS[name]}
+        "merges": [{"aid": aid, "sid": sid, "result_set": _SETS[name], "field": _FIELDS[name]}
                    for name, pairs in spec["merges"].items() for aid, sid in pairs],
         "astroobjects": [{"aid": int(aid), "ra0": positions[sid][0], "dec0": positions[sid][1],
-                          "result_set": _SETS[name]}
+                          "result_set": _SETS[name], "field": _FIELDS[name]}
                          for name, objects in spec["astroobjects"].items()
                          for aid, sid in objects.items()],
-        "astroobjectsmeta": [{**m, "result_set": _SETS[name]}
+        "astroobjectsmeta": [{**m, "result_set": _SETS[name], "field": _FIELDS[name]}
                              for name, rows in spec["astroobjectsmeta"].items() for m in rows],
     }
     seed_path = work / "db-seed.json"

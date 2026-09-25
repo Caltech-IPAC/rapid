@@ -353,3 +353,32 @@ def test_a_broken_lineage_exits_65(tmp_path, monkeypatch, prepared):
     rc, _, db = _run(tmp_path, monkeypatch, inputs, seed)
     assert rc == int(ExitCode.INPUT_REJECTED)
     assert db.commits == 0
+
+
+def test_an_unregistered_input_product_is_read_but_not_a_dependency(tmp_path, monkeypatch,
+                                                                    prepared):
+    """A dev reference catalog has no instance row: no dependency edge, a note instead."""
+    from rapidpipe.selftest.support.fakealertsdb import REFERENCE_CATALOG_INSTANCE
+    inputs, _, seed = prepared
+    del seed["product_instances"][REFERENCE_CATALOG_INSTANCE]
+    rc, outputs, db = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == 0
+    manifest = Manifest.read(outputs / "manifest.json")
+    assert manifest.inputs.products == {"difference-image": DIFFERENCE_INSTANCE}
+    assert db.registered[0]["manifest"]["inputs"]["products"] == {
+        "difference-image": DIFFERENCE_INSTANCE}
+    record = json.loads((outputs / manifest.execution_record).read_text())
+    assert record["notes"]["unregistered_inputs"] == {"reference-catalog":
+                                                      REFERENCE_CATALOG_INSTANCE}
+    # it was still read: the reference-catalog matches are there
+    container = next(e for e in manifest.outputs if e.kind == "alert-container")
+    raw = (outputs / container.primary).read_bytes()
+    assert all(a["refStarMatches"] is not None for a in fastavro.reader(io.BytesIO(raw)))
+
+
+def test_an_association_set_without_an_integer_field_exits_65(tmp_path, monkeypatch, prepared):
+    inputs, _, seed = prepared
+    seed["product_instances"][ASSOCIATION_SET]["key"] = {"field": "5321; DROP", "base": None}
+    rc, _, db = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == int(ExitCode.INPUT_REJECTED)
+    assert db.commits == 0

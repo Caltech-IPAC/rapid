@@ -231,18 +231,26 @@ class FakeAlertsDatabase:
             current = (row.get("key") or {}).get("base")
         return chain
 
-    def associations(self, lineages, statistics_by_association, sids) -> list[dict]:
+    def registered_instances(self, instances) -> set[str]:
+        return {i for i in instances if i in self.product_instances}
+
+    def associations(self, lineages, fields, statistics_by_association, sids) -> list[dict]:
+        """As PostgreSQL does: each named set's field tables only (every seeded
+        merges/astroobjects/astroobjectsmeta row names its ``field``)."""
         rows = []
         for root, chain in lineages.items():
+            field = fields[root]
             stats_set = statistics_by_association.get(root)
             depth = {member: d for d, member in enumerate(chain)}
             objects: dict[int, dict] = {}
-            for o in sorted((o for o in self.astroobjects if o["result_set"] in depth),
+            for o in sorted((o for o in self.astroobjects
+                             if o["field"] == field and o["result_set"] in depth),
                             key=lambda o: -depth[o["result_set"]]):
                 objects[o["aid"]] = o          # the newest set, written last, wins
             meta = {m["aid"]: m for m in self.astroobjectsmeta
-                    if stats_set is not None and m["result_set"] == stats_set}
-            merges = [m for m in self.merges if m["result_set"] in depth]
+                    if stats_set is not None and m["field"] == field
+                    and m["result_set"] == stats_set}
+            merges = [m for m in self.merges if m["field"] == field and m["result_set"] in depth]
             seen = set()
             for m in merges:
                 if m["sid"] not in sids or (m["sid"], m["aid"]) in seen:
@@ -261,13 +269,14 @@ class FakeAlertsDatabase:
                 })
         return sorted(rows, key=lambda r: (r["sid"], r["merges_aid"], r["association_set"]))
 
-    def history(self, lineages, objects, min_mjd) -> list[dict]:
+    def history(self, lineages, fields, objects, min_mjd) -> list[dict]:
         by_sid = {s["sid"]: s for s in self.sources}
         rows = {}
         for root, aid in objects:
             members = set(lineages[root])
             for m in self.merges:
-                if m["result_set"] not in members or m["aid"] != aid:
+                if (m["field"] != fields[root] or m["result_set"] not in members
+                        or m["aid"] != aid):
                     continue
                 s = by_sid.get(m["sid"])
                 if s is None or s["mjdobs"] < min_mjd:

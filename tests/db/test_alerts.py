@@ -9,8 +9,11 @@ and `statistics` stages are not ported yet -- with one object for positive
 row 1 (and its statistics) and a merges row for negative row 1 whose object
 is missing (an orphan). `alerts` runs against the rolled-back transaction.
 
-The `run`, `attempt` and `result_set` columns on `merges`, `astroobjects`
-and `astroobjectsmeta` are 20260924-03-objects-run-columns.sql's.
+Crossmatch's and statistics' rows live in step 1's standalone per-field
+tables `merges_<field>`, `astroobjects_<field>` and
+`astroobjectsmeta_<field>` (not children of the prototypes), made here as in
+production by `create_field_object_tables(field)` and
+`create_astroobjectsmeta_child_table(field)` (20260924-04).
 
 Skips cleanly if PGHOST is unset (see conftest.py).
 """
@@ -34,6 +37,12 @@ from .test_register_l2 import _NoCloseNoCommitConnProxy, _run_register
 from .test_repository import _make_unit
 
 ALERTS_UNIT = "e20260821001234/SCA07"
+
+
+def _field_tables(cur, field):
+    """Make field ``field``'s per-field tables through step 1's functions."""
+    cur.execute("SELECT create_field_object_tables(%s)", (field,))
+    cur.execute("SELECT create_astroobjectsmeta_child_table(%s)", (field,))
 
 
 def _register_set(conn, run_id, *, stage, kind, key, row_count, unit_suffix=""):
@@ -84,16 +93,17 @@ def _seeded_chain(conn, tmp_path, monkeypatch, *, extend_base=False):
     kept, orphan = sids[(1, True)], sids[(1, False)]
     aid, orphan_aid = 7_000_000_001, 7_000_000_002
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO merges (aid, sid, run, attempt, result_set) VALUES "
+        _field_tables(cur, 5321)
+        cur.execute("INSERT INTO merges_5321 (aid, sid, run, attempt, result_set) VALUES "
                     "(%s, %s, %s, %s, %s), (%s, %s, %s, %s, %s)",
                     (aid, kept["sid"], run_id, assoc_attempt, association_set,
                      orphan_aid, orphan["sid"], run_id, assoc_attempt, association_set))
         object_set, object_attempt = ((base_set, base_attempt) if extend_base
                                       else (association_set, assoc_attempt))
-        cur.execute("INSERT INTO astroobjects (aid, ra0, dec0, flux0, run, attempt, result_set) "
-                    "VALUES (%s, %s, %s, 100.0, %s, %s, %s)",
+        cur.execute("INSERT INTO astroobjects_5321 (aid, ra0, dec0, flux0, run, attempt, "
+                    "result_set) VALUES (%s, %s, %s, 100.0, %s, %s, %s)",
                     (aid, kept["ra"], kept["dec"], run_id, object_attempt, object_set))
-        cur.execute("INSERT INTO astroobjectsmeta (aid, meanra, stdevra, meandec, stdevdec, "
+        cur.execute("INSERT INTO astroobjectsmeta_5321 (aid, meanra, stdevra, meandec, stdevdec, "
                     "meanflux, stdevflux, nsources, run, attempt, result_set) VALUES "
                     "(%s, %s, 0.5, %s, 0.25, 100.0, 1.0, 3, %s, %s, %s)",
                     (aid, kept["ra"], kept["dec"], run_id, stats_attempt, statistics_set))
@@ -269,16 +279,18 @@ def test_two_fields_two_association_sets_and_their_statistics(conn, tmp_path, mo
         key={"membership": field2_set}, row_count=1, unit_suffix="-5322")
     aid2 = 7_000_000_003
     with conn.cursor() as cur:
+        _field_tables(cur, 5322)
         cur.execute("SELECT ra, dec FROM sources WHERE sid = %s", (ids["orphan"],))
         ra, dec = cur.fetchone()
-        cur.execute("INSERT INTO merges (aid, sid, run, attempt, result_set) VALUES "
+        cur.execute("INSERT INTO merges_5322 (aid, sid, run, attempt, result_set) VALUES "
                     "(%s, %s, %s, %s, %s)",
                     (aid2, ids["orphan"], run_id, field2_attempt, field2_set))
-        cur.execute("INSERT INTO astroobjects (aid, ra0, dec0, flux0, run, attempt, result_set) "
-                    "VALUES (%s, %s, %s, 100.0, %s, %s, %s), (%s, %s, %s, 100.0, %s, %s, %s)",
+        cur.execute("INSERT INTO astroobjects_5322 (aid, ra0, dec0, flux0, run, attempt, "
+                    "result_set) VALUES (%s, %s, %s, 100.0, %s, %s, %s), "
+                    "(%s, %s, %s, 100.0, %s, %s, %s)",
                     (aid2, ra, dec, run_id, field2_attempt, field2_set,
                      7_000_000_002, ra, dec, run_id, field2_attempt, field2_set))
-        cur.execute("INSERT INTO astroobjectsmeta (aid, meanra, stdevra, meandec, stdevdec, "
+        cur.execute("INSERT INTO astroobjectsmeta_5322 (aid, meanra, stdevra, meandec, stdevdec, "
                     "meanflux, stdevflux, nsources, run, attempt, result_set) VALUES "
                     "(%s, %s, 0.5, %s, 0.25, 100.0, 1.0, 5, %s, %s, %s)",
                     (aid2, ra, dec, run_id, field2_stats_attempt, field2_stats))
