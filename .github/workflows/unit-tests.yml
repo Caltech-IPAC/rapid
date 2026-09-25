@@ -1,10 +1,9 @@
 # Runs the rapidpipe unit test suite on push and pull_request.
 #
 # pip install -e . --no-deps installs only the rapidpipe package under
-# test, not its runtime dependencies (numpy/astropy/astroquery from
-# requirements.txt) -- this workflow proves the package and its tests
-# import and pass on their own, and stays fast; a stage that needs those
-# runtime dependencies pulls them in when it is added.
+# test; the runtime dependencies come from requirements.txt in the next
+# step (the one dependency authority, which pyproject.toml also reads),
+# so this list never drifts from db-migrations.yml and cli-behaviour.yml.
 #
 # rapidpipe.db and rapidpipe.runs import psycopg2 unconditionally
 # (mocked, never connected to, in tests/unit -- the database-backed
@@ -70,8 +69,12 @@ jobs:
       - name: install rapidpipe
         run: pip install -e . --no-deps
 
-      - name: install pytest, psycopg2-binary, numpy, astropy, healpy, fastavro, scipy and hats-import
-        run: pip install pytest psycopg2-binary numpy astropy healpy fastavro scipy hats-import
+      # requirements.txt is the one dependency authority (pyproject.toml
+      # reads it); installing from it here keeps this list from drifting
+      # from db-migrations.yml and cli-behaviour.yml (2026-09-25: the three
+      # workflows carried three different hand-written lists).
+      - name: install the runtime dependencies (requirements.txt) and pytest
+        run: pip install -r requirements.txt pytest
 
       - name: run rapidpipe unit tests
         run: python -m pytest tests/unit -q

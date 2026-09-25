@@ -95,7 +95,8 @@ jobs:
           # for the alerts stage -- this suite imports rapidpipe.cli.main,
           # which reaches all of them by import even where a given test
           # never exercises that stage directly.
-          pip install psycopg2-binary pytest numpy astropy healpy fastavro scipy
+          # requirements.txt is the dependency authority; see unit-tests.yml.
+          pip install -r requirements.txt pytest
 
       - name: run the CLI behavioural suite
         env:
