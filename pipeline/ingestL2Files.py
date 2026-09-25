@@ -188,7 +188,45 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 exit_code_config = 64             # Bad or missing configuration: a required env. var. is not set.
 exit_code_no_input = 66           # A required input is not there: the work directory does not exist.
+exit_code_database = 67           # The database could not be used, when rapid_db reports no code of its own.
 exit_code_cannot_create = 73      # A file could not be created: the per-process log.
+
+
+def get_int_from_env(name,default,minimum=None):
+
+    '''
+    Return an integer environment variable, or the default if it is unset.
+
+    A value that is not an integer, or is below the minimum, quits with a message rather than
+    being quietly defaulted or raising a bare ValueError.  A run started with a misspelled
+    NUM_CORES should say which variable is wrong and exit with the code that means
+    "misconfigured", not hand back a traceback that tells the daemon only that something
+    went wrong.
+    '''
+
+    value_str = os.getenv(name)
+
+    if value_str is None:
+        return default
+
+    try:
+        value = int(value_str)
+    except ValueError:
+        print(f"*** Error: Env. var. {name} = {value_str} is not an integer; quitting...")
+        exit(exit_code_config)
+
+    if minimum is not None and value < minimum:
+        print(f"*** Error: Env. var. {name} = {value} is less than {minimum}; quitting...")
+        exit(exit_code_config)
+
+    return value
+
+
+# The SIP order the L2Files database table stores, which add_l2file_fifth_order writes a
+# column per coefficient for.  The FITS headers are always filled to at least this order, so
+# that the registration finds a complete set whatever degree the fit itself was done to.
+
+database_sip_degree = 5
 
 
 # Global variables.
@@ -238,12 +276,18 @@ print("subdir_work =",subdir_work)
 # Degree of the SIP fit to the gWCS.  The L2Files database table stores SIP coefficients
 # up to fifth order, so a different degree here would leave the row and the file disagreeing.
 
-sip_distortion_degree_str = os.getenv('SIPDISTORTIONDEGREE')
+sip_distortion_degree = get_int_from_env('SIPDISTORTIONDEGREE',database_sip_degree,minimum=1)
 
-if sip_distortion_degree_str is None:
-    sip_distortion_degree = 5
-else:
-    sip_distortion_degree = int(sip_distortion_degree_str)
+
+# A higher degree than the table holds would be fitted into the file and then silently
+# dropped on the way into the database, leaving the row describing a different distortion
+# from the file it points at.  A lower one is allowed: its higher coefficients are genuinely
+# zero, and are registered as zero.
+
+if sip_distortion_degree > database_sip_degree:
+    print(f"*** Error: Env. var. SIPDISTORTIONDEGREE = {sip_distortion_degree} is above the "
+          f"order the L2Files table stores ({database_sip_degree}); quitting...")
+    exit(exit_code_config)
 
 print("sip_distortion_degree =",sip_distortion_degree)
 
@@ -281,24 +325,14 @@ print("do_asdf_recency_check =",do_asdf_recency_check)
 
 # Number of parallel processes.
 
-num_cores_str = os.getenv('NUM_CORES')
-
-if num_cores_str is None:
-    num_cores = os.cpu_count()
-else:
-    num_cores = int(num_cores_str)
+num_cores = get_int_from_env('NUM_CORES',os.cpu_count() or 1,minimum=1)
 
 print("num_cores =",num_cores)
 
 
 # Optional cap on the number of files ingested in one run, for short tests.
 
-max_files_str = os.getenv('MAXFILESTOINGEST')
-
-if max_files_str is None:
-    max_files_to_ingest = None
-else:
-    max_files_to_ingest = int(max_files_str)
+max_files_to_ingest = get_int_from_env('MAXFILESTOINGEST',None,minimum=1)
 
 print("max_files_to_ingest =",max_files_to_ingest)
 
@@ -406,6 +440,14 @@ def coerce_header_value(value):
     if value is None:
         return None
 
+
+    # Before the scalar branch below, which would otherwise return a NaN unexamined and leave
+    # fits.Card to raise on it: FITS headers cannot hold a non-finite floating-point value at
+    # all, so there is nothing to write and the leaf is skipped.
+
+    if isinstance(value,(float,np.floating)) and not np.isfinite(value):
+        return None
+
     if isinstance(value,(bool,int,float,str)):
         return value
 
@@ -421,11 +463,6 @@ def coerce_header_value(value):
     if isinstance(value,np.str_):
         return str(value)
 
-
-    # A non-finite float cannot be written to a FITS card at all.
-
-    if isinstance(value,float) and not np.isfinite(value):
-        return None
 
     if isinstance(value,Time):
         return str(value.isot)
@@ -764,6 +801,18 @@ def build_primary_header(dm,asdf_tree,input_asdf_file):
 
     exptime = float(dm.meta.exposure.exposure_time)
 
+
+    # An exposure time that is not a positive, finite number cannot be scaled by.  This has
+    # to be refused rather than used: the Roman data model fills an unset float with
+    # -999999.0, and multiplying the science image by that produces a FITS file that looks
+    # perfectly well formed, converts without complaint, and carries nothing but garbage --
+    # which then gets uploaded, registered, and given a limiting magnitude.  Silence is the
+    # danger here, so the file is failed and left on the work list instead.
+
+    if not np.isfinite(exptime) or exptime <= 0.0:
+        print(f"*** Error: Exposure time = {exptime} is not a positive, finite number")
+        return None
+
     time_start = coerce_to_astropy_time(dm.meta.exposure.start_time)
     time_end = coerce_to_astropy_time(dm.meta.exposure.end_time)
 
@@ -851,7 +900,11 @@ def build_science_header(primary_hdr,wcs_header,shape,extname):
     hdr["NAXIS1"] = shape[-1]
     hdr["NAXIS2"] = shape[-2]
 
-    fill_missing_sip_keywords(hdr,sip_distortion_degree)
+    # Filled to the order the database stores, not merely to the order fitted: a lower-degree
+    # fit leaves the higher coefficients genuinely zero, and the registration below reads a
+    # fixed fifth-order set that has to find every one of them.
+
+    fill_missing_sip_keywords(hdr,max(sip_distortion_degree,database_sip_degree))
 
     for keyword in science_image_keywords:
 
@@ -1410,7 +1463,11 @@ def register_l2file(dbh,roman_tessellation_db,header,wcs,fits_filename,s3_object
     cunit2 = get_keyword_value(header,key)
 
 
-    # The SIP coefficients, which fill_missing_sip_keywords has guaranteed are all present.
+    # The SIP coefficients.  Collected over the order the DATABASE stores rather than the
+    # order the fit was done to, because add_l2file_fifth_order below asks for a fixed
+    # fifth-order set by name; iterating the fitted degree instead would leave the higher
+    # coefficients absent from this dictionary and every one of those lookups a KeyError.
+    # build_science_header has filled the header to the same order, so all of them are there.
 
     sip_values = {}
 
@@ -1418,9 +1475,9 @@ def register_l2file(dbh,roman_tessellation_db,header,wcs,fits_filename,s3_object
 
         sip_values[f"{prefix}_ORDER"] = get_keyword_value(header,f"{prefix}_ORDER")
 
-        for i in range(0,sip_distortion_degree + 1):
-            for j in range(0,sip_distortion_degree + 1):
-                if i + j > sip_distortion_degree:
+        for i in range(0,database_sip_degree + 1):
+            for j in range(0,database_sip_degree + 1):
+                if i + j > database_sip_degree:
                     continue
                 sip_values[f"{prefix}_{i}_{j}"] = get_keyword_value(header,f"{prefix}_{i}_{j}")
 
@@ -1696,6 +1753,16 @@ def get_ingested_l2file_times(dbh):
              "from l2files where vbest > 0 group by 1;")
 
     records = dbh.execute_sql_queries([query],debug)
+
+
+    # rapid_db returns None, having set its own exit code, when the query failed.  Falling
+    # through on that would make an empty result indistinguishable from "nothing has been
+    # ingested", and the next thing this script does with that answer is re-ingest every file
+    # in the bucket.  Report it instead and let the caller stop.
+
+    if records is None:
+        print("*** Error: Could not query L2Files for the files already ingested")
+        return None
 
     ingested_l2file_times = {}
 
@@ -1973,6 +2040,15 @@ if __name__ == '__main__':
     if do_already_ingested_check:
 
         ingested_l2file_times = get_ingested_l2file_times(dbh)
+
+        if ingested_l2file_times is None:
+
+            exit_code = dbh.exit_code if dbh.exit_code >= 64 else exit_code_database
+
+            dbh.close()
+
+            print("*** Error: Cannot tell what has already been ingested; quitting...")
+            exit(exit_code)
 
         print(f"n_ingested_fits_files = {len(ingested_l2file_times)}")
 

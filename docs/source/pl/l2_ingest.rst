@@ -303,7 +303,11 @@ Variable                                             Meaning
 ``RAPID_WORK``                                       Local work directory.  Defaults to ``/work``.
 ``NUM_CORES``                                        Number of parallel processes.  Defaults to the number of CPUs.
 ``SIPDISTORTIONDEGREE``                              Degree of the SIP fit to the gWCS.  Defaults to 5, which is what
-                                                     ``L2Files`` stores.
+                                                     ``L2Files`` stores, and may not exceed it: a higher-order fit
+                                                     would be dropped on the way into the database, leaving the row
+                                                     describing a different distortion from the file it points at.
+                                                     A lower degree is allowed, and its higher coefficients are
+                                                     registered as the zeros they are.
 ``MAXFILESTOINGEST``                                 Stop after this many files, for short tests.
 ``DONTCHECKALREADYINGESTED``                         Set to skip the ``L2Files`` query and re-ingest everything in the
                                                      input bucket.
@@ -453,6 +457,14 @@ Code     Meaning
 Failure handling
 ************************************
 
+A file whose exposure time is not a positive, finite number is refused before
+anything is written.  The Roman data model fills an unset float with
+``-999999.0``, and scaling the science image by that would produce a FITS file
+that is perfectly well formed, converts without complaint, and holds nothing but
+garbage -- which would then be uploaded, registered, and given a limiting
+magnitude, with nothing in the log to say so.  Silence is the danger, so such a
+file is failed and left on the work list.
+
 A file that cannot be converted, uploaded or registered is logged and skipped,
 and the run carries on with the rest.  Its work directory is cleaned up either
 way, so a long run cannot fill the disk with the leavings of its failures, and
@@ -462,3 +474,11 @@ the next run.
 The database connection and the sky-tessellation database are opened inside each
 child process rather than inherited from the parent, so that no two processes
 can end up sharing one connection.
+
+A run stops outright, rather than skipping files, for the two conditions where
+carrying on would do damage: a numeric environment variable that is not a
+number, which exits 64 naming the variable rather than raising; and a failure of
+the query that finds what has already been ingested, which exits with
+``rapid_db``'s own code.  That query returning nothing must never be confused
+with a query that failed -- the next thing the script does with that answer is
+re-ingest every file in the bucket.
