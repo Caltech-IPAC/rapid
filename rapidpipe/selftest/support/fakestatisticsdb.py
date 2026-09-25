@@ -146,7 +146,7 @@ class FakeStatisticsDatabase:
         self.commits = 0
         self.on_commit = None
 
-    def association_chain(self, instance: str) -> list[str]:
+    def association_chain(self, instance: str, run_id: str | None = None) -> list[str]:
         chain: list[str] = []
         current: str | None = instance
         while current is not None:
@@ -171,12 +171,12 @@ class FakeStatisticsDatabase:
             found.update(row.get("source_sets") or [])
         return sorted(found)
 
-    def source_set_table(self, instance: str) -> str:
+    def source_set_table(self, instance: str, run_id: str | None = None) -> str:
         if instance not in self.source_set_tables:
             raise ValueError(f"no source-set result set with instance {instance!r}")
         return self.source_set_tables[instance]
 
-    def find_complete_statistics_set(self, run_id, key):
+    def find_complete_statistics_set(self, run_id, key, attempt_id=None):
         for instance, s in sorted(self.statistics_sets.items()):
             if s["run"] == run_id and s["key"] == key and s["complete"]:
                 return instance, s["row_count"]

@@ -34,6 +34,7 @@ from .test_register_difference import (
     _register_difference,
     _run_difference,
 )
+from .attempt_helpers import set_disposition
 from .test_register_l2 import _NoCloseNoCommitConnProxy
 from .test_repository import _make_unit
 
@@ -142,9 +143,11 @@ def test_load_writes_devs_rows_and_one_complete_source_set(conn, tmp_path, monke
 
 def test_done_check_reuses_the_set_and_off_loads_again(conn, tmp_path, monkeypatch):
     run_id, diff_outputs = _registered_difference(conn, tmp_path, monkeypatch)
-    rc, _, first = _run_load(conn, monkeypatch, tmp_path, run_id, diff_outputs, name="first")
+    rc, first_attempt, first = _run_load(conn, monkeypatch, tmp_path, run_id, diff_outputs,
+                                         name="first")
     assert rc == 0
     first_instance = Manifest.read(first / "manifest.json").outputs[0].instance
+    set_disposition(conn, first_attempt, "succeeded")  # ruling R1: only a succeeded set is reused
 
     rc, _, second = _run_load(conn, monkeypatch, tmp_path, run_id, diff_outputs, name="second")
     assert rc == 0

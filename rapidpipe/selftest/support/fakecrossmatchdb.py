@@ -117,7 +117,7 @@ class FakeCrossmatchDatabase:
     def lock_field(self, field: int) -> None:
         self.locks.append(int(field))
 
-    def source_set_table(self, instance: str) -> tuple[str, int | None]:
+    def source_set_table(self, instance: str, run_id: str | None = None) -> tuple[str, int | None]:
         found = self.source_sets.get(instance)
         if found is None:
             raise ValueError(f"no source-set result set with instance {instance!r}")
@@ -125,7 +125,7 @@ class FakeCrossmatchDatabase:
             raise ValueError(f"source-set {instance!r} is not complete and retained")
         return found["table"], found.get("row_count")
 
-    def association_chain(self, instance: str) -> list[str]:
+    def association_chain(self, instance: str, run_id: str | None = None) -> list[str]:
         chain: list[str] = []
         current: str | None = instance
         while current is not None:
@@ -138,7 +138,8 @@ class FakeCrossmatchDatabase:
             current = found.get("base") or None
         return chain
 
-    def find_complete_result_set(self, kind: str, run_id: str, key: dict[str, Any]):
+    def find_complete_result_set(self, kind: str, run_id: str, key: dict[str, Any],
+                                 attempt_id: str | None = None):
         assert kind == "association-set"
         for instance in sorted(self.association_sets):
             found = self.association_sets[instance]

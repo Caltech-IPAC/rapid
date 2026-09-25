@@ -180,7 +180,7 @@ class FakeLoadDatabase:
             raise ValueError(f"no diffimages row for difference instance {instance!r}")
         return dict(self.differences[instance])
 
-    def find_complete_source_set(self, run_id, key):
+    def find_complete_source_set(self, run_id, key, attempt_id=None):
         for instance, s in sorted(self.source_sets.items()):
             if s["run"] == run_id and s["key"] == key and s["complete"]:
                 return instance, s["row_count"]

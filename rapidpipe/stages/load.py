@@ -36,7 +36,10 @@ As `dev` does, a job with any of its four catalog files missing is skipped:
 exit 0, no rows, no source set, the reason in the execution record. With
 ``[load] done_check`` on (`dev`'s default), a complete source set already
 loaded for the same logical key in this run is reused and nothing is
-written, the rebuild's form of `dev`'s ``source_dbload_jid<jid>.done`` file.
+written, the rebuild's form of `dev`'s ``source_dbload_jid<jid>.done`` file,
+but only when its producing attempt is this attempt or one that succeeded
+(supervisor step 9 ruling R1): a set a failed attempt committed is not
+reused, and the retry loads a new set under its own instance.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
@@ -126,9 +129,9 @@ class PostgresLoadDatabase:
         with self.conn.cursor() as cur:
             return _sources.difference_image_row(cur, instance)
 
-    def find_complete_source_set(self, run_id: str, key: dict[str, Any]):
+    def find_complete_source_set(self, run_id: str, key: dict[str, Any], attempt_id: str):
         with self.conn.cursor() as cur:
-            return _sources.find_complete_source_set(cur, run_id, key)
+            return _sources.find_complete_source_set(cur, run_id, key, attempt_id)
 
     def ensure_child_table(self, obs_date: str, sca: int) -> bool:
         with self.conn.cursor() as cur:
@@ -377,7 +380,7 @@ def _body(context: StageContext) -> StageResult:
                                    execution_notes={"skip_loading": True})
 
             if load_settings["done_check"]:
-                existing = db.find_complete_source_set(context.run_id, key)
+                existing = db.find_complete_source_set(context.run_id, key, context.attempt_id)
                 if existing is not None:
                     instance, row_count = existing
                     log.warning("source set %s for this difference instance is already "

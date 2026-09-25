@@ -43,7 +43,8 @@ an empty exclusion list is still a complete set.
 With ``[prune] done_check`` on (ruling R14, the default), a complete pruned
 set already written for the same base and settings hash in this run is
 reused and nothing is written, the rebuild's form of `dev` having no done
-file for this stage at all.
+file for this stage at all, only when its producing attempt is this attempt
+or one that succeeded (supervisor step 9 ruling R1).
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
@@ -175,21 +176,21 @@ class PostgresPruneDatabase:
     def __init__(self, conn) -> None:
         self.conn = conn
 
-    def find_complete_pruned_set(self, run_id: str, key: dict[str, Any]):
+    def find_complete_pruned_set(self, run_id: str, key: dict[str, Any], attempt_id: str):
         with self.conn.cursor() as cur:
-            return _objects.find_complete_result_set(cur, "pruned-set", run_id, key)
+            return _objects.find_complete_result_set(cur, "pruned-set", run_id, key, attempt_id)
 
-    def association_chain(self, instance: str) -> list[str]:
+    def association_chain(self, instance: str, run_id: str) -> list[str]:
         with self.conn.cursor() as cur:
-            return _objects.association_chain(cur, instance)
+            return _objects.association_chain(cur, instance, run_id)
 
     def chain_source_sets(self, chain: list[str]) -> list[str]:
         with self.conn.cursor() as cur:
             return _chain_source_sets(cur, chain)
 
-    def source_set_table(self, instance: str) -> tuple[str, int | None]:
+    def source_set_table(self, instance: str, run_id: str) -> tuple[str, int | None]:
         with self.conn.cursor() as cur:
-            return _objects.source_set_table(cur, instance)
+            return _objects.source_set_table(cur, instance, run_id)
 
     def not_best_pairs(self, field: int, chain: list[str],
                        tables_and_sets: list[tuple[str, str]], run_id: str) -> list[tuple[int, int]]:
@@ -315,7 +316,7 @@ def _body(context: StageContext) -> StageResult:
     try:
         with open_database() as db:
             if prune_settings["done_check"]:
-                existing = db.find_complete_pruned_set(context.run_id, key)
+                existing = db.find_complete_pruned_set(context.run_id, key, context.attempt_id)
                 if existing is not None:
                     instance, row_count = existing
                     log.warning(
@@ -328,11 +329,11 @@ def _body(context: StageContext) -> StageResult:
                         result_sets_read=(assoc.instance,),
                         execution_notes={"done_check": {"reused": instance}})
 
-            chain = db.association_chain(assoc.instance)
+            chain = db.association_chain(assoc.instance, context.run_id)
             source_sets = db.chain_source_sets(chain)
             tables_and_sets: list[tuple[str, str]] = []
             for source_set in source_sets:
-                table, _ = db.source_set_table(source_set)
+                table, _ = db.source_set_table(source_set, context.run_id)
                 tables_and_sets.append((table, source_set))
 
             pairs = sorted(set(db.not_best_pairs(field, chain, tables_and_sets, context.run_id)))

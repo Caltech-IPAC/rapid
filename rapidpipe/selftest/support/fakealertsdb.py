@@ -196,7 +196,7 @@ class FakeAlertsDatabase:
         return sorted((r for r in self.outbox if r["instance"] == instance),
                       key=lambda r: r["record_ordinal"])
 
-    def result_set_kinds(self, instances: list[str]) -> dict[str, dict]:
+    def result_set_kinds(self, instances: list[str], run_id: str | None = None) -> dict[str, dict]:
         return {i: {"kind": p["kind"], "complete": p.get("complete"), "key": p.get("key", {})}
                 for i, p in self.product_instances.items() if i in instances}
 
@@ -219,7 +219,7 @@ class FakeAlertsDatabase:
         return [self._joined(s) for s in sorted(self.sources, key=lambda s: s["sid"])
                 if s["result_set"] == source_set and s["pid"] == pid and s["flags"] == 0]
 
-    def association_chain(self, instance: str) -> list[str]:
+    def association_chain(self, instance: str, run_id: str | None = None) -> list[str]:
         """The set and the bases it extends (``key.base``), newest first."""
         chain: list[str] = []
         current = instance

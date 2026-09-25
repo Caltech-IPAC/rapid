@@ -44,7 +44,7 @@ def test_source_set_states_and_rows_through_the_real_query(conn, tmp_path, monke
     run_id, source_set, rows = _loaded_source_set(conn, tmp_path, monkeypatch)
     db = _db(conn)
 
-    states = db.result_set_states([source_set, "01J8Y6QZ3M00000000000NOPE0"])
+    states = db.result_set_states([source_set, "01J8Y6QZ3M00000000000NOPE0"], run_id)
     assert set(states) == {source_set}
     assert states[source_set]["kind"] == "source-set"
     assert states[source_set]["complete"] is True

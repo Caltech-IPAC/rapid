@@ -121,46 +121,91 @@ def test_count_result_set_rows_accepts_only_object_tables():
             objects.count_result_set_rows(FakeCursor([(0,)]), bad, "SET")
 
 
+def _readable(kind="source-set", run="RUN", custody="scratch", deletion_state="retained",
+              complete=True, row_count=12, key=None, selected=True):
+    """One row of ``assert_readable_result_set``'s query."""
+    return (kind, run, custody, deletion_state, complete, row_count,
+            json.dumps(key if key is not None else {}), selected)
+
+
+def test_readable_own_run_set_whatever_its_custody_or_attempt():
+    state = objects.assert_readable_result_set(
+        FakeCursor([_readable(custody="scratch", selected=False, key={"difference": "D"})]),
+        "SS", "RUN")
+    assert state == {"kind": "source-set", "run": "RUN", "custody": "scratch", "row_count": 12,
+                     "key": {"difference": "D"}}
+
+
+@pytest.mark.parametrize("custody", ["candidate", "current"])
+def test_readable_another_runs_selected_production_set(custody):
+    cur = FakeCursor([_readable(kind="association-set", run="OTHER", custody=custody)])
+    assert objects.assert_readable_result_set(cur, "A", "RUN", kind="association-set")["run"] == "OTHER"
+    sql, params = cur.executed[0]
+    assert "u.selected_attempt = pi.producing_attempt" in sql and params == ("A",)
+
+
+@pytest.mark.parametrize("row, kind, match", [
+    (None, None, "no result set"),
+    (_readable(kind="association-set"), "source-set", "not a source-set"),
+    (_readable(complete=False), None, "not complete and retained"),
+    (_readable(complete=None), None, "not complete and retained"),
+    (_readable(deletion_state="deleted"), None, "not complete and retained"),
+    (_readable(run="OTHER", custody="scratch"), None, "scratch result set is not readable"),
+    (_readable(run="OTHER", custody="candidate", selected=False), None, "not its unit's selected"),
+    (_readable(run="OTHER", custody="current", selected=False), None, "not its unit's selected"),
+])
+def test_readable_refuses(row, kind, match):
+    with pytest.raises(ValueError, match=match):
+        objects.assert_readable_result_set(FakeCursor([row] if row else []), "X", "RUN",
+                                           kind=kind)
+
+
 def test_source_set_table_follows_key_to_diffimages_and_l2files():
-    cur = FakeCursor([("DIFF", True, "retained", 12),
+    cur = FakeCursor([_readable(key={"difference": "DIFF"}),
                       (datetime.datetime(2026, 8, 21, 3, 4, 5), 7)])
-    assert objects.source_set_table(cur, "SS") == ("sources_20260821_7", 12)
-    assert "pi.kind = 'source-set'" in cur.executed[0][0]
+    assert objects.source_set_table(cur, "SS", "RUN") == ("sources_20260821_7", 12)
     assert cur.executed[0][1] == ("SS",)
     assert cur.executed[1][1] == ("DIFF",)
 
 
 @pytest.mark.parametrize("rows, match", [
-    ([], "no source-set"),
-    ([("DIFF", False, "retained", 0)], "not complete"),
-    ([("DIFF", True, "deleted", 0)], "not complete"),
-    ([(None, True, "retained", 0)], "names no difference"),
-    ([("DIFF", True, "retained", 0)], "no diffimages"),
+    ([], "no result set"),
+    ([_readable(kind="association-set")], "not a source-set"),
+    ([_readable(complete=False)], "not complete"),
+    ([_readable(deletion_state="deleted")], "not complete"),
+    ([_readable(run="OTHER", custody="scratch", key={"difference": "D"})], "scratch"),
+    ([_readable(run="OTHER", custody="candidate", selected=False, key={"difference": "D"})],
+     "selected"),
+    ([_readable(key={})], "names no difference"),
+    ([_readable(key={"difference": "DIFF"})], "no diffimages"),
 ])
 def test_source_set_table_refuses(rows, match):
     with pytest.raises(ValueError, match=match):
-        objects.source_set_table(FakeCursor(rows), "SS")
+        objects.source_set_table(FakeCursor(rows), "SS", "RUN")
+
+
+def _assoc(base, **kw):
+    return _readable(kind="association-set", key={"field": 1, "base": base}, **kw)
 
 
 def test_association_chain_follows_base_until_null():
-    cur = FakeCursor([("association-set", "retained", "B"),
-                      ("association-set", "retained", "C"),
-                      ("association-set", "retained", None)])
-    assert objects.association_chain(cur, "A") == ["A", "B", "C"]
+    cur = FakeCursor([_assoc("B"), _assoc("C", run="OTHER", custody="current"), _assoc(None)])
+    assert objects.association_chain(cur, "A", "RUN") == ["A", "B", "C"]
     assert [p for _, p in cur.executed] == [("A",), ("B",), ("C",)]
-    assert "logical_key->>'base'" in cur.executed[0][0]
 
 
 @pytest.mark.parametrize("rows, match", [
-    ([], "no instance"),
-    ([("association-set", "retained", "B")], "no instance 'B'"),
-    ([("source-set", "retained", None)], "not an association-set"),
-    ([("association-set", "deleted", None)], "not retained"),
-    ([("association-set", "retained", "B"), ("association-set", "retained", "A")], "loops"),
+    ([], "no result set"),
+    ([_assoc("B")], "no result set with instance 'B'"),
+    ([_readable(kind="source-set")], "not a association-set"),
+    ([_assoc(None, deletion_state="deleted")], "not complete and retained"),
+    ([_assoc("B"), _assoc("A")], "loops"),
+    ([_assoc("B"), _assoc(None, run="OTHER", custody="scratch")], "chain of 'A'.*scratch"),
+    ([_assoc(None, run="OTHER", custody="candidate", selected=False)], "selected"),
 ])
 def test_association_chain_refuses(rows, match):
     with pytest.raises(ValueError, match=match):
-        objects.association_chain(FakeCursor(rows), "A")
+        objects.association_chain(FakeCursor(rows), "A", "RUN")
 
 
 def test_set_rows_clause():
@@ -170,14 +215,16 @@ def test_set_rows_clause():
             objects.set_rows_clause(bad, ["A"])
 
 
-def test_find_complete_result_set_matches_kind_run_and_key():
+def test_find_complete_result_set_matches_kind_run_key_and_reusable_attempt():
     cur = FakeCursor([("SET", 7)])
     key = {"field": 5321, "source_sets": ["S"], "settings_hash": "h"}
-    assert objects.find_complete_result_set(cur, "association-set", "RUN", key) == ("SET", 7)
+    assert objects.find_complete_result_set(cur, "association-set", "RUN", key, "ATT") == ("SET", 7)
     sql, params = cur.executed[0]
     assert "pi.kind = %s" in sql and "rs.complete" in sql and "deletion_state = 'retained'" in sql
-    assert params == ("association-set", "RUN", json.dumps(key))
-    assert objects.find_complete_result_set(FakeCursor([]), "pruned-set", "RUN", key) is None
+    assert "JOIN attempts a ON a.id = pi.producing_attempt" in sql
+    assert "(a.id = %s OR a.disposition = 'succeeded')" in sql
+    assert params == ("association-set", "RUN", json.dumps(key), "ATT")
+    assert objects.find_complete_result_set(FakeCursor([]), "pruned-set", "RUN", key, "ATT") is None
 
 
 def test_current_association_sets():

@@ -214,8 +214,8 @@ def test_association_chain_and_set_rows_read_base_plus_delta(conn):
                                 key={"field": FIELD, "base": first, "settings_hash": "h"})
     other_run, a2, unrelated = _result_set(conn)
     with conn.cursor() as cur:
-        assert objects.association_chain(cur, second) == [second, first]
-        assert objects.association_chain(cur, first) == [first]
+        assert objects.association_chain(cur, second, run_id) == [second, first]
+        assert objects.association_chain(cur, first, run_id) == [first]
         objects.ensure_field_object_tables(cur, FIELD)
         objects.copy_astroobjects(cur, FIELD, _csv(
             (1, 1.0, 1.0, 1.0, "\\N", "\\N", "\\N"),
@@ -223,23 +223,24 @@ def test_association_chain_and_set_rows_read_base_plus_delta(conn):
             (3, 1.0, 1.0, 1.0, run_id, a1, second),
             (4, 1.0, 1.0, 1.0, other_run, a2, unrelated)))
         a = objects.field_table_names(FIELD)["astroobjects"]
-        sql, params = objects.set_rows_clause("o", objects.association_chain(cur, second))
+        sql, params = objects.set_rows_clause("o", objects.association_chain(cur, second, run_id))
         cur.execute(f"SELECT aid FROM {a} o WHERE {sql} ORDER BY aid", params)
         assert [r[0] for r in cur.fetchall()] == [2, 3]
         cur.execute("UPDATE product_instances SET deletion_state = 'deleted' WHERE id = %s",
                     (first,))
-        with pytest.raises(ValueError, match="not retained"):
-            objects.association_chain(cur, second)
+        with pytest.raises(ValueError, match="not complete and retained"):
+            objects.association_chain(cur, second, run_id)
 
 
 def test_find_complete_result_set(conn):
     key = {"field": FIELD, "source_sets": ["S1"], "settings_hash": "h"}
-    run_id, _, instance = _result_set(conn, key=key, rows=5)
+    run_id, attempt_id, instance = _result_set(conn, key=key, rows=5)
     with conn.cursor() as cur:
-        assert objects.find_complete_result_set(cur, "association-set", run_id, key) == (instance, 5)
-        assert objects.find_complete_result_set(cur, "pruned-set", run_id, key) is None
         assert objects.find_complete_result_set(
-            cur, "association-set", run_id, {**key, "settings_hash": "other"}) is None
+            cur, "association-set", run_id, key, attempt_id) == (instance, 5)
+        assert objects.find_complete_result_set(cur, "pruned-set", run_id, key, attempt_id) is None
+        assert objects.find_complete_result_set(
+            cur, "association-set", run_id, {**key, "settings_hash": "other"}, attempt_id) is None
 
 
 def test_current_association_sets(conn):
@@ -292,21 +293,21 @@ def test_a_dev_table_without_run_columns_is_adopted_in_place(conn):
 
 
 def test_source_set_table_refuses_what_is_not_a_complete_source_set(conn):
-    _, _, association = _result_set(conn)
+    association_run, _, association = _result_set(conn)
     with conn.cursor() as cur:
-        with pytest.raises(ValueError, match="no source-set"):
-            objects.source_set_table(cur, association)
-        with pytest.raises(ValueError, match="no source-set"):
-            objects.source_set_table(cur, new_ulid())
+        with pytest.raises(ValueError, match="not a source-set"):
+            objects.source_set_table(cur, association, association_run)
+        with pytest.raises(ValueError, match="no result set"):
+            objects.source_set_table(cur, new_ulid(), association_run)
     run_id = _make_run(conn, kind="scratch", selected_stages=["load"])
     _, _, source_set = _result_set(conn, "source-set", run_id=run_id, stage="load",
                                    key={"difference": new_ulid(), "catalog_type": "photutils"})
     with conn.cursor() as cur:
         with pytest.raises(ValueError, match="no diffimages"):
-            objects.source_set_table(cur, source_set)
+            objects.source_set_table(cur, source_set, run_id)
         cur.execute("UPDATE result_sets SET complete = false WHERE instance = %s", (source_set,))
         with pytest.raises(ValueError, match="not complete"):
-            objects.source_set_table(cur, source_set)
+            objects.source_set_table(cur, source_set, run_id)
 
 
 def test_source_set_table_follows_a_loaded_set_to_its_child_table(conn, tmp_path, monkeypatch):
@@ -320,5 +321,5 @@ def test_source_set_table_follows_a_loaded_set_to_its_child_table(conn, tmp_path
     assert rc == int(ExitCode.SUCCESS)
     (entry,) = Manifest.read(outputs / "manifest.json").outputs
     with conn.cursor() as cur:
-        assert objects.source_set_table(cur, entry.instance) == (
+        assert objects.source_set_table(cur, entry.instance, run_id) == (
             entry.registration["table"], entry.registration["row_count"])
