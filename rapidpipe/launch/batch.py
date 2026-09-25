@@ -837,46 +837,100 @@ def _repair_stranded_succeeded_attempts(conn, *, run_id: str) -> list[Reconciled
 DEFAULT_JOBLESS_AFTER_SECONDS = 600
 
 
-def resolve_jobless(conn, *, run_id: str, older_than_seconds: float) -> list[Reconciled]:
-    """Record ``lost`` for ``run_id``'s job-less attempts (supervisor step 6,
-    2026-09-24, R9).
+def _jobs_named(batch: Any, job_queue: str, job_name: str) -> list[str]:
+    """Every job id on ``job_queue`` whose name is ``job_name``, in any
+    status: with a ``filters`` argument ``ListJobs`` ignores ``jobStatus``
+    and returns every status, 100 per page (botocore's Batch model,
+    ``ListJobs``)."""
+    job_ids: list[str] = []
+    kwargs: dict[str, Any] = {
+        "jobQueue": job_queue,
+        "filters": [{"name": "JOB_NAME", "values": [job_name]}],
+    }
+    while True:
+        response = batch.list_jobs(**kwargs)
+        job_ids += [job["jobId"] for job in response.get("jobSummaryList", [])
+                    if job.get("jobName", job_name) == job_name]
+        token = response.get("nextToken")
+        if not token:
+            return job_ids
+        kwargs["nextToken"] = token
+
+
+def resolve_jobless(
+    conn, *, run_id: str, older_than_seconds: float, client: Any = None,
+) -> list[Reconciled]:
+    """Resolve ``run_id``'s job-less attempts (supervisor step 6, 2026-09-24,
+    R9, with the Codex plan-review amendment B3).
 
     A job-less attempt has ``disposition IS NULL`` and no
     ``scheduler_job_id``: its allocation committed but the Batch submission
-    (or recording its job id) failed, so :func:`reconcile` never looks at
-    it and ``run cancel`` cannot terminate it. Each one started more than
-    ``older_than_seconds`` ago is recorded ``lost`` through
-    :func:`~rapidpipe.runs.repository.record_attempt_result` (exit code
-    ``None``, an execution record from :func:`_execution_record_with_defaults`,
-    ``reconcile_note`` "no scheduler job after N s"), which returns the unit
-    to ``ready`` while attempts remain and otherwise ``failed``. The row is
-    re-read ``FOR UPDATE`` first and skipped if a job id or a disposition
-    arrived meanwhile. One commit per attempt, as :func:`reconcile` does.
-    Reported as ``Reconciled(job_id="-", batch_status="NOJOB",
-    disposition="lost")``.
+    (or recording its job id) failed or has not happened yet, so
+    :func:`reconcile` never looks at it and ``run cancel`` cannot terminate
+    it. For each one, the Batch queue (``RAPIDPIPE_BATCH_JOB_QUEUE``) is
+    searched, every status, for the name :func:`submit_unit` gives its job
+    (:func:`_job_name` with ``RAPIDPIPE_BATCH_JOB_NAME_PREFIX``):
+
+    - exactly one job: its id is recorded on the attempt
+      (:func:`~rapidpipe.runs.repository.record_scheduler_job`) for the
+      ordinary :func:`reconcile` to resolve -- ``REPAIRED``;
+    - more than one: left as it is -- ``AMBIGUOUS`` (``job_id`` lists them);
+    - none, and the attempt started more than ``older_than_seconds`` ago:
+      recorded ``lost`` through
+      :func:`~rapidpipe.runs.repository.record_attempt_result` (exit code
+      ``None``, :func:`_execution_record_with_defaults`, ``reconcile_note``
+      "no scheduler job after N s"), which returns the unit to ``ready``
+      while attempts remain and otherwise ``failed`` -- ``NOJOB``;
+    - none, and younger: left for a later call, not reported.
+
+    Before any write the row is re-read ``FOR UPDATE`` and skipped if a job
+    id or a disposition arrived meanwhile. One commit per attempt, as
+    :func:`reconcile` does.
     """
     if older_than_seconds < 0:
         raise ValueError(f"older_than_seconds must be >= 0, got {older_than_seconds!r}")
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id FROM attempts
+            SELECT id, stage FROM attempts
             WHERE run = %s AND disposition IS NULL AND scheduler_job_id IS NULL
-              AND started < now() - make_interval(secs => %s)
             ORDER BY started, id
             """,
-            (run_id, float(older_than_seconds)))
-        attempt_ids = [row[0] for row in cur.fetchall()]
+            (run_id,))
+        jobless = cur.fetchall()
+    if not jobless:
+        return []
 
+    job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
+    prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX", "rapid")
+    batch = client if client is not None else batch_client()
     note = f"no scheduler job after {older_than_seconds:g} s"
     results: list[Reconciled] = []
-    for attempt_id in attempt_ids:
+    for attempt_id, stage in jobless:
+        found = _jobs_named(batch, job_queue, _job_name(prefix, stage, attempt_id))
+        if len(found) > 1:
+            results.append(Reconciled(
+                attempt_id=attempt_id, job_id=",".join(found), batch_status="AMBIGUOUS",
+                disposition=None, selected=False))
+            continue
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT output_location, disposition, scheduler_job_id FROM attempts "
-                "WHERE id = %s FOR UPDATE", (attempt_id,))
-            output_location, disposition, job_id = cur.fetchone()
+                "SELECT output_location, disposition, scheduler_job_id, "
+                "started < now() - make_interval(secs => %s) "
+                "FROM attempts WHERE id = %s FOR UPDATE",
+                (float(older_than_seconds), attempt_id))
+            output_location, disposition, job_id, old_enough = cur.fetchone()
         if disposition is not None or job_id is not None:
+            conn.rollback()
+            continue
+        if found:
+            record_scheduler_job(conn, attempt_id, found[0])
+            conn.commit()
+            results.append(Reconciled(
+                attempt_id=attempt_id, job_id=found[0], batch_status="REPAIRED",
+                disposition=None, selected=False))
+            continue
+        if not old_enough:
             conn.rollback()
             continue
         record_attempt_result(

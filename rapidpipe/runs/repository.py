@@ -1861,16 +1861,20 @@ def _is_non_complete(state: str, disposition: str | None, job_id: str | None,
 
 @dataclass(frozen=True)
 class FailedRerunPlan:
-    """What ``run create --seed <run> --only-failed`` creates (R7): the
-    seed's configuration (``seed``, its ``runs`` columns by name), the
-    seed's stage list from ``position`` on, and the seed units to re-run
-    as ``(units.id, stage, unit_kind, unit_id)``."""
+    """What ``run create --seed <run> --only-failed`` creates (R7, with the
+    Codex plan-review amendments B1/B2): the seed's configuration
+    (``seed``, its ``runs`` columns by name), the new run's stage list
+    (the seed's from ``position`` on), the seed units to seed from as
+    ``(units.id, stage, unit_kind, unit_id)``, and ``uncarried``: the
+    nominal unit ids of a scratch seed's non-complete units that have no
+    first-stage unit in the seed to carry inputs from."""
 
     seed_run: str
     seed: dict[str, Any]
     position: int
     stages: list[str]
     units: list[tuple[str, str, str, str]]
+    uncarried: list[str]
 
 
 _SEED_COPIED_COLUMNS = (
@@ -1881,19 +1885,35 @@ _SEED_COPIED_COLUMNS = (
 )
 
 
+def _nominal_unit_id(stage: str, unit_id: str) -> str:
+    """The unit id a ``run start --unit`` names: a register unit's id
+    without its ``<producer>/`` prefix, any other unit's id as is."""
+    return unit_id.split("/", 1)[1] if stage == "register" and "/" in unit_id else unit_id
+
+
 def failed_rerun_plan(
     conn: psycopg2.extensions.connection, seed_run: str,
 ) -> FailedRerunPlan:
-    """Work out what a ``--only-failed`` re-run of ``seed_run`` holds (R7).
+    """Work out what a ``--only-failed`` re-run of ``seed_run`` holds.
 
-    The earliest position in the seed's ``selected_stages`` holding a
-    non-complete unit (:func:`_is_non_complete`) starts the new run's
-    stage list; the non-complete units at that position are the ones
-    re-run. Units at later positions are not copied: they start empty and
-    run as usual. Refuses (SeedRefused) when the seed is deleting or
-    deleted or has no non-complete unit in its selected stages; raises
-    RunNotFound for an unknown seed. The seed row is read ``FOR SHARE``,
-    the same fence ``mark_run_deleting`` waits on.
+    A non-complete unit is :func:`_is_non_complete`'s. What is re-run
+    depends on the seed's kind (supervisor step 6, 2026-09-24, R7 and the
+    Codex plan-review amendments B1/B2):
+
+    - production seed (its outputs are project custody, which a re-run may
+      consume): the stage list starts at the earliest position holding a
+      non-complete unit, and every non-complete unit of the seed, at any
+      position, is seeded;
+    - scratch seed (its outputs are usable only within its own run): the
+      whole stage list from position 0 is re-run, and only the seed's
+      first-stage units of the non-complete units' nominal unit ids are
+      seeded, carrying just that first stage's recorded inputs and
+      settings; no seed output is read.
+
+    Refuses (SeedRefused) when the seed is deleting or deleted or has no
+    non-complete unit in its selected stages; raises RunNotFound for an
+    unknown seed. The seed row is read ``FOR SHARE``, the same fence
+    ``mark_run_deleting`` waits on.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -1933,22 +1953,45 @@ def failed_rerun_plan(
         raise SeedRefused(
             f"seed run {seed_run!r} has no non-complete unit in its selected stages "
             f"({', '.join(stages) or 'none'}); nothing to re-run")
-    position = min(p for p, _ in placed)
-    return FailedRerunPlan(
-        seed_run, seed, position, stages[position:],
-        [unit for p, unit in placed if p == position])
+
+    if seed["kind"] == "production":
+        position = min(p for p, _ in placed)
+        units = [unit for p, unit in sorted(placed, key=lambda item: item[0])]
+        return FailedRerunPlan(seed_run, seed, position, stages[position:], units, [])
+
+    # Scratch seed: re-run everything from position 0, carrying only the
+    # first stage's recorded inputs (B1).
+    first = stages[0]
+    first_units = {unit_id: (unit_row_id, stage, unit_kind, unit_id)
+                   for unit_row_id, stage, unit_kind, unit_id, *_ in rows
+                   if stage == first}
+    units: list[tuple[str, str, str, str]] = []
+    uncarried: list[str] = []
+    for _, (_, stage, _, unit_id) in sorted(placed, key=lambda item: item[0]):
+        nominal = _nominal_unit_id(stage, unit_id)
+        carried = None if first == "register" else first_units.get(nominal)
+        if carried is None:
+            if nominal not in uncarried:
+                uncarried.append(nominal)
+        elif carried not in units:
+            units.append(carried)
+    return FailedRerunPlan(seed_run, seed, 0, stages, units, uncarried)
 
 
 def seed_failed_units(
     conn: psycopg2.extensions.connection, *, seed_run: str, new_run: str,
 ) -> list[str]:
-    """Create ``new_run``'s units for the seed's non-complete units (R7).
+    """Create ``new_run``'s seeded units (R7; amendments B1/B2).
 
     ``new_run`` must already exist, record ``seed_run`` as its seed and
     select exactly :func:`failed_rerun_plan`'s stage list (the CLI creates
     it that way, in the same transaction). Each unit keeps the seed unit's
     stage, unit kind and unit id, starts ``pending`` and records
-    ``seeded_from_unit``. Returns the created units' unit ids.
+    ``seeded_from_unit``. The seed unit's ``unit_inputs`` bindings are
+    copied to it, so the deletion fence on those producer instances
+    protects what the re-run reads -- except, for a scratch seed, bindings
+    to the seed's own instances, which another run may not consume (B1).
+    Returns the created units' unit ids.
     """
     plan = failed_rerun_plan(conn, seed_run)
     with conn.cursor() as cur:
@@ -1960,8 +2003,20 @@ def seed_failed_units(
         raise SeedRefused(
             f"run {new_run!r} is not a --only-failed re-run of {seed_run!r} (seed "
             f"{row[0]!r}, stages {list(row[1] or [])}; expected {plan.stages})")
+    scratch_seed = plan.seed["kind"] != "production"
     for unit_row_id, stage, unit_kind, unit_id in plan.units:
         add_unit(conn, new_run, stage, unit_kind, unit_id, seeded_from_unit=unit_row_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ui.producer_instance
+                FROM unit_inputs ui JOIN product_instances pi ON pi.id = ui.producer_instance
+                WHERE ui.unit = %s AND NOT (%s AND pi.run = %s)
+                ORDER BY ui.producer_instance
+                """,
+                (unit_row_id, scratch_seed, seed_run))
+            producers = [r[0] for r in cur.fetchall()]
+        bind_unit_inputs(conn, new_run, stage, unit_id, producers)
     return [unit_id for _, _, _, unit_id in plan.units]
 
 
