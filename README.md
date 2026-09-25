@@ -30,6 +30,7 @@ The distribution built from this repository is `rapid-pipeline`; its import pack
 - `RAPIDPIPE_OUTPUTS_ROOT_SCRATCH` / `RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION` -- the `s3://bucket/prefix` under which `runs/<run>/<stage>/<unit>/<attempt>` lives for a scratch or production run; `RAPIDPIPE_OUTPUTS_ROOT` is the scratch fallback only. A production run never falls back to an unsuffixed variable.
 - `RAPIDPIPE_SCRATCH_BUCKET` -- optional: the only bucket `run delete` may remove objects from (default: the bucket of the scratch outputs root).
 - `RAPIDPIPE_BATCH_JOB_NAME_PREFIX` -- optional, default `rapid`.
+- `RAPIDPIPE_CLEANUP_ROLE_ARN` -- optional: the IAM role `run delete` and `run expire` assume (session `rapidpipe-cleanup-<user>`) for their S3 deletes; unset, they use the caller's own credentials.
 
 ```
 rapidpipe run submit "$run_id" admit --unit e20260821001234/SCA07 --inputs s3://bucket/deliveries/e20260821001234/SCA07
@@ -38,6 +39,22 @@ rapidpipe run reconcile "$run_id"
 ```
 
 Each job definition must run the image built from [`containers/rapid-pipeline`](containers/rapid-pipeline), with a retry rule on exit code 75.
+
+#### Running a run from the command line
+
+- `rapidpipe run create ... [--seed <run>]` records the run a new one was seeded from (configuration lineage only).
+- `rapidpipe run start <run> --unit U [--stage S] [--inputs [S=]LOC]... [--settings [S=]LOC]... [--template S=LOC]... [--no-wait] [--interval SEC] [--timeout SEC]` walks the run's selected stages in order for one unit on Batch: a complete stage is skipped, any other gets its next attempt, and each attempt is waited for by reconciling every `--interval` seconds. A stage's inputs are `--inputs S=LOC` (unprefixed: the first stage's), else an input set composed from `--template S=LOC`, else the selected output of the nearest preceding stage other than `register`. It exits 0 when every stage is complete, 1 when an attempt failed, and 75 on `--timeout`; rerunning the same command continues.
+- `rapidpipe run status <run> [--watch] [--interval SEC]` reconciles and prints one line per unit; it exits 0 when all are complete, 1 when any failed or was cancelled, 2 while any is running.
+- `rapidpipe run inputs <run> <stage> --unit U --from-stage P --template LOC [--dest LOC] [--kind l2-image]` copies a template input set's entries and the producer unit's `--kind` entry (under `l2/`) into one prefix, verifies the copied sizes, writes its `manifest.json` (never over an existing one) and binds the unit's inputs.
+- `rapidpipe run compare <a> <b>` prints both runs' dispositions, settings and product instances side by side, then `same` (exit 0) or `different` (exit 1).
+- `rapidpipe run expire [--now ISO8601]` deletes every expired, unpinned scratch run, one deletion report per run.
+- `rapidpipe stage run <name> ...` (also `rapidpipe stage <name> ...`), `rapidpipe stage list` and `rapidpipe stage describe <name>` run, list and describe stages.
+
+```
+rapidpipe run start "$run_id" --unit r0034001002001001001/SCA01 \
+    --inputs s3://bucket/deliveries/r0034001002001001001/SCA01 \
+    --template difference=s3://bucket/templates/SCA01-W146
+```
 
 #### Running a stage locally
 
