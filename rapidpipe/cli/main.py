@@ -21,6 +21,10 @@ subcommands implemented here:
   (``rapidpipe.runs.cleanup.delete_run``); ``pin`` / ``unpin`` -- keep a
   scratch run from expiring, or release it (``cleanup.pin_run``).
 
+``rapidpipe release cut|show|list|verify`` is ``python -m
+rapidpipe.release``: the ``release`` subparser is built and dispatched by
+``rapidpipe.release.__main__``, so both forms are one code path.
+
 The specification's "Tools" section also names Batch-level run
 management (rerun part of a run, watch progress, restart), not yet built.
 
@@ -51,10 +55,16 @@ from typing import Any, Sequence
 from rapidpipe import __version__
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
 from rapidpipe.db.connection import connect as _default_connect
-from rapidpipe.launch.batch import DependencyIncomplete, LaunchError, MissingEnvironmentVariable
+from rapidpipe.launch.batch import (
+    DependencyIncomplete,
+    LaunchError,
+    MissingEnvironmentVariable,
+    ReleaseDefinitionRefused,
+)
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_id
 from rapidpipe.products.storage import fetch_object, parse_location
+from rapidpipe.release import __main__ as release_cli
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
 from rapidpipe.selftest import run as run_selftest
@@ -207,6 +217,11 @@ def _build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--max-attempts", type=int, default=1)
     create_parser.add_argument("--settings-overlay-ref", default=None)
     create_parser.add_argument("--input-selection-ref", default=None)
+    create_parser.add_argument(
+        "--release", default=None, metavar="TAG",
+        help="Create the run from a complete release: its source revision and "
+             "image digest are the run's, and Batch submissions use its job "
+             "definition revisions.")
 
     list_parser = run_subparsers.add_parser("list", help="List runs.")
     list_parser.add_argument("--kind", default=None, choices=("scratch", "production"))
@@ -262,6 +277,10 @@ def _build_parser() -> argparse.ArgumentParser:
     promote_parser.add_argument(
         "--kinds", default=None,
         help="Comma-separated product kinds to promote (default: every kind).")
+    promote_parser.add_argument(
+        "--allow-unreleased", action="store_true",
+        help="Promote even if a deliverable's attempt ran no complete release's "
+             "image; recorded in the promotion's request_context.")
 
     rollback_parser = run_subparsers.add_parser(
         "rollback", help="Reverse one promotion; print the reversing promotion id.")
@@ -288,6 +307,10 @@ def _build_parser() -> argparse.ArgumentParser:
     unpin_parser = run_subparsers.add_parser(
         "unpin", help="Unpin a run so it expires at its expires_at.")
     unpin_parser.add_argument("run_id")
+
+    release_parser = subparsers.add_parser(
+        "release", help="Cut, show, list and verify releases (python -m rapidpipe.release).")
+    release_cli.build_parser(release_parser)
 
     return parser
 
@@ -389,6 +412,23 @@ def _run_create_command(args: argparse.Namespace) -> int:
         try:
             with conn.cursor() as cur:
                 schema_version = _last_applied_schema_version(cur) or "unknown"
+                if args.release is not None:
+                    cur.execute(
+                        "SELECT state, source_revision, image_digest FROM releases "
+                        "WHERE tag = %s", (args.release,))
+                    release_row = cur.fetchone()
+            if args.release is not None:
+                if release_row is None or release_row[0] != "complete":
+                    state = "absent" if release_row is None else release_row[0]
+                    sys.stderr.write(
+                        f"rapidpipe run create: release {args.release} is {state}, "
+                        "not complete; refusing\n")
+                    conn.rollback()
+                    return 2
+                _, code_revision, image_digest = release_row
+            else:
+                code_revision = _source_revision_or_unknown()
+                image_digest = os.environ.get("RAPIDPIPE_IMAGE_DIGEST")
 
             run_id = create_run(
                 conn,
@@ -396,8 +436,8 @@ def _run_create_command(args: argparse.Namespace) -> int:
                 owner=owner,
                 purpose=args.purpose,
                 selected_stages=stages,
-                code_revision=_source_revision_or_unknown(),
-                image_digest=os.environ.get("RAPIDPIPE_IMAGE_DIGEST"),
+                code_revision=code_revision,
+                image_digest=image_digest,
                 schema_version=schema_version,
                 settings_overlay_ref=args.settings_overlay_ref,
                 input_selection_ref=args.input_selection_ref,
@@ -407,6 +447,7 @@ def _run_create_command(args: argparse.Namespace) -> int:
                 max_attempts_per_unit=args.max_attempts,
                 auto_promote=False,
                 check_policy_ref=None,
+                release=args.release,
             )
             conn.commit()
         except BaseException:
@@ -466,7 +507,7 @@ def _run_show_command(args: argparse.Namespace) -> int:
                 "SELECT id, kind, owner, purpose, selected_stages, state, "
                 "code_revision, image_digest, schema_version, lane, "
                 "resource_profile, database_target, max_attempts_per_unit, "
-                "auto_promote, created, expires_at, pinned, finished_at "
+                "auto_promote, created, expires_at, pinned, finished_at, release "
                 "FROM runs WHERE id = %s",
                 (args.run_id,),
             )
@@ -480,6 +521,7 @@ def _run_show_command(args: argparse.Namespace) -> int:
                 "code_revision", "image_digest", "schema_version", "lane",
                 "resource_profile", "database_target", "max_attempts_per_unit",
                 "auto_promote", "created", "expires_at", "pinned", "finished_at",
+                "release",
             ]
             for column, value in zip(columns, run_row):
                 print(f"{column}: {value}")
@@ -691,6 +733,12 @@ def _run_submit_command(args: argparse.Namespace) -> int:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")
             return int(ExitCode.USAGE)
+        except ReleaseDefinitionRefused as exc:
+            # A permanent refusal, not a retryable one: the run's release
+            # names a job definition revision that is not ACTIVE.
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run submit: {exc}\n")
+            return 1
         except RunModelError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")
@@ -823,7 +871,8 @@ def _run_promote_command(args: argparse.Namespace) -> int:
             return int(ExitCode.USAGE)
     return _run_model_command(
         "promote",
-        lambda conn: promote_run(conn, args.run_id, who, args.reason, kinds=kinds),
+        lambda conn: promote_run(conn, args.run_id, who, args.reason, kinds=kinds,
+                                 allow_unreleased=args.allow_unreleased),
         print_result=print)
 
 
@@ -916,6 +965,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run":
         return _run_command(args)
+
+    if args.command == "release":
+        return release_cli.dispatch(args)
 
     parser.print_help()
     return int(ExitCode.SUCCESS) if args.command is None else int(ExitCode.USAGE)

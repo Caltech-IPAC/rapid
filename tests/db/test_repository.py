@@ -444,6 +444,7 @@ def test_promote_happy_path(conn):
     promotion_id = repo.promote(
         conn, who="brusholme", reason="regular operations",
         changes=[(TEST_KIND, key, None, instance_id)],
+        allow_unreleased=True,
     )
     assert promotion_id
     with conn.cursor() as cur:
@@ -468,6 +469,7 @@ def test_promote_refuses_whole_request_on_mismatch(conn):
                 (TEST_KIND, key_a, None, instance_a),
                 (TEST_KIND, key_b, new_ulid(), instance_b),  # wrong expected-before
             ],
+            allow_unreleased=True,
         )
     # Refused as a whole: instance_a must NOT have been promoted either.
     with conn.cursor() as cur:
@@ -483,6 +485,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     repo.promote(
         conn, who="brusholme", reason="initial",
         changes=[(TEST_KIND, key, None, first_instance)],
+        allow_unreleased=True,
     )
 
     # Reprocess: a new instance for the same logical key, from a fresh run.
@@ -491,6 +494,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     repo.promote(
         conn, who="brusholme", reason="reprocess",
         changes=[(TEST_KIND, key, first_instance, second_instance)],
+        allow_unreleased=True,
     )
     with conn.cursor() as cur:
         cur.execute("SELECT custody FROM product_instances WHERE id = %s", (second_instance,))
@@ -501,6 +505,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     repo.promote(
         conn, who="brusholme", reason="reversal",
         changes=[(TEST_KIND, key, second_instance, first_instance)],
+        allow_unreleased=True,
     )
     with conn.cursor() as cur:
         cur.execute("SELECT id, custody FROM product_instances WHERE id IN (%s, %s)",

@@ -38,8 +38,10 @@ def fake_conn(monkeypatch):
 def test_run_promote_prints_the_promotion_id_and_commits(monkeypatch, fake_conn, capsys):
     seen = {}
 
-    def _promote_run(conn, run_id, who, reason, *, kinds=None, check_policy_version=None):
-        seen.update(run_id=run_id, who=who, reason=reason, kinds=kinds)
+    def _promote_run(conn, run_id, who, reason, *, kinds=None, check_policy_version=None,
+                     allow_unreleased=False):
+        seen.update(run_id=run_id, who=who, reason=reason, kinds=kinds,
+                    allow_unreleased=allow_unreleased)
         return "PROMOTION01"
 
     monkeypatch.setattr(repository, "promote_run", _promote_run)
@@ -48,7 +50,7 @@ def test_run_promote_prints_the_promotion_id_and_commits(monkeypatch, fake_conn,
     assert rc == 0
     assert capsys.readouterr().out.strip() == "PROMOTION01"
     assert seen == {"run_id": "RUN01", "who": "ops", "reason": "nightly",
-                    "kinds": ["difference-image", "psf"]}
+                    "kinds": ["difference-image", "psf"], "allow_unreleased": False}
     assert fake_conn.committed == 1
 
 

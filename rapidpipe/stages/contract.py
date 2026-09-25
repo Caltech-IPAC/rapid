@@ -385,6 +385,13 @@ def _source_revision() -> str | None:
     return revision or os.environ.get("RAPID_SOURCE_REVISION")
 
 
+def _release_identity() -> str | None:
+    """``RAPIDPIPE_RELEASE``, else ``RAPID_RELEASE_IDENTITY``, else
+    ``None``; the placeholder ``unreleased`` is ``None`` too."""
+    value = os.environ.get("RAPIDPIPE_RELEASE") or os.environ.get("RAPID_RELEASE_IDENTITY")
+    return None if not value or value == "unreleased" else value
+
+
 def _write_execution_record(
     outputs_dir: Path,
     attempt_id: str,
@@ -399,7 +406,11 @@ def _write_execution_record(
     else ``None`` -- see :func:`_source_revision`), and the image digest
     from ``RAPIDPIPE_IMAGE_DIGEST`` if set, else the deployed job
     definition's ``RAPID_IMAGE_DIGEST`` (``rapid_systems`` ``rapid-batch.yaml``
-    ``RapidRebuildJobDefinition``) if that is set, else ``None`` -- the
+    ``RapidRebuildJobDefinition``) if that is set, else ``None``; and the
+    release, from ``RAPIDPIPE_RELEASE`` if set, else the job definition's
+    ``RAPID_RELEASE_IDENTITY`` (set at deploy time by ``release cut``),
+    recorded as ``None`` when absent or the placeholder ``unreleased``
+    (supervisor step 5, 2026-09-24, R7) -- the
     execution record's minimal content per the stage contract's "The
     manifest": "the source revision, working-copy changes if any, image
     digest when applicable, database schema version, and the resolved
@@ -417,6 +428,7 @@ def _write_execution_record(
             os.environ.get("RAPIDPIPE_IMAGE_DIGEST")
             or os.environ.get("RAPID_IMAGE_DIGEST")
         ),
+        "release": _release_identity(),
     }
     if notes:
         record["notes"] = notes

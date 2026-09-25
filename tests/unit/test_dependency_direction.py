@@ -9,6 +9,7 @@ contract's fixed dependency direction:
 - launch: may use products/db/runs/stages; not itself imported by a stage
   (checked from the stages side, since launch may import stages)
 - cli: may import anything; nothing else imports cli
+- release: may import db and runs; only cli imports release
 
 Only imports of other rapidpipe subpackages are checked -- third-party and
 standard-library imports are irrelevant to this rule.
@@ -25,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "rapidpipe"
 
 SUBPACKAGES = (
-    "stages", "products", "db", "runs", "launch", "cli", "science",
+    "stages", "products", "db", "runs", "launch", "cli", "science", "release",
 )
 
 
@@ -83,6 +84,7 @@ FORBIDDEN = {
     "runs": {"stages", "launch", "cli"},
     "science": {"stages", "launch", "cli"},
     "stages": {"launch", "cli"},
+    "release": {"stages", "launch", "cli", "products", "science"},
 }
 
 
@@ -117,3 +119,13 @@ def test_nothing_imports_cli():
         assert "cli" not in imports, (
             f"rapidpipe.{subpackage} imports rapidpipe.cli, but nothing in "
             "the package may import the command-line tool back")
+
+
+def test_only_cli_imports_release():
+    for subpackage in SUBPACKAGES:
+        if subpackage in ("cli", "release"):
+            continue
+        imports = _all_imports(subpackage)
+        assert "release" not in imports, (
+            f"rapidpipe.{subpackage} imports rapidpipe.release; only the "
+            "command-line tool may")
