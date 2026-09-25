@@ -91,9 +91,14 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
     if failing:
         parts = []
         for name, value, lo, hi in tests:
-            if name in failing:
-                parts.append(f"{name}={_fmt(value)} outside [{_fmt(lo) if lo is not None else '-inf'}, "
-                             f"{_fmt(hi) if hi is not None else 'inf'}]")
+            if name not in failing:
+                continue
+            if lo is None:
+                parts.append(f"{name}={_fmt(value)} > {_fmt(hi)}")
+            elif hi is None:
+                parts.append(f"{name}={_fmt(value)} < {_fmt(lo)}")
+            else:
+                parts.append(f"{name}={_fmt(value)} outside [{_fmt(lo)}, {_fmt(hi)}]")
         summary = "; ".join(parts)
         outcome = "failed"
     else:

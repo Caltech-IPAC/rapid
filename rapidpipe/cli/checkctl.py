@@ -182,7 +182,6 @@ def _show_command(args: argparse.Namespace) -> int:
     def body(conn) -> int:
         _require_run(conn, args.run_id)
         rows = recorded_checks(conn, args.run_id, instance=args.instance)
-        conn.rollback()
         for row in rows:
             at = row.happened_at.isoformat() if row.happened_at else "-"
             print(f"id={row.id} at={at} {row.line()}")
