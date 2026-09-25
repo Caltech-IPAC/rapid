@@ -135,6 +135,17 @@ def _delete_run_rows(connection, run_ids: list[str], promotion_ids: list[str]) -
     connection.commit()
 
 
+def _pg_params() -> dict:
+    """psycopg2.connect keyword arguments for the CI database."""
+    return dict(
+        host=os.environ["PGHOST"],
+        port=os.environ.get("PGPORT", "5432"),
+        dbname=os.environ["PGDATABASE"],
+        user=os.environ["PGUSER"],
+        password=os.environ.get("PGPASSWORD", ""),
+    )
+
+
 @pytest.fixture()
 def db():
     if not _pg_configured():

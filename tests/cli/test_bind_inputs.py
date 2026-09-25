@@ -175,15 +175,30 @@ def test_a_live_consumer_blocks_its_producers_deletion_until_it_is_deleted(
         assert cur.fetchone() == ("deleted",)
 
 
-def test_a_seeded_only_failed_rerun_reads_the_seeds_recorded_inputs_and_binds(
+def test_a_seeded_only_failed_rerun_reads_the_seeds_recorded_inputs_and_binds_the_new_unit(
         cli, db, fake_batch, fake_s3, batch_env):
-    _producer_run, instance = _producer(cli, db, fake_batch, fake_s3)
-    inputs = _consumer_inputs(fake_s3, instance, unregistered=new_ulid())
+    producer_run, instance = _producer(cli, db, fake_batch, fake_s3)
     seed = _create_run(cli, db, kind="production", stages="difference")
+    # The input set lives under the seed's own prefix, and names a second
+    # instance that is not registered yet when the seed submits.
+    late = new_ulid()
+    inputs = _seed(fake_s3, FAKE_BUCKET, f"scratch/runs/{seed}/inputs/difference/U",
+                   _manifest(instances=[instance, late]))
     failed = cli("run", "submit", seed, "difference", "--unit", "U", "--inputs", inputs)
     assert failed.rc == 0, failed.err
+    assert _bound(db, seed, "U") == [instance]
     fake_batch.set_status(_kv(failed.out, "job"), "FAILED", container_exit_code=70)
     assert cli("run", "reconcile", seed).rc == 0
+
+    # Registered after the seed's binding, before the re-run.
+    with db.cursor() as cur:
+        cur.execute("SELECT selected_attempt FROM units WHERE run = %s AND stage = 'admit'",
+                    (producer_run,))
+        producer_attempt = cur.fetchone()[0]
+    from tests.db.test_repository import TEST_KIND, _register_simple_instance
+    _register_simple_instance(db.connection, producer_run, "admit", producer_attempt,
+                              instance_id=late, kind=TEST_KIND,
+                              logical_key={"k": new_ulid()})
 
     created = cli("run", "create", "--seed", seed, "--only-failed")
     assert created.rc == 0, created.err
@@ -191,9 +206,62 @@ def test_a_seeded_only_failed_rerun_reads_the_seeds_recorded_inputs_and_binds(
     db.track_run(rerun)
 
     # No --inputs: run start resolves the seed attempt's recorded location
-    # (under the seed's prefix), which the launcher reads for real.
+    # (under the seed's prefix), which the launcher reads for real, and
+    # binds to the NEW run's unit -- including the instance the seed's
+    # own binding (copied at seeding) never had.
     started = cli("run", "start", rerun, "--unit", "U", "--no-wait")
     assert started.rc == 0, started.err
     command = fake_batch.submitted[-1]["containerOverrides"]["command"]
     assert command[command.index("--inputs") + 1] == inputs
-    assert _bound(db, rerun, "U") == [instance]
+    assert _bound(db, rerun, "U") == sorted([instance, late])
+    assert _bound(db, seed, "U") == [instance]
+
+
+# ----------------------------------------------------------------------
+# Codex amendment to R4: binding fences the producer's run.
+# ----------------------------------------------------------------------
+
+def test_binding_an_input_of_a_deleted_producer_is_refused_with_65(
+        cli, db, fake_batch, fake_s3, fake_versioned_s3, batch_env):
+    producer, instance = _producer(cli, db, fake_batch, fake_s3)
+    assert cli("run", "delete", producer).rc == 0
+    inputs = _consumer_inputs(fake_s3, instance, unregistered=new_ulid())
+    consumer = _create_run(cli, db, stages="difference")
+    submitted_before = len(fake_batch.submitted)
+
+    result = cli("run", "submit", consumer, "difference", "--unit", "U", "--inputs", inputs)
+    assert result.rc == 65, result.err
+    assert f"run {producer!r}, which is 'deleted'" in result.err
+    assert len(fake_batch.submitted) == submitted_before
+    with db.cursor() as cur:
+        cur.execute("SELECT count(*) FROM attempts WHERE run = %s", (consumer,))
+        assert cur.fetchone() == (0,)
+    assert _bound(db, consumer, "U") == []
+
+
+def test_an_uncommitted_binding_holds_the_producer_run_against_deletion(
+        cli, db, fake_batch, fake_s3, batch_env):
+    import psycopg2
+    import psycopg2.errors
+
+    from rapidpipe.runs import repository
+
+    from .conftest import _pg_params
+
+    producer, instance = _producer(cli, db, fake_batch, fake_s3)
+    consumer = _create_run(cli, db, stages="difference")
+
+    binder = psycopg2.connect(**_pg_params())
+    try:
+        repository.add_unit(binder, consumer, "difference", "detector-image", "U")
+        repository.bind_unit_inputs(binder, consumer, "difference", "U", [instance])
+        # mark_run_deleting takes the producer's run row FOR UPDATE; while
+        # the binding is uncommitted, that lock cannot be had.
+        with db.cursor() as cur:
+            cur.execute("SET lock_timeout = '200ms'")
+            with pytest.raises(psycopg2.errors.LockNotAvailable):
+                cur.execute("SELECT 1 FROM runs WHERE id = %s FOR UPDATE", (producer,))
+            cur.execute("SET lock_timeout = 0")
+    finally:
+        binder.rollback()
+        binder.close()

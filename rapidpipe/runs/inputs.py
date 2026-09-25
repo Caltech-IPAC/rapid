@@ -36,7 +36,7 @@ from typing import Any, Iterable
 
 from rapidpipe.products.manifest import Manifest, ManifestError
 from rapidpipe.products.storage import LocationError, fetch_object, join, parse_location
-from rapidpipe.runs.repository import bind_unit_inputs
+from rapidpipe.runs.repository import ProducerDeletingOrDeleted, bind_unit_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -133,13 +133,20 @@ def bind_registered_inputs(
     """Bind those of ``names`` that are registered product instances to
     the unit; return ``(bound, skipped)``. Does not commit. Idempotent per
     (unit, instance), so a retry or a re-submission rebinds nothing new.
-    With nothing registered, makes no ``unit_inputs`` write at all."""
+    With nothing registered, makes no ``unit_inputs`` write at all. An
+    input whose producing run is deleting or deleted raises
+    :class:`InputsRefused` (the repository's fence, re-raised as the
+    launcher's input refusal)."""
     names = list(dict.fromkeys(names))
     found = _registered(conn, names)
     bound = [n for n in names if n in found]
     skipped = [n for n in names if n not in found]
     if bound:
-        bind_unit_inputs(conn, run_id, stage, unit_id, bound)
+        try:
+            bind_unit_inputs(conn, run_id, stage, unit_id, bound)
+        except ProducerDeletingOrDeleted as exc:
+            # An input being deleted is an input problem: exit 65.
+            raise InputsRefused(f"{exc}; refusing to submit") from exc
     if skipped:
         logger.info(
             "unit (run=%s, stage=%s, unit=%s): %d input name(s) are not registered "

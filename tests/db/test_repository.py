@@ -714,6 +714,22 @@ def test_a_live_consumer_in_another_run_still_blocks_after_a_third_run_is_delete
         repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
 
 
+def test_bind_unit_inputs_refuses_an_input_of_a_deleting_producer(conn):
+    producer_run = _make_run(conn, kind="scratch")
+    _, _, _, producer_instance = _full_chain_to_current_candidate(
+        conn, producer_run, logical_key={"unit": "e001/SCA01", "v": "fence-bind"})
+    repo.mark_run_deleting(conn, producer_run, requested_by="brusholme")
+
+    consumer_run = _make_run(conn, kind="scratch")
+    stage, unit_id = _make_unit(conn, consumer_run)
+    with pytest.raises(repo.ProducerDeletingOrDeleted, match="'deleting'"):
+        repo.bind_unit_inputs(conn, consumer_run, stage, unit_id, [producer_instance])
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM unit_inputs WHERE producer_instance = %s",
+                    (producer_instance,))
+        assert cur.fetchone() == (0,)
+
+
 def test_mark_run_deleted_refuses_if_not_deleting(conn):
     run_id = _make_run(conn, kind="scratch")
     with pytest.raises(repo.DeletionRefused):
