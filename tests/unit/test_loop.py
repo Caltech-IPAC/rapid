@@ -595,18 +595,55 @@ def test_base_for_field_walks_back_to_the_newest_date_that_has_the_field(monkeyp
     assert loop.base_for_field(object(), storage, [], 5) is None
 
 
-def test_process_date_a_jobless_attempt_fails_the_date_with_its_id(monkeypatch):
+def test_process_date_a_jobless_attempt_is_resolved_then_walked_again(monkeypatch):
+    from rapidpipe.launch import batch as launch_batch
+
     class Refusal(Exception):
         code = 64
 
     spec, tools, storage, walks, created, updates = _world(monkeypatch)
+    real_walk = tools.walk
+    state = {"jobless": ["A9"], "first": True}
 
     def walk(*a, **k):
+        if state["first"]:
+            state["first"] = False
+            raise Refusal("attempt A9 is running but has no scheduler job")
+        return real_walk(*a, **k)
+
+    def resolve(conn, *, run_id, older_than_seconds, client=None):
+        assert older_than_seconds == launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS
+        state["jobless"] = []
+        return [launch_batch.Reconciled("A9", "job-9", "REPAIRED", None, False)]
+
+    tools.walk = walk
+    monkeypatch.setattr(loop, "jobless_attempts", lambda conn, run: state["jobless"])
+    monkeypatch.setattr(launch_batch, "resolve_jobless", resolve)
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
+    assert updates["state"] == "complete"
+    assert updates["record"]["jobless_resolved"] == [
+        {"attempt": "A9", "status": "REPAIRED", "job": "job-9"}]
+
+
+def test_process_date_a_jobless_attempt_still_jobless_fails_the_date(monkeypatch):
+    from rapidpipe.launch import batch as launch_batch
+
+    class Refusal(Exception):
+        code = 64
+
+    spec, tools, storage, walks, created, updates = _world(monkeypatch)
+    calls = []
+
+    def walk(*a, **k):
+        calls.append(1)
         raise Refusal("attempt A9 is running but has no scheduler job")
 
     tools.walk = walk
     monkeypatch.setattr(loop, "jobless_attempts", lambda conn, run: ["A9"])
+    monkeypatch.setattr(launch_batch, "resolve_jobless", lambda conn, **k: [
+        launch_batch.Reconciled("A9", "job-1,job-2", "AMBIGUOUS", None, False)])
     assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 1
+    assert len(calls) == 2  # one walk, one resolve, one more walk, then stop
     assert updates["state"] == "failed"
     assert updates["record"]["jobless_attempt"] == "A9"
 
