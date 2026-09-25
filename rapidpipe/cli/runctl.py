@@ -537,29 +537,38 @@ def compose_inputs(
     attempt's manifest (``resolve_inputs_from_stage``), takes the
     producer's one output entry of ``kind``, and copies it (under ``l2/``)
     and every template entry of any other kind into ``dest``, checking
-    each copied size against its manifest. Then writes
-    ``<dest>/manifest.json`` (stage ``input-set``, the producer's unit
-    kind and attempt, the template's inputs and execution record), adds
-    the unit, binds its inputs to whichever entries are registered
-    product instances, and commits.
+    each copied size against its manifest. Then binds the unit's inputs
+    to whichever entries are registered product instances and commits,
+    and only then writes ``<dest>/manifest.json`` (stage ``input-set``,
+    the producer's unit kind and attempt, the template's inputs and
+    execution record). The manifest is the last write, so an existing
+    manifest always means the bindings were committed once.
 
     An existing ``<dest>/manifest.json`` is refused (exit 64), or with
     ``reuse_existing`` (``run start``, rerun after an interruption)
-    returned as is.
+    reused: its registered instances are re-bound (idempotent) and
+    committed, so a reuse always leaves the unit bound.
     """
     storage = storage or _Storage()
     _require_run(conn, run_id)
     dest_text = dest or default_inputs_dest(run_id, stage, unit_id)
     _require_under_inputs_root(dest_text, run_id)
     dest_loc = parse_location(dest_text)
-    if storage.exists(dest_loc, "manifest.json"):
-        if reuse_existing:
-            print(f"inputs={dest_text} (already composed)", flush=True)
-            return dest_text
-        raise _Exit(int(ExitCode.USAGE),
-                    f"refusing to overwrite {join(dest_loc, 'manifest.json')}")
-
     declaration = _declaration(stage)
+    from rapidpipe.runs.repository import add_unit, bind_unit_inputs
+
+    if storage.exists(dest_loc, "manifest.json"):
+        if not reuse_existing:
+            raise _Exit(int(ExitCode.USAGE),
+                        f"refusing to overwrite {join(dest_loc, 'manifest.json')}")
+        existing = storage.read_manifest(dest_text)
+        add_unit(conn, run_id, stage, declaration.unit, unit_id)
+        bound = _registered_instances(conn, [o.instance for o in existing.outputs])
+        bind_unit_inputs(conn, run_id, stage, unit_id, bound)
+        conn.commit()
+        print(f"inputs={dest_text} (already composed)", flush=True)
+        return dest_text
+
     template_manifest = storage.read_manifest(template)
     producer_text = launch_batch.resolve_inputs_from_stage(
         conn, run_id=run_id, unit_id=unit_id, upstream_stage=from_stage)
@@ -573,8 +582,6 @@ def compose_inputs(
 
     # Admission fence first (idempotent), so a finished run is refused
     # before anything is copied.
-    from rapidpipe.runs.repository import add_unit, bind_unit_inputs
-
     add_unit(conn, run_id, stage, declaration.unit, unit_id)
 
     template_loc = parse_location(template)
@@ -603,12 +610,12 @@ def compose_inputs(
         inputs=template_manifest.inputs,
         outputs=(producer_entry, *kept_entries),
     )
-    storage.write_manifest(manifest, dest_loc)
-
     instances = [o.instance for o in manifest.outputs]
     bound = _registered_instances(conn, instances)
     bind_unit_inputs(conn, run_id, stage, unit_id, bound)
     conn.commit()
+    # Last: a manifest on disk means the bindings above were committed.
+    storage.write_manifest(manifest, dest_loc)
     print(f"inputs={dest_text}", flush=True)
     return dest_text
 
