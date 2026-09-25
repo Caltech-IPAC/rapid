@@ -10,6 +10,7 @@ console script.
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,7 @@ import sys
 import pytest
 
 from rapidpipe.cli.main import _build_parser, main
+from rapidpipe.stages.contract import STAGE_NAMES
 
 
 def _iter_subparsers(parser: argparse.ArgumentParser, path: tuple[str, ...] = ()):
@@ -39,11 +41,6 @@ def _all_subparser_paths():
 @pytest.mark.parametrize(
     "path", [p for p, _ in _all_subparser_paths()], ids=lambda p: " ".join(p))
 def test_every_subcommand_help_exits_0(path, capsys):
-    # rapidpipe stage's own subparser has add_help=False (today): --help
-    # is not a recognised option there, so argparse refuses it with exit
-    # 2 rather than printing help and exiting 0. Tracked as an expected
-    # failure, not silently skipped, so the fix (branch step4-cli) turns
-    # this green without anyone having to notice a skip went away.
     # Resolve the actual subparser object for this path directly, since
     # _iter_subparsers's own parser instances are throwaway per call.
     target = _build_parser()
@@ -56,19 +53,59 @@ def test_every_subcommand_help_exits_0(path, capsys):
         assert found is not None, f"{name!r} not found on the way to {path}"
         target = found
 
-    if target.add_help is False:
-        with pytest.raises(SystemExit) as exc_info:
-            main(list(path) + ["--help"])
-        pytest.xfail(
-            f"rapidpipe {' '.join(path)} --help: add_help=False on this "
-            f"subparser (exit {exc_info.value.code}); fixed on branch "
-            "step4-cli (supervisor step 4)")
+    # rapidpipe stage's own subparser used to have add_help=False (fixed
+    # on branch step4-cli, supervisor step 4): --help was refused with
+    # exit 2 there instead of printing help and exiting 0. No subparser
+    # should set add_help=False today, so this is an ordinary assertion
+    # rather than a dynamic xfail.
+    assert target.add_help is not False, (
+        f"rapidpipe {' '.join(path)}: add_help=False again; every "
+        "subparser must accept --help")
 
     with pytest.raises(SystemExit) as exc_info:
         main(list(path) + ["--help"])
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
     assert captured.out.strip()
+
+
+# ======================================================================
+# Pass 2: the 'stage' group's own list/describe output, and the two
+# equivalent forms of running one stage's own -h.
+# ======================================================================
+
+def test_stage_list_prints_every_stage_name_with_its_unit_kind(capsys):
+    rc = main(["stage", "list"])
+    assert rc == 0
+    lines = {line.split("\t")[0]: line for line in capsys.readouterr().out.splitlines()}
+    assert set(lines) == set(STAGE_NAMES)
+    # admit and register are implemented, so their line carries the
+    # DECLARATION's unit kind rather than "(not implemented)".
+    assert lines["admit"] == "admit\tdetector-image"
+    assert lines["register"] == "register\tdetector-image"
+
+
+def test_stage_describe_admit_prints_a_unit_line(capsys):
+    rc = main(["stage", "describe", "admit"])
+    assert rc == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "name: admit" in out
+    assert "unit: detector-image" in out
+
+
+def test_stage_legacy_and_run_forms_both_print_admits_own_usage(capsys):
+    # 'rapidpipe stage admit -h' (the frozen form the Batch launcher's
+    # command line uses) and 'rapidpipe stage run admit -h' (the new,
+    # equivalent form) both reach admit's own argparse parser, whose
+    # prog is "rapidpipe stage admit" (stage contract, _build_parser).
+    for argv in (["stage", "admit", "-h"], ["stage", "run", "admit", "-h"]):
+        rc = main(argv)
+        assert rc == 0, f"{argv}: exit {rc}"
+        # argparse may colorize its help with ANSI escapes (Python's own
+        # HelpFormatter does on a color-capable stream), so strip them
+        # before matching rather than asserting on an exact substring.
+        out = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+        assert "usage: rapidpipe stage admit" in out
 
 
 def test_every_subparser_has_a_non_empty_help_string():
