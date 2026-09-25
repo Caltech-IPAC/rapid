@@ -27,6 +27,9 @@ What is removed, and only for rows whose ``run`` is this run:
   ``s3://`` output location, which must be in the scratch bucket and
   under ``runs/<run>/`` (checked for every attempt before anything is
   marked or removed);
+- every S3 object version under ``<scratch outputs root>/runs/<run>/inputs/``,
+  where ``rapidpipe run inputs`` stages the run's composed input sets
+  (when that root is an ``s3://`` location in the scratch bucket);
 - ``dev`` science rows in ``sources`` (the inheritance parent: a DELETE
   on it reaches every ``sources_<date>_<sca>`` child, which carry ``run``
   since 20260923-04), ``diffimmeta``, ``diffimages``, ``l2filemeta``,
@@ -56,6 +59,7 @@ does is repeated here for the one environment pair it needs.
 
 from __future__ import annotations
 
+import getpass
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -164,6 +168,61 @@ def _default_s3_client() -> Any:
     return storage.s3_client()
 
 
+#: The environment variable naming the IAM role ``run delete`` and ``run
+#: expire`` assume for their S3 deletes (supervisor ruling R7c). Unset,
+#: they use the caller's own credentials, as before.
+CLEANUP_ROLE_ENV = "RAPIDPIPE_CLEANUP_ROLE_ARN"
+
+
+class CleanupRoleError(Exception):
+    """Assuming the cleanup role failed (or boto3 is missing).
+
+    Deliberately not a :class:`RunModelError`: the CLI maps it to exit 75,
+    retryable, not to a 64 refusal -- an STS failure says nothing about the
+    run.
+    """
+
+
+def _boto3_client(service: str, **kwargs: Any) -> Any:
+    """``boto3.client(service, **kwargs)``; a module-level indirection so
+    tests can monkeypatch it with a fake STS/S3 factory, and so boto3 is
+    imported only when a cleanup role is actually configured."""
+    import boto3
+
+    return boto3.client(service, **kwargs)
+
+
+def cleanup_s3_client() -> Any:
+    """An S3 client acting as ``RAPIDPIPE_CLEANUP_ROLE_ARN``, or ``None``.
+
+    When the variable is set, assumes the role with STS (session name
+    ``rapidpipe-cleanup-<user>``, truncated to STS's 64-character limit)
+    and returns an S3 client built from the temporary credentials, for
+    :func:`delete_run`/:func:`expire_runs`'s ``s3_client=``. When unset,
+    returns ``None`` and those functions fall back to
+    :func:`_default_s3_client`, the caller's own credentials. Any failure
+    raises :class:`CleanupRoleError` with the underlying message.
+    """
+    role_arn = os.environ.get(CLEANUP_ROLE_ENV)
+    if not role_arn:
+        return None
+    session_name = f"rapidpipe-cleanup-{getpass.getuser()}"[:64]
+    try:
+        sts = _boto3_client("sts")
+        credentials = sts.assume_role(
+            RoleArn=role_arn, RoleSessionName=session_name)["Credentials"]
+        return _boto3_client(
+            "s3",
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+        )
+    except Exception as exc:  # noqa: BLE001 - ImportError, ClientError, KeyError alike
+        raise CleanupRoleError(
+            f"could not assume the cleanup role named by {CLEANUP_ROLE_ENV}: "
+            f"{type(exc).__name__}: {exc}") from exc
+
+
 def _run_row(cur, run_id: str) -> tuple[str, str, str]:
     cur.execute("SELECT kind, owner, state FROM runs WHERE id = %s", (run_id,))
     row = cur.fetchone()
@@ -172,9 +231,26 @@ def _run_row(cur, run_id: str) -> tuple[str, str, str]:
     return row
 
 
+def _inputs_prefix(run_id: str) -> tuple[str, str] | None:
+    """(bucket, ``<scratch root prefix>/runs/<run>/inputs/``): where ``rapidpipe
+    run inputs`` stages the run's composed input sets, always under the
+    scratch outputs root. ``None`` when that root is unset or not ``s3://``."""
+    root = (os.environ.get("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH")
+            or os.environ.get("RAPIDPIPE_OUTPUTS_ROOT"))
+    if not root:
+        return None
+    location = parse_location(root)
+    if not location.is_s3():
+        return None
+    base = f"{location.prefix}/" if location.prefix else ""
+    return location.bucket, f"{base}runs/{run_id}/inputs/"  # type: ignore[return-value]
+
+
 def _s3_prefixes(conn, run_id: str, scratch_bucket: str | None) -> list[tuple[str, str]]:
     """Every (bucket, key prefix ending '/') of the run's ``s3://`` attempt
-    outputs, all checked before any is deleted."""
+    outputs, all checked before any is deleted, plus the run's composed
+    input sets (:func:`_inputs_prefix`) when that prefix is in the scratch
+    bucket."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id, output_location FROM attempts "
@@ -182,11 +258,14 @@ def _s3_prefixes(conn, run_id: str, scratch_bucket: str | None) -> list[tuple[st
             (run_id,),
         )
         rows = cur.fetchall()
-    if not rows:
+    inputs = _inputs_prefix(run_id)
+    if not rows and inputs is None:
         return []
 
     bucket_allowed = scratch_bucket or _default_scratch_bucket()
     prefixes: list[tuple[str, str]] = []
+    if inputs is not None and inputs[0] == bucket_allowed:
+        prefixes.append(inputs)
     for attempt_id, output_location in rows:
         location = parse_location(output_location)
         if location.bucket != bucket_allowed:
