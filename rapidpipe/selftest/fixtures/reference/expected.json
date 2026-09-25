@@ -1,0 +1,59 @@
+{
+  "about": "Expected products of the reference stage's fixture (make stage-reference; rapidpipe selftest --stage reference). Inputs: three 96x96 L2-shaped W146 frames around tile 4711398's centre (rapidpipe.selftest.support.fakereftools.write_frames), coadded onto a 128x128 mosaic (settings.toml). A registration value is exact, [lo, hi] (a range) or {\"close\": x} (tolerances.scalar_*). 'fake' values are measured from the fake awaicgen/sex; 'real' holds only what the real tools cannot change (the frames' own header values) plus physically plausible ranges -- not yet measured against the pipeline image (step 8: first measured on Batch after merge). Values that depend on the invocation (run, attempt, instance, md5, settings hash, the key's version digest) are checked against the manifest and the outputs, not fixed here.",
+  "tolerances": {"scalar_rel": 1e-6, "scalar_abs": 1e-9},
+  "registration_fields": [
+    "md5", "status", "infobits", "field", "filter", "ra_center", "dec_center",
+    "constituents", "nframes", "mjdobs_min", "mjdobs_max", "jd_start", "jd_end",
+    "total_exptime", "zero_point", "cov5percent", "medncov", "medpixunc", "npixnan",
+    "clmean", "clstddev", "clnoutliers", "gmedian", "datascale", "gmin", "gmax",
+    "fwhmmedpix", "fwhmminpix", "fwhmmaxpix", "nsexcatsources", "npucatsources",
+    "settings_hash"
+  ],
+  "fake": {
+    "exit_code": 0,
+    "mosaic_shape": [128, 128],
+    "registration": {
+      "status": 1, "infobits": 0, "field": 4711398, "filter": "W146",
+      "ra_center": {"close": 267.53906}, "dec_center": {"close": -29.827858},
+      "nframes": 3,
+      "mjdobs_min": {"close": 61679.086}, "mjdobs_max": {"close": 61679.106},
+      "jd_start": {"close": 2461679.586}, "jd_end": {"close": 2461679.606},
+      "total_exptime": {"close": 420.0}, "zero_point": {"close": 26.8630336165},
+      "cov5percent": {"close": 33.75}, "medncov": {"close": 2.0},
+      "medpixunc": {"close": 0.10051785409450531},
+      "npixnan": 6126,
+      "clmean": {"close": 7.1647149846363085}, "clstddev": {"close": 0.09291131622028127},
+      "clnoutliers": 332,
+      "gmedian": {"close": 7.16640043258667}, "datascale": {"close": 0.09278655052185059},
+      "gmin": {"close": 6.632583141326904}, "gmax": {"close": 70.07355499267578},
+      "fwhmmedpix": {"close": 2.4}, "fwhmminpix": {"close": 2.4}, "fwhmmaxpix": {"close": 2.4},
+      "nsexcatsources": 4, "npucatsources": null
+    },
+    "stamp": {
+      "BUNIT": "DN/s", "FIELD": 4711398, "FILTER": "W146", "NFRAMES": 3,
+      "JDSTART": {"close": 2461679.586}, "JDEND": {"close": 2461679.606},
+      "MAGZP": {"close": 26.8630336165}, "TOTEXPTM": {"close": 420.0}
+    }
+  },
+  "real": {
+    "exit_code": 0,
+    "mosaic_shape": [128, 128],
+    "registration": {
+      "status": 1, "infobits": 0, "field": 4711398, "filter": "W146",
+      "ra_center": {"close": 267.53906}, "dec_center": {"close": -29.827858},
+      "nframes": 3,
+      "mjdobs_min": {"close": 61679.086}, "mjdobs_max": {"close": 61679.106},
+      "jd_start": {"close": 2461679.586}, "jd_end": {"close": 2461679.606},
+      "total_exptime": {"close": 420.0}, "zero_point": {"close": 26.8630336165},
+      "cov5percent": [15.0, 50.0], "medncov": [0.0, 3.0],
+      "clmean": [5.0, 9.5],
+      "fwhmmedpix": [1.0, 8.0],
+      "nsexcatsources": [2, 40], "npucatsources": null
+    },
+    "stamp": {
+      "BUNIT": "DN/s", "FIELD": 4711398, "FILTER": "W146", "NFRAMES": 3,
+      "JDSTART": {"close": 2461679.586}, "JDEND": {"close": 2461679.606},
+      "MAGZP": {"close": 26.8630336165}, "TOTEXPTM": {"close": 420.0}
+    }
+  }
+}

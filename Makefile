@@ -69,3 +69,14 @@ stage-statistics:
 .PHONY: stage-prune
 stage-prune:
 	$(PYTHON) tests/fixtures/prune/run_fixture.py
+
+# The reference stage's fixture: three small gzipped L2-shaped frames
+# coadded into a 128x128 reference with its SExtractor catalog and header
+# stamp; no database. REFERENCE_TOOLS=fake (the default) replaces awaicgen
+# and SExtractor with rapidpipe/selftest/support/fakereftools.py and runs
+# anywhere; real runs the pipeline image's own tools.
+REFERENCE_TOOLS ?= fake
+
+.PHONY: stage-reference
+stage-reference:
+	$(PYTHON) tests/fixtures/reference/run_fixture.py --tools $(REFERENCE_TOOLS)

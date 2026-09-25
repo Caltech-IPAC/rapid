@@ -1,0 +1,78 @@
+{
+  "schema_version": "1",
+  "run": "01K6AREF0000000000000000RN",
+  "unit": {
+    "kind": "field",
+    "id": "4711398/F146"
+  },
+  "stage": "input-set",
+  "attempt": "01K6AREF0000000000000000AT",
+  "execution_record": "exec/input-set.json",
+  "inputs": {
+    "manifest": "input-set",
+    "products": {},
+    "result_sets": []
+  },
+  "outputs": [
+    {
+      "kind": "l2-image",
+      "format_version": "1",
+      "instance": "01K6AREF00000000000000F001",
+      "key": {
+        "exposure": "r0034001002001001001",
+        "detector": "1",
+        "version": "1"
+      },
+      "primary": "l2/r0034001002001001001_SCA01_W146.fits.gz",
+      "members": [
+        {
+          "role": "image",
+          "path": "l2/r0034001002001001001_SCA01_W146.fits.gz",
+          "bytes": 30418,
+          "sha256": "sha256:3596f0fd7d03fb1702baf01e320c379212279e171408a4ed3a7f7ee41e513d6d"
+        }
+      ],
+      "registration": {}
+    },
+    {
+      "kind": "l2-image",
+      "format_version": "1",
+      "instance": "01K6AREF00000000000000F002",
+      "key": {
+        "exposure": "r0034001002001001007",
+        "detector": "1",
+        "version": "1"
+      },
+      "primary": "l2/r0034001002001001007_SCA01_W146.fits.gz",
+      "members": [
+        {
+          "role": "image",
+          "path": "l2/r0034001002001001007_SCA01_W146.fits.gz",
+          "bytes": 30397,
+          "sha256": "sha256:560afbffe2a72bff71cebd507899a497a01b9b00baee649c2a0b25020c18e6b2"
+        }
+      ],
+      "registration": {}
+    },
+    {
+      "kind": "l2-image",
+      "format_version": "1",
+      "instance": "01K6AREF00000000000000F003",
+      "key": {
+        "exposure": "r0034001002001001013",
+        "detector": "1",
+        "version": "1"
+      },
+      "primary": "l2/r0034001002001001013_SCA01_W146.fits.gz",
+      "members": [
+        {
+          "role": "image",
+          "path": "l2/r0034001002001001013_SCA01_W146.fits.gz",
+          "bytes": 30444,
+          "sha256": "sha256:0e18f8d6916bcabc8d0248ac811774d8315e0ca07c5ff1764d966a9455e7cd84"
+        }
+      ],
+      "registration": {}
+    }
+  ]
+}

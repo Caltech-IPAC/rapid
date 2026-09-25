@@ -40,9 +40,12 @@ packages.find = {include = [
 # fixture's expected.json and settings.toml (rapidpipe.selftest.runner),
 # needed so `rapidpipe selftest` can read them inside the pipeline image,
 # which excludes tests/ at build time (containers/rapid-pipeline/build.sh).
+# rapidpipe/selftest/fixtures/reference/l2/ holds the reference fixture's
+# three gzipped input frames (rapidpipe.selftest.support.fakereftools).
 # rapidpipe/science/alerts/schema/ holds the alert schema's .avsc files
 # (dev's alerts/schema/<major>/<minor>/), read by the alerts stage.
 rapidpipe = ["settings/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml",
+             "selftest/fixtures/*/l2/*.fits.gz",
              "science/alerts/schema/*/*/*.avsc"]
 
 [tool.pytest.ini_options]
