@@ -140,8 +140,12 @@ def test_source_set_fields_refuses_a_bad_table_before_any_sql():
 
 def test_selected_stages_and_positions_match_the_stage_names():
     assert set(loop.SELECTED_STAGES) <= set(STAGE_NAMES)
+    # A1: the raw difference is never registered; register follows finalize.
+    assert loop.SELECTED_STAGES == (
+        "admit", "register", "difference", "finalize", "register", "load", "maintain",
+        "crossmatch", "statistics", "prune", "alerts")
     assert [loop.SELECTED_STAGES[p] for p in loop.IMAGE_CHAIN] == [
-        "admit", "register", "difference", "register", "finalize", "register", "load"]
+        "admit", "register", "difference", "finalize", "register", "load"]
     assert [loop.SELECTED_STAGES[p] for p in (loop.MAINTAIN, loop.CROSSMATCH, loop.STATISTICS,
                                               loop.PRUNE, loop.ALERTS)] == [
         "maintain", "crossmatch", "statistics", "prune", "alerts"]
@@ -260,7 +264,7 @@ class _Conn:
 def _world(monkeypatch, *, previous=None, walk_rc=None):
     spec = loop.parse_spec(SPEC, "s3://b/loop.toml")
     img = spec.dates[0].detector_images[0]
-    source = _entry("source-set", "S1", {"difference": "D1"}, table="sources_20271001_01")
+    source = _entry("source-set", "S1", {"difference": "DI1"}, table="sources_20271001_01")
     diff = OutputEntry(kind="difference-image", format_version="1", instance="DI1",
                        key={"u": 1}, members=(), registration={})
     refcat = _entry("reference-catalog", "RC1")
@@ -295,9 +299,13 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
     monkeypatch.setattr(loop, "selected_output",
                         lambda conn, run, stage, unit: f"s3://b/out/{stage}")
     monkeypatch.setattr(loop, "source_set_fields", lambda conn, table, instance: [5])
-    monkeypatch.setattr(loop, "previous_complete_row", lambda conn, s, d: previous)
+    monkeypatch.setattr(loop, "previous_complete_rows",
+                        lambda conn, s, d: [] if previous is None else [previous])
     monkeypatch.setattr(loop, "base_entry", lambda conn, st, prev, f: (
         None if prev is None else _entry("association-set", "AS1", {"field": f})))
+    monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
+    monkeypatch.setattr(loop, "run_state", lambda conn, run: "open")
+    monkeypatch.setattr(loop, "jobless_attempts", lambda conn, run: [])
     monkeypatch.setattr(loop, "unit_records", lambda conn, run: [
         {"stage": "admit", "unit": img.unit, "state": "complete", "attempt": "A", "job": "j"}])
     monkeypatch.setattr(loop, "_registered", lambda conn, ids: [])
@@ -325,8 +333,8 @@ def test_process_date_walks_the_chain_and_records_the_date(monkeypatch):
 
     unit = "r0034001002001001001/SCA01"
     assert [(u, p) for u, p, *_ in walks] == [
-        (unit, loop.IMAGE_CHAIN), ("20271001/SCA01", [7]), ("5", [8]), ("5", [9]),
-        ("5", [10]), (unit, [11])]
+        (unit, loop.IMAGE_CHAIN), ("20271001/SCA01", [6]), ("5", [7]), ("5", [8]),
+        ("5", [9]), (unit, [10])]
     chain = walks[0]
     assert chain[2] == ["s3://b/control/delivery/r0034001002001001001-sca01"]
     assert chain[3] == ["s3://b/settings/admit-socsim.toml",
@@ -347,7 +355,9 @@ def test_process_date_walks_the_chain_and_records_the_date(monkeypatch):
         "spec": "s3://b/loop.toml", "release": "rebuild-v0.3", "run": "RUN2",
         "units": [{"stage": "admit", "unit": unit, "state": "complete", "attempt": "A",
                    "job": "j"}],
-        "fields": [5], "base_sets": {"5": "AS1"}, "association_sets": {"5": "AS2"},
+        "fields": [5], "base_sets": {"5": "AS1"},
+        "bases": {"5": {"run": "RUN1", "processing_date": "2027-10-01", "base_promoted": False}},
+        "association_sets": {"5": "AS2"},
         "statistics_sets": {"5": "ST2"},
         "alerts": {unit: {"instance": "AC2", "location": "s3://b/out/alerts"}},
         "promotion": "P1", "promotion_gate": "released-image only"}
@@ -355,12 +365,12 @@ def test_process_date_walks_the_chain_and_records_the_date(monkeypatch):
 
 def test_process_date_a_failed_unit_fails_the_date(monkeypatch):
     spec, tools, storage, walks, created, updates = _world(
-        monkeypatch, walk_rc=lambda positions: 1 if positions == [9] else 0)
+        monkeypatch, walk_rc=lambda positions: 1 if positions == [loop.STATISTICS] else 0)
     rc = loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10)
     assert rc == 1
     assert updates["state"] == "failed" and updates["promotion"] is None
     assert "statistics 5 did not complete" in updates["record"]["failure"]
-    assert [p for _, p, *_ in walks][-1] == [9]  # prune and alerts never walked
+    assert [p for _, p, *_ in walks][-1] == [loop.STATISTICS]  # prune, alerts never walked
 
 
 def test_process_date_a_timeout_leaves_the_row_open_and_exits_75(monkeypatch):
@@ -396,8 +406,14 @@ def _loop_world(monkeypatch, rows, results):
         return result
 
     monkeypatch.setattr(loop, "process_date", process)
+    monkeypatch.setattr(loop, "try_lock", lambda conn, schedule: True)
+    monkeypatch.setattr(loop, "unlock", lambda conn, schedule: None)
+    reopened = []
+    monkeypatch.setattr(loop, "reopen_row", lambda conn, s, d: reopened.append(str(d)))
+    calls_reopened = reopened
     tools = loop.LoopTools(walk=None, create_run=None, storage=None, inputs_root=None,
                            out=lambda line: None)
+    tools.reopened = calls_reopened
     return spec, tools, calls
 
 
@@ -445,7 +461,7 @@ def test_run_loop_date_filter(monkeypatch):
 
 def test_run_loop_dry_run_only_plans(monkeypatch):
     spec, tools, calls = _loop_world(monkeypatch, {}, {})
-    monkeypatch.setattr(loop, "previous_complete_row", lambda conn, s, d: None)
+    monkeypatch.setattr(loop, "previous_complete_rows", lambda conn, s, d: [])
     lines = []
     tools.out = lines.append
     assert loop.run_loop(object(), spec, tools, dry_run=True) == 0
@@ -464,6 +480,7 @@ def test_promote_records_a_refusal_as_a_science_outcome(monkeypatch):
         raise repository.PromotionRefused("check failed")
 
     monkeypatch.setattr(repository, "promote_run", refuse)
+    monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
     conn = _Conn()
     spec = loop.parse_spec(SPEC, "x")
     assert loop._promote(conn, "R", spec, dt.date(2027, 10, 1)) == (
@@ -479,6 +496,7 @@ def test_promote_passes_the_check_policy_when_the_promotion_path_takes_one(monke
         return "P1"
 
     monkeypatch.setattr(repository, "promote_run", promote_run)
+    monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
     spec = loop.parse_spec(SPEC, "x")
     assert loop._promote(_Conn(), "R", spec, dt.date(2027, 10, 1)) == (
         "P1", "P1", "check policy rebuild-trial@1")
@@ -490,5 +508,105 @@ def test_promote_a_missing_run_is_not_a_refusal(monkeypatch):
         raise repository.RunNotFound("no run")
 
     monkeypatch.setattr(repository, "promote_run", missing)
+    monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
     with pytest.raises(repository.RunNotFound):
         loop._promote(_Conn(), "R", loop.parse_spec(SPEC, "x"), dt.date(2027, 10, 1))
+
+
+# ======================================================================
+# Amendments A2-A5
+# ======================================================================
+
+def test_run_loop_exits_75_when_another_loop_holds_the_schedule(monkeypatch):
+    spec, tools, calls = _loop_world(monkeypatch, {}, {"2027-10-01": 0, "2027-10-02": 0})
+    monkeypatch.setattr(loop, "try_lock", lambda conn, schedule: False)
+    lines = []
+    tools.out = lines.append
+    assert loop.run_loop(object(), spec, tools) == 75
+    assert calls == [] and lines == ["another loop holds schedule control-loop"]
+
+
+def test_run_loop_retry_failed_reopens_the_row_and_resumes(monkeypatch):
+    spec, tools, calls = _loop_world(monkeypatch, {"2027-10-01": _row(state="failed")},
+                                     {"2027-10-01": 0, "2027-10-02": 0})
+    assert loop.run_loop(object(), spec, tools, retry_failed=True) == 0
+    assert tools.reopened == ["2027-10-01"]
+    assert calls == ["2027-10-01", "2027-10-02"]
+
+
+def test_base_for_field_walks_back_to_the_newest_date_that_has_the_field(monkeypatch):
+    rows = [_row("2027-10-03", run="RUN3"), _row("2027-10-02", run="RUN2"),
+            _row("2027-10-01", run="RUN1")]
+    found = {"RUN2": ("AS2", "s3://b/RUN2"), "RUN1": ("AS1", "s3://b/RUN1")}
+    monkeypatch.setattr(loop, "base_instance", lambda conn, run, field: found.get(run))
+    monkeypatch.setattr(loop, "run_promotion",
+                        lambda conn, run: "P1" if run == "RUN1" else None)
+    storage = _Storage({f"s3://b/{r}": _manifest([_entry("association-set", i,
+                                                         {"field": 5})])
+                        for r, (i, _) in found.items()})
+    base = loop.base_for_field(object(), storage, rows, 5)
+    assert (base.entry.instance, base.run, str(base.processing_date), base.promoted) == (
+        "AS2", "RUN2", "2027-10-02", False)
+    assert loop.base_for_field(object(), storage, rows[2:], 5).promoted is True
+    assert loop.base_for_field(object(), storage, [], 5) is None
+
+
+def test_process_date_a_jobless_attempt_fails_the_date_with_its_id(monkeypatch):
+    class Refusal(Exception):
+        code = 64
+
+    spec, tools, storage, walks, created, updates = _world(monkeypatch)
+
+    def walk(*a, **k):
+        raise Refusal("attempt A9 is running but has no scheduler job")
+
+    tools.walk = walk
+    monkeypatch.setattr(loop, "jobless_attempts", lambda conn, run: ["A9"])
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 1
+    assert updates["state"] == "failed"
+    assert updates["record"]["jobless_attempt"] == "A9"
+
+
+def test_process_date_other_refusals_propagate(monkeypatch):
+    class Refusal(Exception):
+        code = 64
+
+    spec, tools, *_ = _world(monkeypatch)
+
+    def walk(*a, **k):
+        raise Refusal("no such run")
+
+    tools.walk = walk
+    with pytest.raises(Refusal):
+        loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10)
+
+
+def test_process_date_resumes_a_finished_run_by_completing_the_row(monkeypatch):
+    spec, tools, storage, walks, created, updates = _world(monkeypatch)
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN2", state="open",
+                                                                  record={"run": "RUN2"}))
+    monkeypatch.setattr(loop, "run_state", lambda conn, run: "finished")
+    monkeypatch.setattr(repository, "finish_run", lambda conn, run: pytest.fail("finished"))
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
+    assert walks == [] and created == {}
+    assert updates["state"] == "complete" and updates["promotion"] == "P1"
+
+
+def test_promote_reuses_the_runs_existing_promotion(monkeypatch):
+    monkeypatch.setattr(loop, "run_promotion", lambda conn, run: "P0")
+    monkeypatch.setattr(repository, "promote_run", lambda *a, **k: pytest.fail("promoted"))
+    assert loop._promote(_Conn(), "R", loop.parse_spec(SPEC, "x"), dt.date(2027, 10, 1))[0] \
+        == "P0"
+
+
+def test_alert_inputs_follow_the_alerts_stage_rules():
+    s1 = _entry("source-set", "S1", {"difference": "DI1"})
+    s2 = _entry("source-set", "S2", {"difference": "OTHER"})
+    assert loop.alert_source_set([s1, s2], "DI1") is s1
+    with pytest.raises(loop.LoopError, match="exactly one"):
+        loop.alert_source_set([s2], "DI1")
+    assert loop.alert_result_sets(s1, ["AS1", "AS2"], ["ST1"]) == ["S1", "AS1", "AS2", "ST1"]
+    with pytest.raises(loop.LoopError, match="no association"):
+        loop.alert_result_sets(s1, [], [])
+    with pytest.raises(loop.LoopError, match="more statistics"):
+        loop.alert_result_sets(s1, ["AS1"], ["ST1", "ST2"])

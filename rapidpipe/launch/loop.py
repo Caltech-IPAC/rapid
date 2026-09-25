@@ -10,15 +10,23 @@ uses. The rulings this module implements, one line each:
   timeout; an ``open`` row's run is resumed through ``run start``'s walk
   (complete units skipped, running attempts attached, ready units
   re-attempted).
-- R4: one production run per date, created by ``run create --release``'s
-  code path, walking admit -> register -> difference -> register -> finalize
-  -> register -> load per detector image, maintain per ``<yyyymmdd>/SCA<nn>``,
-  crossmatch -> statistics -> prune per field, then alerts per detector
-  image, every attempt through ``submit_unit`` + ``reconcile``.
-- R5: a field's base catalog is the association set crossmatch produced for
-  that field in the most recent earlier ``complete`` row of the same
-  schedule (its run's selected attempt); none on the first date. Input-set
-  manifests live under ``<scratch root>/runs/<run>/inputs/<stage>/<unit>/``.
+- R4 (amended A1): one production run per date, created by ``run create
+  --release``'s code path, walking admit -> register -> difference ->
+  finalize -> register(finalize output) -> load(finalize output) per detector
+  image (the raw difference is never registered), maintain per
+  ``<yyyymmdd>/SCA<nn>``, crossmatch -> statistics -> prune per field, then
+  alerts per detector image, every attempt through ``submit_unit`` +
+  ``reconcile``.
+- R5 (amended A3): a field's base catalog is the association set crossmatch
+  produced for that field in the most recent earlier ``complete`` row of the
+  same schedule that has one (walking back over dates; promoted or not, with
+  ``base_promoted`` recorded); none on the first date. Input-set manifests
+  live under ``<scratch root>/runs/<run>/inputs/<stage>/<unit>/``.
+- A2: an attempt left running without a Batch job fails the date (row
+  ``failed``, ``record.jobless_attempt``, exit 1); no resolver exists yet.
+- A4: one loop per schedule (``pg_try_advisory_lock``, exit 75 when held); a
+  ``failed`` row stops the loop unless ``--retry-failed`` reopens it and
+  resumes its run; the row's completion commits with ``finish_run``.
 - R6: once every unit is complete the run is promoted (``promote_run``,
   ``who="scheduler"``, under the spec's check policy when the promotion path
   accepts one); a refusal is recorded on the row, not a failure of the date;
@@ -73,10 +81,10 @@ from rapidpipe.runs import repository
 #: The run's selected stages (R4), and the positions in it each part of
 #: the walk takes.
 SELECTED_STAGES = (
-    "admit", "register", "difference", "register", "finalize", "register", "load",
+    "admit", "register", "difference", "finalize", "register", "load",
     "maintain", "crossmatch", "statistics", "prune", "alerts")
-IMAGE_CHAIN = list(range(0, 7))
-MAINTAIN, CROSSMATCH, STATISTICS, PRUNE, ALERTS = 7, 8, 9, 10, 11
+IMAGE_CHAIN = list(range(0, 6))
+MAINTAIN, CROSSMATCH, STATISTICS, PRUNE, ALERTS = 6, 7, 8, 9, 10
 
 #: The unit kinds of the stages whose input sets this module composes
 #: (each stage's ``DECLARATION.unit``; a unit test checks they agree).
@@ -309,14 +317,63 @@ def loop_rows(conn, schedule: str) -> list[LoopRow]:
         return [LoopRow(*row) for row in cur.fetchall()]
 
 
-def previous_complete_row(conn, schedule: str, processing_date: _dt.date) -> LoopRow | None:
-    """The most recent ``complete`` row of ``schedule`` before ``processing_date`` (R5)."""
+def previous_complete_rows(conn, schedule: str, processing_date: _dt.date) -> list[LoopRow]:
+    """``schedule``'s ``complete`` rows before ``processing_date``, newest first (R5/A3)."""
     with conn.cursor() as cur:
         cur.execute(f"SELECT {_ROW_COLUMNS} FROM loop_dates WHERE schedule = %s "
                     "AND processing_date < %s AND state = 'complete' "
-                    "ORDER BY processing_date DESC LIMIT 1", (schedule, processing_date))
+                    "ORDER BY processing_date DESC", (schedule, processing_date))
+        return [LoopRow(*row) for row in cur.fetchall()]
+
+
+def run_promotion(conn, run_id: str) -> str | None:
+    """The most recent promotions row whose request names ``run_id``, if any."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM promotions WHERE request_context->>'run' = %s "
+                    "ORDER BY happened_at DESC, id DESC LIMIT 1", (run_id,))
         row = cur.fetchone()
-    return None if row is None else LoopRow(*row)
+    return row[0] if row else None
+
+
+def run_state(conn, run_id: str) -> str | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT state FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def jobless_attempts(conn, run_id: str) -> list[str]:
+    """The run's attempts still running with no scheduler job (A2)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM attempts WHERE run = %s AND disposition IS NULL "
+                    "AND scheduler_job_id IS NULL ORDER BY id", (run_id,))
+        return [row[0] for row in cur.fetchall()]
+
+
+def try_lock(conn, schedule: str) -> bool:
+    """A session advisory lock on the schedule, so one loop runs per schedule (A4)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_lock(hashtext('rapidpipe.loop:' || %s))",
+                    (schedule,))
+        (locked,) = cur.fetchone()
+    conn.commit()
+    return bool(locked)
+
+
+def unlock(conn, schedule: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_unlock(hashtext('rapidpipe.loop:' || %s))",
+                    (schedule,))
+    conn.commit()
+
+
+def reopen_row(conn, schedule: str, processing_date: _dt.date) -> None:
+    """``--retry-failed``: a failed row back to ``open``, its run kept (A4)."""
+    with conn.cursor() as cur:
+        cur.execute("UPDATE loop_dates SET state = 'open', ended_at = NULL "
+                    "WHERE schedule = %s AND processing_date = %s AND state = 'failed'",
+                    (schedule, processing_date))
+    conn.commit()
 
 
 def _insert_row(conn, schedule: str, processing_date: _dt.date, run_id: str,
@@ -414,12 +471,32 @@ def unit_records(conn, run_id: str) -> list[dict[str, Any]]:
 # Base-set selection and input-set composition
 # ======================================================================
 
-def base_entry(conn, storage: Any, previous: LoopRow | None, field_id: int) -> OutputEntry | None:
-    """The base ``association-set`` entry for ``field_id`` (R5), or ``None``.
+@dataclass(frozen=True)
+class Base:
+    entry: OutputEntry
+    run: str
+    processing_date: _dt.date
+    promoted: bool
 
-    The instance is found through the previous complete date's run's units,
-    attempts and product_instances; the entry itself (key, registration) is
-    that attempt's manifest's, whose ``key.field`` must be the field
+
+def base_for_field(conn, storage: Any, previous: Sequence[LoopRow], field_id: int
+                   ) -> Base | None:
+    """The base for ``field_id`` (R5/A3): the newest of ``previous`` (complete
+    rows, newest first) whose run crossmatched the field, or ``None``."""
+    for row in previous:
+        entry = base_entry(conn, storage, row, field_id)
+        if entry is not None:
+            return Base(entry=entry, run=row.run, processing_date=row.processing_date,
+                        promoted=run_promotion(conn, row.run) is not None)
+    return None
+
+
+def base_entry(conn, storage: Any, previous: LoopRow | None, field_id: int) -> OutputEntry | None:
+    """One complete row's ``association-set`` entry for ``field_id``, or ``None``.
+
+    The instance is found through that date's run's units, attempts and
+    product_instances; the entry itself (key, registration) is that
+    attempt's manifest's, whose ``key.field`` must be the field
     (crossmatch's ``_base_entry`` refuses anything else)."""
     if previous is None:
         return None
@@ -492,20 +569,46 @@ def _copy_members(storage: Any, src: str, entry: OutputEntry, dest: str) -> None
 # ======================================================================
 
 class _Stop(Exception):
-    def __init__(self, code: int, reason: str):
+    def __init__(self, code: int, reason: str, *, jobless: str | None = None):
         super().__init__(reason)
         self.code = code
+        self.jobless = jobless
+
+
+def alert_source_set(entries: Sequence[OutputEntry], difference: str) -> OutputEntry:
+    """The image's one source set loaded from the finalized ``difference``
+    instance (alerts refuses any other number, or another difference)."""
+    matching = [e for e in entries if e.key.get("difference") == difference]
+    if len(matching) != 1:
+        raise LoopError(f"{len(matching)} source sets were loaded from difference "
+                        f"{difference}; alerts needs exactly one")
+    return matching[0]
+
+
+def alert_result_sets(source: OutputEntry, associations: Sequence[str],
+                      statistics: Sequence[str]) -> list[str]:
+    """alerts' ``inputs.result_sets``: the source set, one or more association
+    sets, at most one statistics set per association set; never a pruned set."""
+    if not associations:
+        raise LoopError(f"source set {source.instance} has no association sets")
+    if len(statistics) > len(associations) or len(set(statistics)) != len(statistics):
+        raise LoopError("more statistics sets than association sets")
+    return [source.instance, *associations, *statistics]
 
 
 def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
              ) -> tuple[str | None, str, str]:
     """(promotion id or None, the record's ``promotion`` text, ``promotion_gate``)."""
     kwargs: dict[str, Any] = {}
+    existing = run_promotion(conn, run_id)
     if "check_policy" in inspect.signature(repository.promote_run).parameters:
         kwargs["check_policy"] = spec.check_policy
         gate = f"check policy {spec.check_policy}" if spec.check_policy else "check policy (none)"
     else:
         gate = "released-image only"
+    if existing is not None:
+        # A resumed date whose run was promoted before the loop stopped.
+        return existing, existing, gate
     try:
         promotion = repository.promote_run(
             conn, run_id, "scheduler", f"processing date {processing_date}", **kwargs)
@@ -518,9 +621,26 @@ def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
     return promotion, promotion, gate
 
 
+def _finish_row(conn, spec: LoopSpec, date: _dt.date, run_id: str, record: dict[str, Any],
+                out: Callable[[str], None]) -> int:
+    """(f)+(g): promote (or reuse the run's promotion, or record a refusal),
+    then ``finish_run`` and the row's completion in one transaction (A4)."""
+    promotion_id, promotion_text, gate = _promote(conn, run_id, spec, date)
+    if run_state(conn, run_id) == "open":
+        repository.finish_run(conn, run_id)
+    record.update(units=unit_records(conn, run_id), promotion=promotion_text,
+                  promotion_gate=gate)
+    _update_row(conn, spec.schedule, date, state="complete", promotion=promotion_id,
+                record=record)
+    conn.commit()
+    out(f"date={date} run={run_id} state=complete promotion={promotion_text}")
+    return EXIT_OK
+
+
 def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                  interval: float, timeout: float) -> int:
-    """Walk one date to complete or failed; return its exit code (0, 1 or 75)."""
+    """Walk one date to complete or failed; return its exit code (0 or 1);
+    :class:`_Stop` 75 on a timeout, the row left ``open``."""
     out, storage = tools.out, tools.storage
     schedule, date = spec.schedule, day.processing_date
     row = loop_row(conn, schedule, date)
@@ -540,21 +660,36 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
         run_id = row.run
         record = dict(row.record)
         out(f"date={date} run={run_id} resumed")
+        if run_state(conn, run_id) != "open":
+            # A4: the run was finished before the row was: complete the row.
+            record.setdefault("resumed_after_finish", True)
+            return _finish_row(conn, spec, date, run_id, record, out)
 
     hint = f"rapidpipe loop run --spec {spec.location} --date {date}"
 
     def walk(unit_id: str, positions: list[int], *, inputs: Sequence[str] = (),
              settings: Sequence[str] = (), templates: Sequence[str] = ()) -> None:
-        rc = tools.walk(conn, run_id=run_id, unit_id=unit_id, positions=positions,
-                        inputs=list(inputs), settings=list(settings),
-                        templates=list(templates), interval=interval, timeout=timeout,
-                        continue_hint=hint)
+        try:
+            rc = tools.walk(conn, run_id=run_id, unit_id=unit_id, positions=positions,
+                            inputs=list(inputs), settings=list(settings),
+                            templates=list(templates), interval=interval, timeout=timeout,
+                            continue_hint=hint)
+        except Exception as exc:
+            if getattr(exc, "code", None) == EXIT_USAGE:
+                conn.rollback()
+                jobless = jobless_attempts(conn, run_id)
+                if jobless:
+                    # A2: no resolver exists on rebuild yet; never wait on it.
+                    raise _Stop(EXIT_FAILED, f"attempt {jobless[0]} is running with no "
+                                             f"scheduler job: {exc}", jobless=jobless[0])
+            raise
         if rc != 0:
             stages = ",".join(SELECTED_STAGES[p] for p in positions)
             raise _Stop(EXIT_FAILED, f"{stages} {unit_id} did not complete (exit {rc})")
 
     try:
-        # (b) the detector-image chain, admit..load, per image.
+        # (b) the detector-image chain, admit..load, per image (A1: register
+        # follows finalize only; load reads finalize's output).
         loads: dict[str, tuple[str, list[OutputEntry]]] = {}
         for image in day.detector_images:
             settings = [s for s in (image.admit_settings,) if s]
@@ -599,17 +734,22 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
         fields = sorted(field_sets)
         if not fields:
             raise LoopError(f"date {date}: the loaded source sets have no fields")
-        previous = previous_complete_row(conn, schedule, date)
+        previous = previous_complete_rows(conn, schedule, date)
         association: dict[int, str] = {}
         statistics: dict[int, str] = {}
         bases: dict[str, str | None] = {}
+        base_detail: dict[str, Any] = {}
         for f in fields:
-            base = base_entry(conn, storage, previous, f)
-            bases[str(f)] = base.instance if base is not None else None
+            base = base_for_field(conn, storage, previous, f)
+            bases[str(f)] = base.entry.instance if base is not None else None
+            base_detail[str(f)] = None if base is None else {
+                "run": base.run, "processing_date": str(base.processing_date),
+                "base_promoted": base.promoted}
             xm_inputs = _bind_and_write(
                 conn, storage, run_id=run_id, stage="crossmatch", unit_id=str(f),
                 dest=f"{tools.inputs_root(run_id)}/crossmatch/{f}",
-                manifest=crossmatch_inputs(run_id, f, field_sets[f], base))
+                manifest=crossmatch_inputs(run_id, f, field_sets[f],
+                                           base.entry if base is not None else None))
             walk(str(f), [CROSSMATCH], inputs=[xm_inputs])
             xm_out = selected_output(conn, run_id, "crossmatch", str(f))
             sets = [o.instance for o in storage.read_manifest(xm_out).outputs
@@ -621,11 +761,13 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
             st_out = selected_output(conn, run_id, "statistics", str(f))
             st_sets = [o.instance for o in storage.read_manifest(st_out).outputs
                        if o.kind == "statistics-set"]
+            if len(st_sets) > 1:
+                raise LoopError(f"{st_out}/manifest.json has {len(st_sets)} statistics sets")
             if st_sets:
                 statistics[f] = st_sets[0]
             walk(str(f), [PRUNE], inputs=[xm_out])
 
-        # (e) alerts per detector image.
+        # (e) alerts per detector image (A5, stages/alerts.py's input rules).
         alerts: dict[str, dict[str, Any]] = {}
         for image in day.detector_images:
             fin_loc = selected_output(conn, run_id, "finalize", image.unit)
@@ -634,6 +776,7 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
             if len(diffs) != 1:
                 raise LoopError(f"{fin_loc}/manifest.json has {len(diffs)} difference-image "
                                 "entries; expected one")
+            own_sources = alert_source_set(loads[image.unit][1], diffs[0].instance)
             template = storage.read_manifest(image.difference_template)
             refcats = [o for o in template.outputs if o.kind == "reference-catalog"]
             if len(refcats) > 1:
@@ -641,9 +784,9 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                                 f"{len(refcats)} reference-catalog entries")
             dest = f"{tools.inputs_root(run_id)}/alerts/{image.unit}"
             own_fields = sorted(image_fields.get(image.unit, ()))
-            result_sets = ([e.instance for e in loads[image.unit][1]]
-                           + [association[f] for f in own_fields]
-                           + [statistics[f] for f in own_fields if f in statistics])
+            result_sets = alert_result_sets(own_sources, [association[f] for f in own_fields],
+                                            [statistics[f] for f in own_fields
+                                             if f in statistics])
             manifest = None
             if not storage.exists(parse_location(dest), "manifest.json"):
                 _copy_members(storage, fin_loc, diffs[0], dest)
@@ -660,7 +803,11 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
             alerts[image.unit] = {"instance": containers[0] if containers else None,
                                   "location": al_out}
     except _Stop as stop:
+        if stop.code == EXIT_TIMEOUT:
+            raise
         record.update(units=unit_records(conn, run_id), failure=str(stop))
+        if stop.jobless:
+            record["jobless_attempt"] = stop.jobless
         _update_row(conn, schedule, date, state="failed", promotion=None, record=record)
         conn.commit()
         out(f"date={date} run={run_id} state=failed reason={stop}")
@@ -672,19 +819,11 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
             raise _Stop(EXIT_TIMEOUT, str(exc)) from exc
         raise
 
-    # (f) promotion under the policy, then finish.
-    promotion_id, promotion_text, gate = _promote(conn, run_id, spec, date)
-    repository.finish_run(conn, run_id)
-    record.update(
-        units=unit_records(conn, run_id), fields=fields, base_sets=bases,
-        association_sets={str(f): i for f, i in association.items()},
-        statistics_sets={str(f): i for f, i in statistics.items()},
-        alerts=alerts, promotion=promotion_text, promotion_gate=gate)
-    # (g) the row.
-    _update_row(conn, schedule, date, state="complete", promotion=promotion_id, record=record)
-    conn.commit()
-    out(f"date={date} run={run_id} state=complete promotion={promotion_text}")
-    return EXIT_OK
+    record.update(fields=fields, base_sets=bases, bases=base_detail,
+                  association_sets={str(f): i for f, i in association.items()},
+                  statistics_sets={str(f): i for f, i in statistics.items()},
+                  alerts=alerts)
+    return _finish_row(conn, spec, date, run_id, record, out)
 
 
 # ======================================================================
@@ -703,31 +842,48 @@ def _selected_dates(spec: LoopSpec, dates: Sequence[_dt.date] | None) -> list[Lo
 
 
 def run_loop(conn, spec: LoopSpec, tools: LoopTools, *, dates: Sequence[_dt.date] | None = None,
-             dry_run: bool = False, interval: float = 30.0, timeout: float = 14400.0) -> int:
-    """``loop run`` (R3): every selected date whose row is absent or ``open``,
-    in spec order. 0 when all are complete, 1 at the first failed date, 75 on
-    a timeout (the row stays ``open``; rerun to resume)."""
+             dry_run: bool = False, interval: float = 30.0, timeout: float = 14400.0,
+             retry_failed: bool = False) -> int:
+    """``loop run`` (R3): every selected date whose row is absent or ``open``
+    (or ``failed``, with ``retry_failed``), in spec order, under the
+    schedule's advisory lock. 0 when all are complete, 1 at the first failed
+    date, 75 on a timeout or when another loop holds the schedule."""
     chosen = _selected_dates(spec, dates)
     if dry_run:
         plan(conn, spec, tools, dates=[d.processing_date for d in chosen])
         return EXIT_OK
-    for day in chosen:
-        row = loop_row(conn, spec.schedule, day.processing_date)
-        if row is not None and row.state != "open":
-            tools.out(f"date={day.processing_date} run={row.run} state={row.state} (skipped)")
-            if row.state == "failed":
-                tools.out(f"date={day.processing_date}: a failed date is not retried by the "
-                          "loop; stopping before later dates")
-                return EXIT_FAILED
-            continue
+    if not try_lock(conn, spec.schedule):
+        tools.out(f"another loop holds schedule {spec.schedule}")
+        return EXIT_TIMEOUT
+    try:
+        for day in chosen:
+            row = loop_row(conn, spec.schedule, day.processing_date)
+            if row is not None and row.state == "failed" and retry_failed:
+                reopen_row(conn, spec.schedule, day.processing_date)
+                tools.out(f"date={day.processing_date} run={row.run} reopened (--retry-failed)")
+            elif row is not None and row.state != "open":
+                tools.out(f"date={day.processing_date} run={row.run} state={row.state} "
+                          "(skipped)")
+                if row.state == "failed":
+                    tools.out(f"date={day.processing_date}: failed; stopping before later "
+                              "dates (--retry-failed resumes its run)")
+                    return EXIT_FAILED
+                continue
+            try:
+                code = process_date(conn, spec, day, tools, interval=interval,
+                                    timeout=timeout)
+            except _Stop as stop:
+                tools.out(f"timeout: {stop}")
+                return stop.code
+            if code != EXIT_OK:
+                return code
+        return EXIT_OK
+    finally:
         try:
-            code = process_date(conn, spec, day, tools, interval=interval, timeout=timeout)
-        except _Stop as stop:
-            tools.out(f"timeout: {stop}")
-            return stop.code
-        if code != EXIT_OK:
-            return code
-    return EXIT_OK
+            conn.rollback()
+            unlock(conn, spec.schedule)
+        except Exception:  # noqa: BLE001 - the session ends with the connection anyway
+            pass
 
 
 def plan(conn, spec: LoopSpec, tools: LoopTools, *,
@@ -742,7 +898,8 @@ def plan(conn, spec: LoopSpec, tools: LoopTools, *,
             action, run = "resume", row.run
         else:
             action, run = f"skip ({row.state})", row.run
-        previous = previous_complete_row(conn, spec.schedule, day.processing_date)
+        previous_rows = previous_complete_rows(conn, spec.schedule, day.processing_date)
+        previous = previous_rows[0] if previous_rows else None
         entry = {
             "processing_date": str(day.processing_date), "action": action, "run": run,
             "units": [i.unit for i in day.detector_images],
