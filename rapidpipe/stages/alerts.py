@@ -15,9 +15,14 @@ SExtractor catalog, feeds ``refStarMatches``/``refGalaxyMatches``); its
 ``inputs.result_sets`` names, by instance id, exactly one source set, one or
 more association sets (an image can span fields) and any statistics sets,
 each describing one of the named association sets. The stage tells them
-apart by ``product_instances.kind`` and reads the parent tables
-``sources``, ``merges``, ``astroobjects`` and ``astroobjectsmeta`` by
-``result_set``. Triggers come only from the source set. An association
+apart by ``product_instances.kind``. It reads ``sources`` through its
+parent by ``result_set``, and step 1's standalone per-field tables
+``merges_<f>``, ``astroobjects_<f>`` and ``astroobjectsmeta_<f>`` by name,
+the field taken from the association set's logical key, by ``result_set``. Triggers come
+only from the source set. An input product without a ``product_instances``
+row (a `dev` reference catalog) is read but left out of ``inputs.products``
+and the dependency edges, and named in ``execution_notes``
+``unregistered_inputs``. An association
 set's membership is its own rows plus those of the bases it extends
 (crossmatch's ``logical_key.base``, recursively), so a trigger's merges
 row and its object are looked up across that chain, the newest set winning
@@ -179,14 +184,18 @@ class PostgresAlertsDatabase:
     def association_chain(self, instance: str) -> list[str]:
         return self._call(_alerts_db.association_chain, instance)
 
-    def associations(self, lineages: dict[str, list[str]],
+    def associations(self, lineages: dict[str, list[str]], fields: dict[str, int],
                      statistics_by_association: dict[str, str | None],
                      sids: list[int]) -> list[dict[str, Any]]:
-        return self._call(_alerts_db.associations, lineages, statistics_by_association, sids)
+        return self._call(_alerts_db.associations, lineages, fields,
+                          statistics_by_association, sids)
 
-    def history(self, lineages: dict[str, list[str]], objects: list[tuple[str, int]],
-                min_mjd: float):
-        return self._call(_alerts_db.history, lineages, objects, min_mjd)
+    def history(self, lineages: dict[str, list[str]], fields: dict[str, int],
+                objects: list[tuple[str, int]], min_mjd: float):
+        return self._call(_alerts_db.history, lineages, fields, objects, min_mjd)
+
+    def registered_instances(self, instances: list[str]) -> set[str]:
+        return self._call(_alerts_db.registered_instances, instances)
 
     def register_outputs(self, manifest: dict[str, Any], attempt_id: str) -> None:
         register_manifest(self.conn, manifest, registering_attempt_id=attempt_id)
@@ -536,17 +545,28 @@ def _body(context: StageContext) -> StageResult:
 
     try:
         with open_database() as db:
-            sets = _classify_result_sets(
-                result_sets_read, db.result_set_kinds(list(result_sets_read)),
-                difference.instance)
+            kinds = db.result_set_kinds(list(result_sets_read))
+            sets = _classify_result_sets(result_sets_read, kinds, difference.instance)
             try:
                 pid = db.difference_pid(difference.instance)
                 # Each named association set with the bases it extends: a new
                 # detection of a known object has its merges row in the newest
-                # set and its object in the set that first made it.
+                # set and its object in the set that first made it. A set's
+                # rows are in its field's standalone per-field tables.
                 lineages = {a: db.association_chain(a) for a in sets.association_sets}
+                fields = {a: _alerts_db.set_field(kinds[a]["key"]) for a in sets.association_sets}
             except ValueError as exc:
                 raise InputRejected(str(exc)) from exc
+            # A dev product (a dev reference catalog) has no instance row to
+            # depend on: it is read, but left out of the dependency edges
+            # (difference.py does the same for a dev reference).
+            registered = db.registered_instances(list(products_read.values()))
+            unregistered = {k: v for k, v in products_read.items() if v not in registered}
+            if unregistered:
+                products_read = {k: v for k, v in products_read.items() if v in registered}
+                notes["unregistered_inputs"] = unregistered
+                log.warning("input products without instance rows, not recorded as "
+                            "dependencies: %s", unregistered)
             bases = [b for chain in lineages.values() for b in chain[1:]
                      if b not in result_sets_read]
             result_sets_read = result_sets_read + tuple(dict.fromkeys(bases))
@@ -567,12 +587,15 @@ def _body(context: StageContext) -> StageResult:
                          "by the cross-match, not alertable", pid, stats.n_flagged)
             sources = [Source.from_row(row, strict=True)
                        for row in db.alertable_sources(sets.source_set, pid)]
-            object_rows = db.associations(lineages, sets.statistics_by_association,
-                                          [s.sid for s in sources])
+            try:
+                object_rows = db.associations(lineages, fields, sets.statistics_by_association,
+                                              [s.sid for s in sources])
+            except ValueError as exc:
+                raise InputRejected(str(exc)) from exc
             objects = sorted({(row["association_set"], row["aid"]) for row in object_rows
                               if row["aid"] is not None})
             window = float(alert_settings["prv_window_days"])
-            history_rows = (db.history(lineages, objects,
+            history_rows = (db.history(lineages, fields, objects,
                                        min(s.mjdobs for s in sources) - window)
                             if objects else [])
             associations = assemble.index_associations(object_rows, history_rows)
@@ -621,7 +644,7 @@ def _body(context: StageContext) -> StageResult:
                             container.instance)
                 return StageResult(outputs=[container, alert_set], products_read=products_read,
                                    result_sets_read=result_sets_read,
-                                   execution_notes={"recovered": container.instance})
+                                   execution_notes={**notes, "recovered": container.instance})
 
             container, alert_set = _entries(
                 container_instance=new_ulid(), alert_set_instance=new_ulid(),
