@@ -483,7 +483,9 @@ Variable                                Meaning
                                         ``pipeline/ingestL2Files.py`` and to set ``PYTHONPATH`` for it.
                                         **Required.**
 ``INGESTL2FILESINTERVAL``               Seconds from the start of one cycle to the start of the next.  Defaults
-                                        to 300.  Overridden by the command-line argument.
+                                        to 300, and must be at least 1: zero is not a cadence but a spin, and
+                                        every cycle lists both S3 buckets and queries the database.  Overridden
+                                        by the command-line argument.
 ``RAPIDPYTHON``                         Python interpreter to run the ingest with.  Defaults to the one running
                                         the daemon, so the two cannot end up in different environments.
 ``INGESTL2FILESMAXCYCLES``              Stop after this many cycles, for short tests.  Defaults to no limit.
@@ -498,6 +500,14 @@ file on both would be converted, uploaded and registered twice -- the second
 registration making a needless extra version of each.  The lock file is what
 stops a second one being started by accident; it refuses to start and exits 69,
 leaving the daemon that holds the lock running and untouched.
+
+.. note::
+   The lock file is never deleted, and that is deliberate.  ``flock`` applies to
+   the inode, not to the name, so deleting it would let a daemon that opened the
+   path just before the deletion keep a lock on an inode with no name, while the
+   next daemon to start creates a fresh inode and locks that instead -- two
+   daemons, each satisfied it holds the lock.  The file holds one pid and is
+   truncated on reopen, so leaving it costs nothing.
 
 
 Stopping it
@@ -531,7 +541,14 @@ Code     Meaning
 
 Every failure code is non-zero, which matters most for 70: a daemon that gives
 up must not look like a clean shutdown, or whatever supervises it will leave it
-stopped.
+stopped.  The message that accompanies 70 carries the ingest's *own* last exit
+code -- 64 for a misconfiguration, 67 for the database -- which is the first
+thing anyone reading it will want; the daemon still exits 70 itself, so that
+what supervises it sees one code for "gave up" rather than whatever the ingest
+happened to return.
+
+Like the ingest, the daemon announces its code on the way out as
+``terminating_exitcode = <code>``, at every one of its exits.
 
 ``ingestL2Files.py`` itself is coded the same way:
 

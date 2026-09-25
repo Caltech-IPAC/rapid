@@ -50,6 +50,13 @@ convention RAPID already uses.
 70   Gave up on an ingest that kept failing; read its log for why.
 73   The lock file could not be opened or created.
 
+The daemon announces the code on the way out as
+
+    terminating_exitcode = <code>
+
+at every one of its exits, as ingestL2Files.py does, so a log can be grepped for
+how a run ended.
+
 
 Usage
 -----
@@ -66,7 +73,8 @@ RAPID_SW                        Root of the RAPID software tree, used to locate
                                 pipeline/ingestL2Files.py and to set PYTHONPATH
                                 for it.  Required.
 INGESTL2FILESINTERVAL           Seconds from the start of one cycle to the start
-                                of the next.  Defaults to 300.
+                                of the next.  Defaults to 300, and must be at
+                                least 1.
 RAPIDPYTHON                     Python interpreter to run the ingest with.
                                 Defaults to the one running this daemon.
 INGESTL2FILESMAXCYCLES          Stop after this many cycles, for short tests.
@@ -172,14 +180,29 @@ def catch_zap(signal_number,frame):
     signal.signal(signal_number,signal.SIG_DFL)
 
     if ingest_running:
-        print(f"\n{timestamp()} Signal {signal.Signals(signal_number).name} received; "
+        print(f"\n{timestamp()} Signal {signal_name(signal_number)} received; "
               "will stop after the running ingest finishes")
         print(f"{timestamp()} Signal again to stop immediately")
     else:
-        print(f"\n{timestamp()} Signal {signal.Signals(signal_number).name} received; "
+        print(f"\n{timestamp()} Signal {signal_name(signal_number)} received; "
               "no ingest is running, so stopping now")
 
     sys.stdout.flush()
+
+
+def signal_name(signal_number):
+
+    '''
+    Return the name of a signal, or its number as a string when it has none.  A real-time
+    signal has no member in signal.Signals, and signal.Signals(n) raises ValueError on one --
+    which would be an exception thrown from the code whose only job is to report that
+    something else went wrong.
+    '''
+
+    try:
+        return signal.Signals(signal_number).name
+    except ValueError:
+        return f"signal {signal_number}"
 
 
 def timestamp():
@@ -264,8 +287,8 @@ def run_ingest(python_executable,ingest_script):
 
         signal_number = -returncode
 
-        print(f"*** Warning: {ingest_script} was terminated by signal "
-              f"{signal.Signals(signal_number).name}")
+        print(f"*** Warning: {ingest_script} was terminated by "
+              f"{signal_name(signal_number)}")
 
         return False,None,True
 
@@ -303,13 +326,18 @@ def wait_for_next_cycle(seconds):
         time.sleep(min(1.0,remaining))
 
 
-def get_positive_int_from_env(name,default):
+def get_int_from_env(name,default,minimum=0):
 
     '''
-    Return a non-negative integer environment variable, or the default if it is unset.  A
-    value that is not a number is an error rather than something to quietly default, since a
-    daemon started with a misspelled interval should say so and not run for days at the wrong
-    cadence.
+    Return an integer environment variable, or the default if it is unset.  A value that is
+    not a number, or is below the minimum, is an error rather than something to quietly
+    default: a daemon started with a misspelled interval should say so and not run for days at
+    the wrong cadence.
+
+    The minimum is per variable because zero means different things to different ones.  For
+    the cycle and failure limits it means "no limit" and is allowed; for the interval it would
+    mean no wait at all, which is not a cadence but a spin -- with a trivial ingest that is
+    eighty-odd cycles a second, each one listing both S3 buckets and querying the database.
     '''
 
     value_str = os.getenv(name)
@@ -321,10 +349,12 @@ def get_positive_int_from_env(name,default):
         value = int(value_str)
     except ValueError:
         print(f"*** Error: Env. var. {name} = {value_str} is not an integer; quitting...")
+        print("terminating_exitcode =",exit_code_config)
         exit(exit_code_config)
 
-    if value < 0:
-        print(f"*** Error: Env. var. {name} = {value} is negative; quitting...")
+    if value < minimum:
+        print(f"*** Error: Env. var. {name} = {value} is less than {minimum}; quitting...")
+        print("terminating_exitcode =",exit_code_config)
         exit(exit_code_config)
 
     return value
@@ -360,12 +390,14 @@ if __name__ == '__main__':
 
     if rapid_sw is None:
         print("*** Error: Env. var. RAPID_SW not set; quitting...")
+        print("terminating_exitcode =",exit_code_config)
         exit(exit_code_config)
 
     ingest_script = os.path.join(rapid_sw,ingest_script_relative_path)
 
     if not os.path.exists(ingest_script):
         print(f"*** Error: {ingest_script} does not exist; quitting...")
+        print("terminating_exitcode =",exit_code_no_input)
         exit(exit_code_no_input)
 
 
@@ -383,7 +415,7 @@ if __name__ == '__main__':
 
     # The interval, from the command line if given and from the environment otherwise.
 
-    interval_seconds = get_positive_int_from_env('INGESTL2FILESINTERVAL',300)
+    interval_seconds = get_int_from_env('INGESTL2FILESINTERVAL',300,minimum=1)
 
     if len(sys.argv) > 1:
 
@@ -392,10 +424,12 @@ if __name__ == '__main__':
         except ValueError:
             print(f"*** Error: Interval {sys.argv[1]} is not an integer; quitting...")
             print(f"Usage: python3 {swname} [interval_seconds]")
+            print("terminating_exitcode =",exit_code_config)
             exit(exit_code_config)
 
-        if interval_seconds < 0:
-            print(f"*** Error: Interval {interval_seconds} is negative; quitting...")
+        if interval_seconds < 1:
+            print(f"*** Error: Interval {interval_seconds} is less than 1 second; quitting...")
+            print("terminating_exitcode =",exit_code_config)
             exit(exit_code_config)
 
 
@@ -404,8 +438,11 @@ if __name__ == '__main__':
     # fills the log; a limit turns it into something an operator will notice.  Transient
     # trouble -- the database being restarted, say -- is survived well inside the default.
 
-    max_cycles = get_positive_int_from_env('INGESTL2FILESMAXCYCLES',0)
-    max_failures = get_positive_int_from_env('INGESTL2FILESMAXFAILURES',10)
+    # Zero means "no limit" for both of these, so zero is allowed where it is not for the
+    # interval above.
+
+    max_cycles = get_int_from_env('INGESTL2FILESMAXCYCLES',0,minimum=0)
+    max_failures = get_int_from_env('INGESTL2FILESMAXFAILURES',10,minimum=0)
 
 
     # The interpreter to run the ingest with.  Defaulting to this one means the daemon and the
@@ -442,6 +479,7 @@ if __name__ == '__main__':
     lock_fh,lock_exit_code = acquire_lock(lock_filename)
 
     if lock_fh is None:
+        print("terminating_exitcode =",lock_exit_code)
         exit(lock_exit_code)
 
 
@@ -451,6 +489,8 @@ if __name__ == '__main__':
     n_succeeded = 0
     n_failed = 0
     n_consecutive_failures = 0
+
+    last_ingest_exit_code = None
 
     total_cycle_seconds = 0.0
     max_cycle_seconds = 0.0
@@ -470,9 +510,12 @@ if __name__ == '__main__':
 
         ingest_running = True
 
-        ok,exit_code,killed_by_signal = run_ingest(python_executable,ingest_script)
+        ok,ingest_exit_code,killed_by_signal = run_ingest(python_executable,ingest_script)
 
         ingest_running = False
+
+        if ingest_exit_code is not None and ingest_exit_code != 0:
+            last_ingest_exit_code = ingest_exit_code
 
         cycle_seconds = time.time() - cycle_start_time
 
@@ -489,7 +532,7 @@ if __name__ == '__main__':
             n_consecutive_failures += 1
 
         print(f"{timestamp()} Cycle {n_cycles} finished in {cycle_seconds:.1f} seconds; "
-              f"succeeded = {n_succeeded}, failed = {n_failed}")
+              f"cycles so far: succeeded = {n_succeeded}, failed = {n_failed}")
 
 
         # A child killed by a signal means the signal was aimed at the whole process group,
@@ -502,7 +545,17 @@ if __name__ == '__main__':
             break
 
         if max_failures > 0 and n_consecutive_failures >= max_failures:
-            print(f"*** Error: {n_consecutive_failures} consecutive failed cycles; quitting...")
+
+            # The ingest's own exit code says what kind of failure it kept hitting -- 64 for a
+            # misconfiguration, 67 for the database -- which is the first thing anyone reading
+            # this will want.  The daemon still exits 70 itself, so that what supervises it
+            # sees one code for "gave up" rather than whatever the ingest happened to return.
+
+            print(f"*** Error: {n_consecutive_failures} consecutive failed cycles"
+                  + (f", the last exiting {last_ingest_exit_code}"
+                     if last_ingest_exit_code is not None else "")
+                  + "; quitting...")
+
             stop_reason = "consecutive failures"
             break
 
@@ -530,13 +583,15 @@ if __name__ == '__main__':
 
 
     # Release the lock.  Closing the file drops the flock with it.
+    #
+    # The file itself is deliberately left in place.  flock applies to the inode, not to the
+    # name, so removing it would let a daemon that opened the path just before the removal
+    # keep a lock on an inode with no name, while the next daemon to start creates a fresh
+    # inode and locks that instead -- two daemons, each satisfied it holds the lock, running
+    # against the same buckets.  The file holds one pid and is truncated on reopen, so leaving
+    # it costs nothing.
 
     lock_fh.close()
-
-    try:
-        os.remove(lock_filename)
-    except OSError:
-        pass
 
 
     # Code-timing benchmark.
@@ -563,6 +618,9 @@ if __name__ == '__main__':
     # every other failure here does.
 
     if stop_reason == "consecutive failures":
+        print("terminating_exitcode =",exit_code_ingest_failing)
         exit(exit_code_ingest_failing)
+
+    print("terminating_exitcode =",0)
 
     exit(0)
