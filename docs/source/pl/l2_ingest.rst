@@ -469,6 +469,9 @@ Code     Meaning
          on the next run's work list; they do not make the run a failure.
 64       Bad or missing configuration: a required environment variable is not set.
 66       A required input is not there: the work directory does not exist.
+70       A worker process did not finish, so its whole share of the work list went
+         unattempted.  Where the worker chose its own exit code, that code is reported
+         instead of this one.
 73       A file could not be created: a per-process log.
 67, 69   Passed through from ``rapid_db`` when the database could not be used.
 ======   ===============================================================================
@@ -501,6 +504,15 @@ the next run.
 The database connection and the sky-tessellation database are opened inside each
 child process rather than inherited from the parent, so that no two processes
 can end up sharing one connection.
+
+A worker that does not finish is a different matter, and the run says so.  A
+failed file is deferred -- it has no ``L2Files`` row, so the next run picks it
+up -- but a worker that dies takes its whole share of the work list with it,
+unattempted and unreported.  If that exited 0 the daemon would read it as
+success, and a worker dying on every cycle would never surface.  So the run
+exits 70, or with the worker's own code where it chose one: 67 if it could not
+reach the database, 73 if it could not open its log.  The count of workers that
+did not finish is logged either way, and the timing summary is still printed.
 
 A run stops outright, rather than skipping files, for the two conditions where
 carrying on would do damage: a numeric environment variable that is not a

@@ -119,6 +119,10 @@ Exit codes
      reappear on the next run's work list; they do not make the run a failure.
 64   Bad or missing configuration: a required environment variable is not set.
 66   A required input is not there: the work directory does not exist.
+70   A worker process did not finish, so its whole share of the work list went
+     unattempted.  Unlike a failed file, this has to be reported: the work was
+     not merely deferred, nobody looked at it.  Where the worker chose its own
+     exit code, that code is reported instead of this one.
 73   A file could not be created: a per-process log.
 67, 69
      Passed through from rapid_db when the database could not be used.
@@ -189,6 +193,7 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 exit_code_config = 64             # Bad or missing configuration: a required env. var. is not set.
 exit_code_no_input = 66           # A required input is not there: the work directory does not exist.
 exit_code_database = 67           # The database could not be used, when rapid_db reports no code of its own.
+exit_code_worker_failed = 70      # A worker process did not finish, so part of the work list went undone.
 exit_code_cannot_create = 73      # A file could not be created: the per-process log.
 
 
@@ -2040,8 +2045,19 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
 def execute_parallel_processes(asdf_files_list,num_cores=None,reusable_output_fits_files=None):
 
+    '''
+    Run the work list across num_cores processes, and return the exit code the run should end
+    with: 0 if every worker finished, and otherwise a code describing how they did not.
+
+    A worker that does not finish is a different thing from a file that fails.  A failed file
+    is logged, skipped, and picked up by the next run, and does not make the run a failure.  A
+    worker that dies takes its whole share of the work list with it, unattempted and
+    unreported, and the run has to say so -- otherwise it exits 0, the daemon reads that as
+    success, and a worker dying every time would never surface.
+    '''
+
     if num_cores is None:
-        num_cores = os.cpu_count()
+        num_cores = os.cpu_count() or 1
 
     print("num_cores =",num_cores)
 
@@ -2055,15 +2071,48 @@ def execute_parallel_processes(asdf_files_list,num_cores=None,reusable_output_fi
         # Iterate over completed futures and update progress.
 
         for i, future in enumerate(as_completed(futures)):
-            index = futures.index(future)  # Find the original index/order of the completed future
-            print(f"Completed: {i+1} processes, lastly for index={index}")
+            print(f"Completed: {i+1} of {num_cores} processes")
 
-    for future in futures:
-        index = futures.index(future)
+    n_failed_workers = 0
+
+    worker_exit_code = None
+
+    for index,future in enumerate(futures):
+
         try:
+
             print(future.result())
-        except Exception as e:
-            print(f"*** Error in thread index {index} = {e}")
+
+
+        # BaseException, not Exception: run_single_core_job quits with exit() when it cannot
+        # open its log or reach the database, and that arrives here as SystemExit, which is
+        # not an Exception.  Catching only Exception would let it escape this loop, leaving
+        # the remaining workers unreported and the run's summary unprinted -- and those are
+        # exactly the failures that hit every worker at once.
+
+        except BaseException as e:
+
+            n_failed_workers += 1
+
+            print(f"*** Error in thread index {index} = {type(e).__name__}: {e}")
+
+
+            # A worker that chose its own exit code knew something about why it stopped, so
+            # keep the first such code rather than flattening every failure into one.
+
+            if worker_exit_code is None and isinstance(e,SystemExit):
+                if isinstance(e.code,int) and e.code >= 64:
+                    worker_exit_code = e.code
+
+    if n_failed_workers == 0:
+        return 0
+
+    exit_code = worker_exit_code if worker_exit_code is not None else exit_code_worker_failed
+
+    print(f"*** Error: {n_failed_workers} of {num_cores} worker(s) did not finish, so part of "
+          f"the work list was not attempted; exiting {exit_code}...")
+
+    return exit_code
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -2225,19 +2274,40 @@ if __name__ == '__main__':
     ###############################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(sorted_input_asdf_files,num_cores,reusable_output_fits_files)
+
+        exit_code = execute_parallel_processes(sorted_input_asdf_files,num_cores,
+                                               reusable_output_fits_files)
+
     else:
+
+        # The single-process path reports the same way, so that a run reads the same whether
+        # it used one core or many.
+
+        exit_code = 0
+
         thread_index = 0
-        print(run_single_core_job(sorted_input_asdf_files,thread_index,reusable_output_fits_files))
+
+        try:
+            print(run_single_core_job(sorted_input_asdf_files,thread_index,reusable_output_fits_files))
+        except BaseException as e:
+            print(f"*** Error in thread index {thread_index} = {type(e).__name__}: {e}")
+            if isinstance(e,SystemExit) and isinstance(e.code,int) and e.code >= 64:
+                exit_code = e.code
+            else:
+                exit_code = exit_code_worker_failed
+            print(f"*** Error: The one worker did not finish, so part of the work list was "
+                  f"not attempted; exiting {exit_code}...")
 
 
-    # Code-timing benchmark.
+    # Code-timing benchmark.  Printed whatever happened above, so that a run that lost a
+    # worker still says how long it took and how far it got.
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds to ingest L2 files =",
         end_time_benchmark - start_time_benchmark)
 
 
-    # Termination.
+    # Termination.  A file that individually failed does not come out here -- it was logged,
+    # skipped, and left on the next run's work list.  Only a worker that did not finish does.
 
-    exit(0)
+    exit(exit_code)
