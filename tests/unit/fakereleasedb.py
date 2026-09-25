@@ -99,6 +99,9 @@ class _Cursor:
             self._rows = list(state["schema_migrations"].items())
         elif text.startswith("SELECT to_regclass('releases')"):
             self._rows = [(state["releases_table"],)]
+        elif text.startswith("SELECT tag, state FROM releases WHERE state <> 'complete'"):
+            rows = sorted(state["releases"].values(), key=lambda r: (r["cut_at"], r["tag"]))
+            self._rows = [(r["tag"], r["state"]) for r in rows if r["state"] != "complete"]
         elif text.startswith("SELECT tag, source_revision") and "WHERE tag = %s" in text:
             row = state["releases"].get(params[0])
             self._rows = [self._release_tuple(row)] if row else []

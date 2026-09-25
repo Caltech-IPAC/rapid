@@ -1717,10 +1717,14 @@ def mark_run_deleting(
     explicitly authorised actor), replaces the owner check with the expiry
     predicate re-checked under the lock: not pinned and ``expires_at <
     now()`` (supervisor step 3, 2026-09-24, amendment A6) -- refuses if any attempt is queued or running
-    (disposition IS NULL), or if any
+    (disposition IS NULL), or if any live
     ``unit_inputs``/``dependencies`` row from OUTSIDE the run points at
     one of its instances, then sets state 'deleting' -- all in one
-    transaction (runs page, "Deletion").
+    transaction (runs page, "Deletion"). Live means a ``unit_inputs`` row
+    whose unit's run is not 'deleted', and a ``dependencies`` edge whose
+    consumer instance is not 'deleted' (supervisor step 9, 2026-09-25,
+    R3): a deleted consumer's tombstones stay as history and stop
+    blocking.
 
     A ``lost`` attempt does not block deletion (supervisor step 6,
     2026-09-24, R10): it is a recorded resolution, never "still running"
@@ -1772,15 +1776,20 @@ def mark_run_deleting(
                 f"run {run_id!r} has {unresolved} unresolved (queued or running) attempt(s) "
                 "with no recorded disposition; refusing")
 
-        # Any unit_inputs or dependencies row from OUTSIDE this run
-        # pointing at one of its instances.
+        # Any LIVE unit_inputs or dependencies row from OUTSIDE this run
+        # pointing at one of its instances (supervisor step 9,
+        # 2026-09-25, R3): a binding whose unit's run is 'deleted', or an
+        # edge whose consumer instance is 'deleted', is a tombstone kept
+        # as history and never blocks its producer's deletion.
         cur.execute(
             """
             SELECT count(*)
             FROM unit_inputs ui
             JOIN product_instances pi ON pi.id = ui.producer_instance
             JOIN units u ON u.id = ui.unit
+            JOIN runs consumer_run ON consumer_run.id = u.run
             WHERE pi.run = %s AND u.run != %s
+              AND consumer_run.state <> 'deleted'
             """,
             (run_id, run_id),
         )
@@ -1797,6 +1806,7 @@ def mark_run_deleting(
             JOIN product_instances producer ON producer.id = d.producer_instance
             JOIN product_instances consumer ON consumer.id = d.consumer_instance
             WHERE producer.run = %s AND consumer.run != %s
+              AND consumer.deletion_state <> 'deleted'
             """,
             (run_id, run_id),
         )

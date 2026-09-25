@@ -81,6 +81,7 @@ from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_i
 from rapidpipe.products.storage import fetch_object, parse_location
 from rapidpipe.cli import checkctl, loopctl, runctl, stagectl
 from rapidpipe.release import __main__ as release_cli
+from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
 from rapidpipe.selftest import run as run_selftest
@@ -895,6 +896,10 @@ def _run_local_command(args: argparse.Namespace) -> int:
                 settings=args.settings,
                 python=args.python,
             )
+        except InputsRefused as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run local: {exc}\n")
+            return int(ExitCode.INPUT_REJECTED)
         except RunModelError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run local: {exc}\n")
@@ -993,6 +998,10 @@ def _run_submit_command(args: argparse.Namespace) -> int:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")
             return int(ExitCode.USAGE)
+        except InputsRefused as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run submit: {exc}\n")
+            return int(ExitCode.INPUT_REJECTED)
         except MissingEnvironmentVariable as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")

@@ -59,6 +59,7 @@ from typing import Any, Iterable, Sequence
 
 from rapidpipe.products.manifest import Manifest, ManifestError
 from rapidpipe.products.storage import fetch_object, join, parse_location
+from rapidpipe.runs import inputs as run_inputs
 from rapidpipe.runs.local import disposition_for
 from rapidpipe.runs.repository import (
     RunNotFound,
@@ -325,6 +326,7 @@ def submit_unit(
     outputs_root: str | None = None,
     job_definition: str | None = None,
     client: Any = None,
+    s3_client: Any = None,
 ) -> BatchSubmission:
     """Allocate an attempt and submit it to Batch as one job.
 
@@ -350,6 +352,16 @@ def submit_unit(
     allocation's own transaction (supervisor step 6, 2026-09-24, R7). Commits
     after each repository call, as
     :func:`rapidpipe.runs.local.run_stage_locally` does.
+
+    Before anything is written, the input-set manifest at
+    ``inputs_location`` is read (through ``s3_client``, default
+    ``rapidpipe.products.storage.s3_client``); an absent or unreadable one
+    raises :class:`rapidpipe.runs.inputs.InputsRefused` and nothing is
+    submitted. After ``add_unit`` and before ``allocate_attempt``, every
+    instance it names that is a registered product instance is bound in
+    ``unit_inputs`` (:func:`rapidpipe.runs.inputs.bind_registered_inputs`,
+    idempotent, so a retry rebinds nothing new) and committed with the
+    unit (supervisor step 9, 2026-09-25, R4).
     """
     released = _release_job_definition(conn, run_id)
     if released is not None:
@@ -371,7 +383,11 @@ def submit_unit(
     if released is not None:
         _require_active(batch, released[0], job_definition)
 
+    # R4: read first, so a refusal leaves no unit and no attempt behind.
+    input_names = run_inputs.read_input_instances(inputs_location, s3_client=s3_client)
+
     add_unit(conn, run_id, stage, unit_kind, unit_id)
+    run_inputs.bind_registered_inputs(conn, run_id, stage, unit_id, input_names)
     conn.commit()
 
     attempt_id = allocate_attempt(conn, run_id, stage, unit_id, outputs_root=outputs_root)

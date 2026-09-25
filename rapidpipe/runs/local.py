@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from rapidpipe.products.manifest import Manifest, ManifestError
+from rapidpipe.runs import inputs as run_inputs
 from rapidpipe.runs.repository import (
     add_unit,
     allocate_attempt,
@@ -170,7 +171,11 @@ def run_stage_locally(
     recorded without also being selected:
 
     1. :func:`~rapidpipe.runs.repository.add_unit` -- a no-op if the unit
-       already exists (its own ``ON CONFLICT DO NOTHING``).
+       already exists (its own ``ON CONFLICT DO NOTHING``) -- after the
+       input-set manifest at ``inputs`` is read (absent or unreadable:
+       :class:`rapidpipe.runs.inputs.InputsRefused`, nothing written), and
+       with its registered instances bound in ``unit_inputs`` in the same
+       commit (supervisor step 9, 2026-09-25, R4).
     2. :func:`~rapidpipe.runs.repository.allocate_attempt` -- enforces the
        run fence and the attempt allowance; its exceptions propagate
        uncommitted (the caller's transaction, if any wraps this call, sees
@@ -200,7 +205,13 @@ def run_stage_locally(
     subprocess runs. Never swallows a subprocess launch failure (e.g. the
     interpreter not found): that propagates as an ``OSError``.
     """
+    # R4 (supervisor step 9, 2026-09-25): read the input-set manifest
+    # before anything is written (an absent or unreadable one raises
+    # InputsRefused), then bind its registered instances with the unit.
+    input_names = run_inputs.read_input_instances(str(inputs))
+
     add_unit(conn, run_id, stage, unit_kind, unit_id)
+    run_inputs.bind_registered_inputs(conn, run_id, stage, unit_id, input_names)
     conn.commit()
 
     attempt_id = allocate_attempt(conn, run_id, stage, unit_id, outputs_root=str(outputs_root))

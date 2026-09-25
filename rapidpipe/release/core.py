@@ -269,6 +269,26 @@ def _releases_table_exists(conn) -> bool:
         return bool(cur.fetchone()[0])
 
 
+def _refuse_unfinished(conn, resume: str | None) -> None:
+    """Concurrent cuts are serialised by the record (supervisor step 9,
+    2026-09-25, R8): refuse to start -- before any tag -- while a
+    ``releases`` row is in a state other than 'complete', unless
+    ``resume`` names that row. Raises :class:`ReleaseRefused` (exit 1)
+    naming each such row's tag and state."""
+    if not _releases_table_exists(conn):
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT tag, state FROM releases WHERE state <> 'complete' ORDER BY cut_at, tag")
+        unfinished = [(tag, state) for tag, state in cur.fetchall() if tag != resume]
+    if unfinished:
+        rows = ", ".join(f"{tag} (state {state!r})" for tag, state in unfinished)
+        first = unfinished[0][0]
+        raise ReleaseRefused(
+            f"release {rows} is not complete; finish it with "
+            f"'rapidpipe release cut --resume {first}' before starting another cut")
+
+
 def _fetch_release(conn, tag: str) -> Release | None:
     with conn.cursor() as cur:
         cur.execute(f"SELECT {_RELEASE_COLUMNS} FROM releases WHERE tag = %s", (tag,))
@@ -395,6 +415,8 @@ def cut(
                                                check=False).returncode != 0:
         raise ReleaseUsage(f"--repo {repo} is not a git checkout")
     _require_clean(repo)
+    if conn is not None:
+        _refuse_unfinished(conn, resume)
 
     if resume is not None:
         return _cut_resume(conn, repo=repo, ref=ref, tag=resume, hooks_dir=hooks_dir,
