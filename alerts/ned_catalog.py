@@ -403,27 +403,45 @@ def mirror(base_url: str, dest: str, jobs: int = 4) -> dict[str, int]:
     manifest's md5 are skipped, so a rerun finishes an interrupted mirror
     and a new release replaces only what changed.
     """
+    import threading
     import requests
     base_url = base_url.rstrip("/") + "/"
     store = Store(dest)
-    session = requests.Session()
-    for name in COLLECTION_FILES:                  # small; always refreshed
-        mirror_file(base_url, store, name, session=session)
-    md5s = parse_md5sums(store.read_text(f"{HATS_SUBDIR}/md5sums.txt"))
-    counts = {"skipped": 0, "mirrored": 0, "failed": 0}
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = {pool.submit(mirror_file, base_url, store, rel, md5,
-                               requests.Session()): rel
-                   for rel, md5 in md5s.items()}
-        for i, fut in enumerate(as_completed(futures), start=1):
-            rel = futures[fut]
-            try:
-                counts[fut.result()] += 1
-            except Exception as exc:
-                counts["failed"] += 1
-                logger.error("%s: %s", rel, exc)
-            if i % 10 == 0 or i == len(futures):
-                logger.info("mirror: %d/%d files %s", i, len(futures), counts)
+    # one HTTP session per worker thread, all closed at the end (a session
+    # per file leaked sockets: ResourceWarning in the tests)
+    local = threading.local()
+    sessions: list[Any] = []
+    lock = threading.Lock()
+
+    def session_for_thread() -> Any:
+        if not hasattr(local, "session"):
+            local.session = requests.Session()
+            with lock:
+                sessions.append(local.session)
+        return local.session
+
+    def one(rel: str, md5: str) -> str:
+        return mirror_file(base_url, store, rel, md5, session=session_for_thread())
+
+    try:
+        for name in COLLECTION_FILES:              # small; always refreshed
+            mirror_file(base_url, store, name, session=session_for_thread())
+        md5s = parse_md5sums(store.read_text(f"{HATS_SUBDIR}/md5sums.txt"))
+        counts = {"skipped": 0, "mirrored": 0, "failed": 0}
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futures = {pool.submit(one, rel, md5): rel for rel, md5 in md5s.items()}
+            for i, fut in enumerate(as_completed(futures), start=1):
+                rel = futures[fut]
+                try:
+                    counts[fut.result()] += 1
+                except Exception as exc:
+                    counts["failed"] += 1
+                    logger.error("%s: %s", rel, exc)
+                if i % 10 == 0 or i == len(futures):
+                    logger.info("mirror: %d/%d files %s", i, len(futures), counts)
+    finally:
+        for s in sessions:
+            s.close()
     return counts
 
 

@@ -794,18 +794,102 @@ def _ref_match_from_row(columns: dict[str, np.ndarray], row: int,
     )
 
 
+def _nearest_within(src: Any, coords: Any, radius_arcsec: float,
+                    n_max: int) -> list[tuple[int, int, float, float]]:
+    """The nearest `n_max` catalog rows within `radius_arcsec` of each source.
+
+    Shared by match_refcat() and match_nedcat(). One KD-tree query on
+    unit vectors for the ``n_max`` nearest rows per source with a chord
+    distance bound, then separation and position angle (astropy, on the
+    hits only) and the same ``sep <= radius`` mask as before.
+
+    This replaced a loop over ``match_to_catalog_sky(nthneighbor=n)`` on
+    2026-09-23. That call is the same KD-tree query keeping only rank n,
+    and when catalog rows share a position the ranks tie, so it returned
+    the SAME row for every rank (3C 273's 16 absorption-line rows came
+    back as one row three times; ~0.1% of rows in that pixel, none in
+    others). One query for k rows returns k distinct rows. Measured on a
+    chip's 20k detections vs 300-200k catalog rows: 1.3-3.7x faster than
+    the loop, identical indices wherever positions are not tied.
+
+    Parameters
+    ----------
+    src, coords : astropy.coordinates.SkyCoord
+        Detection positions (1-D) and catalog positions (1-D, non-empty).
+    radius_arcsec : float
+        Maximum separation to report.
+    n_max : int
+        Rows kept per source.
+
+    Returns
+    -------
+    list of (source index, catalog index, sep [arcsec], pa [deg E of N])
+        Grouped by source in input order, nearest first; ties in
+        separation are broken by catalog index, so the order is
+        deterministic.
+    """
+    from scipy.spatial import cKDTree
+
+    n_src, n_cat = len(src), len(coords)
+    if n_src == 0 or n_cat == 0 or n_max <= 0:
+        return []
+    k = min(n_max, n_cat)
+    # plain arrays from here on: indexing SkyCoord objects per hit pair
+    # cost more than the whole old loop (measured 2026-09-23)
+    src_ra, src_dec = np.radians(src.ra.deg), np.radians(src.dec.deg)
+    cat_ra, cat_dec = np.radians(coords.ra.deg), np.radians(coords.dec.deg)
+    cat_xyz = _unit_vectors(cat_ra, cat_dec)
+    src_xyz = _unit_vectors(src_ra, src_dec)
+    chord = 2.0 * np.sin(np.radians(radius_arcsec / 3600.0) / 2.0)
+    dist, idx = cKDTree(cat_xyz).query(src_xyz, k=k,
+                                       distance_upper_bound=chord * (1.0 + 1e-9))
+    dist = np.asarray(dist).reshape(n_src, k)
+    idx = np.asarray(idx).reshape(n_src, k)
+    ii, jj = np.nonzero(np.isfinite(dist))                  # misses are inf
+    if ii.size == 0:
+        return []
+    cat_idx = idx[ii, jj]
+    sep, pa = _sep_pa(src_ra[ii], src_dec[ii], cat_ra[cat_idx], cat_dec[cat_idx])
+    keep = sep <= radius_arcsec                             # exact angular test
+    ii, cat_idx, sep, pa = ii[keep], cat_idx[keep], sep[keep], pa[keep]
+    order = np.lexsort((cat_idx, sep, ii))
+    return [(int(ii[o]), int(cat_idx[o]), float(sep[o]), float(pa[o]))
+            for o in order]
+
+
+def _unit_vectors(ra_rad: np.ndarray, dec_rad: np.ndarray) -> np.ndarray:
+    """(N, 3) unit vectors for positions in radians."""
+    cos_dec = np.cos(dec_rad)
+    return np.column_stack((cos_dec * np.cos(ra_rad), cos_dec * np.sin(ra_rad),
+                            np.sin(dec_rad)))
+
+
+def _sep_pa(ra1: np.ndarray, dec1: np.ndarray, ra2: np.ndarray,
+            dec2: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Separation [arcsec] and position angle [deg, E of N] from 1 to 2,
+    all in radians in; the Vincenty and position-angle formulas astropy's
+    ``separation`` / ``position_angle`` use, so results agree to rounding."""
+    dra = ra2 - ra1
+    sin_dra, cos_dra = np.sin(dra), np.cos(dra)
+    sin_d1, cos_d1 = np.sin(dec1), np.cos(dec1)
+    sin_d2, cos_d2 = np.sin(dec2), np.cos(dec2)
+    num1 = cos_d2 * sin_dra
+    num2 = cos_d1 * sin_d2 - sin_d1 * cos_d2 * cos_dra
+    den = sin_d1 * sin_d2 + cos_d1 * cos_d2 * cos_dra
+    sep = np.degrees(np.arctan2(np.hypot(num1, num2), den)) * 3600.0
+    pa = np.degrees(np.arctan2(num1, num2)) % 360.0
+    return sep, pa
+
+
 def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
                  radius_arcsec: float = REF_MATCH_RADIUS_ARCSEC,
                  n_max: int = REF_MATCH_NMAX,
                  ) -> list[tuple[list[RefMatch], list[RefMatch]]]:
     """Match detection positions against a reference catalog.
 
-    One vectorized pass for any number of detections: per class the
-    nth-nearest catalog neighbor of every detection is queried for
-    n = 1..n_max (astropy reuses the KD-tree cached on the class
-    SkyCoord), then matches beyond `radius_arcsec` are dropped --
-    nthneighbor always returns something, so the radius is a mask on the
-    result, not a query parameter. This is also why the per-class match
+    One vectorized pass for any number of detections: per class, one
+    KD-tree query for the n_max nearest catalog rows of every detection
+    within `radius_arcsec` (see _nearest_within). The per-class match
     count doubles as a crowding diagnostic: len == n_max means the
     neighborhood may extend beyond what is reported.
 
@@ -840,18 +924,11 @@ def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
         if coords is None:
             continue  # class has no catalog rows
         subset_to_row = catalog.rows[cls]
-        # ascending nthneighbor keeps each result list nearest-first
-        for n in range(1, min(n_max, len(subset_to_row)) + 1):
-            idx, sep2d, _ = src.match_to_catalog_sky(coords, nthneighbor=n)
-            pa = src.position_angle(coords[idx])
-            idx = np.atleast_1d(idx)
-            sep_arcsec = np.atleast_1d(sep2d.arcsec)
-            pa_deg = np.atleast_1d(pa.deg) % 360.0
-            for i in np.flatnonzero(sep_arcsec <= radius_arcsec):
-                row = int(subset_to_row[idx[i]])
-                results[i][slot].append(_ref_match_from_row(
-                    catalog.columns, row,
-                    float(sep_arcsec[i]), float(pa_deg[i])))
+        # nearest-first, distinct rows even at tied positions
+        for i, sub_idx, sep_arcsec, pa_deg in _nearest_within(
+                src, coords, radius_arcsec, n_max):
+            results[i][slot].append(_ref_match_from_row(
+                catalog.columns, int(subset_to_row[sub_idx]), sep_arcsec, pa_deg))
     return results
 
 
@@ -1202,12 +1279,10 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
     """Match detection positions against a NED slice.
 
     Same vectorized nearest-N strategy as match_refcat(), with one tree
-    instead of a star/galaxy pair: the nth-nearest candidate host of every
-    detection is queried for n = 1..n_max, then matches beyond
-    `radius_arcsec` are dropped -- nthneighbor always returns something, so
-    the radius is a mask on the result, not a query parameter. A result of
-    length n_max therefore means the neighborhood may extend beyond what is
-    reported.
+    instead of a star/galaxy pair: one KD-tree query for the n_max nearest
+    candidate hosts of every detection within `radius_arcsec` (see
+    _nearest_within). A result of length n_max means the neighborhood may
+    extend beyond what is reported.
 
     Parameters
     ----------
@@ -1239,18 +1314,11 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
         return results  # no candidate hosts in this slice
 
     src = SkyCoord(ra * u.deg, dec * u.deg)
-    n_rows = len(catalog.columns["prefname"])
-    # ascending nthneighbor keeps each result list nearest-first
-    for n in range(1, min(n_max, n_rows) + 1):
-        idx, sep2d, _ = src.match_to_catalog_sky(coords, nthneighbor=n)
-        pa = src.position_angle(coords[idx])
-        idx = np.atleast_1d(idx)
-        sep_arcsec = np.atleast_1d(sep2d.arcsec)
-        pa_deg = np.atleast_1d(pa.deg) % 360.0
-        for i in np.flatnonzero(sep_arcsec <= radius_arcsec):
-            results[i].append(_ned_match_from_row(
-                catalog.columns, int(idx[i]),
-                float(sep_arcsec[i]), float(pa_deg[i])))
+    # nearest-first, distinct rows even at tied positions
+    for i, cat_idx, sep_arcsec, pa_deg in _nearest_within(src, coords,
+                                                          radius_arcsec, n_max):
+        results[i].append(_ned_match_from_row(catalog.columns, cat_idx,
+                                              sep_arcsec, pa_deg))
     return results
 
 

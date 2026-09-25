@@ -133,6 +133,23 @@ def test_selection_ordering_and_radius(tmp_path):
     assert stars[0].pa == pytest.approx(90.0, abs=0.1)   # due East
 
 
+def test_coincident_rows_are_distinct_matches(tmp_path):
+    """Rows at the same coordinates must come back as distinct matches;
+    the nth-neighbour loop this replaced returned one row per rank."""
+    ra0, dec0 = 150.0, -20.0
+    cat = make_refcat(tmp_path, [
+        {"ra": ra0, "dec": dec0, "class_star": GALAXY, "mag": 21.0},
+        {"ra": ra0, "dec": dec0, "class_star": GALAXY, "mag": 22.0},
+        {"ra": ra0, "dec": dec0, "class_star": GALAXY, "mag": 23.0},
+        {"ra": ra0 + ra_offset(dec0, 3.0), "dec": dec0, "class_star": GALAXY, "mag": 24.0},
+    ])
+    (_, galaxies), = match_refcat(ra0, dec0, cat, n_max=3)
+    assert sorted(m.mag_auto for m in galaxies) == [21.0, 22.0, 23.0]
+    assert all(m.sep == pytest.approx(0.0, abs=1e-6) for m in galaxies)
+    (_, galaxies), = match_refcat(ra0, dec0, cat, n_max=4)
+    assert [m.mag_auto for m in galaxies] == [21.0, 22.0, 23.0, 24.0]
+
+
 def test_index_mapping_with_interleaved_classes(tmp_path):
     """KD-tree indices are subset positions; the matched rows must carry
     the *original* catalog row's photometry. Interleave classes so a

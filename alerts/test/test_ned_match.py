@@ -136,6 +136,103 @@ def test_build_nedcat_nothing_selected_gives_none_coords():
 
 
 # ---------------------------------------------------------------------------
+# Tied positions: rows at the same coordinates must come back as distinct
+# matches. The nth-neighbour loop this replaced returned one row for every
+# rank (3C 273's absorption-line systems, live 2026-09-23).
+# ---------------------------------------------------------------------------
+
+def test_coincident_rows_are_distinct_matches():
+    ra0, dec0 = 10.0, 20.0
+    cat = make_nedcat([
+        {"ra": ra0, "dec": dec0, "prefname": "ABS-1", "ptype": "AbLS", "z": 0.1},
+        {"ra": ra0, "dec": dec0, "prefname": "ABS-2", "ptype": "AbLS", "z": 0.2},
+        {"ra": ra0, "dec": dec0, "prefname": "ABS-3", "ptype": "AbLS", "z": 0.3},
+        {"ra": ra0 + ra_offset(dec0, 3.0), "dec": dec0, "prefname": "NEAR", "ptype": "G"},
+    ])
+    [matches] = match_nedcat(ra0, dec0, cat, n_max=3)
+    assert [m.prefname for m in matches] == ["ABS-1", "ABS-2", "ABS-3"]   # distinct, index order
+    assert all(m.sep == pytest.approx(0.0, abs=1e-6) for m in matches)
+    [matches] = match_nedcat(ra0, dec0, cat, n_max=4)
+    assert [m.prefname for m in matches] == ["ABS-1", "ABS-2", "ABS-3", "NEAR"]
+    assert matches[-1].sep == pytest.approx(3.0, abs=0.01)
+
+
+def test_matcher_agrees_with_nth_neighbour_loop_when_untied():
+    # property check against the algorithm this replaced: identical
+    # matches (indices, order, sep, pa) on random inputs without ties
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+    rng = np.random.default_rng(3)
+    ra0, dec0 = 210.0, -35.0
+    ncat, nsrc = 400, 120
+    cat_ra = ra0 + rng.uniform(-60, 60, ncat) / 3600 / np.cos(np.radians(dec0))
+    cat_dec = dec0 + rng.uniform(-60, 60, ncat) / 3600
+    cat = make_nedcat([{"ra": r, "dec": d, "prefname": f"C{i}", "ptype": "G"}
+                       for i, (r, d) in enumerate(zip(cat_ra, cat_dec))])
+    src_ra = ra0 + rng.uniform(-60, 60, nsrc) / 3600 / np.cos(np.radians(dec0))
+    src_dec = dec0 + rng.uniform(-60, 60, nsrc) / 3600
+    got = match_nedcat(src_ra, src_dec, cat, radius_arcsec=12.0, n_max=3)
+
+    src = SkyCoord(src_ra * u.deg, src_dec * u.deg)
+    want = [[] for _ in range(nsrc)]
+    for n in (1, 2, 3):                        # the old loop
+        idx, sep2d, _ = src.match_to_catalog_sky(cat.coords, nthneighbor=n)
+        pa = src.position_angle(cat.coords[idx]).deg % 360.0
+        for i in np.flatnonzero(sep2d.arcsec <= 12.0):
+            want[i].append((cat.columns["prefname"][idx[i]], sep2d.arcsec[i], pa[i]))
+    assert sum(len(w) for w in want) > 100     # a meaningful comparison
+    for g, w in zip(got, want):
+        assert [m.prefname for m in g] == [name for name, _, _ in w]
+        assert [m.sep for m in g] == pytest.approx([s for _, s, _ in w], abs=1e-6)
+        assert [m.pa for m in g] == pytest.approx([p for _, _, p in w], abs=1e-6)
+
+
+def test_sep_pa_matches_astropy_everywhere():
+    # the matcher's numpy separation / position angle against astropy's
+    # SkyCoord, over the whole sphere and the regimes that bite: tiny
+    # offsets at all declinations, the poles, the RA 0/360 seam
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+    from alerts.providers import _sep_pa
+    rng = np.random.default_rng(42)
+    n = 20000
+
+    def check(ra1, dec1, ra2, dec2, sep_tol, pa_tol):
+        a = SkyCoord(ra1 * u.deg, dec1 * u.deg)
+        b = SkyCoord(ra2 * u.deg, dec2 * u.deg)
+        want_sep = a.separation(b).arcsec
+        want_pa = a.position_angle(b).deg % 360.0
+        sep, pa = _sep_pa(np.radians(ra1), np.radians(dec1),
+                          np.radians(ra2), np.radians(dec2))
+        assert np.max(np.abs(sep - want_sep)) < sep_tol
+        dpa = np.abs((pa - want_pa + 180.0) % 360.0 - 180.0)   # wrap-aware
+        assert np.max(np.where(want_sep < 1e-6, 0.0, dpa)) < pa_tol
+
+    ra1 = rng.uniform(0, 360, n)
+    dec1 = np.degrees(np.arcsin(rng.uniform(-1, 1, n)))
+    check(ra1, dec1, rng.uniform(0, 360, n),
+          np.degrees(np.arcsin(rng.uniform(-1, 1, n))), 1e-8, 1e-9)   # whole sphere
+    sep = 10 ** rng.uniform(-3, np.log10(60), n) / 3600                 # 0.001"-60"
+    theta = rng.uniform(0, 2 * np.pi, n)
+    dec2 = np.clip(dec1 + sep * np.cos(theta), -89.999, 89.999)
+    ra2 = (ra1 + sep * np.sin(theta) / np.cos(np.radians(dec2))) % 360
+    check(ra1, dec1, ra2, dec2, 1e-8, 1e-4)                             # PA ill-conditioned at 1 mas
+    decp = rng.uniform(88, 89.999, n)
+    check(ra1, decp, rng.uniform(0, 360, n), np.clip(decp + rng.uniform(-.01, .01, n), -90, 89.9999), 1e-8, 1e-9)
+    check(ra1, -decp, rng.uniform(0, 360, n), -np.clip(decp + rng.uniform(-.01, .01, n), -90, 89.9999), 1e-8, 1e-9)
+    decw = rng.uniform(-80, 80, n)
+    check(rng.uniform(359.99, 360, n), decw, rng.uniform(0, 0.01, n),
+          decw + rng.uniform(-.01, .01, n), 1e-8, 1e-6)                # RA seam
+    # cardinal directions at the equator: exact quadrant PAs
+    z = np.zeros(4)
+    sep, pa = _sep_pa(np.radians(z), np.radians(z),
+                      np.radians(np.array([0, 1 / 3600, 0, 360 - 1 / 3600])),
+                      np.radians(np.array([1 / 3600, 0, -1 / 3600, 0])))
+    assert pa == pytest.approx([0.0, 90.0, 180.0, 270.0], abs=1e-9)
+    assert sep == pytest.approx([1.0] * 4, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
 # Geometry: sep/pa against the KONA matcher's independent implementation
 # ---------------------------------------------------------------------------
 
@@ -575,7 +672,7 @@ def test_hp6_cone_crossing_pixel_edges_sees_every_neighbour(tmp_path):
     # and objects 3" away in each of them must all come back
     pix = int(hp.ang2pix(HP6_NSIDE, 40.0, 10.0, nest=True, lonlat=True))
     corner = hp.boundaries(HP6_NSIDE, pix, step=1, nest=True)[:, 0]
-    ra0, dec0 = (float(v) for v in hp.vec2ang(corner, lonlat=True))
+    ra0, dec0 = (float(np.asarray(v).item()) for v in hp.vec2ang(corner, lonlat=True))
     objs = [{"ra": ra0 + ra_offset(dec0, dra), "dec": dec0 + ddec / 3600,
              "prefname": f"N{i}", "ptype": "G"}
             for i, (dra, ddec) in enumerate([(3, 0), (-3, 0), (0, 3), (0, -3)])]
