@@ -181,7 +181,10 @@ def _body(context: StageContext) -> StageResult:
                             conn,
                             entry=entry.to_dict(),
                             run_id=manifest.run,
-                            attempt_id=context.attempt_id,
+                            # The producing attempt: refimages.attempt
+                            # names the attempt that made the product
+                            # (20260923-02; supervisor amendment, step 8).
+                            attempt_id=manifest.attempt,
                             output_location=context.inputs_location,
                         )
                         products_read["reference-image"] = entry.instance

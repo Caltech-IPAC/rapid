@@ -18,6 +18,7 @@ from rapidpipe.products.refimage import (
     ReferenceCatalogRegistration,
     ReferenceImageRegistration,
     ReferenceRegistrationError,
+    rapid_filter_name,
     validate_reference_catalog_entry,
     validate_reference_image_entry,
 )
@@ -40,7 +41,7 @@ def reference_image_registration(*, constituents=None, field=4711398, filter_="W
         "npixnan": 12, "clmean": 0.004, "clstddev": 0.03, "clnoutliers": 118,
         "gmedian": 0.003, "datascale": 0.028, "gmin": -0.4, "gmax": 812.0,
         "fwhmmedpix": 1.9, "fwhmminpix": 1.2, "fwhmmaxpix": 7.5,
-        "nsexcatsources": 5321, "npucatsources": npucatsources,
+        "nsxcatsources": 5321, "npucatsources": npucatsources,
         "settings_hash": "sha256:" + "5" * 64,
     }
 
@@ -100,6 +101,17 @@ def test_a_valid_reference_image_entry_returns_its_block():
     assert ReferenceImageRegistration.from_dict(registration.to_dict()) == registration
 
 
+def test_filter_spellings_normalise_to_the_rapid_name():
+    assert rapid_filter_name("F146") == "W146"
+    assert rapid_filter_name(" w146 ") == "W146"
+    assert rapid_filter_name("F184") == "F184"
+    assert rapid_filter_name("F999") == "F999"
+    # The key and the block may spell the filter differently.
+    entry = reference_image_entry(filter_="W146")
+    entry["key"]["filter"] = "F146"
+    assert validate_reference_image_entry(entry).filter == "W146"
+
+
 def test_npucatsources_may_be_a_count():
     assert validate_reference_image_entry(
         reference_image_entry(npucatsources=4000)).npucatsources == 4000
@@ -146,7 +158,8 @@ def _mutated(mutate):
     (lambda e: e["registration"].update(gmax="big"), "gmax must be a finite number"),
     (lambda e: e["registration"].update(fwhmmedpix=float("inf")), "fwhmmedpix must be a finite"),
     (lambda e: e["registration"].update(npixnan=1.5), "npixnan must be a non-negative integer"),
-    (lambda e: e["registration"].update(nsexcatsources=-1), "nsexcatsources must be"),
+    (lambda e: e["registration"].update(nsxcatsources=-1), "nsxcatsources must be"),
+    (lambda e: e["registration"].update(nsexcatsources=1), "unknown fields"),
     (lambda e: e["registration"].update(npucatsources=-1), "npucatsources must be"),
     (lambda e: e["registration"].update(mjdobs_min=61680.0), "is after mjdobs_max"),
     (lambda e: e["registration"].update(jd_end=2461679.0), "is after jd_end"),

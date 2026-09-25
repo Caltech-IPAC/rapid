@@ -20,7 +20,6 @@ import json
 import pytest
 
 from rapidpipe.db.ids import new_ulid
-from rapidpipe.db.refimages import NPUCATSOURCES_WHEN_ABSENT
 from rapidpipe.products.manifest import Manifest, register_unit_id
 from rapidpipe.runs import cleanup
 from rapidpipe.runs import repository as repo
@@ -129,8 +128,11 @@ def test_register_writes_refimages_refimmeta_refimimages_refimcatalogs(
         assert (ref["vbest"], ref["status"], ref["infobits"]) == (0, 1, 0)
         assert ref["checksum"] == block["md5"]
         assert ref["filename"] == f"{outputs}/ref/awaicgen_output_mosaic_image.fits"
+        # attempt is the PRODUCING (reference) attempt, not register's.
+        producing_attempt = Manifest.read(outputs / "manifest.json").attempt
+        assert producing_attempt != registering_attempt
         assert (ref["run"], ref["attempt"], ref["instance"]) == (
-            run_id, registering_attempt, reference)
+            run_id, producing_attempt, reference)
         cur.execute("SELECT max(svid) FROM swversions")
         assert ref["svid"] == cur.fetchone()[0]   # addRefImage: the latest swversions row
 
@@ -144,8 +146,8 @@ def test_register_writes_refimages_refimmeta_refimimages_refimcatalogs(
                      "fwhmmaxpix"):
             assert meta[name] == pytest.approx(block[name], rel=1e-6), name
         assert (meta["npixnan"], meta["clnoutliers"]) == (block["npixnan"], block["clnoutliers"])
-        assert meta["nsxcatsources"] == block["nsexcatsources"]
-        assert meta["npucatsources"] == NPUCATSOURCES_WHEN_ABSENT
+        assert meta["nsxcatsources"] == block["nsxcatsources"]
+        assert meta["npucatsources"] is None   # no Photutils catalog: null, never 0
 
         cur.execute(
             "SELECT l.instance FROM refimimages r JOIN l2files l ON l.rid = r.rid "
@@ -201,14 +203,22 @@ def test_replay_writes_nothing_new(conn, tmp_path, monkeypatch):
     assert _register(conn, monkeypatch, outputs, run_id, tmp_path, "r1")[0] == 0
     with conn.cursor() as cur:
         rfid = _refimages_row(cur, reference)["rfid"]
+
+    def ctids():
+        # An UPDATE writes a new tuple version, so an unchanged ctid means
+        # the row was not rewritten (registerRefImCatalog/-Meta upsert).
+        with conn.cursor() as cur:
+            found = {}
+            for table in ("refimages", "refimmeta", "refimcatalogs", "refimimages"):
+                cur.execute(f"SELECT array_agg(ctid::text ORDER BY ctid) FROM {table} "
+                            "WHERE rfid = %s", (rfid,))
+                found[table] = cur.fetchone()[0]
+            return found
+
+    before = ctids()
     # A second attempt of the same register unit (a retry replaying the manifest).
-    manifest = Manifest.read(outputs / "manifest.json")
-    attempt = repo.allocate_attempt(conn, run_id, "register", register_unit_id(manifest))
-    import rapidpipe.stages.register as register_module
-    from .test_register_l2 import _register_argv
-    assert register_module.main(_register_argv(
-        outputs, tmp_path / "r2", run_id=run_id, unit_id=register_unit_id(manifest),
-        attempt_id=attempt)) == 0
+    assert _replay_as_new_attempt(conn, outputs, run_id, tmp_path, "r2") == 0
+    assert ctids() == before
     with conn.cursor() as cur:
         for table in ("refimages", "refimmeta", "refimcatalogs"):
             cur.execute(f"SELECT count(*) FROM {table} WHERE rfid = %s", (rfid,))
@@ -233,8 +243,49 @@ def test_a_constituent_without_an_l2files_row_exits_65(conn, tmp_path, monkeypat
 def test_an_unknown_filter_exits_65(conn, tmp_path, monkeypatch):
     constituents, _ = _admitted_l2s(conn, tmp_path, monkeypatch, n=1)
     run_id, outputs, reference, _ = _reference_manifest(
-        conn, tmp_path, "f", constituents, "F146")   # the filters table says W146
+        conn, tmp_path, "f", constituents, "F999")
     assert _register(conn, monkeypatch, outputs, run_id, tmp_path, "f")[0] == int(
+        ExitCode.INPUT_REJECTED)
+
+
+def test_the_roman_filter_spelling_finds_the_rapid_row(conn, tmp_path, monkeypatch):
+    constituents, _ = _admitted_l2s(conn, tmp_path, monkeypatch, n=1)
+    run_id, outputs, reference, _ = _reference_manifest(
+        conn, tmp_path, "w", constituents, "F146")   # the filters table says W146
+    assert _register(conn, monkeypatch, outputs, run_id, tmp_path, "w")[0] == 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT fid FROM filters WHERE filter = 'W146'")
+        (w146,) = cur.fetchone()
+        assert _refimages_row(cur, reference)["fid"] == w146
+
+
+def _replay_as_new_attempt(conn, outputs, run_id, tmp_path, name):
+    import rapidpipe.stages.register as register_module
+
+    from .test_register_l2 import _register_argv
+    manifest = Manifest.read(outputs / "manifest.json")
+    attempt = repo.allocate_attempt(conn, run_id, "register", register_unit_id(manifest))
+    return register_module.main(_register_argv(
+        outputs, tmp_path / name, run_id=run_id, unit_id=register_unit_id(manifest),
+        attempt_id=attempt))
+
+
+@pytest.mark.parametrize("edit", [
+    lambda outputs: outputs[-1]["registration"].update(clmean=0.5),
+    lambda outputs: outputs[-1]["registration"].update(npucatsources=7),
+    lambda outputs: outputs[-1]["registration"].update(md5="0" * 32),
+    lambda outputs: outputs[0]["registration"].update(md5="1" * 32),   # the catalog
+])
+def test_a_replay_with_different_content_exits_65(conn, tmp_path, monkeypatch, edit):
+    constituents, filter_ = _admitted_l2s(conn, tmp_path, monkeypatch, n=1)
+    run_id, outputs, reference, _ = _reference_manifest(
+        conn, tmp_path, "x", constituents, filter_)
+    assert _register(conn, monkeypatch, outputs, run_id, tmp_path, "x1")[0] == 0
+    path = outputs / "manifest.json"
+    manifest = json.loads(path.read_text())
+    edit(manifest["outputs"])   # [catalog, image]: _reference_manifest's order
+    path.write_text(json.dumps(manifest))
+    assert _replay_as_new_attempt(conn, outputs, run_id, tmp_path, "x2") == int(
         ExitCode.INPUT_REJECTED)
 
 
@@ -317,6 +368,13 @@ def test_deleting_a_scratch_run_removes_its_reference_rows(conn, tmp_path, monke
         # The constituents' l2files rows, another run's, are untouched.
         cur.execute("SELECT count(*) FROM l2files WHERE instance = %s", (constituents[0],))
         assert cur.fetchone()[0] == 1
+        # Tombstones kept: the run and its instance rows stay, marked deleted.
+        cur.execute("SELECT state FROM runs WHERE id = %s", (run_id,))
+        assert cur.fetchone()[0] == "deleted"
+        cur.execute("SELECT kind, deletion_state FROM product_instances WHERE run = %s "
+                    "ORDER BY kind", (run_id,))
+        assert cur.fetchall() == [("reference-catalog", "deleted"),
+                                  ("reference-image", "deleted")]
 
 
 def test_a_reference_of_another_run_naming_this_runs_l2_blocks_deletion(

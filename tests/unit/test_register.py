@@ -230,7 +230,7 @@ def test_reference_manifest_registers_the_image_before_its_catalog(tmp_path, mon
     assert [name for name, _ in order] == ["image", "catalog"]
     image_call = order[0][1]
     assert (image_call["run_id"], image_call["output_location"]) == ("r1", str(inputs_dir))
-    assert image_call["attempt_id"] == "register-attempt-1"
+    assert image_call["attempt_id"] == "admit-attempt-1"   # the manifest's (producing) attempt
     assert order[1][1]["output_location"] == str(inputs_dir)
 
 

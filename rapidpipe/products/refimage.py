@@ -16,8 +16,16 @@ difference image's was:
   instance ids coadded), and the measurements `dev` writes to `refimmeta`
   under `dev`'s own names (``nframes`` ... ``npucatsources``), plus the
   frame-range and zero-point values the header carries and
-  ``settings_hash``. ``npucatsources`` is null when the Photutils
-  reference catalog is off (``[psfcat] enabled = false``, the default).
+  ``settings_hash``. The two catalog counts use the `refimmeta` column
+  spellings, ``nsxcatsources`` and ``npucatsources`` (supervisor
+  amendment to R6, 2026-09-24); ``npucatsources`` is null when the
+  Photutils reference catalog is off (``[psfcat] enabled = false``, the
+  default), and `refimmeta` stores that null
+  (20260924-09-refimmeta-npucatsources-nullable.sql).
+- ``filter`` may use either spelling of a filter name, the RAPID one the
+  `filters` table seeds (``W146``) or the Roman one (``F146``);
+  :func:`rapid_filter_name` normalises it, as `dev`'s
+  ``roman_to_rapid_filter_names`` does.
 - `reference-catalog`: ``md5``, ``status``, ``catalog_type`` (``sextractor``
   or ``psf``; the legacy ``refimcatalogs.cattype`` 1 or 2) and
   ``source_count``.
@@ -63,6 +71,34 @@ REFERENCE_RECIPES = ("awaicgen",)
 #: Bundle roles of a reference image (ruling R5): the primary member is
 #: ``image``; all three are required and no other role is declared.
 REFERENCE_IMAGE_ROLES = ("image", "coverage", "uncertainty")
+
+#: `dev`'s ``roman_to_rapid_filter_names`` (``modules/utils/
+#: rapid_pipeline_subs.py``): Roman filter designations to the RAPID names
+#: that FITS FILTER headers and the `filters` table carry. F184 is spelled
+#: the same either way. The `reference` stage carries its own copy
+#: (``rapidpipe.science.reference.prep``); products may not import science.
+ROMAN_TO_RAPID_FILTER_NAMES: dict[str, str] = {
+    "F062": "R062",
+    "F087": "Z087",
+    "F106": "Y106",
+    "F129": "J129",
+    "F158": "H158",
+    "F184": "F184",
+    "F213": "K213",
+    "F146": "W146",
+}
+
+
+def rapid_filter_name(name: str) -> str:
+    """The RAPID spelling of a filter name given in either spelling.
+
+    Upper-cased and stripped; a Roman designation maps through
+    :data:`ROMAN_TO_RAPID_FILTER_NAMES`; any other name is returned as it
+    is, for the `filters` lookup to accept or refuse.
+    """
+    upper = str(name).strip().upper()
+    return ROMAN_TO_RAPID_FILTER_NAMES.get(upper, upper)
+
 
 #: `dev`'s ``refimcatalogs.cattype`` values: 1 for the SExtractor catalog,
 #: 2 for the Photutils PSF-fit catalog (``registerCompletedJobsInDB.py``).
@@ -110,7 +146,7 @@ _FLOAT_FIELDS = (
     "fwhmminpix", "fwhmmaxpix",
 )
 #: The block's counts (`refimmeta`'s ``integer``/``smallint`` columns).
-_COUNT_FIELDS = ("npixnan", "clnoutliers", "nsexcatsources")
+_COUNT_FIELDS = ("npixnan", "clnoutliers", "nsxcatsources")
 
 
 @dataclass(frozen=True)
@@ -147,7 +183,7 @@ class ReferenceImageRegistration:
     fwhmmedpix: float
     fwhmminpix: float
     fwhmmaxpix: float
-    nsexcatsources: int
+    nsxcatsources: int
     npucatsources: int | None
     settings_hash: str
 
@@ -278,7 +314,7 @@ def validate_reference_image_entry(entry: Mapping[str, Any]) -> ReferenceImageRe
     _require(key["field"] == str(registration.field),
              f"registration field {registration.field!r} is not the key's field "
              f"{key['field']!r}")
-    _require(key["filter"] == registration.filter,
+    _require(rapid_filter_name(key["filter"]) == rapid_filter_name(registration.filter),
              f"registration filter {registration.filter!r} is not the key's filter "
              f"{key['filter']!r}")
     return registration
