@@ -1,10 +1,8 @@
 # AGENTS.md
 
 Operating contract for any coding agent working in this repository (the
-`rapid` repository, Caltech-IPAC/rapid). Ben Rusholme's dotfiles-level
-agent rules govern how he directs work here; this file is the
-repository's own contract, self-contained for an agent with no other
-context.
+`rapid` repository, Caltech-IPAC/rapid), self-contained for an agent
+with no other context.
 
 ## What this repository is
 
@@ -60,7 +58,7 @@ modules never import other stage modules, `launch`, or `cli`;
 
 | Subpackage | Holds |
 |---|---|
-| `stages/` | One module per stage (`admit`, `reference`, `difference`, `finalize`, `register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `photometry`, `export`), plus the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (`photometry`, `export` in this build), 70 unclassified error, 75 retryable transient failure. |
+| `stages/` | One module per stage (`admit`, `reference`, `difference`, `finalize`, `register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `photometry`, `export`), plus the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (`photometry` only in this build; `export` was ported for real in step 8), 70 unclassified error, 75 retryable transient failure. |
 | `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `finalize`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
 | `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), and per-kind modules (`l2image`, `refimage`, `diffimage`, `psf`, `alertcontainer`, `catalogexport`). |
 | `db/` | Persistence: `connection.py`, per-table modules (`l2files`, `refimages`, `diffimages`, `sources`, `objects`, `psfs`, `alerts`, `ids`), and the migrations applier (`database/apply-migrations.sh`, not itself under `rapidpipe/`). |
@@ -109,14 +107,14 @@ a `tests/db` test, not only a mocked `tests/unit` one.
 | `tests/unit` | `unit-tests.yml` | No database; `rapidpipe.db`/`rapidpipe.runs` import `psycopg2` but tests mock it. Run locally: `python -m pytest tests/unit -q` (needs `psycopg2-binary`, `numpy`, `astropy`, `healpy`, `fastavro`, `scipy`, `hats-import` importable; on a laptop with no project Python environment, `uv run --no-project --python 3.12 --with pytest --with psycopg2-binary --with boto3 --with numpy --with astropy --with fastavro --with tomli-w python -m pytest tests/unit -q`, adding `--with` for whatever import error appears). |
 | `tests/db` | `db-migrations.yml` | Real PostgreSQL 18 + Q3C service container, migrations applied first. Needs a live PostgreSQL; there is none on the laptop, so this suite is CI-only for a laptop-based agent. |
 | `tests/cli` | `cli-behaviour.yml` | Real PostgreSQL 18 + Q3C, Batch and S3 faked (`tests/unit/fakebatch.py`, `fakes3.py`). Black-box: argv in, exit code/stdout/stderr/database state out. CI-only, same reason. |
-| — | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version` and `stage admit --help`. Proves the build recipe only, not the production science environment. |
-| — | `public-safety.yml` | `scripts/check-public-safety.sh`, see above. |
+| n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version` and `stage admit --help`. Proves the build recipe only, not the production science environment. |
+| n/a | `public-safety.yml` | `scripts/check-public-safety.sh`, see above. |
 
 Stage fixtures under `tests/fixtures/<name>/` back both `make
 stage-<name>` (runs the stage locally, `fake` tools by default, `real`
 where a target exists) and `rapidpipe selftest --stage <name>
 [--real-tools]`, which submits the same fixture as an ordinary Batch
-job against the deployed image — the venue for exercising a stage
+job against the deployed image: the venue for exercising a stage
 against real tools and a real database, owned by `rapid_systems`'
 Batch recipes, not run from this repository's own CI. A release is cut
 with `python -m rapidpipe.release cut` (or `rapidpipe release cut`),
@@ -135,7 +133,7 @@ credentials never do.
 
 Database credentials reach `rapidpipe.db` only through the `PG*`
 environment variables or an AWS Secrets Manager secret named by
-`RAPID_DB_SECRET_ID` — never as a command-line argument and never
+`RAPID_DB_SECRET_ID`, never as a command-line argument and never
 committed to this repository. The same rule applies to every other
 account-specific value the tool reads (`RAPIDPIPE_BATCH_JOB_QUEUE`,
 `RAPIDPIPE_OUTPUTS_ROOT_*`, `RAPIDPIPE_CLEANUP_ROLE_ARN`, and siblings
@@ -147,7 +145,7 @@ documented in README.md): named environment variables only.
   pipeline, cite `dev`'s script name in the docstring or commit message
   so the correspondence is traceable.
 - Every departure from `dev`'s behaviour is stated on the relevant
-  `rapid_docs` page, not only in a code comment — the page is the
+  `rapid_docs` page, not only in a code comment. The page is the
   design authority, so it is where a reader (and a future agent) looks
   first.
 - Rulings (a supervisor's or the lead's decision that changes a
