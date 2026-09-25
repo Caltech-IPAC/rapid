@@ -2,8 +2,9 @@
 
 ``rapidpipe stage <name> ...`` imports ``rapidpipe.stages.<name>`` and calls
 its ``main(argv)``, per the stage contract's "Invocation" section: "``rapidpipe
-stage <name>`` calls that same entrypoint." The ``rapidpipe run``
-subcommands implemented here:
+stage <name>`` calls that same entrypoint." It is the ``stage run`` command
+of the ``stage`` group, with ``stage list`` and ``stage describe``
+(``rapidpipe.cli.stagectl``). The ``rapidpipe run`` subcommands:
 
 - ``create``, ``list``, ``show`` -- record a run, list runs, inspect one
   (its units, attempts, expiry, pin and promotions), over
@@ -25,8 +26,14 @@ subcommands implemented here:
 rapidpipe.release``: the ``release`` subparser is built and dispatched by
 ``rapidpipe.release.__main__``, so both forms are one code path.
 
-The specification's "Tools" section also names Batch-level run
-management (rerun part of a run, watch progress, restart), not yet built.
+The specification's "Tools" section's Batch-level run management is in
+``rapidpipe.cli.runctl``: ``start`` walks a run's selected stages for one
+unit on Batch (skipping what is complete, so rerunning it restarts or
+reruns part of a run), ``status`` reconciles and shows progress (``--watch``
+to follow it), ``inputs`` composes a unit's input set, ``compare`` sets two
+runs side by side, and ``expire`` deletes expired scratch runs. ``delete``
+and ``expire`` act as ``RAPIDPIPE_CLEANUP_ROLE_ARN`` when it is set
+(``rapidpipe.runs.cleanup.cleanup_s3_client``).
 
 This module resolves a stage's ``DECLARATION`` by
 ``importlib.import_module(f"rapidpipe.stages.{name}")`` rather than
@@ -64,6 +71,7 @@ from rapidpipe.launch.batch import (
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_id
 from rapidpipe.products.storage import fetch_object, parse_location
+from rapidpipe.cli import runctl, stagectl
 from rapidpipe.release import __main__ as release_cli
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
@@ -160,20 +168,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    stage_parser = subparsers.add_parser(
-        "stage",
-        help="Run one stage: rapidpipe stage <name> --run ... --unit ... "
-             "--attempt ... --inputs ... --outputs ... [--settings ...] "
-             "[--dry-run]",
-        add_help=False,
-    )
-    stage_parser.add_argument("name", nargs="?", help="Stage name.")
-    stage_parser.add_argument(
-        "stage_argv", nargs=argparse.REMAINDER,
-        help="Arguments forwarded to the stage's own entrypoint.")
+    stagectl.add_parsers(subparsers)
 
     selftest_parser = subparsers.add_parser(
         "selftest",
+        description="Run one stage's own packaged fixture and check its outputs.",
         help="Run one stage's own packaged fixture and check it: "
              "rapidpipe selftest --stage difference|finalize|load|maintain|crossmatch|alerts|statistics|prune [--real-tools] "
              "[--work-dir DIR] [--output-location s3://... or path]")
@@ -199,11 +198,14 @@ def _build_parser() -> argparse.ArgumentParser:
     selftest_parser.add_argument("--python", default=sys.executable)
 
     run_parser = subparsers.add_parser(
-        "run", help="Create, list, inspect, run, promote and delete runs.")
+        "run", help="Create, list, inspect, run, promote and delete runs.",
+        description="Create, list, inspect, run, promote and delete runs.")
+    run_parser.set_defaults(run_group_parser=run_parser)
     run_subparsers = run_parser.add_subparsers(dest="run_command")
 
     create_parser = run_subparsers.add_parser(
-        "create", help="Create a run and print its id.")
+        "create", help="Create a run and print its id.",
+        description="Record a new run and print its id.")
     create_parser.add_argument(
         "--kind", required=True, choices=("scratch", "production"))
     create_parser.add_argument("--purpose", required=True)
@@ -222,17 +224,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Create the run from a complete release: its source revision and "
              "image digest are the run's, and Batch submissions use its job "
              "definition revisions.")
+    create_parser.add_argument(
+        "--seed", default=None, metavar="RUN_ID",
+        help="Record the run this one was seeded from (configuration lineage "
+             "only; it authorises no reuse of that run's outputs).")
 
-    list_parser = run_subparsers.add_parser("list", help="List runs.")
+    list_parser = run_subparsers.add_parser("list", help="List runs.",
+        description="List runs, newest first, optionally filtered.")
     list_parser.add_argument("--kind", default=None, choices=("scratch", "production"))
     list_parser.add_argument("--owner", default=None)
     list_parser.add_argument("--state", default=None)
 
-    show_parser = run_subparsers.add_parser("show", help="Show one run.")
+    show_parser = run_subparsers.add_parser("show", help="Show one run.",
+        description="Show one run: its fields, units, attempts and promotions.")
     show_parser.add_argument("run_id")
 
     local_parser = run_subparsers.add_parser(
-        "local", help="Run one stage attempt locally as a subprocess.")
+        "local", help="Run one stage attempt locally as a subprocess.",
+        description="Allocate an attempt and run one stage as a subprocess on this machine.")
     local_parser.add_argument("run_id")
     local_parser.add_argument("stage")
     local_parser.add_argument(
@@ -246,7 +255,8 @@ def _build_parser() -> argparse.ArgumentParser:
     local_parser.add_argument("--python", default=sys.executable)
 
     submit_parser = run_subparsers.add_parser(
-        "submit", help="Submit one stage attempt to Batch.")
+        "submit", help="Submit one stage attempt to Batch.",
+        description="Allocate an attempt and submit it to AWS Batch as one job.")
     submit_parser.add_argument("run_id")
     submit_parser.add_argument("stage")
     submit_parser.add_argument(
@@ -260,16 +270,19 @@ def _build_parser() -> argparse.ArgumentParser:
     submit_parser.add_argument("--settings", default=None)
 
     reconcile_parser = run_subparsers.add_parser(
-        "reconcile", help="Reconcile a run's unresolved Batch attempts.")
+        "reconcile", help="Reconcile a run's unresolved Batch attempts.",
+        description="Record the outcome of every unresolved Batch attempt of a run.")
     reconcile_parser.add_argument("run_id")
 
     cancel_parser = run_subparsers.add_parser(
-        "cancel", help="Terminate an attempt's Batch job.")
+        "cancel", help="Terminate an attempt's Batch job.",
+        description="Terminate an attempt's Batch job, recording the reason.")
     cancel_parser.add_argument("attempt_id")
     cancel_parser.add_argument("--reason", required=True)
 
     promote_parser = run_subparsers.add_parser(
-        "promote", help="Promote a production run's candidates; print the promotion id.")
+        "promote", help="Promote a production run's candidates; print the promotion id.",
+        description="Promote a production run's candidates; print the promotion id.")
     promote_parser.add_argument("run_id")
     promote_parser.add_argument("--reason", required=True)
     promote_parser.add_argument(
@@ -283,33 +296,42 @@ def _build_parser() -> argparse.ArgumentParser:
              "image; recorded in the promotion's request_context.")
 
     rollback_parser = run_subparsers.add_parser(
-        "rollback", help="Reverse one promotion; print the reversing promotion id.")
+        "rollback", help="Reverse one promotion; print the reversing promotion id.",
+        description="Reverse one promotion; print the reversing promotion id.")
     rollback_parser.add_argument("promotion_id")
     rollback_parser.add_argument("--reason", required=True)
     rollback_parser.add_argument(
         "--who", default=None, help="Who is rolling back (default: the current user).")
 
     delete_parser = run_subparsers.add_parser(
-        "delete", help="Delete a scratch run's outputs and science rows.")
+        "delete", help="Delete a scratch run's outputs and science rows.",
+        description="Delete a scratch run's S3 outputs and science rows, keeping "
+                    "its run-model rows. Honours RAPIDPIPE_CLEANUP_ROLE_ARN.")
     delete_parser.add_argument("run_id")
     delete_parser.add_argument(
         "--requested-by", default=None, dest="requested_by",
         help="The run's owner (default: the current user).")
 
     finish_parser = run_subparsers.add_parser(
-        "finish", help="Mark a run whose units are all terminal as finished.")
+        "finish", help="Mark a run whose units are all terminal as finished.",
+        description="Mark a run whose units are all terminal as finished.")
     finish_parser.add_argument("run_id")
 
     pin_parser = run_subparsers.add_parser(
-        "pin", help="Pin a run so it never expires.")
+        "pin", help="Pin a run so it never expires.",
+        description="Pin a scratch run so it never expires.")
     pin_parser.add_argument("run_id")
 
     unpin_parser = run_subparsers.add_parser(
-        "unpin", help="Unpin a run so it expires at its expires_at.")
+        "unpin", help="Unpin a run so it expires at its expires_at.",
+        description="Unpin a scratch run so it expires at its expires_at.")
     unpin_parser.add_argument("run_id")
 
+    runctl.add_parsers(run_subparsers)
+
     release_parser = subparsers.add_parser(
-        "release", help="Cut, show, list and verify releases (python -m rapidpipe.release).")
+        "release", help="Cut, show, list and verify releases (python -m rapidpipe.release).",
+        description="Cut, show, list and verify releases.")
     release_cli.build_parser(release_parser)
 
     return parser
@@ -448,8 +470,13 @@ def _run_create_command(args: argparse.Namespace) -> int:
                 auto_promote=False,
                 check_policy_ref=None,
                 release=args.release,
+                seed_run=args.seed,
             )
             conn.commit()
+        except RunModelError as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run create: {exc}\n")
+            return int(ExitCode.USAGE)
         except BaseException:
             conn.rollback()
             raise
@@ -894,15 +921,22 @@ def _print_deletion_report(report) -> None:
     for table, count in report.rows_deleted.items():
         print(f"rows_deleted.{table}: {count}")
     print(f"instances_marked: {report.instances_marked}")
+    if report.refused is not None:
+        print(f"refused: {report.refused}")
 
 
 def _run_delete_command(args: argparse.Namespace) -> int:
-    from rapidpipe.runs.cleanup import delete_run
+    from rapidpipe.runs.cleanup import CleanupRoleError, cleanup_s3_client, delete_run
 
     requested_by = args.requested_by or getpass.getuser()
+    try:
+        s3_client = cleanup_s3_client()
+    except CleanupRoleError as exc:
+        sys.stderr.write(f"rapidpipe run delete: {exc}\n")
+        return int(ExitCode.TRANSIENT_FAILURE)
     return _run_model_command(
         "delete",
-        lambda conn: delete_run(conn, args.run_id, requested_by),
+        lambda conn: delete_run(conn, args.run_id, requested_by, s3_client=s3_client),
         print_result=_print_deletion_report)
 
 
@@ -946,19 +980,26 @@ def _run_command(args: argparse.Namespace) -> int:
         return _run_pin_command(args, True)
     if args.run_command == "unpin":
         return _run_pin_command(args, False)
+    if args.run_command in runctl.COMMANDS:
+        return runctl.dispatch(args)
+    args.run_group_parser.print_help(sys.stderr)
     sys.stderr.write(
         "rapidpipe run: a subcommand is required: create, list, show, local, "
         "submit, reconcile, cancel, promote, rollback, delete, finish, pin, "
-        "unpin\n")
+        "unpin, start, status, inputs, compare, expire\n")
     return int(ExitCode.USAGE)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else sys.argv[1:])
+    # "rapidpipe stage <name> ..." (the form the Batch launcher submits) is
+    # "rapidpipe stage run <name> ...": rewritten before argparse sees it.
+    argv_list = stagectl.rewrite_legacy_argv(
+        list(argv) if argv is not None else sys.argv[1:])
+    args = parser.parse_args(argv_list)
 
     if args.command == "stage":
-        return _run_stage_command(args.name, args.stage_argv)
+        return stagectl.dispatch(args, _run_stage_command)
 
     if args.command == "selftest":
         return _run_selftest_command(args)
