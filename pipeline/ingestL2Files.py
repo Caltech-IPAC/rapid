@@ -2471,4 +2471,6 @@ if __name__ == '__main__':
     # Termination.  A file that individually failed does not come out here -- it was logged,
     # skipped, and left on the next run's work list.  Only a worker that did not finish does.
 
+    print("terminating_exitcode =",exit_code)
+
     exit(exit_code)
