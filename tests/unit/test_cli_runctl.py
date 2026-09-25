@@ -408,6 +408,23 @@ def test_start_attempt_running_without_a_scheduler_job_exits_64(world, capsys):
     assert w.submits == [] and w.reconciles == 0
 
 
+def test_start_template_on_register_is_refused(world, monkeypatch, capsys):
+    w = world(["admit", "register"])
+    monkeypatch.setattr(runctl, "compose_inputs", lambda *a, **k: pytest.fail("composed"))
+    assert cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://d",
+                     "--template", "register=s3://t"]) == 64
+    assert "--template is refused for register" in capsys.readouterr().err
+    assert w.submits == []
+
+
+def test_inputs_for_register_is_refused(compose_env, capsys):
+    rc = cli.main(["run", "inputs", "R", "register", "--unit", "U", "--from-stage", "admit",
+                   "--template", str(compose_env["template"])])
+    assert rc == 64
+    assert "--template is refused for register" in capsys.readouterr().err
+    assert compose_env["calls"]["add_unit"] == []
+
+
 def test_start_batch_error_exits_75(world, monkeypatch, capsys):
     world(["admit"])
 
