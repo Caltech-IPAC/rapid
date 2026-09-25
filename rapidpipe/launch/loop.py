@@ -22,8 +22,9 @@ uses. The rulings this module implements, one line each:
   same schedule that has one (walking back over dates; promoted or not, with
   ``base_promoted`` recorded); none on the first date. Input-set manifests
   live under ``<scratch root>/runs/<run>/inputs/<stage>/<unit>/``.
-- A2: an attempt left running without a Batch job fails the date (row
-  ``failed``, ``record.jobless_attempt``, exit 1); no resolver exists yet.
+- A2: an attempt left running without a Batch job goes to step 6's
+  ``resolve_jobless`` once and the walk is retried once; still job-less, the
+  date fails (row ``failed``, ``record.jobless_attempt``, exit 1).
 - A4: one loop per schedule (``pg_try_advisory_lock``, exit 75 when held); a
   ``failed`` row stops the loop unless ``--retry-failed`` reopens it and
   resumes its run; the row's completion commits with ``finish_run``.
@@ -703,20 +704,38 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
 
     def walk(unit_id: str, positions: list[int], *, inputs: Sequence[str] = (),
              settings: Sequence[str] = (), templates: Sequence[str] = ()) -> None:
-        try:
-            rc = tools.walk(conn, run_id=run_id, unit_id=unit_id, positions=positions,
-                            inputs=list(inputs), settings=list(settings),
-                            templates=list(templates), interval=interval, timeout=timeout,
-                            continue_hint=hint)
-        except Exception as exc:
-            if getattr(exc, "code", None) == EXIT_USAGE:
+        resolved = False
+        while True:
+            try:
+                rc = tools.walk(conn, run_id=run_id, unit_id=unit_id, positions=positions,
+                                inputs=list(inputs), settings=list(settings),
+                                templates=list(templates), interval=interval,
+                                timeout=timeout, continue_hint=hint)
+                break
+            except Exception as exc:
+                if getattr(exc, "code", None) != EXIT_USAGE:
+                    raise
                 conn.rollback()
                 jobless = jobless_attempts(conn, run_id)
-                if jobless:
-                    # A2: no resolver exists on rebuild yet; never wait on it.
+                if not jobless:
+                    raise
+                if resolved:
+                    # A2: resolved once and still job-less; never wait on it.
                     raise _Stop(EXIT_FAILED, f"attempt {jobless[0]} is running with no "
                                              f"scheduler job: {exc}", jobless=jobless[0])
-            raise
+                # A2: step 6's resolver (run reconcile --resolve-jobless),
+                # then one more walk: a found job is attached, a lost attempt
+                # leaves its unit ready for the next one.
+                results = launch_batch.resolve_jobless(
+                    conn, run_id=run_id,
+                    older_than_seconds=launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS)
+                record.setdefault("jobless_resolved", []).extend(
+                    {"attempt": r.attempt_id, "status": r.batch_status, "job": r.job_id}
+                    for r in results)
+                out(f"date={date} run={run_id} resolved job-less attempts: "
+                    + (", ".join(f"{r.attempt_id}={r.batch_status}" for r in results)
+                       or "none resolvable yet"))
+                resolved = True
         if rc != 0:
             stages = ",".join(SELECTED_STAGES[p] for p in positions)
             raise _Stop(EXIT_FAILED, f"{stages} {unit_id} did not complete (exit {rc})")
