@@ -97,6 +97,13 @@ class RunDeletingOrDeleted(RunModelError):
     """
 
 
+class ProducerDeletingOrDeleted(RunDeletingOrDeleted):
+    """An input to bind was produced by a run that is 'deleting' or
+    'deleted' (supervisor step 9, 2026-09-25, Codex amendment to R4):
+    :func:`bind_unit_inputs` refuses the binding, so a producer can never
+    be deleted underneath a consumer bound after its deletion check."""
+
+
 class UnitTerminal(RunModelError):
     """The unit is already complete, failed or cancelled."""
 
@@ -344,7 +351,10 @@ def bind_unit_inputs(
     retries." (runs page, "Units"). Refuses on a finished, deleting or
     deleted run, same fence as add_unit. Idempotent per (unit, producer_instance): a
     retry that rebinds the same inputs is a no-op, matching "retained for
-    retries" rather than an error on re-bind.
+    retries" rather than an error on re-bind. Refuses
+    (:class:`ProducerDeletingOrDeleted`) an input whose producing run is
+    deleting or deleted, holding each producer run row FOR SHARE until
+    commit so the deletion guard cannot miss the binding.
     """
     with conn.cursor() as cur:
         _refuse_admission(cur, run_id)
@@ -360,6 +370,21 @@ def bind_unit_inputs(
         unit_row_id = row[0]
 
         for producer_instance in producer_instances:
+            # The producer's run row is taken FOR SHARE and must not be
+            # deleting or deleted, as register_manifest does before a
+            # dependency edge: a concurrent mark_run_deleting (FOR UPDATE)
+            # either waits for this binding to commit and then counts it,
+            # or has already committed 'deleting' and this refuses
+            # (supervisor step 9, 2026-09-25, Codex amendment to R4).
+            cur.execute(
+                "SELECT run FROM product_instances WHERE id = %s", (producer_instance,))
+            producer = cur.fetchone()
+            if producer is not None:
+                producer_state = _fetch_run_state(cur, producer[0])
+                if producer_state in _TERMINAL_RUN_STATES:
+                    raise ProducerDeletingOrDeleted(
+                        f"input {producer_instance!r} belongs to run {producer[0]!r}, "
+                        f"which is {producer_state!r}; refusing to bind it")
             cur.execute(
                 """
                 INSERT INTO unit_inputs (id, unit, producer_instance)
