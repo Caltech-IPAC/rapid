@@ -241,6 +241,7 @@ def _patch_submit(monkeypatch, release):
                         lambda *a: calls.setdefault("add_unit", a))
     monkeypatch.setattr(launch_batch, "allocate_attempt", lambda *a, **k: "ATT1")
     monkeypatch.setattr(launch_batch, "record_scheduler_job", lambda *a, **k: None)
+    monkeypatch.setattr(launch_batch, "record_attempt_locations", lambda *a, **k: None)
     return calls
 
 
