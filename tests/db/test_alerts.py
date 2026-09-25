@@ -27,6 +27,7 @@ import shutil
 import fastavro
 
 import rapidpipe.stages.alerts as alerts
+from rapidpipe.db import alerts as alerts_db
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.manifest import Manifest, register_unit_id
 from rapidpipe.runs import repository as repo
@@ -227,10 +228,12 @@ def test_alerts_writes_outbox_rows_instances_and_nalertpackets(conn, tmp_path, m
         assert cur.fetchone()[0] == 2
 
 
-def test_an_unknown_result_set_kind_exits_65(conn, tmp_path, monkeypatch):
+def test_a_pruned_set_of_an_unnamed_association_set_exits_65(conn, tmp_path, monkeypatch):
+    """R5 (supervisor step 9): a pruned set's base must be a named association set."""
     run_id, diff_outputs, sets, _ = _seeded_chain(conn, tmp_path, monkeypatch)
     pruned, _ = _register_set(conn, run_id, stage="prune", kind="pruned-set",
-                              key={"base": sets[1]}, row_count=0)
+                              key={"base": new_ulid(), "settings_hash": "sha256:0"},
+                              row_count=0)
     inputs, _ = _input_set(tmp_path, diff_outputs, (sets[0], sets[1], pruned))
     rc, attempt_id, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
     assert rc == int(ExitCode.INPUT_REJECTED)
@@ -342,3 +345,81 @@ def test_the_merges_count_fallback_counts_a_duplicated_pair_once(conn, tmp_path,
     assert [a["diaSourceId"] for a in alerts_read] == [ids["kept"]]
     assert alerts_read[0]["diaObject"]["nDiaSources"] == 1
     assert alerts_read[0]["diaObject"]["raSigma"] is None
+
+
+# ----------------------------------------------------------------------
+# R5 (supervisor step 9, 2026-09-25): prune binds to alerts
+# ----------------------------------------------------------------------
+
+
+def _pruned_chain(conn, tmp_path, monkeypatch):
+    """_seeded_chain with a base holding two more detections of the kept
+    source's object -- the flagged source and the orphan source -- and a
+    pruned set of the association set that lists (aid, flagged) only."""
+    run_id, diff_outputs, sets, ids = _seeded_chain(conn, tmp_path, monkeypatch,
+                                                    extend_base=True)
+    source_set, association_set, _ = sets
+    with conn.cursor() as cur:
+        cur.execute("SELECT attempt FROM astroobjects_5321 WHERE result_set = %s",
+                    (ids["base"],))
+        base_attempt = cur.fetchone()[0]
+        cur.execute("INSERT INTO merges_5321 (aid, sid, run, attempt, result_set) VALUES "
+                    "(%s, %s, %s, %s, %s), (%s, %s, %s, %s, %s)",
+                    (ids["aid"], ids["flagged"], run_id, base_attempt, ids["base"],
+                     ids["aid"], ids["orphan"], run_id, base_attempt, ids["base"]))
+    pruned, prune_attempt = _register_set(
+        conn, run_id, stage="prune", kind="pruned-set",
+        key={"base": association_set, "settings_hash": "sha256:" + "0" * 64}, row_count=1)
+    with conn.cursor() as cur:
+        from rapidpipe.db.objects import insert_pruned_merges
+        assert insert_pruned_merges(cur, [(ids["aid"], ids["flagged"])], pruned,
+                                    association_set, run_id, prune_attempt) == 1
+    return run_id, diff_outputs, sets, ids, pruned
+
+
+def test_history_leaves_out_the_pairs_a_named_pruned_set_lists(conn, tmp_path, monkeypatch):
+    """The pruned set lists (aid, flagged): the kept source's history is the
+    orphan source only; the unlisted pair (aid, orphan) stays."""
+    run_id, diff_outputs, sets, ids, pruned = _pruned_chain(conn, tmp_path, monkeypatch)
+    inputs, _ = _input_set(tmp_path, diff_outputs, (*sets, pruned))
+    rc, attempt_id, outputs = _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs)
+    assert rc == int(ExitCode.SUCCESS)
+    manifest = Manifest.read(outputs / "manifest.json")
+    assert list(manifest.inputs.result_sets) == [*sets, pruned, ids["base"]]
+    container = next(e for e in manifest.outputs if e.kind == "alert-container")
+    raw = (outputs / container.primary).read_bytes()
+    by_sid = {a["diaSourceId"]: a for a in fastavro.reader(io.BytesIO(raw))}
+    kept = by_sid[ids["kept"]]
+    assert [p["diaSourceId"] for p in kept["prvDiaSources"]] == [ids["orphan"]]
+    record = json.loads((outputs / manifest.execution_record).read_text())
+    assert record["notes"]["pruned_sets"] == [pruned]
+    with conn.cursor() as cur:
+        cur.execute("SELECT producer_instance FROM dependencies WHERE consumer_instance = %s",
+                    (container.instance,))
+        assert pruned in {r[0] for r in cur.fetchall()}
+
+
+def test_the_exclusion_applies_only_with_the_pruned_set_named(conn, tmp_path, monkeypatch):
+    """db.alerts.history and associations directly: without the pruned set the
+    listed pair is history and counted; with it, neither."""
+    run_id, _, sets, ids, pruned = _pruned_chain(conn, tmp_path, monkeypatch)
+    association_set = sets[1]
+    lineages = {association_set: [association_set, ids["base"]]}
+    fields = {association_set: 5321}
+    objects = [(association_set, ids["aid"])]
+    with conn.cursor() as cur:
+        unpruned = alerts_db.history(cur, lineages, fields, objects, 0.0)
+        applied = alerts_db.history(cur, lineages, fields, objects, 0.0,
+                                    pruned_by_association={association_set: pruned})
+        assert {r["sid"] for r in unpruned} == {ids["kept"], ids["flagged"], ids["orphan"]}
+        assert {r["sid"] for r in applied} == {ids["kept"], ids["orphan"]}
+        # no statistics set: nsources is the merges-count fallback
+        counts = {}
+        for label, pm in (("unpruned", None), ("applied", {association_set: pruned})):
+            rows = alerts_db.associations(cur, lineages, fields, {association_set: None},
+                                          [ids["kept"], ids["flagged"]],
+                                          pruned_by_association=pm)
+            counts[label] = {r["sid"]: r["nsources"] for r in rows}
+        assert counts["unpruned"] == {ids["kept"]: 3, ids["flagged"]: 3}
+        # the flagged pair is excluded: no association, and not counted
+        assert counts["applied"] == {ids["kept"]: 2}

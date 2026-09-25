@@ -74,7 +74,7 @@ def _rewrite(inputs, manifest):
 def test_declaration():
     alerts.DECLARATION.validate()
     assert alerts.DECLARATION.consumes == ("difference-image", "reference-catalog", "source-set",
-                                           "association-set", "statistics-set")
+                                           "association-set", "statistics-set", "pruned-set")
     assert alerts.DECLARATION.produces == ("alert-container", "alert-set")
     assert alerts.DECLARATION.database_access == "read-write"
     assert alerts.DECLARATION.resource_defaults == {"vcpus": 1, "memory_mib": 8192}
@@ -107,6 +107,9 @@ def test_success_writes_container_outbox_and_both_outputs(tmp_path, monkeypatch,
     assert db.nalertpackets == [{"instance": DIFFERENCE_INSTANCE, "run": RUN, "value": 1}]
     # register can replay this manifest: both kinds are known to it
     _reject_unknown_kinds(manifest.outputs)
+    # R5: an input set naming no pruned set says so in the execution notes
+    record = json.loads((outputs / manifest.execution_record).read_text())
+    assert record["notes"]["pruned_sets"] == "none"
 
 
 def test_kafka_on_exits_64(tmp_path, monkeypatch, prepared, capsys):
@@ -165,7 +168,7 @@ def test_result_set_problems_exit_65(tmp_path, monkeypatch, prepared, change):
     instances = seed["product_instances"]
     manifest = _manifest_inputs(inputs)
     if change == "unknown-kind":
-        instances[STATISTICS_SET]["kind"] = "pruned-set"
+        instances[STATISTICS_SET]["kind"] = "alert-set"
     elif change == "unregistered":
         del instances[STATISTICS_SET]
     elif change == "incomplete":
@@ -405,3 +408,111 @@ def test_merges_count_fallback_counts_a_pair_in_base_and_extension_once(
     assert by_sid[105]["diaObject"]["nDiaSources"] == 1
     # 9001: 103, 104 in the extension, 50, 51 in the base -- four distinct sources
     assert by_sid[103]["diaObject"]["nDiaSources"] == 4
+
+
+# ----------------------------------------------------------------------
+# R5 (supervisor step 9, 2026-09-25): prune binds to alerts
+# ----------------------------------------------------------------------
+
+PRUNED_SET = "01J8Y6QZ3M00000000000PRUN1"
+
+
+def _pruned(seed, *, base=ASSOCIATION_SET, instance=PRUNED_SET, pairs=((9001, 51),)):
+    seed["product_instances"][instance] = {
+        "kind": "pruned-set", "complete": True,
+        "key": {"base": base, "settings_hash": "sha256:" + "0" * 64}}
+    seed.setdefault("prunedmerges", []).extend(
+        {"result_set": instance, "aid": aid, "sid": sid} for aid, sid in pairs)
+
+
+def _name(inputs, *instances):
+    manifest = _manifest_inputs(inputs)
+    manifest["inputs"]["result_sets"] += list(instances)
+    _rewrite(inputs, manifest)
+
+
+def _alerts_by_sid(outputs):
+    container = next(e for e in Manifest.read(outputs / "manifest.json").outputs
+                     if e.kind == "alert-container")
+    raw = (outputs / container.primary).read_bytes()
+    return {a["diaSourceId"]: a for a in fastavro.reader(io.BytesIO(raw))}
+
+
+def test_a_named_pruned_set_excludes_its_pairs_from_history(tmp_path, monkeypatch, prepared):
+    """The pruned set lists (9001, 51), a base pair: 103's history loses 51,
+    keeps 104; the set is an input, a dependency, and named in the notes."""
+    inputs, _, seed = prepared
+    _extend_from_a_base(seed)
+    _pruned(seed)
+    _name(inputs, PRUNED_SET)
+    rc, outputs, db = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == 0
+    by_sid = _alerts_by_sid(outputs)
+    assert [p["diaSourceId"] for p in by_sid[103]["prvDiaSources"]] == [104]
+    manifest = Manifest.read(outputs / "manifest.json")
+    assert list(manifest.inputs.result_sets) == RESULT_SETS + [PRUNED_SET, BASE_SET]
+    assert PRUNED_SET in db.registered[0]["manifest"]["inputs"]["result_sets"]
+    record = json.loads((outputs / manifest.execution_record).read_text())
+    assert record["notes"]["pruned_sets"] == [PRUNED_SET]
+
+
+def test_without_the_pruned_set_the_same_pair_stays_in_history(tmp_path, monkeypatch, prepared):
+    """The pruned set exists but the input set does not name it: no exclusion."""
+    inputs, _, seed = prepared
+    _extend_from_a_base(seed)
+    _pruned(seed)
+    rc, outputs, _ = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == 0
+    assert sorted(p["diaSourceId"] for p in _alerts_by_sid(outputs)[103]["prvDiaSources"]) == [
+        51, 104]
+
+
+def test_a_pruned_pair_is_not_counted_in_the_merges_count_fallback(tmp_path, monkeypatch,
+                                                                    prepared):
+    inputs, _, seed = prepared
+    _extend_from_a_base(seed)
+    _pruned(seed)
+    manifest = _manifest_inputs(inputs)
+    manifest["inputs"]["result_sets"] = [SOURCE_SET, ASSOCIATION_SET, ASSOCIATION_SET_2,
+                                         PRUNED_SET]
+    _rewrite(inputs, manifest)
+    rc, outputs, _ = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == 0
+    # 9001: 103, 104, 50 -- 51 is pruned
+    assert _alerts_by_sid(outputs)[103]["diaObject"]["nDiaSources"] == 3
+
+
+@pytest.mark.parametrize("change", ["base-not-named", "no-base", "two-for-one-set",
+                                    "incomplete"])
+def test_pruned_set_problems_exit_65(tmp_path, monkeypatch, prepared, change):
+    inputs, _, seed = prepared
+    _pruned(seed)
+    named = [PRUNED_SET]
+    instances = seed["product_instances"]
+    if change == "base-not-named":
+        instances[PRUNED_SET]["key"]["base"] = UNNAMED_ASSOCIATION_SET
+    elif change == "no-base":
+        instances[PRUNED_SET]["key"] = {"field": 5321}
+    elif change == "two-for-one-set":
+        _pruned(seed, instance="01J8Y6QZ3M00000000000PRUN2")
+        named.append("01J8Y6QZ3M00000000000PRUN2")
+    elif change == "incomplete":
+        instances[PRUNED_SET]["complete"] = False
+    _name(inputs, *named)
+    rc, _, db = _run(tmp_path, monkeypatch, inputs, seed)
+    assert rc == int(ExitCode.INPUT_REJECTED)
+    assert db.commits == 0 and db.outbox == []
+
+
+def test_one_pruned_set_per_association_set_is_accepted():
+    """_classify_result_sets pairs each pruned set with the association set its key's base names."""
+    found = {
+        "S": {"kind": "source-set", "complete": True, "key": {"difference": "D"}},
+        "A1": {"kind": "association-set", "complete": True, "key": {"field": 1}},
+        "A2": {"kind": "association-set", "complete": True, "key": {"field": 2}},
+        "P2": {"kind": "pruned-set", "complete": True, "key": {"base": "A2"}},
+    }
+    sets = alerts._classify_result_sets(("S", "A1", "A2", "P2"), found, "D")
+    assert sets.pruned_by_association == {"A1": None, "A2": "P2"}
+    assert sets.pruned_sets == ("P2",)
+    assert alerts._classify_result_sets(("S", "A1"), found, "D").pruned_sets == ()

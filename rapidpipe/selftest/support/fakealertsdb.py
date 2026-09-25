@@ -175,6 +175,8 @@ class FakeAlertsDatabase:
         self.merges: list[dict] = list(seed.get("merges", []))
         self.astroobjects: list[dict] = list(seed.get("astroobjects", []))
         self.astroobjectsmeta: list[dict] = list(seed.get("astroobjectsmeta", []))
+        #: ``prunedmerges``: {result_set, aid, sid} per excluded pair (R5).
+        self.prunedmerges: list[dict] = list(seed.get("prunedmerges", []))
         self.members: dict[str, list[dict]] = dict(seed.get("members", {}))
         self.outbox: list[dict] = list(seed.get("outbox", []))
         self.registered: list[dict] = []
@@ -234,11 +236,20 @@ class FakeAlertsDatabase:
     def registered_instances(self, instances) -> set[str]:
         return {i for i in instances if i in self.product_instances}
 
-    def associations(self, lineages, fields, statistics_by_association, sids) -> list[dict]:
+    def _excluded(self, pruned_by_association, root) -> set[tuple[int, int]]:
+        """The (aid, sid) pairs the pruned set applied to ``root`` lists (R5)."""
+        pruned = (pruned_by_association or {}).get(root)
+        return {(p["aid"], p["sid"]) for p in self.prunedmerges
+                if pruned is not None and p["result_set"] == pruned}
+
+    def associations(self, lineages, fields, statistics_by_association, sids, *,
+                     pruned_by_association=None) -> list[dict]:
         """As PostgreSQL does: each named set's field tables only (every seeded
-        merges/astroobjects/astroobjectsmeta row names its ``field``)."""
+        merges/astroobjects/astroobjectsmeta row names its ``field``), less the
+        pairs its pruned set lists."""
         rows = []
         for root, chain in lineages.items():
+            excluded = self._excluded(pruned_by_association, root)
             field = fields[root]
             stats_set = statistics_by_association.get(root)
             depth = {member: d for d, member in enumerate(chain)}
@@ -250,7 +261,8 @@ class FakeAlertsDatabase:
             meta = {m["aid"]: m for m in self.astroobjectsmeta
                     if stats_set is not None and m["field"] == field
                     and m["result_set"] == stats_set}
-            merges = [m for m in self.merges if m["field"] == field and m["result_set"] in depth]
+            merges = [m for m in self.merges if m["field"] == field and m["result_set"] in depth
+                      and (m["aid"], m["sid"]) not in excluded]
             seen = set()
             for m in merges:
                 if m["sid"] not in sids or (m["sid"], m["aid"]) in seen:
@@ -269,14 +281,16 @@ class FakeAlertsDatabase:
                 })
         return sorted(rows, key=lambda r: (r["sid"], r["merges_aid"], r["association_set"]))
 
-    def history(self, lineages, fields, objects, min_mjd) -> list[dict]:
+    def history(self, lineages, fields, objects, min_mjd, *,
+                pruned_by_association=None) -> list[dict]:
         by_sid = {s["sid"]: s for s in self.sources}
         rows = {}
         for root, aid in objects:
             members = set(lineages[root])
+            excluded = self._excluded(pruned_by_association, root)
             for m in self.merges:
                 if (m["field"] != fields[root] or m["result_set"] not in members
-                        or m["aid"] != aid):
+                        or m["aid"] != aid or (m["aid"], m["sid"]) in excluded):
                     continue
                 s = by_sid.get(m["sid"])
                 if s is None or s["mjdobs"] < min_mjd:
