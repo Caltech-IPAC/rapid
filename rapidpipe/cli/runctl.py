@@ -39,6 +39,7 @@ failed. ``status`` also exits 2 when something is still running.
 from __future__ import annotations
 
 import argparse
+import getpass
 import shlex
 import shutil
 import sys
@@ -864,8 +865,34 @@ class _StartWalk:
             if args.stage is not None and not first_look:
                 break
 
+        maybe_auto_promote(self.conn, args.run_id)
         print(f"run={args.run_id} state=complete", flush=True)
         return int(ExitCode.SUCCESS)
+
+
+def maybe_auto_promote(conn, run_id: str) -> None:
+    """End of a ``run start`` walk: automatic promotion, designed in and off
+    (supervisor step 6, 2026-09-24, R5).
+
+    Calls :func:`rapidpipe.checks.runner.maybe_auto_promote`, commits what
+    it recorded (check rows, and the promotion when one was made), and
+    prints its one line -- ``auto-promote off (policy <ref>)`` for every
+    run today, since no shipped policy permits automatic promotion. A
+    check-policy error (the run names a policy that no longer loads) is
+    printed as a refusal, not raised: the walk itself succeeded.
+    """
+    from rapidpipe.checks.registry import CheckError
+    from rapidpipe.checks.runner import maybe_auto_promote as _maybe_auto_promote
+
+    conn.commit()  # the walk's own writes are already committed; start clean
+    try:
+        outcome = _maybe_auto_promote(conn, run_id, who=getpass.getuser())
+    except CheckError as exc:
+        conn.rollback()
+        print(f"auto-promote refused: {exc}", flush=True)
+        return
+    conn.commit()
+    print(outcome.message, flush=True)
 
 
 def _start_command(args: argparse.Namespace) -> int:

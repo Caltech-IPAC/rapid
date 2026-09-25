@@ -1,0 +1,37 @@
+# Check policy rebuild-strict@1 (supervisor step 6, 2026-09-24, R3).
+# The same checks as rebuild-trial@1 with bounds the control run cannot
+# meet: it exists to demonstrate and test the promotion gate's refusal.
+# Immutable once landed: a change is a new version (a new file).
+name = "rebuild-strict"
+version = "1"
+description = "Strict demonstration policy: bounds the control run cannot meet, so promotion under it is refused."
+approval = "trial"
+approved_by = "supervisor-step-6"
+auto_promote = false
+
+[[checks]]
+name = "difference-image-statistics"
+version = "1"
+kind = "difference-image"
+required = true
+
+[checks.params]
+scalefacref_lo = 0.99
+scalefacref_hi = 1.01
+rms_max = 0.01
+median_max = 0.5
+n_min = 0
+n_max = 1000
+ratio_lo = 0.5
+ratio_hi = 2.0
+
+[[checks]]
+name = "catalog-counts-vs-reference"
+version = "1"
+kind = "source-set"
+required = false
+
+[checks.params]
+tolerance = 0.0001
+missing_reference = "fail"
+reference_run = ""

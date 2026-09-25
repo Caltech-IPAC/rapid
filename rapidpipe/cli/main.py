@@ -22,6 +22,11 @@ of the ``stage`` group, with ``stage list`` and ``stage describe``
   (``rapidpipe.runs.cleanup.delete_run``); ``pin`` / ``unpin`` -- keep a
   scratch run from expiring, or release it (``cleanup.pin_run``).
 
+``rapidpipe check list|run|show`` (``rapidpipe.cli.checkctl``) lists the
+registered checks and shipped check policies, runs a policy's checks over
+a run's candidates recording each result, and shows recorded results
+(supervisor step 6, 2026-09-24, R6).
+
 ``rapidpipe release cut|show|list|verify`` is ``python -m
 rapidpipe.release``: the ``release`` subparser is built and dispatched by
 ``rapidpipe.release.__main__``, so both forms are one code path.
@@ -71,7 +76,7 @@ from rapidpipe.launch.batch import (
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_id
 from rapidpipe.products.storage import fetch_object, parse_location
-from rapidpipe.cli import runctl, stagectl
+from rapidpipe.cli import checkctl, runctl, stagectl
 from rapidpipe.release import __main__ as release_cli
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
@@ -229,6 +234,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Record the run this one was seeded from. Lineage only: the new "
              "run inherits no configuration from it (give every option "
              "explicitly) and may not reuse its outputs.")
+    create_parser.add_argument(
+        "--check-policy", default=None, metavar="NAME@VERSION", dest="check_policy",
+        help="The check policy this run's promotions are validated under "
+             "(default when promoting: rebuild-trial@1). Must be a shipped policy.")
+    create_parser.add_argument(
+        "--auto-promote", action="store_true", dest="auto_promote",
+        help="Promote automatically at the end of run start when every check "
+             "passes. Refused unless the run's policy is lead-approved and "
+             "permits it; no shipped policy does.")
 
     list_parser = run_subparsers.add_parser("list", help="List runs.",
         description="List runs, newest first, optionally filtered.")
@@ -295,6 +309,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allow-unreleased", action="store_true",
         help="Promote even if a deliverable's attempt ran no complete release's "
              "image; recorded in the promotion's request_context.")
+    promote_parser.add_argument(
+        "--check-policy", default=None, metavar="NAME@VERSION", dest="check_policy",
+        help="Validate under this check policy (default: the run's check policy, "
+             "else rebuild-trial@1).")
 
     rollback_parser = run_subparsers.add_parser(
         "rollback", help="Reverse one promotion; print the reversing promotion id.",
@@ -334,6 +352,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "release", help="Cut, show, list and verify releases (python -m rapidpipe.release).",
         description="Cut, show, list and verify releases.")
     release_cli.build_parser(release_parser)
+
+    checkctl.add_parser(subparsers)
 
     return parser
 
@@ -468,8 +488,8 @@ def _run_create_command(args: argparse.Namespace) -> int:
                 resource_profile=args.profile,
                 database_target=args.db_target or os.environ.get("PGDATABASE", ""),
                 max_attempts_per_unit=args.max_attempts,
-                auto_promote=False,
-                check_policy_ref=None,
+                auto_promote=args.auto_promote,
+                check_policy_ref=args.check_policy,
                 release=args.release,
                 seed_run=args.seed,
             )
@@ -897,10 +917,13 @@ def _run_promote_command(args: argparse.Namespace) -> int:
         if not kinds:
             sys.stderr.write("rapidpipe run promote: --kinds must name at least one kind\n")
             return int(ExitCode.USAGE)
+    # promote_run resolves the check policy: --check-policy > the run's
+    # check_policy_ref > rebuild-trial@1 (supervisor step 6, 2026-09-24, R4).
+    policy_kwargs = {} if args.check_policy is None else {"check_policy": args.check_policy}
     return _run_model_command(
         "promote",
         lambda conn: promote_run(conn, args.run_id, who, args.reason, kinds=kinds,
-                                 allow_unreleased=args.allow_unreleased),
+                                 allow_unreleased=args.allow_unreleased, **policy_kwargs),
         print_result=print)
 
 
@@ -1010,6 +1033,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "release":
         return release_cli.dispatch(args)
+
+    if args.command == "check":
+        return checkctl.dispatch(args)
 
     parser.print_help()
     return int(ExitCode.SUCCESS) if args.command is None else int(ExitCode.USAGE)

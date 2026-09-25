@@ -1,0 +1,38 @@
+# Check policy rebuild-trial@1 (supervisor step 6, 2026-09-24, R3).
+# Immutable once landed: a change is a new version (a new file).
+# Bounds are generous margins around the control run's measured values.
+name = "rebuild-trial"
+version = "1"
+description = "Rebuild trial policy: difference-image statistics required, catalog counts advisory; bounds with generous margins around the control run."
+# Trial approval recorded by the step-6 supervisor under the lead's grant
+# (plan-review amendment A1); lead re-approval is an open item.
+approval = "trial"
+approved_by = "supervisor-step-6"
+auto_promote = false
+
+[[checks]]
+name = "difference-image-statistics"
+version = "1"
+kind = "difference-image"
+required = true
+
+[checks.params]
+scalefacref_lo = 0.2
+scalefacref_hi = 5.0
+rms_max = 1.0
+median_max = 0.5
+n_min = 50000
+n_max = 500000
+ratio_lo = 0.5
+ratio_hi = 2.0
+
+[[checks]]
+name = "catalog-counts-vs-reference"
+version = "1"
+kind = "source-set"
+required = false
+
+[checks.params]
+tolerance = 0.10
+missing_reference = "pass"
+reference_run = ""
