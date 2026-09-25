@@ -305,6 +305,9 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
         None if prev is None else _entry("association-set", "AS1", {"field": f})))
     monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
     monkeypatch.setattr(loop, "run_state", lambda conn, run: "open")
+    monkeypatch.setattr(loop, "run_lineage",
+                        lambda conn, run: ((run,), list(loop.SELECTED_STAGES)))
+    monkeypatch.setattr(loop, "unit_state", lambda conn, run, stage, unit: ("complete", False))
     monkeypatch.setattr(loop, "jobless_attempts", lambda conn, run: [])
     monkeypatch.setattr(loop, "unit_records", lambda conn, run: [
         {"stage": "admit", "unit": img.unit, "state": "complete", "attempt": "A", "job": "j"}])
@@ -408,12 +411,8 @@ def _loop_world(monkeypatch, rows, results):
     monkeypatch.setattr(loop, "process_date", process)
     monkeypatch.setattr(loop, "try_lock", lambda conn, schedule: True)
     monkeypatch.setattr(loop, "unlock", lambda conn, schedule: None)
-    reopened = []
-    monkeypatch.setattr(loop, "reopen_row", lambda conn, s, d: reopened.append(str(d)))
-    calls_reopened = reopened
     tools = loop.LoopTools(walk=None, create_run=None, storage=None, inputs_root=None,
                            out=lambda line: None)
-    tools.reopened = calls_reopened
     return spec, tools, calls
 
 
@@ -570,12 +569,53 @@ def test_run_loop_exits_75_when_another_loop_holds_the_schedule(monkeypatch):
     assert calls == [] and lines == ["another loop holds schedule control-loop"]
 
 
-def test_run_loop_retry_failed_reopens_the_row_and_resumes(monkeypatch):
-    spec, tools, calls = _loop_world(monkeypatch, {"2027-10-01": _row(state="failed")},
+def test_run_loop_retry_failed_repoints_the_row_to_a_seeded_run_and_resumes(monkeypatch):
+    failed = _row(state="failed", record={
+        "run": "RUN1", "spec": "x", "failure": "statistics 5 did not complete (exit 1)",
+        "units": [{"stage": "statistics"}], "previous_runs": ["RUN0"]})
+    spec, tools, calls = _loop_world(monkeypatch, {"2027-10-01": failed},
                                      {"2027-10-01": 0, "2027-10-02": 0})
-    assert loop.run_loop(object(), spec, tools, retry_failed=True) == 0
-    assert tools.reopened == ["2027-10-01"]
+    seeded, repointed = [], {}
+    conn = _Conn()
+
+    def create_seeded_run(c, seed):
+        assert c is conn
+        seeded.append(seed)
+        return "RUN3"
+
+    monkeypatch.setattr(loop, "repoint_row", lambda c, s, d, run, record: repointed.update(
+        date=str(d), run=run, record=record, commits=conn.commits))
+    tools.create_seeded_run = create_seeded_run
+    assert loop.run_loop(conn, spec, tools, retry_failed=True) == 0
+    assert seeded == ["RUN1"]
+    assert repointed["date"] == "2027-10-01" and repointed["run"] == "RUN3"
+    assert repointed["record"] == {
+        "run": "RUN3", "spec": "x", "previous_runs": ["RUN0", "RUN1"],
+        "previous_failures": [{"run": "RUN1",
+                               "failure": "statistics 5 did not complete (exit 1)"}]}
+    assert conn.commits == repointed["commits"] + 1  # the run and the row together
     assert calls == ["2027-10-01", "2027-10-02"]
+
+
+def test_run_loop_retry_failed_a_refused_seed_fails_the_date_with_its_message(monkeypatch):
+    spec, tools, calls = _loop_world(monkeypatch, {"2027-10-01": _row(
+        state="failed", record={"run": "RUN1"})}, {"2027-10-02": 0})
+    updates = {}
+
+    def refuse(conn, seed):
+        raise repository.SeedRefused(f"seed run {seed!r} has no non-complete unit; "
+                                     "nothing to re-run")
+
+    tools.create_seeded_run = refuse
+    monkeypatch.setattr(loop, "repoint_row", lambda *a: pytest.fail("repointed"))
+    monkeypatch.setattr(loop, "_update_row", lambda conn, s, d, **kw: updates.update(kw))
+    conn = _Conn()
+    assert loop.run_loop(conn, spec, tools, retry_failed=True) == 1
+    assert calls == []
+    assert updates["state"] == "failed"
+    assert updates["record"]["reason"] == (
+        "--retry-failed: seed run 'RUN1' has no non-complete unit; nothing to re-run")
+    assert conn.rollbacks >= 1
 
 
 def test_base_for_field_walks_back_to_the_newest_date_that_has_the_field(monkeypatch):
@@ -663,6 +703,7 @@ def test_process_date_other_refusals_propagate(monkeypatch):
 
 
 def test_process_date_resumes_a_finished_run_by_completing_the_row(monkeypatch):
+    # Every unit the date requires is complete (_world's unit_state).
     spec, tools, storage, walks, created, updates = _world(monkeypatch)
     monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN2", state="open",
                                                                   record={"run": "RUN2"}))
@@ -691,3 +732,164 @@ def test_alert_inputs_follow_the_alerts_stage_rules():
         loop.alert_result_sets(s1, [], [])
     with pytest.raises(loop.LoopError, match="more statistics"):
         loop.alert_result_sets(s1, ["AS1"], ["ST1", "ST2"])
+
+
+# ======================================================================
+# Codex 7-2
+# ======================================================================
+
+TWO_IMAGES = SPEC.split("[[dates]]\nprocessing_date = 2027-10-02")[0] + """
+[[dates.detector_images]]
+delivery = "s3://b/control/delivery/r0034001002001001001-sca02"
+difference_template = "s3://b/control/step3/P1/inputs"
+"""
+
+
+def _two_image_world(monkeypatch, **kwargs):
+    """_world with two detector images: SCA01's source set S1 has rows in
+    field 5 only, SCA02's S2 in field 6 only."""
+    spec, tools, storage, walks, created, updates = _world(monkeypatch, **kwargs)
+    spec = loop.parse_spec(TWO_IMAGES, "s3://b/loop.toml")
+    units = [i.unit for i in spec.dates[0].detector_images]
+    for unit, instance in zip(units, ("S1", "S2")):
+        storage.manifests[f"s3://b/out/load/{unit}"] = _manifest([_entry(
+            "source-set", instance, {"difference": "DI1"}, table="sources_20271001_01")])
+    monkeypatch.setattr(loop, "selected_output", lambda conn, run, stage, unit: (
+        f"s3://b/out/load/{unit}" if stage == "load" else f"s3://b/out/{stage}"))
+    monkeypatch.setattr(loop, "source_set_fields",
+                        lambda conn, table, instance: {"S1": [5], "S2": [6]}[instance])
+    return spec, tools, storage, walks, created, updates, units
+
+
+def test_crossmatch_input_sets_carry_every_source_set_of_the_date(monkeypatch):
+    spec, tools, storage, walks, created, updates, units = _two_image_world(
+        monkeypatch, previous=_row(run="RUN1"))
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
+    for f in (5, 6):
+        xm = storage.written[f"s3://b/scratch/runs/RUN2/inputs/crossmatch/{f}"]
+        # The neighbour pass needs the other field's rows: both source sets,
+        # then this field's base.
+        assert [o.instance for o in xm.outputs] == ["S1", "S2", "AS1"]
+        assert xm.outputs[-1].key == {"field": f}
+        assert xm.inputs.result_sets == ("S1", "S2", "AS1")
+    # alerts still take only the image's own fields' sets.
+    alerts = storage.written[f"s3://b/scratch/runs/RUN2/inputs/alerts/{units[0]}"]
+    assert alerts.inputs.result_sets == ("S1", "AS2", "ST2")
+    assert updates["record"]["fields"] == [5, 6]
+
+
+def test_a_failed_image_chain_does_not_stop_the_other_images(monkeypatch):
+    spec, tools, storage, walks, created, updates, units = _two_image_world(
+        monkeypatch, walk_rc=lambda positions: 1)
+    real_walk = tools.walk
+
+    def walk(conn, *, unit_id, **kw):
+        rc = real_walk(conn, unit_id=unit_id, **kw)
+        return rc if unit_id == units[0] else 0
+
+    tools.walk = walk
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 1
+    # Both chains were walked; nothing after the image phase was.
+    assert [(u, p) for u, p, *_ in walks] == [(units[0], loop.IMAGE_CHAIN),
+                                              (units[1], loop.IMAGE_CHAIN)]
+    assert updates["state"] == "failed"
+    assert f"{units[0]} did not complete" in updates["record"]["failure"]
+
+
+def test_a_finished_run_with_units_missing_fails_the_date(monkeypatch):
+    spec, tools, storage, walks, created, updates = _world(monkeypatch)
+    unit = spec.dates[0].detector_images[0].unit
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN2", state="open",
+                                                                  record={"run": "RUN2"}))
+    monkeypatch.setattr(loop, "run_state", lambda conn, run: "finished")
+    states = {("statistics", "5"): ("failed", False), ("prune", "5"): None,
+              ("alerts", unit): None}
+    monkeypatch.setattr(loop, "unit_state", lambda conn, run, stage, u: states.get(
+        (stage, u), ("complete", False)))
+    monkeypatch.setattr(loop, "_promote", lambda *a: pytest.fail("promoted"))
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 1
+    assert walks == []
+    assert updates["state"] == "failed" and updates["promotion"] is None
+    assert updates["record"]["reason"] == (
+        "run RUN2 is finished but the date's units are not all complete: statistics 5 "
+        f"(failed), prune 5 (absent), alerts {unit} (absent)")
+
+
+def test_a_finished_run_without_its_loads_names_the_image_chain(monkeypatch):
+    spec, tools, storage, walks, created, updates = _world(monkeypatch)
+    unit = spec.dates[0].detector_images[0].unit
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN2", state="open"))
+    monkeypatch.setattr(loop, "run_state", lambda conn, run: "finished")
+    absent = {("register", f"finalize/{unit}"), ("load", unit), ("alerts", unit)}
+    monkeypatch.setattr(loop, "unit_state", lambda conn, run, stage, u: (
+        None if (stage, u) in absent else ("complete", False)))
+    monkeypatch.setattr(loop, "selected_output", lambda *a: pytest.fail("read a load"))
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 1
+    reason = updates["record"]["reason"]
+    assert f"register finalize/{unit} (absent), load {unit} (absent)" in reason
+    assert "unknown until every load is complete" in reason
+    assert reason.endswith(f"alerts {unit} (absent)")
+
+
+def test_image_units_name_registers_by_their_producer():
+    assert loop.image_units("U/SCA01") == [
+        (0, "admit", "U/SCA01"), (1, "register", "admit/U/SCA01"),
+        (2, "difference", "U/SCA01"), (3, "finalize", "U/SCA01"),
+        (4, "register", "finalize/U/SCA01"), (5, "load", "U/SCA01")]
+
+
+def test_process_date_on_a_seeded_re_run_walks_only_what_its_seed_left(monkeypatch):
+    """RUN3 re-runs RUN2's failed statistics 5 (--retry-failed): its stages
+    are statistics, prune, alerts; everything before is inherited from RUN2
+    and read there; prune 5 and alerts never ran in RUN2 and run in RUN3."""
+    spec, tools, storage, walks, created, updates = _world(monkeypatch)
+    unit = spec.dates[0].detector_images[0].unit
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN3", state="open",
+                                                                  record={"run": "RUN3"}))
+    monkeypatch.setattr(loop, "run_lineage",
+                        lambda conn, run: (("RUN3", "RUN2"), ["statistics", "prune", "alerts"]))
+    run3 = {("statistics", "5"): ("pending", True)}
+    run2_missing = {("prune", "5"), ("alerts", unit)}
+
+    def unit_state(conn, run, stage, u):
+        if run == "RUN3":
+            return run3.get((stage, u))
+        if (stage, u) in run2_missing:
+            return None
+        return ("failed", False) if (stage, u) == ("statistics", "5") else ("complete", False)
+
+    reads = []
+
+    def selected_output(conn, run, stage, u):
+        reads.append((run, stage))
+        return f"s3://b/out/{stage}"
+
+    monkeypatch.setattr(loop, "unit_state", unit_state)
+    monkeypatch.setattr(loop, "selected_output", selected_output)
+    real_walk = tools.walk
+
+    def walk(conn, *, unit_id, positions, **kw):
+        stage = ["statistics", "prune", "alerts"][positions[0]]
+        run3[(stage, unit_id)] = ("complete", run3.get((stage, unit_id), (None, False))[1])
+        return real_walk(conn, unit_id=unit_id, positions=positions, **kw)
+
+    tools.walk = walk
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
+    assert [(u, p, i) for u, p, i, *_ in walks] == [
+        ("5", [0], ["s3://b/out/crossmatch"]), ("5", [1], ["s3://b/out/crossmatch"]),
+        (unit, [2], [f"s3://b/scratch/runs/RUN3/inputs/alerts/{unit}"])]
+    assert ("RUN2", "load") in reads and ("RUN2", "crossmatch") in reads
+    assert ("RUN2", "finalize") in reads and ("RUN3", "alerts") in reads
+    # Nothing inherited was composed in RUN3: only the alerts input set.
+    assert [k for k in storage.written if "/inputs/" in k] == [
+        f"s3://b/scratch/runs/RUN3/inputs/alerts/{unit}"]
+    assert updates["state"] == "complete"
+
+
+def test_run_view_refuses_a_run_whose_stages_are_not_a_suffix(monkeypatch):
+    monkeypatch.setattr(loop, "run_lineage", lambda conn, run: (("R",), ["admit", "load"]))
+    with pytest.raises(loop.LoopError, match="suffix"):
+        loop.run_view(object(), "R")
+    monkeypatch.setattr(loop, "run_lineage", lambda conn, run: (("R", "S"), ["prune", "alerts"]))
+    view = loop.run_view(object(), "R")
+    assert (view.offset, view.seeded) == (9, True)
