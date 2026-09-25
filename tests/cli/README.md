@@ -31,3 +31,11 @@ finishing a job between polls without a side thread. `run expire`'s
 re-checks `expires_at < now()` under the row lock using the database's
 own clock (`runs.repository.mark_run_deleting`), so a scratch run under
 test is backdated directly rather than through `--now` alone.
+
+`test_loop.py` drives `rapidpipe loop run|plan|show` over a two-date spec
+the same way: the wrapped `_reconcile` writes a stage-shaped manifest per
+attempt (an `l2-image` for admit, a `source-set` whose rows go into a real
+`sources_29990101_01` table the test makes and drops, an `association-set`
+for crossmatch that it also registers, as the real stage does), so the
+second date's crossmatch input set can be checked for the first date's
+association set.
