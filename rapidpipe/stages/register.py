@@ -5,7 +5,7 @@ from manifests"; per "The manifest": "Each product kind defines the
 registration metadata its manifest entry must carry. `register` validates
 that metadata and writes product rows without reading product contents."
 
-It records six kinds. It registers the enclosing manifest's own
+It records eight kinds. It registers the enclosing manifest's own
 instances (`rapidpipe.runs.repository.register_manifest`), then writes
 the legacy rows each kind has, all in one transaction:
 
@@ -16,6 +16,13 @@ the legacy rows each kind has, all in one transaction:
   (`rapidpipe.db.diffimages.register_difference_image`);
 - `psf` (designed in for `admit`'s manifest, which carries none today):
   one `psfs` row through `dev`'s ``addPSF`` (``rapidpipe.db.psfs.register_psf``);
+- `reference-image` (`reference`'s manifest): `refimages`, `refimmeta` and
+  one `refimimages` row per constituent l2 image, through `dev`'s
+  ``addRefImage``/``registerRefImMeta``/``registerRefImImage``
+  (``rapidpipe.db.refimages.register_reference_image``);
+- `reference-catalog` (also `reference`'s): one `refimcatalogs` row through
+  ``registerRefImCatalog``, after the reference image it names
+  (``rapidpipe.db.refimages.register_reference_catalog``);
 - `source-catalog` (also `difference`'s): validated and accepted, nothing
   written beyond its instance row -- the products page's "Today's table"
   for this kind is "none until `load`".
@@ -43,6 +50,7 @@ from rapidpipe.db.connection import ConnectionUnavailable
 from rapidpipe.db.diffimages import register_difference_image
 from rapidpipe.db.l2files import register_l2_image
 from rapidpipe.db.psfs import register_psf
+from rapidpipe.db.refimages import register_reference_catalog, register_reference_image
 from rapidpipe.products.alertcontainer import (
     validate_alert_container_entry,
     validate_alert_set_entry,
@@ -52,6 +60,10 @@ from rapidpipe.products.diffimage import (
     validate_source_catalog_entry,
 )
 from rapidpipe.products.psf import validate_psf_entry
+from rapidpipe.products.refimage import (
+    validate_reference_catalog_entry,
+    validate_reference_image_entry,
+)
 from rapidpipe.runs.repository import register_manifest
 from rapidpipe.stages.contract import (
     InputRejected,
@@ -65,7 +77,14 @@ from rapidpipe.stages.contract import (
 #: Product kinds this stage knows how to record. An output entry of any
 #: other kind is InputRejected, naming the kind.
 _KNOWN_KINDS = ("l2-image", "psf", "difference-image", "source-catalog",
-                "alert-container", "alert-set")
+                "alert-container", "alert-set", "reference-image",
+                "reference-catalog")
+
+#: Kinds whose rows other kinds' rows reference, written first: a
+#: reference-catalog's `refimcatalogs` row needs its reference image's
+#: `refimages` row, which may be registered by the same manifest. Every
+#: other kind keeps its manifest order.
+_REGISTRATION_ORDER = {"reference-image": 0}
 
 DECLARATION = StageDeclaration(
     name="register",
@@ -78,7 +97,8 @@ DECLARATION = StageDeclaration(
             "producing attempt's completion manifest (admit's, naming "
             "l2-image and psf entries, or difference's, naming difference-image "
             "and source-catalog entries, or alerts's, naming alert-container "
-            "and alert-set entries). <unit-id> is always "
+            "and alert-set entries, or reference's, naming reference-image "
+            "and reference-catalog entries). <unit-id> is always "
             "<producing stage>/<producing unit id> (rapidpipe.products."
             "manifest.register_unit_id), derived from that same manifest's "
             "own `stage` and `unit.id` -- a register unit is identified by "
@@ -89,7 +109,8 @@ DECLARATION = StageDeclaration(
     },
     settings_schema_path=None,
     consumes=("l2-image", "psf", "difference-image", "source-catalog",
-              "alert-container", "alert-set"),
+              "alert-container", "alert-set", "reference-image",
+              "reference-catalog"),
     produces=(),
     database_access="read-write",
     resource_defaults={"vcpus": 1, "memory_mib": 1024},
@@ -133,6 +154,10 @@ def _body(context: StageContext) -> StageResult:
                 validate_alert_container_entry(entry.to_dict())
             elif entry.kind == "alert-set":
                 validate_alert_set_entry(entry.to_dict())
+            elif entry.kind == "reference-image":
+                validate_reference_image_entry(entry.to_dict())
+            elif entry.kind == "reference-catalog":
+                validate_reference_catalog_entry(entry.to_dict())
         except ValueError as exc:
             raise InputRejected(f"{entry.kind} {entry.instance!r}: {exc}") from exc
 
@@ -147,7 +172,31 @@ def _body(context: StageContext) -> StageResult:
                 register_manifest(
                     conn, manifest_dict, registering_attempt_id=context.attempt_id)
 
-                for entry in manifest.outputs:
+                ordered = sorted(
+                    manifest.outputs,
+                    key=lambda e: _REGISTRATION_ORDER.get(e.kind, 1))
+                for entry in ordered:
+                    if entry.kind == "reference-image":
+                        register_reference_image(
+                            conn,
+                            entry=entry.to_dict(),
+                            run_id=manifest.run,
+                            # The producing attempt: refimages.attempt
+                            # names the attempt that made the product
+                            # (20260923-02; supervisor amendment, step 8).
+                            attempt_id=manifest.attempt,
+                            output_location=context.inputs_location,
+                        )
+                        products_read["reference-image"] = entry.instance
+                        continue
+                    if entry.kind == "reference-catalog":
+                        register_reference_catalog(
+                            conn,
+                            entry=entry.to_dict(),
+                            output_location=context.inputs_location,
+                        )
+                        products_read["reference-catalog"] = entry.instance
+                        continue
                     if entry.kind == "difference-image":
                         register_difference_image(
                             conn,

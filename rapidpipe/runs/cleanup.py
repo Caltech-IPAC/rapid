@@ -40,11 +40,18 @@ What is removed, and only for rows whose ``run`` is this run:
   ``diffimages.rid`` -> ``l2files``, ``diffimages.rfid`` -> ``refimages``;
   ``l2filemeta.rid`` -> ``l2files``; ``psfs`` has no inbound key).
 
-``xsources``, ``refimimages``, ``refimcatalogs`` and ``refimmeta`` carry
-no ``run`` column and are never cleaned. A row in them -- or a science
-row of another run, or a ``dev`` row with no run -- that references one of
-this run's rows blocks deletion: it is found by a preflight and refused
-before the run is marked (``_blocking_references``).
+``refimimages``, ``refimcatalogs`` and ``refimmeta`` carry no ``run``
+column; they belong to a run through their ``rfid``
+(:data:`RFID_SCOPED_TABLES`). Their rows whose ``rfid`` is one of this
+run's `refimages` rows are deleted first, in the same transaction, since
+`register` writes them with that run's reference image (supervisor step
+8, ruling R7). ``xsources`` carries no ``run`` column and is never
+cleaned. A row that references one of this run's rows and is not itself
+cleaned with the run -- an ``xsources`` row, a `refimimages` row of
+another run's reference naming this run's l2 image, a science row of
+another run, or a ``dev`` row with no run -- blocks deletion: it is found
+by a preflight and refused before the run is marked
+(``_blocking_references``).
 
 Run-model rows (runs, units, attempts, execution records, instances,
 members, result sets, dependencies, promotions) are tombstones and are
@@ -90,6 +97,11 @@ SCIENCE_TABLES = (
     "psfs",
 )
 
+#: Satellite tables of `refimages` with no ``run`` column, cleaned with
+#: the run that owns their ``rfid`` (module docstring), before
+#: :data:`SCIENCE_TABLES`: ``refimimages`` also references ``l2files``.
+RFID_SCOPED_TABLES = ("refimimages", "refimcatalogs", "refimmeta")
+
 #: Every foreign key in the baseline that points at a run-scoped science
 #: table, as (referencing table, its column, referenced table, its key
 #: column). A referencing row that does not belong to the run being
@@ -107,7 +119,11 @@ _INBOUND_REFERENCES = (
     ("diffimages", "rfid", "refimages", "rfid"),
     ("l2filemeta", "rid", "l2files", "rid"),
 )
-_RUNLESS_TABLES = ("xsources", "refimimages", "refimcatalogs", "refimmeta")
+_RUNLESS_TABLES = ("xsources",)
+#: A satellite row outside this run: its ``rfid`` is not one of this run's
+#: `refimages` rows (``r`` is the referencing row, as in the preflight).
+_OUTSIDE_BY_RFID = (
+    "NOT EXISTS (SELECT 1 FROM refimages o WHERE o.rfid = r.rfid AND o.run = %(run)s)")
 
 #: The ``requested_by`` :func:`expire_runs` deletes as.
 EXPIRY_ACTOR = "expire_runs"
@@ -334,7 +350,12 @@ def _blocking_references(conn, run_id: str) -> list[str]:
     blocking: list[str] = []
     with conn.cursor() as cur:
         for table, column, target, key in _INBOUND_REFERENCES:
-            outside = "TRUE" if table in _RUNLESS_TABLES else "r.run IS DISTINCT FROM %(run)s"
+            if table in _RUNLESS_TABLES:
+                outside = "TRUE"
+            elif table in RFID_SCOPED_TABLES:
+                outside = _OUTSIDE_BY_RFID
+            else:
+                outside = "r.run IS DISTINCT FROM %(run)s"
             # Names come from the fixed tuple above, never caller input.
             cur.execute(
                 f"""
@@ -433,8 +454,10 @@ def delete_run(
        ``delete_objects`` in batches of 1000, quiet). Any per-object error
        raises :class:`CleanupFailed`; the run stays ``deleting`` and the
        database is untouched.
-    4. In ONE transaction: ``DELETE FROM <table> WHERE run = %s`` for each
-       of :data:`SCIENCE_TABLES` in order, counted per table; the run's
+    4. In ONE transaction: the :data:`RFID_SCOPED_TABLES` rows whose
+       ``rfid`` is one of this run's `refimages` rows, then ``DELETE FROM
+       <table> WHERE run = %s`` for each of :data:`SCIENCE_TABLES` in
+       order, counted per table; the run's
        instances marked ``deletion_state = 'deleted'``;
        :func:`~rapidpipe.runs.repository.mark_run_deleted`; then one
        ``commit``. A failure rolls all of it back and leaves ``deleting``.
@@ -465,6 +488,13 @@ def delete_run(
 
     try:
         with conn.cursor() as cur:
+            for table in RFID_SCOPED_TABLES:
+                # table comes from the fixed tuple above, never caller input.
+                cur.execute(
+                    f"DELETE FROM {table} WHERE rfid IN "
+                    "(SELECT rfid FROM refimages WHERE run = %s)",
+                    (run_id,))
+                report.rows_deleted[table] = cur.rowcount
             for table in SCIENCE_TABLES:
                 # table comes from the fixed tuple above, never caller input.
                 cur.execute(f"DELETE FROM {table} WHERE run = %s", (run_id,))
