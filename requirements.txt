@@ -25,3 +25,13 @@ boto3>=1.34
 # (rapidpipe.science.alerts imports it at module scope; nothing else in
 # rapidpipe does). The pipeline image's conda environment carries it.
 fastavro>=1.9
+# The difference stage's PSF-fit catalogs (rapidpipe.science.difference.psfcat)
+# import photutils lazily, inside the fitting functions, so importing the
+# stage never requires it; whatever environment runs difference with real
+# tools must carry it. The pipeline image's conda environment carries it.
+photutils>=2.0
+# The export stage's HATS source-catalog export (rapidpipe.stages.export)
+# imports hats, hats_import and dask lazily, inside the export path, so
+# importing the stage never requires them; hats-import pulls hats and dask.
+# The pipeline image's conda environment carries all three.
+hats-import>=0.5

@@ -13,7 +13,7 @@ container):
 
 ```
 PGHOST=... PGPORT=5432 PGDATABASE=rapid PGUSER=... PGPASSWORD=... \
-    .venv/bin/python -m pytest tests/cli -q
+    python -m pytest tests/cli -q
 ```
 
 Without `PGHOST` set, the database-backed tests skip cleanly (exit 0);
