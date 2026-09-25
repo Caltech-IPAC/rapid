@@ -13,9 +13,12 @@ written with the reformatted file's header. The arithmetic below is
 `dev` also accumulates the JD range and the total exposure time; the
 caller does that from :class:`PreparedFrame`.
 
-The filter-name map and :func:`get_reference_image_zeropoint` are `dev`'s
-(``modules/utils/rapid_pipeline_subs.py``), ported because that module
-imports boto3 at module scope.
+The filter-name map and :func:`rapid_filter_name` are `dev`'s
+(``modules/utils/rapid_pipeline_subs.py``); the single copy lives in
+:mod:`rapidpipe.products.filters` (step 8, WP-E) and is re-exported here
+under its original name, since this module used to define it.
+:func:`get_reference_image_zeropoint` is `dev`'s too, ported because that
+module imports boto3 at module scope.
 """
 
 from __future__ import annotations
@@ -30,46 +33,15 @@ from typing import Any, Mapping
 import numpy as np
 from astropy.io import fits
 
+from rapidpipe.products.filters import (
+    RAPID_TO_ROMAN_FILTER_NAMES,
+    ROMAN_TO_RAPID_FILTER_NAMES,
+    filter_spellings,
+    rapid_filter_name,
+    same_filter,
+)
+
 logger = logging.getLogger(__name__)
-
-#: `dev`'s ``roman_to_rapid_filter_names``: Roman designations to the RAPID
-#: names FITS ``FILTER`` headers and the ``filters`` table carry.
-ROMAN_TO_RAPID_FILTER_NAMES = {
-    "F062": "R062",
-    "F087": "Z087",
-    "F106": "Y106",
-    "F129": "J129",
-    "F158": "H158",
-    "F184": "F184",
-    "F213": "K213",
-    "F146": "W146",
-}
-RAPID_TO_ROMAN_FILTER_NAMES = {v: k for k, v in ROMAN_TO_RAPID_FILTER_NAMES.items()}
-
-
-def filter_spellings(name: str) -> set[str]:
-    """Every spelling of ``name`` `dev` treats as the same filter (upper case)."""
-    upper = str(name).strip().upper()
-    spellings = {upper}
-    alternate = ROMAN_TO_RAPID_FILTER_NAMES.get(upper, RAPID_TO_ROMAN_FILTER_NAMES.get(upper))
-    if alternate is not None:
-        spellings.add(alternate)
-    return spellings
-
-
-def rapid_filter_name(name: str) -> str:
-    """The RAPID spelling of ``name`` (``F146`` -> ``W146``; ``W146`` unchanged).
-
-    FITS ``FILTER`` headers and the ``filters`` table carry the RAPID
-    spelling; a name in neither map is returned upper-cased.
-    """
-    upper = str(name).strip().upper()
-    return ROMAN_TO_RAPID_FILTER_NAMES.get(upper, upper)
-
-
-def same_filter(a: str, b: str) -> bool:
-    """True when ``a`` and ``b`` name one filter in either spelling."""
-    return bool(filter_spellings(a) & filter_spellings(b))
 
 
 def get_reference_image_zeropoint(awaicgen_dict: Mapping[str, Any], filter_name: str | None) -> float:

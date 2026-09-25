@@ -55,6 +55,8 @@ import re
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Mapping
 
+from rapidpipe.products.filters import ROMAN_TO_RAPID_FILTER_NAMES, rapid_filter_name
+
 _MD5_RE = re.compile(r"^[0-9a-f]{32}$")
 #: A ULID as rapidpipe.db.ids writes one (the rapid_ulid domain's pattern);
 #: repeated here because products must not import db.
@@ -73,35 +75,14 @@ REFERENCE_RECIPES = ("awaicgen",)
 #: ``image``; all three are required and no other role is declared.
 REFERENCE_IMAGE_ROLES = ("image", "coverage", "uncertainty")
 
-#: `dev`'s ``roman_to_rapid_filter_names`` (``modules/utils/
-#: rapid_pipeline_subs.py``): Roman filter designations to the RAPID names
-#: that FITS FILTER headers and the `filters` table carry. F184 is spelled
-#: the same either way. The `reference` stage carries the same map in
-#: ``rapidpipe.science.reference.prep`` (PR #128, not yet merged when this
-#: landed); products may not import science, so this is a second copy
-#: until the two are reconciled at merge.
-ROMAN_TO_RAPID_FILTER_NAMES: dict[str, str] = {
-    "F062": "R062",
-    "F087": "Z087",
-    "F106": "Y106",
-    "F129": "J129",
-    "F158": "H158",
-    "F184": "F184",
-    "F213": "K213",
-    "F146": "W146",
-}
-
-
-def rapid_filter_name(name: str) -> str:
-    """The RAPID spelling of a filter name given in either spelling.
-
-    Upper-cased and stripped; a Roman designation maps through
-    :data:`ROMAN_TO_RAPID_FILTER_NAMES`; any other name is returned as it
-    is, for the `filters` lookup to accept or refuse.
-    """
-    upper = str(name).strip().upper()
-    return ROMAN_TO_RAPID_FILTER_NAMES.get(upper, upper)
-
+# ROMAN_TO_RAPID_FILTER_NAMES and rapid_filter_name (imported above from
+# rapidpipe.products.filters): `dev`'s `roman_to_rapid_filter_names`
+# (`modules/utils/rapid_pipeline_subs.py`), Roman filter designations to
+# the RAPID names that FITS FILTER headers and the `filters` table carry;
+# F184 is spelled the same either way. The `reference` stage carries the
+# same map (`rapidpipe.science.reference.prep`); the single copy lives in
+# `rapidpipe.products.filters` (step 8, WP-E) and is re-exported here
+# under its original name, since this module used to define it.
 
 #: `dev`'s ``refimcatalogs.cattype`` values: 1 for the SExtractor catalog,
 #: 2 for the Photutils PSF-fit catalog (``registerCompletedJobsInDB.py``).
