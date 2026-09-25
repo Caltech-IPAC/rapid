@@ -35,6 +35,14 @@ from typing import Any, Iterable, Sequence
 import psycopg2
 import psycopg2.extensions
 
+from rapidpipe.checks.policy import (
+    DEFAULT_POLICY,
+    Policy,
+    PolicyError,
+    load_policy,
+    policy_permits_auto_promote,
+    policy_permits_promotion,
+)
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.storage import join, parse_location
 
@@ -110,6 +118,12 @@ class ManifestConflict(RunModelError):
 
 class PromotionRefused(RunModelError):
     """A promotion request failed validation; the whole request is refused."""
+
+
+class CheckPolicyRefused(RunModelError):
+    """A check policy is unknown, or does not permit what was asked of it
+    (automatic promotion at run creation; supervisor step 6, 2026-09-24,
+    R5)."""
 
 
 class DeletionRefused(RunModelError):
@@ -190,9 +204,27 @@ def create_run(
     it is complete and copied its source revision and image digest into
     ``code_revision``/``image_digest``). ``runs.release`` references
     ``releases (tag)``, so an unknown tag fails at the INSERT.
+
+    ``check_policy_ref``, when given, must name a shipped check policy
+    (``name@version``); it is the policy ``promote_run`` validates this
+    run's promotions under (R4). ``auto_promote`` is refused
+    (:class:`CheckPolicyRefused`) unless the run's policy -- the named one
+    or the default -- permits automatic promotion
+    (:func:`policy_permits_auto_promote`; supervisor step 6, 2026-09-24,
+    R5). No shipped policy does.
     """
     if kind not in ("scratch", "production"):
         raise ValueError(f"kind must be 'scratch' or 'production', got {kind!r}")
+    if check_policy_ref is not None or auto_promote:
+        policy_ref = check_policy_ref or DEFAULT_POLICY
+        try:
+            policy = load_policy(policy_ref)
+        except PolicyError as exc:
+            raise CheckPolicyRefused(str(exc)) from None
+        if auto_promote and not policy_permits_auto_promote(policy):
+            raise CheckPolicyRefused(
+                f"policy {policy.ref} does not permit automatic promotion; "
+                "lead approval pending")
 
     run_id = new_ulid()
     with conn.cursor() as cur:
@@ -987,8 +1019,7 @@ def promote(
     who: str,
     reason: str,
     changes: Sequence[tuple[str, dict[str, Any], str | None, str | None]],
-    check_policy_version: str | None = None,
-    check_result_ids: Sequence[str] = (),
+    check_policy: Policy | None = None,
     request_context: dict[str, Any] | None = None,
     *,
     allow_unreleased: bool = False,
@@ -1023,6 +1054,22 @@ def promote(
          unless ``allow_unreleased``, which admits them and records
          ``{"allow_unreleased": true, "attempts": [<the unreleased
          attempts>]}`` in ``request_context`` (the recorded exception).
+         Then, when ``check_policy`` is given, the check-policy gate
+         (supervisor step 6, 2026-09-24, R4 and plan-review amendments
+         A1/A2): the policy must be approved
+         (:func:`policy_permits_promotion`); for each after-instance and
+         each policy check of its kind, the latest ``checks`` row for that
+         check name and version whose recorded ``detail.params`` equal the
+         policy's params (by ``happened_at`` desc, ``id`` desc, read FOR
+         SHARE under the lock) must have outcome ``passed`` when the policy
+         marks the check required; a failed or missing required result
+         refuses the whole promotion. Advisory rows never refuse. A kind
+         the policy names no check for passes trivially. The promotions
+         row records ``check_policy_version`` (the policy's
+         ``name@version``) and ``check_result_ids`` (every row relied on,
+         required and advisory). With ``check_policy`` ``None`` (only
+         :func:`rollback_promotion` and direct callers) neither is
+         checked nor recorded.
       3. Sets the before rows to candidate and the after rows to
          current, maintains ``dev``'s ``vbest`` for kinds that have one
          (``vbest = 0`` on the before-instance's row, ``vbest = 1`` on the
@@ -1104,6 +1151,15 @@ def promote(
                     "attempts": sorted({attempt for attempt, _d, _r in unreleased}),
                 }
 
+        # Step 2c: the check-policy gate (supervisor step 6, R4).
+        check_policy_version: str | None = None
+        check_result_ids: list[str] = []
+        if check_policy is not None:
+            check_policy_version = check_policy.ref
+            check_result_ids = _validate_check_policy(
+                cur, check_policy,
+                [(kind, after) for kind, _key, _before, after in changes if after is not None])
+
         # Step 3: apply. Before rows (if any) go back to candidate; after
         # rows become current; vbest follows. Record the promotion and
         # its changes.
@@ -1115,7 +1171,7 @@ def promote(
             ) VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (promotion_id, who, reason, check_policy_version,
-             list(check_result_ids), json.dumps(request_context or {})),
+             check_result_ids, json.dumps(request_context or {})),
         )
 
         for kind, logical_key, expected_before, after_instance in changes:
@@ -1141,6 +1197,63 @@ def promote(
             )
 
     return promotion_id
+
+
+def _validate_check_policy(
+    cur, policy: Policy, after_instances: Sequence[tuple[str, str]],
+) -> list[str]:
+    """The check-policy gate of :func:`promote`; returns the ``checks`` row
+    ids relied on, or raises :class:`PromotionRefused` (supervisor step 6,
+    2026-09-24, R4, A1, A2).
+
+    Requiredness is the policy's own flag, never the ``checks.required``
+    column (which records what the check ran as; A2). Only a row whose
+    ``detail.params`` equal the policy's params for that check qualifies,
+    and of those the latest (``happened_at`` desc, ``id`` desc) decides
+    (R4 amendment, 19:50): the outcome depends on the bounds, so a run
+    checked under ``rebuild-strict@1`` after ``rebuild-trial@1`` must not
+    poison a trial promotion, and a pass under looser ``--param`` bounds
+    must not admit one.
+
+    Runs inside the promotion transaction with the advisory lock held; the
+    rows relied on are read FOR SHARE so they cannot change under the
+    promotion. A check row inserted after this read is not seen (recorded
+    and accepted, plan review "LIKELY latest-row race").
+    """
+    if not policy_permits_promotion(policy):
+        raise PromotionRefused(
+            f"check policy {policy.ref} is not approved; refusing")
+    relied_on: list[str] = []
+    for kind, instance in after_instances:
+        for policy_check in policy.checks_for_kind(kind):
+            cur.execute(
+                """
+                SELECT id, outcome, detail->>'summary'
+                FROM checks
+                WHERE instance = %s AND check_name = %s AND version = %s
+                  AND detail->'params' = %s::jsonb
+                ORDER BY happened_at DESC, id DESC
+                LIMIT 1
+                FOR SHARE
+                """,
+                (instance, policy_check.name, policy_check.version,
+                 policy_check.params_json()),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                relied_on.append(row[0])
+            if not policy_check.required:
+                continue
+            if row is None:
+                raise PromotionRefused(
+                    f"check policy {policy.ref}: required check {policy_check.ref} "
+                    f"on instance {instance} (kind {kind}) has no result; refusing")
+            if row[1] != "passed":
+                raise PromotionRefused(
+                    f"check policy {policy.ref}: required check {policy_check.ref} "
+                    f"on instance {instance} (kind {kind}) is {row[1]} "
+                    f"({row[2] or 'no summary'}); refusing")
+    return relied_on
 
 
 def _maintain_vbest(
@@ -1214,11 +1327,9 @@ def _unreleased_attempt(cur, after_instance: str) -> tuple[str, str | None, str 
 def _validate_promotion_eligibility(
     cur, kind: str, logical_key: dict[str, Any], after_instance: str,
 ) -> None:
-    # The released-image rule is checked by promote() itself, after this
-    # (supervisor step 5, 2026-09-24, R8). Check-policy validation
-    # (required checks passed under the named policy version) is still NOT
-    # verified here; it lands with step 6 -- a recorded deferral, not an
-    # acceptance.
+    # The released-image rule and the check-policy gate are checked by
+    # promote() itself, after this (supervisor step 5, 2026-09-24, R8;
+    # supervisor step 6, 2026-09-24, R4).
     cur.execute(
         """
         SELECT pi.custody, pi.kind, pi.logical_key, pi.deletion_state,
@@ -1275,16 +1386,25 @@ def _validate_promotion_eligibility(
     # Every provenance dependency must identify a complete, retained
     # instance in project custody (candidate or current; scratch is not
     # project custody).
+    # A dependency that is a result set must be complete (plan-review
+    # amendment A3, supervisor step 6, 2026-09-24).
     cur.execute(
         """
-        SELECT d.producer_instance, pi.custody, pi.deletion_state
+        SELECT d.producer_instance, pi.custody, pi.deletion_state,
+               rs.instance IS NOT NULL AND NOT rs.complete
         FROM dependencies d
         JOIN product_instances pi ON pi.id = d.producer_instance
+        LEFT JOIN result_sets rs ON rs.instance = pi.id
         WHERE d.consumer_instance = %s
         """,
         (after_instance,),
     )
-    for producer_instance, producer_custody, deletion_state in cur.fetchall():
+    for producer_instance, producer_custody, deletion_state, incomplete in cur.fetchall():
+        if incomplete:
+            raise PromotionRefused(
+                f"after instance {after_instance!r} depends on "
+                f"{producer_instance!r}, which is an incomplete result set; "
+                "refusing")
         if producer_custody not in ("candidate", "current"):
             raise PromotionRefused(
                 f"after instance {after_instance!r} depends on "
@@ -1308,7 +1428,7 @@ def promote_run(
     reason: str,
     *,
     kinds: Sequence[str] | None = None,
-    check_policy_version: str | None = None,
+    check_policy: Policy | str | None = None,
     allow_unreleased: bool = False,
 ) -> str:
     """Promote a production run's deliverables; return the promotion id.
@@ -1331,23 +1451,35 @@ def promote_run(
     admitted deliverables no complete release produced; see
     :func:`promote`).
 
+    Every promotion is validated under a named check policy (supervisor
+    step 6, 2026-09-24, R4): ``check_policy`` (a :class:`Policy` or its
+    ``name@version``) > the run's ``check_policy_ref`` > the default
+    ``rebuild-trial@1``; an unknown policy is refused. See :func:`promote`
+    for the gate itself.
+
     Refuses (:class:`PromotionRefused`) when there is nothing to promote.
     """
     with conn.cursor() as cur:
         cur.execute(
             "SELECT pg_advisory_xact_lock(%s)", (_PROMOTION_ADVISORY_LOCK_KEY,))
         cur.execute(
-            "SELECT kind, state FROM runs WHERE id = %s FOR SHARE", (run_id,))
+            "SELECT kind, state, check_policy_ref FROM runs WHERE id = %s FOR SHARE",
+            (run_id,))
         row = cur.fetchone()
         if row is None:
             raise RunNotFound(f"run {run_id!r} does not exist")
-        run_kind, run_state = row
+        run_kind, run_state, run_policy_ref = row
         if run_kind != "production":
             raise PromotionRefused(
                 f"run {run_id!r} is a {run_kind!r} run; scratch never leaves "
                 "scratch, only a production run's candidates may be promoted")
         if run_state in _TERMINAL_RUN_STATES:
             raise RunDeletingOrDeleted(f"run {run_id!r} is {run_state!r}; refusing")
+        if not isinstance(check_policy, Policy):
+            try:
+                check_policy = load_policy(check_policy or run_policy_ref or DEFAULT_POLICY)
+            except PolicyError as exc:
+                raise PromotionRefused(f"{exc}; refusing") from None
 
         query = """
             SELECT pi.id, pi.kind, pi.logical_key
@@ -1397,7 +1529,7 @@ def promote_run(
 
     return promote(
         conn, who, reason, changes,
-        check_policy_version=check_policy_version,
+        check_policy=check_policy,
         request_context={"run": run_id},
         allow_unreleased=allow_unreleased,
     )
@@ -1421,9 +1553,13 @@ def rollback_promotion(
     the selection it made. The new promotions row records
     ``request_context = {"rollback_of": promotion_id}``.
 
-    The released-image rule is not re-applied: a rollback restores a
-    selection that was current before, admitted by that earlier
-    promotion's own check (or its recorded exception).
+    Rollback skips check-policy revalidation (supervisor step 6,
+    2026-09-24, R4 and amendment A4): no ``check_policy`` is passed, so the
+    row records none. As before (supervisor step 5, R8) it also skips the
+    released-image rule. Every other validation in :func:`promote` still
+    runs: the expected-before check, and each restored instance's
+    eligibility (candidate from a selected attempt, retained, complete if a
+    result set, dependencies in project custody, retained and complete).
     """
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM promotions WHERE id = %s", (promotion_id,))

@@ -1,0 +1,34 @@
+# Test fixture only, never shipped in the package (supervisor step 6, A1):
+# rebuild-trial@1's checks with approval "none" and auto_promote = false.
+name = "unapproved"
+version = "1"
+description = "Test fixture."
+approval = "none"
+auto_promote = false
+
+[[checks]]
+name = "difference-image-statistics"
+version = "1"
+kind = "difference-image"
+required = true
+
+[checks.params]
+scalefacref_lo = 1e-3
+scalefacref_hi = 1e5
+rms_max = 2.0
+median_max = 1.0
+n_min = 1000
+n_max = 1000000
+ratio_lo = 0.1
+ratio_hi = 10.0
+
+[[checks]]
+name = "catalog-counts-vs-reference"
+version = "1"
+kind = "source-set"
+required = false
+
+[checks.params]
+tolerance = 0.10
+missing_reference = "pass"
+reference_run = ""

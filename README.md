@@ -70,6 +70,21 @@ rapidpipe run show "$run_id"
 
 `register`'s `--inputs` is admit's own output location (printed by `run local admit` as `outputs=...`), since `register` reads the producing attempt's completion manifest rather than the original delivery.
 
+#### Checks and promotion
+
+A check is a named, versioned function over one product instance (`rapidpipe/checks/`); a check policy is a named, versioned TOML file shipped in the package (`rapidpipe/checks/policies/<name>@<version>.toml`) saying which checks apply to which kind, which are required, and their bounds. Two policies ship: `rebuild-trial@1` (the default: `difference-image-statistics@1` required, `catalog-counts-vs-reference@1` advisory) and `rebuild-strict@1` (bounds the control run cannot meet, to demonstrate refusal). A policy change is a new version.
+
+- `rapidpipe check list` prints the registered checks and the shipped policies.
+- `rapidpipe check run <run> [--policy P] [--instance I] [--check NAME@V] [--param k=v]... [--who W]` runs the policy's checks (default: the run's `--check-policy`, else `rebuild-trial@1`) over the run's instances from selected attempts, records one `checks` row per result and prints one line per result; it exits 0 when all passed, 1 when any failed. `--param` overrides one `--check`'s bounds; such a result does not count for promotion under the policy.
+- `rapidpipe check show <run> [--instance I]` prints the recorded results, newest first.
+- `rapidpipe run promote <run> --reason R [--check-policy P]` refuses (exit 64) unless every required check of the policy has a latest recorded result, under the policy's own bounds, that passed; the promotion records the policy version and the check results it relied on.
+- `rapidpipe run create ... [--check-policy P] [--auto-promote]` names the run's policy; `--auto-promote` is refused unless the policy is lead-approved for automatic promotion, which no shipped policy is, so `run start` ends with `auto-promote off (policy P)`.
+
+```
+rapidpipe check run "$run_id"
+rapidpipe run promote "$run_id" --reason "nightly"
+```
+
 ### Container
 
 [`containers/rapid-pipeline`](containers/rapid-pipeline) holds the recipe that builds `rapidpipe` into a runnable image over a base environment supplying its dependencies. Which base image that is and where the built image is published are decided and owned outside this repository, in `rapid_systems`. See [`containers/README.md`](containers/README.md) for how to build the recipe locally.

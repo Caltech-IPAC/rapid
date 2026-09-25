@@ -44,7 +44,9 @@ packages.find = {include = [
 # three gzipped input frames (rapidpipe.selftest.support.fakereftools).
 # rapidpipe/science/alerts/schema/ holds the alert schema's .avsc files
 # (dev's alerts/schema/<major>/<minor>/), read by the alerts stage.
-rapidpipe = ["settings/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml",
+# rapidpipe/checks/policies/ holds the shipped check policies
+# (<name>@<version>.toml, rapidpipe.checks.policy), read by promotion.
+rapidpipe = ["settings/*.toml", "checks/policies/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml",
              "selftest/fixtures/*/l2/*.fits.gz",
              "science/alerts/schema/*/*/*.avsc"]
 

@@ -1,0 +1,41 @@
+# Check policy rebuild-trial@1 (supervisor step 6, 2026-09-24, R3).
+# Immutable once landed: a change is a new version (a new file).
+# Bounds are generous margins around the control run's measured values in
+# rapid_rebuild (scalefacref 17572.896 under gain-1 settings, dxrmsfin 0.25,
+# dyrmsfin 0.56, dxmedianfin 0.004, dymedianfin -0.48, nsexcatsources 21749,
+# SExtractor positive/negative 21749/55451).
+name = "rebuild-trial"
+version = "1"
+description = "Rebuild trial policy: difference-image statistics required, catalog counts advisory; bounds with generous margins around the control run."
+# Trial approval recorded by supervisor step 6 under the 2026-09-24 grant;
+# lead re-approval pending (plan-review amendment A1).
+approval = "trial"
+approved_by = "rusholme"
+auto_promote = false
+
+[[checks]]
+name = "difference-image-statistics"
+version = "1"
+kind = "difference-image"
+required = true
+
+[checks.params]
+scalefacref_lo = 1e-3
+scalefacref_hi = 1e5
+rms_max = 2.0
+median_max = 1.0
+n_min = 1000
+n_max = 1000000
+ratio_lo = 0.1
+ratio_hi = 10.0
+
+[[checks]]
+name = "catalog-counts-vs-reference"
+version = "1"
+kind = "source-set"
+required = false
+
+[checks.params]
+tolerance = 0.10
+missing_reference = "pass"
+reference_run = ""
