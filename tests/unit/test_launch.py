@@ -47,6 +47,7 @@ def _patch_repository(monkeypatch, *, attempt_id="ATTEMPT01", run_kind="scratch"
         calls["scheduler_job"] = (attempt_id_, scheduler_job_id, output_location)
 
     monkeypatch.setattr(launch_batch, "_run_kind", _fake_run_kind)
+    monkeypatch.setattr(launch_batch, "_release_job_definition", lambda conn, run_id: None)
     monkeypatch.setattr(launch_batch, "add_unit", _fake_add_unit)
     monkeypatch.setattr(launch_batch, "allocate_attempt", _fake_allocate_attempt)
     monkeypatch.setattr(launch_batch, "record_scheduler_job", _fake_record_scheduler_job)

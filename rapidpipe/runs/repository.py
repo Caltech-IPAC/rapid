@@ -166,6 +166,7 @@ def create_run(
     check_policy_ref: str | None,
     seed_run: str | None = None,
     expires_at: datetime | None = None,
+    release: str | None = None,
 ) -> str:
     """Create a run and return its id.
 
@@ -183,6 +184,12 @@ def create_run(
     run expires 14 days after creation (``now() + interval '14 days'``,
     evaluated in the same statement that sets ``created``) and a
     production run never expires (NULL).
+
+    ``release`` is the tag of the release the run was created from
+    (``rapidpipe run create --release``; the caller has already checked
+    it is complete and copied its source revision and image digest into
+    ``code_revision``/``image_digest``). ``runs.release`` references
+    ``releases (tag)``, so an unknown tag fails at the INSERT.
     """
     if kind not in ("scratch", "production"):
         raise ValueError(f"kind must be 'scratch' or 'production', got {kind!r}")
@@ -202,9 +209,9 @@ def create_run(
                 image_digest, schema_version, settings_overlay_ref,
                 input_selection_ref, lane, resource_profile,
                 database_target, max_attempts_per_unit, auto_promote,
-                check_policy_ref, seed_run, expires_at
+                check_policy_ref, seed_run, release, expires_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 COALESCE(
                     %s::timestamptz,
                     CASE WHEN %s = 'scratch'
@@ -216,7 +223,7 @@ def create_run(
                 code_revision, image_digest, schema_version,
                 settings_overlay_ref, input_selection_ref, lane,
                 resource_profile, database_target, max_attempts_per_unit,
-                auto_promote, check_policy_ref, seed_run,
+                auto_promote, check_policy_ref, seed_run, release,
                 expires_at, kind, _SCRATCH_DEFAULT_LIFETIME,
             ),
         )
@@ -493,8 +500,8 @@ def record_attempt_result(
             INSERT INTO execution_records (
                 attempt, source_revision, working_copy_patch, image_digest,
                 schema_version, resolved_settings, settings_hash,
-                scheduler_metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                scheduler_metadata, release
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (attempt) DO UPDATE SET
                 source_revision = EXCLUDED.source_revision,
                 working_copy_patch = EXCLUDED.working_copy_patch,
@@ -502,7 +509,8 @@ def record_attempt_result(
                 schema_version = EXCLUDED.schema_version,
                 resolved_settings = EXCLUDED.resolved_settings,
                 settings_hash = EXCLUDED.settings_hash,
-                scheduler_metadata = EXCLUDED.scheduler_metadata
+                scheduler_metadata = EXCLUDED.scheduler_metadata,
+                release = EXCLUDED.release
             """,
             (
                 attempt_id,
@@ -513,6 +521,7 @@ def record_attempt_result(
                 json.dumps(execution_record.get("resolved_settings", {})),
                 execution_record.get("settings_hash"),
                 json.dumps(execution_record.get("scheduler_metadata", {})),
+                _release_identity(execution_record.get("release")),
             ),
         )
 
@@ -545,6 +554,14 @@ def record_attempt_result(
             )
         # disposition == 'succeeded': the unit stays 'running' until
         # select_attempt is called; success alone does not complete it.
+
+
+def _release_identity(value: Any) -> str | None:
+    """An execution record's release: ``None`` for absent, empty or the
+    job definition's placeholder ``unreleased``."""
+    if not value or value == "unreleased":
+        return None
+    return str(value)
 
 
 # ======================================================================
@@ -973,6 +990,9 @@ def promote(
     check_policy_version: str | None = None,
     check_result_ids: Sequence[str] = (),
     request_context: dict[str, Any] | None = None,
+    *,
+    allow_unreleased: bool = False,
+    _check_release: bool = True,
 ) -> str:
     """Apply a promotion under one advisory lock; return the promotion id.
 
@@ -993,7 +1013,16 @@ def promote(
          custody (runs page, "Promotion eligibility": "Every provenance
          dependency must identify a complete, retained instance in
          project custody."). A ``None`` after-instance is an unselect:
-         there is nothing to validate.
+         there is nothing to validate. Then the released-image rule
+         (runs page, "Promotion eligibility": "a recorded image digest
+         identifying a released artifact"): each after-instance's
+         producing attempt's ``execution_records.image_digest`` must equal
+         the ``image_digest`` of a ``releases`` row in state ``complete``
+         -- that row being the one named by ``execution_records.release``
+         when that is set. Refused naming the attempt and its digest,
+         unless ``allow_unreleased``, which admits them and records
+         ``{"allow_unreleased": true, "attempts": [<the unreleased
+         attempts>]}`` in ``request_context`` (the recorded exception).
       3. Sets the before rows to candidate and the after rows to
          current, maintains ``dev``'s ``vbest`` for kinds that have one
          (``vbest = 0`` on the before-instance's row, ``vbest = 1`` on the
@@ -1051,6 +1080,29 @@ def promote(
         for kind, logical_key, _expected_before, after_instance in changes:
             if after_instance is not None:
                 _validate_promotion_eligibility(cur, kind, logical_key, after_instance)
+
+        # Step 2b: the released-image rule, last so the older, more
+        # specific refusals above keep their messages.
+        if _check_release:
+            unreleased = []
+            for _kind, _key, _before, after_instance in changes:
+                if after_instance is not None:
+                    problem = _unreleased_attempt(cur, after_instance)
+                    if problem is not None:
+                        unreleased.append(problem)
+            if unreleased and not allow_unreleased:
+                attempt_id, digest, release = unreleased[0]
+                raise PromotionRefused(
+                    f"attempt {attempt_id!r} ran image {digest!r}"
+                    + (f" (release {release!r})" if release else "")
+                    + ", which is not the image of a complete release; refusing "
+                    "(--allow-unreleased records an exception)")
+            if allow_unreleased:
+                request_context = {
+                    **(request_context or {}),
+                    "allow_unreleased": True,
+                    "attempts": sorted({attempt for attempt, _d, _r in unreleased}),
+                }
 
         # Step 3: apply. Before rows (if any) go back to candidate; after
         # rows become current; vbest follows. Record the promotion and
@@ -1137,14 +1189,36 @@ def _maintain_vbest(
                 (flag, instance))
 
 
+def _unreleased_attempt(cur, after_instance: str) -> tuple[str, str | None, str | None] | None:
+    """``(attempt, image_digest, release)`` of ``after_instance``'s
+    producing attempt when its execution record names no complete
+    release's image, else ``None`` (supervisor step 5, 2026-09-24, R8)."""
+    cur.execute(
+        """
+        SELECT pi.producing_attempt, er.image_digest, er.release,
+               EXISTS (
+                   SELECT 1 FROM releases r
+                   WHERE r.state = 'complete'
+                     AND r.image_digest = er.image_digest
+                     AND (er.release IS NULL OR r.tag = er.release))
+        FROM product_instances pi
+        LEFT JOIN execution_records er ON er.attempt = pi.producing_attempt
+        WHERE pi.id = %s
+        """,
+        (after_instance,),
+    )
+    attempt_id, digest, release, released = cur.fetchone()
+    return None if released else (attempt_id, digest, release)
+
+
 def _validate_promotion_eligibility(
     cur, kind: str, logical_key: dict[str, Any], after_instance: str,
 ) -> None:
-    # Trial exception, supervisor step 3, 2026-09-24: the released-image
-    # rule and check-policy validation (required checks passed under the
-    # named policy version) are NOT verified here yet; they land with
-    # steps 5 and 6. Until then a promotion is eligible on the rules below
-    # alone -- this is a recorded deferral, not an acceptance of them.
+    # The released-image rule is checked by promote() itself, after this
+    # (supervisor step 5, 2026-09-24, R8). Check-policy validation
+    # (required checks passed under the named policy version) is still NOT
+    # verified here; it lands with step 6 -- a recorded deferral, not an
+    # acceptance.
     cur.execute(
         """
         SELECT pi.custody, pi.kind, pi.logical_key, pi.deletion_state,
@@ -1235,6 +1309,7 @@ def promote_run(
     *,
     kinds: Sequence[str] | None = None,
     check_policy_version: str | None = None,
+    allow_unreleased: bool = False,
 ) -> str:
     """Promote a production run's deliverables; return the promotion id.
 
@@ -1251,7 +1326,10 @@ def promote_run(
     :func:`promote`, which takes the promotion lock -- taken here first
     too, so the expected-befores read below cannot go stale before
     ``promote`` re-checks them (the transaction-scoped lock is re-entrant).
-    ``request_context`` on the promotions row is ``{"run": run_id}``.
+    ``request_context`` on the promotions row is ``{"run": run_id}``
+    (plus ``allow_unreleased``/``attempts`` when ``allow_unreleased``
+    admitted deliverables no complete release produced; see
+    :func:`promote`).
 
     Refuses (:class:`PromotionRefused`) when there is nothing to promote.
     """
@@ -1321,6 +1399,7 @@ def promote_run(
         conn, who, reason, changes,
         check_policy_version=check_policy_version,
         request_context={"run": run_id},
+        allow_unreleased=allow_unreleased,
     )
 
 
@@ -1341,6 +1420,10 @@ def rollback_promotion(
     changed that key, and the runs page reverses a promotion only against
     the selection it made. The new promotions row records
     ``request_context = {"rollback_of": promotion_id}``.
+
+    The released-image rule is not re-applied: a rollback restores a
+    selection that was current before, admitted by that earlier
+    promotion's own check (or its recorded exception).
     """
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM promotions WHERE id = %s", (promotion_id,))
@@ -1365,6 +1448,7 @@ def rollback_promotion(
     return promote(
         conn, who, reason, inverse,
         request_context={"rollback_of": promotion_id},
+        _check_release=False,
     )
 
 

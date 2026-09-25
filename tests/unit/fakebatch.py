@@ -1,8 +1,10 @@
 """A minimal in-memory stand-in for a boto3 Batch client, for tests that
 must run whether or not boto3 is installed.
 
-Only the three operations ``rapidpipe.launch.batch`` calls are
-implemented: ``submit_job``, ``describe_jobs`` (returning whatever
+Only the operations ``rapidpipe.launch.batch`` calls are implemented:
+``describe_job_definitions`` (a released run's revision must be ACTIVE;
+``job_definitions`` maps ``name:revision`` to a status, and one not in it
+is not found), ``submit_job``, ``describe_jobs`` (returning whatever
 statuses the test configured, omitting any job id the test never
 registered -- standing in for a job Batch itself has forgotten about),
 and ``terminate_job``. ``calls`` records each operation's name and its
@@ -24,6 +26,17 @@ class FakeBatch:
         self.calls: list[tuple[str, Any]] = []
         self.submitted: list[dict[str, Any]] = []
         self.terminated: list[dict[str, Any]] = []
+        self.job_definitions: dict[str, str] = {}
+
+    def describe_job_definitions(self, *, jobDefinitions: list[str], **_: Any) -> dict[str, Any]:
+        self.calls.append(("describe_job_definitions", tuple(jobDefinitions)))
+        found = []
+        for name in jobDefinitions:
+            if name in self.job_definitions:
+                job_name, _, revision = name.partition(":")
+                found.append({"jobDefinitionName": job_name, "revision": int(revision),
+                              "status": self.job_definitions[name]})
+        return {"jobDefinitions": found}
 
     def submit_job(
         self, *, jobName: str, jobQueue: str, jobDefinition: str,

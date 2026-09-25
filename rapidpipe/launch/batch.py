@@ -34,6 +34,13 @@ hostnames are injected at deploy time, never committed to `rapid`."):
   outputs to a scratch location.
 - ``RAPIDPIPE_BATCH_JOB_NAME_PREFIX`` -- optional, default ``rapid``.
 
+A run created from a release (``runs.release``) never uses those
+job-definition variables: :func:`submit_unit` submits to the release's own
+``release_deployments.job_definition`` revision for the run's kind, after
+``describe_job_definitions`` confirms it is ACTIVE, and refuses
+(:class:`ReleaseDefinitionRefused`) rather than fall back to an
+unversioned name (supervisor step 5, 2026-09-24, R7).
+
 The run's kind is fixed at creation (runs page, "Runs"), so
 :func:`submit_unit` reads it from the ``runs`` row and picks the root and
 definition from it; an explicit ``outputs_root``/``job_definition``
@@ -87,6 +94,13 @@ class LaunchError(Exception):
 
 class MissingEnvironmentVariable(LaunchError):
     """A required ``RAPIDPIPE_*`` environment variable is not set."""
+
+
+class ReleaseDefinitionRefused(LaunchError):
+    """A released run's job definition cannot be used: the release has no
+    single deployment for the run's kind, the revision is not ACTIVE, or
+    an explicit ``job_definition`` contradicts it. Permanent, not
+    retryable."""
 
 
 class DependencyIncomplete(LaunchError):
@@ -213,6 +227,48 @@ def _run_kind(conn, run_id: str) -> str:
     return row[0]
 
 
+def _release_job_definition(conn, run_id: str) -> tuple[str, str] | None:
+    """``(release tag, "name:revision")`` for a run created from a release,
+    or ``None`` for a run with no release.
+
+    The consumer is chosen by kind: the one ``release_deployments`` row
+    whose consumer name ends in ``-production`` is a production run's, the
+    one that does not is a scratch run's; anything but exactly one match
+    is refused. A module-level function so the database-free unit tests
+    can monkeypatch it.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT kind, release FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise RunNotFound(f"run {run_id!r} does not exist")
+        kind, release = row
+        if release is None:
+            return None
+        cur.execute(
+            "SELECT consumer, job_definition FROM release_deployments WHERE release = %s",
+            (release,))
+        deployments = cur.fetchall()
+    matches = [job_definition for consumer, job_definition in deployments
+               if consumer.endswith("-production") == (kind == "production")]
+    if len(matches) != 1:
+        raise ReleaseDefinitionRefused(
+            f"run {run_id!r} is from release {release!r}, which records "
+            f"{len(matches)} job definition(s) for a {kind} run "
+            f"({[c for c, _ in deployments]}); refusing to submit")
+    return release, matches[0]
+
+
+def _require_active(batch: Any, release: str, job_definition: str) -> None:
+    response = batch.describe_job_definitions(jobDefinitions=[job_definition])
+    statuses = [d.get("status") for d in response.get("jobDefinitions", [])]
+    if "ACTIVE" not in statuses:
+        raise ReleaseDefinitionRefused(
+            f"release {release!r} job definition {job_definition!r} is "
+            f"{statuses[0] if statuses else 'not found'}, not ACTIVE; refusing to "
+            "submit (never falling back to the unversioned name)")
+
+
 def batch_client() -> Any:
     """Return a fresh ``boto3`` Batch client.
 
@@ -278,7 +334,12 @@ def submit_unit(
     <attempt>``, where ``outputs_root`` and ``job_definition`` default,
     when ``None``, to :func:`outputs_root_for` and
     :func:`job_definition_for` of the run's kind (read from its ``runs``
-    row before anything is written); the Batch job's ``containerOverrides.command`` starts at
+    row before anything is written) -- except for a run created from a
+    release, whose job definition is always the release's recorded
+    ``name:revision`` for its kind (:func:`_release_job_definition`),
+    checked ACTIVE with ``describe_job_definitions`` first; an explicit
+    ``job_definition`` that differs from it is refused. The Batch job's
+    ``containerOverrides.command`` starts at
     ``stage`` (the image's entrypoint is ``rapidpipe``, per the stage
     contract's "Invocation" form). The job id Batch returns is then
     recorded on the attempt row with
@@ -286,6 +347,14 @@ def submit_unit(
     after each repository call, as
     :func:`rapidpipe.runs.local.run_stage_locally` does.
     """
+    released = _release_job_definition(conn, run_id)
+    if released is not None:
+        release, release_definition = released
+        if job_definition is not None and job_definition != release_definition:
+            raise ReleaseDefinitionRefused(
+                f"run {run_id!r} is from release {release!r}, whose job definition "
+                f"is {release_definition!r}, not {job_definition!r}; refusing")
+        job_definition = release_definition
     if outputs_root is None or job_definition is None:
         kind = _run_kind(conn, run_id)
         outputs_root = outputs_root or outputs_root_for(kind)
@@ -294,6 +363,9 @@ def submit_unit(
     else:
         job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
     job_name_prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX", "rapid")
+    batch = client if client is not None else batch_client()
+    if released is not None:
+        _require_active(batch, released[0], job_definition)
 
     add_unit(conn, run_id, stage, unit_kind, unit_id)
     conn.commit()
@@ -316,7 +388,6 @@ def submit_unit(
 
     job_name = _job_name(job_name_prefix, stage, attempt_id)
 
-    batch = client if client is not None else batch_client()
     response = batch.submit_job(
         jobName=job_name,
         jobQueue=job_queue,
@@ -493,6 +564,11 @@ def _execution_record_with_defaults(
         record["source_revision"] = "unknown"
     if record.get("settings_hash") is None:
         record["settings_hash"] = "unknown"
+    # The release the job carried, as the stage recorded it, passes
+    # through unchanged to execution_records.release; the repository
+    # records an absent, empty or "unreleased" value as NULL.
+    if "release" in record:
+        record["release"] = record["release"] or None
     return record
 
 

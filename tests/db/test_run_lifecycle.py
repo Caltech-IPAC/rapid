@@ -142,11 +142,11 @@ def test_promote_with_after_none_unselects(conn):
     run_id = _make_run(conn)
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
-    repo.promote(conn, "brusholme", "select", [(TEST_KIND, key, None, instance)])
+    repo.promote(conn, "brusholme", "select", [(TEST_KIND, key, None, instance)], allow_unreleased=True)
     assert _custody(conn, instance) == "current"
 
     promotion_id = repo.promote(
-        conn, "brusholme", "unselect", [(TEST_KIND, key, instance, None)])
+        conn, "brusholme", "unselect", [(TEST_KIND, key, instance, None)], allow_unreleased=True)
 
     assert _custody(conn, instance) == "candidate"
     ((kind, logical_key, before, after),) = _changes(conn, promotion_id)
@@ -161,23 +161,25 @@ def test_promote_refuses_after_equal_to_before(conn):
     run_id = _make_run(conn)
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
-    repo.promote(conn, "brusholme", "select", [(TEST_KIND, key, None, instance)])
+    repo.promote(conn, "brusholme", "select", [(TEST_KIND, key, None, instance)], allow_unreleased=True)
     with pytest.raises(repo.PromotionRefused):
-        repo.promote(conn, "brusholme", "again", [(TEST_KIND, key, instance, instance)])
+        repo.promote(conn, "brusholme", "again", [(TEST_KIND, key, instance, instance)], allow_unreleased=True)
     with pytest.raises(repo.PromotionRefused):
-        repo.promote(conn, "brusholme", "nothing", [(TEST_KIND, {"k": new_ulid()}, None, None)])
+        repo.promote(conn, "brusholme", "nothing", [(TEST_KIND, {"k": new_ulid()}, None, None)], allow_unreleased=True)
 
 
 def test_promote_records_request_context(conn):
     run_id = _make_run(conn)
     key = {"k": new_ulid()}
-    instance, _ = _candidate(conn, run_id, key=key)
+    instance, attempt = _candidate(conn, run_id, key=key)
     promotion_id = repo.promote(
         conn, "brusholme", "r", [(TEST_KIND, key, None, instance)],
-        request_context={"ticket": "T-1"})
+        request_context={"ticket": "T-1"}, allow_unreleased=True)
     with conn.cursor() as cur:
         cur.execute("SELECT request_context FROM promotions WHERE id = %s", (promotion_id,))
-        assert cur.fetchone()[0] == {"ticket": "T-1"}
+        # The unreleased attempt is recorded beside the caller's context.
+        assert cur.fetchone()[0] == {
+            "ticket": "T-1", "allow_unreleased": True, "attempts": [attempt]}
 
 
 def test_vbest_follows_promotion_and_rollback(conn):
@@ -186,12 +188,12 @@ def test_vbest_follows_promotion_and_rollback(conn):
     first = _psf_candidate(conn, first_run, key)
     assert _vbest(conn, first) == 0
 
-    first_promotion = repo.promote_run(conn, first_run, "brusholme", "first")
+    first_promotion = repo.promote_run(conn, first_run, "brusholme", "first", allow_unreleased=True)
     assert _vbest(conn, first) == 1
 
     second_run = _make_run(conn)
     second = _psf_candidate(conn, second_run, key)
-    second_promotion = repo.promote_run(conn, second_run, "brusholme", "reprocess")
+    second_promotion = repo.promote_run(conn, second_run, "brusholme", "reprocess", allow_unreleased=True)
     assert (_vbest(conn, first), _vbest(conn, second)) == (0, 1)
     ((_, _, before, after),) = _changes(conn, second_promotion)
     assert (before, after) == (first, second)
@@ -216,7 +218,7 @@ def test_promote_run_promotes_one_candidate_per_key_across_kinds(conn):
     diff, _ = _candidate(conn, run_id, kind=TEST_KIND, key=diff_key)
     catalog, _ = _candidate(conn, run_id, kind="source-catalog", key=catalog_key)
 
-    promotion_id = repo.promote_run(conn, run_id, "brusholme", "deliver")
+    promotion_id = repo.promote_run(conn, run_id, "brusholme", "deliver", allow_unreleased=True)
 
     assert (_custody(conn, diff), _custody(conn, catalog)) == ("current", "current")
     changes = _changes(conn, promotion_id)  # ordered by kind
@@ -224,21 +226,23 @@ def test_promote_run_promotes_one_candidate_per_key_across_kinds(conn):
         ("source-catalog", None, catalog), (TEST_KIND, None, diff)]
     with conn.cursor() as cur:
         cur.execute("SELECT request_context FROM promotions WHERE id = %s", (promotion_id,))
-        assert cur.fetchone()[0] == {"run": run_id}
+        context = cur.fetchone()[0]
+    assert (context["run"], context["allow_unreleased"], len(context["attempts"])) == (
+        run_id, True, 2)
 
 
 def test_promote_run_kinds_filter_and_replaces_the_current_instance(conn):
     key = {"k": new_ulid()}
     old_run = _make_run(conn)
     old, _ = _candidate(conn, old_run, key=key)
-    repo.promote_run(conn, old_run, "brusholme", "first")
+    repo.promote_run(conn, old_run, "brusholme", "first", allow_unreleased=True)
 
     run_id = _make_run(conn)
     new, _ = _candidate(conn, run_id, key=key)
     other, _ = _candidate(conn, run_id, kind="source-catalog")
 
     promotion_id = repo.promote_run(
-        conn, run_id, "brusholme", "only images", kinds=[TEST_KIND])
+        conn, run_id, "brusholme", "only images", kinds=[TEST_KIND], allow_unreleased=True)
 
     ((kind, _key, before, after),) = _changes(conn, promotion_id)
     assert (kind, before, after) == (TEST_KIND, old, new)
@@ -259,7 +263,7 @@ def test_promote_run_skips_candidates_from_unselected_attempts(conn):
     unselected = _register_simple_instance(
         conn, run_id, "difference", attempt_id, logical_key={"k": new_ulid()})
 
-    promotion_id = repo.promote_run(conn, run_id, "brusholme", "deliver")
+    promotion_id = repo.promote_run(conn, run_id, "brusholme", "deliver", allow_unreleased=True)
 
     assert [c[3] for c in _changes(conn, promotion_id)] == [selected]
     assert _custody(conn, unselected) == "candidate"
@@ -269,7 +273,7 @@ def test_promote_run_refuses_scratch(conn):
     run_id = _make_run(conn, kind="scratch")
     _candidate(conn, run_id)
     with pytest.raises(repo.PromotionRefused, match="scratch never leaves scratch"):
-        repo.promote_run(conn, run_id, "brusholme", "no")
+        repo.promote_run(conn, run_id, "brusholme", "no", allow_unreleased=True)
 
 
 def test_promote_run_refuses_two_candidates_for_one_key(conn):
@@ -278,16 +282,16 @@ def test_promote_run_refuses_two_candidates_for_one_key(conn):
     _candidate(conn, run_id, key=key)
     _candidate(conn, run_id, key=key)
     with pytest.raises(repo.PromotionRefused, match="more than one candidate"):
-        repo.promote_run(conn, run_id, "brusholme", "ambiguous")
+        repo.promote_run(conn, run_id, "brusholme", "ambiguous", allow_unreleased=True)
 
 
 def test_promote_run_refuses_when_nothing_to_promote(conn):
     run_id = _make_run(conn)
     with pytest.raises(repo.PromotionRefused, match="nothing to promote"):
-        repo.promote_run(conn, run_id, "brusholme", "empty")
+        repo.promote_run(conn, run_id, "brusholme", "empty", allow_unreleased=True)
     _candidate(conn, run_id, kind="source-catalog")
     with pytest.raises(repo.PromotionRefused, match="nothing to promote"):
-        repo.promote_run(conn, run_id, "brusholme", "filtered out", kinds=["psf"])
+        repo.promote_run(conn, run_id, "brusholme", "filtered out", kinds=["psf"], allow_unreleased=True)
 
 
 # ======================================================================
@@ -298,9 +302,9 @@ def test_rollback_promotion_restores_the_prior_selection(conn):
     key = {"k": new_ulid()}
     first_run, second_run = _make_run(conn), _make_run(conn)
     first, _ = _candidate(conn, first_run, key=key)
-    repo.promote_run(conn, first_run, "brusholme", "first")
+    repo.promote_run(conn, first_run, "brusholme", "first", allow_unreleased=True)
     second, _ = _candidate(conn, second_run, key=key)
-    promotion_id = repo.promote_run(conn, second_run, "brusholme", "second")
+    promotion_id = repo.promote_run(conn, second_run, "brusholme", "second", allow_unreleased=True)
 
     rollback_id = repo.rollback_promotion(conn, promotion_id, "brusholme", "revert")
 
@@ -316,9 +320,9 @@ def test_rollback_promotion_refused_after_a_later_promotion_changed_the_key(conn
     key = {"k": new_ulid()}
     first_run, second_run = _make_run(conn), _make_run(conn)
     first, _ = _candidate(conn, first_run, key=key)
-    first_promotion = repo.promote_run(conn, first_run, "brusholme", "first")
+    first_promotion = repo.promote_run(conn, first_run, "brusholme", "first", allow_unreleased=True)
     second, _ = _candidate(conn, second_run, key=key)
-    repo.promote_run(conn, second_run, "brusholme", "second")
+    repo.promote_run(conn, second_run, "brusholme", "second", allow_unreleased=True)
 
     with pytest.raises(repo.PromotionRefused):
         repo.rollback_promotion(conn, first_promotion, "brusholme", "too late")
@@ -665,7 +669,7 @@ def test_promote_refuses_a_mapped_kind_with_no_dev_row(conn):
     run_id = _make_run(conn)
     _candidate(conn, run_id, kind="psf", key=_psf_key())  # no psfs row
     with pytest.raises(repo.PromotionRefused, match="has no psfs row"):
-        repo.promote_run(conn, run_id, "brusholme", "no dev row")
+        repo.promote_run(conn, run_id, "brusholme", "no dev row", allow_unreleased=True)
 
 
 def test_promote_never_rewrites_a_dev_written_row(conn):
@@ -683,7 +687,7 @@ def test_promote_never_rewrites_a_dev_written_row(conn):
             "UPDATE psfs SET run = NULL, attempt = NULL, vbest = 2 WHERE instance = %s",
             (instance,))
 
-    promotion_id = repo.promote_run(conn, run_id, "brusholme", "import")
+    promotion_id = repo.promote_run(conn, run_id, "brusholme", "import", allow_unreleased=True)
     assert _custody(conn, instance) == "current"
     assert _vbest(conn, instance) == 2
     repo.rollback_promotion(conn, promotion_id, "brusholme", "undo")
@@ -696,10 +700,10 @@ def test_promote_refuses_a_kind_or_key_that_does_not_match_the_instance(conn):
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
     with pytest.raises(repo.PromotionRefused, match="not the requested"):
-        repo.promote(conn, "brusholme", "wrong kind", [("other-kind", key, None, instance)])
+        repo.promote(conn, "brusholme", "wrong kind", [("other-kind", key, None, instance)], allow_unreleased=True)
     with pytest.raises(repo.PromotionRefused, match="not the requested"):
         repo.promote(conn, "brusholme", "wrong key",
-                     [(TEST_KIND, {"k": new_ulid()}, None, instance)])
+                     [(TEST_KIND, {"k": new_ulid()}, None, instance)], allow_unreleased=True)
 
 
 def test_promote_refuses_a_deleted_after_instance(conn):
@@ -711,7 +715,7 @@ def test_promote_refuses_a_deleted_after_instance(conn):
             "UPDATE product_instances SET deletion_state = 'deleted' WHERE id = %s",
             (instance,))
     with pytest.raises(repo.PromotionRefused, match="not retained"):
-        repo.promote(conn, "brusholme", "gone", [(TEST_KIND, key, None, instance)])
+        repo.promote(conn, "brusholme", "gone", [(TEST_KIND, key, None, instance)], allow_unreleased=True)
 
 
 def test_promote_refuses_an_incomplete_result_set(conn):
@@ -728,7 +732,7 @@ def test_promote_refuses_an_incomplete_result_set(conn):
     with conn.cursor() as cur:
         cur.execute("UPDATE result_sets SET complete = false WHERE instance = %s", (instance,))
     with pytest.raises(repo.PromotionRefused, match="incomplete result set"):
-        repo.promote(conn, "brusholme", "partial", [("source-set", key, None, instance)])
+        repo.promote(conn, "brusholme", "partial", [("source-set", key, None, instance)], allow_unreleased=True)
 
 
 def test_the_sweeper_refuses_a_pinned_or_unexpired_run(conn):
