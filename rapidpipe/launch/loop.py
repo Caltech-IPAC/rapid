@@ -31,6 +31,10 @@ uses. The rulings this module implements, one line each:
 - A2: an attempt left running without a Batch job goes to step 6's
   ``resolve_jobless`` once and the walk is retried once; still job-less, the
   date fails (row ``failed``, ``record.jobless_attempt``, exit 1).
+- Step 9 R4: a unit whose input manifest the launcher refuses
+  (``InputsRefused``, ``run start``'s exit 65: absent, unreadable, or naming
+  an input of a deleting run) fails the date with the message (row
+  ``failed``, ``record.failure``, exit 1); nothing was written for it.
 - A4: one loop per schedule (``pg_try_advisory_lock``, exit 75 when held); a
   ``failed`` row stops the loop unless ``--retry-failed`` reopens it: a new
   run seeded from the row's run through step 6's ``run create --seed <run>
@@ -97,6 +101,7 @@ from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
 from rapidpipe.products.storage import join, parse_location
 from rapidpipe.runs import repository
+from rapidpipe.runs.inputs import InputsRefused
 
 #: The run's selected stages (R4), and the positions in it each part of
 #: the walk takes.
@@ -1010,6 +1015,14 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                                 templates=list(templates), interval=interval,
                                 timeout=timeout, continue_hint=hint)
                 break
+            except InputsRefused as exc:
+                # R4: the launcher refused the unit's input manifest before
+                # writing anything (``run start`` exits 65). The unit cannot
+                # run, so it fails the date with the message, as a unit that
+                # cannot be walked does, rather than ending the loop.
+                conn.rollback()
+                stages = ",".join(SELECTED_STAGES[p + view.offset] for p in positions)
+                raise _Stop(EXIT_FAILED, f"{stages} {unit_id}: inputs refused: {exc}") from exc
             except Exception as exc:
                 if getattr(exc, "code", None) != EXIT_USAGE:
                     raise
