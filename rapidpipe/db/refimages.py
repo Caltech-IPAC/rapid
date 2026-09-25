@@ -12,7 +12,7 @@ as ``rapidpipe.db.psfs`` calls ``addPSF`` (supervisor step 8, ruling R7).
 Column sources, where they are not the manifest itself:
 
 - ``refimages``: ``fid`` from `filters` by the block's filter name in its
-  RAPID spelling (``rapidpipe.products.refimage.rapid_filter_name``:
+  RAPID spelling (``rapidpipe.products.filters.rapid_filter_name``:
   ``F146`` and ``W146`` both find ``W146``); ``ppid`` from
   :data:`REFERENCE_RECIPE_PPIDS` (``awaicgen`` is `dev`'s pipeline 12,
   "Standard reference-image pipeline"); ``hp6``/``hp9`` from the block's
@@ -74,10 +74,10 @@ from __future__ import annotations
 import struct
 from typing import Any
 
+from rapidpipe.products.filters import rapid_filter_name
 from rapidpipe.products.refimage import (
     REFERENCE_CATALOG_CATTYPES,
     ReferenceImageRegistration,
-    rapid_filter_name,
     validate_reference_catalog_entry,
     validate_reference_image_entry,
 )
