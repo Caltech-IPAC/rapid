@@ -47,7 +47,8 @@ def add_parser(subparsers: Any) -> None:
     run = sub.add_parser(
         "run", help="Process every spec date not yet complete, in order.",
         description="For each date of the spec (or each --date) whose loop_dates "
-                    "row is absent or open, in spec order: create (or resume) the "
+                    "row is absent or open (or failed on a refusal with no failed "
+                    "unit, reopened on its run), in spec order: create (or resume) the "
                     "date's production run under the spec's release, walk admit.."
                     "load per detector image, maintain, crossmatch/statistics/prune "
                     "per field (the base catalog is the previous complete date's "
