@@ -31,6 +31,9 @@ caller's transaction: none commits or rolls back.
   pass reads as the existing catalog, "base plus delta" (step 1 ruling R3 as
   amended 2026-09-24): the association sets its base chain names, never
   "whatever is current".
+- :func:`chain_source_sets`: the source sets a chain's members' keys name,
+  the sources its merges rows point at (read by statistics, prune and
+  alerts, each validated by the caller).
 - :func:`find_complete_result_set`: the rebuild's done check for the three
   field stages, a complete set of the same kind and key in the same run
   (ruling R14) whose producing attempt is the calling attempt or one that
@@ -312,6 +315,39 @@ def association_chain(cur, instance: str, run_id: str) -> list[str]:
         base = state["key"].get("base")
         current = base if isinstance(base, str) and base else None
     return chain
+
+
+def chain_source_sets(cur, chain: Iterable[str]) -> list[str]:
+    """The distinct `source-set` instances the chain members' logical keys name, in chain order.
+
+    Crossmatch records the source sets an association set was made from as
+    its key's ``source_sets`` (a list of instance ids); a set's membership is
+    its rows plus its bases', so the sources a chain's merges rows point at
+    are those of the sets its members' keys name. Reads
+    ``logical_key->>'source_sets'`` as JSON text. A member whose key names
+    none contributes nothing; a value that is not a list of strings raises
+    :class:`ValueError`. Readability is the caller's: pass each through
+    :func:`assert_readable_result_set` (or :func:`source_set_table`).
+    """
+    members = list(chain)
+    if not members:
+        return []
+    cur.execute(
+        "SELECT id, logical_key ->> 'source_sets' FROM product_instances WHERE id = ANY(%s)",
+        (members,))
+    raw_by_id = dict(cur.fetchall())
+    seen: dict[str, None] = {}
+    for member in members:
+        raw = raw_by_id.get(member)
+        if not raw:
+            continue
+        value = json.loads(raw)
+        if not isinstance(value, list) or not all(isinstance(s, str) and s for s in value):
+            raise ValueError(f"association set {member!r}: key source_sets {value!r} is not "
+                             "a list of instance ids")
+        for instance in value:
+            seen.setdefault(instance, None)
+    return list(seen)
 
 
 def set_rows_clause(alias: str, chain: Iterable[str]) -> tuple[str, tuple]:

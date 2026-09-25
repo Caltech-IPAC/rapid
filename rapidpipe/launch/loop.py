@@ -22,7 +22,11 @@ uses. The rulings this module implements, one line each:
 - R5 (amended A3): a field's base catalog is the association set crossmatch
   produced for that field in the most recent earlier ``complete`` row of the
   same schedule that has one (walking back over dates; promoted or not, with
-  ``base_promoted`` recorded); none on the first date. Input-set manifests
+  ``base_promoted`` recorded); none on the first date. The set must be
+  readable by the date's run (supervisor step 9 R2: complete, retained, a
+  selected production output); one that is not is skipped for the next
+  earlier date and named in ``record.bases_skipped``. The source sets the
+  loop reads fields from pass the same rule. Input-set manifests
   live under ``<scratch root>/runs/<run>/inputs/<stage>/<unit>/``.
 - A2: an attempt left running without a Batch job goes to step 6's
   ``resolve_jobless`` once and the walk is retried once; still job-less, the
@@ -87,6 +91,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any, Callable, Sequence
 
+from rapidpipe.db import objects as _objects
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
@@ -459,6 +464,19 @@ def maintain_unit_id(table: str) -> str:
     return f"{match.group('date')}/SCA{int(match.group('sca')):02d}"
 
 
+def readable_result_set(conn, instance: str, run_id: str, kind: str) -> None:
+    """Refuse (:class:`ValueError`) a result set run ``run_id`` may not read.
+
+    ``rapidpipe.db.objects.assert_readable_result_set`` (supervisor step 9
+    ruling R2; Codex 9-2): complete and retained, and ``run_id``'s own or a
+    production run's (custody ``candidate``/``current``) selected output,
+    of ``kind``. The loop applies it to the source sets it discovers fields
+    from and to the base it chooses, with the date's run as the reader.
+    """
+    with conn.cursor() as cur:
+        _objects.assert_readable_result_set(cur, instance, run_id, kind=kind)
+
+
 def source_set_fields(conn, table: str, instance: str) -> list[int]:
     """The distinct ``field`` values of one source set's rows in its child table."""
     maintain_unit_id(table)  # validates the name before it reaches SQL
@@ -528,15 +546,28 @@ class Base:
     promoted: bool
 
 
-def base_for_field(conn, storage: Any, previous: Sequence[LoopRow], field_id: int
+def base_for_field(conn, storage: Any, previous: Sequence[LoopRow], field_id: int,
+                   run_id: str, skipped: list[dict[str, str]] | None = None
                    ) -> Base | None:
     """The base for ``field_id`` (R5/A3): the newest of ``previous`` (complete
-    rows, newest first) whose run crossmatched the field, or ``None``."""
+    rows, newest first) whose run crossmatched the field and whose
+    association set run ``run_id`` may read (:func:`readable_result_set`,
+    ruling R2), or ``None``. A set it may not read is not eligible: the
+    search goes on to the next earlier date, and ``skipped`` (when given)
+    gets ``{run, processing_date, instance, reason}`` for it."""
     for row in previous:
         entry = base_entry(conn, storage, row, field_id)
-        if entry is not None:
-            return Base(entry=entry, run=row.run, processing_date=row.processing_date,
-                        promoted=run_promotion(conn, row.run) is not None)
+        if entry is None:
+            continue
+        try:
+            readable_result_set(conn, entry.instance, run_id, "association-set")
+        except ValueError as exc:
+            if skipped is not None:
+                skipped.append({"run": row.run, "processing_date": str(row.processing_date),
+                                "instance": entry.instance, "reason": str(exc)})
+            continue
+        return Base(entry=entry, run=row.run, processing_date=row.processing_date,
+                    promoted=run_promotion(conn, row.run) is not None)
     return None
 
 
@@ -846,15 +877,24 @@ def _loads(conn, storage: Any, view: RunView, day: LoopDate
     return loads, by_maintain
 
 
-def _fields(conn, loads: dict[str, tuple[str, list[OutputEntry]]], date: _dt.date
-            ) -> tuple[list[int], list[OutputEntry], dict[str, set[int]]]:
+def _fields(conn, loads: dict[str, tuple[str, list[OutputEntry]]], date: _dt.date,
+            run_id: str) -> tuple[list[int], list[OutputEntry], dict[str, set[int]]]:
     """The date's fields, every source set of the date (image order, once
-    each), and per image the fields its source sets have rows in."""
+    each), and per image the fields its source sets have rows in. Each
+    source set must be readable by run ``run_id`` (:func:`readable_result_set`,
+    ruling R2: its own, or an inherited production seed's selected output)
+    before its rows are read; one that is not is a :class:`LoopError`."""
     fields: set[int] = set()
     sources: dict[str, OutputEntry] = {}
     image_fields: dict[str, set[int]] = {}
     for unit, (_, entries) in loads.items():
         for entry in entries:
+            if entry.instance not in sources:
+                try:
+                    readable_result_set(conn, entry.instance, run_id, "source-set")
+                except ValueError as exc:
+                    raise LoopError(f"date {date}: run {run_id} may not read the source set "
+                                    f"{entry.instance} of {unit}: {exc}") from None
             sources.setdefault(entry.instance, entry)
             for f in source_set_fields(conn, str(entry.registration["table"]), entry.instance):
                 fields.add(f)
@@ -890,7 +930,7 @@ def incomplete_units(conn, storage: Any, view: RunView, day: LoopDate) -> list[s
         loads, by_maintain = _loads(conn, storage, view, day)
         for mu in by_maintain:
             check("maintain", mu)
-        fields, _, _ = _fields(conn, loads, day.processing_date)
+        fields, _, _ = _fields(conn, loads, day.processing_date, view.run)
         for f in fields:
             for stage in ("crossmatch", "statistics", "prune"):
                 check(stage, str(f))
@@ -1073,17 +1113,21 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
 
         # (d) per field: crossmatch (every source set of the date + the
         # field's base) -> statistics -> prune.
-        fields, sources, image_fields = _fields(conn, loads, date)
+        fields, sources, image_fields = _fields(conn, loads, date, run_id)
         previous = previous_complete_rows(conn, schedule, date)
         association: dict[int, str] = {}
         statistics: dict[int, str] = {}
         pruned: dict[int, str] = {}
         bases: dict[str, str | None] = {}
         base_detail: dict[str, Any] = {}
+        bases_skipped: dict[str, list[dict[str, str]]] = {}
 
         def field_chain(f: int) -> None:
             unit = str(f)
-            base = base_for_field(conn, storage, previous, f)
+            skipped: list[dict[str, str]] = []
+            base = base_for_field(conn, storage, previous, f, run_id, skipped)
+            if skipped:
+                bases_skipped[unit] = skipped
             bases[unit] = base.entry.instance if base is not None else None
             base_detail[unit] = None if base is None else {
                 "run": base.run, "processing_date": str(base.processing_date),
@@ -1181,6 +1225,8 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                   statistics_sets={str(f): i for f, i in statistics.items()},
                   pruned_sets={str(f): i for f, i in pruned.items()},
                   alerts=alerts)
+    if bases_skipped:
+        record["bases_skipped"] = bases_skipped
     return _finish_row(conn, spec, date, run_id, record, out)
 
 

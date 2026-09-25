@@ -32,7 +32,9 @@ set's membership is its own rows plus those of the bases it extends
 (crossmatch's ``logical_key.base``, recursively), so a trigger's merges
 row and its object are looked up across that chain, the newest set winning
 per aid, and its history is the object's merges anywhere in the chain
-joined to ``sources`` in any source set. The bases read are added to the
+joined to ``sources`` in the source sets the chain names (``logical_key.source_sets``,
+each refused unless this run may read it, supervisor step 9 R2) and the named
+one, and in no other. The bases read are added to the
 manifest's ``inputs.result_sets``.
 ``cutoutScience`` and ``cutoutReference`` are null in this port: those
 files are not input-set members.
@@ -193,20 +195,26 @@ class PostgresAlertsDatabase:
     def association_chain(self, instance: str, run_id: str) -> list[str]:
         return self._call(_alerts_db.association_chain, instance, run_id)
 
+    def readable_source_sets(self, lineages: dict[str, list[str]], source_set: str,
+                             run_id: str) -> list[str]:
+        return self._call(_alerts_db.readable_source_sets, lineages, source_set, run_id)
+
     def associations(self, lineages: dict[str, list[str]], fields: dict[str, int],
                      statistics_by_association: dict[str, str | None],
-                     sids: list[int], *,
+                     sids: list[int], *, source_sets: list[str],
                      pruned_by_association: dict[str, str | None] | None = None
                      ) -> list[dict[str, Any]]:
         with self.conn.cursor() as cur:
             return _alerts_db.associations(cur, lineages, fields, statistics_by_association,
-                                           sids, pruned_by_association=pruned_by_association)
+                                           sids, source_sets=source_sets,
+                                           pruned_by_association=pruned_by_association)
 
     def history(self, lineages: dict[str, list[str]], fields: dict[str, int],
-                objects: list[tuple[str, int]], min_mjd: float, *,
+                objects: list[tuple[str, int]], min_mjd: float, *, source_sets: list[str],
                 pruned_by_association: dict[str, str | None] | None = None):
         with self.conn.cursor() as cur:
             return _alerts_db.history(cur, lineages, fields, objects, min_mjd,
+                                      source_sets=source_sets,
                                       pruned_by_association=pruned_by_association)
 
     def registered_instances(self, instances: list[str]) -> set[str]:
@@ -601,6 +609,9 @@ def _body(context: StageContext) -> StageResult:
                 # rows are in its field's standalone per-field tables.
                 lineages = {a: db.association_chain(a, context.run_id) for a in sets.association_sets}
                 fields = {a: _alerts_db.set_field(kinds[a]["key"]) for a in sets.association_sets}
+                # R2 (Codex 9-2): history sources come from the source sets the
+                # chains name, each readable by this run, and from no other.
+                source_sets = db.readable_source_sets(lineages, sets.source_set, context.run_id)
             except ValueError as exc:
                 raise InputRejected(str(exc)) from exc
             # A dev product (a dev reference catalog) has no instance row to
@@ -635,7 +646,7 @@ def _body(context: StageContext) -> StageResult:
                        for row in db.alertable_sources(sets.source_set, pid)]
             try:
                 object_rows = db.associations(lineages, fields, sets.statistics_by_association,
-                                              [s.sid for s in sources],
+                                              [s.sid for s in sources], source_sets=source_sets,
                                               pruned_by_association=sets.pruned_by_association)
             except ValueError as exc:
                 raise InputRejected(str(exc)) from exc
@@ -644,6 +655,7 @@ def _body(context: StageContext) -> StageResult:
             window = float(alert_settings["prv_window_days"])
             history_rows = (db.history(lineages, fields, objects,
                                        min(s.mjdobs for s in sources) - window,
+                                       source_sets=source_sets,
                                        pruned_by_association=sets.pruned_by_association)
                             if objects else [])
             associations = assemble.index_associations(object_rows, history_rows)
