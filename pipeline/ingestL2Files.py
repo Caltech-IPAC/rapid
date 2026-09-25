@@ -151,6 +151,15 @@ Exit codes
 67, 69
      Passed through from rapid_db when the database could not be used.
 
+The run announces the code on the way out as
+
+    terminating_exitcode = <code>
+
+so a log can be grepped for how a run ended.  The configuration checks that run
+as this module is imported quit before the main program begins and so do not
+print it; nor does a worker process, whose code is announced by the main program
+that actually terminates on it.
+
 Usage:
 
     python3 pipeline/ingestL2Files.py

@@ -549,6 +549,24 @@ Code     Meaning
 67, 69   Passed through from ``rapid_db`` when the database could not be used.
 ======   ===============================================================================
 
+Whichever it is, the run announces it on the way out:
+
+.. code-block::
+
+   terminating_exitcode = 0
+
+so a log can be grepped for how a run ended without going back to the shell that
+started it -- which for a run under the daemon is no longer there to ask.
+
+.. note::
+   Two paths do not print it, both of them deliberate.  A worker process that
+   quits with its own code does not: its code reaches the main program through
+   the process pool and is announced there, by the process that is actually
+   terminating.  And the configuration checks that run as the module is imported
+   -- the two bucket names, the SIP-degree ceiling, and any of the numeric
+   environment variables failing to parse -- quit before the main program
+   begins.
+
 .. note::
    The consecutive-failure limit exists because a daemon that keeps failing is
    usually misconfigured rather than unlucky, and spinning on that forever only
