@@ -25,6 +25,10 @@ commits or rolls back.
   ``astroobjects_<f>``, ``astroobjectsmeta_<f>`` by name, as `dev` reads them.
 - :func:`history`: the objects' sources through merges anywhere in their
   chain, from any source set, `dev`'s previous-detection prefetch.
+- Both :func:`associations` and :func:`history` leave out every (aid, sid)
+  pair a named pruned set lists in ``prunedmerges`` for that association set
+  (supervisor step 9, R5): a pruned set is its base minus those pairs, and
+  pruning never mutates the base's ``merges_<f>`` rows.
 - :func:`registered_instances`: which input products have instance rows.
 - :func:`attempt_outputs`, :func:`outbox_rows`, :func:`insert_outbox_rows`:
   the outbox and the recovery of an attempt whose commit was uncertain.
@@ -160,9 +164,23 @@ def _field_tables(cur, field: int, *, meta: bool) -> dict[str, sql.Identifier]:
     return {prefix: sql.Identifier(names[prefix]) for prefix in wanted}
 
 
+#: The R5 exclusion: a ``merges_<f>`` pair ``{alias}`` the named pruned sets list.
+_NOT_PRUNED = ("NOT EXISTS (SELECT 1 FROM prunedmerges pm "
+               "WHERE pm.result_set = ANY(%(pruned)s::text[]) "
+               "AND pm.aid = {alias}.aid AND pm.sid = {alias}.sid)")
+
+
+def _pruned(pruned_by_association: dict[str, str | None] | None, named: str) -> list[str]:
+    """The pruned sets applied to ``named``'s reads: [] or [its one pruned set]."""
+    pruned = (pruned_by_association or {}).get(named)
+    return [pruned] if pruned is not None else []
+
+
 def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
                  statistics_by_association: dict[str, str | None],
-                 sids: Sequence[int]) -> list[dict[str, Any]]:
+                 sids: Sequence[int], *,
+                 pruned_by_association: dict[str, str | None] | None = None,
+                 ) -> list[dict[str, Any]]:
     """`dev`'s association prefetch over the named association sets' lineages.
 
     ``lineages`` maps each named association set to its chain (itself, then
@@ -180,6 +198,9 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
     ``nsources`` is the statistics row's, else the number of distinct sources
     the aid has in merges across the chain (`dev`'s ``_stats_sql``); an
     (aid, sid) pair present in a base and its extension counts once.
+    ``pruned_by_association`` maps a named set to the pruned set applied to it
+    (or None): a pair that pruned set lists in ``prunedmerges`` is neither a
+    trigger's association nor counted in the fallback (R5).
     """
     if not sids or not lineages:
         return []
@@ -200,7 +221,8 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
             SELECT DISTINCT ON (m.sid, m.aid)
                    m.sid, m.aid AS merges_aid, a.aid, a.ra0, a.dec0, {stats_select},
                    (SELECT count(DISTINCT m2.sid) FROM {merges} m2
-                    WHERE m2.aid = a.aid AND m2.result_set = ANY(%(chain)s::text[]))::int
+                    WHERE m2.aid = a.aid AND m2.result_set = ANY(%(chain)s::text[])
+                      AND {m2_not_pruned})::int
                        AS merges_count
             FROM {merges} m
             JOIN unnest(%(chain)s::text[]) WITH ORDINALITY AS lm(member, depth)
@@ -211,11 +233,14 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
                      ON lo.member = o.result_set
                 WHERE o.aid = m.aid ORDER BY lo.depth LIMIT 1) a ON true
             {stats_join}
-            WHERE m.sid = ANY(%(sids)s)
+            WHERE m.sid = ANY(%(sids)s) AND {m_not_pruned}
             ORDER BY m.sid, m.aid, lm.depth
             """).format(stats_select=stats_select, stats_join=stats_join,
-                        merges=t["merges"], astroobjects=t["astroobjects"]),
-            {"chain": list(chain), "stats": stats, "sids": list(sids)})
+                        merges=t["merges"], astroobjects=t["astroobjects"],
+                        m_not_pruned=sql.SQL(_NOT_PRUNED.format(alias="m")),
+                        m2_not_pruned=sql.SQL(_NOT_PRUNED.format(alias="m2"))),
+            {"chain": list(chain), "stats": stats, "sids": list(sids),
+             "pruned": _pruned(pruned_by_association, named)})
         for row in _dicts(cur):
             meta_nsources = row.pop("meta_nsources")
             merges_count = row.pop("merges_count")
@@ -227,13 +252,16 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
 
 
 def history(cur, lineages: dict[str, list[str]], fields: dict[str, int],
-            objects: Sequence[tuple[str, int]], min_mjd: float) -> list[dict[str, Any]]:
+            objects: Sequence[tuple[str, int]], min_mjd: float, *,
+            pruned_by_association: dict[str, str | None] | None = None,
+            ) -> list[dict[str, Any]]:
     """Every source of the objects through merges anywhere in their set's chain, oldest first.
 
     ``objects`` are (named association set, aid) pairs, read from that set's
     field's ``merges_<f>``. The sources may belong to any source set: they are
     the frozen inputs the chain names. ``object_set``/``object_aid`` say which
-    object each row belongs to.
+    object each row belongs to. A pair the named set's pruned set lists in
+    ``prunedmerges`` (``pruned_by_association``) is not history (R5).
     """
     rows: list[dict[str, Any]] = []
     for named, chain in lineages.items():
@@ -249,11 +277,13 @@ def history(cur, lineages: dict[str, list[str]], fields: dict[str, int],
             JOIN sources s ON s.sid = m.sid
             JOIN filters f ON s.fid = f.fid
             JOIN exposures e ON s.expid = e.expid
-            WHERE m.result_set = ANY(%s::text[]) AND m.aid = ANY(%s::bigint[])
-              AND s.mjdobs >= %s
+            WHERE m.result_set = ANY(%(chain)s::text[]) AND m.aid = ANY(%(aids)s::bigint[])
+              AND s.mjdobs >= %(min_mjd)s AND {not_pruned}
             ORDER BY s.mjdobs, s.sid, m.aid
-            """).format(source_select=sql.SQL(_SOURCE_SELECT), merges=merges),
-            (list(chain), aids, min_mjd))
+            """).format(source_select=sql.SQL(_SOURCE_SELECT), merges=merges,
+                        not_pruned=sql.SQL(_NOT_PRUNED.format(alias="m"))),
+            {"chain": list(chain), "aids": aids, "min_mjd": min_mjd,
+             "pruned": _pruned(pruned_by_association, named)})
         for row in _dicts(cur):
             row["object_set"] = named
             rows.append(row)

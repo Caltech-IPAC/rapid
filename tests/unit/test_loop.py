@@ -271,7 +271,9 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
     outputs = {
         "load": [source], "finalize": [diff], "crossmatch": [_entry("association-set", "AS2",
                                                                      {"field": 5})],
-        "statistics": [_entry("statistics-set", "ST2")], "alerts": [_entry("alert-container",
+        "statistics": [_entry("statistics-set", "ST2")],
+        "prune": [_entry("pruned-set", "PS2", {"base": "AS2", "settings_hash": "sha256:0"})],
+        "alerts": [_entry("alert-container",
                                                                           "AC2")]}
     manifests = {f"s3://b/out/{stage}": _manifest(o) for stage, o in outputs.items()}
     manifests[img.difference_template] = _manifest([refcat])
@@ -350,7 +352,7 @@ def test_process_date_walks_the_chain_and_records_the_date(monkeypatch):
     assert [o.instance for o in xm.outputs] == ["S1", "AS1"]
     alerts = storage.written[f"s3://b/scratch/runs/RUN2/inputs/alerts/{unit}"]
     assert [o.kind for o in alerts.outputs] == ["difference-image", "reference-catalog"]
-    assert alerts.inputs.result_sets == ("S1", "AS2", "ST2")
+    assert alerts.inputs.result_sets == ("S1", "AS2", "ST2", "PS2")
 
     assert updates["state"] == "complete" and updates["promotion"] == "P1"
     record = updates["record"]
@@ -362,6 +364,7 @@ def test_process_date_walks_the_chain_and_records_the_date(monkeypatch):
         "bases": {"5": {"run": "RUN1", "processing_date": "2027-10-01", "base_promoted": False}},
         "association_sets": {"5": "AS2"},
         "statistics_sets": {"5": "ST2"},
+        "pruned_sets": {"5": "PS2"},
         "alerts": {unit: {"instance": "AC2", "location": "s3://b/out/alerts"}},
         "promotion": "P1", "promotion_gate": "check policy rebuild-trial@1", "checks": []}
 
@@ -732,6 +735,24 @@ def test_alert_inputs_follow_the_alerts_stage_rules():
         loop.alert_result_sets(s1, [], [])
     with pytest.raises(loop.LoopError, match="more statistics"):
         loop.alert_result_sets(s1, ["AS1"], ["ST1", "ST2"])
+    # R5: each field's pruned set follows the statistics sets, one per field.
+    assert loop.alert_result_sets(s1, ["AS1", "AS2"], ["ST1"], ["PS1", "PS2"]) == [
+        "S1", "AS1", "AS2", "ST1", "PS1", "PS2"]
+    with pytest.raises(loop.LoopError, match="more pruned"):
+        loop.alert_result_sets(s1, ["AS1"], [], ["PS1", "PS2"])
+
+
+def test_field_pruned_set_names_the_prune_output_of_the_fields_association_set():
+    """R5: the loop binds the field's one pruned set, which must prune the
+    association set the same date's crossmatch produced for that field."""
+    ps = _entry("pruned-set", "PS1", {"base": "AS1", "settings_hash": "sha256:0"})
+    assert loop.field_pruned_set([ps], "s3://b/out/prune", "AS1") == "PS1"
+    with pytest.raises(loop.LoopError, match="0 pruned sets"):
+        loop.field_pruned_set([], "s3://b/out/prune", "AS1")
+    with pytest.raises(loop.LoopError, match="2 pruned sets"):
+        loop.field_pruned_set([ps, ps], "s3://b/out/prune", "AS1")
+    with pytest.raises(loop.LoopError, match="not the field's association set AS2"):
+        loop.field_pruned_set([ps], "s3://b/out/prune", "AS2")
 
 
 # ======================================================================
@@ -774,7 +795,7 @@ def test_crossmatch_input_sets_carry_every_source_set_of_the_date(monkeypatch):
         assert xm.inputs.result_sets == ("S1", "S2", "AS1")
     # alerts still take only the image's own fields' sets.
     alerts = storage.written[f"s3://b/scratch/runs/RUN2/inputs/alerts/{units[0]}"]
-    assert alerts.inputs.result_sets == ("S1", "AS2", "ST2")
+    assert alerts.inputs.result_sets == ("S1", "AS2", "ST2", "PS2")
     assert updates["record"]["fields"] == [5, 6]
 
 

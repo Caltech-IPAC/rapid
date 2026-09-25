@@ -14,8 +14,13 @@ and optionally one ``reference-catalog`` entry (its primary member, a
 SExtractor catalog, feeds ``refStarMatches``/``refGalaxyMatches``); its
 ``inputs.result_sets`` names, by instance id, exactly one source set, one or
 more association sets (an image can span fields) and any statistics sets,
-each describing one of the named association sets. The stage tells them
-apart by ``product_instances.kind``. It reads ``sources`` through its
+each describing one of the named association sets, and any pruned sets,
+each pruning one of the named association sets (its key's ``base``), at
+most one per association set. The stage tells them apart by
+``product_instances.kind``. A named pruned set's excluded (aid, sid) pairs
+(``prunedmerges``) are left out of its base's associations and history
+(supervisor step 9, R5); the execution notes' ``pruned_sets`` lists the
+pruned sets applied, or says ``none``. It reads ``sources`` through its
 parent by ``result_set``, and step 1's standalone per-field tables
 ``merges_<f>``, ``astroobjects_<f>`` and ``astroobjectsmeta_<f>`` by name,
 the field taken from the association set's logical key, by ``result_set``. Triggers come
@@ -80,7 +85,7 @@ import importlib
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -112,7 +117,11 @@ _SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings" / "alerts.t
 INPUT_SET_STAGE = "input-set"
 
 SOURCE_SET, ASSOCIATION_SET, STATISTICS_SET = "source-set", "association-set", "statistics-set"
-RESULT_SET_KINDS = (SOURCE_SET, ASSOCIATION_SET, STATISTICS_SET)
+PRUNED_SET = "pruned-set"
+RESULT_SET_KINDS = (SOURCE_SET, ASSOCIATION_SET, STATISTICS_SET, PRUNED_SET)
+
+#: The execution note an input set naming no pruned set gets (supervisor step 9, R5).
+NO_PRUNED_SETS = "none"
 
 KAFKA_REFUSAL = "Kafka publication is not enabled in this build"
 
@@ -128,12 +137,12 @@ DECLARATION = StageDeclaration(
             "[--settings <toml>] [--dry-run]. --inputs holds an input-set "
             "manifest (stage input-set) naming one difference-image entry, "
             "optionally one reference-catalog entry, and in inputs.result_sets "
-            "the source, association and statistics sets by instance id."
+            "the source, association, statistics and pruned sets by instance id."
         ),
     },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("difference-image", "reference-catalog", "source-set", "association-set",
-              "statistics-set"),
+              "statistics-set", "pruned-set"),
     produces=("alert-container", "alert-set"),
     database_access="read-write",
     resource_defaults={"vcpus": 1, "memory_mib": 8192},
@@ -186,13 +195,19 @@ class PostgresAlertsDatabase:
 
     def associations(self, lineages: dict[str, list[str]], fields: dict[str, int],
                      statistics_by_association: dict[str, str | None],
-                     sids: list[int]) -> list[dict[str, Any]]:
-        return self._call(_alerts_db.associations, lineages, fields,
-                          statistics_by_association, sids)
+                     sids: list[int], *,
+                     pruned_by_association: dict[str, str | None] | None = None
+                     ) -> list[dict[str, Any]]:
+        with self.conn.cursor() as cur:
+            return _alerts_db.associations(cur, lineages, fields, statistics_by_association,
+                                           sids, pruned_by_association=pruned_by_association)
 
     def history(self, lineages: dict[str, list[str]], fields: dict[str, int],
-                objects: list[tuple[str, int]], min_mjd: float):
-        return self._call(_alerts_db.history, lineages, fields, objects, min_mjd)
+                objects: list[tuple[str, int]], min_mjd: float, *,
+                pruned_by_association: dict[str, str | None] | None = None):
+        with self.conn.cursor() as cur:
+            return _alerts_db.history(cur, lineages, fields, objects, min_mjd,
+                                      pruned_by_association=pruned_by_association)
 
     def registered_instances(self, instances: list[str]) -> set[str]:
         return self._call(_alerts_db.registered_instances, instances)
@@ -344,10 +359,15 @@ class _Sets:
     source_set: str
     association_sets: tuple[str, ...]
     statistics_by_association: dict[str, str | None]
+    pruned_by_association: dict[str, str | None] = field(default_factory=dict)
 
     @property
     def statistics_sets(self) -> tuple[str, ...]:
         return tuple(s for s in self.statistics_by_association.values() if s is not None)
+
+    @property
+    def pruned_sets(self) -> tuple[str, ...]:
+        return tuple(p for p in self.pruned_by_association.values() if p is not None)
 
 
 def _classify_result_sets(named: tuple[str, ...], found: dict[str, dict[str, Any]],
@@ -358,7 +378,10 @@ def _classify_result_sets(named: tuple[str, ...], found: dict[str, dict[str, Any
     instance), one or more ``association-set``, and any number of
     ``statistics-set``, each describing one of the named association sets
     (some value of its logical key names that set) and at most one per
-    association set. Every set must be complete.
+    association set, and any number of ``pruned-set``, each pruning one of
+    the named association sets (its logical key's ``base``, as ``prune``
+    writes it) and at most one per association set (supervisor step 9, R5).
+    Every set must be complete.
     """
     if not named:
         raise InputRejected("the input set names no result sets")
@@ -400,8 +423,21 @@ def _classify_result_sets(named: tuple[str, ...], found: dict[str, dict[str, Any
             raise InputRejected(
                 f"association set {described[0]!r} is described by two named statistics sets")
         statistics[described[0]] = stats
+    pruned: dict[str, str | None] = {a: None for a in associations}
+    for pruned_set in by_kind[PRUNED_SET]:
+        key = found[pruned_set]["key"]
+        base = key.get("base") if isinstance(key, dict) else None
+        if base not in pruned:
+            raise InputRejected(
+                f"pruned set {pruned_set!r} prunes association set {base!r}, which the input "
+                f"set does not name; a pruned set's base must be one of {list(associations)}")
+        if pruned[base] is not None:
+            raise InputRejected(
+                f"association set {base!r} is pruned by two named pruned sets: "
+                f"{pruned[base]!r} and {pruned_set!r}")
+        pruned[base] = pruned_set
     return _Sets(source_set=source_set, association_sets=associations,
-                 statistics_by_association=statistics)
+                 statistics_by_association=statistics, pruned_by_association=pruned)
 
 
 def _key_values(key: Any) -> list[str]:
@@ -547,6 +583,13 @@ def _body(context: StageContext) -> StageResult:
         with open_database() as db:
             kinds = db.result_set_kinds(list(result_sets_read))
             sets = _classify_result_sets(result_sets_read, kinds, difference.instance)
+            # R5: the pairs a named pruned set lists are left out of every
+            # association and history read of its base; no pruned set, no
+            # exclusion, and the notes say so.
+            notes["pruned_sets"] = list(sets.pruned_sets) or NO_PRUNED_SETS
+            if not sets.pruned_sets:
+                log.info("the input set names no pruned-set: associations and history read "
+                         "every merges pair of the named association sets")
             try:
                 pid = db.difference_pid(difference.instance)
                 # Each named association set with the bases it extends: a new
@@ -589,14 +632,16 @@ def _body(context: StageContext) -> StageResult:
                        for row in db.alertable_sources(sets.source_set, pid)]
             try:
                 object_rows = db.associations(lineages, fields, sets.statistics_by_association,
-                                              [s.sid for s in sources])
+                                              [s.sid for s in sources],
+                                              pruned_by_association=sets.pruned_by_association)
             except ValueError as exc:
                 raise InputRejected(str(exc)) from exc
             objects = sorted({(row["association_set"], row["aid"]) for row in object_rows
                               if row["aid"] is not None})
             window = float(alert_settings["prv_window_days"])
             history_rows = (db.history(lineages, fields, objects,
-                                       min(s.mjdobs for s in sources) - window)
+                                       min(s.mjdobs for s in sources) - window,
+                                       pruned_by_association=sets.pruned_by_association)
                             if objects else [])
             associations = assemble.index_associations(object_rows, history_rows)
 

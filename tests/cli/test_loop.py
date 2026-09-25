@@ -101,8 +101,15 @@ class _FakeStages:
             return [{"kind": "statistics-set", "format_version": "1", "instance": new_ulid(),
                      "key": {"field": int(unit_id)}, "primary": None, "members": []}]
         if stage == "prune":
+            # prune's key names its base: the field's newest association set.
+            with self.db.cursor() as cur:
+                cur.execute("SELECT id FROM product_instances WHERE kind = 'association-set' "
+                            "AND logical_key ->> 'field' = %s ORDER BY id DESC LIMIT 1",
+                            (unit_id,))
+                base = cur.fetchone()[0]
             return [{"kind": "pruned-set", "format_version": "1", "instance": new_ulid(),
-                     "key": {"field": int(unit_id)}, "primary": None, "members": []}]
+                     "key": {"base": base, "settings_hash": "sha256:" + "0" * 64},
+                     "primary": None, "members": []}]
         if stage == "alerts":
             return [{"kind": "alert-container", "format_version": "1", "instance": new_ulid(),
                      "key": {"unit": unit_id}, "primary": "alerts.avro",
@@ -306,7 +313,10 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     alerts_in = _read(fake_s3, f"s3://{FAKE_BUCKET}/scratch/runs/{run2}/inputs/alerts/"
                                f"{UNIT}/manifest.json")
     assert [o["kind"] for o in alerts_in["outputs"]] == ["difference-image", "reference-catalog"]
-    assert len(alerts_in["inputs"]["result_sets"]) == 1 + 2 * len(FIELDS)
+    # R5: per field, the association, statistics and pruned sets.
+    assert len(alerts_in["inputs"]["result_sets"]) == 1 + 3 * len(FIELDS)
+    for f in FIELDS:
+        assert record2["pruned_sets"][str(f)] in alerts_in["inputs"]["result_sets"]
     fake_s3.head_object(Bucket=FAKE_BUCKET,
                         Key=f"scratch/runs/{run2}/inputs/alerts/{UNIT}/diff/final.fits")
     assert record2["alerts"][UNIT]["instance"]

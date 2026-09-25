@@ -16,7 +16,9 @@ uses. The rulings this module implements, one line each:
   image (the raw difference is never registered), maintain per
   ``<yyyymmdd>/SCA<nn>``, crossmatch -> statistics -> prune per field, then
   alerts per detector image, every attempt through ``submit_unit`` +
-  ``reconcile``.
+  ``reconcile``. An alerts input set names, per field the image touches,
+  the association set, its statistics set and the field's prune output
+  (supervisor step 9, R5: the history leaves out the pruned pairs).
 - R5 (amended A3): a field's base catalog is the association set crossmatch
   produced for that field in the most recent earlier ``complete`` row of the
   same schedule that has one (walking back over dates; promoted or not, with
@@ -636,14 +638,30 @@ def alert_source_set(entries: Sequence[OutputEntry], difference: str) -> OutputE
 
 
 def alert_result_sets(source: OutputEntry, associations: Sequence[str],
-                      statistics: Sequence[str]) -> list[str]:
+                      statistics: Sequence[str], pruned: Sequence[str] = ()) -> list[str]:
     """alerts' ``inputs.result_sets``: the source set, one or more association
-    sets, at most one statistics set per association set; never a pruned set."""
+    sets, at most one statistics set and at most one pruned set per
+    association set (each field's prune output, supervisor step 9 R5)."""
     if not associations:
         raise LoopError(f"source set {source.instance} has no association sets")
     if len(statistics) > len(associations) or len(set(statistics)) != len(statistics):
         raise LoopError("more statistics sets than association sets")
-    return [source.instance, *associations, *statistics]
+    if len(pruned) > len(associations) or len(set(pruned)) != len(pruned):
+        raise LoopError("more pruned sets than association sets")
+    return [source.instance, *associations, *statistics, *pruned]
+
+
+def field_pruned_set(entries: Sequence[OutputEntry], location: str, association: str) -> str:
+    """The one ``pruned-set`` a field's prune manifest (at ``location``) lists,
+    which must prune ``association``, the field's association set (R5)."""
+    pruned = [e for e in entries if e.kind == "pruned-set"]
+    if len(pruned) != 1:
+        raise LoopError(f"{location}/manifest.json has {len(pruned)} pruned sets")
+    base = pruned[0].key.get("base")
+    if base != association:
+        raise LoopError(f"{location}/manifest.json's pruned set {pruned[0].instance} prunes "
+                        f"{base}, not the field's association set {association}")
+    return pruned[0].instance
 
 
 def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
@@ -1059,6 +1077,7 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
         previous = previous_complete_rows(conn, schedule, date)
         association: dict[int, str] = {}
         statistics: dict[int, str] = {}
+        pruned: dict[int, str] = {}
         bases: dict[str, str | None] = {}
         base_detail: dict[str, Any] = {}
 
@@ -1094,6 +1113,11 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                 statistics[f] = st_sets[0]
             if not inherited("prune", unit):
                 walk(unit, [position(PRUNE, "prune", unit)], inputs=[xm_out])
+            # R5: the field's prune output (the selected attempt's pruned set)
+            # binds to every alerts input set naming this field.
+            pr_out = _output(conn, view, "prune", unit)
+            pruned[f] = field_pruned_set(storage.read_manifest(pr_out).outputs, pr_out,
+                                         association[f])
 
         _phase(fields, field_chain)
 
@@ -1119,7 +1143,8 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                 own_fields = sorted(image_fields.get(image.unit, ()))
                 result_sets = alert_result_sets(
                     own_sources, [association[f] for f in own_fields],
-                    [statistics[f] for f in own_fields if f in statistics])
+                    [statistics[f] for f in own_fields if f in statistics],
+                    [pruned[f] for f in own_fields])
                 manifest = None
                 if not storage.exists(parse_location(dest), "manifest.json"):
                     _copy_members(storage, fin_loc, diffs[0], dest)
@@ -1154,6 +1179,7 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
     record.update(fields=fields, base_sets=bases, bases=base_detail,
                   association_sets={str(f): i for f, i in association.items()},
                   statistics_sets={str(f): i for f, i in statistics.items()},
+                  pruned_sets={str(f): i for f, i in pruned.items()},
                   alerts=alerts)
     return _finish_row(conn, spec, date, run_id, record, out)
 
