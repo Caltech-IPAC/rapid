@@ -23,7 +23,10 @@ IP, a retired ECR alias) and runs in CI (`public-safety.yml`) and in
 the `rapid_docs` repository's `system/` directory: `specification.md`
 (requirements), `stage-contract.md` (package layout and per-stage
 contract), `runs.md` (runs/attempts/custody), `products.md`,
-`releases.md`, `tool.md`, `loop.md`, `checks.md`, and per-stage pages.
+`releases.md`, `tool.md`, `loop.md`, `checks.md`, `observability.md`
+(logging, monitoring, job timing), and per-stage pages; `operations.md`
+holds the direction pass's operations-readiness proposal (2026-09-26),
+not yet ruled.
 When a page and this code disagree, **the page is corrected first**;
 never quietly patch code around a stale page. This repository's own
 README.md carries a longer prose walkthrough of the same rules and the
@@ -138,6 +141,19 @@ committed to this repository. The same rule applies to every other
 account-specific value the tool reads (`RAPIDPIPE_BATCH_JOB_QUEUE`,
 `RAPIDPIPE_OUTPUTS_ROOT_*`, `RAPIDPIPE_CLEANUP_ROLE_ARN`, and siblings
 documented in README.md): named environment variables only.
+
+## Output and logging
+
+A command prints its data on stdout and nothing else there; everything
+else goes through `rapidpipe.log`, which writes one line shape to stderr
+(`<UTC> <LEVEL> run= attempt= stage= unit= <logger> <message>`) and, for
+a stage invocation, the same lines to `log/<stage>.log` beside the
+attempt's outputs. A new subcommand follows the same split, and a
+command whose output is a record should offer `--json` (the direction
+pass's proposal, 2026-09-26). Exit codes are the tables on the
+`rapid_docs` tool and stage-contract pages; do not invent a new one.
+`RAPIDPIPE_LOG_LEVEL` sets the level; `--profile` (or
+`RAPIDPIPE_PROFILE=1`) profiles a stage body on a scratch run.
 
 ## Writing conventions
 
