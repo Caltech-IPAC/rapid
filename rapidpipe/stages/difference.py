@@ -29,8 +29,11 @@ files beside the manifest --
   ``"reference"`` (role ``psf``).
 
 Outputs. One ``difference-image`` instance for ZOGY, registered as in
-`dev`; an SFFT instance only when ``[sfft] register_sfft`` is on and SFFT
-succeeded (never a partial bundle); ``source-catalog`` entries for each
+`dev`; an SFFT instance when ``[sfft] register_sfft`` is on (the
+default, lead ruling 2026-09-26) and SFFT succeeded (never a partial
+bundle). Both instances register under their own `pipelines` row (ZOGY
+ppid 15, SFFT ppid 16); which one consumers see is a promotion choice
+downstream, not this stage's job. ``source-catalog`` entries for each
 registered instance's catalogs. Every working file stays in
 ``[paths] work_subdirectory`` of the attempt's output location, as `dev`
 uploads its intermediates for diagnosis; the naive subtraction's files

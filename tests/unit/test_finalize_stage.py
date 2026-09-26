@@ -432,7 +432,12 @@ def test_finalizes_a_real_difference_stage_manifest(tmp_path, monkeypatch):
     diff_inputs, diff_outputs = tmp_path / "diff-inputs", tmp_path / "diff-outputs"
     build_input_set(diff_inputs)
     overlay = tmp_path / "overlay.toml"
-    overlay.write_text(f'[paths]\ncfg_path = "{CDF_DIR}"\n')
+    # SFFT registration off: this test is about finalize passing a single
+    # differencer's manifest through unchanged, not the two-differencer
+    # drop, which test_the_configured_differencer_is_republished_and_the_
+    # other_dropped and test_sfft_selected_from_a_two_differencer_manifest
+    # already cover.
+    overlay.write_text(f'[paths]\ncfg_path = "{CDF_DIR}"\n[sfft]\nregister_sfft = false\n')
     assert difference.main(_argv(diff_inputs, diff_outputs, "--settings", str(overlay))) == 0
     source = Manifest.read(diff_outputs / "manifest.json")
 
