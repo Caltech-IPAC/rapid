@@ -84,6 +84,24 @@ def test_check_run_param_usage_errors_exit_64_before_connecting(monkeypatch, cap
     assert message in capsys.readouterr().err
 
 
+def test_check_run_accepts_check_policy_as_an_alias_of_policy(monkeypatch, fake_conn):
+    from rapidpipe.cli import checkctl
+
+    seen = {}
+
+    def _fake_resolve_run_policy(conn, run_id, policy_ref):
+        seen["policy_ref"] = policy_ref
+        raise LookupError("stop before running checks")
+
+    monkeypatch.setattr("rapidpipe.checks.runner.resolve_run_policy", _fake_resolve_run_policy)
+    monkeypatch.setattr(checkctl, "_require_run", lambda conn, run_id: None)
+    cli.main(["check", "run", "R", "--check-policy", "rebuild-strict@1"])
+    assert seen["policy_ref"] == "rebuild-strict@1"
+    seen.clear()
+    cli.main(["check", "run", "R", "--policy", "rebuild-strict@1"])
+    assert seen["policy_ref"] == "rebuild-strict@1"
+
+
 def test_check_run_and_show_refuse_an_unknown_run(fake_conn, capsys):
     assert cli.main(["check", "run", "R"]) == 64
     assert "rapidpipe check run: run R does not exist" in capsys.readouterr().err

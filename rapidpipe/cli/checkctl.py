@@ -3,9 +3,10 @@
 
 - ``list`` -- the registered checks and the shipped check policies (no
   database);
-- ``run <run> [--policy P] [--instance I] [--check NAME@V] [--param k=v]...
-  [--who W]`` -- run every applicable check of the policy (``--policy`` >
-  the run's ``check_policy_ref`` > ``rebuild-trial@1``) over the run's
+- ``run <run> [--check-policy P] [--instance I] [--check NAME@V] [--param k=v]...
+  [--who W]`` -- run every applicable check of the policy (``--check-policy``,
+  an alias ``--policy`` is also accepted, > the run's ``check_policy_ref`` >
+  ``rebuild-trial@1``) over the run's
   candidates (instances from selected attempts, any custody), or the one
   instance / the one check; record one ``checks`` row per result; print
   one line per result. ``--param`` overrides the policy's params for the
@@ -53,8 +54,10 @@ def add_parser(subparsers: Any) -> None:
                     "and print one line per result. Exit 0 all passed, 1 any failed.")
     run_parser.add_argument("run_id")
     run_parser.add_argument(
-        "--policy", default=None, metavar="NAME@VERSION",
-        help="Check policy (default: the run's check policy, else rebuild-trial@1).")
+        "--check-policy", "--policy", dest="policy", default=None, metavar="NAME@VERSION",
+        help="Check policy (default: the run's check policy, else rebuild-trial@1); "
+             "the same policy reference `run promote --check-policy` takes. "
+             "--policy is an accepted alias.")
     run_parser.add_argument(
         "--instance", default=None, metavar="INSTANCE_ID",
         help="Check only this candidate instance of the run.")
