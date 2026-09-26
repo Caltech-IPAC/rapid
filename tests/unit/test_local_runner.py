@@ -140,6 +140,56 @@ def test_run_stage_locally_output_location_layout(tmp_path, monkeypatch):
     assert calls["add_unit"] == ("RUN01", "admit", "detector-image", "e20260821001234/SCA07")
 
 
+def test_run_stage_locally_env_none_value_removes_an_inherited_key(tmp_path, monkeypatch):
+    """A ``None`` value in ``env`` removes that key from the subprocess
+    environment instead of setting it, so a caller can strip something
+    this process itself inherited (a production run stripping an ambient
+    ``RAPIDPIPE_PROFILE=1``), not only add or overwrite a key."""
+    from rapidpipe.runs import local as local_module
+
+    monkeypatch.setenv("RAPIDPIPE_PROFILE", "1")
+
+    class _FakeConn:
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    monkeypatch.setattr(local_module, "add_unit", lambda *a, **k: None)
+    monkeypatch.setattr(local_module, "allocate_attempt", lambda *a, **k: "ATTEMPT01")
+    monkeypatch.setattr(local_module, "record_attempt_result", lambda *a, **k: None)
+    monkeypatch.setattr(local_module, "select_attempt", lambda *a, **k: None)
+    monkeypatch.setattr(local_module, "_run_schema_version", lambda conn, run_id: "1")
+    monkeypatch.setattr(local_module, "_source_revision_or_unknown", lambda: "abc123")
+    monkeypatch.setattr(
+        local_module, "_read_manifest_if_valid", lambda output_location: object())
+
+    captured = {}
+
+    class _FakeCompletedProcess:
+        returncode = 0
+
+    def _fake_run(argv, env):
+        captured["env"] = env
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(local_module.subprocess, "run", _fake_run)
+
+    local_module.run_stage_locally(
+        _FakeConn(),
+        run_id="RUN01",
+        stage="admit",
+        unit_kind="detector-image",
+        unit_id="e1/SCA07",
+        inputs=str(tmp_path / "in"),
+        outputs_root=str(tmp_path / "root"),
+        env={"RAPIDPIPE_PROFILE": None},
+    )
+
+    assert "RAPIDPIPE_PROFILE" not in captured["env"]
+
+
 def test_run_stage_locally_fills_none_valued_execution_record_fields(tmp_path, monkeypatch):
     """A stage-written exec/<attempt>.json can hold the NOT NULL columns
     present but explicitly null (e.g. a Batch container where git isn't
@@ -409,6 +459,7 @@ def test_run_local_register_derives_unit_id_from_the_manifest(tmp_path, monkeypa
             disposition="succeeded", manifest_path=None, selected=True)
 
     monkeypatch.setattr(cli_main, "connect", _fake_connect)
+    monkeypatch.setattr(cli_main.launch_batch, "_run_kind", lambda conn, run_id: "scratch")
     monkeypatch.setattr(cli_main, "run_stage_locally", _fake_run_stage_locally)
 
     rc = cli_main.main([
@@ -457,6 +508,89 @@ def test_run_local_profile_sets_the_subprocess_environment(tmp_path, monkeypatch
 
     assert rc == int(ExitCode.SUCCESS)
     assert seen["env"] == {"RAPIDPIPE_PROFILE": "1"}
+
+
+def test_run_local_production_run_strips_an_inherited_profile_env_var(tmp_path, monkeypatch):
+    # No --profile given, but the calling shell's own environment already
+    # carries RAPIDPIPE_PROFILE=1 (local.py's subprocess_env starts from
+    # dict(os.environ), so it would otherwise inherit this unchanged); a
+    # production run must still never profile (direction review,
+    # 2026-09-26): main.py now strips the key for every production run,
+    # not only when --profile is passed and refused outright.
+    monkeypatch.setenv("RAPIDPIPE_PROFILE", "1")
+    inputs = tmp_path / "admit-outputs"
+    inputs.mkdir()
+    (inputs / "manifest.json").write_text(_manifest_json(stage="admit", unit_id="e1/SCA07"))
+
+    seen = {}
+
+    class _FakeConn:
+        def rollback(self):
+            pass
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_run_stage_locally(conn, *, run_id, stage, unit_kind, unit_id, inputs,
+                                 outputs_root, settings, python, env=None):
+        seen["env"] = env
+        return LocalAttempt(
+            attempt_id="a1", output_location=str(tmp_path / "out"), exit_code=0,
+            disposition="succeeded", manifest_path=None, selected=True)
+
+    monkeypatch.setattr(cli_main, "connect", lambda *a, **k: _FakeConnCtx())
+    monkeypatch.setattr(cli_main.launch_batch, "_run_kind", lambda conn, run_id: "production")
+    monkeypatch.setattr(cli_main, "run_stage_locally", _fake_run_stage_locally)
+
+    rc = cli_main.main([
+        "run", "local", "r1", "register",
+        "--inputs", str(inputs), "--outputs-root", str(tmp_path / "outputs-root"),
+    ])
+
+    assert rc == int(ExitCode.SUCCESS)
+    assert seen["env"] == {"RAPIDPIPE_PROFILE": None}
+
+
+def test_run_local_scratch_run_without_profile_passes_no_env_override(tmp_path, monkeypatch):
+    inputs = tmp_path / "admit-outputs"
+    inputs.mkdir()
+    (inputs / "manifest.json").write_text(_manifest_json(stage="admit", unit_id="e1/SCA07"))
+
+    seen = {}
+
+    class _FakeConn:
+        def rollback(self):
+            pass
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_run_stage_locally(conn, *, run_id, stage, unit_kind, unit_id, inputs,
+                                 outputs_root, settings, python, env=None):
+        seen["env"] = env
+        return LocalAttempt(
+            attempt_id="a1", output_location=str(tmp_path / "out"), exit_code=0,
+            disposition="succeeded", manifest_path=None, selected=True)
+
+    monkeypatch.setattr(cli_main, "connect", lambda *a, **k: _FakeConnCtx())
+    monkeypatch.setattr(cli_main.launch_batch, "_run_kind", lambda conn, run_id: "scratch")
+    monkeypatch.setattr(cli_main, "run_stage_locally", _fake_run_stage_locally)
+
+    rc = cli_main.main([
+        "run", "local", "r1", "register",
+        "--inputs", str(inputs), "--outputs-root", str(tmp_path / "outputs-root"),
+    ])
+
+    assert rc == int(ExitCode.SUCCESS)
+    assert seen["env"] is None
 
 
 def test_run_submit_profile_not_allowed_maps_to_exit_64(monkeypatch):
