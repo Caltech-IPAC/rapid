@@ -343,6 +343,19 @@ def test_run_stage_s3_inputs_and_outputs_end_to_end(monkeypatch, tmp_path):
     assert not seen_work_dirs["inputs_dir"].exists()
     assert not seen_work_dirs["outputs_dir"].exists()
 
+    # The uploaded log is not just present (asserted above): it contains
+    # the final success line, with the exit code, published manifest
+    # location, and all four timing fields, not only what was logged
+    # before the log file was closed and uploaded.
+    uploaded_log = fake._objects[("out-bucket", "runs/r1/admit/u1/a1/log/admit.log")].decode()
+    (final_line,) = (line for line in uploaded_log.splitlines() if "exit=" in line)
+    assert f"exit={int(ExitCode.SUCCESS)}" in final_line
+    assert "manifest=s3://out-bucket/runs/r1/admit/u1/a1/manifest.json" in final_line
+    assert "elapsed_s=" in final_line
+    assert "fetch_s=" in final_line
+    assert "body_s=" in final_line
+    assert "publish_s=" in final_line
+
 
 def test_run_stage_s3_outputs_body_raises_uploads_only_the_log_and_keeps_work_dir(
         monkeypatch, tmp_path):
