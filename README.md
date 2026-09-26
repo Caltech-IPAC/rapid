@@ -40,6 +40,18 @@ rapidpipe run reconcile "$run_id"
 
 Each job definition must run the image built from [`containers/rapid-pipeline`](containers/rapid-pipeline), with a retry rule on exit code 75.
 
+#### Environment read inside the container
+
+Beyond the deployment variables above, `rapidpipe` reads these directly from the process environment, none committed here:
+
+- `RAPID_PARAMETER_PATH` -- the SSM parameter tree `rapidpipe.db.connection` reads for its `db/server`, `db/port`, `db/name` and `db/secret-id` keys when the `PG*` variables are not set; set by the job definition.
+- `RAPIDPIPE_IMAGE_DIGEST`, else `RAPID_IMAGE_DIGEST` -- the image digest a stage's execution record carries (`rapidpipe.stages.contract`); `RAPIDPIPE_IMAGE_DIGEST` wins when both are set.
+- `RAPIDPIPE_RELEASE`, else `RAPID_RELEASE_IDENTITY` -- the release identity a stage's execution record carries; `RAPIDPIPE_RELEASE` wins when both are set.
+- `RAPID_SOURCE_REVISION` -- the source revision a stage's execution record carries when `git rev-parse HEAD` fails in the container (no `.git` checkout there); `run create` instead asks git directly for the same field and never reads this variable.
+- `RAPIDPIPE_LOAD_DATABASE`, `RAPIDPIPE_MAINTAIN_DATABASE`, `RAPIDPIPE_CROSSMATCH_DATABASE`, `RAPIDPIPE_STATISTICS_DATABASE`, `RAPIDPIPE_PRUNE_DATABASE`, `RAPIDPIPE_ALERTS_DATABASE`, `RAPIDPIPE_EXPORT_DATABASE` -- each names a `module:factory` that returns an alternate database for that one stage (`load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export` respectively) in place of PostgreSQL; unset in every deployment, read only by that stage's own fixture, since a stage run as a subprocess cannot be monkeypatched.
+- `RAPIDPIPE_DIFFERENCE_TOOLKIT` / `RAPIDPIPE_REFERENCE_TOOLKIT` -- each names a `module:factory` that returns an alternate `Toolkit` for the `difference` or `reference` stage in place of the real tools; unset in every deployment, read only by that stage's own fixture and the `run local` smoke test.
+- `RAPIDPIPE_RELEASE_HOOKS` -- launcher-side, not container-side: the default `--hooks-dir` for `release cut`/`release verify`, read on the machine that cuts or verifies a release, not inside a stage's container.
+
 #### Running a run from the command line
 
 - `rapidpipe run create ... [--seed <run>]` records the run a new one was seeded from: lineage only, inheriting no configuration. `--seed <run> --only-failed` re-runs the seed's failed units instead (see Recovery below).
