@@ -686,10 +686,28 @@ def _with_batch_scheduler_metadata(
     ``scheduler_metadata`` under a ``"batch"`` key -- merged with, not
     replacing, whatever ``scheduler_metadata`` the record already carries
     (direction/run-timings; there is none today, since no stage writes
-    one, but this must not assume that stays true)."""
+    one, but this must not assume that stays true).
+
+    Also, when ``execution_record`` itself carries a ``"timing"`` key (the
+    stage's own ``fetch_s``/``body_s``, written into ``exec/<attempt>.json``
+    by ``rapidpipe.stages.contract.run_stage``, direction/logging-timing,
+    and already read back here by :func:`_fetch_execution_record` for a
+    SUCCEEDED job with a valid manifest -- ``_execution_record_with_defaults``
+    passes it through unchanged), copies it into ``scheduler_metadata``
+    under a ``"stage"`` key, merged the same way, so ``rapidpipe run
+    timings`` can read ``fetch_s``/``body_s`` back without a second S3
+    fetch of its own. There is no ``publish_s`` here: the stage writes its
+    execution record before publishing (the same reason it has no
+    ``"ended"``), so that phase is never in this dict; ``run timings``
+    always prints ``-`` for it.
+    """
     record = dict(execution_record)
     scheduler_metadata = dict(record.get("scheduler_metadata") or {})
     scheduler_metadata["batch"] = _batch_scheduler_metadata(job)
+    stage_timing = record.get("timing")
+    if stage_timing:
+        scheduler_metadata["stage"] = {
+            **(scheduler_metadata.get("stage") or {}), **stage_timing}
     record["scheduler_metadata"] = scheduler_metadata
     return record
 

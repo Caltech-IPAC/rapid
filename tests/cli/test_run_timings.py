@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+from .conftest import FAKE_BUCKET
 from .test_run_lifecycle import _create_run, _kv, _seed_manifest, _submit
 
 _TIMINGS_HEADER = (
@@ -16,13 +17,33 @@ _TIMINGS_HEADER = (
 )
 
 
+def _seed_exec_record(fake_s3, output_location, *, attempt_id, fetch_s=None, body_s=None):
+    """Seed exec/<attempt>.json with a "timing" key, the way
+    ``rapidpipe.stages.contract.run_stage`` writes one (direction/
+    logging-timing) -- so ``reconcile`` has something to copy into
+    ``scheduler_metadata["stage"]`` (direction/run-timings)."""
+    bucket = FAKE_BUCKET
+    assert output_location.startswith(f"s3://{bucket}/")
+    prefix = output_location[len(f"s3://{bucket}/"):]
+    record = {
+        "settings_hash": "sha256:" + "0" * 64,
+        "source_revision": None,
+        "image_digest": None,
+        "release": None,
+        "timing": {"started": "2023-11-14T22:13:30Z", "fetch_s": fetch_s, "body_s": body_s},
+    }
+    fake_s3.seed(bucket, f"{prefix}/exec/{attempt_id}.json", json.dumps(record).encode())
+
+
 def _submit_and_complete_with_batch_timestamps(
         cli, fake_batch, fake_s3, run_id, *, unit_id, stage="admit",
-        created_at, started_at, stopped_at):
+        created_at, started_at, stopped_at, fetch_s=None, body_s=None):
     """Like ``test_run_lifecycle._submit_and_complete``, but the FakeBatch
     job also carries Batch's own ``createdAt``/``startedAt``/``stoppedAt``
     (epoch milliseconds), so ``reconcile`` has something to copy into
-    ``scheduler_metadata`` (direction/run-timings)."""
+    ``scheduler_metadata`` (direction/run-timings); when ``fetch_s``/
+    ``body_s`` are given, the attempt's own exec/<attempt>.json also
+    carries a "timing" key, the way a real stage invocation would."""
     submitted = _submit(cli, run_id, stage, unit_id)
     assert submitted.rc == 0, submitted.err
     attempt_id = _kv(submitted.out, "attempt")
@@ -34,6 +55,9 @@ def _submit_and_complete_with_batch_timestamps(
         stopped_at=stopped_at, job_queue="fake-queue", log_stream="fake-stream")
     _seed_manifest(fake_s3, output_location, run_id=run_id, stage=stage,
                     unit_id=unit_id, attempt_id=attempt_id)
+    if fetch_s is not None or body_s is not None:
+        _seed_exec_record(fake_s3, output_location, attempt_id=attempt_id,
+                          fetch_s=fetch_s, body_s=body_s)
 
     reconciled = cli("run", "reconcile", run_id)
     assert reconciled.rc == 0, reconciled.err
@@ -46,7 +70,7 @@ def test_timings_derives_queue_and_exec_seconds_from_batch_metadata(
     attempt_id, _job_id, _location = _submit_and_complete_with_batch_timestamps(
         cli, fake_batch, fake_s3, run_id, unit_id="cli-timings-001/SCA07",
         created_at=1_700_000_000_000, started_at=1_700_000_010_000,
-        stopped_at=1_700_000_070_000)
+        stopped_at=1_700_000_070_000, fetch_s=2.5, body_s=54.0)
 
     result = cli("run", "timings", run_id)
     assert result.rc == 0, result.err
@@ -59,7 +83,9 @@ def test_timings_derives_queue_and_exec_seconds_from_batch_metadata(
     assert row[3] == "succeeded"
     assert row[4] == "10.0"  # queue_s
     assert row[5] == "60.0"  # exec_s
-    assert row[6:9] == ["-", "-", "-"]  # fetch/body/publish: never persisted
+    assert row[6] == "2.5"  # fetch_s: from the stage's own exec record
+    assert row[7] == "54.0"  # body_s: likewise
+    assert row[8] == "-"  # publish_s: never reaches scheduler_metadata
     assert row[10] == "false"
 
     # The per-stage summary follows.

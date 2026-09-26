@@ -236,14 +236,17 @@ def add_parsers(run_subparsers: Any) -> None:
                     "(reconcile records them in scheduler_metadata) and the "
                     "attempts table give: queue_s (Batch started - Batch "
                     "created), exec_s (Batch stopped - Batch started), "
-                    "fetch_s/body_s/publish_s (from the stage's own execution "
-                    "record, when it wrote one), reconcile_lag_s (this attempt's "
-                    "ended - Batch stopped), and over_30m (exec_s > 1800s). An "
-                    "attempt with no Batch metadata (an older row, or a local "
-                    "run) prints '-' throughout. Then a per-stage summary: "
-                    "count, median, p90 and max of exec_s, and how many exceeded "
-                    "30 minutes. Data on stdout only; exits 0, or 64 for an "
-                    "unknown run.")
+                    "fetch_s/body_s (the stage's own execution record's timing, "
+                    "when it wrote one; reconcile copies it alongside Batch's "
+                    "own timestamps), publish_s (always '-': the stage writes "
+                    "its execution record before publishing, so this phase "
+                    "never reaches it; only that stage's own final log line "
+                    "has it), reconcile_lag_s (this attempt's ended - Batch "
+                    "stopped), and over_30m (exec_s > 1800s). An attempt with "
+                    "no Batch metadata (an older row, or a local run) prints "
+                    "'-' throughout. Then a per-stage summary: count, median, "
+                    "p90 and max of exec_s, and how many exceeded 30 minutes. "
+                    "Data on stdout only; exits 0, or 64 for an unknown run.")
     timings.add_argument("run_id", help="The run.")
     timings.add_argument(
         "--stage", default=None, choices=STAGE_NAMES,
@@ -1416,19 +1419,19 @@ def _parse_batch_timestamp(value: Any) -> datetime | None:
 class AttemptTiming:
     """One derived row of ``run timings``.
 
-    ``fetch_s``/``body_s``/``publish_s`` are always ``None``: the stage's
-    own execution record carries a ``timing`` key (``rapidpipe.stages.
-    contract.run_stage``, direction/logging-timing) with exactly these
-    phases, but ``rapidpipe.runs.repository.record_attempt_result`` only
-    ever persists the named ``execution_records`` columns (source_revision,
-    working_copy_patch, image_digest, schema_version, resolved_settings,
-    settings_hash, scheduler_metadata, release): an execution record's
-    other keys, "timing" included, are read out of the JSON the stage
-    wrote and then simply dropped, never reaching a column. Reading them
-    back here would mean re-fetching each attempt's exec/<attempt>.json
-    from its own output location (S3 or local) for every row, which is
-    not what a read-only, database-only report should cost -- so this
-    prints '-' for all three rather than adding a column or a fetch.
+    ``fetch_s``/``body_s`` come from ``scheduler_metadata["stage"]``:
+    ``rapidpipe.launch.batch.reconcile`` copies them there from the
+    stage's own execution record (``exec/<attempt>.json``'s ``timing``
+    key, ``rapidpipe.stages.contract.run_stage``, direction/logging-timing)
+    when it fetches one for a SUCCEEDED job with a valid manifest -- no
+    second S3 fetch here, and no new column. ``publish_s`` is always
+    ``None``: the stage writes its execution record before publishing (the
+    same reason that record has no ``"ended"``), so ``publish_s`` never
+    reaches even ``scheduler_metadata``; it is only ever in the stage's
+    own final log line. An attempt reconcile never resolved this way (an
+    older row, a local run, or one that failed before a manifest existed)
+    has no ``"stage"`` key either, so ``fetch_s``/``body_s`` fall back to
+    ``None`` (printed ``-``) for it too.
     """
 
     stage: str
@@ -1450,6 +1453,7 @@ def _attempt_timing(row: tuple) -> AttemptTiming:
     if isinstance(metadata, str):  # a driver that does not auto-cast jsonb
         metadata = json.loads(metadata) if metadata else {}
     batch = (metadata or {}).get("batch") or {}
+    stage_timing = (metadata or {}).get("stage") or {}
 
     created_at = _parse_batch_timestamp(batch.get("created_at"))
     started_at = _parse_batch_timestamp(batch.get("started_at"))
@@ -1467,8 +1471,9 @@ def _attempt_timing(row: tuple) -> AttemptTiming:
 
     return AttemptTiming(
         stage=stage, unit=unit_id, attempt=attempt_id, disposition=disposition,
-        queue_s=queue_s, exec_s=exec_s, fetch_s=None, body_s=None, publish_s=None,
-        reconcile_lag_s=reconcile_lag_s,
+        queue_s=queue_s, exec_s=exec_s,
+        fetch_s=stage_timing.get("fetch_s"), body_s=stage_timing.get("body_s"),
+        publish_s=None, reconcile_lag_s=reconcile_lag_s,
         over_30m=(None if exec_s is None else exec_s > _OVER_LONG_SECONDS))
 
 
@@ -1527,13 +1532,16 @@ def _timings_command(args: argparse.Namespace) -> int:
             print("\t".join(_fmt_timing_value(v) for v in (
                 t.stage, t.unit, t.attempt, t.disposition, t.queue_s, t.exec_s,
                 t.fetch_s, t.body_s, t.publish_s, t.reconcile_lag_s, t.over_30m)))
-        print()
-        print("\t".join(("stage", "count", "median_exec_s", "p90_exec_s",
-                         "max_exec_s", "over_30m_count")))
-        for summary in stage_summaries:
-            print("\t".join(_fmt_timing_value(summary[key]) for key in (
-                "stage", "count", "median_exec_s", "p90_exec_s",
-                "max_exec_s", "over_30m_count")))
+        if timings:
+            # Nothing to summarise for a run with no attempts at all
+            # (--stage matching none of them included): header only.
+            print()
+            print("\t".join(("stage", "count", "median_exec_s", "p90_exec_s",
+                             "max_exec_s", "over_30m_count")))
+            for summary in stage_summaries:
+                print("\t".join(_fmt_timing_value(summary[key]) for key in (
+                    "stage", "count", "median_exec_s", "p90_exec_s",
+                    "max_exec_s", "over_30m_count")))
         return int(ExitCode.SUCCESS)
 
     return _with_connection("timings", body)
