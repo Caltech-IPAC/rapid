@@ -68,12 +68,14 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from rapidpipe import __version__
+from rapidpipe import log as rapidpipe_log
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
 from rapidpipe.db.connection import connect as _default_connect
 from rapidpipe.launch.batch import (
     DependencyIncomplete,
     LaunchError,
     MissingEnvironmentVariable,
+    ProfileNotAllowed,
     ReleaseDefinitionRefused,
 )
 from rapidpipe.launch import batch as launch_batch
@@ -297,6 +299,12 @@ def _build_parser() -> argparse.ArgumentParser:
     local_parser.add_argument("--outputs-root", required=True)
     local_parser.add_argument("--settings", default=None)
     local_parser.add_argument("--python", default=sys.executable)
+    local_parser.add_argument(
+        "--profile", action="store_true", default=False,
+        help="Profile the stage body under cProfile (RAPIDPIPE_PROFILE=1 "
+             "for the subprocess); refused on a production run (exit 64), "
+             "since profiles land in the attempt's own outputs prefix, "
+             "which for production is the products bucket.")
 
     submit_parser = run_subparsers.add_parser(
         "submit", help="Submit one stage attempt to Batch.",
@@ -312,6 +320,12 @@ def _build_parser() -> argparse.ArgumentParser:
     inputs_group.add_argument("--inputs", default=None)
     inputs_group.add_argument("--inputs-from-stage", default=None, dest="inputs_from_stage")
     submit_parser.add_argument("--settings", default=None)
+    submit_parser.add_argument(
+        "--profile", action="store_true", default=False,
+        help="Profile the stage body under cProfile (sets RAPIDPIPE_PROFILE=1 "
+             "in the Batch job's environment); refused on a production run "
+             "(exit 64), since profiles land in the attempt's own outputs "
+             "prefix, which for production is the products bucket.")
 
     reconcile_parser = run_subparsers.add_parser(
         "reconcile", help="Reconcile a run's unresolved Batch attempts.",
@@ -889,6 +903,23 @@ def _run_local_command(args: argparse.Namespace) -> int:
         return int(ExitCode.TRANSIENT_FAILURE)
 
     with cm as conn:
+        if args.profile:
+            try:
+                kind = launch_batch._run_kind(conn, args.run_id)
+            except RunModelError as exc:
+                conn.rollback()
+                sys.stderr.write(f"rapidpipe run local: {exc}\n")
+                return int(ExitCode.USAGE)
+            if kind == "production":
+                conn.rollback()
+                sys.stderr.write(
+                    "rapidpipe run local: --profile is refused for a "
+                    f"production run ({args.run_id}); profiling is for "
+                    "scratch runs, since profiles land in the attempt's "
+                    "own outputs prefix, which for production is the "
+                    "products bucket\n")
+                return int(ExitCode.USAGE)
+
         try:
             result = run_stage_locally(
                 conn,
@@ -900,6 +931,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
                 outputs_root=args.outputs_root,
                 settings=args.settings,
                 python=args.python,
+                env=({"RAPIDPIPE_PROFILE": "1"} if args.profile else None),
             )
         except InputsRefused as exc:
             conn.rollback()
@@ -998,7 +1030,12 @@ def _run_submit_command(args: argparse.Namespace) -> int:
                 unit_id=unit_id,
                 inputs_location=inputs_location,
                 settings_location=args.settings,
+                profile=args.profile,
             )
+        except ProfileNotAllowed as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run submit: {exc}\n")
+            return int(ExitCode.USAGE)
         except RegisterUnitIdError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")
@@ -1275,6 +1312,12 @@ def _run_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Configures Python's real root logger (WARNING by default,
+    # RAPIDPIPE_LOG_LEVEL overrides) with the same UTC line shape a stage
+    # invocation uses, so a library's bare warning gets a timestamp and
+    # run context instead of Python's last-resort handler. CLI data
+    # output (print to stdout) is unaffected.
+    rapidpipe_log.configure_root()
     parser = _build_parser()
     # "rapidpipe stage <name> ..." (the form the Batch launcher submits) is
     # "rapidpipe stage run <name> ...": rewritten before argparse sees it.

@@ -197,16 +197,18 @@ def test_zero_point_read_from_reference_header_by_default(tmp_path, fakes, capsy
     code, outputs = _run(tmp_path)
     assert code == ExitCode.SUCCESS
     assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 17.0, "source": "header"}
-    assert "zero point source=header; value=17.0" in capsys.readouterr().out
+    # Log lines go to stderr (a command whose stdout carries data logs to
+    # stderr; rapidpipe.log's console handler default, direction/logging-timing).
+    assert "zero point source=header; value=17.0" in capsys.readouterr().err
 
 
 def test_zero_point_override_takes_precedence_over_header(tmp_path, fakes, capsys):
     code, outputs = _run(tmp_path, overlay="[awaicgen]\nzprefimg = 18.5\n")
     assert code == ExitCode.SUCCESS
     assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 18.5, "source": "override"}
-    out = capsys.readouterr().out
-    assert "zero point source=override; value=18.5" in out
-    assert "overrides reference header MAGZP=17.0" in out
+    err = capsys.readouterr().err
+    assert "zero point source=override; value=18.5" in err
+    assert "overrides reference header MAGZP=17.0" in err
 
 
 def test_zero_point_override_without_a_header_value_is_still_used(tmp_path, fakes, capsys):
@@ -214,7 +216,7 @@ def test_zero_point_override_without_a_header_value_is_still_used(tmp_path, fake
     code, outputs = _run(tmp_path, overlay="[awaicgen]\nzprefimg = 18.5\n")
     assert code == ExitCode.SUCCESS
     assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 18.5, "source": "override"}
-    assert "reference header has no MAGZP" in capsys.readouterr().out
+    assert "reference header has no MAGZP" in capsys.readouterr().err
 
 
 def test_missing_header_and_no_override_is_input_rejected(tmp_path, fakes):

@@ -25,18 +25,22 @@ but never another stage module, ``rapidpipe.launch`` or ``rapidpipe.cli``.
 from __future__ import annotations
 
 import argparse
+import cProfile
 import json
 import logging
 import os
+import pstats
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from rapidpipe.log import stage_log_context
+from rapidpipe.log import add_stage_file_handler, remove_file_handler, stage_log_context
 from rapidpipe.products.manifest import (
     Inputs,
     Manifest,
@@ -52,8 +56,18 @@ from rapidpipe.products.storage import (
     join,
     parse_location,
     publish_dir,
+    upload_object,
 )
 from rapidpipe.stages.settings import SettingsError, canonical_hash, resolve_settings
+
+#: Environment variable that turns on per-invocation cProfile of ``body``
+#: (stage contract addendum: profiling is opt-in, scratch-only).
+PROFILE_ENV_VAR = "RAPIDPIPE_PROFILE"
+
+
+def _fmt_phase(seconds: float | None) -> str:
+    """A timing phase for a log line: rounded to 0.1s, or ``-`` if unreached."""
+    return "-" if seconds is None else f"{seconds:.1f}"
 
 #: The stable list of stage names (stage contract, "Declaration"). A
 #: StageDeclaration naming anything else is rejected by validate().
@@ -421,6 +435,8 @@ def _write_execution_record(
     attempt_id: str,
     settings_hash: str,
     notes: dict[str, Any] | None = None,
+    timing: dict[str, Any] | None = None,
+    resolved_settings: dict[str, Any] | None = None,
 ) -> str:
     """Write ``exec/<attempt>.json`` under ``outputs_dir``; return its
     manifest-relative path.
@@ -441,6 +457,20 @@ def _write_execution_record(
     settings." Schema version and working-copy changes are not recorded
     here: they belong to ``rapidpipe.runs``, which this module must not
     import.
+
+    ``resolved_settings`` is the merged settings dict ``run_stage`` already
+    resolved (``rapidpipe.stages.settings.resolve_settings``), written
+    verbatim (it is TOML-derived, so JSON-serialisable); ``settings_hash``
+    is its canonical hash, so the two are always consistent. Was
+    previously omitted here despite this docstring's own "the resolved
+    settings" and the runs page's table both naming it as part of the
+    execution record; closed as a provenance gap (direction/logging-timing).
+
+    ``timing``, when given, is written verbatim under an additive
+    ``"timing"`` key: ``run_stage`` passes ``{"started": ..., "fetch_s":
+    ..., "body_s": ...}`` (no ``"ended"``: this record is written before
+    publish, so the attempt's total and publish durations are not known
+    yet; they are only ever in the log line, not this record).
     """
     relative_path = f"exec/{attempt_id}.json"
     record_path = outputs_dir / relative_path
@@ -453,9 +483,12 @@ def _write_execution_record(
             or os.environ.get("RAPID_IMAGE_DIGEST")
         ),
         "release": _release_identity(),
+        "resolved_settings": resolved_settings or {},
     }
     if notes:
         record["notes"] = notes
+    if timing:
+        record["timing"] = timing
     record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     return relative_path
 
@@ -495,6 +528,17 @@ def run_stage(
     checks above (a parseable ``manifest.json``) already cover what
     ``--dry-run`` promises for them. Unset, ``run_stage`` behaves exactly
     as before.
+
+    Also (additive, no manifest member): mirrors every log line to
+    ``<outputs>/log/<stage>.log`` (skipped under ``--dry-run``, which
+    writes nothing); measures wall-clock ``fetch``/``body``/``publish``
+    phases and logs them (``elapsed_s=``/``fetch_s=``/``body_s=``/
+    ``publish_s=``, rounded to 0.1s, ``-`` for a phase not reached) on the
+    final success line and on both error lines, and writes ``started``/
+    ``fetch_s``/``body_s`` into the execution record's ``timing`` key;
+    and, with ``RAPIDPIPE_PROFILE=1``, profiles ``body`` under ``cProfile``
+    and writes ``profile/<stage>.pstats``/``.txt`` into the outputs
+    directory before the manifest.
     """
     declaration.validate()
     # Before argv is parsed there is no run/attempt id yet; a plain logger
@@ -503,6 +547,35 @@ def run_stage(
     logger = logging.getLogger(f"rapidpipe.stages.{declaration.name}")
 
     work_dir: Path | None = None
+    outputs_location: Location | None = None
+    log_path: Path | None = None
+    file_handler: logging.Handler | None = None
+    total_start: float | None = None
+    fetch_elapsed: float | None = None
+    body_elapsed: float | None = None
+    publish_elapsed: float | None = None
+
+    def _close_stage_log(*, upload: bool) -> None:
+        # Removes the per-stage file handler (task c) and, for an S3
+        # --outputs, best-effort re-uploads it on its own: `publish_dir`
+        # only runs once, on success, and never on failure, so a failed
+        # attempt's log would otherwise never leave the work directory
+        # (which failure intentionally keeps, but only on this host). A
+        # failed upload logs a warning and never changes the exit code.
+        nonlocal file_handler
+        if file_handler is None:
+            return
+        remove_file_handler(file_handler)
+        file_handler = None
+        if (upload and outputs_location is not None and outputs_location.is_s3()
+                and log_path is not None and log_path.exists()):
+            try:
+                upload_object(log_path, outputs_location, f"log/{declaration.name}.log")
+            except Exception as exc:  # noqa: BLE001 - best-effort only
+                logger.warning(
+                    "stage=%s could not upload log file %s: %s",
+                    declaration.name, log_path, exc)
+
     try:
         parser = _build_parser(declaration)
         try:
@@ -518,7 +591,10 @@ def run_stage(
         # logger so every remaining line (including the "start" line below)
         # carries them, per the contract's "wire it into run_stage so every
         # stage logs its start, its exit code and its manifest path".
-        logger = stage_log_context(declaration.name, args.run_id, args.attempt_id)
+        logger = stage_log_context(
+            declaration.name, args.run_id, args.attempt_id, unit_id=args.unit_id)
+        total_start = time.monotonic()
+        run_started_at = datetime.now(timezone.utc)
 
         try:
             inputs_location = parse_location(args.inputs)
@@ -529,6 +605,7 @@ def run_stage(
             raise UsageError(str(exc)) from exc
 
         settings_is_s3 = settings_location is not None and settings_location.is_s3()
+        fetch_start = time.monotonic()
 
         needs_work_dir = (
             inputs_location.is_s3() or outputs_location.is_s3() or settings_is_s3)
@@ -580,6 +657,18 @@ def run_stage(
             assert outputs_location.path is not None
             outputs_dir = outputs_location.path
 
+        # The per-stage log file (task c): skipped under --dry-run, which
+        # promises to write nothing. outputs_dir is the real, final
+        # location for a local --outputs, so the file lives there
+        # directly for the rest of this invocation, per the local branch
+        # of _close_stage_log's upload skip.
+        if not args.dry_run:
+            outputs_dir.mkdir(parents=True, exist_ok=True)
+            log_path = outputs_dir / "log" / f"{declaration.name}.log"
+            file_handler = add_stage_file_handler(
+                log_path, run_id=args.run_id, attempt_id=args.attempt_id,
+                stage=declaration.name, unit_id=args.unit_id)
+
         if inputs_location.is_s3():
             inputs_dir.mkdir(parents=True, exist_ok=True)
             try:
@@ -596,6 +685,7 @@ def run_stage(
                 raise _map_storage_error(exc) from exc
 
         input_manifest = _read_input_manifest_from(inputs_dir, args.inputs)
+        fetch_elapsed = time.monotonic() - fetch_start
 
         context = StageContext(
             declaration=declaration,
@@ -633,7 +723,24 @@ def run_stage(
                 planned_inputs, planned_result_sets, context.outputs_location)
             return int(ExitCode.SUCCESS)
 
-        result = body(context)
+        profile_enabled = os.environ.get(PROFILE_ENV_VAR) == "1"
+        profiler = cProfile.Profile() if profile_enabled else None
+        body_start = time.monotonic()
+        if profiler is not None:
+            profiler.enable()
+        try:
+            result = body(context)
+        except BaseException:
+            # A body that raised still ran for a measurable time; record
+            # it before the exception propagates, rather than leaving
+            # body_s "-" for work that was in fact reached.
+            body_elapsed = time.monotonic() - body_start
+            if profiler is not None:
+                profiler.disable()
+            raise
+        if profiler is not None:
+            profiler.disable()
+        body_elapsed = time.monotonic() - body_start
 
         if not isinstance(result, StageResult):
             raise StageError(
@@ -641,8 +748,28 @@ def run_stage(
                 "expected a StageResult")
 
         outputs_dir.mkdir(parents=True, exist_ok=True)
+
+        if profiler is not None:
+            # Opt-in profiling (task e): written before the manifest, into
+            # the outputs directory, so they publish with the attempt --
+            # they are not manifest members, the same way exec/<attempt>.json
+            # is not one.
+            profile_dir = outputs_dir / "profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            profiler.dump_stats(str(profile_dir / f"{declaration.name}.pstats"))
+            with open(profile_dir / f"{declaration.name}.txt", "w") as profile_txt:
+                stats = pstats.Stats(profiler, stream=profile_txt)
+                stats.sort_stats("cumulative")
+                stats.print_stats(40)
+
         execution_record_ref = _write_execution_record(
-            outputs_dir, args.attempt_id, settings_hash, dict(result.execution_notes))
+            outputs_dir, args.attempt_id, settings_hash, dict(result.execution_notes),
+            resolved_settings=settings,
+            timing={
+                "started": run_started_at.isoformat().replace("+00:00", "Z"),
+                "fetch_s": None if fetch_elapsed is None else round(fetch_elapsed, 1),
+                "body_s": None if body_elapsed is None else round(body_elapsed, 1),
+            })
 
         manifest = Manifest(
             run=args.run_id,
@@ -664,39 +791,65 @@ def run_stage(
         except ManifestError as exc:
             raise StageError(f"completion manifest failed validation: {exc}") from exc
 
+        publish_start = time.monotonic()
         if outputs_location.is_s3():
             try:
                 publish_dir(outputs_dir, outputs_location)
             except Exception as exc:  # noqa: BLE001
                 raise _map_storage_error(exc) from exc
             published_manifest_ref = join(outputs_location, "manifest.json")
+            # The work directory holding the log file is about to be
+            # removed (below); close it and re-upload it on its own now,
+            # while it still exists. This means the S3 copy cannot itself
+            # contain this function's very last line (logged after this
+            # point) -- the same limitation the execution record's
+            # "timing" has no "ended" for, and for the same reason.
+            _close_stage_log(upload=True)
         else:
             published_manifest_ref = str(manifest_path)
+        publish_elapsed = time.monotonic() - publish_start
 
         if work_dir is not None:
             shutil.rmtree(work_dir, ignore_errors=True)
             work_dir = None
 
+        total_elapsed = time.monotonic() - total_start
         logger.info(
-            "stage=%s run=%s unit=%s attempt=%s exit=%s manifest=%s",
+            "stage=%s run=%s unit=%s attempt=%s exit=%s manifest=%s "
+            "elapsed_s=%s fetch_s=%s body_s=%s publish_s=%s",
             declaration.name, context.run_id, context.unit_id,
-            context.attempt_id, int(ExitCode.SUCCESS), published_manifest_ref)
+            context.attempt_id, int(ExitCode.SUCCESS), published_manifest_ref,
+            _fmt_phase(total_elapsed), _fmt_phase(fetch_elapsed),
+            _fmt_phase(body_elapsed), _fmt_phase(publish_elapsed))
+        # A local --outputs never removed the handler above: it is still
+        # attached, so the line just logged is in the file too.
+        _close_stage_log(upload=False)
         return int(ExitCode.SUCCESS)
 
     except StageContractError as exc:
+        total_elapsed = None if total_start is None else time.monotonic() - total_start
         logger.error(
-            "stage=%s exit=%s error=%s", declaration.name, int(exc.exit_code), exc)
+            "stage=%s exit=%s error=%s elapsed_s=%s fetch_s=%s body_s=%s publish_s=%s",
+            declaration.name, int(exc.exit_code), exc,
+            _fmt_phase(total_elapsed), _fmt_phase(fetch_elapsed),
+            _fmt_phase(body_elapsed), _fmt_phase(publish_elapsed))
         if work_dir is not None:
             logger.info(
                 "stage=%s attempt failed; work directory kept at %s",
                 declaration.name, work_dir)
+        _close_stage_log(upload=True)
         return int(exc.exit_code)
     except Exception as exc:  # noqa: BLE001 - contract: unhandled -> 70
+        total_elapsed = None if total_start is None else time.monotonic() - total_start
         logger.error(
-            "stage=%s exit=%s error=%s", declaration.name, int(ExitCode.STAGE_ERROR),
-            exc, exc_info=True)
+            "stage=%s exit=%s error=%s elapsed_s=%s fetch_s=%s body_s=%s publish_s=%s",
+            declaration.name, int(ExitCode.STAGE_ERROR), exc,
+            _fmt_phase(total_elapsed), _fmt_phase(fetch_elapsed),
+            _fmt_phase(body_elapsed), _fmt_phase(publish_elapsed),
+            exc_info=True)
         if work_dir is not None:
             logger.info(
                 "stage=%s attempt failed; work directory kept at %s",
                 declaration.name, work_dir)
+        _close_stage_log(upload=True)
         return int(ExitCode.STAGE_ERROR)

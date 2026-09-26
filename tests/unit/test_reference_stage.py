@@ -166,11 +166,13 @@ def test_full_run_publishes_the_ruled_manifest(tmp_path):
         "l2-image/001": constituents[0], "l2-image/002": constituents[1],
         "l2-image/003": constituents[2]}
     assert "notes" not in record
-    # Nothing but the four products is published: the scratch inputs are not.
+    # Nothing but the four products (plus the manifest, execution record
+    # and per-stage log) is published: the scratch inputs are not.
     published = sorted(p.relative_to(outputs).as_posix() for p in outputs.rglob("*")
                        if p.is_file())
     assert published == sorted([
-        "manifest.json", f"exec/{ATTEMPT}.json", "ref/awaicgen_output_mosaic_image.fits",
+        "manifest.json", f"exec/{ATTEMPT}.json", "log/reference.log",
+        "ref/awaicgen_output_mosaic_image.fits",
         "ref/awaicgen_output_mosaic_cov_map.fits",
         "ref/awaicgen_output_mosaic_uncert_image.fits",
         "ref/awaicgen_output_mosaic_refimsexcat.txt"])

@@ -157,6 +157,12 @@ def add_parsers(run_subparsers: Any) -> None:
     start.add_argument(
         "--timeout", type=_positive_seconds, default=14400.0,
         help="Seconds to wait for one attempt before exiting 75 (default 14400).")
+    start.add_argument(
+        "--profile", action="store_true", default=False,
+        help="Profile each submitted stage body under cProfile; refused on "
+             "a production run (exit 64), since profiles land in the "
+             "attempt's own outputs prefix, which for production is the "
+             "products bucket.")
 
     status = run_subparsers.add_parser(
         "status", help="Reconcile a run, then print one line per unit.",
@@ -972,6 +978,13 @@ class _StartWalk:
     def run(self) -> int:
         args = self.args
         run = self.run = _require_run(self.conn, args.run_id)
+        if getattr(args, "profile", False) and run.kind == "production":
+            raise _Exit(
+                int(ExitCode.USAGE),
+                f"--profile is refused for a production run ({args.run_id}); "
+                "profiling is for scratch runs, since profiles land in the "
+                "attempt's own outputs prefix, which for production is the "
+                "products bucket")
         selected = run.selected_stages
         if self.positions is not None:
             positions = list(self.positions)
@@ -1068,7 +1081,8 @@ class _StartWalk:
                         self.conn, run_id=args.run_id, stage=stage,
                         unit_kind=declaration.unit, unit_id=unit_id,
                         inputs_location=inputs_location,
-                        settings_location=settings_location)
+                        settings_location=settings_location,
+                        profile=getattr(args, "profile", False))
                     attempt_id, job_id = submission.attempt_id, submission.job_id
                     outputs = submission.output_location
 

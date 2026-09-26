@@ -121,7 +121,7 @@ class World:
 
     # -- rapidpipe.launch.batch ------------------------------------------
     def submit_unit(self, conn, *, run_id, stage, unit_kind, unit_id, inputs_location,
-                    settings_location=None):
+                    settings_location=None, profile=False):
         u = self.unit(stage, unit_id)
         if u["state"] in ("complete", "failed", "cancelled"):
             raise repository.UnitTerminal(f"unit {stage}/{unit_id} is {u['state']!r}")
@@ -133,7 +133,8 @@ class World:
         u["attempts"].append(attempt)
         u["state"] = "running"
         self.submits.append({"stage": stage, "unit": unit_id, "kind": unit_kind,
-                             "inputs": inputs_location, "settings": settings_location})
+                             "inputs": inputs_location, "settings": settings_location,
+                             "profile": profile})
         return launch_batch.BatchSubmission(attempt["id"], attempt["job"], "name", attempt["out"])
 
     def reconcile(self, conn, *, run_id):
@@ -230,6 +231,23 @@ def test_start_walks_every_stage_in_order_with_inputs_by_precedence(world, monke
     assert ("stage=admit unit=U attempt=A1 job=job-1 disposition=succeeded "
             "outputs=s3://b/runs/R/admit/U/A1") in out
     assert out[-1] == "run=R state=complete"
+
+
+def test_start_profile_is_passed_through_to_submit_unit(world, capsys):
+    w = world(["admit"])
+    rc = cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://deliv/U",
+                   "--profile"])
+    assert rc == 0
+    assert [s["profile"] for s in w.submits] == [True]
+
+
+def test_start_profile_refused_for_a_production_run(world, capsys):
+    world(["admit"], kind="production")
+    rc = cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://deliv/U",
+                   "--profile"])
+    assert rc == 64
+    err = capsys.readouterr().err
+    assert "--profile is refused for a production run" in err
 
 
 def test_start_skips_complete_stages(world, capsys):
