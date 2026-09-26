@@ -64,11 +64,15 @@ def _replace_photutils_catalogs(outputs):
 
 
 def _registered_difference(conn, tmp_path, monkeypatch):
+    # SFFT registration off: these load tests are about loading a single
+    # differencer's catalogs, and a second registered instance's photutils
+    # catalogs would otherwise also become dependencies of every source-set
+    # this stage loads.
     l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)
     run_id, outputs = _run_difference(conn, tmp_path, monkeypatch, l2_instance=l2_instance,
-                                      rfid=rfid)
+                                      rfid=rfid, overlay="[sfft]\nregister_sfft = false\n")
     _replace_photutils_catalogs(outputs)
     assert _register_difference(conn, monkeypatch, outputs, run_id, tmp_path)[0] == 0
     return run_id, outputs

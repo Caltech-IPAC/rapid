@@ -31,8 +31,12 @@ def test_difference_runs_locally_and_is_selected(conn, tmp_path):
     inputs = tmp_path / "inputs"
     build_input_set(inputs)
     settings = tmp_path / "overlay.toml"
+    # SFFT registration off: this test is about run_stage_locally's own
+    # plumbing (disposition, selection, the manifest it writes back), not
+    # the two-differencer case.
     settings.write_text(
-        f'[paths]\ncfg_path = "{CDF_DIR}"\n[statistics]\nclip_correction_seed = 1\n')
+        f'[paths]\ncfg_path = "{CDF_DIR}"\n[statistics]\nclip_correction_seed = 1\n'
+        '[sfft]\nregister_sfft = false\n')
 
     result = run_stage_locally(
         conn,
