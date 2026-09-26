@@ -43,7 +43,8 @@
       }
     },
     "execution_notes": {"sfft": {"ran": true, "succeeded": true, "exit_code": 0},
-                        "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0}}
+                        "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0},
+                        "zero_point": {"value": 17.0, "source": "header"}}
   },
   "real": {
     "exit_code": 0,
@@ -77,6 +78,7 @@
       }
     },
     "execution_notes": {"sfft": {"ran": true, "succeeded": true, "exit_code": 0},
-                        "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0}}
+                        "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0},
+                        "zero_point": {"value": 17.0, "source": "header"}}
   }
 }

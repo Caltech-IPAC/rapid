@@ -53,8 +53,14 @@ extreme_artifact_threshold = 10000.0
 saturation_level = 100000.0
 
 [awaicgen]
-# [AWAICGEN] zprefimg: the reference-image zero point gain matching uses.
-zprefimg = 17.0
+# [AWAICGEN] zprefimg: an explicit override of the reference-image zero
+# point gain matching uses. Empty (the default) means the stage reads the
+# zero point from the reference image's own MAGZP header keyword, the
+# value the reference stage stamped when it built the coadd (the lead,
+# 2026-09-26: gain matching reads the reference it is given rather than a
+# fixed setting). A non-empty value here overrides the header, whether or
+# not the header carries one; the stage logs which source was used.
+zprefimg = ""
 
 [zogy]
 # [ZOGY]. Gain matching's fallback x/y RMS when too few sources match.

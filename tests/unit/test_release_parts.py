@@ -4,6 +4,7 @@ released run's Batch submission -- all database-free."""
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import json
 
@@ -95,6 +96,15 @@ def test_every_subcommand_prints_usage(argv, capsys):
         release_main.main(argv)
     assert excinfo.value.code == 0
     assert "usage:" in capsys.readouterr().out
+
+
+def test_show_and_list_gain_a_description_like_cut_already_has():
+    parser = release_main.build_parser()
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    descriptions = {name: choice.description for name, choice in sub.choices.items()}
+    assert descriptions["cut"]
+    assert descriptions["show"]
+    assert descriptions["list"]
 
 
 def test_both_forms_are_one_dry_run_code_path(repo, capsys, monkeypatch):

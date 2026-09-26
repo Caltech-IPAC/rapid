@@ -69,10 +69,15 @@ def build_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
                      help="Print the plan; touch nothing (no fetch, tag, hook or DB write).")
     cut.add_argument("--by", default=None, help="Who is cutting (default: the current user).")
 
-    show = sub.add_parser("show", help="Print one release and its deployments as JSON.")
+    show = sub.add_parser(
+        "show", help="Print one release and its deployments as JSON.",
+        description="Print one release's recorded facts and its deployments as JSON.")
     show.add_argument("tag")
 
-    sub.add_parser("list", help="One line per release: tag, state, revision, digest, cut_at.")
+    sub.add_parser(
+        "list", help="One line per release: tag, state, revision, digest, cut_at.",
+        description="List every recorded release, one line each: tag, state, revision, "
+                    "digest, cut_at.")
 
     verify = sub.add_parser(
         "verify", help="Recompute a release's facts; exit 0 if they hold, 1 if not.")

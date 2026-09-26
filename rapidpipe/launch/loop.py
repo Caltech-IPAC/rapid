@@ -89,7 +89,6 @@ module never copies them.
 from __future__ import annotations
 
 import datetime as _dt
-import inspect
 import json
 import re
 import tomllib
@@ -707,47 +706,39 @@ def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
     """(promotion id or None, the record's ``promotion`` text, ``promotion_gate``,
     the checks run) (R6).
 
-    With step 6's gate (``promote_run`` takes ``check_policy``): resolve the
-    policy (the spec's, else the run's, else the default), run its checks
-    over the run's candidates as ``scheduler`` through
+    Resolve the policy (the spec's, else the run's, else the default), run
+    its checks over the run's candidates as ``scheduler`` through
     ``rapidpipe.checks.runner`` (recorded, committed), then promote under it.
-    Without it: promote under the released-image rule only. A run already
-    promoted (a resumed date) reuses that promotion. A refusal is returned,
-    not raised."""
-    existing = run_promotion(conn, run_id)
-    kwargs: dict[str, Any] = {}
-    checks: list[dict[str, Any]] = []
-    if "check_policy" not in inspect.signature(repository.promote_run).parameters:
-        gate = "released-image only"
-        if existing is not None:
-            return existing, existing, gate, checks
-    else:
-        from rapidpipe.checks.registry import CheckError
-        from rapidpipe.checks.runner import (
-            CheckUsageError,
-            resolve_run_policy,
-            run_policy_checks,
-        )
+    A run already promoted (a resumed date) reuses that promotion. A refusal
+    is returned, not raised."""
+    from rapidpipe.checks.registry import CheckError
+    from rapidpipe.checks.runner import (
+        CheckUsageError,
+        resolve_run_policy,
+        run_policy_checks,
+    )
 
-        try:
-            policy = resolve_run_policy(conn, run_id, spec.check_policy)
-        except CheckError as exc:
-            conn.rollback()
-            return None, f"refused: {exc}", "check policy (unloadable)", checks
-        gate = f"check policy {policy.ref}"
-        if existing is not None:
-            # A resumed date whose run was promoted before the loop stopped.
-            return existing, existing, gate, checks
-        try:
-            recorded = run_policy_checks(conn, run_id, policy, who="scheduler")
-        except (CheckError, CheckUsageError) as exc:
-            conn.rollback()
-            return None, f"refused: {exc}", gate, checks
-        conn.commit()
-        checks = [{"id": c.id, "check": f"{c.check_name}@{c.version}",
-                   "instance": c.instance, "required": c.required, "outcome": c.outcome}
-                  for c in recorded]
-        kwargs["check_policy"] = policy
+    existing = run_promotion(conn, run_id)
+    checks: list[dict[str, Any]] = []
+    try:
+        policy = resolve_run_policy(conn, run_id, spec.check_policy)
+    except CheckError as exc:
+        conn.rollback()
+        return None, f"refused: {exc}", "check policy (unloadable)", checks
+    gate = f"check policy {policy.ref}"
+    if existing is not None:
+        # A resumed date whose run was promoted before the loop stopped.
+        return existing, existing, gate, checks
+    try:
+        recorded = run_policy_checks(conn, run_id, policy, who="scheduler")
+    except (CheckError, CheckUsageError) as exc:
+        conn.rollback()
+        return None, f"refused: {exc}", gate, checks
+    conn.commit()
+    checks = [{"id": c.id, "check": f"{c.check_name}@{c.version}",
+               "instance": c.instance, "required": c.required, "outcome": c.outcome}
+              for c in recorded]
+    kwargs: dict[str, Any] = {"check_policy": policy}
     try:
         promotion = repository.promote_run(
             conn, run_id, "scheduler", f"processing date {processing_date}", **kwargs)

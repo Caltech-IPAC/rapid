@@ -1,5 +1,5 @@
-"""``rapidpipe run promote/rollback/delete/finish/pin/unpin`` wiring, with
-the repository and cleanup calls monkeypatched and no database."""
+"""``rapidpipe run promote/rollback/delete/finish/pin/unpin/show`` wiring,
+with the repository and cleanup calls monkeypatched and no database."""
 
 from __future__ import annotations
 
@@ -122,3 +122,37 @@ def test_run_finish_refusal_exits_64(monkeypatch, fake_conn, capsys):
     monkeypatch.setattr(repository, "finish_run", _refuse)
     assert cli.main(["run", "finish", "R"]) == 64
     assert "not yet complete" in capsys.readouterr().err
+
+
+def test_run_show_exits_1_for_an_unknown_run(monkeypatch, capsys):
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, *_a, **_k):
+            pass
+
+        def fetchone(self):
+            return None
+
+    class _ShowConn:
+        def cursor(self):
+            return _Cursor()
+
+    @contextlib.contextmanager
+    def _connect(**_kwargs):
+        yield _ShowConn()
+
+    monkeypatch.setattr(cli, "connect", _connect)
+    assert cli.main(["run", "show", "MISSING"]) == 1
+    assert "no such run: MISSING" in capsys.readouterr().err
+
+
+def test_run_show_help_documents_the_unknown_run_exit(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["run", "show", "--help"])
+    assert excinfo.value.code == 0
+    assert "Exit 1" in capsys.readouterr().out
