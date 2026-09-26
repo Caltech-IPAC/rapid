@@ -93,8 +93,9 @@ def test_loads_positive_then_negative_rows_into_the_child_table(tmp_path, db):
         "source-catalog/positive": "01J8Y6QZ3M00000000000PUC00",
         "source-catalog/negative": "01J8Y6QZ3M00000000000PUC11"}
     assert _manifest(outputs).inputs.products == registered["products"]
-    # dev deletes its CSV after the COPY; only the manifest and record remain.
-    assert sorted(p.name for p in outputs.iterdir()) == ["exec", "manifest.json"]
+    # dev deletes its CSV after the COPY; only the manifest, execution
+    # record and per-stage log remain.
+    assert sorted(p.name for p in outputs.iterdir()) == ["exec", "log", "manifest.json"]
 
 
 def test_an_existing_child_table_is_not_made_again(tmp_path, db):

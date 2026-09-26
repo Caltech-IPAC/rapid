@@ -105,6 +105,16 @@ class ReleaseDefinitionRefused(LaunchError):
     retryable."""
 
 
+class ProfileNotAllowed(LaunchError):
+    """``profile=True`` was refused for a production run.
+
+    Profiling is scratch-only (``--profile``, ``rapidpipe.cli.main``): a
+    profile file is written into the attempt's own outputs prefix, which
+    for a production run is the products bucket, not a scratch location.
+    Permanent, not retryable; the CLI maps it to exit 64.
+    """
+
+
 class DependencyIncomplete(LaunchError):
     """The requested upstream unit has no selected attempt yet.
 
@@ -327,6 +337,7 @@ def submit_unit(
     job_definition: str | None = None,
     client: Any = None,
     s3_client: Any = None,
+    profile: bool = False,
 ) -> BatchSubmission:
     """Allocate an attempt and submit it to Batch as one job.
 
@@ -362,7 +373,20 @@ def submit_unit(
     ``unit_inputs`` (:func:`rapidpipe.runs.inputs.bind_registered_inputs`,
     idempotent, so a retry rebinds nothing new) and committed with the
     unit (supervisor step 9, 2026-09-25, R4).
+
+    ``profile=True`` sets ``RAPIDPIPE_PROFILE=1`` in the job's
+    ``containerOverrides.environment``, refused with
+    :class:`ProfileNotAllowed` for a production run before anything is
+    written or submitted: a profile lands in the attempt's own outputs
+    prefix, which for production is the products bucket, not a scratch
+    location.
     """
+    if profile and _run_kind(conn, run_id) == "production":
+        raise ProfileNotAllowed(
+            f"--profile is refused for a production run ({run_id}); "
+            "profiling is for scratch runs, since profiles land in the "
+            "attempt's own outputs prefix, which for production is the "
+            "products bucket")
     released = _release_job_definition(conn, run_id)
     if released is not None:
         release, release_definition = released
@@ -412,16 +436,20 @@ def submit_unit(
 
     job_name = _job_name(job_name_prefix, stage, attempt_id)
 
+    environment = [
+        {"name": "RAPIDPIPE_RUN_ID", "value": run_id},
+        {"name": "RAPIDPIPE_ATTEMPT_ID", "value": attempt_id},
+    ]
+    if profile:
+        environment.append({"name": "RAPIDPIPE_PROFILE", "value": "1"})
+
     response = batch.submit_job(
         jobName=job_name,
         jobQueue=job_queue,
         jobDefinition=job_definition,
         containerOverrides={
             "command": command,
-            "environment": [
-                {"name": "RAPIDPIPE_RUN_ID", "value": run_id},
-                {"name": "RAPIDPIPE_ATTEMPT_ID", "value": attempt_id},
-            ],
+            "environment": environment,
         },
     )
     job_id = response["jobId"]

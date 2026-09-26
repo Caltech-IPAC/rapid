@@ -402,7 +402,7 @@ def test_run_local_register_derives_unit_id_from_the_manifest(tmp_path, monkeypa
         return _FakeConnCtx()
 
     def _fake_run_stage_locally(conn, *, run_id, stage, unit_kind, unit_id, inputs,
-                                 outputs_root, settings, python):
+                                 outputs_root, settings, python, env=None):
         seen["unit_id"] = unit_id
         return LocalAttempt(
             attempt_id="a1", output_location=str(tmp_path / "out"), exit_code=0,
@@ -418,6 +418,103 @@ def test_run_local_register_derives_unit_id_from_the_manifest(tmp_path, monkeypa
 
     assert rc == int(ExitCode.SUCCESS)
     assert seen["unit_id"] == "admit/e1/SCA07"
+
+
+def test_run_local_profile_sets_the_subprocess_environment(tmp_path, monkeypatch):
+    inputs = tmp_path / "admit-outputs"
+    inputs.mkdir()
+    (inputs / "manifest.json").write_text(_manifest_json(stage="admit", unit_id="e1/SCA07"))
+
+    seen = {}
+
+    class _FakeConn:
+        def rollback(self):
+            pass
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_run_stage_locally(conn, *, run_id, stage, unit_kind, unit_id, inputs,
+                                 outputs_root, settings, python, env=None):
+        seen["env"] = env
+        return LocalAttempt(
+            attempt_id="a1", output_location=str(tmp_path / "out"), exit_code=0,
+            disposition="succeeded", manifest_path=None, selected=True)
+
+    monkeypatch.setattr(cli_main, "connect", lambda *a, **k: _FakeConnCtx())
+    monkeypatch.setattr(cli_main.launch_batch, "_run_kind", lambda conn, run_id: "scratch")
+    monkeypatch.setattr(cli_main, "run_stage_locally", _fake_run_stage_locally)
+
+    rc = cli_main.main([
+        "run", "local", "r1", "register",
+        "--inputs", str(inputs), "--outputs-root", str(tmp_path / "outputs-root"),
+        "--profile",
+    ])
+
+    assert rc == int(ExitCode.SUCCESS)
+    assert seen["env"] == {"RAPIDPIPE_PROFILE": "1"}
+
+
+def test_run_submit_profile_not_allowed_maps_to_exit_64(monkeypatch):
+    from rapidpipe.launch.batch import ProfileNotAllowed
+
+    class _FakeConn:
+        def rollback(self):
+            pass
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_submit_unit(conn, **kwargs):
+        assert kwargs["profile"] is True
+        raise ProfileNotAllowed("--profile is refused for a production run (r1)")
+
+    monkeypatch.setattr(cli_main, "connect", lambda *a, **k: _FakeConnCtx())
+    monkeypatch.setattr(cli_main.launch_batch, "submit_unit", _fake_submit_unit)
+
+    rc = cli_main.main([
+        "run", "submit", "r1", "admit",
+        "--unit", "u1", "--inputs", "s3://in/pre", "--profile",
+    ])
+
+    assert rc == int(ExitCode.USAGE)
+
+
+def test_run_local_profile_refused_for_a_production_run(tmp_path, monkeypatch):
+    inputs = tmp_path / "admit-outputs"
+    inputs.mkdir()
+    (inputs / "manifest.json").write_text(_manifest_json(stage="admit", unit_id="e1/SCA07"))
+
+    class _FakeConn:
+        def rollback(self):
+            pass
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(cli_main, "connect", lambda *a, **k: _FakeConnCtx())
+    monkeypatch.setattr(cli_main.launch_batch, "_run_kind", lambda conn, run_id: "production")
+    monkeypatch.setattr(cli_main, "run_stage_locally", _raise_if_called)
+
+    rc = cli_main.main([
+        "run", "local", "r1", "register",
+        "--inputs", str(inputs), "--outputs-root", str(tmp_path / "outputs-root"),
+        "--profile",
+    ])
+
+    assert rc == int(ExitCode.USAGE)
 
 
 def test_run_local_non_register_stage_still_requires_unit(monkeypatch):

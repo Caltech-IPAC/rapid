@@ -216,3 +216,21 @@ def publish_dir(
     if last_path is not None:
         key = _key(location, last)
         s3.upload_file(str(last_path), location.bucket, key)
+
+
+def upload_object(local_path: Path, location: Location, relative: str, *,
+                   client: Any = None) -> None:
+    """Upload one local file to ``relative`` under ``location``.
+
+    For a local ``location``, a no-op: the file already lives there (or
+    the caller made a mistake giving a local destination for a single
+    object it expects to be copied, which this function does not do).
+    For S3, uploads exactly one object; used by ``run_stage`` to publish
+    the per-stage log file on its own, separately from :func:`publish_dir`
+    (which only runs once, on success).
+    """
+    if not location.is_s3():
+        return
+    s3 = client if client is not None else s3_client()
+    key = _key(location, relative)
+    s3.upload_file(str(local_path), location.bucket, key)

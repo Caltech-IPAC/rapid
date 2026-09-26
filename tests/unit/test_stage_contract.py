@@ -309,9 +309,12 @@ def test_run_stage_s3_inputs_and_outputs_end_to_end(monkeypatch, tmp_path):
     # The execution record was uploaded too.
     assert ("out-bucket", "runs/r1/admit/u1/a1/exec/a1.json") in fake._objects
 
-    # The manifest was uploaded last.
+    # The manifest was the last of publish_dir's own uploads (the
+    # per-stage log file is re-uploaded separately, after publish_dir,
+    # since its work directory is removed right afterwards).
     upload_keys = [key for op, key in fake.calls if op == "upload_file"]
-    assert upload_keys[-1] == "runs/r1/admit/u1/a1/manifest.json"
+    assert upload_keys[-1] == "runs/r1/admit/u1/a1/log/admit.log"
+    assert upload_keys[-2] == "runs/r1/admit/u1/a1/manifest.json"
 
     # The temporary work directory used for both inputs and outputs is
     # gone afterwards.
@@ -319,7 +322,7 @@ def test_run_stage_s3_inputs_and_outputs_end_to_end(monkeypatch, tmp_path):
     assert not seen_work_dirs["outputs_dir"].exists()
 
 
-def test_run_stage_s3_outputs_body_raises_uploads_nothing_and_keeps_work_dir(
+def test_run_stage_s3_outputs_body_raises_uploads_only_the_log_and_keeps_work_dir(
         monkeypatch, tmp_path):
     fake = FakeS3()
     _seed_s3_inputs(fake, "in-bucket", "runs/r0/admit/u0/a0")
@@ -340,7 +343,11 @@ def test_run_stage_s3_outputs_body_raises_uploads_nothing_and_keeps_work_dir(
     rc = run_stage(DECLARATION, body, argv)
     assert rc == int(ExitCode.STAGE_ERROR)
 
-    assert [c for c in fake.calls if c[0] == "upload_file"] == []
+    # No manifest, no execution record: body raised before either was
+    # written. The per-stage log file is still re-uploaded, best-effort,
+    # so a failed S3 attempt's log is not stranded on this host alone.
+    upload_keys = [key for op, key in fake.calls if op == "upload_file"]
+    assert upload_keys == ["runs/r1/admit/u1/a1/log/admit.log"]
     # The attempt's own outputs work directory survives for inspection;
     # its parent (the attempt's overall temp work dir) does too.
     assert seen_work_dirs["outputs_dir"].parent.exists()
@@ -673,3 +680,116 @@ def test_write_execution_record_digest_none_when_both_unset(monkeypatch, tmp_pat
     relative = contract_module._write_execution_record(outputs_dir, "a1", "hash1")
     record = json.loads((outputs_dir / relative).read_text())
     assert record["image_digest"] is None
+
+
+# ======================================================================
+# Per-stage log file, timing, and opt-in profiling
+# ======================================================================
+
+def test_success_writes_a_per_stage_log_file_with_timing(inputs_dir, tmp_path):
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, _success_body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+
+    log_path = outputs_dir / "log" / "admit.log"
+    assert log_path.exists()
+    contents = log_path.read_text()
+    assert "run=r1" in contents
+    assert "attempt=a1" in contents
+    assert "stage=admit" in contents
+    assert "unit=u1" in contents
+    # The final success line, with every phase reached (all local, so
+    # nothing is "-").
+    last_line = contents.strip().splitlines()[-1]
+    assert "exit=0" in last_line
+    for field in ("elapsed_s=", "fetch_s=", "body_s=", "publish_s="):
+        assert field in last_line
+        value = last_line.split(field, 1)[1].split()[0]
+        assert value != "-"
+        float(value)  # a real number, not a placeholder
+
+
+def test_error_log_line_has_elapsed_fields_with_dashes_for_unreached_phases(
+        inputs_dir, tmp_path):
+    def body(context):
+        raise StageError("boom")
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.STAGE_ERROR)
+
+    log_path = outputs_dir / "log" / "admit.log"
+    contents = log_path.read_text()
+    last_line = contents.strip().splitlines()[-1]
+    assert "error=boom" in last_line
+    assert "elapsed_s=" in last_line and "fetch_s=" in last_line
+    assert "body_s=" in last_line and "publish_s=-" in last_line  # never reached
+
+
+def test_error_before_the_log_file_exists_still_has_dashed_phases(tmp_path, capsys):
+    # A missing input manifest fails before body, so fetch/body/publish
+    # never ran; the error line still carries the elapsed fields, with
+    # every unreached phase "-" (total is not, since the attempt did run
+    # for some measurable time before failing).
+    rc = run_stage(DECLARATION, _success_body, [
+        "--run", "r1", "--unit", "u1", "--attempt", "a1",
+        "--inputs", str(tmp_path / "no-such-inputs"), "--outputs", str(tmp_path / "out"),
+    ])
+    assert rc == int(ExitCode.INPUT_REJECTED)
+    err = capsys.readouterr().err
+    assert "fetch_s=-" in err and "body_s=-" in err and "publish_s=-" in err
+    assert "elapsed_s=-" not in err
+
+
+def test_execution_record_gets_a_timing_key(inputs_dir, tmp_path):
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, _success_body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+
+    restored = Manifest.read(outputs_dir / "manifest.json")
+    record = json.loads((outputs_dir / restored.execution_record).read_text())
+    timing = record["timing"]
+    assert set(timing) == {"started", "fetch_s", "body_s"}
+    assert timing["started"].endswith("Z")
+    assert isinstance(timing["fetch_s"], (int, float))
+    assert isinstance(timing["body_s"], (int, float))
+    assert "ended" not in timing  # written before publish; not known yet
+
+
+def test_dry_run_writes_no_log_file(inputs_dir, tmp_path):
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(
+        DECLARATION, _success_body,
+        _argv(inputs_dir, outputs_dir, extra=["--dry-run"]))
+    assert rc == int(ExitCode.SUCCESS)
+    # --dry-run "returns 0 without calling body or writing anything": the
+    # per-stage log file is no exception.
+    assert not outputs_dir.exists() or not any(outputs_dir.iterdir())
+
+
+def test_profile_env_var_writes_pstats_and_txt(monkeypatch, inputs_dir, tmp_path):
+    monkeypatch.setenv("RAPIDPIPE_PROFILE", "1")
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, _success_body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+
+    pstats_path = outputs_dir / "profile" / "admit.pstats"
+    txt_path = outputs_dir / "profile" / "admit.txt"
+    assert pstats_path.exists()
+    assert txt_path.exists()
+    assert pstats_path.stat().st_size > 0
+    text = txt_path.read_text()
+    assert "cumulative" in text
+
+    # Not manifest members.
+    restored = Manifest.read(outputs_dir / "manifest.json")
+    published_paths = {entry.primary for entry in restored.outputs}
+    assert "profile/admit.pstats" not in published_paths
+    assert "profile/admit.txt" not in published_paths
+
+
+def test_profile_files_absent_without_the_env_var(inputs_dir, tmp_path):
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(DECLARATION, _success_body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+    assert not (outputs_dir / "profile").exists()

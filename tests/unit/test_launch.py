@@ -705,3 +705,49 @@ def test_execution_record_with_defaults_handles_none_record():
         "source_revision": "unknown",
         "settings_hash": "unknown",
     }
+
+
+def test_submit_unit_profile_sets_the_container_environment(monkeypatch):
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue1")
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "def1")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://bucket/prefix")
+    _patch_repository(monkeypatch, run_kind="scratch")
+
+    fake = FakeBatch()
+    launch_batch.submit_unit(
+        _FakeConn(), run_id="RUN01", stage="admit", unit_kind="detector-image",
+        unit_id="u1", inputs_location="s3://in/pre", client=fake, profile=True)
+
+    env = fake.submitted[0]["containerOverrides"]["environment"]
+    assert {"name": "RAPIDPIPE_PROFILE", "value": "1"} in env
+
+
+def test_submit_unit_without_profile_omits_the_variable(monkeypatch):
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue1")
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "def1")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://bucket/prefix")
+    _patch_repository(monkeypatch, run_kind="scratch")
+
+    fake = FakeBatch()
+    launch_batch.submit_unit(
+        _FakeConn(), run_id="RUN01", stage="admit", unit_kind="detector-image",
+        unit_id="u1", inputs_location="s3://in/pre", client=fake)
+
+    env = fake.submitted[0]["containerOverrides"]["environment"]
+    assert all(item["name"] != "RAPIDPIPE_PROFILE" for item in env)
+
+
+def test_submit_unit_profile_refused_for_a_production_run(monkeypatch):
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue1")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION", "s3://project/root")
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION", "prod-def")
+    calls = _patch_repository(monkeypatch, run_kind="production")
+
+    fake = FakeBatch()
+    with pytest.raises(launch_batch.ProfileNotAllowed, match="RUN01"):
+        launch_batch.submit_unit(
+            _FakeConn(), run_id="RUN01", stage="admit", unit_kind="detector-image",
+            unit_id="u1", inputs_location="s3://in/pre", client=fake, profile=True)
+    # Refused before anything is written or submitted.
+    assert fake.submitted == []
+    assert "add_unit" not in calls
