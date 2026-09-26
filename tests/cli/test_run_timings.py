@@ -128,17 +128,28 @@ def test_timings_stage_filter(cli, db, fake_batch, fake_s3, batch_env):
     assert result.out.splitlines() == [_TIMINGS_HEADER]  # no register attempts
 
 
-def test_timings_attempt_with_no_batch_metadata_prints_dashes(cli, db):
-    # A local run (or an attempt older than this feature): no Batch job,
-    # so no scheduler_metadata at all, but the attempt row itself exists
-    # (rapidpipe.runs.local writes execution_records with an empty
-    # scheduler_metadata default, same as any attempt reconcile never saw).
+def test_timings_attempt_with_no_batch_metadata_prints_dashes(
+        cli, db, fake_batch, fake_s3, batch_env):
+    # An attempt that was submitted but never reconciled (no Batch job
+    # status set yet), using the same _submit harness
+    # _submit_and_complete_with_batch_timestamps above builds on: the
+    # attempts row exists, but there is no execution_records row at all
+    # yet, so every batch/stage-derived field prints "-", disposition
+    # included (never resolved).
     run_id = _create_run(cli, db, kind="scratch", purpose="timings-no-batch")
+    submitted = _submit(cli, run_id, "admit", "cli-timings-no-batch/SCA07")
+    assert submitted.rc == 0, submitted.err
+    attempt_id = _kv(submitted.out, "attempt")
+
     result = cli("run", "timings", run_id)
     assert result.rc == 0, result.err
-    # No attempts at all yet for this run: header only, no rows, no
-    # per-stage summary (nothing to summarise).
-    assert result.out.splitlines() == [_TIMINGS_HEADER]
+    lines = result.out.splitlines()
+    assert lines[0] == _TIMINGS_HEADER
+    row = lines[1].split("\t")
+    assert row[0] == "admit"
+    assert row[1] == "cli-timings-no-batch/SCA07"
+    assert row[2] == attempt_id
+    assert row[3:] == ["-"] * 8  # disposition, then every timing field
 
 
 def test_timings_unknown_run_exits_64(cli, db):
