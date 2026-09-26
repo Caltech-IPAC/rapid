@@ -9,8 +9,9 @@
 [finalize]
 # Which differencer's difference-image instance (and its catalogs) to
 # republish, as load's [load] differencer selects one. Another
-# differencer's entries in the same manifest (SFFT with [sfft]
-# register_sfft on) are dropped and noted in the execution record.
+# differencer's entries in the same manifest (SFFT registers alongside
+# ZOGY by default, [sfft] register_sfft) are dropped and noted in the
+# execution record.
 differencer = "zogy"
 
 # The `pipelines` row each differencer's finalized image records as PPID:

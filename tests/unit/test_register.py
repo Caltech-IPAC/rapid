@@ -125,7 +125,10 @@ def _difference_manifest(tmp_path, monkeypatch):
         runner=FakeToolRunner(), sip_to_pv=fake_sip_to_pv, psf_catalog=FakePsfCatalog()))
     build_input_set(tmp_path / "diff-inputs")
     overlay = tmp_path / "overlay.toml"
-    overlay.write_text(f'[paths]\ncfg_path = "{CDF_DIR}"\n')
+    # SFFT registration off: the tests built on this fixture are about
+    # register's handling of a single differencer's manifest, not the
+    # two-differencer case (covered in tests/db/test_register_difference.py).
+    overlay.write_text(f'[paths]\ncfg_path = "{CDF_DIR}"\n[sfft]\nregister_sfft = false\n')
     outputs = tmp_path / "diff-outputs"
     assert difference.main([
         "--run", "r1", "--unit", "e1/SCA07", "--attempt", "diff-attempt-1",
