@@ -424,7 +424,7 @@ def test_run_stage_s3_missing_manifest_exits_input_rejected(monkeypatch, tmp_pat
     assert rc == int(ExitCode.INPUT_REJECTED)
 
 
-def test_run_stage_s3_connection_error_exits_transient_failure(monkeypatch, tmp_path):
+def test_run_stage_s3_connection_error_exits_transient_failure(monkeypatch, tmp_path, capsys):
     class _BrokenS3(FakeS3):
         def list_objects_v2(self, **kwargs):
             raise FakeEndpointConnectionError("could not connect")
@@ -441,6 +441,41 @@ def test_run_stage_s3_connection_error_exits_transient_failure(monkeypatch, tmp_
     ]
     rc = run_stage(DECLARATION, _success_body, argv)
     assert rc == int(ExitCode.TRANSIENT_FAILURE)
+
+    # The S3 fetch ran (and failed) inside the fetch phase, so it gets a
+    # real elapsed value, not the "-" a phase that never started would
+    # get; body and publish never ran.
+    err = capsys.readouterr().err
+    assert "fetch_s=-" not in err
+    assert "body_s=-" in err and "publish_s=-" in err
+
+
+def test_run_stage_s3_publish_failure_reports_real_publish_time_not_dashed(
+        monkeypatch, tmp_path, capsys):
+    class _BrokenUploadS3(FakeS3):
+        def upload_file(self, filename, bucket, key, **kwargs):
+            raise FakeEndpointConnectionError("could not connect")
+
+    fake = _BrokenUploadS3()
+    _seed_s3_inputs(fake, "in-bucket", "runs/r0/admit/u0/a0")
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+
+    argv = [
+        "--run", "r1", "--unit", "u1", "--attempt", "a1",
+        "--inputs", "s3://in-bucket/runs/r0/admit/u0/a0",
+        "--outputs", "s3://out-bucket/runs/r1/admit/u1/a1",
+    ]
+    rc = run_stage(DECLARATION, _success_body, argv)
+    assert rc == int(ExitCode.TRANSIENT_FAILURE)
+
+    # publish_dir's upload failed, but only after fetch and body ran to
+    # completion, and after publish itself started, so all three get a
+    # real elapsed value; only "-" would mean a phase never started.
+    err = capsys.readouterr().err
+    assert "fetch_s=-" not in err
+    assert "body_s=-" not in err
+    assert "publish_s=-" not in err
 
 
 # --- --settings as an s3:// overlay ---------------------------------------
@@ -761,16 +796,36 @@ def test_error_log_line_has_elapsed_fields_with_dashes_for_unreached_phases(
     assert "body_s=" in last_line and "publish_s=-" in last_line  # never reached
 
 
-def test_error_before_the_log_file_exists_still_has_dashed_phases(tmp_path, capsys):
-    # A missing input manifest fails before body, so fetch/body/publish
-    # never ran; the error line still carries the elapsed fields, with
-    # every unreached phase "-" (total is not, since the attempt did run
-    # for some measurable time before failing).
+def test_missing_input_manifest_error_reports_real_fetch_time_not_dashed(tmp_path, capsys):
+    # A missing input manifest fails inside the fetch phase (after
+    # fetch_start is set, and after the per-stage log file already
+    # exists): fetch ran, however briefly, before failing, so it gets a
+    # real elapsed value, not "-". body and publish never ran, so they
+    # are still "-".
     rc = run_stage(DECLARATION, _success_body, [
         "--run", "r1", "--unit", "u1", "--attempt", "a1",
         "--inputs", str(tmp_path / "no-such-inputs"), "--outputs", str(tmp_path / "out"),
     ])
     assert rc == int(ExitCode.INPUT_REJECTED)
+    assert (tmp_path / "out" / "log" / "admit.log").exists()
+    err = capsys.readouterr().err
+    assert "fetch_s=-" not in err
+    assert "body_s=-" in err and "publish_s=-" in err
+    assert "elapsed_s=-" not in err
+
+
+def test_error_before_fetch_starts_still_has_dashed_phases(tmp_path, capsys):
+    # A malformed --inputs location fails while parsing argv, before
+    # fetch_start is even set (and before the per-stage log file is
+    # created): fetch/body/publish never ran, so every one of them is
+    # "-" (total is not, since the attempt did run for some measurable
+    # time before failing).
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(
+        DECLARATION, _success_body,
+        _argv("s3:///no-bucket", outputs_dir))
+    assert rc == int(ExitCode.USAGE)
+    assert not (outputs_dir / "log").exists()
     err = capsys.readouterr().err
     assert "fetch_s=-" in err and "body_s=-" in err and "publish_s=-" in err
     assert "elapsed_s=-" not in err
