@@ -9,6 +9,7 @@ publishes -- not the tools' science.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import sys
@@ -111,6 +112,7 @@ def test_full_run_publishes_a_valid_zogy_instance(tmp_path, fakes):
     assert _exec_record(outputs)["notes"] == {
         "sfft": {"ran": True, "succeeded": True, "exit_code": 0},
         "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0},
+        "zero_point": {"value": 17.0, "source": "header"},
     }
 
 
@@ -164,6 +166,62 @@ def test_astrometric_sigma_setting_reaches_zogy_but_not_registration(tmp_path, f
     residual = _entries(_manifest(outputs), "difference-image")[0].registration["registration_residual"]
     assert residual["x_rms"] == 0.05 and residual["y_rms"] == 0.05
     assert _exec_record(outputs)["notes"]["zogy_astrometric_sigma"] == {"x": 0.3, "y": 0.3}
+
+
+# ----------------------------------------------------------------------
+# Reference zero point (the lead, 2026-09-26): header MAGZP by default,
+# [awaicgen] zprefimg as an explicit override, bad input if neither is set.
+# ----------------------------------------------------------------------
+
+
+def _strip_ref_magzp(tmp_path) -> None:
+    """Build the fixture's input set, then remove MAGZP from the reference
+    image's header, patching the manifest's declared bytes/sha256 for that
+    member so input verification still passes."""
+    inputs = tmp_path / "inputs"
+    build_input_set(inputs)
+    ref_path = inputs / "ref" / "awaicgen_output_mosaic_image.fits"
+    with fits.open(ref_path, mode="update") as hdul:
+        del hdul[0].header["MAGZP"]
+        hdul.flush()
+    manifest_path = inputs / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    member = manifest["outputs"][1]["members"][0]
+    assert member["role"] == "image"
+    member["bytes"] = ref_path.stat().st_size
+    member["sha256"] = "sha256:" + hashlib.sha256(ref_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def test_zero_point_read_from_reference_header_by_default(tmp_path, fakes, capsys):
+    code, outputs = _run(tmp_path)
+    assert code == ExitCode.SUCCESS
+    assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 17.0, "source": "header"}
+    assert "zero point source=header; value=17.0" in capsys.readouterr().out
+
+
+def test_zero_point_override_takes_precedence_over_header(tmp_path, fakes, capsys):
+    code, outputs = _run(tmp_path, overlay="[awaicgen]\nzprefimg = 18.5\n")
+    assert code == ExitCode.SUCCESS
+    assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 18.5, "source": "override"}
+    out = capsys.readouterr().out
+    assert "zero point source=override; value=18.5" in out
+    assert "overrides reference header MAGZP=17.0" in out
+
+
+def test_zero_point_override_without_a_header_value_is_still_used(tmp_path, fakes, capsys):
+    _strip_ref_magzp(tmp_path)
+    code, outputs = _run(tmp_path, overlay="[awaicgen]\nzprefimg = 18.5\n")
+    assert code == ExitCode.SUCCESS
+    assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 18.5, "source": "override"}
+    assert "reference header has no MAGZP" in capsys.readouterr().out
+
+
+def test_missing_header_and_no_override_is_input_rejected(tmp_path, fakes):
+    _strip_ref_magzp(tmp_path)
+    code, outputs = _run(tmp_path)
+    assert code == ExitCode.INPUT_REJECTED
+    assert not (outputs / "manifest.json").exists()
 
 
 def test_zogy_catalogs_detect_on_scorr_with_devs_overrides(tmp_path, fakes):
@@ -259,8 +317,11 @@ def test_run_sfft_off_runs_no_sfft(tmp_path, fakes):
     assert code == ExitCode.SUCCESS
     assert runner.shell_calls == []
     # No "sfft" key with SFFT off, but the ZOGY-fed astrometric sigma note
-    # is unconditional.
-    assert _exec_record(outputs)["notes"] == {"zogy_astrometric_sigma": {"x": 0.0, "y": 0.0}}
+    # and the zero point note are unconditional.
+    assert _exec_record(outputs)["notes"] == {
+        "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0},
+        "zero_point": {"value": 17.0, "source": "header"},
+    }
 
 
 # ----------------------------------------------------------------------
@@ -357,6 +418,8 @@ def test_bad_input_set_exits_65_and_publishes_nothing(tmp_path, fakes, edit):
     '[zogy]\ndetection_role = "kernel"\n',
     '[sfft]\ndetection_role = "significance"\n',
     "[zogy]\nno_such_setting = 1\n",
+    '[awaicgen]\nzprefimg = "not a number"\n',
+    "[awaicgen]\nzprefimg = true\n",
 ])
 def test_bad_settings_exit_64(tmp_path, fakes, overlay):
     code, outputs = _run(tmp_path, overlay=overlay)

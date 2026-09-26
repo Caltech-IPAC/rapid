@@ -54,6 +54,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from astropy.io import fits
+
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.diffimage import (
     DIFFERENCERS,
@@ -315,6 +317,7 @@ def _check_settings(settings: dict[str, Any]) -> None:
         raise UsageError(
             "[fake_sources] inject_fake_sources_flag = true is not supported: "
             "fake-source injection is not ported to the rebuild")
+    _zero_point_override(settings)
     for differencer, table in (("zogy", "zogy"), ("sfft", "sfft")):
         role = settings[table]["detection_role"]
         if role not in DIFFERENCERS[differencer].declared:
@@ -326,6 +329,66 @@ def _check_settings(settings: dict[str, Any]) -> None:
 def _seed(settings: dict[str, Any]) -> int | None:
     seed = int(settings["statistics"]["clip_correction_seed"])
     return seed if seed >= 0 else None
+
+
+def _zero_point_override(settings: dict[str, Any]) -> float | None:
+    """``[awaicgen] zprefimg``: empty (the default) means no override, so
+    the reference zero point comes from the reference image's own MAGZP
+    header keyword; otherwise the number to use instead, unconditionally
+    (the lead, 2026-09-26)."""
+    value = settings["awaicgen"]["zprefimg"]
+    if value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise UsageError(f"[awaicgen] zprefimg must be empty or a number, got {value!r}")
+    return float(value)
+
+
+def _reference_header_magzp(work_dir: Path, reference_image: str) -> float | None:
+    """The reference image's own ``MAGZP``, read from its primary header.
+
+    Reads the original reference input file (as delivered, before SWarp
+    resamples it onto the science grid): the resampled copy's header is
+    the science image's, carried through by SWarp, and ``[swarp]
+    swarp_copy_keywords`` never names ``MAGZP``, so the resampled file
+    never carries it.
+    """
+    with fits.open(work_dir / reference_image) as hdul:
+        header = hdul[0].header
+        if "MAGZP" not in header:
+            return None
+        return float(header["MAGZP"])
+
+
+def _resolve_zero_point(
+    settings: dict[str, Any], work_dir: Path, reference_image: str, log: Any,
+) -> tuple[float, str]:
+    """The reference zero point gain matching uses, and where it came from.
+
+    An explicit ``[awaicgen] zprefimg`` override always wins; absent that,
+    the reference image's ``MAGZP`` header keyword is read. Neither
+    present is an input rejection (65): the stage was given a reference
+    image with no recorded zero point and no override to fall back on.
+    """
+    override = _zero_point_override(settings)
+    header_value = _reference_header_magzp(work_dir, reference_image)
+    if override is not None:
+        if header_value is not None:
+            log.info(
+                "zero point source=override; value=%s (overrides reference header MAGZP=%s)",
+                override, header_value)
+        else:
+            log.info(
+                "zero point source=override; value=%s (reference header has no MAGZP)", override)
+        return override, "override"
+    if header_value is None:
+        raise InputRejected(
+            "reference image header has no MAGZP keyword and [awaicgen] zprefimg is not set: "
+            "either set [awaicgen] zprefimg as an explicit override, or supply a reference "
+            "image whose header carries MAGZP (the reference stage stamps it on every coadd "
+            "it produces)")
+    log.info("zero point source=header; value=%s", header_value)
+    return header_value, "header"
 
 
 # ----------------------------------------------------------------------
@@ -492,7 +555,11 @@ def _body(context: StageContext) -> StageResult:
         kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
         sci_fits_file_with_pv, settings["bkgest"])
 
-    # Gain matching.
+    # Gain matching. The reference zero point is read from the reference
+    # image's own MAGZP header (the file as delivered, not the resampled
+    # copy), unless [awaicgen] zprefimg overrides it (the lead, 2026-09-26).
+    zero_point, zero_point_source = _resolve_zero_point(
+        settings, work_dir, inputs.reference_image, log)
     filename_scigainmatchsexcat_catalog = filename_bkg_subbed_science_image.replace(
         ".fits", "_scigainmatchsexcat.txt")
     filename_refgainmatchsexcat_catalog = output_resampled_reference_image.replace(
@@ -504,7 +571,7 @@ def _body(context: StageContext) -> StageResult:
             filename_scigainmatchsexcat_catalog,
             output_resampled_reference_image, output_resampled_reference_uncert_image,
             filename_refgainmatchsexcat_catalog,
-            float(settings["awaicgen"]["zprefimg"]), settings["gainmatch"],
+            zero_point, settings["gainmatch"],
             settings["sextractor_gainmatch"], fwhm_sci, fwhm_ref,
             float(zogy_settings["astrometric_uncert_x"]),
             float(zogy_settings["astrometric_uncert_y"]),
@@ -649,6 +716,7 @@ def _body(context: StageContext) -> StageResult:
     notes: dict[str, Any] = {
         "zogy_astrometric_sigma": {"x": zogy_astrometric_sigma_x,
                                     "y": zogy_astrometric_sigma_y},
+        "zero_point": {"value": zero_point, "source": zero_point_source},
     }
     sfft_settings = settings["sfft"]
     sfft_result = None
