@@ -1005,7 +1005,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
         except MissingEnvironmentVariable as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")
-            return 64
+            return int(ExitCode.USAGE)
         except DependencyIncomplete as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")
