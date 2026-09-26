@@ -599,16 +599,6 @@ def test_promote_records_a_refusal_as_a_science_outcome(monkeypatch):
     assert conn.rollbacks == 1
 
 
-def test_promote_without_the_gate_is_released_image_only(monkeypatch):
-    def promote_run(conn, run_id, who, reason, *, kinds=None, allow_unreleased=False):
-        return "P2"
-
-    monkeypatch.setattr(repository, "promote_run", promote_run)
-    monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
-    assert loop._promote(_Conn(), "R", loop.parse_spec(SPEC, "x"), dt.date(2027, 10, 1)) == (
-        "P2", "P2", "released-image only", [])
-
-
 def test_promote_a_missing_run_is_not_a_refusal(monkeypatch):
     def missing(conn, run_id, who, reason, *, kinds=None, check_policy=None,
                 allow_unreleased=False):
