@@ -223,7 +223,71 @@ def test_missing_header_and_no_override_is_input_rejected(tmp_path, fakes):
     _strip_ref_magzp(tmp_path)
     code, outputs = _run(tmp_path)
     assert code == ExitCode.INPUT_REJECTED
+
+
+def _set_ref_magzp(tmp_path, value) -> None:
+    """Build the fixture's input set, then set the reference image's
+    ``MAGZP`` header to ``value`` (for example a non-numeric string, to
+    simulate a malformed keyword), patching the manifest's declared
+    bytes/sha256 for that member so input verification still passes."""
+    inputs = tmp_path / "inputs"
+    build_input_set(inputs)
+    ref_path = inputs / "ref" / "awaicgen_output_mosaic_image.fits"
+    with fits.open(ref_path, mode="update") as hdul:
+        hdul[0].header["MAGZP"] = value
+        hdul.flush()
+    manifest_path = inputs / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    member = manifest["outputs"][1]["members"][0]
+    assert member["role"] == "image"
+    member["bytes"] = ref_path.stat().st_size
+    member["sha256"] = "sha256:" + hashlib.sha256(ref_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def test_malformed_header_and_no_override_is_input_rejected(tmp_path, fakes):
+    """A non-numeric MAGZP is caught and reported as bad input (65), not
+    left to raise an unhandled ValueError (which would surface as 70)."""
+    _set_ref_magzp(tmp_path, "not-a-number")
+    code, outputs = _run(tmp_path)
+    assert code == ExitCode.INPUT_REJECTED
     assert not (outputs / "manifest.json").exists()
+
+
+def test_override_takes_precedence_over_a_malformed_header(tmp_path, fakes):
+    """The override is applied before the header is even parsed for its
+    value, so a malformed MAGZP never matters when an override is set."""
+    _set_ref_magzp(tmp_path, "not-a-number")
+    code, outputs = _run(tmp_path, overlay="[awaicgen]\nzprefimg = 18.5\n")
+    assert code == ExitCode.SUCCESS
+    assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 18.5, "source": "override"}
+
+
+def test_resolve_zero_point_rejects_a_non_finite_header_value(tmp_path, monkeypatch):
+    """``math.isfinite`` guards against a header MAGZP astropy would
+    otherwise hand back as +/-inf (FITS itself refuses to store nan)."""
+    monkeypatch.setattr(difference, "_reference_header_magzp", lambda *a, **k: float("inf"))
+    settings = {"awaicgen": {"zprefimg": ""}}
+    with pytest.raises(difference.InputRejected):
+        difference._resolve_zero_point(settings, tmp_path, "ref.fits", log=_NullLog())
+
+
+def test_resolve_zero_point_override_ignores_a_header_read_failure(monkeypatch, tmp_path):
+    """An override is returned even if reading the header would raise:
+    the override path never depends on the header parsing successfully."""
+
+    def _boom(*a, **k):
+        raise ValueError("simulated malformed header")
+
+    monkeypatch.setattr(difference, "_reference_header_magzp", _boom)
+    settings = {"awaicgen": {"zprefimg": 18.5}}
+    value, source = difference._resolve_zero_point(settings, tmp_path, "ref.fits", log=_NullLog())
+    assert (value, source) == (18.5, "override")
+
+
+class _NullLog:
+    def info(self, *a, **k):
+        pass
 
 
 def test_zogy_catalogs_detect_on_scorr_with_devs_overrides(tmp_path, fakes):

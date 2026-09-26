@@ -47,6 +47,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import importlib
+import math
 import os
 import shutil
 import sys
@@ -352,6 +353,10 @@ def _reference_header_magzp(work_dir: Path, reference_image: str) -> float | Non
     the science image's, carried through by SWarp, and ``[swarp]
     swarp_copy_keywords`` never names ``MAGZP``, so the resampled file
     never carries it.
+
+    Raises ``ValueError`` or ``TypeError`` if the keyword is present but
+    cannot be read as a number (non-numeric, or FITS-undefined); callers
+    decide how that maps to an exit code.
     """
     with fits.open(work_dir / reference_image) as hdul:
         header = hdul[0].header
@@ -365,14 +370,24 @@ def _resolve_zero_point(
 ) -> tuple[float, str]:
     """The reference zero point gain matching uses, and where it came from.
 
-    An explicit ``[awaicgen] zprefimg`` override always wins; absent that,
-    the reference image's ``MAGZP`` header keyword is read. Neither
-    present is an input rejection (65): the stage was given a reference
-    image with no recorded zero point and no override to fall back on.
+    An explicit ``[awaicgen] zprefimg`` override always wins, and is
+    applied without depending on the reference header at all: a
+    malformed ``MAGZP`` (non-numeric, undefined, or non-finite) never
+    matters when an override is set. The header is still opened, best
+    effort, only to make the log message more informative; any failure
+    reading it there is swallowed.
+
+    Absent an override, the reference image's ``MAGZP`` header keyword is
+    read. Missing, non-numeric, undefined, or non-finite is an input
+    rejection (65): the stage was given a reference image with no usable
+    recorded zero point and no override to fall back on.
     """
     override = _zero_point_override(settings)
-    header_value = _reference_header_magzp(work_dir, reference_image)
     if override is not None:
+        try:
+            header_value = _reference_header_magzp(work_dir, reference_image)
+        except (ValueError, TypeError):
+            header_value = None
         if header_value is not None:
             log.info(
                 "zero point source=override; value=%s (overrides reference header MAGZP=%s)",
@@ -381,12 +396,21 @@ def _resolve_zero_point(
             log.info(
                 "zero point source=override; value=%s (reference header has no MAGZP)", override)
         return override, "override"
+    try:
+        header_value = _reference_header_magzp(work_dir, reference_image)
+    except (ValueError, TypeError) as exc:
+        raise InputRejected(
+            f"reference image header MAGZP is not a usable number: {exc}") from exc
     if header_value is None:
         raise InputRejected(
             "reference image header has no MAGZP keyword and [awaicgen] zprefimg is not set: "
             "either set [awaicgen] zprefimg as an explicit override, or supply a reference "
             "image whose header carries MAGZP (the reference stage stamps it on every coadd "
             "it produces)")
+    if not math.isfinite(header_value):
+        raise InputRejected(
+            f"reference image header MAGZP is not finite ({header_value!r}) and "
+            "[awaicgen] zprefimg is not set")
     log.info("zero point source=header; value=%s", header_value)
     return header_value, "header"
 
