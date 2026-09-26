@@ -627,6 +627,22 @@ def test_with_batch_scheduler_metadata_no_stage_key_when_no_timing():
     assert "stage" not in merged["scheduler_metadata"]
 
 
+def test_with_batch_scheduler_metadata_merges_a_pre_existing_nested_batch_key():
+    # scheduler_metadata.batch is merged with, not replaced by, Batch's own
+    # job timestamps, the same way scheduler_metadata.stage already is:
+    # a pre-existing key under "batch" (from some other writer) survives
+    # alongside the ones this call adds or overwrites.
+    execution_record = {
+        "scheduler_metadata": {"batch": {"pre_existing": "value", "job_queue": "old-queue"}},
+    }
+    job = {"jobId": "job-1", "createdAt": 1_700_000_000_000, "jobQueue": "new-queue"}
+    merged = launch_batch._with_batch_scheduler_metadata(execution_record, job)
+    batch_metadata = merged["scheduler_metadata"]["batch"]
+    assert batch_metadata["pre_existing"] == "value"
+    assert batch_metadata["job_queue"] == "new-queue"
+    assert batch_metadata["created_at"] == "2023-11-14T22:13:20Z"
+
+
 def test_reconcile_succeeded_merges_the_stage_execution_records_timing(monkeypatch):
     _, recorded = _reconcile_one(
         monkeypatch, status="SUCCEEDED", manifest_ok=True,
