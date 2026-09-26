@@ -329,6 +329,30 @@ def test_run_with_no_subcommand_exits_64_without_connecting(monkeypatch):
     assert rc == int(ExitCode.USAGE)
 
 
+def test_invalid_log_level_env_var_exits_64_not_an_uncaught_valueerror(monkeypatch, capsys):
+    # configure_root() runs before argparse sees argv at all, so an
+    # invalid RAPIDPIPE_LOG_LEVEL used to raise an uncaught ValueError
+    # (surfacing as Python's own exit 1) instead of the contract's usage
+    # error (direction review, 2026-09-26).
+    monkeypatch.setenv("RAPIDPIPE_LOG_LEVEL", "NOT-A-LEVEL")
+    monkeypatch.setattr(cli_main, "connect", _raise_if_called)
+    rc = cli_main.main(["run", "list"])
+    assert rc == int(ExitCode.USAGE)
+    err = capsys.readouterr().err
+    assert "RAPIDPIPE_LOG_LEVEL" in err
+    assert "NOT-A-LEVEL" in err
+
+
+def test_invalid_log_level_env_var_exits_64_even_for_version(monkeypatch, capsys):
+    # The check runs before argparse's own --version handling (a
+    # SystemExit(0)), so a malformed level still wins: usage error, not
+    # the version string, and not an uncaught exception either.
+    monkeypatch.setenv("RAPIDPIPE_LOG_LEVEL", "NOT-A-LEVEL")
+    rc = cli_main.main(["--version"])
+    assert rc == int(ExitCode.USAGE)
+    assert "RAPIDPIPE_LOG_LEVEL" in capsys.readouterr().err
+
+
 def test_connection_unavailable_exits_75(monkeypatch):
     def _raise_unavailable(*args, **kwargs):
         raise ConnectionUnavailable("no route to host")

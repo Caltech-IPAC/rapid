@@ -1331,8 +1331,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     # RAPIDPIPE_LOG_LEVEL overrides) with the same UTC line shape a stage
     # invocation uses, so a library's bare warning gets a timestamp and
     # run context instead of Python's last-resort handler. CLI data
-    # output (print to stdout) is unaffected.
-    rapidpipe_log.configure_root()
+    # output (print to stdout) is unaffected. This runs before argparse
+    # sees argv at all (even --help or --version), so an invalid
+    # RAPIDPIPE_LOG_LEVEL is a usage error (exit 64) here, not an
+    # uncaught ValueError.
+    try:
+        rapidpipe_log.configure_root()
+    except ValueError as exc:
+        sys.stderr.write(
+            f"rapidpipe: invalid {rapidpipe_log.LEVEL_ENV_VAR}: {exc}\n")
+        return int(ExitCode.USAGE)
     parser = _build_parser()
     # "rapidpipe stage <name> ..." (the form the Batch launcher submits) is
     # "rapidpipe stage run <name> ...": rewritten before argparse sees it.
