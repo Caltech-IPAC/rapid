@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from rapidpipe.db.ids import new_ulid
+from rapidpipe.exitcodes import ExitCode
 from rapidpipe.runs import cleanup
 from tests.unit.fakes3 import FakeClientError
 
@@ -42,7 +43,9 @@ def test_status_exit_codes_and_one_row_per_unit(cli, db, fake_batch, fake_s3, ba
     fake_batch.set_status(_kv(submitted.out, "job"), "RUNNING")
 
     still_running = cli("run", "status", run_id)
-    assert still_running.rc == 2
+    # ExitCode.INCOMPLETE (2): a unit still non-terminal without --watch
+    # (rapidpipe/exitcodes.py, supervisor step 1, 2026-09-26).
+    assert still_running.rc == ExitCode.INCOMPLETE
     lines = still_running.out.splitlines()
     assert lines[0] == _STATUS_HEADER
     assert len(lines) == 2
