@@ -39,9 +39,12 @@ failed. ``status`` also exits 2 when something is still running.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import getpass
+import json
 import shlex
 import shutil
+import statistics
 import sys
 import tempfile
 import time
@@ -68,7 +71,7 @@ from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
 sleep: Callable[[float], None] = time.sleep
 now: Callable[[], float] = time.monotonic
 
-COMMANDS = ("start", "status", "inputs", "compare", "expire")
+COMMANDS = ("start", "status", "inputs", "compare", "expire", "timings")
 
 _TERMINAL_UNIT_STATES = ("complete", "failed", "cancelled")
 _STATUS_STILL_RUNNING = 2
@@ -225,6 +228,30 @@ def add_parsers(run_subparsers: Any) -> None:
     expire.add_argument(
         "--now", type=_iso8601, default=None,
         help="Treat this ISO 8601 time as now (default: the database's now()).")
+
+    timings = run_subparsers.add_parser(
+        "timings", help="Read-only: queue, execution and orchestration timings per attempt.",
+        description="Print one row per attempt of the run: stage, unit, attempt, "
+                    "disposition, and the durations Batch's own job timestamps "
+                    "(reconcile records them in scheduler_metadata) and the "
+                    "attempts table give: queue_s (Batch started - Batch "
+                    "created), exec_s (Batch stopped - Batch started), "
+                    "fetch_s/body_s/publish_s (from the stage's own execution "
+                    "record, when it wrote one), reconcile_lag_s (this attempt's "
+                    "ended - Batch stopped), and over_30m (exec_s > 1800s). An "
+                    "attempt with no Batch metadata (an older row, or a local "
+                    "run) prints '-' throughout. Then a per-stage summary: "
+                    "count, median, p90 and max of exec_s, and how many exceeded "
+                    "30 minutes. Data on stdout only; exits 0, or 64 for an "
+                    "unknown run.")
+    timings.add_argument("run_id", help="The run.")
+    timings.add_argument(
+        "--stage", default=None, choices=STAGE_NAMES,
+        help="Only this stage's attempts.")
+    timings.add_argument(
+        "--json", action="store_true",
+        help="One JSON object ({'attempts': [...], 'stages': [...]}) instead "
+             "of tab-separated text.")
 
 
 # ======================================================================
@@ -1344,6 +1371,175 @@ def _expire_command(args: argparse.Namespace) -> int:
 
 
 # ======================================================================
+# run timings
+# ======================================================================
+
+#: exec_s beyond this many seconds is "over_30m" (both the per-attempt
+#: flag and the per-stage summary's count).
+_OVER_LONG_SECONDS = 30 * 60
+
+_TIMINGS_COLUMNS = (
+    "stage", "unit", "attempt", "disposition", "queue_s", "exec_s",
+    "fetch_s", "body_s", "publish_s", "reconcile_lag_s", "over_30m",
+)
+
+
+def _timings_rows(conn, run_id: str, *, stage: str | None = None) -> list[tuple]:
+    """One row per attempt of ``run_id`` (optionally restricted to
+    ``stage``): its own columns plus ``execution_records.scheduler_metadata``,
+    read once here rather than per attempt."""
+    query = (
+        "SELECT a.stage, u.unit_id, a.id, a.disposition, a.started, a.ended, "
+        "er.scheduler_metadata "
+        "FROM attempts a "
+        "JOIN units u ON u.id = a.unit "
+        "LEFT JOIN execution_records er ON er.attempt = a.id "
+        "WHERE a.run = %s"
+    )
+    params: list[Any] = [run_id]
+    if stage is not None:
+        query += " AND a.stage = %s"
+        params.append(stage)
+    query += " ORDER BY a.stage, u.unit_id, a.started"
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        return cur.fetchall()
+
+
+def _parse_batch_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+@dataclass(frozen=True)
+class AttemptTiming:
+    """One derived row of ``run timings``.
+
+    ``fetch_s``/``body_s``/``publish_s`` are always ``None``: the stage's
+    own execution record carries a ``timing`` key (``rapidpipe.stages.
+    contract.run_stage``, direction/logging-timing) with exactly these
+    phases, but ``rapidpipe.runs.repository.record_attempt_result`` only
+    ever persists the named ``execution_records`` columns (source_revision,
+    working_copy_patch, image_digest, schema_version, resolved_settings,
+    settings_hash, scheduler_metadata, release): an execution record's
+    other keys, "timing" included, are read out of the JSON the stage
+    wrote and then simply dropped, never reaching a column. Reading them
+    back here would mean re-fetching each attempt's exec/<attempt>.json
+    from its own output location (S3 or local) for every row, which is
+    not what a read-only, database-only report should cost -- so this
+    prints '-' for all three rather than adding a column or a fetch.
+    """
+
+    stage: str
+    unit: str
+    attempt: str
+    disposition: str | None
+    queue_s: float | None
+    exec_s: float | None
+    fetch_s: float | None
+    body_s: float | None
+    publish_s: float | None
+    reconcile_lag_s: float | None
+    over_30m: bool | None
+
+
+def _attempt_timing(row: tuple) -> AttemptTiming:
+    stage, unit_id, attempt_id, disposition, started, ended, scheduler_metadata = row
+    metadata = scheduler_metadata
+    if isinstance(metadata, str):  # a driver that does not auto-cast jsonb
+        metadata = json.loads(metadata) if metadata else {}
+    batch = (metadata or {}).get("batch") or {}
+
+    created_at = _parse_batch_timestamp(batch.get("created_at"))
+    started_at = _parse_batch_timestamp(batch.get("started_at"))
+    stopped_at = _parse_batch_timestamp(batch.get("stopped_at"))
+
+    queue_s = (
+        (started_at - created_at).total_seconds()
+        if created_at is not None and started_at is not None else None)
+    exec_s = (
+        (stopped_at - started_at).total_seconds()
+        if started_at is not None and stopped_at is not None else None)
+    reconcile_lag_s = (
+        (ended - stopped_at).total_seconds()
+        if ended is not None and stopped_at is not None else None)
+
+    return AttemptTiming(
+        stage=stage, unit=unit_id, attempt=attempt_id, disposition=disposition,
+        queue_s=queue_s, exec_s=exec_s, fetch_s=None, body_s=None, publish_s=None,
+        reconcile_lag_s=reconcile_lag_s,
+        over_30m=(None if exec_s is None else exec_s > _OVER_LONG_SECONDS))
+
+
+def _stage_summary(stage: str, timings: list[AttemptTiming]) -> dict[str, Any]:
+    exec_values = sorted(t.exec_s for t in timings if t.exec_s is not None)
+    over_30m_count = sum(1 for t in timings if t.over_30m)
+    summary: dict[str, Any] = {
+        "stage": stage,
+        "count": len(exec_values),
+        "median_exec_s": None,
+        "p90_exec_s": None,
+        "max_exec_s": None,
+        "over_30m_count": over_30m_count,
+    }
+    if exec_values:
+        summary["median_exec_s"] = statistics.median(exec_values)
+        # A simple inclusive-method percentile: fine for the small
+        # per-stage attempt counts this ever runs over.
+        index = min(len(exec_values) - 1, int(round(0.9 * (len(exec_values) - 1))))
+        summary["p90_exec_s"] = exec_values[index]
+        summary["max_exec_s"] = exec_values[-1]
+    return summary
+
+
+def _fmt_timing_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:.1f}"
+    return str(value)
+
+
+def _timings_command(args: argparse.Namespace) -> int:
+    def body(conn) -> int:
+        _require_run(conn, args.run_id)
+        rows = _timings_rows(conn, args.run_id, stage=args.stage)
+        timings = [_attempt_timing(row) for row in rows]
+
+        by_stage: dict[str, list[AttemptTiming]] = {}
+        for timing in timings:
+            by_stage.setdefault(timing.stage, []).append(timing)
+        stage_summaries = [_stage_summary(stage, ts) for stage, ts in by_stage.items()]
+
+        if args.json:
+            payload = {
+                "attempts": [dataclasses.asdict(t) for t in timings],
+                "stages": stage_summaries,
+            }
+            print(json.dumps(payload, sort_keys=True))
+            return int(ExitCode.SUCCESS)
+
+        print("\t".join(_TIMINGS_COLUMNS))
+        for t in timings:
+            print("\t".join(_fmt_timing_value(v) for v in (
+                t.stage, t.unit, t.attempt, t.disposition, t.queue_s, t.exec_s,
+                t.fetch_s, t.body_s, t.publish_s, t.reconcile_lag_s, t.over_30m)))
+        print()
+        print("\t".join(("stage", "count", "median_exec_s", "p90_exec_s",
+                         "max_exec_s", "over_30m_count")))
+        for summary in stage_summaries:
+            print("\t".join(_fmt_timing_value(summary[key]) for key in (
+                "stage", "count", "median_exec_s", "p90_exec_s",
+                "max_exec_s", "over_30m_count")))
+        return int(ExitCode.SUCCESS)
+
+    return _with_connection("timings", body)
+
+
+# ======================================================================
 # Dispatch
 # ======================================================================
 
@@ -1356,4 +1552,5 @@ def dispatch(args: argparse.Namespace) -> int:
         "inputs": _inputs_command,
         "compare": _compare_command,
         "expire": _expire_command,
+        "timings": _timings_command,
     }[args.run_command](args)
