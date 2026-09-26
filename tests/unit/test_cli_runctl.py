@@ -573,6 +573,23 @@ def test_timings_text_output_with_and_without_batch_metadata(monkeypatch, fake_c
     assert summary[5] == "0"
 
 
+def _timing(exec_s: float) -> runctl.AttemptTiming:
+    return runctl.AttemptTiming(
+        stage="admit", unit="U", attempt="A", disposition="succeeded",
+        queue_s=None, exec_s=exec_s, fetch_s=None, body_s=None, publish_s=None,
+        reconcile_lag_s=None, over_30m=False)
+
+
+def test_stage_summary_p90_is_nearest_rank_not_interpolated():
+    # Two values, [0, 100]: nearest-rank (round 0.9 * (n - 1) = 0.9 to the
+    # nearest index, 1, and take exec_values[1] outright) gives 100.
+    # Linear interpolation between the two neighbours would instead give
+    # an interpolated 90. The docstring/comment names nearest-rank; this
+    # pins the actual value so a silent switch to interpolation is caught.
+    summary = runctl._stage_summary("admit", [_timing(0.0), _timing(100.0)])
+    assert summary["p90_exec_s"] == 100.0
+
+
 def test_timings_over_30m_flag(monkeypatch, fake_conn, capsys):
     long_row = (
         "difference", "U3", "A3", "succeeded", None, None,

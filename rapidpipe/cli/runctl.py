@@ -1490,7 +1490,10 @@ def _stage_summary(stage: str, timings: list[AttemptTiming]) -> dict[str, Any]:
     }
     if exec_values:
         summary["median_exec_s"] = statistics.median(exec_values)
-        # A simple inclusive-method percentile: fine for the small
+        # Nearest-rank, not linear interpolation: round 0.9 * (n - 1) to
+        # the nearest sorted index and take that value outright, rather
+        # than interpolating between its two neighbours. For [0, 100]
+        # this returns 100, not an interpolated 90. Fine for the small
         # per-stage attempt counts this ever runs over.
         index = min(len(exec_values) - 1, int(round(0.9 * (len(exec_values) - 1))))
         summary["p90_exec_s"] = exec_values[index]
