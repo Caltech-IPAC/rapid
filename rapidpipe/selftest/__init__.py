@@ -22,12 +22,15 @@ image, unlike ``tests/`` -- ``containers/rapid-pipeline/build.sh``).
 
 :func:`run` is this package's one entry point: it prepares and runs the
 named stage's fixture and prints its report, returning the exit code
-``rapidpipe.cli.main`` should use -- 0 on a full pass, 1 on a fixture
-mismatch (the stage ran, but its manifest or products didn't match
-``expected.json``), and the stage's own subprocess exit code when that
-itself was not what the fixture expected (a stage failure, not a fixture
-mismatch: something the stage contract's own exit codes already
-classify, so re-using them here needs no second vocabulary).
+``rapidpipe.cli.main`` should use, all from the one vocabulary in
+``rapidpipe.exitcodes``: 0 (SUCCESS) on a full pass; 1 (FAILURE) on a
+fixture mismatch (the stage ran, but its manifest or products didn't match
+``expected.json``) and when the stage exited 0 although the fixture
+expected a non-zero code (a false success must not read as a pass); 64
+(USAGE) when the work directory already exists; and the stage's own
+non-zero subprocess exit code when that itself was not what the fixture
+expected (a stage failure, not a fixture mismatch, which the stage's code
+already classifies, being a member of the same vocabulary).
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from rapidpipe.exitcodes import ExitCode
 from rapidpipe.selftest.runner import FixtureResult, STAGE_NAMES, run_fixture
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -94,7 +98,7 @@ def run(*, stage: str, real_tools: bool, work_dir: str | None, output_location: 
             work_dir=work_dir_path, output_location=output_location)
     except FileExistsError as exc:
         print(f"selftest: {exc}", file=sys.stderr)
-        return 1
+        return int(ExitCode.USAGE)
 
     return _report(stage, result)
 
@@ -109,8 +113,13 @@ def _report(stage: str, result: FixtureResult) -> int:
         # failure, not a fixture mismatch -- propagate its own exit code
         # so the caller (a Batch job, or a developer at a shell) sees the
         # same signal `rapidpipe stage <name>` itself would have given.
+        # A stage that exited 0 where the fixture expected a non-zero code
+        # (e.g. 69 from a declared stub) is a false success: FAILURE, never
+        # the unexpected 0.
         print(f"selftest: {stage}: STAGE FAILURE (exit {result.exit_code}); "
               f"work dir {result.work_dir}")
+        if result.exit_code == 0:
+            return int(ExitCode.FAILURE)
         return result.exit_code
 
     verdict = "PASS" if not result.checks.failures else "FAIL"
@@ -119,4 +128,4 @@ def _report(stage: str, result: FixtureResult) -> int:
                       else f"outputs in {result.output_location}")
     print(f"selftest: {stage}: {verdict} ({result.checks.passed} checks passed, "
           f"{len(result.checks.failures)} failed; tools={result.tools}; {location_note})")
-    return 0 if not result.checks.failures else 1
+    return int(ExitCode.SUCCESS) if not result.checks.failures else int(ExitCode.FAILURE)

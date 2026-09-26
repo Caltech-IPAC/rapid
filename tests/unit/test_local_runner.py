@@ -310,9 +310,9 @@ def test_run_create_bad_kind_exits_64_before_connecting(monkeypatch, capsys):
     monkeypatch.setattr(cli_main, "connect", _raise_if_called)
     with pytest.raises(SystemExit) as exc_info:
         cli_main.main(["run", "create", "--kind", "bogus", "--purpose", "p", "--stages", "admit"])
-    # argparse's own choices validation exits 2 before rapidpipe ever gets
-    # a chance to run --  still before any connection is attempted.
-    assert exc_info.value.code == 2
+    # argparse's own choices validation exits 64 through
+    # rapidpipe.exitcodes.ArgumentParser, before any connection is attempted.
+    assert exc_info.value.code == int(ExitCode.USAGE)
 
 
 def test_run_create_no_stages_exits_64_before_connecting(monkeypatch):

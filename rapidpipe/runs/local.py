@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from rapidpipe.exitcodes import ExitCode
 from rapidpipe.products.manifest import Manifest, ManifestError
 from rapidpipe.runs import inputs as run_inputs
 from rapidpipe.runs.repository import (
@@ -35,12 +36,10 @@ from rapidpipe.runs.repository import (
     select_attempt,
 )
 
-#: Exit codes the stage contract assigns a disposition without needing the
-#: exit code table imported from ``rapidpipe.stages.contract`` -- that
-#: module lives in the forbidden ``stages`` subpackage from here, so the
-#: three codes this function cares about are repeated as plain ints, with
-#: the contract section they come from named in the docstring below.
-_TRANSIENT_FAILURE_CODE = 75
+#: The exit code the stage contract assigns a retryable disposition, from
+#: the stdlib-only ``rapidpipe.exitcodes`` (importable here, unlike the
+#: forbidden ``stages`` subpackage).
+_TRANSIENT_FAILURE_CODE = ExitCode.TRANSIENT_FAILURE
 
 
 @dataclass(frozen=True)

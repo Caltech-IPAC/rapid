@@ -757,8 +757,8 @@ def print_report(summary: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(
+    from rapidpipe.exitcodes import ArgumentParser
+    parser = ArgumentParser(
         description="Show implemented vs stub alert schema params")
     parser.add_argument("--summary", action="store_true",
                         help="per-record counts only")

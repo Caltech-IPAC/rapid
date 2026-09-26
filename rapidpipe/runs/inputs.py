@@ -34,6 +34,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
+from rapidpipe.exitcodes import ExitCode
 from rapidpipe.products.manifest import Manifest, ManifestError
 from rapidpipe.products.storage import LocationError, fetch_object, join, parse_location
 from rapidpipe.runs.repository import ProducerDeletingOrDeleted, bind_unit_inputs
@@ -56,7 +57,7 @@ _TRANSIENT_EXCEPTION_NAMES = (
 
 #: The stage contract's INPUT_REJECTED exit code, which the CLI returns
 #: for :class:`InputsRefused`.
-INPUTS_REFUSED_EXIT = 65
+INPUTS_REFUSED_EXIT = ExitCode.INPUT_REJECTED
 
 
 class InputsRefused(Exception):

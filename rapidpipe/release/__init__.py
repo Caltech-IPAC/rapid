@@ -40,9 +40,10 @@ schema_version, image_digest, image_ref, state, cut_by, cut_at,
 completed_at, notes, deployments: list[Deployment(consumer,
 job_definition, deployed_at, deployed_by)])``.
 
-Exit codes: 0 success; 1 refused (a hook failed, a check failed, a resume
-does not match, verify found a mismatch); 2 usage (bad arguments, dirty
-tree, tag exists, missing hooks); 75 the database is unavailable (retry).
+Exit codes (``rapidpipe.exitcodes.ExitCode``): 0 success; 1 refused (a hook
+failed, a check failed, a resume does not match, verify found a mismatch);
+64 usage (bad arguments, dirty tree, tag exists, missing hooks); 70 an
+unexpected error; 75 the database is unavailable (retry).
 
 Order of a cut
 --------------

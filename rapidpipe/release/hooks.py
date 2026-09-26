@@ -18,11 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-#: Exit codes (package docstring, "Exit codes").
-EXIT_SUCCESS = 0
-EXIT_REFUSED = 1
-EXIT_USAGE = 2
-EXIT_TRANSIENT = 75
+from rapidpipe.exitcodes import ExitCode
 
 #: The four hooks ``cut`` runs, in order, and the optional read-only one
 #: ``verify`` runs.
@@ -40,21 +36,24 @@ JOB_DEFINITION_RE = re.compile(r"^[A-Za-z0-9_-]+:[0-9]+$")
 
 
 class ReleaseError(Exception):
-    """Base class; ``exit_code`` is what the command-line tool exits with."""
+    """Base class; ``exit_code`` is what the command-line tool exits with
+    (an :class:`~rapidpipe.exitcodes.ExitCode` member)."""
 
-    exit_code = EXIT_REFUSED
+    exit_code = ExitCode.FAILURE
 
 
 class ReleaseUsage(ReleaseError):
-    """Bad arguments or a precondition the operator must fix first (exit 2)."""
+    """Bad arguments or a precondition the operator must fix first (exit 64,
+    ``ExitCode.USAGE``)."""
 
-    exit_code = EXIT_USAGE
+    exit_code = ExitCode.USAGE
 
 
 class ReleaseRefused(ReleaseError):
-    """A check failed, a hook failed, or a resume does not match (exit 1)."""
+    """A check failed, a hook failed, or a resume does not match (exit 1,
+    ``ExitCode.FAILURE``)."""
 
-    exit_code = EXIT_REFUSED
+    exit_code = ExitCode.FAILURE
 
 
 class HookFailed(ReleaseRefused):

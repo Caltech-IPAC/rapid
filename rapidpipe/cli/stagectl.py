@@ -25,7 +25,8 @@ import importlib
 import sys
 from typing import Any, Sequence
 
-from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
+from rapidpipe.exitcodes import ExitCode
+from rapidpipe.stages.contract import STAGE_NAMES
 
 #: The ``stage`` group's own subcommands; anything else after ``stage`` that
 #: is not an option is taken as a stage name (the legacy form).

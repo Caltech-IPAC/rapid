@@ -33,7 +33,8 @@ the same reason.
 Exit codes, as for the rest of ``rapidpipe run``: 0 success; 64 a usage
 error or a refusal (any ``RunModelError``); 75 transient (an AWS-shaped
 error, the database unavailable, or ``start``'s ``--timeout``); 1 a unit
-failed. ``status`` also exits 2 when something is still running.
+failed. ``status`` also exits 2 (still running, ``ExitCode.INCOMPLETE``)
+when something is still running.
 """
 
 from __future__ import annotations
@@ -64,7 +65,8 @@ from rapidpipe.products.manifest import Manifest, ManifestError, Member, OutputE
 from rapidpipe.products.storage import Location, LocationError, join, parse_location
 from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.repository import RunModelError
-from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
+from rapidpipe.exitcodes import ExitCode
+from rapidpipe.stages.contract import STAGE_NAMES
 
 #: Indirections for tests: ``start --interval`` / ``status --watch`` sleep
 #: through ``sleep``; ``start --timeout`` measures with ``now``.
@@ -74,7 +76,7 @@ now: Callable[[], float] = time.monotonic
 COMMANDS = ("start", "status", "inputs", "compare", "expire", "timings")
 
 _TERMINAL_UNIT_STATES = ("complete", "failed", "cancelled")
-_STATUS_STILL_RUNNING = 2
+_STATUS_STILL_RUNNING = ExitCode.INCOMPLETE
 
 
 class _Exit(Exception):
@@ -173,8 +175,8 @@ def add_parsers(run_subparsers: Any) -> None:
                     "stage, unit, state, selected attempt, last attempt, last "
                     "job and its disposition for every unit. Exit 0 when "
                     "every unit is complete, 1 when any failed or was "
-                    "cancelled, 2 when something is still running or the run "
-                    "has no units.")
+                    "cancelled, 2 (still running) when something is still "
+                    "running or the run has no units.")
     status.add_argument("run_id", help="The run.")
     status.add_argument(
         "--watch", action="store_true",
@@ -312,7 +314,7 @@ def _with_connection(command: str, body: Callable[[Any], int], *,
         except ReleaseDefinitionRefused as exc:
             conn.rollback()
             sys.stderr.write(f"{prog} {command}: {exc}\n")
-            return 1
+            return int(ExitCode.FAILURE)
         except Exception as exc:  # noqa: BLE001 - AWS/botocore-shaped errors
             if main._is_batch_error(exc):
                 conn.rollback()
@@ -697,8 +699,9 @@ def compose_inputs(
         storage.copy(src_loc, src_rel, dest_loc, dst_rel)
         actual = storage.size(dest_loc, dst_rel)
         if actual != expected:
-            raise _Exit(1, f"copied {join(dest_loc, dst_rel)} is {actual} bytes; its "
-                           f"manifest says {expected}")
+            raise _Exit(int(ExitCode.FAILURE),
+                        f"copied {join(dest_loc, dst_rel)} is {actual} bytes; its "
+                        f"manifest says {expected}")
 
     manifest = Manifest(
         run=run_id,
@@ -1078,8 +1081,7 @@ class _StartWalk:
                 if row is not None and row.state in ("failed", "cancelled"):
                     print(f"{stage} {unit_id} is {row.state}", flush=True)
                     print(f"run={args.run_id} state=failed", flush=True)
-                    return 1
-
+                    return int(ExitCode.FAILURE)
                 if (row is not None and row.state == "running" and row.last_attempt
                         and row.last_disposition is None):
                     attempt_id, job_id, outputs = row.last_attempt, row.last_job, row.last_output
@@ -1140,7 +1142,7 @@ class _StartWalk:
                           flush=True)
                     continue
                 print(f"run={args.run_id} state=failed", flush=True)
-                return 1
+                return int(ExitCode.FAILURE)
             if args.stage is not None and not first_look:
                 break
 
@@ -1260,7 +1262,7 @@ def _status_command(args: argparse.Namespace) -> int:
         if not rows:
             return _STATUS_STILL_RUNNING
         if any(s in ("failed", "cancelled") for s in states):
-            return 1
+            return int(ExitCode.FAILURE)
         if all(s == "complete" for s in states):
             return int(ExitCode.SUCCESS)
         return _STATUS_STILL_RUNNING
@@ -1338,7 +1340,7 @@ def _compare_command(args: argparse.Namespace) -> int:
             different |= len(a_ids) != len(b_ids)
 
         print("different" if different else "same")
-        return 1 if different else int(ExitCode.SUCCESS)
+        return int(ExitCode.FAILURE) if different else int(ExitCode.SUCCESS)
 
     return _with_connection("compare", body)
 

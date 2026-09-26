@@ -97,6 +97,7 @@ from pathlib import PurePosixPath
 from typing import Any, Callable, Sequence
 
 from rapidpipe.db import objects as _objects
+from rapidpipe.exitcodes import ExitCode
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
@@ -116,7 +117,8 @@ MAINTAIN, CROSSMATCH, STATISTICS, PRUNE, ALERTS = 6, 7, 8, 9, 10
 #: (each stage's ``DECLARATION.unit``; a unit test checks they agree).
 UNIT_KINDS = {"maintain": "detector-date", "crossmatch": "field", "alerts": "detector-image"}
 
-EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_TIMEOUT = 0, 1, 64, 75
+EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_TIMEOUT = (
+    ExitCode.SUCCESS, ExitCode.FAILURE, ExitCode.USAGE, ExitCode.TRANSIENT_FAILURE)
 
 
 class LoopSpecError(ValueError):
