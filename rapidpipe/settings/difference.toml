@@ -100,9 +100,11 @@ python_cmd = ""
 # "source /sfft_env/bin/activate" for its own venv image. New default.
 activate_cmd = ""
 # New: whether SFFT's output is registered as its own difference-image
-# instance. Off by default: SFFT runs as `dev` runs it, and its files stay
-# diagnostics. Ruling 2.
-register_sfft = false
+# instance, alongside ZOGY's. On by default (lead ruling 2026-09-26):
+# when the stage runs both, both are registered, each under its own
+# `pipelines` row (ZOGY ppid 15, SFFT ppid 16). Which instance consumers
+# see is a promotion choice downstream, not this setting.
+register_sfft = true
 # New: the member SFFT's catalogs detect on (the cross-convolved image
 # when crossconv_flag is set, as in `dev`). Ruling 3.
 detection_role = "difference"

@@ -78,7 +78,9 @@ def _exec_record(outputs) -> dict:
 
 
 def test_full_run_publishes_a_valid_zogy_instance(tmp_path, fakes):
-    code, outputs = _run(tmp_path)
+    # SFFT registration off here to isolate ZOGY's instance; its own
+    # default-on behaviour is covered by test_sfft_is_registered_by_default.
+    code, outputs = _run(tmp_path, overlay="[sfft]\nregister_sfft = false\n")
     assert code == ExitCode.SUCCESS
     manifest = _manifest(outputs)
     assert manifest.stage == "difference"
@@ -342,7 +344,8 @@ def test_uncovered_reference_pixels_are_nan_in_the_difference(tmp_path, fakes):
 
 
 # ----------------------------------------------------------------------
-# SFFT: runs as dev runs it; registration off by default
+# SFFT: runs as dev runs it; registration on by default (lead ruling
+# 2026-09-26), alongside ZOGY, each under its own `pipelines` row
 # ----------------------------------------------------------------------
 
 
@@ -358,10 +361,17 @@ def test_sfft_failure_is_not_fatal_and_is_noted(tmp_path, fakes):
     assert not (outputs / "diff" / "sfftdiffimage_masked_negative.fits").exists()
 
 
-def test_sfft_is_not_registered_by_default(tmp_path, fakes):
+def test_sfft_is_registered_by_default(tmp_path, fakes):
     _, outputs = _run(tmp_path)
+    assert sorted(d.key["differencer"] for d in _entries(_manifest(outputs), "difference-image")) == \
+        ["sfft", "zogy"]
+    assert (outputs / "diff" / "sfftdiffimage_masked.fits").exists()
+
+
+def test_register_sfft_off_registers_zogy_only(tmp_path, fakes):
+    _, outputs = _run(tmp_path, overlay="[sfft]\nregister_sfft = false\n")
     assert [d.key["differencer"] for d in _entries(_manifest(outputs), "difference-image")] == ["zogy"]
-    assert (outputs / "diff" / "sfftdiffimage_masked.fits").exists()   # a diagnostic
+    assert (outputs / "diff" / "sfftdiffimage_masked.fits").exists()   # still a diagnostic
 
 
 def test_register_sfft_adds_its_own_instance(tmp_path, fakes):
@@ -396,9 +406,11 @@ def test_run_sfft_off_runs_no_sfft(tmp_path, fakes):
 
 
 def test_missing_photutils_catalog_sets_its_bit_and_a_null_count(tmp_path, fakes):
+    # SFFT registration off: this is about ZOGY's own catalog_outcome_bits
+    # and source-catalog entries, not the two-differencer case.
     _, catalog = fakes
     catalog.fail = ("positive zogy difference image", "negative naive difference image")
-    code, outputs = _run(tmp_path)
+    code, outputs = _run(tmp_path, overlay="[sfft]\nregister_sfft = false\n")
     assert code == ExitCode.SUCCESS
     manifest = _manifest(outputs)
     registration = _entries(manifest, "difference-image")[0].registration

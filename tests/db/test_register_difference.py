@@ -173,11 +173,14 @@ def _diffimmeta_row(cur, pid):
 
 def test_register_writes_diffimages_and_diffimmeta_for_a_legacy_reference(
         conn, tmp_path, monkeypatch):
+    # SFFT registration off here to isolate ZOGY's own row; the two-instance
+    # case is test_register_writes_an_sfft_instance_under_its_pipelines_row.
     l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)
     run_id, outputs = _run_difference(
-        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid,
+        overlay="[sfft]\nregister_sfft = false\n")
     manifest = Manifest.read(outputs / "manifest.json")
     entry = next(e for e in manifest.outputs if e.kind == "difference-image")
     registration = entry.registration
@@ -254,7 +257,8 @@ def test_replaying_the_manifest_writes_nothing_new(conn, tmp_path, monkeypatch):
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)
     run_id, outputs = _run_difference(
-        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid)
+        conn, tmp_path, monkeypatch, l2_instance=l2_instance, rfid=rfid,
+        overlay="[sfft]\nregister_sfft = false\n")
     assert _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, "first")[0] == 0
     assert _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, "second")[0] == 0
     with conn.cursor() as cur:

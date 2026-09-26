@@ -13,7 +13,7 @@
   },
   "fake": {
     "exit_code": 0,
-    "entries": {"difference-image": 1, "source-catalog": 4},
+    "entries": {"difference-image": 2, "source-catalog": 8},
     "difference_image": {
       "differencer": "zogy",
       "roles": ["difference", "uncertainty", "significance", "psf"],
@@ -48,7 +48,7 @@
   },
   "real": {
     "exit_code": 0,
-    "entries": {"difference-image": 1, "source-catalog": [2, 4]},
+    "entries": {"difference-image": [1, 2], "source-catalog": [2, 8]},
     "difference_image": {
       "differencer": "zogy",
       "roles": ["difference", "uncertainty", "significance", "psf"],
