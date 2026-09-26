@@ -607,84 +607,93 @@ def run_stage(
         settings_is_s3 = settings_location is not None and settings_location.is_s3()
         fetch_start = time.monotonic()
 
-        needs_work_dir = (
-            inputs_location.is_s3() or outputs_location.is_s3() or settings_is_s3)
-        if needs_work_dir:
-            _work_root().mkdir(parents=True, exist_ok=True)
-            work_dir = Path(tempfile.mkdtemp(
-                prefix=f"rapidpipe-{declaration.name}-{args.attempt_id}-",
-                dir=str(_work_root())))
-
-        # The settings overlay is fetched (if it names an s3:// location)
-        # and resolved before --dry-run's early return, since --dry-run
-        # validates settings too. A missing/unreadable overlay -- local or
-        # S3 -- is a usage error (exit 64): the overlay is an argument, not
-        # a declared input, so this does not go through
-        # _map_storage_error's InputRejected/TransientFailure mapping.
-        settings_overlay_path = args.settings
-        if settings_is_s3:
-            assert work_dir is not None
-            assert settings_location is not None
-            try:
-                settings_overlay_path = fetch_object(
-                    settings_location, "",
-                    work_dir / "settings-overlay.toml")
-            except LocationError as exc:
-                raise UsageError(str(exc)) from exc
-            except Exception as exc:  # noqa: BLE001
-                raise UsageError(
-                    f"could not fetch --settings overlay {args.settings!r}: {exc}"
-                ) from exc
-
         try:
-            settings = resolve_settings(
-                declaration.settings_schema_path, settings_overlay_path)
-        except (SettingsError, FileNotFoundError, OSError) as exc:
-            raise UsageError(str(exc)) from exc
-        settings_hash = canonical_hash(settings)
+            needs_work_dir = (
+                inputs_location.is_s3() or outputs_location.is_s3() or settings_is_s3)
+            if needs_work_dir:
+                _work_root().mkdir(parents=True, exist_ok=True)
+                work_dir = Path(tempfile.mkdtemp(
+                    prefix=f"rapidpipe-{declaration.name}-{args.attempt_id}-",
+                    dir=str(_work_root())))
 
-        if inputs_location.is_s3():
-            assert work_dir is not None
-            inputs_dir = work_dir / "inputs"
-        else:
-            assert inputs_location.path is not None
-            inputs_dir = inputs_location.path
+            # The settings overlay is fetched (if it names an s3:// location)
+            # and resolved before --dry-run's early return, since --dry-run
+            # validates settings too. A missing/unreadable overlay -- local
+            # or S3 -- is a usage error (exit 64): the overlay is an
+            # argument, not a declared input, so this does not go through
+            # _map_storage_error's InputRejected/TransientFailure mapping.
+            settings_overlay_path = args.settings
+            if settings_is_s3:
+                assert work_dir is not None
+                assert settings_location is not None
+                try:
+                    settings_overlay_path = fetch_object(
+                        settings_location, "",
+                        work_dir / "settings-overlay.toml")
+                except LocationError as exc:
+                    raise UsageError(str(exc)) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise UsageError(
+                        f"could not fetch --settings overlay {args.settings!r}: {exc}"
+                    ) from exc
 
-        if outputs_location.is_s3():
-            assert work_dir is not None
-            outputs_dir = work_dir / "outputs"
-        else:
-            assert outputs_location.path is not None
-            outputs_dir = outputs_location.path
-
-        # The per-stage log file (task c): skipped under --dry-run, which
-        # promises to write nothing. outputs_dir is the real, final
-        # location for a local --outputs, so the file lives there
-        # directly for the rest of this invocation, per the local branch
-        # of _close_stage_log's upload skip.
-        if not args.dry_run:
-            outputs_dir.mkdir(parents=True, exist_ok=True)
-            log_path = outputs_dir / "log" / f"{declaration.name}.log"
-            file_handler = add_stage_file_handler(
-                log_path, run_id=args.run_id, attempt_id=args.attempt_id,
-                stage=declaration.name, unit_id=args.unit_id)
-
-        if inputs_location.is_s3():
-            inputs_dir.mkdir(parents=True, exist_ok=True)
             try:
-                if args.dry_run:
-                    # Validate without fetching the whole prefix: one object.
-                    fetch_object(
-                        inputs_location, "manifest.json",
-                        inputs_dir / "manifest.json")
-                else:
-                    fetch_prefix(inputs_location, inputs_dir)
-            except LocationError as exc:
-                raise InputRejected(str(exc)) from exc
-            except Exception as exc:  # noqa: BLE001
-                raise _map_storage_error(exc) from exc
+                settings = resolve_settings(
+                    declaration.settings_schema_path, settings_overlay_path)
+            except (SettingsError, FileNotFoundError, OSError) as exc:
+                raise UsageError(str(exc)) from exc
+            settings_hash = canonical_hash(settings)
 
-        input_manifest = _read_input_manifest_from(inputs_dir, args.inputs)
+            if inputs_location.is_s3():
+                assert work_dir is not None
+                inputs_dir = work_dir / "inputs"
+            else:
+                assert inputs_location.path is not None
+                inputs_dir = inputs_location.path
+
+            if outputs_location.is_s3():
+                assert work_dir is not None
+                outputs_dir = work_dir / "outputs"
+            else:
+                assert outputs_location.path is not None
+                outputs_dir = outputs_location.path
+
+            # The per-stage log file (task c): skipped under --dry-run,
+            # which promises to write nothing. outputs_dir is the real,
+            # final location for a local --outputs, so the file lives
+            # there directly for the rest of this invocation, per the
+            # local branch of _close_stage_log's upload skip.
+            if not args.dry_run:
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                log_path = outputs_dir / "log" / f"{declaration.name}.log"
+                file_handler = add_stage_file_handler(
+                    log_path, run_id=args.run_id, attempt_id=args.attempt_id,
+                    stage=declaration.name, unit_id=args.unit_id)
+
+            if inputs_location.is_s3():
+                inputs_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    if args.dry_run:
+                        # Validate without fetching the whole prefix: one object.
+                        fetch_object(
+                            inputs_location, "manifest.json",
+                            inputs_dir / "manifest.json")
+                    else:
+                        fetch_prefix(inputs_location, inputs_dir)
+                except LocationError as exc:
+                    raise InputRejected(str(exc)) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise _map_storage_error(exc) from exc
+
+            input_manifest = _read_input_manifest_from(inputs_dir, args.inputs)
+        except BaseException:
+            # The fetch phase reached here (fetch_start is always set just
+            # above), and ran for a measurable time before this failure, so
+            # it gets a real elapsed time, not the "-" that means a phase
+            # never started (the same convention the body phase already
+            # uses, just below).
+            fetch_elapsed = time.monotonic() - fetch_start
+            raise
         fetch_elapsed = time.monotonic() - fetch_start
 
         context = StageContext(
@@ -792,14 +801,21 @@ def run_stage(
             raise StageError(f"completion manifest failed validation: {exc}") from exc
 
         publish_start = time.monotonic()
-        if outputs_location.is_s3():
-            try:
-                publish_dir(outputs_dir, outputs_location)
-            except Exception as exc:  # noqa: BLE001
-                raise _map_storage_error(exc) from exc
-            published_manifest_ref = join(outputs_location, "manifest.json")
-        else:
-            published_manifest_ref = str(manifest_path)
+        try:
+            if outputs_location.is_s3():
+                try:
+                    publish_dir(outputs_dir, outputs_location)
+                except Exception as exc:  # noqa: BLE001
+                    raise _map_storage_error(exc) from exc
+                published_manifest_ref = join(outputs_location, "manifest.json")
+            else:
+                published_manifest_ref = str(manifest_path)
+        except BaseException:
+            # As with the fetch phase above: publish_start is always set
+            # just above, so a publish that fails still ran for a
+            # measurable time and gets a real elapsed value, not "-".
+            publish_elapsed = time.monotonic() - publish_start
+            raise
         publish_elapsed = time.monotonic() - publish_start
 
         total_elapsed = time.monotonic() - total_start
