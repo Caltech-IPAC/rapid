@@ -9,10 +9,10 @@ so a failure leaves the ``releases`` row at its last good state for
 ``--resume``.
 
 This module imports nothing from ``rapidpipe.stages``, ``rapidpipe.launch``
-or ``rapidpipe.cli``; the exit codes in ``hooks`` mirror
-``rapidpipe.stages.contract.ExitCode`` values by number rather than by
-import (``rapidpipe/__init__.py``: ``release`` may import ``db`` and
-``runs`` only).
+or ``rapidpipe.cli`` (``rapidpipe/__init__.py``: ``release`` may import
+``db`` and ``runs`` only); the exit codes in ``hooks`` are
+``rapidpipe.exitcodes.ExitCode`` members, a stdlib-only top-level module
+every subpackage may import.
 """
 
 from __future__ import annotations

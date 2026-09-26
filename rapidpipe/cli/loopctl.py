@@ -24,7 +24,7 @@ from typing import Any
 
 from rapidpipe.cli import runctl
 from rapidpipe.launch import loop as launch_loop
-from rapidpipe.stages.contract import ExitCode
+from rapidpipe.exitcodes import ExitCode
 
 
 def _date(text: str) -> _dt.date:

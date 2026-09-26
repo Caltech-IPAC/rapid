@@ -60,6 +60,7 @@ import argparse
 import getpass
 import importlib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -88,7 +89,8 @@ from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
 from rapidpipe.selftest import run as run_selftest
 from rapidpipe.selftest.runner import STAGE_NAMES as SELFTEST_STAGE_NAMES
-from rapidpipe.stages.contract import STAGE_NAMES, ExitCode
+from rapidpipe.exitcodes import ArgumentParser, ExitCode
+from rapidpipe.stages.contract import STAGE_NAMES
 
 #: Recognised as network-shaped, the same rule
 #: ``rapidpipe.stages.contract._map_storage_error`` uses: matched by class
@@ -172,7 +174,7 @@ def _resolve_register_unit_id(*, unit_id_arg: str | None, inputs_location_arg: s
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         prog="rapidpipe", description="The RAPID pipeline command-line tool.")
     parser.add_argument(
         "--version", action="version", version=f"rapidpipe {__version__}")
@@ -600,7 +602,7 @@ def _run_create_command(args: argparse.Namespace) -> int:
         except ReleaseNotComplete as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run create: {exc}\n")
-            return 2
+            return int(ExitCode.USAGE)
         except RunModelError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run create: {exc}\n")
@@ -802,8 +804,7 @@ def _run_show_command(args: argparse.Namespace) -> int:
             run_row = cur.fetchone()
             if run_row is None:
                 sys.stderr.write(f"rapidpipe run show: no such run: {args.run_id}\n")
-                return 1
-
+                return int(ExitCode.FAILURE)
             columns = [
                 "id", "kind", "owner", "purpose", "selected_stages", "state",
                 "code_revision", "image_digest", "schema_version", "lane",
@@ -1072,7 +1073,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
             # names a job definition revision that is not ACTIVE.
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")
-            return 1
+            return int(ExitCode.FAILURE)
         except RunModelError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run submit: {exc}\n")
@@ -1348,23 +1349,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         list(argv) if argv is not None else sys.argv[1:])
     args = parser.parse_args(argv_list)
 
-    if args.command == "stage":
-        return stagectl.dispatch(args, _run_stage_command)
+    # The unclassified-error boundary: an unexpected exception escaping a
+    # command is logged with its traceback and exits 70. SystemExit and
+    # KeyboardInterrupt are not Exception subclasses and pass through.
+    try:
+        if args.command == "stage":
+            return stagectl.dispatch(args, _run_stage_command)
 
-    if args.command == "selftest":
-        return _run_selftest_command(args)
+        if args.command == "selftest":
+            return _run_selftest_command(args)
 
-    if args.command == "run":
-        return _run_command(args)
+        if args.command == "run":
+            return _run_command(args)
 
-    if args.command == "release":
-        return release_cli.dispatch(args)
+        if args.command == "release":
+            return release_cli.dispatch(args)
 
-    if args.command == "check":
-        return checkctl.dispatch(args)
+        if args.command == "check":
+            return checkctl.dispatch(args)
 
-    if args.command == "loop":
-        return loopctl.dispatch(args)
+        if args.command == "loop":
+            return loopctl.dispatch(args)
+    except Exception:  # noqa: BLE001 - the unclassified-error boundary
+        logging.getLogger("rapidpipe.cli").exception(
+            "rapidpipe %s: unexpected error", args.command)
+        return int(ExitCode.STAGE_ERROR)
 
     parser.print_help()
     return int(ExitCode.SUCCESS) if args.command is None else int(ExitCode.USAGE)

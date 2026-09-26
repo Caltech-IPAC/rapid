@@ -32,7 +32,7 @@ import sys
 from typing import Any
 
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
-from rapidpipe.stages.contract import ExitCode
+from rapidpipe.exitcodes import ExitCode
 
 
 def add_parser(subparsers: Any) -> None:
@@ -174,7 +174,7 @@ def _run_command(args: argparse.Namespace) -> int:
             print(f"no applicable checks for run {args.run_id} under policy {policy.ref}")
         for result in results:
             print(result.line())
-        return 1 if any(r.outcome != "passed" for r in results) else int(ExitCode.SUCCESS)
+        return int(ExitCode.FAILURE) if any(r.outcome != "passed" for r in results) else int(ExitCode.SUCCESS)
 
     return _with_connection("run", body)
 

@@ -4,8 +4,9 @@
 ``list``, ``verify``) to a given parser -- the ``release`` subparser of
 ``rapidpipe.cli.main``, or a fresh top-level one here -- and
 :func:`dispatch` runs the parsed arguments, so both forms behave
-identically. Exit codes: 0 success, 1 refused or mismatch, 2 usage, 75
-database unavailable (package docstring, "Exit codes").
+identically. Exit codes (``rapidpipe.exitcodes.ExitCode``): 0 success, 1
+refused or mismatch, 64 usage, 70 an unexpected error, 75 database
+unavailable (package docstring, "Exit codes").
 """
 
 from __future__ import annotations
@@ -13,18 +14,15 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import logging
 import sys
 from typing import Callable, Sequence
 
+from rapidpipe.exitcodes import ArgumentParser, ExitCode
 from rapidpipe.release import core
-from rapidpipe.release.hooks import (
-    EXIT_REFUSED,
-    EXIT_SUCCESS,
-    EXIT_TRANSIENT,
-    EXIT_USAGE,
-    HOOKS,
-    ReleaseError,
-)
+from rapidpipe.release.hooks import HOOKS, ReleaseError
+
+_logger = logging.getLogger("rapidpipe.release")
 
 
 def _default_connect(**kwargs):
@@ -41,7 +39,7 @@ connect: Callable = _default_connect
 def build_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
     """Add the release subcommands to ``parser`` (or a new one); return it."""
     if parser is None:
-        parser = argparse.ArgumentParser(
+        parser = ArgumentParser(
             prog="python -m rapidpipe.release",
             description="Cut, show, list and verify releases of the rebuilt pipeline.")
     sub = parser.add_subparsers(dest="release_command")
@@ -103,7 +101,7 @@ def dispatch(args: argparse.Namespace) -> int:
     command = getattr(args, "release_command", None)
     if command is None:
         sys.stderr.write("rapidpipe release: a subcommand is required: cut, show, list, verify\n")
-        return EXIT_USAGE
+        return int(ExitCode.USAGE)
     try:
         from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
     except ImportError:  # psycopg2 absent: only a dry-run can proceed
@@ -114,10 +112,10 @@ def dispatch(args: argparse.Namespace) -> int:
         cm = _open(command) if needs_db else _no_connection()
     except ConnectionConfigError as exc:  # type: ignore[misc]
         sys.stderr.write(f"rapidpipe release {command}: database configuration error: {exc}\n")
-        return EXIT_USAGE
+        return int(ExitCode.USAGE)
     except ConnectionUnavailable as exc:  # type: ignore[misc]
         sys.stderr.write(f"rapidpipe release {command}: database unavailable: {exc}\n")
-        return EXIT_TRANSIENT
+        return int(ExitCode.TRANSIENT_FAILURE)
 
     try:
         with cm as conn:
@@ -129,7 +127,7 @@ def dispatch(args: argparse.Namespace) -> int:
                 raise
     except ReleaseError as exc:
         sys.stderr.write(f"rapidpipe release {command}: {exc}\n")
-        return exc.exit_code
+        return int(exc.exit_code)
 
 
 def _run(command: str, args: argparse.Namespace, conn) -> int:
@@ -140,32 +138,40 @@ def _run(command: str, args: argparse.Namespace, conn) -> int:
             force_resume=args.force_resume)
         if isinstance(result, core.Release):
             print(json.dumps(result.to_json(), indent=2, sort_keys=True))
-        return EXIT_SUCCESS
+        return int(ExitCode.SUCCESS)
     if command == "show":
         print(json.dumps(core.show(conn, args.tag).to_json(), indent=2, sort_keys=True))
-        return EXIT_SUCCESS
+        return int(ExitCode.SUCCESS)
     if command == "list":
         for r in core.list_releases(conn):
             cut_at = r.cut_at.isoformat(timespec="seconds") if r.cut_at else ""
             print(f"{r.tag}\t{r.state}\t{r.source_revision[:12]}\t"
                   f"{(r.image_digest or '')[:19]}\t{cut_at}")
-        return EXIT_SUCCESS
+        return int(ExitCode.SUCCESS)
     if command == "verify":
         problems = core.verify(conn, args.tag, args.repo, args.hooks_dir)
         for problem in problems:
             print(f"MISMATCH {problem}")
         if problems:
-            return EXIT_REFUSED
+            return int(ExitCode.FAILURE)
         print(f"release {args.tag}: verified")
-        return EXIT_SUCCESS
+        return int(ExitCode.SUCCESS)
     sys.stderr.write(f"rapidpipe release: unknown subcommand {command!r}\n")
-    return EXIT_USAGE
+    return int(ExitCode.USAGE)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else sys.argv[1:])
-    return dispatch(args)
+    try:
+        return dispatch(args)
+    except Exception:  # noqa: BLE001 - the unclassified-error boundary
+        # SystemExit and KeyboardInterrupt are not Exception subclasses and
+        # pass through; ReleaseError is mapped inside dispatch().
+        _logger.exception(
+            "rapidpipe release %s: unexpected error",
+            getattr(args, "release_command", None))
+        return int(ExitCode.STAGE_ERROR)
 
 
 if __name__ == "__main__":

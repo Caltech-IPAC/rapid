@@ -14,6 +14,7 @@ import pytest
 
 from rapidpipe.cli import main as cli
 from rapidpipe.cli import runctl
+from rapidpipe.exitcodes import ExitCode
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import (
     Inputs,
@@ -1042,7 +1043,7 @@ def test_cleanup_s3_client_factory_unset_is_none(monkeypatch, fake_boto3):
 
     with pytest.raises(SystemExit) as exc:
         cli.main(["run", "expire", "--now", "yesterday"])
-    assert exc.value.code == 2
+    assert exc.value.code == int(ExitCode.USAGE)
 
 
 def test_expire_and_delete_role_failure_exit_75(monkeypatch, fake_conn, fake_boto3, capsys):

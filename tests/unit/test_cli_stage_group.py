@@ -10,6 +10,7 @@ import pytest
 
 from rapidpipe.cli import main as cli
 from rapidpipe.cli import stagectl
+from rapidpipe.exitcodes import ExitCode
 
 #: What ``rapidpipe.launch.batch.submit_unit`` puts after the entrypoint.
 LAUNCHER_ARGV = [
@@ -110,7 +111,7 @@ def test_stage_describe_admit(capsys):
 def test_stage_describe_unknown_is_a_usage_error():
     with pytest.raises(SystemExit) as exc:
         cli.main(["stage", "describe", "bogus"])
-    assert exc.value.code == 2
+    assert exc.value.code == int(ExitCode.USAGE)
 
 
 def _subcommand_paths(parser: argparse.ArgumentParser, prefix: tuple[str, ...] = ()):

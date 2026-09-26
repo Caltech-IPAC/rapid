@@ -36,10 +36,10 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from rapidpipe.exitcodes import ArgumentParser, ExitCode
 from rapidpipe.log import add_stage_file_handler, remove_file_handler, stage_log_context
 from rapidpipe.products.manifest import (
     Inputs,
@@ -94,41 +94,19 @@ UNIT_KINDS = ("exposure", "detector-image", "field", "processing-date", "detecto
 DB_ACCESS_LEVELS = ("none", "read", "read-write")
 
 
-class ExitCode(IntEnum):
-    """The stage contract's six exit codes and the caller's action.
-
-    Values and meanings are fixed by the contract's "Exit codes" table;
-    do not renumber or add to this list without a contract change.
-    """
-
-    SUCCESS = 0
-    """Success, manifest published. Caller's action: none."""
-
-    USAGE = 64
-    """Bad arguments, invalid settings, or missing environment.
-    Caller's action: fail, no retry."""
-
-    INPUT_REJECTED = 65
-    """A declared input was absent, corrupt or incompatible once its
-    storage was reached. Caller's action: fail, no retry."""
-
-    NOT_IMPLEMENTED = 69
-    """Declared, not implemented in this build: the stage has a real
-    :class:`StageDeclaration` and validates its arguments, settings and
-    input manifest like any other stage, but its science has not been
-    ported yet (supervisor step 8, 2026-09-24, ruling R9). sysexits'
-    EX_UNAVAILABLE; chosen over 64 (which would misreport a correct
-    invocation as a usage error) and 70 (which calls for investigation of
-    something unexpected, when the absence is deliberate and known).
-    Caller's action: fail, no retry."""
-
-    STAGE_ERROR = 70
-    """Unclassified stage error; stop for investigation.
-    Caller's action: fail, no retry."""
-
-    TRANSIENT_FAILURE = 75
-    """A recognised temporary dependency failure; repeating the same work
-    may succeed. Caller's action: retry within the limit."""
+#: The stage contract's permitted subset of :class:`ExitCode` (the
+#: contract's "Exit codes" table): a stage returns only these six, and a
+#: :class:`StageDeclaration` declaring any other member is rejected by
+#: validate(). ``FAILURE`` (1) and ``INCOMPLETE`` (2) are command-line
+#: outcomes, never a stage's.
+STAGE_EXIT_CODES: tuple[ExitCode, ...] = (
+    ExitCode.SUCCESS,
+    ExitCode.USAGE,
+    ExitCode.INPUT_REJECTED,
+    ExitCode.NOT_IMPLEMENTED,
+    ExitCode.STAGE_ERROR,
+    ExitCode.TRANSIENT_FAILURE,
+)
 
 
 class StageContractError(Exception):
@@ -187,8 +165,8 @@ class StageDeclaration:
     ``consumes`` and ``produces`` name the product kinds the stage requires
     and writes; ``settings_schema_path`` is the stage's
     ``settings/<name>.toml`` defaults file, or ``None`` if it declares no
-    settings. ``supported_exit_codes`` must be a subset of the six defined
-    in :class:`ExitCode`, and 0 is always implicitly supported.
+    settings. ``supported_exit_codes`` must be a subset of the six in
+    :data:`STAGE_EXIT_CODES`, and 0 is always implicitly supported.
     """
 
     name: str
@@ -218,7 +196,7 @@ class StageDeclaration:
             raise ValueError(
                 f"unknown database_access {self.database_access!r}; "
                 f"expected one of {DB_ACCESS_LEVELS}")
-        unknown_codes = set(self.supported_exit_codes) - set(ExitCode)
+        unknown_codes = set(self.supported_exit_codes) - set(STAGE_EXIT_CODES)
         if unknown_codes:
             raise ValueError(f"unsupported exit codes declared: {unknown_codes}")
 
@@ -288,7 +266,7 @@ class StageResult:
 
 
 def _build_parser(declaration: StageDeclaration) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         prog=f"rapidpipe stage {declaration.name}", add_help=True)
     parser.add_argument("--run", required=True, dest="run_id")
     parser.add_argument("--unit", required=True, dest="unit_id")
@@ -581,8 +559,9 @@ def run_stage(
         try:
             args = parser.parse_args(list(argv))
         except SystemExit as exc:
-            # argparse calls sys.exit(2) on a usage error; translate to the
-            # contract's usage code instead of letting 2 leak out.
+            # argparse exits 64 on a usage error through
+            # rapidpipe.exitcodes.ArgumentParser; translated here as belt
+            # and braces.
             logger.info(
                 "stage=%s exit=%s reason=argparse", declaration.name, ExitCode.USAGE)
             return int(ExitCode.USAGE) if exc.code != 0 else int(ExitCode.SUCCESS)

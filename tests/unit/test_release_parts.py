@@ -11,6 +11,7 @@ import json
 import pytest
 
 from rapidpipe.cli import main as cli
+from rapidpipe.exitcodes import ExitCode
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.release import __main__ as release_main
 from rapidpipe.release import core
@@ -121,12 +122,12 @@ def test_both_forms_are_one_dry_run_code_path(repo, capsys, monkeypatch):
     assert git(repo, "tag", "-l") == ""
 
 
-def test_usage_refusals_exit_2(repo, monkeypatch, capsys):
+def test_usage_refusals_exit_64(repo, monkeypatch, capsys):
     monkeypatch.setattr(release_main, "connect", lambda **_kw: contextlib.nullcontext(None))
     (repo / "database" / "migrations" / "README.md").write_text("dirty\n")
-    assert release_main.main(["cut", "--dry-run", "--repo", str(repo)]) == 2
+    assert release_main.main(["cut", "--dry-run", "--repo", str(repo)]) == int(ExitCode.USAGE)
     assert "uncommitted" in capsys.readouterr().err
-    assert release_main.main([]) == 2
+    assert release_main.main([]) == int(ExitCode.USAGE)
 
 
 def test_list_and_show_print_the_rows(monkeypatch, capsys):
@@ -329,5 +330,5 @@ def test_run_create_refuses_a_release_that_is_not_complete(monkeypatch, capsys, 
     monkeypatch.setattr(repository, "create_run", lambda *a, **k: pytest.fail("no run"))
     rc = cli.main(["run", "create", "--kind", "scratch", "--purpose", "p",
                    "--stages", "admit", "--release", "rebuild-v0.1"])
-    assert rc == 2
+    assert rc == int(ExitCode.USAGE)
     assert f"is {state}, not complete" in capsys.readouterr().err

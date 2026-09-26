@@ -58,6 +58,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from rapidpipe.exitcodes import ExitCode
 from rapidpipe.products.manifest import Manifest, ManifestError
 from rapidpipe.products.storage import fetch_object, join, parse_location
 from rapidpipe.runs import inputs as run_inputs
@@ -81,7 +82,7 @@ _UNRESOLVED_BATCH_STATUSES = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "R
 #: describe_jobs accepts at most 100 job ids per call (a Batch API limit).
 _DESCRIBE_JOBS_BATCH_SIZE = 100
 
-_TRANSIENT_FAILURE_CODE = 75
+_TRANSIENT_FAILURE_CODE = ExitCode.TRANSIENT_FAILURE
 
 #: Unit states :func:`~rapidpipe.runs.repository.select_attempt` refuses
 #: to touch (mirrors ``rapidpipe.runs.repository._TERMINAL_UNIT_STATES``,

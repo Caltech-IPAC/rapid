@@ -71,6 +71,7 @@ modules never import other stage modules, `launch`, or `cli`;
 | `checks/` | `registry.py`, `builtin.py`, `policy.py`, `runner.py`, and shipped policies under `policies/<name>@<version>.toml` (`rebuild-trial@1`, `rebuild-strict@1`). |
 | `cli/` | The `rapidpipe` command-line tool: `main.py` dispatches to `runctl.py` (`run ...`), `stagectl.py` (`stage ...`), `checkctl.py` (`check ...`), `loopctl.py` (`loop ...`); `release` dispatches into `rapidpipe.release`. |
 | `selftest/` | `runner.py` plus per-stage modules and `support/` fakes; drives `make stage-<name>` and `rapidpipe selftest --stage <name> [--real-tools]`. `fixtures/` ships each stage's packaged expected output. |
+| `exitcodes.py` | A bare top-level module, not a subpackage: `ExitCode`, the one exit-code vocabulary, and `ArgumentParser` (parse failures exit 64). Stdlib-only, so every subpackage, `science` included, may import it. |
 | `settings/` | Per-stage default settings and schema, `<name>.toml`, merged recursively with a `--settings` overlay. |
 
 ## Migrations
@@ -150,8 +151,12 @@ else goes through `rapidpipe.log`, which writes one line shape to stderr
 a stage invocation, the same lines to `log/<stage>.log` beside the
 attempt's outputs. A new subcommand follows the same split, and a
 command whose output is a record should offer `--json` (the direction
-pass's proposal, 2026-09-26). Exit codes are the tables on the
-`rapid_docs` tool and stage-contract pages; do not invent a new one.
+pass's proposal, 2026-09-26). The exit-code vocabulary is
+`rapidpipe/exitcodes.py` (`ExitCode`); stages use its subset
+`STAGE_EXIT_CODES` (`rapidpipe/stages/contract.py`); every parser is
+`rapidpipe.exitcodes.ArgumentParser`, so a parse failure exits 64. The
+tables on the `rapid_docs` tool and stage-contract pages document it; do
+not invent a new code or a second list.
 `RAPIDPIPE_LOG_LEVEL` sets the level; `--profile` (or
 `RAPIDPIPE_PROFILE=1`) profiles a stage body on a scratch run.
 
