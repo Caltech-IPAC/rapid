@@ -703,7 +703,8 @@ def _with_batch_scheduler_metadata(
     """
     record = dict(execution_record)
     scheduler_metadata = dict(record.get("scheduler_metadata") or {})
-    scheduler_metadata["batch"] = _batch_scheduler_metadata(job)
+    scheduler_metadata["batch"] = {
+        **(scheduler_metadata.get("batch") or {}), **_batch_scheduler_metadata(job)}
     stage_timing = record.get("timing")
     if stage_timing:
         scheduler_metadata["stage"] = {
