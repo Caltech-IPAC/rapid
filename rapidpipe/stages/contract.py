@@ -798,20 +798,9 @@ def run_stage(
             except Exception as exc:  # noqa: BLE001
                 raise _map_storage_error(exc) from exc
             published_manifest_ref = join(outputs_location, "manifest.json")
-            # The work directory holding the log file is about to be
-            # removed (below); close it and re-upload it on its own now,
-            # while it still exists. This means the S3 copy cannot itself
-            # contain this function's very last line (logged after this
-            # point) -- the same limitation the execution record's
-            # "timing" has no "ended" for, and for the same reason.
-            _close_stage_log(upload=True)
         else:
             published_manifest_ref = str(manifest_path)
         publish_elapsed = time.monotonic() - publish_start
-
-        if work_dir is not None:
-            shutil.rmtree(work_dir, ignore_errors=True)
-            work_dir = None
 
         total_elapsed = time.monotonic() - total_start
         logger.info(
@@ -821,9 +810,20 @@ def run_stage(
             context.attempt_id, int(ExitCode.SUCCESS), published_manifest_ref,
             _fmt_phase(total_elapsed), _fmt_phase(fetch_elapsed),
             _fmt_phase(body_elapsed), _fmt_phase(publish_elapsed))
-        # A local --outputs never removed the handler above: it is still
-        # attached, so the line just logged is in the file too.
-        _close_stage_log(upload=False)
+        # Close the per-stage log now, before the work directory holding
+        # it is removed below, and only after the line just logged above:
+        # for an S3 --outputs this re-upload is the log's only trip to
+        # S3, so it must happen after the final success line, not before,
+        # for the uploaded copy to contain it. A local --outputs writes
+        # straight into its final location, so closing here (rather than
+        # leaving the handler attached) only stops further writes; either
+        # way the line above is already in the file.
+        _close_stage_log(upload=True)
+
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            work_dir = None
+
         return int(ExitCode.SUCCESS)
 
     except StageContractError as exc:
