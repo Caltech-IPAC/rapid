@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -500,6 +501,109 @@ def test_status_unknown_run_and_batch_error(monkeypatch, fake_conn, capsys):
     assert cli.main(["run", "status", "NOPE"]) == 64
     assert cli.main(["run", "status", "R"]) == 75
     assert "AWS error" in capsys.readouterr().err
+
+
+# ======================================================================
+# run timings
+# ======================================================================
+
+def _timings_setup(monkeypatch, rows, *, capture=None):
+    monkeypatch.setattr(runctl, "_run_row",
+                        lambda conn, run_id: runctl.RunRow("scratch", [], "open", None)
+                        if run_id == "R" else None)
+
+    def _fake_timings_rows(conn, run_id, *, stage=None):
+        if capture is not None:
+            capture["stage"] = stage
+        return rows
+
+    monkeypatch.setattr(runctl, "_timings_rows", _fake_timings_rows)
+
+
+_ROW_WITH_BATCH = (
+    # started/ended are what psycopg2 actually hands back for a
+    # timestamptz column: real datetime objects, not strings.
+    "admit", "U1", "A1", "succeeded",
+    datetime(2023, 11, 14, 22, 14, 0, tzinfo=timezone.utc),
+    datetime(2023, 11, 14, 22, 14, 35, tzinfo=timezone.utc),
+    {"batch": {"created_at": "2023-11-14T22:13:20Z", "started_at": "2023-11-14T22:13:30Z",
+              "stopped_at": "2023-11-14T22:14:30Z"}},
+)
+_ROW_NO_BATCH = (
+    "admit", "U2", "A2", "succeeded",
+    datetime(2023, 11, 14, 22, 14, 0, tzinfo=timezone.utc),
+    datetime(2023, 11, 14, 22, 14, 5, tzinfo=timezone.utc), {},
+)
+
+
+def test_timings_unknown_run_exits_64(monkeypatch, fake_conn, capsys):
+    _timings_setup(monkeypatch, [])
+    assert cli.main(["run", "timings", "NOPE"]) == 64
+    assert "no such run: NOPE" in capsys.readouterr().err
+
+
+def test_timings_text_output_with_and_without_batch_metadata(monkeypatch, fake_conn, capsys):
+    _timings_setup(monkeypatch, [_ROW_WITH_BATCH, _ROW_NO_BATCH])
+    assert cli.main(["run", "timings", "R"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "\t".join(runctl._TIMINGS_COLUMNS)
+
+    with_batch = out[1].split("\t")
+    assert with_batch[:4] == ["admit", "U1", "A1", "succeeded"]
+    assert with_batch[4] == "10.0"  # queue_s: started_at - created_at
+    assert with_batch[5] == "60.0"  # exec_s: stopped_at - started_at
+    # fetch/body/publish are never persisted (see AttemptTiming's docstring).
+    assert with_batch[6:9] == ["-", "-", "-"]
+    assert with_batch[9] == "5.0"  # reconcile_lag_s: ended - stopped_at
+    assert with_batch[10] == "false"  # over_30m
+
+    no_batch = out[2].split("\t")
+    assert no_batch[:4] == ["admit", "U2", "A2", "succeeded"]
+    assert no_batch[4:] == ["-"] * 7
+
+    # The per-stage summary follows a blank line.
+    assert out[3] == ""
+    assert out[4] == "stage\tcount\tmedian_exec_s\tp90_exec_s\tmax_exec_s\tover_30m_count"
+    summary = out[5].split("\t")
+    assert summary[0] == "admit"
+    assert summary[1] == "1"  # only one of the two attempts has an exec_s
+    assert summary[2] == summary[3] == summary[4] == "60.0"
+    assert summary[5] == "0"
+
+
+def test_timings_over_30m_flag(monkeypatch, fake_conn, capsys):
+    long_row = (
+        "difference", "U3", "A3", "succeeded", None, None,
+        {"batch": {"started_at": "2023-11-14T22:00:00Z", "stopped_at": "2023-11-14T22:35:00Z"}},
+    )
+    _timings_setup(monkeypatch, [long_row])
+    assert cli.main(["run", "timings", "R"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    row = out[1].split("\t")
+    assert row[5] == "2100.0"
+    assert row[10] == "true"
+    summary = out[4].split("\t")
+    assert summary[5] == "1"
+
+
+def test_timings_json_output(monkeypatch, fake_conn, capsys):
+    _timings_setup(monkeypatch, [_ROW_WITH_BATCH])
+    assert cli.main(["run", "timings", "R", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload["attempts"]) == 1
+    attempt = payload["attempts"][0]
+    assert attempt["stage"] == "admit" and attempt["attempt"] == "A1"
+    assert attempt["queue_s"] == 10.0
+    assert attempt["fetch_s"] is None
+    assert payload["stages"][0]["stage"] == "admit"
+    assert payload["stages"][0]["count"] == 1
+
+
+def test_timings_stage_filter_is_passed_through(monkeypatch, fake_conn, capsys):
+    capture: dict = {}
+    _timings_setup(monkeypatch, [], capture=capture)
+    assert cli.main(["run", "timings", "R", "--stage", "difference"]) == 0
+    assert capture["stage"] == "difference"
 
 
 # ======================================================================

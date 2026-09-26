@@ -54,6 +54,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -633,6 +634,66 @@ def _last_container_exit_code(job: dict[str, Any]) -> int | None:
     return container.get("exitCode")
 
 
+def _epoch_ms_to_iso(value: Any) -> str | None:
+    """A Batch epoch-milliseconds timestamp field as a UTC ISO 8601 string,
+    or ``None`` for a missing or unparseable value."""
+    if value is None:
+        return None
+    try:
+        seconds = float(value) / 1000.0
+    except (TypeError, ValueError):
+        return None
+    return (datetime.fromtimestamp(seconds, tz=timezone.utc)
+            .isoformat().replace("+00:00", "Z"))
+
+
+def _batch_scheduler_metadata(job: dict[str, Any]) -> dict[str, Any]:
+    """The ``"batch"`` value :func:`reconcile` merges into an attempt's
+    ``execution_records.scheduler_metadata`` (``rapid_docs`` runs.md
+    addendum, direction/run-timings): Batch's own ``createdAt``/
+    ``startedAt``/``stoppedAt`` (as UTC ISO 8601, converted from the
+    epoch-millisecond fields ``describe_jobs`` returns), how many
+    container attempts the job itself made, its last ``statusReason``,
+    the job's own container's ``logStreamName``, and its job queue.
+    Missing fields are omitted, never written as ``null``, so
+    ``rapidpipe run timings`` (which reads this back) can tell "never
+    recorded" from "recorded empty".
+    """
+    metadata: dict[str, Any] = {}
+    for key, batch_field in (("created_at", "createdAt"), ("started_at", "startedAt"),
+                             ("stopped_at", "stoppedAt")):
+        iso = _epoch_ms_to_iso(job.get(batch_field))
+        if iso is not None:
+            metadata[key] = iso
+    attempts = job.get("attempts")
+    if attempts is not None:
+        metadata["attempts"] = len(attempts)
+    status_reason = job.get("statusReason")
+    if status_reason is not None:
+        metadata["status_reason"] = status_reason
+    log_stream = (job.get("container") or {}).get("logStreamName")
+    if log_stream is not None:
+        metadata["log_stream"] = log_stream
+    job_queue = job.get("jobQueue")
+    if job_queue is not None:
+        metadata["job_queue"] = job_queue
+    return metadata
+
+
+def _with_batch_scheduler_metadata(
+        execution_record: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
+    """``execution_record`` with Batch's own job timestamps merged into its
+    ``scheduler_metadata`` under a ``"batch"`` key -- merged with, not
+    replacing, whatever ``scheduler_metadata`` the record already carries
+    (direction/run-timings; there is none today, since no stage writes
+    one, but this must not assume that stays true)."""
+    record = dict(execution_record)
+    scheduler_metadata = dict(record.get("scheduler_metadata") or {})
+    scheduler_metadata["batch"] = _batch_scheduler_metadata(job)
+    record["scheduler_metadata"] = scheduler_metadata
+    return record
+
+
 def reconcile(
     conn, *, run_id: str, client: Any = None, s3_client: Any = None,
 ) -> list[Reconciled]:
@@ -772,7 +833,8 @@ def reconcile(
                 # that way).
                 record_attempt_result(
                     conn, attempt_id, 0, "succeeded", output_location,
-                    _execution_record_with_defaults(conn, run_id, execution_record),
+                    _with_batch_scheduler_metadata(
+                        _execution_record_with_defaults(conn, run_id, execution_record), job),
                     scheduler_job_id=job_id)
                 select_attempt(conn, attempt_id)
                 conn.commit()
@@ -783,7 +845,8 @@ def reconcile(
                 # Exit zero alone is not success (runs page, "Attempts").
                 record_attempt_result(
                     conn, attempt_id, 0, "failed", output_location,
-                    _execution_record_with_defaults(conn, run_id),
+                    _with_batch_scheduler_metadata(
+                        _execution_record_with_defaults(conn, run_id), job),
                     scheduler_job_id=job_id)
                 conn.commit()
                 results.append(Reconciled(
@@ -803,7 +866,8 @@ def reconcile(
                 disposition = "killed"
             record_attempt_result(
                 conn, attempt_id, exit_code, disposition, output_location,
-                _execution_record_with_defaults(conn, run_id),
+                _with_batch_scheduler_metadata(
+                    _execution_record_with_defaults(conn, run_id), job),
                 scheduler_job_id=job_id)
             conn.commit()
             results.append(Reconciled(
@@ -816,7 +880,8 @@ def reconcile(
         # as a termination it cannot classify further.
         record_attempt_result(
             conn, attempt_id, None, "killed", output_location,
-            _execution_record_with_defaults(conn, run_id),
+            _with_batch_scheduler_metadata(
+                _execution_record_with_defaults(conn, run_id), job),
             scheduler_job_id=job_id)
         conn.commit()
         results.append(Reconciled(

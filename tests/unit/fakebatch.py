@@ -58,6 +58,11 @@ class FakeBatch:
         self, job_id: str, status: str, *,
         status_reason: str | None = None,
         container_exit_code: int | None = None,
+        created_at: int | None = None,
+        started_at: int | None = None,
+        stopped_at: int | None = None,
+        job_queue: str | None = None,
+        log_stream: str | None = None,
     ) -> None:
         """Test setup: give a submitted (or arbitrary) job id a status.
 
@@ -66,6 +71,14 @@ class FakeBatch:
         :func:`rapidpipe.launch.batch.reconcile` reads a FAILED job's exit
         code from. Omitting it stands in for a termination Batch never
         saw a container exit code for.
+
+        ``created_at``/``started_at``/``stopped_at`` (epoch milliseconds,
+        as ``describe_jobs`` itself returns them), ``job_queue`` and
+        ``log_stream`` stand in for the rest of a real job's shape that
+        ``reconcile`` copies into ``scheduler_metadata`` (direction/
+        run-timings); omitted, they are simply absent from the job dict,
+        matching an older Batch response or a field reconcile itself
+        never learned.
         """
         job = self._jobs.setdefault(job_id, {"jobId": job_id})
         job["status"] = status
@@ -75,6 +88,16 @@ class FakeBatch:
             job["attempts"] = [{"container": {"exitCode": container_exit_code}}]
         elif "attempts" not in job:
             job["attempts"] = []
+        if created_at is not None:
+            job["createdAt"] = created_at
+        if started_at is not None:
+            job["startedAt"] = started_at
+        if stopped_at is not None:
+            job["stoppedAt"] = stopped_at
+        if job_queue is not None:
+            job["jobQueue"] = job_queue
+        if log_stream is not None:
+            job["container"] = {**job.get("container", {}), "logStreamName": log_stream}
 
     def forget(self, job_id: str) -> None:
         """Remove a job id entirely, standing in for one describe_jobs no
