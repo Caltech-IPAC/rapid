@@ -43,14 +43,14 @@ Outputs (R5, R6). One ``reference-image`` entry: primary member ``image``
 "version": <selection digest, 64 hex>}``; the registration block R6 fixes
 (:func:`registration_block`); the SExtractor count is the block's
 ``nsexcatsources``, which `register` writes to ``refimmeta.nsxcatsources``.
-``zero_point`` is the zero point the coadd was scaled to, also stamped as ``MAGZP``; the
-difference stage today uses its own ``[awaicgen] zprefimg`` setting for
-gain matching and does not read ``MAGZP`` (a residual the supervisor
-records). All three bundle members are PRIMARY-HDU images carrying
-awaicgen's output WCS unchanged (TAN, no PV/SIP: the difference stage
-resamples the reference with SWarp assuming no distortion); the stamp
-adds keywords to the image and uncertainty headers and never touches the
-WCS. The catalog is written with the packaged
+``zero_point`` is the zero point the coadd was scaled to, also stamped as
+``MAGZP``; the difference stage's gain matching reads this keyword from
+the reference image it is given, unless its own ``[awaicgen] zprefimg``
+setting overrides it (the lead, 2026-09-26). All three bundle members are
+PRIMARY-HDU images carrying awaicgen's output WCS unchanged (TAN, no
+PV/SIP: the difference stage resamples the reference with SWarp assuming
+no distortion); the stamp adds keywords to the image and uncertainty
+headers and never touches the WCS. The catalog is written with the packaged
 ``cdf/rapidSexParamsRefImage.inp``, the parameter file the difference
 stage reads it by (``FWHM_IMAGE``). One ``reference-catalog`` entry: member
 ``catalog`` (``ref/awaicgen_output_mosaic_refimsexcat.txt``), key
