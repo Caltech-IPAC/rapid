@@ -279,7 +279,8 @@ def _build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument("--state", default=None)
 
     show_parser = run_subparsers.add_parser("show", help="Show one run.",
-        description="Show one run: its fields, units, attempts and promotions.")
+        description="Show one run: its fields, units, attempts and promotions. "
+                    "Exit 1 if run_id names no run.")
     show_parser.add_argument("run_id")
 
     local_parser = run_subparsers.add_parser(
@@ -761,6 +762,10 @@ def _run_list_command(args: argparse.Namespace) -> int:
 
 
 def _run_show_command(args: argparse.Namespace) -> int:
+    """Print one run's fields, units, attempts and promotions.
+
+    Exit 0 on success, 64 on a database configuration error, 75 if the
+    database is unavailable, 1 if ``args.run_id`` names no run."""
     try:
         cm = connect(application_name="rapidpipe-run-show")
     except ConnectionConfigError as exc:
