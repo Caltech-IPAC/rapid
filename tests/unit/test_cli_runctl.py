@@ -527,7 +527,8 @@ _ROW_WITH_BATCH = (
     datetime(2023, 11, 14, 22, 14, 0, tzinfo=timezone.utc),
     datetime(2023, 11, 14, 22, 14, 35, tzinfo=timezone.utc),
     {"batch": {"created_at": "2023-11-14T22:13:20Z", "started_at": "2023-11-14T22:13:30Z",
-              "stopped_at": "2023-11-14T22:14:30Z"}},
+              "stopped_at": "2023-11-14T22:14:30Z"},
+     "stage": {"started": "2023-11-14T22:13:30Z", "fetch_s": 2.0, "body_s": 55.0}},
 )
 _ROW_NO_BATCH = (
     "admit", "U2", "A2", "succeeded",
@@ -552,8 +553,9 @@ def test_timings_text_output_with_and_without_batch_metadata(monkeypatch, fake_c
     assert with_batch[:4] == ["admit", "U1", "A1", "succeeded"]
     assert with_batch[4] == "10.0"  # queue_s: started_at - created_at
     assert with_batch[5] == "60.0"  # exec_s: stopped_at - started_at
-    # fetch/body/publish are never persisted (see AttemptTiming's docstring).
-    assert with_batch[6:9] == ["-", "-", "-"]
+    assert with_batch[6] == "2.0"  # fetch_s: from scheduler_metadata["stage"]
+    assert with_batch[7] == "55.0"  # body_s: likewise
+    assert with_batch[8] == "-"  # publish_s: never reaches scheduler_metadata
     assert with_batch[9] == "5.0"  # reconcile_lag_s: ended - stopped_at
     assert with_batch[10] == "false"  # over_30m
 
@@ -594,7 +596,9 @@ def test_timings_json_output(monkeypatch, fake_conn, capsys):
     attempt = payload["attempts"][0]
     assert attempt["stage"] == "admit" and attempt["attempt"] == "A1"
     assert attempt["queue_s"] == 10.0
-    assert attempt["fetch_s"] is None
+    assert attempt["fetch_s"] == 2.0
+    assert attempt["body_s"] == 55.0
+    assert attempt["publish_s"] is None
     assert payload["stages"][0]["stage"] == "admit"
     assert payload["stages"][0]["count"] == 1
 
@@ -604,6 +608,13 @@ def test_timings_stage_filter_is_passed_through(monkeypatch, fake_conn, capsys):
     _timings_setup(monkeypatch, [], capture=capture)
     assert cli.main(["run", "timings", "R", "--stage", "difference"]) == 0
     assert capture["stage"] == "difference"
+
+
+def test_timings_no_attempts_prints_header_only(monkeypatch, fake_conn, capsys):
+    _timings_setup(monkeypatch, [])
+    assert cli.main(["run", "timings", "R"]) == 0
+    # Nothing to summarise: no blank line, no summary header either.
+    assert capsys.readouterr().out.splitlines() == ["\t".join(runctl._TIMINGS_COLUMNS)]
 
 
 # ======================================================================
