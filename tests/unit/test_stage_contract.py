@@ -8,7 +8,9 @@ added to it.
 
 from __future__ import annotations
 
+import dataclasses
 import json
+from pathlib import Path
 
 import pytest
 
@@ -107,6 +109,26 @@ def test_success_writes_execution_record(inputs_dir, tmp_path):
     assert "settings_hash" in record
     assert "source_revision" in record
     assert "image_digest" in record
+
+
+def test_execution_record_carries_the_resolved_settings(inputs_dir, tmp_path):
+    # DECLARATION itself declares no settings (settings_schema_path=None,
+    # so resolved_settings would trivially be {}); a real schema exercises
+    # the actual gap this closes (execution_records.resolved_settings was
+    # documented, but never written, direction/logging-timing).
+    schema_path = Path(__file__).resolve().parents[2] / "rapidpipe" / "settings" / "admit.toml"
+    declaration = dataclasses.replace(DECLARATION, settings_schema_path=str(schema_path))
+
+    outputs_dir = tmp_path / "outputs"
+    rc = run_stage(declaration, _success_body, _argv(inputs_dir, outputs_dir))
+    assert rc == int(ExitCode.SUCCESS)
+
+    restored = Manifest.read(outputs_dir / "manifest.json")
+    record = json.loads((outputs_dir / restored.execution_record).read_text())
+    assert record["resolved_settings"]  # non-empty: admit.toml has real defaults
+    assert record["resolved_settings"]["header"]["sca"] == "SCA-NUM"
+    # Consistent with the hash already recorded alongside it.
+    assert canonical_hash(record["resolved_settings"]) == record["settings_hash"]
 
 
 def test_products_read_and_result_sets_read_reach_the_manifest(inputs_dir, tmp_path):

@@ -436,6 +436,7 @@ def _write_execution_record(
     settings_hash: str,
     notes: dict[str, Any] | None = None,
     timing: dict[str, Any] | None = None,
+    resolved_settings: dict[str, Any] | None = None,
 ) -> str:
     """Write ``exec/<attempt>.json`` under ``outputs_dir``; return its
     manifest-relative path.
@@ -457,6 +458,14 @@ def _write_execution_record(
     here: they belong to ``rapidpipe.runs``, which this module must not
     import.
 
+    ``resolved_settings`` is the merged settings dict ``run_stage`` already
+    resolved (``rapidpipe.stages.settings.resolve_settings``), written
+    verbatim (it is TOML-derived, so JSON-serialisable); ``settings_hash``
+    is its canonical hash, so the two are always consistent. Was
+    previously omitted here despite this docstring's own "the resolved
+    settings" and the runs page's table both naming it as part of the
+    execution record; closed as a provenance gap (direction/logging-timing).
+
     ``timing``, when given, is written verbatim under an additive
     ``"timing"`` key: ``run_stage`` passes ``{"started": ..., "fetch_s":
     ..., "body_s": ...}`` (no ``"ended"``: this record is written before
@@ -474,6 +483,7 @@ def _write_execution_record(
             or os.environ.get("RAPID_IMAGE_DIGEST")
         ),
         "release": _release_identity(),
+        "resolved_settings": resolved_settings or {},
     }
     if notes:
         record["notes"] = notes
@@ -754,6 +764,7 @@ def run_stage(
 
         execution_record_ref = _write_execution_record(
             outputs_dir, args.attempt_id, settings_hash, dict(result.execution_notes),
+            resolved_settings=settings,
             timing={
                 "started": run_started_at.isoformat().replace("+00:00", "Z"),
                 "fetch_s": None if fetch_elapsed is None else round(fetch_elapsed, 1),
