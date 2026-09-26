@@ -160,7 +160,7 @@ def run_stage_locally(
     outputs_root: str,
     settings: str | None = None,
     python: str = sys.executable,
-    env: Mapping[str, str] | None = None,
+    env: Mapping[str, str | None] | None = None,
 ) -> LocalAttempt:
     """Run one stage attempt as a subprocess against a real database.
 
@@ -187,7 +187,8 @@ def run_stage_locally(
        if it already exists, since the location must be exclusive to this
        attempt.
     4. Runs the stage as a subprocess, per the stage contract's
-       "Invocation" form, with ``os.environ`` overlaid by ``env``.
+       "Invocation" form, with ``os.environ`` overlaid by ``env`` (a
+       ``None`` value in ``env`` removes that key instead of setting it).
        Nothing is captured -- the stage's own logging reaches the
        terminal directly.
     5. :func:`disposition_for` decides the outcome from the exit code and
@@ -235,7 +236,16 @@ def run_stage_locally(
 
     subprocess_env = dict(os.environ)
     if env:
-        subprocess_env.update(env)
+        # A ``None`` value removes the key from the subprocess environment
+        # instead of setting it, so a caller can strip something this
+        # process itself inherited (a production run's caller stripping
+        # an ambient ``RAPIDPIPE_PROFILE=1``, so it never reaches the
+        # subprocess), not only add or overwrite one.
+        for key, value in env.items():
+            if value is None:
+                subprocess_env.pop(key, None)
+            else:
+                subprocess_env[key] = value
 
     result = subprocess.run(argv, env=subprocess_env)
     exit_code = result.returncode

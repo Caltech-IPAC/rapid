@@ -903,22 +903,37 @@ def _run_local_command(args: argparse.Namespace) -> int:
         return int(ExitCode.TRANSIENT_FAILURE)
 
     with cm as conn:
-        if args.profile:
-            try:
-                kind = launch_batch._run_kind(conn, args.run_id)
-            except RunModelError as exc:
-                conn.rollback()
-                sys.stderr.write(f"rapidpipe run local: {exc}\n")
-                return int(ExitCode.USAGE)
-            if kind == "production":
-                conn.rollback()
-                sys.stderr.write(
-                    "rapidpipe run local: --profile is refused for a "
-                    f"production run ({args.run_id}); profiling is for "
-                    "scratch runs, since profiles land in the attempt's "
-                    "own outputs prefix, which for production is the "
-                    "products bucket\n")
-                return int(ExitCode.USAGE)
+        # The run's kind is needed whether or not --profile was given: a
+        # production run must never profile, including via a
+        # RAPIDPIPE_PROFILE=1 the calling shell's own environment already
+        # carries (local.py's subprocess otherwise inherits it), not only
+        # via an explicit --profile this command would refuse outright.
+        try:
+            kind = launch_batch._run_kind(conn, args.run_id)
+        except RunModelError as exc:
+            conn.rollback()
+            sys.stderr.write(f"rapidpipe run local: {exc}\n")
+            return int(ExitCode.USAGE)
+
+        if args.profile and kind == "production":
+            conn.rollback()
+            sys.stderr.write(
+                "rapidpipe run local: --profile is refused for a "
+                f"production run ({args.run_id}); profiling is for "
+                "scratch runs, since profiles land in the attempt's "
+                "own outputs prefix, which for production is the "
+                "products bucket\n")
+            return int(ExitCode.USAGE)
+
+        if kind == "production":
+            # Strip it, not merely set it falsy: the point is that a
+            # production run never profiles, even via an ambient
+            # RAPIDPIPE_PROFILE=1 this process itself inherited.
+            profile_env = {"RAPIDPIPE_PROFILE": None}
+        elif args.profile:
+            profile_env = {"RAPIDPIPE_PROFILE": "1"}
+        else:
+            profile_env = None
 
         try:
             result = run_stage_locally(
@@ -931,7 +946,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
                 outputs_root=args.outputs_root,
                 settings=args.settings,
                 python=args.python,
-                env=({"RAPIDPIPE_PROFILE": "1"} if args.profile else None),
+                env=profile_env,
             )
         except InputsRefused as exc:
             conn.rollback()
