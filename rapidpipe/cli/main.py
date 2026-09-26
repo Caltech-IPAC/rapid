@@ -1307,7 +1307,7 @@ def _run_command(args: argparse.Namespace) -> int:
     sys.stderr.write(
         "rapidpipe run: a subcommand is required: create, list, show, local, "
         "submit, reconcile, cancel, promote, rollback, delete, finish, pin, "
-        "unpin, start, status, inputs, compare, expire\n")
+        "unpin, start, status, inputs, compare, expire, timings\n")
     return int(ExitCode.USAGE)
 
 

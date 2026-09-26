@@ -357,7 +357,9 @@ def test_reconcile_batches_describe_jobs_at_100(monkeypatch):
 def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
                     manifest_ok=None, forget=False,
                     manifest_fetch_error=None, exec_record_fetch_error=None,
-                    repair_rows=()):
+                    repair_rows=(), created_at=None, started_at=None,
+                    stopped_at=None, job_queue=None, log_stream=None,
+                    fetched_execution_record=None):
     """Reconcile exactly one attempt/job and return the Reconciled result.
 
     manifest_ok controls what _fetch_manifest_if_valid returns for a
@@ -398,6 +400,7 @@ def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
                                      output_location, execution_record,
                                      scheduler_job_id):
         recorded["record"] = (attempt_id, exit_code, disposition, scheduler_job_id)
+        recorded["execution_record"] = execution_record
 
     def _fake_select_attempt(conn, attempt_id):
         recorded["selected"] = attempt_id
@@ -428,7 +431,7 @@ def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
         if exec_record_fetch_error is not None:
             result = _classify(exec_record_fetch_error, key=output_location)
             return {} if result is None else result
-        return {}
+        return dict(fetched_execution_record) if fetched_execution_record else {}
 
     if manifest_ok is not None or manifest_fetch_error is not None:
         monkeypatch.setattr(launch_batch, "_fetch_manifest_if_valid", _fake_fetch_manifest)
@@ -438,7 +441,9 @@ def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
     fake = FakeBatch()
     if not forget:
         fake.set_status(
-            "job-1", status, container_exit_code=container_exit_code)
+            "job-1", status, container_exit_code=container_exit_code,
+            created_at=created_at, started_at=started_at, stopped_at=stopped_at,
+            job_queue=job_queue, log_stream=log_stream)
 
     results = launch_batch.reconcile(_Conn(), run_id="r1", client=fake)
     assert len(results) == 1
@@ -550,6 +555,90 @@ def test_reconcile_missing_job_id_is_lost(monkeypatch):
     assert result.disposition == "lost"
     assert result.batch_status == "LOST"
     assert recorded["record"] == ("attempt-1", None, "lost", "job-1")
+    # No Batch job at all to read timestamps from.
+    assert "batch" not in recorded["execution_record"].get("scheduler_metadata", {})
+
+
+# ======================================================================
+# reconcile: Batch's own job timestamps merged into scheduler_metadata
+# (direction/run-timings)
+# ======================================================================
+
+def test_reconcile_succeeded_merges_batch_scheduler_metadata(monkeypatch):
+    _, recorded = _reconcile_one(
+        monkeypatch, status="SUCCEEDED", manifest_ok=True,
+        created_at=1_700_000_000_000, started_at=1_700_000_010_000,
+        stopped_at=1_700_000_070_000, job_queue="the-queue", log_stream="the-stream")
+    batch_metadata = recorded["execution_record"]["scheduler_metadata"]["batch"]
+    assert batch_metadata["created_at"] == "2023-11-14T22:13:20Z"
+    assert batch_metadata["started_at"] == "2023-11-14T22:13:30Z"
+    assert batch_metadata["stopped_at"] == "2023-11-14T22:14:30Z"
+    assert batch_metadata["job_queue"] == "the-queue"
+    assert batch_metadata["log_stream"] == "the-stream"
+    assert batch_metadata["attempts"] == 0  # set_status's default: no container attempt given
+
+
+def test_reconcile_failed_merges_batch_scheduler_metadata_too(monkeypatch):
+    _, recorded = _reconcile_one(
+        monkeypatch, status="FAILED", container_exit_code=70,
+        created_at=1_700_000_000_000, started_at=1_700_000_010_000,
+        stopped_at=1_700_000_070_000)
+    batch_metadata = recorded["execution_record"]["scheduler_metadata"]["batch"]
+    assert batch_metadata["created_at"] == "2023-11-14T22:13:20Z"
+    assert batch_metadata["attempts"] == 1
+
+
+def test_reconcile_batch_metadata_omits_missing_fields():
+    # No createdAt/startedAt/stoppedAt/jobQueue at all: describe_jobs's
+    # own minimal shape (job just submitted, not yet started).
+    job = {"jobId": "job-1", "status": "RUNNING"}
+    assert launch_batch._batch_scheduler_metadata(job) == {}
+
+
+def test_reconcile_merge_keeps_any_existing_scheduler_metadata():
+    execution_record = {"scheduler_metadata": {"other": "value"}}
+    job = {"jobId": "job-1", "createdAt": 1_700_000_000_000}
+    merged = launch_batch._with_batch_scheduler_metadata(execution_record, job)
+    assert merged["scheduler_metadata"]["other"] == "value"
+    assert merged["scheduler_metadata"]["batch"]["created_at"] == "2023-11-14T22:13:20Z"
+    # The input dict itself is untouched.
+    assert execution_record == {"scheduler_metadata": {"other": "value"}}
+
+
+def test_with_batch_scheduler_metadata_copies_the_stage_timing_too():
+    # The stage's own execution record (exec/<attempt>.json's "timing"
+    # key, direction/logging-timing) already read by _fetch_execution_record.
+    execution_record = {
+        "settings_hash": "hash1",
+        "timing": {"started": "2023-11-14T22:14:00Z", "fetch_s": 1.2, "body_s": 3.4},
+    }
+    job = {"jobId": "job-1", "createdAt": 1_700_000_000_000}
+    merged = launch_batch._with_batch_scheduler_metadata(execution_record, job)
+    assert merged["scheduler_metadata"]["stage"] == {
+        "started": "2023-11-14T22:14:00Z", "fetch_s": 1.2, "body_s": 3.4}
+    # "timing" itself is untouched at the top level too (record_attempt_result
+    # ignores it either way; this function only ever adds, never removes).
+    assert merged["timing"] == execution_record["timing"]
+
+
+def test_with_batch_scheduler_metadata_no_stage_key_when_no_timing():
+    merged = launch_batch._with_batch_scheduler_metadata(
+        {"settings_hash": "hash1"}, {"jobId": "job-1"})
+    assert "stage" not in merged["scheduler_metadata"]
+
+
+def test_reconcile_succeeded_merges_the_stage_execution_records_timing(monkeypatch):
+    _, recorded = _reconcile_one(
+        monkeypatch, status="SUCCEEDED", manifest_ok=True,
+        created_at=1_700_000_000_000, started_at=1_700_000_010_000,
+        stopped_at=1_700_000_070_000,
+        fetched_execution_record={
+            "settings_hash": "hash1",
+            "timing": {"started": "2023-11-14T22:13:30Z", "fetch_s": 2.0, "body_s": 55.0}})
+    scheduler_metadata = recorded["execution_record"]["scheduler_metadata"]
+    assert scheduler_metadata["stage"] == {
+        "started": "2023-11-14T22:13:30Z", "fetch_s": 2.0, "body_s": 55.0}
+    assert scheduler_metadata["batch"]["created_at"] == "2023-11-14T22:13:20Z"
 
 
 # ======================================================================
