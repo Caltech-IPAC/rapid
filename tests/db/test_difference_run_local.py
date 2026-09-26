@@ -31,12 +31,8 @@ def test_difference_runs_locally_and_is_selected(conn, tmp_path):
     inputs = tmp_path / "inputs"
     build_input_set(inputs)
     settings = tmp_path / "overlay.toml"
-    # SFFT registration off: this test is about run_stage_locally's own
-    # plumbing (disposition, selection, the manifest it writes back), not
-    # the two-differencer case.
     settings.write_text(
-        f'[paths]\ncfg_path = "{CDF_DIR}"\n[statistics]\nclip_correction_seed = 1\n'
-        '[sfft]\nregister_sfft = false\n')
+        f'[paths]\ncfg_path = "{CDF_DIR}"\n[statistics]\nclip_correction_seed = 1\n')
 
     result = run_stage_locally(
         conn,
@@ -56,7 +52,11 @@ def test_difference_runs_locally_and_is_selected(conn, tmp_path):
     assert result.selected
     manifest = Manifest.read(result.manifest_path)
     assert manifest.run == run_id and manifest.attempt == result.attempt_id
-    (entry,) = [e for e in manifest.outputs if e.kind == "difference-image"]
+    # SFFT registers too, on by default; select ZOGY's own instance, since
+    # this test is about run_stage_locally's plumbing, not the
+    # two-differencer case.
+    entry = next(e for e in manifest.outputs
+                 if e.kind == "difference-image" and e.key["differencer"] == "zogy")
     validate_difference_entry(entry.to_dict())
 
     with conn.cursor() as cur:

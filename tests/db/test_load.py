@@ -64,15 +64,17 @@ def _replace_photutils_catalogs(outputs):
 
 
 def _registered_difference(conn, tmp_path, monkeypatch):
-    # SFFT registration off: these load tests are about loading a single
-    # differencer's catalogs, and a second registered instance's photutils
-    # catalogs would otherwise also become dependencies of every source-set
-    # this stage loads.
+    # SFFT registers too, on by default: this manifest carries both
+    # differencers' instances and catalogs, as a real run now would.
+    # load's own default ([load] differencer = "zogy") still loads only
+    # ZOGY's, so callers that care about a single differencer's
+    # dependencies must select entries by differencer, not assume the
+    # manifest holds only one.
     l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)
     run_id, outputs = _run_difference(conn, tmp_path, monkeypatch, l2_instance=l2_instance,
-                                      rfid=rfid, overlay="[sfft]\nregister_sfft = false\n")
+                                      rfid=rfid)
     _replace_photutils_catalogs(outputs)
     assert _register_difference(conn, monkeypatch, outputs, run_id, tmp_path)[0] == 0
     return run_id, outputs
@@ -140,8 +142,12 @@ def test_load_writes_devs_rows_and_one_complete_source_set(conn, tmp_path, monke
         cur.execute("SELECT producer_instance FROM dependencies WHERE consumer_instance = %s",
                     (entry.instance,))
         producers = {r[0] for r in cur.fetchall()}
+        # This source-set's own differencer's photutils catalogs only; the
+        # manifest also carries SFFT's (registered by default alongside
+        # ZOGY's), which are not this load's dependencies.
         photutils = {e.instance for e in diff_manifest.outputs if e.kind == "source-catalog"
-                     and e.key["catalog_type"] == "photutils"}
+                     and e.key["catalog_type"] == "photutils"
+                     and e.key["difference"] == diff_entry.instance}
         assert producers == {diff_entry.instance} | photutils
 
 
