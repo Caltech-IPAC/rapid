@@ -65,7 +65,7 @@ modules never import other stage modules, `launch`, or `cli`;
 | `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `finalize`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
 | `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), and per-kind modules (`l2image`, `refimage`, `diffimage`, `psf`, `alertcontainer`, `catalogexport`). |
 | `db/` | Persistence: `connection.py`, per-table modules (`l2files`, `refimages`, `diffimages`, `sources`, `objects`, `psfs`, `alerts`, `ids`), and the migrations applier (`database/apply-migrations.sh`, not itself under `rapidpipe/`). |
-| `runs/` | `repository.py` (runs, units, attempts, instances, promotion), `local.py` (subprocess execution of one attempt), `cleanup.py` (deletion guard and blocking-reference checks). |
+| `runs/` | `repository.py` (runs, units, attempts, instances, promotion), `local.py` (subprocess execution of one attempt), `cleanup.py` (deletion guard and blocking-reference checks), `inputs.py` (binding a unit's inputs from its input-set manifest), `binding.py` (`bind_input_set`, the one path by which both composers admit, bind and write an input set). |
 | `launch/` | `batch.py` (turning a run into Batch jobs, reading results back) and `loop.py` (the processing-date loop). |
 | `release/` | `core.py` (`cut`/`show`/`list`/`verify`), `hooks.py` (the account-specific hook contract), `__main__.py`. |
 | `checks/` | `registry.py`, `builtin.py`, `policy.py`, `runner.py`, and shipped policies under `policies/<name>@<version>.toml` (`rebuild-trial@1`, `rebuild-strict@1`). |

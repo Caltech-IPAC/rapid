@@ -23,7 +23,7 @@ from rapidpipe.products.manifest import (
     Unit,
     member_for_file,
 )
-from rapidpipe.runs import cleanup, repository
+from rapidpipe.runs import cleanup, inputs, repository
 from tests.unit.fakes3 import FakeClientError, FakeS3
 
 
@@ -730,11 +730,13 @@ def compose_env(tmp_path, monkeypatch, fake_conn):
     monkeypatch.setattr(repository, "add_unit",
                         lambda conn, run_id, stage, kind, unit_id:
                             calls["add_unit"].append((run_id, stage, kind, unit_id)))
-    monkeypatch.setattr(repository, "bind_unit_inputs",
+    # Seams of the binding primitive (rapidpipe.runs.binding goes through
+    # rapidpipe.runs.inputs; supervisor step 2 R7).
+    monkeypatch.setattr(inputs, "bind_unit_inputs",
                         lambda conn, run_id, stage, unit_id, instances:
                             calls["bind"].append((run_id, stage, unit_id, list(instances))))
-    monkeypatch.setattr(runctl, "_registered_instances",
-                        lambda conn, ids: [i for i in ids if i in ("L2NEW", "REF1")])
+    monkeypatch.setattr(inputs, "_registered",
+                        lambda conn, ids: {i for i in ids if i in ("L2NEW", "REF1")})
     return {"template": template, "producer": producer, "calls": calls, "tmp": tmp_path,
             "dest": tmp_path / "outputs/runs/R/inputs/difference/U"}
 
@@ -825,11 +827,36 @@ def test_inputs_admission_fence_fires_before_any_copy(compose_env, monkeypatch, 
         raise repository.RunDeletingOrDeleted("run 'R' is 'deleting'; it admits no new work")
 
     monkeypatch.setattr(repository, "add_unit", _refuse)
+    # Admission is the first write-side check (supervisor step 2 R13): no
+    # template or producer manifest is read before it.
+    reads: list[str] = []
+    real_read = runctl._Storage.read_manifest
+    monkeypatch.setattr(runctl._Storage, "read_manifest",
+                        lambda self, text: reads.append(text) or real_read(self, text))
+    monkeypatch.setattr(launch_batch, "resolve_inputs_from_stage",
+                        lambda conn, **kw: pytest.fail("producer resolved before admission"))
     rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
                    "--template", str(compose_env["template"])])
     assert rc == 64
     assert "admits no new work" in capsys.readouterr().err
+    assert reads == []
     assert not compose_env["dest"].exists()
+
+
+def test_inputs_a_compose_failure_after_admission_commits_nothing(
+        compose_env, fake_conn, capsys):
+    # supervisor step 2 R13: admission comes first, so a size mismatch in the
+    # copies follows add_unit; nothing is committed and no manifest written.
+    (compose_env["template"] / "ref/image.fits").write_bytes(b"short")
+    dest = compose_env["dest"]
+    rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
+                   "--template", str(compose_env["template"]), "--dest", str(dest)])
+    assert rc == 1
+    assert compose_env["calls"]["add_unit"] == [("R", "difference", "detector-image", "U")]
+    assert compose_env["calls"]["bind"] == []
+    assert fake_conn.committed == 0
+    assert fake_conn.rolled_back >= 1
+    assert not (dest / "manifest.json").exists()
 
 
 def test_inputs_over_s3_copies_server_side(compose_env, monkeypatch, capsys):

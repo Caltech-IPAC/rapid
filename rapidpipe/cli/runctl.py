@@ -25,8 +25,8 @@ module).
 
 The SQL each command reads is kept in small module-level functions
 (:func:`_run_row`, :func:`_unit_row`, :func:`_status_rows`,
-:func:`_compare_units`, :func:`_compare_instances`,
-:func:`_registered_instances`) so the database-free unit tests can
+:func:`_compare_units`, :func:`_compare_instances`) so the database-free
+unit tests can
 monkeypatch them; ``sleep`` and ``now`` are module-level indirections for
 the same reason.
 
@@ -63,6 +63,7 @@ from rapidpipe.launch.batch import (
 )
 from rapidpipe.products.manifest import Manifest, ManifestError, Member, OutputEntry, Unit
 from rapidpipe.products.storage import Location, LocationError, join, parse_location
+from rapidpipe.runs import binding
 from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.repository import RunModelError
 from rapidpipe.exitcodes import ExitCode
@@ -538,18 +539,6 @@ class _Storage:
 # run inputs
 # ======================================================================
 
-def _registered_instances(conn, instance_ids: list[str]) -> list[str]:
-    """Those of ``instance_ids`` that exist in ``product_instances`` --
-    the only ones ``unit_inputs.producer_instance`` (a foreign key) can
-    bind. A template's entries may carry instance ids nothing registered."""
-    if not instance_ids:
-        return []
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM product_instances WHERE id = ANY(%s)", (instance_ids,))
-        found = {row[0] for row in cur.fetchall()}
-    return [i for i in instance_ids if i in found]
-
-
 def inputs_root(run_id: str) -> str:
     """``<scratch outputs root>/runs/<run>/inputs`` -- for every run kind.
 
@@ -637,7 +626,9 @@ def compose_inputs(
     and only then writes ``<dest>/manifest.json`` (stage ``input-set``,
     the producer's unit kind and attempt, the template's inputs and
     execution record). The manifest is the last write, so an existing
-    manifest always means the bindings were committed once.
+    manifest always means the bindings were committed once. The order is
+    :func:`rapidpipe.runs.binding.bind_input_set`'s: admission
+    (``add_unit``) comes first, before the template or producer is read.
 
     An existing ``<dest>/manifest.json`` is refused (exit 64), or with
     ``reuse_existing`` (``run start``, rerun after an interruption)
@@ -656,69 +647,61 @@ def compose_inputs(
     _require_under_inputs_root(dest_text, run_id)
     dest_loc = parse_location(dest_text)
     declaration = _declaration(stage)
-    from rapidpipe.runs.repository import add_unit, bind_unit_inputs
 
-    if storage.exists(dest_loc, "manifest.json"):
-        if not reuse_existing:
+    def compose() -> Manifest:
+        # Called by bind_input_set only after admission (add_unit) and only
+        # when no manifest exists at dest.
+        template_manifest = storage.read_manifest(template)
+        producer_text = launch_batch.resolve_inputs_from_stage(
+            conn, run_id=producer_run or run_id, unit_id=unit_id, upstream_stage=from_stage)
+        producer = storage.read_manifest(producer_text)
+        candidates = [o for o in producer.outputs if o.kind == kind]
+        if len(candidates) != 1:
             raise _Exit(int(ExitCode.USAGE),
-                        f"refusing to overwrite {join(dest_loc, 'manifest.json')}")
-        existing = storage.read_manifest(dest_text)
-        add_unit(conn, run_id, stage, declaration.unit, unit_id)
-        bound = _registered_instances(conn, [o.instance for o in existing.outputs])
-        bind_unit_inputs(conn, run_id, stage, unit_id, bound)
-        conn.commit()
-        print(f"inputs={dest_text} (already composed)", flush=True)
-        return dest_text
+                        f"{producer_text}/manifest.json has {len(candidates)} output(s) of "
+                        f"kind {kind!r}; expected exactly one")
+        producer_entry, moves = _rehome_under_l2(candidates[0])
 
-    template_manifest = storage.read_manifest(template)
-    producer_text = launch_batch.resolve_inputs_from_stage(
-        conn, run_id=producer_run or run_id, unit_id=unit_id, upstream_stage=from_stage)
-    producer = storage.read_manifest(producer_text)
-    candidates = [o for o in producer.outputs if o.kind == kind]
-    if len(candidates) != 1:
-        raise _Exit(int(ExitCode.USAGE),
-                    f"{producer_text}/manifest.json has {len(candidates)} output(s) of "
-                    f"kind {kind!r}; expected exactly one")
-    producer_entry, moves = _rehome_under_l2(candidates[0])
+        template_loc = parse_location(template)
+        producer_loc = parse_location(producer_text)
+        copies: list[tuple[Location, str, str, int]] = [
+            (producer_loc, src, new, member.bytes)
+            for (src, new), member in zip(moves, producer_entry.members)]
+        kept_entries = [o for o in template_manifest.outputs if o.kind != kind]
+        for entry in kept_entries:
+            for member in entry.members:
+                copies.append((template_loc, member.path, member.path, member.bytes))
 
-    # Admission fence first (idempotent), so a finished run is refused
-    # before anything is copied.
-    add_unit(conn, run_id, stage, declaration.unit, unit_id)
+        for src_loc, src_rel, dst_rel, expected in copies:
+            storage.copy(src_loc, src_rel, dest_loc, dst_rel)
+            actual = storage.size(dest_loc, dst_rel)
+            if actual != expected:
+                raise _Exit(int(ExitCode.FAILURE),
+                            f"copied {join(dest_loc, dst_rel)} is {actual} bytes; its "
+                            f"manifest says {expected}")
 
-    template_loc = parse_location(template)
-    producer_loc = parse_location(producer_text)
-    copies: list[tuple[Location, str, str, int]] = [
-        (producer_loc, src, new, member.bytes)
-        for (src, new), member in zip(moves, producer_entry.members)]
-    kept_entries = [o for o in template_manifest.outputs if o.kind != kind]
-    for entry in kept_entries:
-        for member in entry.members:
-            copies.append((template_loc, member.path, member.path, member.bytes))
+        return Manifest(
+            run=run_id,
+            unit=Unit(kind=producer.unit.kind, id=unit_id),
+            stage="input-set",
+            attempt=producer.attempt,
+            execution_record=template_manifest.execution_record or "exec/input-set.json",
+            inputs=template_manifest.inputs,
+            outputs=(producer_entry, *kept_entries),
+        )
 
-    for src_loc, src_rel, dst_rel, expected in copies:
-        storage.copy(src_loc, src_rel, dest_loc, dst_rel)
-        actual = storage.size(dest_loc, dst_rel)
-        if actual != expected:
-            raise _Exit(int(ExitCode.FAILURE),
-                        f"copied {join(dest_loc, dst_rel)} is {actual} bytes; its "
-                        f"manifest says {expected}")
-
-    manifest = Manifest(
-        run=run_id,
-        unit=Unit(kind=producer.unit.kind, id=unit_id),
-        stage="input-set",
-        attempt=producer.attempt,
-        execution_record=template_manifest.execution_record or "exec/input-set.json",
-        inputs=template_manifest.inputs,
-        outputs=(producer_entry, *kept_entries),
-    )
-    instances = [o.instance for o in manifest.outputs]
-    bound = _registered_instances(conn, instances)
-    bind_unit_inputs(conn, run_id, stage, unit_id, bound)
-    conn.commit()
-    # Last: a manifest on disk means the bindings above were committed.
-    storage.write_manifest(manifest, dest_loc)
-    print(f"inputs={dest_text}", flush=True)
+    try:
+        # Labelled (supervisor step 2 R4): the id rule is manifest_instances,
+        # so a template's inputs.result_sets are bound too; a deleting or
+        # deleted producer at bind time exits 65 (InputsRefused), not 64.
+        result = binding.bind_input_set(
+            conn, storage, run_id=run_id, stage=stage, unit_kind=declaration.unit,
+            unit_id=unit_id, dest=dest_text, compose=compose,
+            reuse_existing=reuse_existing)
+    except binding.InputSetExists as exc:
+        raise _Exit(int(ExitCode.USAGE), str(exc)) from exc
+    suffix = " (already composed)" if result.reused else ""
+    print(f"inputs={dest_text}{suffix}", flush=True)
     return dest_text
 
 

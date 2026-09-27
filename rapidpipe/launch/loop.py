@@ -102,7 +102,7 @@ from rapidpipe.db.ids import new_ulid
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
 from rapidpipe.products.storage import join, parse_location
-from rapidpipe.runs import repository
+from rapidpipe.runs import binding, repository
 from rapidpipe.runs.inputs import InputsRefused
 
 #: The run's selected stages (R4), and the positions in it each part of
@@ -520,15 +520,6 @@ def base_instance(conn, run_id: str, field_id: str) -> tuple[str, str] | None:
     return rows[0][0], rows[0][1]
 
 
-def _registered(conn, instance_ids: list[str]) -> list[str]:
-    if not instance_ids:
-        return []
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM product_instances WHERE id = ANY(%s)", (instance_ids,))
-        found = {row[0] for row in cur.fetchall()}
-    return [i for i in instance_ids if i in found]
-
-
 def unit_records(conn, run_id: str) -> list[dict[str, Any]]:
     """Every unit of the run: stage, unit, state, selected attempt and its job."""
     with conn.cursor() as cur:
@@ -601,27 +592,6 @@ def base_entry(conn, storage: Any, previous: LoopRow | None, field_id: int) -> O
         raise LoopError(f"association set {instance} is for field {entry.key.get('field')!r}, "
                         f"not {field_id}")
     return entry
-
-
-def _bind_and_write(conn, storage: Any, *, run_id: str, stage: str, unit_id: str,
-                    dest: str, manifest: Manifest | None) -> str:
-    """Admit the unit, bind its registered inputs, commit, then write the
-    manifest last (``compose_inputs``'s order: a manifest on storage means the
-    bindings were committed). An existing manifest at ``dest`` is reused, so a
-    resumed date re-binds (idempotent) and never rewrites it."""
-    dest_loc = parse_location(dest)
-    existing = storage.exists(dest_loc, "manifest.json")
-    if existing:
-        manifest = storage.read_manifest(dest)
-    assert manifest is not None
-    repository.add_unit(conn, run_id, stage, UNIT_KINDS[stage], unit_id)
-    ids = [o.instance for o in manifest.outputs] + list(manifest.inputs.result_sets)
-    repository.bind_unit_inputs(conn, run_id, stage, unit_id,
-                                _registered(conn, list(dict.fromkeys(ids))))
-    conn.commit()
-    if not existing:
-        storage.write_manifest(manifest, dest_loc)
-    return dest
 
 
 def input_set_manifest(run_id: str, unit: Unit, outputs: Sequence[OutputEntry],
@@ -1109,12 +1079,13 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
             if len({loc for loc, _ in items}) == 1:
                 inputs = items[0][0]
             else:
-                inputs = _bind_and_write(
-                    conn, storage, run_id=run_id, stage="maintain", unit_id=mu,
+                inputs = binding.bind_input_set(
+                    conn, storage, run_id=run_id, stage="maintain",
+                    unit_kind=UNIT_KINDS["maintain"], unit_id=mu,
                     dest=f"{tools.inputs_root(run_id)}/maintain/{mu}",
-                    manifest=input_set_manifest(
+                    compose=lambda: input_set_manifest(
                         run_id, Unit(kind="detector-date", id=mu), [e for _, e in items],
-                        [e.instance for _, e in items]))
+                        [e.instance for _, e in items])).location
             walk(mu, here, inputs=[inputs])
 
         _phase(list(by_maintain.items()), maintain)
@@ -1142,11 +1113,12 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                 "base_promoted": base.promoted}
             if not inherited("crossmatch", unit):
                 here = [position(CROSSMATCH, "crossmatch", unit)]
-                xm_inputs = _bind_and_write(
-                    conn, storage, run_id=run_id, stage="crossmatch", unit_id=unit,
+                xm_inputs = binding.bind_input_set(
+                    conn, storage, run_id=run_id, stage="crossmatch",
+                    unit_kind=UNIT_KINDS["crossmatch"], unit_id=unit,
                     dest=f"{tools.inputs_root(run_id)}/crossmatch/{f}",
-                    manifest=crossmatch_inputs(run_id, f, sources,
-                                               base.entry if base is not None else None))
+                    compose=lambda: crossmatch_inputs(
+                        run_id, f, sources, base.entry if base is not None else None)).location
                 walk(unit, here, inputs=[xm_inputs])
             xm_out = _output(conn, view, "crossmatch", unit)
             sets = [o.instance for o in storage.read_manifest(xm_out).outputs
@@ -1197,16 +1169,21 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                     own_sources, [association[f] for f in own_fields],
                     [statistics[f] for f in own_fields if f in statistics],
                     [pruned[f] for f in own_fields])
-                manifest = None
-                if not storage.exists(parse_location(dest), "manifest.json"):
+
+                def compose() -> Manifest:
+                    # Runs after admission, and only when no manifest exists
+                    # at dest: the members are copied, then listed.
                     _copy_members(storage, fin_loc, diffs[0], dest)
                     for refcat in refcats:
                         _copy_members(storage, image.difference_template, refcat, dest)
-                    manifest = input_set_manifest(run_id, fin.unit, [diffs[0], *refcats],
-                                                  result_sets)
-                _bind_and_write(conn, storage, run_id=run_id, stage="alerts",
-                                unit_id=image.unit, dest=dest, manifest=manifest)
-                walk(image.unit, here, inputs=[dest])
+                    return input_set_manifest(run_id, fin.unit, [diffs[0], *refcats],
+                                              result_sets)
+
+                al_inputs = binding.bind_input_set(
+                    conn, storage, run_id=run_id, stage="alerts",
+                    unit_kind=UNIT_KINDS["alerts"], unit_id=image.unit, dest=dest,
+                    compose=compose).location
+                walk(image.unit, here, inputs=[al_inputs])
             al_out = _output(conn, view, "alerts", image.unit)
             containers = [o.instance for o in storage.read_manifest(al_out).outputs
                           if o.kind == "alert-container"]
