@@ -52,7 +52,6 @@ from rapidpipe.products.storage import (
     Location,
     LocationError,
     fetch_object,
-    fetch_prefix,
     join,
     parse_location,
     publish_dir,
@@ -385,6 +384,17 @@ def _assert_inputs_readable(input_manifest: Manifest, run_id: str) -> None:
         raise TransientFailure(str(exc)) from exc
 
 
+def _manifest_member_paths(manifest: Manifest) -> list[str]:
+    """Every member path the manifest's output entries name, once each, in order.
+
+    ``Manifest.read`` has already refused a path that is absolute or
+    escapes the location, so each is safe to join under the inputs
+    directory.
+    """
+    paths = [member.path for entry in manifest.outputs for member in entry.members]
+    return list(dict.fromkeys(p for p in paths if p != "manifest.json"))
+
+
 def _work_root() -> Path:
     """The base directory for a stage attempt's temporary work directory.
 
@@ -531,9 +541,10 @@ def run_stage(
 
     The read guard (supervisor step 6, 2026-09-26, R6, A5, A6): once the
     input manifest is parsed -- on an S3 ``--inputs`` only
-    ``manifest.json`` has been fetched at that point, and the members are
-    fetched only after the guard passes, so forbidden bytes are never
-    downloaded -- and before ``validate_inputs``, the ``--dry-run`` return
+    ``manifest.json`` has been fetched at that point; after the guard
+    passes, only the member files that manifest names are fetched, one
+    object at a time, never the whole prefix, and the manifest is not
+    fetched again, so forbidden bytes are never downloaded -- and before ``validate_inputs``, the ``--dry-run`` return
     and ``body``, :func:`rapidpipe.runs.readguard.assert_inputs_readable`
     checks that this run may read every instance the manifest names. A
     direct ``rapidpipe stage run``, the local launcher's ``python -m`` and
@@ -685,39 +696,35 @@ def run_stage(
                     log_path, run_id=args.run_id, attempt_id=args.attempt_id,
                     stage=declaration.name, unit_id=args.unit_id)
 
-            manifest_dir = inputs_dir
             if inputs_location.is_s3():
                 inputs_dir.mkdir(parents=True, exist_ok=True)
-                # The manifest alone first, beside (not into) the inputs
-                # directory, which fetch_prefix needs empty: the read
-                # guard below judges it before any member is fetched (A6).
-                # Under --dry-run it is the only object fetched.
-                assert work_dir is not None
-                manifest_dir = inputs_dir if args.dry_run else work_dir / "input-manifest"
+                # The manifest alone first: the read guard below judges it
+                # before any other object is fetched (A6).
                 try:
                     fetch_object(
                         inputs_location, "manifest.json",
-                        manifest_dir / "manifest.json")
+                        inputs_dir / "manifest.json")
                 except LocationError as exc:
                     raise InputRejected(str(exc)) from exc
                 except Exception as exc:  # noqa: BLE001
                     raise _map_storage_error(exc) from exc
 
-            input_manifest = _read_input_manifest_from(manifest_dir, args.inputs)
+            input_manifest = _read_input_manifest_from(inputs_dir, args.inputs)
 
             _assert_inputs_readable(input_manifest, args.run_id)
 
             if inputs_location.is_s3() and not args.dry_run:
-                try:
-                    fetch_prefix(inputs_location, inputs_dir)
-                except LocationError as exc:
-                    raise InputRejected(str(exc)) from exc
-                except Exception as exc:  # noqa: BLE001
-                    raise _map_storage_error(exc) from exc
-                if _read_input_manifest_from(inputs_dir, args.inputs) != input_manifest:
-                    raise InputRejected(
-                        f"input manifest {args.inputs} changed between the read "
-                        "guard and the fetch of its members")
+                # Only the objects the guarded manifest names, one by one
+                # (amendment 3): never the whole prefix, and the manifest
+                # is not fetched again, so what was judged is what is read.
+                for member_path in _manifest_member_paths(input_manifest):
+                    try:
+                        fetch_object(inputs_location, member_path,
+                                     inputs_dir / member_path)
+                    except LocationError as exc:
+                        raise InputRejected(str(exc)) from exc
+                    except Exception as exc:  # noqa: BLE001
+                        raise _map_storage_error(exc) from exc
         except BaseException:
             # The fetch phase reached here (fetch_start is always set just
             # above), and ran for a measurable time before this failure, so

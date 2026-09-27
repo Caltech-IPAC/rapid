@@ -435,16 +435,58 @@ def test_on_s3_the_members_are_fetched_after_the_guard_passes(tmp_path, monkeypa
     assert any(key == "in/l2/F.fits" for _op, key in fake.calls[guard_at:])
 
 
-def test_on_s3_a_manifest_replaced_after_the_guard_is_refused(tmp_path, monkeypatch):
+def test_on_s3_an_object_under_the_prefix_but_not_in_the_manifest_is_never_fetched(
+        tmp_path, monkeypatch):
+    fake = FakeS3()
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+    monkeypatch.setattr(readguard, "assert_inputs_readable",
+                        lambda manifest, run_id, *, connect=None: None)
+    inputs = _seed_s3(fake, "in", _manifest(_entry("F")))
+    fake.seed("bucket", "in/l2/forbidden.fits", b"another run's scratch bytes")
+
+    def _body(context):
+        assert not (context.inputs_dir / "l2" / "forbidden.fits").exists()
+        return StageResult(outputs=())
+
+    rc = run_stage(DECLARATION, _body, _argv(inputs, tmp_path / "out"))
+    assert rc == 0
+    touched = [key for _op, key in fake.calls if key.startswith("in/")]
+    assert touched == ["in/manifest.json", "in/l2/F.fits"]
+    assert not any(op == "list_objects_v2" for op, _key in fake.calls)
+
+
+def test_on_s3_a_manifest_swapped_after_the_guard_cannot_matter(tmp_path, monkeypatch):
     fake = FakeS3()
     monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
     monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
     inputs = _seed_s3(fake, "in", _manifest(_entry("F")))
+    fake.seed("bucket", "in/l2/G.fits", b"never read")
 
     def _swap(manifest, run_id, *, connect=None):
         fake.seed("bucket", "in/manifest.json", _manifest(_entry("G")).to_json().encode())
 
     monkeypatch.setattr(readguard, "assert_inputs_readable", _swap)
+    seen = []
+
+    def _body(context):
+        seen.append([entry.instance for entry in context.input_manifest.outputs])
+        return StageResult(outputs=())
+
+    rc = run_stage(DECLARATION, _body, _argv(inputs, tmp_path / "out"))
+    assert rc == 0
+    assert seen == [["F"]]
+    touched = [key for _op, key in fake.calls if key.startswith("in/")]
+    assert touched == ["in/manifest.json", "in/l2/F.fits"]
+
+
+def test_on_s3_a_member_missing_from_the_prefix_is_rejected_with_65(tmp_path, monkeypatch):
+    fake = FakeS3()
+    monkeypatch.setattr(storage_module, "s3_client", lambda: fake)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+    monkeypatch.setattr(readguard, "assert_inputs_readable",
+                        lambda manifest, run_id, *, connect=None: None)
+    fake.seed("bucket", "in/manifest.json", _manifest(_entry("F")).to_json().encode())
     rc = run_stage(DECLARATION, lambda context: StageResult(outputs=()),
-                   _argv(inputs, tmp_path / "out"))
+                   _argv("s3://bucket/in", tmp_path / "out"))
     assert rc == 65
