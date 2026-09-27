@@ -53,6 +53,26 @@ class _Body:
         return self._data
 
 
+class _Paginator:
+    """Stands in for a ``boto3`` paginator: ``paginate(**kwargs)`` calls the
+    wrapped client's ``list_objects_v2`` once per page, following
+    ``ContinuationToken``/``IsTruncated`` exactly as :class:`FakeS3` reports
+    them, so a page-forcing ``FakeS3(page_size=...)`` exercises more than one
+    page here too."""
+
+    def __init__(self, client: "FakeS3"):
+        self._client = client
+
+    def paginate(self, **kwargs: Any):
+        token = kwargs.pop("ContinuationToken", None)
+        while True:
+            page = self._client.list_objects_v2(ContinuationToken=token, **kwargs)
+            yield page
+            if not page.get("IsTruncated"):
+                return
+            token = page.get("NextContinuationToken")
+
+
 class FakeS3:
     """An in-memory bucket store, keyed by ``(bucket, key)``."""
 
@@ -107,6 +127,13 @@ class FakeS3:
         else:
             response["IsTruncated"] = False
         return response
+
+    def get_paginator(self, operation_name: str) -> "_Paginator":
+        """A minimal stand-in for ``boto3``'s paginator: only ``list_objects_v2``
+        (``rapidpipe.launch.discovery.list_inbox``'s one paginated call)."""
+        if operation_name != "list_objects_v2":
+            raise NotImplementedError(operation_name)
+        return _Paginator(self)
 
     def upload_file(self, filename: str, bucket: str, key: str, **_: Any) -> None:
         self.calls.append(("upload_file", key))

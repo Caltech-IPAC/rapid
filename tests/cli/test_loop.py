@@ -695,6 +695,31 @@ def test_loop_resolves_a_jobless_attempt_and_keeps_its_bindings(
         assert cur.fetchone()[0] == 1
 
 
+def test_loop_a_spec_listed_date_runs_as_batch_1(
+        cli, db, fake_batch, fake_s3, world, monkeypatch):
+    """A spec with [[dates]] and no inbox still runs as batch 1 (step 4,
+    R1/R5): the migration's batch/kind columns default a spec-listed date to
+    (1, 'batch'), the record carries batch=1, and 'loop show' prints it."""
+    _FakeStages(db, fake_batch, fake_s3, execution_record={
+        "image_digest": world["digest"], "release": world["tag"]}).install(monkeypatch)
+
+    result = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01")
+    assert result.rc == 0, result.err + result.out
+
+    with db.cursor() as cur:
+        cur.execute("SELECT processing_date::text, batch, kind, record FROM loop_dates "
+                    "WHERE schedule = %s ORDER BY processing_date", (world["schedule"],))
+        rows = cur.fetchall()
+    assert len(rows) == 1
+    date, batch, kind, record = rows[0]
+    assert (date, batch, kind) == ("2027-10-01", 1, "batch")
+    assert record.get("batch") == 1
+
+    shown = cli("loop", "show", world["schedule"])
+    assert shown.rc == 0, shown.err
+    assert "batch=1" in shown.out
+
+
 def test_loop_a_refused_input_manifest_fails_the_date(
         cli, db, fake_batch, fake_s3, world, monkeypatch):
     # The delivery's manifest is gone: run start's launcher refuses admit
