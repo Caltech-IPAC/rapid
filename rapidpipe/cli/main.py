@@ -1370,6 +1370,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "loop":
             return loopctl.dispatch(args)
+    except ConnectionConfigError as exc:
+        sys.stderr.write(
+            f"rapidpipe {args.command}: database configuration error: {exc}\n")
+        return int(ExitCode.USAGE)
+    except ConnectionUnavailable as exc:
+        sys.stderr.write(
+            f"rapidpipe {args.command}: database unavailable: {exc}\n")
+        return int(ExitCode.TRANSIENT_FAILURE)
     except Exception:  # noqa: BLE001 - the unclassified-error boundary
         logging.getLogger("rapidpipe.cli").exception(
             "rapidpipe %s: unexpected error", args.command)
