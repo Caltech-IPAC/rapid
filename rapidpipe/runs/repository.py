@@ -1753,18 +1753,18 @@ def _run_slot_changes(
 
     by_slot: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
     for instance_id, kind, slot, identity in deliverables:
-        if identity is None:
-            raise PromotionRefused(
-                f"run {run_id!r}: candidate {instance_id!r} of kind={kind!r} has no identity "
-                "(it could not be derived from its logical key: a missing or malformed "
-                "field, an unresolved or missing producer, or an unknown kind; "
-                "slot_backfill_log counts them); refusing")
         if slot is None:
             raise PromotionRefused(
                 f"run {run_id!r}: candidate {instance_id!r} of kind={kind!r} has no slot "
                 "(its slot could not be derived from its logical key: a missing or "
                 "malformed field, an unresolved or missing producer, or an unknown "
                 "kind; slot_backfill_log counts them); refusing")
+        if identity is None:
+            raise PromotionRefused(
+                f"run {run_id!r}: candidate {instance_id!r} of kind={kind!r} has no identity "
+                "(it could not be derived from its logical key: a missing or malformed "
+                "field, an unresolved or missing producer, or an unknown kind; "
+                "slot_backfill_log counts them); refusing")
         slot_text = canonical_json(slot)
         if (kind, slot_text) in by_slot:
             raise PromotionRefused(

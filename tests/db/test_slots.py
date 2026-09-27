@@ -645,8 +645,7 @@ def test_promotion_plan_matches_and_stale_plan_refuses(conn):
 # ======================================================================
 
 def test_association_ancestor_rule(conn):
-    _run, srcset = _register(
-        conn, "source-set", {"difference": new_ulid(), "catalog_type": "sextractor"})
+    srcset = _resolved_source_set(conn)
     _run, base = _register(
         conn, "association-set",
         {"field": 8000, "base": None, "source_sets": [srcset], "settings_hash": "sha256:base"})
@@ -690,8 +689,7 @@ def test_rollback_legacy_promotion_recorded_without_a_slot(conn):
     slot stripped to NULL (legacy state); rollback_promotion restores the
     earlier selection exactly, selecting by logical_key since the
     recorded change's slot is NULL."""
-    _run, srcset = _register(
-        conn, "source-set", {"difference": new_ulid(), "catalog_type": "sextractor"})
+    srcset = _resolved_source_set(conn)
     # Pre-migration, promotion matched (kind, logical_key) exactly: a
     # superseding instance necessarily carried the SAME logical_key as the
     # one it replaced (the old unique index was on (kind, logical_key)).
@@ -771,6 +769,18 @@ def test_rollback_slot_promotion_exact_inverse_and_refused_when_moved(conn):
 # Predicate 11: catalog-counts-vs-reference finds its reference by slot
 # (R8, R16).
 # ======================================================================
+
+def _resolved_source_set(conn):
+    """A source set over a registered l2 -> reference -> difference chain,
+    so it and an association set built on it derive an identity (a slot
+    comes only with an identity, 20260926-03, R21)."""
+    exposure = int(new_ulid()[-6:], 36) % 10**6
+    _run, l2 = _register_l2(conn, exposure, 1, version=1)
+    _run, ref = _register_reference(conn, exposure, "F184")
+    _run, diff = _register_difference(conn, l2, ref, settings_hash="sha256:src")
+    _run, srcset = _register(conn, "source-set", {"difference": diff, "catalog_type": "sextractor"})
+    return srcset
+
 
 def _register_result_set(conn, kind, key, *, row_count=None, run_id=None, instance_id=None):
     """Register a database result set (no members, a ``row_count``), the
