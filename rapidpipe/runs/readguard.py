@@ -177,7 +177,7 @@ _MEMBER_MATCH_SQL = """
 
 
 def _member_matches(cur, member) -> list[str]:
-    """Registered instances one of whose members is ``member``'s file (A5):
+    """Registered instances one of whose members is ``member``'s file:
     the same SHA-256 at the same path, as a member path or a primary location."""
     cur.execute(_MEMBER_MATCH_SQL, (member.sha256, member.path, member.path))
     return [instance for (instance,) in cur.fetchall()]
