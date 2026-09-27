@@ -294,6 +294,22 @@ def test_a_fresh_id_over_another_runs_scratch_files_is_refused_with_65(
     assert f"registered instance {scratch_f['F']}" in result.err
 
 
+def test_a_readable_member_does_not_authorise_another_runs_scratch_member(
+        cli, db, scratch_f, tmp_path):
+    q_run, g_id, _rs = _producer(db, "production")
+    readable = _l2_entry(g_id)
+    # The same SHA-256 fixture value for both files: F's and G's members
+    # differ only by path, and each path identifies its instance.
+    mixed = dict(_l2_entry(new_ulid(), path=f"l2/{g_id}.fits"))
+    mixed["members"] = readable["members"] + [
+        {"role": "mask", "path": f"l2/{scratch_f['F']}.fits", "bytes": len(F_BYTES),
+         "sha256": SHA}]
+    inputs = _local_inputs(tmp_path, _input_manifest(entries=[mixed]))
+    result = _direct(cli, scratch_f["P"], inputs, tmp_path / "out", dry_run=True)
+    assert result.rc == 65, result.err
+    assert f"is a file of registered instance {scratch_f['F']}" in result.err
+
+
 def test_no_instance_named_makes_no_connection(cli, db, tmp_path, monkeypatch):
     calls = []
 

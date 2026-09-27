@@ -24,9 +24,11 @@ unregistered but whose members match a registered instance's members
 ``product_instances.primary_location``, and same SHA-256) is judged as
 that instance, so a fresh id over another run's scratch files is refused.
 Requiring the SHA-256 as well as the path keeps two runs that merely
-share a relative layout (``l2/<name>.fits``) from matching each other;
-when the bytes match several instances the entry is readable if any of
-them is.
+share a relative layout (``l2/<name>.fits``) from matching each other.
+Each member is judged on its own (amendment 3): a member whose bytes
+match several instances is readable if any of them is, and one member
+that matches only unreadable instances refuses the entry, whatever its
+other members match.
 
 This module sits in ``rapidpipe.runs`` and may not import
 ``rapidpipe.stages`` (the fixed dependency direction,
@@ -230,20 +232,17 @@ _MEMBER_MATCH_SQL = """
 """
 
 
-def _member_matches(cur, entry: OutputEntry) -> list[str]:
-    """Registered instances whose members carry one of ``entry``'s files (A5)."""
-    matches: list[str] = []
-    for member in entry.members:
-        cur.execute(_MEMBER_MATCH_SQL, (member.sha256, member.path, member.path))
-        for (instance,) in cur.fetchall():
-            if instance not in matches:
-                matches.append(instance)
-    return matches
+def _member_matches(cur, member) -> list[str]:
+    """Registered instances one of whose members is ``member``'s file (A5):
+    the same SHA-256 at the same path, as a member path or a primary location."""
+    cur.execute(_MEMBER_MATCH_SQL, (member.sha256, member.path, member.path))
+    return [instance for (instance,) in cur.fetchall()]
 
 
 def _refusal(name: str, instance: str, found: dict[str, Any] | None, run_id: str,
-             reason: str) -> InputNotReadable:
-    via = "" if name == instance else f" (its members are those of registered instance {instance})"
+             reason: str, *, member: str | None = None) -> InputNotReadable:
+    via = ("" if name == instance else
+           f" (its member {member} is a file of registered instance {instance})")
     if found is None:
         return InputNotReadable(
             f"input {name}{via} is not readable by run {run_id}: {reason}")
@@ -280,17 +279,21 @@ def _check_all(cur, manifest: Manifest, names: list[str], run_id: str) -> None:
         entry = entries.get(name)
         if entry is None or not entry.members:
             continue  # an unregistered result-set id reads nothing: readable
-        matches = _member_matches(cur, entry)
-        refusals = []
-        for match in matches:
-            match_found, match_reason = _judge(cur, match, run_id)
-            if match_reason is None:
-                refusals = []
-                break
-            refusals.append((match, match_found, match_reason))
-        if refusals:
-            match, match_found, match_reason = refusals[0]
-            raise _refusal(name, match, match_found, run_id, match_reason)
+        # Authorised per member (amendment 3): every member whose bytes
+        # are a registered product's must be those of a readable one. A
+        # readable match for one member never authorises another member.
+        for member in entry.members:
+            refusals = []
+            for match in _member_matches(cur, member):
+                match_found, match_reason = _judge(cur, match, run_id)
+                if match_reason is None:
+                    refusals = []
+                    break
+                refusals.append((match, match_found, match_reason))
+            if refusals:
+                match, match_found, match_reason = refusals[0]
+                raise _refusal(name, match, match_found, run_id, match_reason,
+                               member=member.path)
 
 
 def assert_inputs_readable(

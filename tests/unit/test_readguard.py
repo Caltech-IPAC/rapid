@@ -213,7 +213,7 @@ def test_a_fresh_id_over_another_runs_scratch_files_is_refused():
     with pytest.raises(readguard.InputNotReadable) as err:
         readguard.assert_inputs_readable(
             _manifest(_entry("NEW", path="l2/F.fits")), RUN, connect=opener)
-    assert "registered instance F" in str(err.value)
+    assert "member l2/F.fits is a file of registered instance F" in str(err.value)
 
 
 def test_a_fresh_id_matched_through_primary_location_is_refused():
@@ -239,6 +239,22 @@ def test_bytes_matching_a_readable_instance_as_well_are_readable():
         members=[("F", "l2/x.fits", "l2/x.fits", SHA), ("G", "l2/x.fits", "l2/x.fits", SHA)])
     readguard.assert_inputs_readable(
         _manifest(_entry("NEW", path="l2/x.fits")), RUN, connect=opener)
+
+
+def test_a_readable_member_does_not_authorise_a_forbidden_one():
+    other_sha = "sha256:" + "3" * 64
+    entry = OutputEntry(
+        kind="l2-image", format_version="1", instance="NEW",
+        key={"exposure": "e1", "detector": "SCA01"}, primary="l2/ok.fits",
+        members=(Member("image", "l2/ok.fits", 10, SHA),
+                 Member("mask", "l2/bad.fits", 10, other_sha)))
+    opener, _conn = _opener(
+        {"G": _instance(custody="candidate"), "F": _instance(custody="scratch")},
+        members=[("G", "l2/ok.fits", "l2/ok.fits", SHA),
+                 ("F", "l2/bad.fits", "l2/bad.fits", other_sha)])
+    with pytest.raises(readguard.InputNotReadable) as err:
+        readguard.assert_inputs_readable(_manifest(entry), RUN, connect=opener)
+    assert "member l2/bad.fits is a file of registered instance F" in str(err.value)
 
 
 @pytest.mark.parametrize("raised, expected, code", [
