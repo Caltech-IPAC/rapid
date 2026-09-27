@@ -1484,21 +1484,28 @@ def discover(conn, spec: LoopSpec, tools: LoopTools) -> discovery.Discovery:
 
 def form_batches(conn, spec: LoopSpec, tools: LoopTools,
                  found: discovery.Discovery) -> list[LoopDate]:
-    """Record a firing's discovery (R6, R13): the refused, quarantined and
-    deferred deliveries in one transaction, then per processing date, oldest
-    first, one transaction holding the batch's run, its ``loop_dates`` row
-    (``open``, the next batch of the date) and its ``batched`` deliveries.
-    Every batch is committed before any is walked (frozen membership)."""
+    """Record a firing's discovery (R6, R13): first, per processing date and
+    in key order, a batched delivery whose derived unit id repeats an
+    earlier batched delivery's is quarantined as a unit id collision
+    (:func:`discovery.resolve_unit_collisions`), so two delivery names that
+    would derive the same unit id never reach the same batch. Then the
+    refused, quarantined and deferred deliveries are recorded in one
+    transaction, and, per processing date, oldest first, one transaction
+    holds the batch's run, its ``loop_dates`` row (``open``, the next batch
+    of the date) and its ``batched`` deliveries. Every batch is committed
+    before any is walked (frozen membership)."""
     out = tools.out
-    rejected = [d for d in found.deliveries if d.state != discovery.BATCHED]
+    resolved = discovery.resolve_unit_collisions(found.deliveries, detector_unit_id)
+    rejected = [d for d in resolved if d.state != discovery.BATCHED]
     if rejected:
         discovery.insert_deliveries(conn, spec.schedule, rejected, batch=None)
         conn.commit()
         for d in rejected:
             out(f"delivery {d.location} {d.label} state={d.state} reason={d.reason}")
     by_date: dict[_dt.date, list[discovery.Delivery]] = {}
-    for d in found.with_state(discovery.BATCHED):
-        by_date.setdefault(d.processing_date, []).append(d)
+    for d in resolved:
+        if d.state == discovery.BATCHED:
+            by_date.setdefault(d.processing_date, []).append(d)
     days: list[LoopDate] = []
     for date in sorted(by_date):
         members = by_date[date]
@@ -1506,9 +1513,6 @@ def form_batches(conn, spec: LoopSpec, tools: LoopTools,
         batch = next_batch(conn, spec.schedule, date)
         day = LoopDate(processing_date=date, detector_images=stream_images(spec, locations),
                        batch=batch, deliveries=locations)
-        units = [i.unit for i in day.detector_images]
-        if len(set(units)) != len(units):
-            raise LoopError(f"date {date}: two deliveries share a unit id ({units})")
         run_id = _create_run(conn, spec, tools, date, batch)
         _insert_row(conn, spec.schedule, date, batch, run_id, _new_record(spec, run_id, day))
         discovery.insert_deliveries(conn, spec.schedule, members, batch=batch)
