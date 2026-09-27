@@ -975,3 +975,113 @@ def test_forty_deep_association_chain_resolves_in_one_fill_call(conn):
         slot, identity = rows[instance_id]
         assert slot == {"field": 93000}
         assert identity is not None
+
+
+# ======================================================================
+# R22 (migration 20260926-04-product-slots-rederive.sql): -02's 32-pass
+# identity cap could crown a shallow member of a duplicate-current pair
+# before its deeper peer's identity ever reached the collision check;
+# -03's one-time cleanup only clears a slot with no identity, so that
+# premature winner (which DOES have an identity) survives it too. -04's
+# unconditional clear-and-rederive is what finally catches it.
+# ======================================================================
+
+def _insert_raw_instance(conn, kind, key, run_id, attempt_id, custody="candidate"):
+    """A product_instances row with slot and identity left NULL (the
+    shape register_manifest itself inserts, before its own internal
+    fill call) -- used here so the OLD -02 function, replayed in this
+    test's own transaction, sees genuinely unresolved rows to fill,
+    rather than rows the currently-installed (already -04-corrected)
+    functions resolved at registration time."""
+    instance_id = new_ulid()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO product_instances (
+                id, kind, logical_key, run, producing_stage, producing_attempt,
+                registering_attempt, custody, format_version, primary_location, manifest_ref
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (instance_id, kind, json.dumps(key), run_id, "test-stage", attempt_id, attempt_id,
+             custody, "1", f"s3://example/{kind}/{instance_id}.fits", ""),
+        )
+    return instance_id
+
+
+def test_rederive_corrects_a_premature_duplicate_winner_beyond_the_old_pass_cap(conn):
+    run_id = _make_run(conn)
+    stage, unit_id = _make_unit(conn, run_id)
+    attempt_id = _succeed_and_select(conn, run_id, stage, unit_id)
+    field = 94000
+
+    # Shallow branch: one association-set (base None, resolves in a
+    # single pass under any version), and a current pruned-set on it.
+    shallow_assoc = _insert_raw_instance(
+        conn, "association-set",
+        {"field": field, "base": None, "source_sets": [], "settings_hash": "sha256:r22-shallow"},
+        run_id, attempt_id)
+    shallow_pruned = _insert_raw_instance(
+        conn, "pruned-set", {"base": shallow_assoc, "settings_hash": "sha256:r22-shallow-p"},
+        run_id, attempt_id, custody="current")
+
+    # Deep branch: a 33-link association-set chain (each base the
+    # previous), so its last link's identity needs 33 identity-loop
+    # passes to resolve -- one more than -02's 32-pass cap -- and a
+    # current pruned-set on that last link.
+    base = None
+    deep_assoc = None
+    for i in range(33):
+        deep_assoc = _insert_raw_instance(
+            conn, "association-set",
+            {"field": field, "base": base, "source_sets": [],
+             "settings_hash": f"sha256:r22-deep-{i}"},
+            run_id, attempt_id)
+        base = deep_assoc
+    deep_pruned = _insert_raw_instance(
+        conn, "pruned-set", {"base": deep_assoc, "settings_hash": "sha256:r22-deep-p"},
+        run_id, attempt_id, custody="current")
+
+    # A promotion recorded (by hand, as if made between -02 and -04)
+    # naming the deep pruned-set as its after instance with a slot --
+    # -04 must recompute this to NULL once the instance no longer (in
+    # fact, never rightly did) hold that slot alone.
+    promotion_id = new_ulid()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO promotions (id, who, reason) VALUES (%s, %s, %s)",
+            (promotion_id, "brusholme", "r22 fixture"))
+        cur.execute(
+            "INSERT INTO promotion_changes "
+            "(id, promotion, kind, logical_key, slot, before_instance, after_instance) "
+            "VALUES (%s, %s, %s, %s, %s, NULL, %s)",
+            (new_ulid(), promotion_id, "pruned-set",
+             json.dumps({"base": deep_assoc, "settings_hash": "sha256:r22-deep-p"}),
+             json.dumps({"field": field}), deep_pruned))
+
+    # Apply -02, then -03, then -04 in order, inside this test's own
+    # transaction, exactly as the applier already did against CI's
+    # database (the idempotence test above does the same for one file).
+    for filename in (
+        "20260926-02-product-slots.sql",
+        "20260926-03-product-slots-identity-first.sql",
+        "20260926-04-product-slots-rederive.sql",
+    ):
+        with open(f"database/migrations/{filename}") as fh:
+            sql_text = fh.read()
+        with conn.cursor() as cur:
+            cur.execute(sql_text)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, slot, identity FROM product_instances WHERE id IN (%s, %s)",
+            (shallow_pruned, deep_pruned))
+        rows = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+        cur.execute(
+            "SELECT slot FROM promotion_changes WHERE after_instance = %s", (deep_pruned,))
+        (recorded_slot,) = cur.fetchone()
+
+    for instance_id in (shallow_pruned, deep_pruned):
+        slot, identity = rows[instance_id]
+        assert slot is None, f"{instance_id} kept a slot after the rederive"
+        assert identity is not None, f"{instance_id} has no identity after the rederive"
+    assert recorded_slot is None
