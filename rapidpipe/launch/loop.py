@@ -58,6 +58,19 @@ uses. The rulings this module implements, one line each:
   either way.
 - R7: ``loop_dates`` (migration 20260924-11) holds per date the run, the
   state, the promotion and a JSON record of what ran.
+- Step 4 of the operations campaign (rulings R1-R6, R13, R14, 2026-09-26):
+  a spec with an ``inbox`` discovers its deliveries
+  (``<inbox>/<YYYY-MM-DD>/<name>/manifest.json``, the date directory being
+  the processing date; ``rapidpipe.launch.discovery``) and classifies each
+  once into ``loop_deliveries`` (batched, refused, quarantined, deferred).
+  ``loop run`` then resumes the schedule's open batches, records the
+  firing's rejections in one transaction, forms one batch per date with new
+  deliveries (oldest first, batch = 1 + the date's highest, each with its
+  run in its own transaction, all before any is walked) and walks them.
+  ``loop_dates`` is keyed by (schedule, processing_date, batch) (migration
+  20260926-01), every read and write of it names the batch, and a later
+  batch's base is the earlier batch of the same date before any earlier
+  date. A firing that resumes and finds nothing writes nothing and exits 0.
 
 The spec is a TOML document at a local path or an ``s3://`` object::
 
@@ -80,6 +93,17 @@ The spec is a TOML document at a local path or an ``s3://`` object::
     difference_settings = "s3://.../difference-gain1-imgnoise.toml"
     # unit = "r0034001002001001001/SCA01"  (optional; derived from delivery)
 
+The inbox form (step 4 R1) discovers the deliveries instead of listing
+them; ``[[dates]]`` may be given as well, and ``--date`` selects only those::
+
+    [loop]
+    schedule = "ops4-stream"
+    # release, kind, owner, lane, check_policy, max_attempts as above
+    inbox = "s3://.../ops4/inbox"                 # <inbox>/<YYYY-MM-DD>/<name>/manifest.json
+    difference_template = "s3://.../control/20260923/inputs"   # every delivery's
+    admit_settings = "s3://.../admit-socsim.toml"               # optional
+    difference_settings = "s3://.../difference-gain1-imgnoise.toml"   # optional
+
 Dependency direction: ``rapidpipe.launch`` may not import ``rapidpipe.cli``,
 and ``run start``'s walk, ``run create``'s release path and the storage
 helper live there, so the CLI hands them in as :class:`LoopTools`; this
@@ -100,6 +124,7 @@ from rapidpipe.db import objects as _objects
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.launch import batch as launch_batch
+from rapidpipe.launch import discovery
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
 from rapidpipe.products.storage import join, parse_location
 from rapidpipe.runs import binding, repository
@@ -371,11 +396,11 @@ _ROW_COLUMNS = ("schedule, processing_date, run, state, started_at, ended_at, pr
                 "record, batch, kind")
 
 
-def loop_row(conn, schedule: str, processing_date: _dt.date) -> LoopRow | None:
+def loop_row(conn, schedule: str, processing_date: _dt.date, batch: int) -> LoopRow | None:
     with conn.cursor() as cur:
         cur.execute(f"SELECT {_ROW_COLUMNS} FROM loop_dates "
-                    "WHERE schedule = %s AND processing_date = %s",
-                    (schedule, processing_date))
+                    "WHERE schedule = %s AND processing_date = %s AND batch = %s",
+                    (schedule, processing_date, batch))
         row = cur.fetchone()
     return None if row is None else LoopRow(*row)
 
@@ -383,17 +408,31 @@ def loop_row(conn, schedule: str, processing_date: _dt.date) -> LoopRow | None:
 def loop_rows(conn, schedule: str) -> list[LoopRow]:
     with conn.cursor() as cur:
         cur.execute(f"SELECT {_ROW_COLUMNS} FROM loop_dates WHERE schedule = %s "
-                    "ORDER BY processing_date", (schedule,))
+                    "ORDER BY processing_date, batch", (schedule,))
         return [LoopRow(*row) for row in cur.fetchall()]
 
 
-def previous_complete_rows(conn, schedule: str, processing_date: _dt.date) -> list[LoopRow]:
-    """``schedule``'s ``complete`` rows before ``processing_date``, newest first (R5/A3)."""
+def previous_complete_rows(conn, schedule: str, processing_date: _dt.date,
+                           batch: int) -> list[LoopRow]:
+    """``schedule``'s ``complete`` rows before (``processing_date``, ``batch``),
+    newest first (R5/A3; step 4 R5: a later batch of a date extends the
+    earlier batches of the same date before any earlier date)."""
     with conn.cursor() as cur:
         cur.execute(f"SELECT {_ROW_COLUMNS} FROM loop_dates WHERE schedule = %s "
-                    "AND processing_date < %s AND state = 'complete' "
-                    "ORDER BY processing_date DESC", (schedule, processing_date))
+                    "AND state = 'complete' AND (processing_date, batch) < (%s, %s) "
+                    "ORDER BY processing_date DESC, batch DESC",
+                    (schedule, processing_date, batch))
         return [LoopRow(*row) for row in cur.fetchall()]
+
+
+def next_batch(conn, schedule: str, processing_date: _dt.date) -> int:
+    """1 + the highest batch of (``schedule``, ``processing_date``), else 1 (R6)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT COALESCE(MAX(batch), 0) + 1 FROM loop_dates "
+                    "WHERE schedule = %s AND processing_date = %s",
+                    (schedule, processing_date))
+        (batch,) = cur.fetchone()
+    return int(batch)
 
 
 def run_promotion(conn, run_id: str) -> str | None:
@@ -437,15 +476,16 @@ def unlock(conn, schedule: str) -> None:
     conn.commit()
 
 
-def repoint_row(conn, schedule: str, processing_date: _dt.date, run_id: str,
+def repoint_row(conn, schedule: str, processing_date: _dt.date, batch: int, run_id: str,
                 record: dict[str, Any]) -> None:
     """``--retry-failed``: a failed row back to ``open`` on its seeded re-run
     ``run_id`` (Codex 7-2). Does not commit."""
     with conn.cursor() as cur:
         cur.execute("UPDATE loop_dates SET run = %s, state = 'open', ended_at = NULL, "
-                    "promotion = NULL, record = %s "
-                    "WHERE schedule = %s AND processing_date = %s AND state = 'failed'",
-                    (run_id, json.dumps(record, default=str), schedule, processing_date))
+                    "promotion = NULL, record = %s WHERE schedule = %s "
+                    "AND processing_date = %s AND batch = %s AND state = 'failed'",
+                    (run_id, json.dumps(record, default=str), schedule, processing_date,
+                     batch))
 
 
 def run_lineage(conn, run_id: str) -> tuple[tuple[str, ...], list[str]]:
@@ -476,21 +516,21 @@ def unit_state(conn, run_id: str, stage: str, unit_id: str) -> tuple[str, bool] 
     return None if row is None else (row[0], bool(row[1]))
 
 
-def _insert_row(conn, schedule: str, processing_date: _dt.date, run_id: str,
+def _insert_row(conn, schedule: str, processing_date: _dt.date, batch: int, run_id: str,
                 record: dict[str, Any]) -> None:
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO loop_dates (schedule, processing_date, run, state, record) "
-                    "VALUES (%s, %s, %s, 'open', %s)",
-                    (schedule, processing_date, run_id, json.dumps(record)))
+        cur.execute("INSERT INTO loop_dates (schedule, processing_date, batch, kind, run, "
+                    "state, record) VALUES (%s, %s, %s, 'batch', %s, 'open', %s)",
+                    (schedule, processing_date, batch, run_id, json.dumps(record)))
 
 
-def _update_row(conn, schedule: str, processing_date: _dt.date, *, state: str,
+def _update_row(conn, schedule: str, processing_date: _dt.date, batch: int, *, state: str,
                 promotion: str | None, record: dict[str, Any]) -> None:
     with conn.cursor() as cur:
         cur.execute("UPDATE loop_dates SET state = %s, ended_at = now(), promotion = %s, "
-                    "record = %s WHERE schedule = %s AND processing_date = %s",
+                    "record = %s WHERE schedule = %s AND processing_date = %s AND batch = %s",
                     (state, promotion, json.dumps(record, default=str), schedule,
-                     processing_date))
+                     processing_date, batch))
 
 
 def selected_output(conn, run_id: str, stage: str, unit_id: str) -> str:
@@ -711,7 +751,7 @@ def field_pruned_set(entries: Sequence[OutputEntry], location: str, association:
     return pruned[0].instance
 
 
-def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
+def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date, batch: int = 1
              ) -> tuple[str | None, str, str, list[dict[str, Any]]]:
     """(promotion id or None, the record's ``promotion`` text, ``promotion_gate``,
     the checks run) (R6).
@@ -751,7 +791,8 @@ def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
     kwargs: dict[str, Any] = {"check_policy": policy}
     try:
         promotion = repository.promote_run(
-            conn, run_id, "scheduler", f"processing date {processing_date}", **kwargs)
+            conn, run_id, "scheduler", f"processing date {processing_date} batch {batch}",
+            **kwargs)
     except (repository.RunNotFound, repository.RunDeletingOrDeleted):
         raise
     except repository.RunModelError as exc:
@@ -761,29 +802,35 @@ def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date
     return promotion, promotion, gate, checks
 
 
-def _finish_row(conn, spec: LoopSpec, date: _dt.date, run_id: str, record: dict[str, Any],
-                out: Callable[[str], None]) -> int:
+def _at(date: _dt.date, batch: int) -> str:
+    """``date=<d>`` for batch 1 (the pre-batch line shape), else ``date=<d> batch=<n>``."""
+    return f"date={date}" if batch == 1 else f"date={date} batch={batch}"
+
+
+def _finish_row(conn, spec: LoopSpec, date: _dt.date, batch: int, run_id: str,
+                record: dict[str, Any], out: Callable[[str], None]) -> int:
     """(f)+(g): promote (or reuse the run's promotion, or record a refusal),
     then ``finish_run`` and the row's completion in one transaction (A4)."""
-    promotion_id, promotion_text, gate, checks = _promote(conn, run_id, spec, date)
+    promotion_id, promotion_text, gate, checks = _promote(conn, run_id, spec, date, batch)
     if run_state(conn, run_id) == "open":
         repository.finish_run(conn, run_id)
     record.update(units=unit_records(conn, run_id), promotion=promotion_text,
                   promotion_gate=gate, checks=checks)
-    _update_row(conn, spec.schedule, date, state="complete", promotion=promotion_id,
+    _update_row(conn, spec.schedule, date, batch, state="complete", promotion=promotion_id,
                 record=record)
     conn.commit()
-    out(f"date={date} run={run_id} state=complete promotion={promotion_text}")
+    out(f"{_at(date, batch)} run={run_id} state=complete promotion={promotion_text}")
     return EXIT_OK
 
 
-def _fail_row(conn, spec: LoopSpec, date: _dt.date, run_id: str, record: dict[str, Any],
-              out: Callable[[str], None], **fields: Any) -> int:
+def _fail_row(conn, spec: LoopSpec, date: _dt.date, batch: int, run_id: str,
+              record: dict[str, Any], out: Callable[[str], None], **fields: Any) -> int:
     record.update(units=unit_records(conn, run_id), **fields)
-    _update_row(conn, spec.schedule, date, state="failed", promotion=None, record=record)
+    _update_row(conn, spec.schedule, date, batch, state="failed", promotion=None,
+                record=record)
     conn.commit()
     reason = fields.get("failure") or fields.get("reason")
-    out(f"date={date} run={run_id} state=failed reason={reason}")
+    out(f"{_at(date, batch)} run={run_id} state=failed reason={reason}")
     return EXIT_FAILED
 
 
@@ -969,30 +1016,39 @@ def _phase(items: Sequence[Any], body: Callable[[Any], None]) -> None:
 # One date
 # ----------------------------------------------------------------------
 
+def _create_run(conn, spec: LoopSpec, tools: LoopTools, date: _dt.date, batch: int) -> str:
+    """One batch's production run, through ``run create --release``'s path (R4)."""
+    return tools.create_run(
+        conn, kind=spec.kind, owner=spec.owner,
+        purpose=f"processing date {date} batch {batch} (schedule {spec.schedule})",
+        stages=list(SELECTED_STAGES), release=spec.release, lane=spec.lane,
+        profile=spec.profile, db_target=None, max_attempts=spec.max_attempts,
+        input_selection_ref=spec.location, check_policy_ref=spec.check_policy)
+
+
+def _new_record(spec: LoopSpec, run_id: str, day: LoopDate) -> dict[str, Any]:
+    return {"spec": spec.location, "release": spec.release, "run": run_id,
+            "batch": day.batch, "deliveries": list(day.deliveries)}
+
+
 def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                  interval: float, timeout: float) -> int:
     """Walk one date to complete or failed; return its exit code (0 or 1);
     :class:`_Stop` 75 on a timeout, the row left ``open``."""
     out, storage = tools.out, tools.storage
-    schedule, date = spec.schedule, day.processing_date
-    row = loop_row(conn, schedule, date)
+    schedule, date, batch = spec.schedule, day.processing_date, day.batch
+    row = loop_row(conn, schedule, date, batch)
     if row is None:
-        run_id = tools.create_run(
-            conn, kind=spec.kind, owner=spec.owner,
-            purpose=f"processing date {date} (schedule {schedule})",
-            stages=list(SELECTED_STAGES), release=spec.release, lane=spec.lane,
-            profile=spec.profile, db_target=None, max_attempts=spec.max_attempts,
-            input_selection_ref=spec.location, check_policy_ref=spec.check_policy)
-        record: dict[str, Any] = {"spec": spec.location, "release": spec.release,
-                                  "run": run_id}
-        _insert_row(conn, schedule, date, run_id, record)
+        run_id = _create_run(conn, spec, tools, date, batch)
+        record: dict[str, Any] = _new_record(spec, run_id, day)
+        _insert_row(conn, schedule, date, batch, run_id, record)
         conn.commit()
-        out(f"date={date} run={run_id} created")
+        out(f"{_at(date, batch)} run={run_id} created")
         view = RunView(run=run_id, chain=(run_id,), offset=0)
     else:
         run_id = row.run
         record = dict(row.record)
-        out(f"date={date} run={run_id} resumed")
+        out(f"{_at(date, batch)} run={run_id} resumed")
         view = run_view(conn, run_id)
         state = run_state(conn, run_id)
         if state != "open":
@@ -1000,13 +1056,15 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
             # the row only when every unit the date's plan requires is.
             missing = incomplete_units(conn, storage, view, day)
             if missing:
-                return _fail_row(conn, spec, date, run_id, record, out, reason=(
+                return _fail_row(conn, spec, date, batch, run_id, record, out, reason=(
                     f"run {run_id} is {state} but the date's units are not all complete: "
                     + ", ".join(missing)))
             record.setdefault("resumed_after_finish", True)
-            return _finish_row(conn, spec, date, run_id, record, out)
+            return _finish_row(conn, spec, date, batch, run_id, record, out)
 
-    hint = f"rapidpipe loop run --spec {spec.location} --date {date}"
+    # A discovered batch resumes with the same command that formed it.
+    hint = (f"rapidpipe loop run --spec {spec.location}" if day.deliveries else
+            f"rapidpipe loop run --spec {spec.location} --date {date}")
 
     def walk(unit_id: str, positions: list[int], *, inputs: Sequence[str] = (),
              settings: Sequence[str] = (), templates: Sequence[str] = ()) -> None:
@@ -1046,7 +1104,7 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                 record.setdefault("jobless_resolved", []).extend(
                     {"attempt": r.attempt_id, "status": r.batch_status, "job": r.job_id}
                     for r in results)
-                out(f"date={date} run={run_id} resolved job-less attempts: "
+                out(f"{_at(date, batch)} run={run_id} resolved job-less attempts: "
                     + (", ".join(f"{r.attempt_id}={r.batch_status}" for r in results)
                        or "none resolvable yet"))
                 resolved = True
@@ -1131,7 +1189,7 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
         # (d) per field: crossmatch (every source set of the date + the
         # field's base) -> statistics -> prune.
         fields, sources, image_fields = _fields(conn, loads, date, run_id)
-        previous = previous_complete_rows(conn, schedule, date)
+        previous = previous_complete_rows(conn, schedule, date, batch)
         association: dict[int, str] = {}
         statistics: dict[int, str] = {}
         pruned: dict[int, str] = {}
@@ -1235,11 +1293,11 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
         fields_failed: dict[str, Any] = {"failure": str(stop)}
         if stop.jobless:
             fields_failed["jobless_attempt"] = stop.jobless
-        return _fail_row(conn, spec, date, run_id, record, out, **fields_failed)
+        return _fail_row(conn, spec, date, batch, run_id, record, out, **fields_failed)
     except Exception as exc:
         if getattr(exc, "code", None) == EXIT_TIMEOUT:
             conn.rollback()
-            out(f"date={date} run={run_id} state=timeout")
+            out(f"{_at(date, batch)} run={run_id} state=timeout")
             raise _Stop(EXIT_TIMEOUT, str(exc)) from exc
         raise
 
@@ -1250,7 +1308,7 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                   alerts=alerts)
     if bases_skipped:
         record["bases_skipped"] = bases_skipped
-    return _finish_row(conn, spec, date, run_id, record, out)
+    return _finish_row(conn, spec, date, batch, run_id, record, out)
 
 
 #: Keys of a failed row's record that describe the failed run, moved to
@@ -1284,10 +1342,10 @@ def reopen_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> None:
     record.setdefault("previous_failures", []).append({"run": row.run, **failed})
     record["reopened"] = [*record.get("reopened", []),
                           _dt.datetime.now(_dt.timezone.utc).isoformat()]
-    repoint_row(conn, spec.schedule, row.processing_date, row.run, record)
+    repoint_row(conn, spec.schedule, row.processing_date, row.batch, row.run, record)
     conn.commit()
-    tools.out(f"date={row.processing_date} run={row.run} reopened (failed with no failed "
-              "units; resuming the same run)")
+    tools.out(f"{_at(row.processing_date, row.batch)} run={row.run} reopened (failed with "
+              "no failed units; resuming the same run)")
 
 
 def retry_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> int:
@@ -1298,7 +1356,7 @@ def retry_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> int:
     both together; the caller then resumes the date as usual. A refusal
     (nothing to re-run, a deleting seed) leaves the row ``failed`` with the
     message as ``record.reason`` and returns 1."""
-    date, out = row.processing_date, tools.out
+    date, batch, out = row.processing_date, row.batch, tools.out
     record = dict(row.record)
     if tools.create_seeded_run is None:
         raise LoopError("--retry-failed needs run create's --only-failed path")
@@ -1307,18 +1365,19 @@ def retry_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> int:
     except repository.RunModelError as exc:
         conn.rollback()
         record["reason"] = f"--retry-failed: {exc}"
-        _update_row(conn, spec.schedule, date, state="failed", promotion=None, record=record)
+        _update_row(conn, spec.schedule, date, batch, state="failed", promotion=None,
+                    record=record)
         conn.commit()
-        out(f"date={date} run={row.run} state=failed reason={record['reason']}")
+        out(f"{_at(date, batch)} run={row.run} state=failed reason={record['reason']}")
         return EXIT_FAILED
     failed = {k: record.pop(k) for k in _FAILURE_KEYS if k in record}
     record.pop("units", None)  # the old run's; the new run's are recorded at the end
     record.setdefault("previous_failures", []).append({"run": row.run, **failed})
     record["previous_runs"] = [*record.get("previous_runs", []), row.run]
     record["run"] = new_run
-    repoint_row(conn, spec.schedule, date, new_run, record)
+    repoint_row(conn, spec.schedule, date, batch, new_run, record)
     conn.commit()
-    out(f"date={date} run={new_run} reopened (--retry-failed, seeded from {row.run})")
+    out(f"{_at(date, batch)} run={new_run} reopened (--retry-failed, seeded from {row.run})")
     return EXIT_OK
 
 
@@ -1337,43 +1396,189 @@ def _selected_dates(spec: LoopSpec, dates: Sequence[_dt.date] | None) -> list[Lo
     return [d for d in spec.dates if d.processing_date in wanted]
 
 
+def _stream(spec: LoopSpec, dates: Sequence[_dt.date] | None) -> bool:
+    """Whether ``loop run``/``loop plan`` discovers (R2): an inbox and no ``--date``."""
+    return spec.inbox is not None and not dates
+
+
+def stream_images(spec: LoopSpec, locations: Sequence[str]) -> tuple[DetectorImage, ...]:
+    """The detector images of discovered deliveries: the delivery prefix, its
+    derived unit id, and the spec's stream-level stage inputs (R1)."""
+    if spec.difference_template is None:
+        raise LoopSpecError(f"{spec.location}: a discovered batch needs [loop] "
+                            "difference_template")
+    return tuple(DetectorImage(delivery=location, admit_settings=spec.admit_settings,
+                               difference_template=spec.difference_template,
+                               difference_settings=spec.difference_settings,
+                               unit=detector_unit_id(location))
+                 for location in locations)
+
+
+def row_day(conn, spec: LoopSpec, row: LoopRow) -> LoopDate:
+    """The batch a ``loop_dates`` row stands for (R2 step 1): its ``batched``
+    ``loop_deliveries`` with the spec's stream-level inputs, or, for a row
+    with none, the spec's ``[[dates]]`` entry of its date (batch 1)."""
+    locations = discovery.batch_locations(conn, spec.schedule, row.processing_date, row.batch)
+    if locations:
+        return LoopDate(processing_date=row.processing_date,
+                        detector_images=stream_images(spec, locations), batch=row.batch,
+                        deliveries=tuple(locations))
+    listed = [d for d in spec.dates if d.processing_date == row.processing_date]
+    if listed and row.batch == 1:
+        return listed[0]
+    raise LoopError(f"date {row.processing_date} batch {row.batch} of schedule "
+                    f"{spec.schedule} has no batched deliveries recorded and is not a "
+                    f"[[dates]] entry of {spec.location}")
+
+
+#: :func:`_prepare`'s answer for a row that is skipped (``complete``).
+_SKIP = object()
+
+
+def _prepare(conn, spec: LoopSpec, tools: LoopTools, day: LoopDate, row: LoopRow | None,
+             retry_failed: bool) -> Any:
+    """Before a batch is walked: reopen a :func:`reopenable` row, retry a
+    failed one under ``--retry-failed``, skip a complete one, stop at any
+    other failed one. ``None`` to walk the batch, :data:`_SKIP`, or an exit
+    code to stop with."""
+    if row is not None and reopenable(conn, row):
+        reopen_date(conn, spec, row, tools)
+    elif row is not None and row.state == "failed" and retry_failed:
+        code = retry_date(conn, spec, row, tools)
+        if code != EXIT_OK:
+            return code
+    elif row is not None and row.state != "open":
+        at = _at(day.processing_date, day.batch)
+        tools.out(f"{at} run={row.run} state={row.state} (skipped)")
+        if row.state == "failed":
+            tools.out(f"{at}: failed; stopping before later dates (--retry-failed re-runs "
+                      "its failed units)")
+            return EXIT_FAILED
+        return _SKIP
+    return None
+
+
+def _walk(conn, spec: LoopSpec, tools: LoopTools, day: LoopDate, *, interval: float,
+          timeout: float) -> int:
+    try:
+        return process_date(conn, spec, day, tools, interval=interval, timeout=timeout)
+    except _Stop as stop:
+        tools.out(f"timeout: {stop}")
+        return stop.code
+
+
+def _s3(tools: LoopTools) -> Any:
+    if tools.s3_client is not None:
+        return tools.s3_client
+    from rapidpipe.products import storage
+
+    return storage.s3_client()
+
+
+def discover(conn, spec: LoopSpec, tools: LoopTools) -> discovery.Discovery:
+    """R3: the inbox's new deliveries, classified; reads only."""
+    assert spec.inbox is not None
+    return discovery.discover(conn, spec.schedule, spec.inbox, tools.storage, _s3(tools),
+                              detector_unit_id)
+
+
+def form_batches(conn, spec: LoopSpec, tools: LoopTools,
+                 found: discovery.Discovery) -> list[LoopDate]:
+    """Record a firing's discovery (R6, R13): the refused, quarantined and
+    deferred deliveries in one transaction, then per processing date, oldest
+    first, one transaction holding the batch's run, its ``loop_dates`` row
+    (``open``, the next batch of the date) and its ``batched`` deliveries.
+    Every batch is committed before any is walked (frozen membership)."""
+    out = tools.out
+    rejected = [d for d in found.deliveries if d.state != discovery.BATCHED]
+    if rejected:
+        discovery.insert_deliveries(conn, spec.schedule, rejected, batch=None)
+        conn.commit()
+        for d in rejected:
+            out(f"delivery {d.location} {d.label} state={d.state} reason={d.reason}")
+    by_date: dict[_dt.date, list[discovery.Delivery]] = {}
+    for d in found.with_state(discovery.BATCHED):
+        by_date.setdefault(d.processing_date, []).append(d)
+    days: list[LoopDate] = []
+    for date in sorted(by_date):
+        members = by_date[date]
+        locations = tuple(d.location for d in members)
+        batch = next_batch(conn, spec.schedule, date)
+        day = LoopDate(processing_date=date, detector_images=stream_images(spec, locations),
+                       batch=batch, deliveries=locations)
+        units = [i.unit for i in day.detector_images]
+        if len(set(units)) != len(units):
+            raise LoopError(f"date {date}: two deliveries share a unit id ({units})")
+        run_id = _create_run(conn, spec, tools, date, batch)
+        _insert_row(conn, spec.schedule, date, batch, run_id, _new_record(spec, run_id, day))
+        discovery.insert_deliveries(conn, spec.schedule, members, batch=batch)
+        conn.commit()
+        out(f"date={date} batch={batch} run={run_id} created ({len(members)} deliveries: "
+            + ", ".join(f"{d.location} {d.label}" for d in members) + ")")
+        days.append(day)
+    return days
+
+
+def _run_stream(conn, spec: LoopSpec, tools: LoopTools, *, interval: float, timeout: float,
+                retry_failed: bool) -> int:
+    """R2 under the lock: resume the schedule's open (and reopenable or, with
+    ``--retry-failed``, failed) batches in (date, batch) order; then discover,
+    record and form the new batches; then walk them in order."""
+    out = tools.out
+    for row in loop_rows(conn, spec.schedule):
+        if row.state == "complete":
+            continue
+        day = row_day(conn, spec, row)
+        prepared = _prepare(conn, spec, tools, day, row, retry_failed)
+        if prepared is _SKIP:
+            continue
+        if prepared is not None:
+            return prepared
+        code = _walk(conn, spec, tools, day, interval=interval, timeout=timeout)
+        if code != EXIT_OK:
+            return code
+    found = discover(conn, spec, tools)
+    if not found.deliveries:
+        out(f"schedule {spec.schedule}: nothing to discover")
+        return EXIT_OK
+    out(f"schedule {spec.schedule}: {spec.inbox}: {found.summary()}")
+    for day in form_batches(conn, spec, tools, found):
+        code = _walk(conn, spec, tools, day, interval=interval, timeout=timeout)
+        if code != EXIT_OK:
+            return code
+    return EXIT_OK
+
+
 def run_loop(conn, spec: LoopSpec, tools: LoopTools, *, dates: Sequence[_dt.date] | None = None,
              dry_run: bool = False, interval: float = 30.0, timeout: float = 14400.0,
              retry_failed: bool = False) -> int:
-    """``loop run`` (R3): every selected date whose row is absent or ``open``
-    (or ``failed``, with ``retry_failed``), in spec order, under the
-    schedule's advisory lock. 0 when all are complete, 1 at the first failed
-    date, 75 on a timeout or when another loop holds the schedule."""
-    chosen = _selected_dates(spec, dates)
+    """``loop run`` (R3; step 4 R2), under the schedule's advisory lock. A
+    spec with an ``inbox`` and no ``dates``: resume, discover, form batches,
+    walk them (:func:`_run_stream`). Otherwise every selected ``[[dates]]``
+    entry whose row is absent or ``open`` (or ``failed``, with
+    ``retry_failed``), in spec order. 0 when all are complete (or nothing
+    was found), 1 at the first failed batch, 75 on a timeout or when another
+    loop holds the schedule."""
+    stream = _stream(spec, dates)
+    chosen = [] if stream else _selected_dates(spec, dates)
     if dry_run:
-        plan(conn, spec, tools, dates=[d.processing_date for d in chosen])
+        plan(conn, spec, tools, dates=dates)
         return EXIT_OK
     if not try_lock(conn, spec.schedule):
         tools.out(f"another loop holds schedule {spec.schedule}")
         return EXIT_TIMEOUT
     try:
+        if stream:
+            return _run_stream(conn, spec, tools, interval=interval, timeout=timeout,
+                               retry_failed=retry_failed)
         for day in chosen:
-            row = loop_row(conn, spec.schedule, day.processing_date)
-            if row is not None and reopenable(conn, row):
-                reopen_date(conn, spec, row, tools)
-            elif row is not None and row.state == "failed" and retry_failed:
-                code = retry_date(conn, spec, row, tools)
-                if code != EXIT_OK:
-                    return code
-            elif row is not None and row.state != "open":
-                tools.out(f"date={day.processing_date} run={row.run} state={row.state} "
-                          "(skipped)")
-                if row.state == "failed":
-                    tools.out(f"date={day.processing_date}: failed; stopping before later "
-                              "dates (--retry-failed re-runs its failed units)")
-                    return EXIT_FAILED
+            row = loop_row(conn, spec.schedule, day.processing_date, day.batch)
+            prepared = _prepare(conn, spec, tools, day, row, retry_failed)
+            if prepared is _SKIP:
                 continue
-            try:
-                code = process_date(conn, spec, day, tools, interval=interval,
-                                    timeout=timeout)
-            except _Stop as stop:
-                tools.out(f"timeout: {stop}")
-                return stop.code
+            if prepared is not None:
+                return prepared
+            code = _walk(conn, spec, tools, day, interval=interval, timeout=timeout)
             if code != EXIT_OK:
                 return code
         return EXIT_OK
@@ -1385,49 +1590,88 @@ def run_loop(conn, spec: LoopSpec, tools: LoopTools, *, dates: Sequence[_dt.date
             pass
 
 
+def _plan_entry(conn, spec: LoopSpec, tools: LoopTools, day: LoopDate,
+                row: LoopRow | None) -> dict[str, Any]:
+    if row is None:
+        action, run = "create", None
+    elif row.state == "open":
+        action, run = "resume", row.run
+    elif reopenable(conn, row):
+        action, run = "reopen", row.run
+    else:
+        action, run = f"skip ({row.state})", row.run
+    previous_rows = previous_complete_rows(conn, spec.schedule, day.processing_date, day.batch)
+    previous = previous_rows[0] if previous_rows else None
+    entry = {
+        "processing_date": str(day.processing_date), "batch": day.batch, "action": action,
+        "run": run, "units": [i.unit for i in day.detector_images],
+        "deliveries": list(day.deliveries),
+        "base_from": None if previous is None else {
+            "processing_date": str(previous.processing_date), "batch": previous.batch,
+            "run": previous.run,
+            "association_sets": previous.record.get("association_sets", {})},
+    }
+    base = entry["base_from"]
+    base_text = ("none (first date)" if base is None else
+                 f"{base['run']} ({base['processing_date']}"
+                 + ("" if base["batch"] == 1 else f" batch {base['batch']}") + ") "
+                 + (",".join(f"{f}={i}" for f, i in base["association_sets"].items())
+                    or "no association sets recorded"))
+    tools.out(f"{_at(day.processing_date, day.batch)} action={action} run={run or '-'} "
+              f"units={','.join(entry['units'])} base={base_text}")
+    return entry
+
+
 def plan(conn, spec: LoopSpec, tools: LoopTools, *,
          dates: Sequence[_dt.date] | None = None) -> list[dict[str, Any]]:
-    """``loop plan``: per date, what ``loop run`` would do; prints and returns it."""
+    """``loop plan``: per batch, what ``loop run`` would do; prints and returns
+    it. On an inbox spec (no ``dates``): the rows a firing would resume, then
+    a dry classification of the inbox (no writes) and the batches it would
+    form (R5)."""
     lines: list[dict[str, Any]] = []
-    for day in _selected_dates(spec, dates):
-        row = loop_row(conn, spec.schedule, day.processing_date)
-        if row is None:
-            action, run = "create", None
-        elif row.state == "open":
-            action, run = "resume", row.run
-        elif reopenable(conn, row):
-            action, run = "reopen", row.run
-        else:
-            action, run = f"skip ({row.state})", row.run
-        previous_rows = previous_complete_rows(conn, spec.schedule, day.processing_date)
-        previous = previous_rows[0] if previous_rows else None
-        entry = {
-            "processing_date": str(day.processing_date), "action": action, "run": run,
-            "units": [i.unit for i in day.detector_images],
-            "base_from": None if previous is None else {
-                "processing_date": str(previous.processing_date), "run": previous.run,
-                "association_sets": previous.record.get("association_sets", {})},
-        }
-        lines.append(entry)
-        base = entry["base_from"]
-        base_text = ("none (first date)" if base is None else
-                     f"{base['run']} ({base['processing_date']}) "
-                     + (",".join(f"{f}={i}" for f, i in base["association_sets"].items())
-                        or "no association sets recorded"))
-        tools.out(f"date={entry['processing_date']} action={action} run={run or '-'} "
-                  f"units={','.join(entry['units'])} base={base_text}")
+    if not _stream(spec, dates):
+        for day in _selected_dates(spec, dates):
+            row = loop_row(conn, spec.schedule, day.processing_date, day.batch)
+            lines.append(_plan_entry(conn, spec, tools, day, row))
+        return lines
+    for row in loop_rows(conn, spec.schedule):
+        if row.state == "complete":
+            continue
+        lines.append(_plan_entry(conn, spec, tools, row_day(conn, spec, row), row))
+    found = discover(conn, spec, tools)
+    tools.out(f"schedule {spec.schedule}: {spec.inbox}: {found.summary()}")
+    next_of: dict[_dt.date, int] = {}
+    for d in found.deliveries:
+        batch = None
+        if d.state == discovery.BATCHED:
+            if d.processing_date not in next_of:
+                next_of[d.processing_date] = next_batch(conn, spec.schedule, d.processing_date)
+            batch = next_of[d.processing_date]
+        lines.append({"processing_date": str(d.processing_date), "location": d.location,
+                      "identity": d.label, "action": d.state, "reason": d.reason,
+                      "batch": batch, "unit": d.unit})
+        tools.out(f"date={d.processing_date} delivery={d.location} {d.label} "
+                  f"action={d.state} "
+                  + (f"batch={batch} unit={d.unit}" if batch is not None
+                     else f"reason={d.reason}"))
     return lines
 
 
 def show(conn, schedule: str, *, as_json: bool, out: Callable[[str], None]) -> int:
-    """``loop show``: one line per ``loop_dates`` row of ``schedule``."""
+    """``loop show``: one line per ``loop_dates`` row (batch) of ``schedule``,
+    then one per ``loop_deliveries`` row."""
     rows = loop_rows(conn, schedule)
     for row in rows:
-        out(f"{row.processing_date}\t{row.state}\trun={row.run}\t"
+        out(f"{row.processing_date}\tbatch={row.batch}\t{row.state}\trun={row.run}\t"
             f"promotion={row.promotion or row.record.get('promotion') or '-'}\t"
             f"started={row.started_at}\tended={row.ended_at or '-'}")
         if as_json:
             out(json.dumps(row.record, sort_keys=True, default=str))
-    if not rows:
+    deliveries = discovery.delivery_rows(conn, schedule)
+    for d in deliveries:
+        out(f"{d.processing_date}\t{d.state}\t{d.location}\t"
+            f"{d.exposure or '-'}/{d.detector or '-'}/v{d.version or '-'}\t"
+            + (d.reason or f"batch={d.batch}"))
+    if not rows and not deliveries:
         out(f"schedule {schedule}: no processing dates recorded")
     return EXIT_OK
