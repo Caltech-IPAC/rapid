@@ -29,6 +29,7 @@ dict shape ``register_manifest`` needs, so no import is required.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable, Sequence
@@ -46,6 +47,16 @@ from rapidpipe.checks.policy import (
 )
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.storage import join, parse_location
+from rapidpipe.runs.slots import (
+    PlanEntry,
+    Selector,
+    canonical_json,
+    plan_by_slot,
+    plan_entries,
+    selector_parts,
+)
+
+logger = logging.getLogger(__name__)
 
 #: One fixed advisory-lock key for every promotion, per the runs page,
 #: "Promotion": "All promotions take one transaction-scoped advisory
@@ -137,6 +148,12 @@ class DependencyRefused(ManifestConflict):
 
 class PromotionRefused(RunModelError):
     """A promotion request failed validation; the whole request is refused."""
+
+
+class StalePlan(PromotionRefused):
+    """A frozen promotion plan no longer matches the run's changes read
+    under the promotion lock (supervisor step 5a, 2026-09-26, R5): nothing
+    is written, and the CLI exits 64 as for any refusal."""
 
 
 class CheckPolicyRefused(RunModelError):
@@ -905,6 +922,11 @@ def register_manifest(
                 input_result_sets=input_result_sets,
             )
 
+        # Slot and identity of what was just registered (and of anything
+        # else still NULL), derived by the database; a failure is logged,
+        # never fails registration (supervisor step 5a, 2026-09-26, R2).
+        _fill_identity_quietly(cur, f"registering run {run_id} stage {stage}")
+
 
 def _refuse_foreign_dependency(
     producer_instance: str, run_id: str, producer_run: str, custody: str,
@@ -1104,6 +1126,65 @@ def _register_one_output(
 
 
 # ======================================================================
+# slot and identity (supervisor step 5a, 2026-09-26, R1-R3, R12, R16)
+# ======================================================================
+
+def fill_identity(cur) -> list[tuple[str, int, int, int]]:
+    """Fill ``slot`` and ``identity`` on every ``product_instances`` row
+    where either is NULL, through the database function
+    ``product_identity_fill()`` (migration 20260926-02; the derivation
+    lives there only). Returns its report, one ``(kind, converted,
+    unresolved, duplicate_current)`` per kind it touched, which it also
+    logs in ``slot_backfill_log``. Runs in the caller's transaction."""
+    cur.execute(
+        "SELECT kind, converted, unresolved, duplicate_current FROM product_identity_fill()")
+    return [tuple(row) for row in cur.fetchall()]
+
+
+def _fill_identity_quietly(cur, context: str) -> list[tuple[str, int, int, int]]:
+    """:func:`fill_identity` inside a savepoint: a failure is logged and
+    rolled back to the savepoint, never raised, so the caller's
+    registration, check or promotion goes on (a row the fill could not
+    reach keeps a NULL slot, which promotion refuses with its reason)."""
+    cur.execute("SAVEPOINT rapidpipe_fill_identity")
+    try:
+        report = fill_identity(cur)
+    except psycopg2.Error as exc:
+        cur.execute("ROLLBACK TO SAVEPOINT rapidpipe_fill_identity")
+        cur.execute("RELEASE SAVEPOINT rapidpipe_fill_identity")
+        logger.warning("slot and identity fill failed while %s; going on: %s",
+                       context, str(exc).strip())
+        return []
+    cur.execute("RELEASE SAVEPOINT rapidpipe_fill_identity")
+    for kind, converted, unresolved, duplicate_current in report:
+        if unresolved or duplicate_current:
+            logger.info("slot fill while %s: kind=%s converted=%s unresolved=%s "
+                        "duplicate_current=%s", context, kind, converted, unresolved,
+                        duplicate_current)
+    return report
+
+
+def parse_selector(
+    kind: str, selector: Any, *, recorded_inverse: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    """``("slot", slot)`` or ``("logical_key", key)`` from one change's
+    selector (supervisor step 5a, 2026-09-26, R4, R15); refuses
+    (:class:`PromotionRefused`) anything else, an empty slot, and a
+    logical_key selector unless ``recorded_inverse``."""
+    try:
+        by, value = selector_parts(selector)
+    except ValueError as exc:
+        raise PromotionRefused(
+            f"kind={kind!r}: {exc}; refusing the whole promotion") from None
+    if by == "logical_key" and not recorded_inverse:
+        raise PromotionRefused(
+            f"kind={kind!r}: a logical_key selector is accepted only when rolling back a "
+            "change recorded without a slot; promotion replaces by slot; refusing the "
+            "whole promotion")
+    return by, value
+
+
+# ======================================================================
 # promote
 # ======================================================================
 
@@ -1111,33 +1192,49 @@ def promote(
     conn: psycopg2.extensions.connection,
     who: str,
     reason: str,
-    changes: Sequence[tuple[str, dict[str, Any], str | None, str | None]],
+    changes: Sequence[tuple[str, Selector, str | None, str | None]],
     check_policy: Policy | None = None,
     request_context: dict[str, Any] | None = None,
     *,
     allow_unreleased: bool = False,
     _check_release: bool = True,
+    _recorded_inverse: bool = False,
 ) -> str:
     """Apply a promotion under one advisory lock; return the promotion id.
 
-    ``changes`` is a list of ``(kind, logical_key, expected_before_instance_or_None,
-    after_instance_or_None)`` tuples (runs page, "Promotion"). Takes
+    ``changes`` is a list of ``(kind, selector, expected_before_instance_or_None,
+    after_instance_or_None)`` tuples (runs page, "Promotion"). A selector
+    is ``{"slot": {...}}``: promotion replaces by slot, at most one
+    instance being current per (kind, slot) (supervisor step 5a,
+    2026-09-26, R4). ``{"logical_key": {...}}`` is accepted only with
+    ``_recorded_inverse``, i.e. from :func:`rollback_promotion` reversing
+    a change recorded without a slot (R15); any other caller passing it,
+    or anything else as a selector, is refused. Takes
     ``pg_advisory_xact_lock`` on one fixed key, then:
 
       1. Checks every expected before-instance (including expected
-         absence, i.e. ``None``) against the actual current selection;
-         refuses the WHOLE request on any mismatch
+         absence, i.e. ``None``) against the actual current instance
+         the selector selects; refuses the WHOLE request on any mismatch
          (:class:`PromotionRefused`). Also refuses a change whose
          after-instance equals its before-instance (nothing to change,
          including ``None`` to ``None``) and a request naming the same
-         (kind, logical_key) twice -- the runs page records exactly one
-         before and after per affected key.
+         (kind, selector) twice -- the runs page records exactly one
+         before and after per affected slot.
       2. Validates each non-``None`` after-instance is a candidate from a
-         selected attempt, with every provenance dependency in project
-         custody (runs page, "Promotion eligibility": "Every provenance
-         dependency must identify a complete, retained instance in
-         project custody."). A ``None`` after-instance is an unselect:
-         there is nothing to validate. Then the released-image rule
+         selected attempt whose slot (or, for a logical_key selector,
+         logical key) equals the selector, with every provenance
+         dependency in project custody (runs page, "Promotion
+         eligibility": "Every provenance dependency must identify a
+         complete, retained instance in project custody."). A ``None``
+         after-instance is an unselect: there is nothing to validate.
+         A slot change is refused when another instance with the after
+         instance's kind and logical key is current outside the slot (its
+         own slot unresolved or withheld). An ``association-set`` change
+         with both a before and an after instance is refused unless the
+         before is an ancestor of the after along ``logical_key.base``
+         (R6: the chain switch is not implemented, and ordinary slot
+         replacement does not stand in for it); ``_recorded_inverse``
+         skips this rule only (R13). Then the released-image rule
          (runs page, "Promotion eligibility": "a recorded image digest
          identifying a released artifact"): each after-instance's
          producing attempt's ``execution_records.image_digest`` must equal
@@ -1168,7 +1265,9 @@ def promote(
          (``vbest = 0`` on the before-instance's row, ``vbest = 1`` on the
          after-instance's row, found through the kind's table's
          ``instance`` column; see ``_VBEST_TABLES``), and records the
-         promotion and its promotion_changes (an unselect records
+         promotion and its promotion_changes: kind, the after instance's
+         logical key (else the before's), the slot (NULL for a
+         logical_key selector), before and after (an unselect records
          ``after_instance`` NULL). ``request_context`` is stored on the
          promotions row (``{}`` when ``None``); :func:`rollback_promotion`
          records ``{"rollback_of": <promotion id>}`` there.
@@ -1176,56 +1275,63 @@ def promote(
     Reversal is :func:`rollback_promotion`, which calls this function with
     the inverse mapping: the previous after-instance as the new
     expected-before, and the previous before-instance (possibly ``None``)
-    as the new after-instance for each key.
+    as the new after-instance for each recorded selector.
     """
     changes = list(changes)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT pg_advisory_xact_lock(%s)", (_PROMOTION_ADVISORY_LOCK_KEY,))
 
-        seen_keys: set[tuple[str, str]] = set()
-        for kind, logical_key, expected_before, after_instance in changes:
-            key_text = json.dumps(logical_key, sort_keys=True)
-            if (kind, key_text) in seen_keys:
+        parsed: list[tuple[str, str, dict[str, Any], str, str | None, str | None]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for kind, selector, expected_before, after_instance in changes:
+            by, value = parse_selector(kind, selector, recorded_inverse=_recorded_inverse)
+            where = f"kind={kind!r} {by}={canonical_json(value)}"
+            if (kind, by, canonical_json(value)) in seen:
                 raise PromotionRefused(
-                    f"kind={kind!r} key={logical_key!r} appears more than once "
-                    "in one promotion; refusing the whole promotion")
-            seen_keys.add((kind, key_text))
+                    f"{where} appears more than once in one promotion; refusing the "
+                    "whole promotion")
+            seen.add((kind, by, canonical_json(value)))
             if after_instance == expected_before:
                 raise PromotionRefused(
-                    f"kind={kind!r} key={logical_key!r}: the after instance "
-                    f"{after_instance!r} is the same as the before instance; "
-                    "refusing the whole promotion")
+                    f"{where}: the after instance {after_instance!r} is the same as the "
+                    "before instance; refusing the whole promotion")
+            parsed.append((kind, by, value, where, expected_before, after_instance))
 
         # Step 1: check every expected before against the actual current
-        # selection. Refuse the whole request on any mismatch.
-        for kind, logical_key, expected_before, _after in changes:
+        # selection. Refuse the whole request on any mismatch. ``by`` is
+        # "slot" or "logical_key" (parse_selector), never caller text.
+        for kind, by, value, where, expected_before, _after in parsed:
             cur.execute(
-                """
-                SELECT id FROM product_instances
-                WHERE kind = %s AND logical_key = %s AND custody = 'current'
-                """,
-                (kind, json.dumps(logical_key)),
+                f"SELECT id FROM product_instances "
+                f"WHERE kind = %s AND {by} = %s AND custody = 'current'",
+                (kind, json.dumps(value)),
             )
             row = cur.fetchone()
             actual_before = row[0] if row else None
             if actual_before != expected_before:
                 raise PromotionRefused(
-                    f"expected current selection for kind={kind!r} "
-                    f"key={logical_key!r} to be {expected_before!r}, but it "
-                    f"is {actual_before!r}; refusing the whole promotion")
+                    f"expected current selection for {where} to be "
+                    f"{expected_before!r}, but it is {actual_before!r}; refusing the "
+                    "whole promotion")
 
         # Step 2: validate every after-instance is eligible. An unselect
         # (after None) has nothing to validate.
-        for kind, logical_key, _expected_before, after_instance in changes:
-            if after_instance is not None:
-                _validate_promotion_eligibility(cur, kind, logical_key, after_instance)
+        for kind, by, value, where, expected_before, after_instance in parsed:
+            if after_instance is None:
+                continue
+            _validate_promotion_eligibility(cur, kind, by, value, after_instance)
+            if by == "slot":
+                _refuse_current_outside_slot(cur, where, expected_before, after_instance)
+            if (kind == "association-set" and expected_before is not None
+                    and not _recorded_inverse):
+                _refuse_unless_ancestor(cur, where, expected_before, after_instance)
 
         # Step 2b: the released-image rule, last so the older, more
         # specific refusals above keep their messages.
         if _check_release:
             unreleased = []
-            for _kind, _key, _before, after_instance in changes:
+            for _kind, _by, _value, _where, _before, after_instance in parsed:
                 if after_instance is not None:
                     problem = _unreleased_attempt(cur, after_instance)
                     if problem is not None:
@@ -1251,7 +1357,8 @@ def promote(
             check_policy_version = check_policy.ref
             check_result_ids = _validate_check_policy(
                 cur, check_policy,
-                [(kind, after) for kind, _key, _before, after in changes if after is not None])
+                [(kind, after) for kind, _by, _value, _where, _before, after in parsed
+                 if after is not None])
 
         # Step 3: apply. Before rows (if any) go back to candidate; after
         # rows become current; vbest follows. Record the promotion and
@@ -1267,7 +1374,14 @@ def promote(
              check_result_ids, json.dumps(request_context or {})),
         )
 
-        for kind, logical_key, expected_before, after_instance in changes:
+        for kind, by, value, _where, expected_before, after_instance in parsed:
+            if by == "slot":
+                cur.execute(
+                    "SELECT logical_key FROM product_instances WHERE id = %s",
+                    (after_instance if after_instance is not None else expected_before,))
+                recorded_key, recorded_slot = cur.fetchone()[0], value
+            else:
+                recorded_key, recorded_slot = value, None
             if expected_before is not None:
                 cur.execute(
                     "UPDATE product_instances SET custody = 'candidate' WHERE id = %s",
@@ -1282,14 +1396,64 @@ def promote(
             cur.execute(
                 """
                 INSERT INTO promotion_changes (
-                    id, promotion, kind, logical_key, before_instance, after_instance
-                ) VALUES (%s, %s, %s, %s, %s, %s)
+                    id, promotion, kind, logical_key, slot, before_instance, after_instance
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (new_ulid(), promotion_id, kind, json.dumps(logical_key),
+                (new_ulid(), promotion_id, kind, json.dumps(recorded_key),
+                 None if recorded_slot is None else json.dumps(recorded_slot),
                  expected_before, after_instance),
             )
 
     return promotion_id
+
+
+def _refuse_current_outside_slot(
+    cur, where: str, expected_before: str | None, after_instance: str,
+) -> None:
+    """Refuse a slot change when another instance of the after instance's
+    kind and logical key is current without holding the slot (its slot
+    unresolved or withheld): promoting would make two current instances of
+    one logical key, which ``product_instances_current_key_uq`` forbids."""
+    cur.execute(
+        """
+        SELECT o.id FROM product_instances o
+        JOIN product_instances a ON a.id = %s
+        WHERE o.kind = a.kind AND o.logical_key = a.logical_key
+          AND o.custody = 'current' AND o.id <> a.id
+          AND o.id IS DISTINCT FROM %s
+        """,
+        (after_instance, expected_before),
+    )
+    row = cur.fetchone()
+    if row is not None:
+        raise PromotionRefused(
+            f"{where}: instance {row[0]!r} is current with the same logical key as "
+            f"{after_instance!r} but holds no slot (its slot is unresolved or withheld); "
+            "refusing the whole promotion")
+
+
+def _refuse_unless_ancestor(cur, where: str, before: str, after: str) -> None:
+    """The association-set ancestor rule (supervisor step 5a, 2026-09-26,
+    R6): ``before`` must be reached from ``after`` by following
+    ``logical_key.base`` through ``product_instances``; a missing link or
+    a cycle ends the walk and refuses."""
+    visited = {after}
+    instance = after
+    while True:
+        cur.execute(
+            "SELECT logical_key->>'base' FROM product_instances WHERE id = %s", (instance,))
+        row = cur.fetchone()
+        base = row[0] if row else None
+        if base == before:
+            return
+        if base is None or base in visited:
+            break
+        visited.add(base)
+        instance = base
+    raise PromotionRefused(
+        f"{where}: the current instance {before!r} is not an ancestor of {after!r} along "
+        "base; the chain switch is not implemented; ordinary slot replacement does not "
+        "stand in for it; refusing the whole promotion")
 
 
 def _validate_check_policy(
@@ -1418,14 +1582,17 @@ def _unreleased_attempt(cur, after_instance: str) -> tuple[str, str | None, str 
 
 
 def _validate_promotion_eligibility(
-    cur, kind: str, logical_key: dict[str, Any], after_instance: str,
+    cur, kind: str, by: str, value: dict[str, Any], after_instance: str,
 ) -> None:
     # The released-image rule and the check-policy gate are checked by
     # promote() itself, after this (supervisor step 5, 2026-09-24, R8;
-    # supervisor step 6, 2026-09-24, R4).
+    # supervisor step 6, 2026-09-24, R4). ``by`` is "slot" or
+    # "logical_key": the after instance's own slot (or, for a legacy
+    # selector, its logical key) must equal the selector (supervisor step
+    # 5a, 2026-09-26, R4, R15).
     cur.execute(
         """
-        SELECT pi.custody, pi.kind, pi.logical_key, pi.deletion_state,
+        SELECT pi.custody, pi.kind, pi.slot, pi.logical_key, pi.deletion_state,
                rs.instance IS NOT NULL, rs.complete
         FROM product_instances pi
         LEFT JOIN result_sets rs ON rs.instance = pi.id
@@ -1437,12 +1604,15 @@ def _validate_promotion_eligibility(
     if row is None:
         raise PromotionRefused(
             f"after instance {after_instance!r} for kind={kind!r} does not exist")
-    custody, actual_kind, actual_key, deletion_state, is_result_set, complete = row
-    if actual_kind != kind or actual_key != logical_key:
+    (custody, actual_kind, actual_slot, actual_key, deletion_state, is_result_set,
+     complete) = row
+    actual = actual_slot if by == "slot" else actual_key
+    if actual_kind != kind or actual != value:
+        shown = "none (unresolved)" if actual is None else canonical_json(actual)
         raise PromotionRefused(
             f"after instance {after_instance!r} is kind={actual_kind!r} "
-            f"key={actual_key!r}, not the requested kind={kind!r} "
-            f"key={logical_key!r}; refusing")
+            f"{by}={shown}, not the requested kind={kind!r} "
+            f"{by}={canonical_json(value)}; refusing")
     if deletion_state != "retained":
         raise PromotionRefused(
             f"after instance {after_instance!r} is {deletion_state!r}, not "
@@ -1514,6 +1684,137 @@ def _validate_promotion_eligibility(
 # promote_run / rollback_promotion
 # ======================================================================
 
+def _promotable_run(cur, run_id: str) -> str | None:
+    """Lock the run row FOR SHARE and refuse what cannot be promoted: a
+    missing run, a scratch run, a deleting or deleted run. Returns the
+    run's ``check_policy_ref``."""
+    cur.execute(
+        "SELECT kind, state, check_policy_ref FROM runs WHERE id = %s FOR SHARE",
+        (run_id,))
+    row = cur.fetchone()
+    if row is None:
+        raise RunNotFound(f"run {run_id!r} does not exist")
+    run_kind, run_state, run_policy_ref = row
+    if run_kind != "production":
+        raise PromotionRefused(
+            f"run {run_id!r} is a {run_kind!r} run; scratch never leaves "
+            "scratch, only a production run's candidates may be promoted")
+    if run_state in _TERMINAL_RUN_STATES:
+        raise RunDeletingOrDeleted(f"run {run_id!r} is {run_state!r}; refusing")
+    return run_policy_ref
+
+
+def _run_slot_changes(
+    cur, run_id: str, kinds: Sequence[str] | None,
+) -> list[tuple[str, dict[str, Any], str | None, str]]:
+    """``(kind, slot, expected_before, after)`` for every deliverable of
+    ``run_id``, sorted by kind then canonical slot (supervisor step 5a,
+    2026-09-26, R4). A deliverable is a ``candidate`` row of the run whose
+    producing attempt is its unit's selected attempt (optionally one of
+    ``kinds``). Refuses a deliverable whose slot is NULL, and two
+    deliverables in one (kind, slot). ``expected_before`` is the instance
+    current in that slot, or ``None``. Empty when there is nothing to
+    promote; the caller decides what that means."""
+    query = """
+        SELECT pi.id, pi.kind, pi.slot
+        FROM product_instances pi
+        JOIN attempts a ON a.id = pi.producing_attempt
+        JOIN units u ON u.id = a.unit
+        WHERE pi.run = %s
+          AND pi.custody = 'candidate'
+          AND u.selected_attempt = pi.producing_attempt
+    """
+    params: list[Any] = [run_id]
+    if kinds is not None:
+        query += " AND pi.kind = ANY(%s)"
+        params.append(list(kinds))
+    query += " ORDER BY pi.kind, pi.id"
+    cur.execute(query, params)
+    deliverables = cur.fetchall()
+
+    by_slot: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
+    for instance_id, kind, slot in deliverables:
+        if slot is None:
+            raise PromotionRefused(
+                f"run {run_id!r}: candidate {instance_id!r} of kind={kind!r} has no slot "
+                "(its slot could not be derived from its logical key: a missing or "
+                "malformed field, an unresolved or missing producer, or an unknown "
+                "kind; slot_backfill_log counts them); refusing")
+        slot_text = canonical_json(slot)
+        if (kind, slot_text) in by_slot:
+            raise PromotionRefused(
+                f"run {run_id!r} has more than one candidate for kind={kind!r} "
+                f"slot={slot_text} ({by_slot[(kind, slot_text)][0]!r} and "
+                f"{instance_id!r}); a promotion replaces exactly one instance per slot")
+        by_slot[(kind, slot_text)] = (instance_id, slot)
+
+    changes: list[tuple[str, dict[str, Any], str | None, str]] = []
+    for (kind, _slot_text), (instance_id, slot) in sorted(by_slot.items()):
+        cur.execute(
+            """
+            SELECT id FROM product_instances
+            WHERE kind = %s AND slot = %s AND custody = 'current'
+            """,
+            (kind, json.dumps(slot)),
+        )
+        current = cur.fetchone()
+        changes.append((kind, slot, current[0] if current else None, instance_id))
+    return changes
+
+
+def _nothing_to_promote(run_id: str, kinds: Sequence[str] | None) -> PromotionRefused:
+    return PromotionRefused(
+        f"run {run_id!r} has no candidate from a selected attempt"
+        + (f" of kinds {list(kinds)!r}" if kinds is not None else "")
+        + "; nothing to promote")
+
+
+def promotion_plan(
+    conn: psycopg2.extensions.connection,
+    run_id: str,
+    *,
+    kinds: Sequence[str] | None = None,
+) -> list[PlanEntry]:
+    """What :func:`promote_run` would promote now, as a frozen plan: one
+    ``{"kind", "slot", "before", "after"}`` per slot, sorted by kind then
+    canonical slot (supervisor step 5a, 2026-09-26, R5). Fills slot and
+    identity first, as ``promote_run`` does; takes no promotion lock and
+    writes nothing else, so a caller that wants no write at all rolls back
+    (``rapidpipe run promote-plan`` does). Refuses as ``promote_run``
+    does, including when there is nothing to promote."""
+    with conn.cursor() as cur:
+        _promotable_run(cur, run_id)
+        _fill_identity_quietly(cur, f"planning the promotion of run {run_id}")
+        changes = _run_slot_changes(cur, run_id, kinds)
+    if not changes:
+        raise _nothing_to_promote(run_id, kinds)
+    return plan_entries(changes)
+
+
+def _refuse_stale_plan(
+    run_id: str, plan: Sequence[PlanEntry],
+    changes: Sequence[tuple[str, dict[str, Any], str | None, str]],
+) -> None:
+    """Raise :class:`StalePlan` naming the first (kind, slot) where the
+    frozen ``plan`` and the actual ``changes`` read under the lock differ
+    (R5): a slot whose current instance moved, a candidate that appeared,
+    disappeared or changed."""
+    try:
+        planned = plan_by_slot(plan)
+    except ValueError as exc:
+        raise PromotionRefused(f"the plan is malformed: {exc}; refusing") from None
+    actual = plan_by_slot(plan_entries(changes))
+    for key in sorted(set(planned) | set(actual)):
+        if planned.get(key) != actual.get(key):
+            kind, slot_text = key
+            p_before, p_after = planned.get(key, (None, None))
+            a_before, a_after = actual.get(key, (None, None))
+            raise StalePlan(
+                f"stale plan for run {run_id!r}: kind={kind!r} slot={slot_text}: the plan "
+                f"has before={p_before!r} after={p_after!r}, the run now has "
+                f"before={a_before!r} after={a_after!r}; nothing promoted (plan again)")
+
+
 def promote_run(
     conn: psycopg2.extensions.connection,
     run_id: str,
@@ -1523,26 +1824,34 @@ def promote_run(
     kinds: Sequence[str] | None = None,
     check_policy: Policy | str | None = None,
     allow_unreleased: bool = False,
+    plan: Sequence[PlanEntry] | None = None,
 ) -> str:
     """Promote a production run's deliverables; return the promotion id.
 
     The run must be ``production`` -- a scratch run is refused ("scratch
     never leaves scratch", runs page, "Runs" and "Custody") -- and not
-    deleting or deleted. Its deliverables are every ``product_instances``
-    row of the run with custody ``candidate`` whose producing attempt is
-    its unit's selected attempt, optionally filtered to ``kinds``. There
-    must be exactly one such candidate per (kind, logical_key): the runs
-    page's promotion replaces exactly one instance per key, so two
-    candidates for one key is refused rather than guessed between. Each
-    change's expected-before is the instance currently ``current`` for
-    that (kind, logical_key), or ``None``; the changes are then applied by
-    :func:`promote`, which takes the promotion lock -- taken here first
-    too, so the expected-befores read below cannot go stale before
-    ``promote`` re-checks them (the transaction-scoped lock is re-entrant).
+    deleting or deleted. Under the promotion lock (taken here first, so
+    the expected-befores read below cannot go stale before ``promote``
+    re-checks them; the transaction-scoped lock is re-entrant), slot and
+    identity are filled (:func:`fill_identity`, so a row an older image
+    registered gets its slot now), then the deliverables are grouped by
+    (kind, slot) (supervisor step 5a, 2026-09-26, R4): every
+    ``product_instances`` row of the run with custody ``candidate`` whose
+    producing attempt is its unit's selected attempt, optionally filtered
+    to ``kinds``. A deliverable whose slot is still NULL is refused, and
+    so are two deliverables in one slot. Each change's expected-before is
+    the instance currently ``current`` in that slot, or ``None``; the
+    changes are applied by :func:`promote` with slot selectors.
     ``request_context`` on the promotions row is ``{"run": run_id}``
     (plus ``allow_unreleased``/``attempts`` when ``allow_unreleased``
     admitted deliverables no complete release produced; see
     :func:`promote`).
+
+    ``plan``, when given, is a frozen plan from :func:`promotion_plan`
+    (R5): the changes read under the lock must equal it slot for slot,
+    else :class:`StalePlan` is raised naming the first differing slot and
+    nothing is written. Without it the changes read under the lock are
+    promoted, as before.
 
     Every promotion is validated under a named check policy (supervisor
     step 6, 2026-09-24, R4): ``check_policy`` (a :class:`Policy` or its
@@ -1555,73 +1864,23 @@ def promote_run(
     with conn.cursor() as cur:
         cur.execute(
             "SELECT pg_advisory_xact_lock(%s)", (_PROMOTION_ADVISORY_LOCK_KEY,))
-        cur.execute(
-            "SELECT kind, state, check_policy_ref FROM runs WHERE id = %s FOR SHARE",
-            (run_id,))
-        row = cur.fetchone()
-        if row is None:
-            raise RunNotFound(f"run {run_id!r} does not exist")
-        run_kind, run_state, run_policy_ref = row
-        if run_kind != "production":
-            raise PromotionRefused(
-                f"run {run_id!r} is a {run_kind!r} run; scratch never leaves "
-                "scratch, only a production run's candidates may be promoted")
-        if run_state in _TERMINAL_RUN_STATES:
-            raise RunDeletingOrDeleted(f"run {run_id!r} is {run_state!r}; refusing")
+        run_policy_ref = _promotable_run(cur, run_id)
         if not isinstance(check_policy, Policy):
             try:
                 check_policy = load_policy(check_policy or run_policy_ref or DEFAULT_POLICY)
             except PolicyError as exc:
                 raise PromotionRefused(f"{exc}; refusing") from None
 
-        query = """
-            SELECT pi.id, pi.kind, pi.logical_key
-            FROM product_instances pi
-            JOIN attempts a ON a.id = pi.producing_attempt
-            JOIN units u ON u.id = a.unit
-            WHERE pi.run = %s
-              AND pi.custody = 'candidate'
-              AND u.selected_attempt = pi.producing_attempt
-        """
-        params: list[Any] = [run_id]
-        if kinds is not None:
-            query += " AND pi.kind = ANY(%s)"
-            params.append(list(kinds))
-        query += " ORDER BY pi.kind, pi.id"
-        cur.execute(query, params)
-        deliverables = cur.fetchall()
-
-        by_key: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
-        for instance_id, kind, logical_key in deliverables:
-            key_text = json.dumps(logical_key, sort_keys=True)
-            if (kind, key_text) in by_key:
-                raise PromotionRefused(
-                    f"run {run_id!r} has more than one candidate for "
-                    f"kind={kind!r} key={logical_key!r} "
-                    f"({by_key[(kind, key_text)][0]!r} and {instance_id!r}); "
-                    "a promotion replaces exactly one instance per key")
-            by_key[(kind, key_text)] = (instance_id, logical_key)
-
-        if not by_key:
-            raise PromotionRefused(
-                f"run {run_id!r} has no candidate from a selected attempt"
-                + (f" of kinds {list(kinds)!r}" if kinds is not None else "")
-                + "; nothing to promote")
-
-        changes: list[tuple[str, dict[str, Any], str | None, str | None]] = []
-        for (kind, _key_text), (instance_id, logical_key) in by_key.items():
-            cur.execute(
-                """
-                SELECT id FROM product_instances
-                WHERE kind = %s AND logical_key = %s AND custody = 'current'
-                """,
-                (kind, json.dumps(logical_key)),
-            )
-            current = cur.fetchone()
-            changes.append((kind, logical_key, current[0] if current else None, instance_id))
+        _fill_identity_quietly(cur, f"promoting run {run_id}")
+        changes = _run_slot_changes(cur, run_id, kinds)
+        if plan is not None:
+            _refuse_stale_plan(run_id, plan, changes)
+        if not changes:
+            raise _nothing_to_promote(run_id, kinds)
 
     return promote(
-        conn, who, reason, changes,
+        conn, who, reason,
+        [(kind, {"slot": slot}, before, after) for kind, slot, before, after in changes],
         check_policy=check_policy,
         request_context={"run": run_id},
         allow_unreleased=allow_unreleased,
@@ -1637,22 +1896,29 @@ def rollback_promotion(
     """Reverse one promotion; return the new (reversing) promotion id.
 
     Reads the promotion's ``promotion_changes`` and applies the inverse
-    mapping through :func:`promote`: for each key, the expected-before is
-    the recorded after-instance and the new after-instance is the
-    recorded before-instance, which may be ``None`` (the key goes back to
-    having no current instance). ``promote`` refuses the whole reversal if
-    any recorded after-selection is no longer current -- a later promotion
-    changed that key, and the runs page reverses a promotion only against
-    the selection it made. The new promotions row records
-    ``request_context = {"rollback_of": promotion_id}``.
+    mapping through :func:`promote`: for each recorded change, the
+    expected-before is the recorded after-instance and the new
+    after-instance is the recorded before-instance, which may be ``None``
+    (the slot goes back to having no current instance). Each change is
+    selected by its recorded slot, or by its recorded logical key when the
+    slot is NULL (a promotion recorded before migration 20260926-02 whose
+    instances stayed unresolved; supervisor step 5a, 2026-09-26, R9).
+    ``promote`` refuses the whole reversal if any recorded after-selection
+    is no longer current -- a later promotion changed that slot, and the
+    runs page reverses a promotion only against the selection it made. The
+    new promotions row records ``request_context = {"rollback_of":
+    promotion_id}``.
 
     Rollback skips check-policy revalidation (supervisor step 6,
     2026-09-24, R4 and amendment A4): no ``check_policy`` is passed, so the
     row records none. As before (supervisor step 5, R8) it also skips the
-    released-image rule. Every other validation in :func:`promote` still
-    runs: the expected-before check, and each restored instance's
-    eligibility (candidate from a selected attempt, retained, complete if a
-    result set, dependencies in project custody, retained and complete).
+    released-image rule, and, being the recorded inverse, the
+    association-set ancestor rule (step 5a, R13). Every other validation
+    in :func:`promote` still runs: the expected-before check, and each
+    restored instance's eligibility (candidate from a selected attempt,
+    retained, complete if a result set, dependencies in project custody,
+    retained and complete, its slot or logical key equal to the recorded
+    one).
     """
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM promotions WHERE id = %s", (promotion_id,))
@@ -1660,7 +1926,7 @@ def rollback_promotion(
             raise PromotionRefused(f"promotion {promotion_id!r} does not exist")
         cur.execute(
             """
-            SELECT kind, logical_key, before_instance, after_instance
+            SELECT kind, logical_key, slot, before_instance, after_instance
             FROM promotion_changes WHERE promotion = %s ORDER BY id
             """,
             (promotion_id,),
@@ -1671,13 +1937,16 @@ def rollback_promotion(
             f"promotion {promotion_id!r} recorded no changes; nothing to roll back")
 
     inverse = [
-        (kind, logical_key, after_instance, before_instance)
-        for kind, logical_key, before_instance, after_instance in recorded
+        (kind,
+         {"slot": slot} if slot is not None else {"logical_key": logical_key},
+         after_instance, before_instance)
+        for kind, logical_key, slot, before_instance, after_instance in recorded
     ]
     return promote(
         conn, who, reason, inverse,
         request_context={"rollback_of": promotion_id},
         _check_release=False,
+        _recorded_inverse=True,
     )
 
 
