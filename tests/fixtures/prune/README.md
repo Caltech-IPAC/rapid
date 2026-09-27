@@ -51,14 +51,14 @@ commit. The same stage against PostgreSQL (the child tables, the
 not-best exclusion for real, `prunedmerges`, provenance) is tested in
 `tests/db/test_prune.py`.
 
-Three difference images, over five `merges_<field>` pairs (R6, the
+Three difference images, over five `merges_<field>` pairs (the
 run-model form of `dev`'s not-best rule):
 
 | pid | `vbest` | `run` | Fate |
 |---|---|---|---|
 | 101 | 1 | (none) | best (promoted current): its one source's pairs kept |
 | 102 | 0 | another run | not best: its source's two pairs excluded |
-| 103 | 0 | **this run** | best under R6's own-run clause: its source's pair kept |
+| 103 | 0 | **this run** | best under the own-run clause: its source's pair kept |
 
 A seeded `diffimages.run` of `"__OWN_RUN__"` is replaced with the
 invocation's own `--run` value at fixture run time (read from `sys.argv`

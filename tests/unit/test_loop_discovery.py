@@ -460,7 +460,7 @@ def test_an_invalid_manifest_exit_64_from_the_cli_storage_is_malformed():
 
 
 def test_an_attribute_or_index_error_from_manifest_validation_is_malformed_not_fatal():
-    # P1: AttributeError/IndexError used to propagate and abort the
+    # AttributeError/IndexError used to propagate and abort the
     # whole firing before any classification committed; one bad object then
     # blocked the inbox forever. They are malformed like ValueError etc.
     db, s3, storage = _DB(), _S3(), _Inbox()
@@ -631,7 +631,7 @@ def test_rejections_commit_before_the_first_batch(monkeypatch):
 
 def test_a_unit_id_collision_is_quarantined_naming_the_earlier_delivery_and_the_batch_has_one_image(
         monkeypatch):
-    # P2: "image-sca01" and "image_sca01" both derive unit
+    # "image-sca01" and "image_sca01" both derive unit
     # "image/SCA01". This used to raise LoopError with nothing recorded, so
     # neither delivery was ever batched. Now the later one (key order) is a
     # durable quarantine naming the earlier, and the earlier batches alone.
