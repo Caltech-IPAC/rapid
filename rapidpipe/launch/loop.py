@@ -144,8 +144,14 @@ class DetectorImage:
 
 @dataclass(frozen=True)
 class LoopDate:
+    """One batch of a processing date: a ``[[dates]]`` entry (batch 1, no
+    discovered deliveries) or a batch formed from the inbox (R1, R6), whose
+    ``deliveries`` are the batch's ``loop_deliveries`` locations."""
+
     processing_date: _dt.date
     detector_images: tuple[DetectorImage, ...]
+    batch: int = 1
+    deliveries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,6 +166,12 @@ class LoopSpec:
     max_attempts: int
     profile: str
     dates: tuple[LoopDate, ...]
+    #: R1: the ``s3://bucket/prefix`` the stream discovers deliveries under,
+    #: and the stream-level stage inputs every discovered delivery takes.
+    inbox: str | None = None
+    difference_template: str | None = None
+    admit_settings: str | None = None
+    difference_settings: str | None = None
 
 
 _SCA_SUFFIX = re.compile(r"^(?P<stem>.+)[-_]sca(?P<sca>[0-9]{2})$", re.IGNORECASE)
@@ -210,9 +222,25 @@ def parse_spec(text: str, location: str) -> LoopSpec:
     if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
         raise LoopSpecError(f"{where}: max_attempts must be a positive integer")
 
-    dates_raw = doc.get("dates")
-    if not isinstance(dates_raw, list) or not dates_raw:
-        raise LoopSpecError(f"{location}: no [[dates]] entries")
+    inbox = _optional_str(loop, "inbox", where)
+    stream_template = _optional_str(loop, "difference_template", where)
+    if inbox is not None:
+        try:
+            inbox_loc = parse_location(inbox)
+        except ValueError as exc:
+            raise LoopSpecError(f"{where}: inbox {inbox!r}: {exc}") from exc
+        if not inbox_loc.is_s3() or not inbox_loc.prefix:
+            raise LoopSpecError(f"{where}: inbox must be an s3://bucket/prefix location, "
+                                f"got {inbox!r}")
+        inbox = f"s3://{inbox_loc.bucket}/{inbox_loc.prefix}"
+        if stream_template is None:
+            raise LoopSpecError(f"{where}: 'difference_template' is required with 'inbox' "
+                                "(a discovered manifest carries no stage inputs)")
+
+    dates_raw = doc.get("dates", [] if inbox is not None else None)
+    if not isinstance(dates_raw, list) or (not dates_raw and inbox is None):
+        raise LoopSpecError(f"{location}: no [[dates]] entries and no [loop] inbox "
+                            "(a spec needs one or both)")
     dates: list[LoopDate] = []
     seen: set[_dt.date] = set()
     for index, entry in enumerate(dates_raw):
@@ -254,7 +282,11 @@ def parse_spec(text: str, location: str) -> LoopSpec:
         check_policy=_optional_str(loop, "check_policy", where),
         max_attempts=max_attempts,
         profile=_optional_str(loop, "profile", where) or "batch",
-        dates=tuple(dates))
+        dates=tuple(dates),
+        inbox=inbox,
+        difference_template=stream_template,
+        admit_settings=_optional_str(loop, "admit_settings", where),
+        difference_settings=_optional_str(loop, "difference_settings", where))
 
 
 def read_spec_text(location: str, *, s3_client: Any = None) -> str:
@@ -304,7 +336,9 @@ class LoopTools:
     ``<scratch root>/runs/<run>/inputs``; ``out`` prints a line;
     ``create_seeded_run(conn, seed) -> run id`` is ``run create --seed <run>
     --only-failed`` (``rapidpipe.cli.main.create_only_failed_run``, no
-    commit; a refusal is a ``RunModelError``)."""
+    commit; a refusal is a ``RunModelError``). ``s3_client`` lists the inbox
+    (R3); ``None`` means ``rapidpipe.products.storage.s3_client()``, the seam
+    :func:`read_spec_text` uses."""
 
     walk: Callable[..., int]
     create_run: Callable[..., str]
@@ -312,6 +346,7 @@ class LoopTools:
     inputs_root: Callable[[str], str]
     out: Callable[[str], None] = field(default=lambda line: print(line, flush=True))
     create_seeded_run: Callable[..., str] | None = None
+    s3_client: Any = None
 
 
 # ======================================================================
@@ -328,9 +363,12 @@ class LoopRow:
     ended_at: Any
     promotion: str | None
     record: dict[str, Any]
+    batch: int = 1
+    kind: str = "batch"
 
 
-_ROW_COLUMNS = "schedule, processing_date, run, state, started_at, ended_at, promotion, record"
+_ROW_COLUMNS = ("schedule, processing_date, run, state, started_at, ended_at, promotion, "
+                "record, batch, kind")
 
 
 def loop_row(conn, schedule: str, processing_date: _dt.date) -> LoopRow | None:
