@@ -41,7 +41,7 @@ Departures from `dev`, each deliberate:
 - ``vbest`` stays 0: `dev` calls ``updateRefImage`` right after
   ``addRefImage`` to make the new row current; the rebuild never sets a
   legacy current flag at registration (products page, "Registration
-  metadata"; promotion maintains it, loop.md §Promotion).
+  metadata"; promotion maintains it, runs.md §Rules).
 - A transaction-level advisory lock on (``field``, ``fid``, ``ppid``) is
   taken before ``addRefImage``: its ``max(version) + 1`` is a read then a
   write, and two registrations of one field and filter at once would

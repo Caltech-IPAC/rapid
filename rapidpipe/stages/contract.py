@@ -714,8 +714,8 @@ def run_stage(
             _assert_inputs_readable(input_manifest, args.run_id)
 
             if inputs_location.is_s3() and not args.dry_run:
-                # Only the objects the guarded manifest names, one by one
-                # (amendment 3): never the whole prefix, and the manifest
+                # Only the objects the guarded manifest names, one by one:
+                # never the whole prefix, and the manifest
                 # is not fetched again, so what was judged is what is read.
                 for member_path in _manifest_member_paths(input_manifest):
                     try:

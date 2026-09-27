@@ -1,4 +1,4 @@
-"""Supersession by slot without a database (loop.md §Promotion).
+"""Supersession by slot without a database (runs.md §Rules).
 
 The selector and plan helpers (``rapidpipe.runs.slots``); ``promote``'s
 selector handling, refusals and the association-set ancestor rule;

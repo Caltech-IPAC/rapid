@@ -1270,7 +1270,7 @@ def _run_promote_command(args: argparse.Namespace) -> int:
     extra: dict[str, Any] = {} if args.check_policy is None else {
         "check_policy": args.check_policy}
     if args.plan is not None:
-        # A frozen plan (checks page, "The promotion gate"): a non-empty
+        # A frozen plan (runs page, "Rules"): a non-empty
         # JSON list of {kind, slot, before, after}; anything else, JSON null
         # included, exits 64 before any connection (tool page, "Exit
         # codes"). A stale one exits 64 from promote_run under the lock.

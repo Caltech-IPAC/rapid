@@ -1,5 +1,5 @@
 """Behavioural, black-box tests of ``rapidpipe run promote-plan`` and
-``run promote --plan`` (loop.md §Promotion): argv in,
+``run promote --plan`` (runs.md §Rules): argv in,
 exit code / stdout / stderr and database state out, against a real
 PostgreSQL with Batch and S3 faked (see
 ``tests/cli/test_run_lifecycle.py``'s module docstring for the shared
