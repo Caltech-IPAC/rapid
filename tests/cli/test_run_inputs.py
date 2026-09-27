@@ -306,7 +306,7 @@ def test_inputs_commits_bindings_before_the_manifest_write_and_recovers_after_a_
     failure leaves the ``unit_inputs`` rows in place and no manifest at
     dest; a retry composes again and writes the manifest, binding nothing
     new (each (unit, instance) bound exactly once)."""
-    entries, _ref_instance_id = _template_with_registered_entry(
+    entries, ref_instance_id = _template_with_registered_entry(
         cli, db, fake_batch, fake_s3, purpose="inputs-commit-ref1-producer")
     run_id = _create_run(cli, db, kind="scratch", stages="admit,difference",
                          purpose="inputs-commit-before-publish")
@@ -316,9 +316,16 @@ def test_inputs_commits_bindings_before_the_manifest_write_and_recovers_after_a_
 
     real_write_manifest = runctl._Storage.write_manifest
     calls = {"n": 0}
+    # What an independent connection (``db``: its own psycopg2 connection,
+    # autocommit, so it sees committed rows only) reads from unit_inputs at
+    # the moment each write begins. Non-empty at the first, failing write
+    # proves the bindings were committed BEFORE the write, not in failure
+    # cleanup after it.
+    bound_at_write: list[set[str]] = []
 
     def flaky_write_manifest(self, manifest, location):
         calls["n"] += 1
+        bound_at_write.append(_bound(db, run_id, "difference", "U"))
         if calls["n"] == 1:
             raise OSError("disk went away")
         return real_write_manifest(self, manifest, location)
@@ -338,13 +345,19 @@ def test_inputs_commits_bindings_before_the_manifest_write_and_recovers_after_a_
     dest_prefix = expected_dest[len(f"s3://{FAKE_BUCKET}/"):]
     assert (FAKE_BUCKET, f"{dest_prefix}/manifest.json") not in fake_s3._objects
 
+    assert bound_at_write == [{ref_instance_id}], (
+        "the bindings should have been committed, and visible to another connection, "
+        "when the (failing) manifest write began")
     bound_after_failure = _bound(db, run_id, "difference", "U")
-    assert bound_after_failure, "the bindings should have committed before the failed write"
+    assert bound_after_failure == {ref_instance_id}, (
+        "the bindings should have committed before the failed write")
 
     second = cli("run", "inputs", run_id, "difference", "--unit", "U",
                 "--from-stage", "admit", "--template", template_loc)
     assert second.rc == 0, second.err
     assert (FAKE_BUCKET, f"{dest_prefix}/manifest.json") in fake_s3._objects
+    # The retry's (successful) write also began with the bindings committed.
+    assert bound_at_write == [{ref_instance_id}, {ref_instance_id}]
 
     with db.cursor() as cur:
         cur.execute(
