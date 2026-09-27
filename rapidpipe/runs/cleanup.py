@@ -44,8 +44,8 @@ What is removed, and only for rows whose ``run`` is this run:
 column; they belong to a run through their ``rfid``
 (:data:`RFID_SCOPED_TABLES`). Their rows whose ``rfid`` is one of this
 run's `refimages` rows are deleted first, in the same transaction, since
-`register` writes them with that run's reference image (supervisor step
-8, ruling R7). ``xsources`` carries no ``run`` column and is never
+`register` writes them with that run's reference image. ``xsources``
+carries no ``run`` column and is never
 cleaned. A row that references one of this run's rows and is not itself
 cleaned with the run -- an ``xsources`` row, a `refimimages` row of
 another run's reference naming this run's l2 image, a science row of
@@ -186,8 +186,8 @@ def _default_s3_client() -> Any:
 
 
 #: The environment variable naming the IAM role ``run delete`` and ``run
-#: expire`` assume for their S3 deletes (supervisor ruling R7c). Unset,
-#: they use the caller's own credentials, as before.
+#: expire`` assume for their S3 deletes. Unset, they use the caller's own
+#: credentials, as before.
 CLEANUP_ROLE_ENV = "RAPIDPIPE_CLEANUP_ROLE_ARN"
 
 # The cleanup role's MaxSessionDuration is 3600 s, so this is also the most

@@ -44,7 +44,7 @@ from rapidpipe.science.spatial import healpix_indexes
 #: (``[SCI_IMAGE] ppid = 15``). SFFT's row (ppid 16, priority 6) was
 #: assigned by the lead 2026-09-24 (database/migrations/20260924-01-pipelines-
 #: sfft.sql). SFFT registers alongside ZOGY by default (``[sfft]
-#: register_sfft``, lead ruling 2026-09-26): a manifest carrying both
+#: register_sfft``): a manifest carrying both
 #: differencers' instances is registered as two rows, one per `pipelines`
 #: row; which one is current downstream is a promotion choice, not a
 #: registration-time refusal.

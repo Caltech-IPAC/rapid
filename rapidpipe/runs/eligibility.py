@@ -1,5 +1,5 @@
 """Acceptance state: one judgement per product instance, computed once
-(supervisor step 6, 2026-09-26, rulings R1-R4, amendments A1-A7).
+(checks.md §Acceptance).
 
 :func:`acceptance_state` decides the state of one ``product_instances``
 row; :func:`acceptance_states` decides many in one pass and
@@ -8,7 +8,7 @@ run. The promotion walk (``repository._validate_promotion_eligibility``),
 ``check accept``, ``check show`` and ``run show`` all read these, so the
 states and their wording come from one place.
 
-States, decided in this order of precedence (A4):
+States, decided in this order of precedence (checks.md §Acceptance):
 
 - ``deleted``: ``deletion_state`` is not ``retained``;
 - ``incomplete``: a result set that is not complete;
@@ -50,7 +50,8 @@ STATES: tuple[str, ...] = (
     "accepted", "pending", "rejected",
 )
 
-#: The states a promotion accepts in an ancestor (R2, A1).
+#: The states a promotion accepts in an ancestor (checks.md §The
+#: promotion gate).
 PROMOTABLE_ANCESTOR_STATES: tuple[str, ...] = ("current", "superseded", "accepted")
 
 
@@ -67,7 +68,8 @@ class CheckEvidence:
 
 @dataclass(frozen=True)
 class AcceptanceState:
-    """The acceptance state of one ``product_instances`` row (R1)."""
+    """The acceptance state of one ``product_instances`` row
+    (checks.md §Acceptance)."""
 
     instance: str
     kind: str
@@ -106,7 +108,8 @@ class AcceptanceState:
 
     def detail(self) -> str:
         """What decided the state: the check and outcome, the acceptance
-        row, or the custody (the tail of the R4 ``acceptance`` line)."""
+        row, or the custody (the tail of the ``acceptance`` line, checks.md
+        §The check commands)."""
         if self.state == "deleted":
             return "deletion_state=deleted"
         if self.state == "incomplete":
@@ -158,7 +161,8 @@ class AcceptanceState:
         return self.state
 
     def line(self) -> str:
-        """The R4 line ``check show`` and ``run show`` print."""
+        """The line ``check show`` and ``run show`` print
+        (checks.md §The check commands)."""
         return (f"acceptance instance={self.instance} kind={self.kind} "
                 f"state={self.state} {self.detail()}").rstrip()
 
@@ -284,8 +288,8 @@ def acceptance_states(cur, instance_ids: Iterable[str], *,
 
 
 def acceptance_state(cur, instance_id: str) -> AcceptanceState:
-    """The acceptance state of one instance (R1); :class:`LookupError` if
-    no ``product_instances`` row has that id."""
+    """The acceptance state of one instance (checks.md §Acceptance);
+    :class:`LookupError` if no ``product_instances`` row has that id."""
     states = acceptance_states(cur, [instance_id])
     if instance_id not in states:
         raise LookupError(f"no product instance {instance_id!r}")
@@ -296,7 +300,7 @@ def run_acceptance_states(cur, run_id: str, *,
                           instance: str | None = None) -> list[AcceptanceState]:
     """The states of ``run_id``'s candidate and current instances (or the one
     ``instance`` of them), ordered by kind then id: the lines ``check show``
-    and ``run show`` print (R4)."""
+    and ``run show`` print (checks.md §The check commands)."""
     query = ("SELECT id FROM product_instances WHERE run = %s "
              "AND custody IN ('candidate', 'current')")
     params: list[Any] = [run_id]
@@ -312,10 +316,10 @@ def run_acceptance_states(cur, run_id: str, *,
 
 def ancestors(cur, instance_id: str) -> list[str]:
     """Every instance ``instance_id`` depends on, through the whole chain of
-    ``dependencies`` (R2, A1): a recursive walk from the instance up through
-    ``producer_instance``, cycle-guarded by UNION (a row already found is
-    never walked again) and otherwise unbounded. Excludes ``instance_id``
-    itself; ordered by id."""
+    ``dependencies`` (checks.md §The promotion gate): a recursive walk from
+    the instance up through ``producer_instance``, cycle-guarded by UNION (a
+    row already found is never walked again) and otherwise unbounded.
+    Excludes ``instance_id`` itself; ordered by id."""
     cur.execute(
         """
         WITH RECURSIVE walk (id) AS (

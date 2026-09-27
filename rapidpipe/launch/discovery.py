@@ -1,4 +1,5 @@
-"""Delivery discovery for the processing-date loop (supervisor step 4, R1-R3, R13).
+"""Delivery discovery for the processing-date loop (loop.md §Discovery and
+batches).
 
 A schedule whose spec names an ``inbox`` (``s3://bucket/prefix``) finds its
 deliveries there, one per ``<inbox>/<YYYY-MM-DD>/<name>/manifest.json``: the
@@ -156,7 +157,8 @@ def identify(manifest: Manifest) -> Identity | None:
 
 
 def classify(identity: Identity | None, history: Sequence[Identity]) -> tuple[str, str | None]:
-    """``(state, reason)`` of one delivery against the batched ``history`` (R3)."""
+    """``(state, reason)`` of one delivery against the batched ``history``
+    (loop.md §Classification)."""
     if identity is None:
         return QUARANTINED, MALFORMED
     same = [h for h in history if (h.exposure, h.detector, h.version) ==
@@ -191,7 +193,7 @@ def _read(storage: Any, location: str) -> Manifest | None:
 def discover(conn, schedule: str, inbox: str, storage: Any, client: Any,
              unit_of: Callable[[str], str]) -> Discovery:
     """List ``inbox``, read and classify every delivery ``schedule`` has not
-    recorded (R3). Reads only."""
+    recorded (loop.md §Classification). Reads only."""
     listed, ignored = list_inbox(client, inbox)
     recorded = recorded_locations(conn, schedule)
     history = batched_identities(conn, schedule)

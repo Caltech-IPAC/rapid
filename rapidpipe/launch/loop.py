@@ -1,16 +1,16 @@
-"""The processing-date loop: ``rapidpipe loop run|plan|show`` (supervisor step 7).
+"""The processing-date loop: ``rapidpipe loop run|plan|show``.
 
 One scheduled invocation walks a dates spec, date by date, through one
 production run each, with the machinery ``rapidpipe run start`` already
-uses. The rulings this module implements, one line each:
+uses. The behaviour this module implements, one line each:
 
-- R3: ``loop run`` processes, in spec order and serially, every date whose
+- ``loop run`` processes, in spec order and serially, every date whose
   ``loop_dates`` row is absent or ``open``; exit 0 when every processed date
   is complete, 1 on the first failed date (later dates not started), 75 on a
   timeout; an ``open`` row's run is resumed through ``run start``'s walk
   (complete units skipped, running attempts attached, ready units
   re-attempted).
-- R4 (amended A1): one production run per date, created by ``run create
+- (loop.md §Per date): one production run per date, created by ``run create
   --release``'s code path, walking admit -> register -> difference ->
   finalize -> register(finalize output) -> load(finalize output) per detector
   image (the raw difference is never registered), maintain per
@@ -18,51 +18,54 @@ uses. The rulings this module implements, one line each:
   alerts per detector image, every attempt through ``submit_unit`` +
   ``reconcile``. An alerts input set names, per field the image touches,
   the association set, its statistics set and the field's prune output
-  (supervisor step 9, R5: the history leaves out the pruned pairs).
-- R5 (amended A3): a field's base catalog is the association set crossmatch
-  produced for that field in the most recent earlier ``complete`` row of the
-  same schedule that has one (walking back over dates; promoted or not, with
-  ``base_promoted`` recorded); none on the first date. The set must be
-  readable by the date's run (supervisor step 9 R2: complete, retained, a
-  selected production output); one that is not is skipped for the next
-  earlier date and named in ``record.bases_skipped``. The source sets the
-  loop reads fields from pass the same rule. Input-set manifests
+  (the history leaves out the pruned pairs).
+- (loop.md §Base catalog): a field's base catalog is the association set
+  crossmatch produced for that field in the most recent earlier
+  ``complete`` row of the same schedule that has one (walking back over
+  dates; promoted or not, with ``base_promoted`` recorded); none on the
+  first date. The set must be readable by the date's run (complete,
+  retained, a selected production output); one that is not is skipped for
+  the next earlier date and named in ``record.bases_skipped``. The source
+  sets the loop reads fields from pass the same rule. Input-set manifests
   live under ``<scratch root>/runs/<run>/inputs/<stage>/<unit>/``.
-- A2: an attempt left running without a Batch job goes to step 6's
-  ``resolve_jobless`` once and the walk is retried once; still job-less, the
-  date fails (row ``failed``, ``record.jobless_attempt``, exit 1).
-- Step 9 R4: a unit whose input manifest the launcher refuses
-  (``InputsRefused``, ``run start``'s exit 65: absent, unreadable, or naming
-  an input of a deleting run) fails the date with the message (row
-  ``failed``, ``record.failure``, exit 1); nothing was written for it.
-- A4: one loop per schedule (``pg_try_advisory_lock``, exit 75 when held); a
-  ``failed`` row stops the loop unless ``--retry-failed`` reopens it: a new
-  run seeded from the row's run through step 6's ``run create --seed <run>
-  --only-failed`` path (the row repointed to it, the old run id appended to
-  ``record.previous_runs``), then resumed; the row's completion commits with
-  ``finish_run``. A ``failed`` row whose run is open with no failed or
-  cancelled unit (a refusal, not a unit's failure) is reopened on the same
-  run by any ``loop run`` (``record.reopened`` gets the time) and resumed.
-- Codex 7-2: within a date every unit a phase can run is walked before the
-  date fails (the detector-image chains, then maintain, then the field
-  chains, then alerts), so a seeded re-run, whose stage list starts at its
-  earliest non-complete position, holds every unit still to run; each
+- (loop.md §Concurrency and recovery): an attempt left running without a
+  Batch job goes to ``resolve_jobless`` once and the walk is retried once;
+  still job-less, the date fails (row ``failed``, ``record.jobless_attempt``,
+  exit 1).
+- (loop.md §Concurrency and recovery): a unit whose input manifest the
+  launcher refuses (``InputsRefused``, ``run start``'s exit 65: absent,
+  unreadable, or naming an input of a deleting run) fails the date with the
+  message (row ``failed``, ``record.failure``, exit 1); nothing was written
+  for it.
+- (loop.md §Concurrency and recovery): one loop per schedule
+  (``pg_try_advisory_lock``, exit 75 when held); a ``failed`` row stops the
+  loop unless ``--retry-failed`` reopens it: a new run seeded from the row's
+  run through the ``run create --seed <run> --only-failed`` path (the row
+  repointed to it, the old run id appended to ``record.previous_runs``),
+  then resumed; the row's completion commits with ``finish_run``. A
+  ``failed`` row whose run is open with no failed or cancelled unit (a
+  refusal, not a unit's failure) is reopened on the same run by any
+  ``loop run`` (``record.reopened`` gets the time) and resumed.
+- (loop.md §Per date): within a date every unit a phase can run is walked
+  before the date fails (the detector-image chains, then maintain, then the
+  field chains, then alerts), so a seeded re-run, whose stage list starts at
+  its earliest non-complete position, holds every unit still to run; each
   field's crossmatch input set carries every source set of the date (the
   neighbour pass needs neighbouring fields' rows); a date whose run is no
   longer open completes only when every unit its plan requires is
   ``complete`` (in the run, or inherited from the runs it was seeded from).
-- R6: once every unit is complete the policy's checks are run and recorded
-  and the run is promoted (``promote_run``, ``who="scheduler"``,
-  ``check_policy`` = the spec's, else the run's, else the default); a refusal
-  is recorded on the row, not a failure of the date; the run is finished
-  either way.
-- R7: ``loop_dates`` (migration 20260924-11) holds per date the run, the
-  state, the promotion and a JSON record of what ran.
-- Step 4 of the operations campaign (rulings R1-R6, R13, R14, 2026-09-26):
-  a spec with an ``inbox`` discovers its deliveries
-  (``<inbox>/<YYYY-MM-DD>/<name>/manifest.json``, the date directory being
-  the processing date; ``rapidpipe.launch.discovery``) and classifies each
-  once into ``loop_deliveries`` (batched, refused, quarantined, deferred).
+- (loop.md §Promotion): once every unit is complete the policy's checks are
+  run and recorded and the run is promoted (``promote_run``,
+  ``who="scheduler"``, ``check_policy`` = the spec's, else the run's, else
+  the default); a refusal is recorded on the row, not a failure of the
+  date; the run is finished either way.
+- (loop.md §Records): ``loop_dates`` (migration 20260924-11) holds per date
+  the run, the state, the promotion and a JSON record of what ran.
+- (loop.md §Discovery and batches): a spec with an ``inbox`` discovers its
+  deliveries (``<inbox>/<YYYY-MM-DD>/<name>/manifest.json``, the date
+  directory being the processing date; ``rapidpipe.launch.discovery``) and
+  classifies each once into ``loop_deliveries`` (batched, refused,
+  quarantined, deferred).
   ``loop run`` then resumes the schedule's open batches, records the
   firing's rejections in one transaction, forms one batch per date with new
   deliveries (oldest first, batch = 1 + the date's highest, each with its
@@ -93,8 +96,9 @@ The spec is a TOML document at a local path or an ``s3://`` object::
     difference_settings = "s3://.../difference-gain1-imgnoise.toml"
     # unit = "r0034001002001001001/SCA01"  (optional; derived from delivery)
 
-The inbox form (step 4 R1) discovers the deliveries instead of listing
-them; ``[[dates]]`` may be given as well, and ``--date`` selects only those::
+The inbox form (loop.md §Discovery and batches) discovers the deliveries
+instead of listing them; ``[[dates]]`` may be given as well, and ``--date``
+selects only those::
 
     [loop]
     schedule = "ops4-stream"
@@ -130,8 +134,8 @@ from rapidpipe.products.storage import join, parse_location
 from rapidpipe.runs import binding, repository
 from rapidpipe.runs.inputs import InputsRefused
 
-#: The run's selected stages (R4), and the positions in it each part of
-#: the walk takes.
+#: The run's selected stages (loop.md §Per date), and the positions in it
+#: each part of the walk takes.
 SELECTED_STAGES = (
     "admit", "register", "difference", "finalize", "register", "load",
     "maintain", "crossmatch", "statistics", "prune", "alerts")
@@ -170,8 +174,9 @@ class DetectorImage:
 @dataclass(frozen=True)
 class LoopDate:
     """One batch of a processing date: a ``[[dates]]`` entry (batch 1, no
-    discovered deliveries) or a batch formed from the inbox (R1, R6), whose
-    ``deliveries`` are the batch's ``loop_deliveries`` locations."""
+    discovered deliveries) or a batch formed from the inbox (loop.md
+    §Discovery and batches), whose ``deliveries`` are the batch's
+    ``loop_deliveries`` locations."""
 
     processing_date: _dt.date
     detector_images: tuple[DetectorImage, ...]
@@ -191,8 +196,9 @@ class LoopSpec:
     max_attempts: int
     profile: str
     dates: tuple[LoopDate, ...]
-    #: R1: the ``s3://bucket/prefix`` the stream discovers deliveries under,
-    #: and the stream-level stage inputs every discovered delivery takes.
+    #: The ``s3://bucket/prefix`` the stream discovers deliveries under
+    #: (loop.md §Discovery and batches), and the stream-level stage inputs
+    #: every discovered delivery takes.
     inbox: str | None = None
     difference_template: str | None = None
     admit_settings: str | None = None
@@ -362,7 +368,8 @@ class LoopTools:
     ``create_seeded_run(conn, seed) -> run id`` is ``run create --seed <run>
     --only-failed`` (``rapidpipe.cli.main.create_only_failed_run``, no
     commit; a refusal is a ``RunModelError``). ``s3_client`` lists the inbox
-    (R3); ``None`` means ``rapidpipe.products.storage.s3_client()``, the seam
+    (loop.md §Discovery and batches); ``None`` means
+    ``rapidpipe.products.storage.s3_client()``, the seam
     :func:`read_spec_text` uses."""
 
     walk: Callable[..., int]
@@ -415,8 +422,8 @@ def loop_rows(conn, schedule: str) -> list[LoopRow]:
 def previous_complete_rows(conn, schedule: str, processing_date: _dt.date,
                            batch: int) -> list[LoopRow]:
     """``schedule``'s ``complete`` rows before (``processing_date``, ``batch``),
-    newest first (R5/A3; step 4 R5: a later batch of a date extends the
-    earlier batches of the same date before any earlier date)."""
+    newest first (loop.md §Base catalog: a later batch of a date extends
+    the earlier batches of the same date before any earlier date)."""
     with conn.cursor() as cur:
         cur.execute(f"SELECT {_ROW_COLUMNS} FROM loop_dates WHERE schedule = %s "
                     "AND state = 'complete' AND (processing_date, batch) < (%s, %s) "
@@ -426,7 +433,8 @@ def previous_complete_rows(conn, schedule: str, processing_date: _dt.date,
 
 
 def next_batch(conn, schedule: str, processing_date: _dt.date) -> int:
-    """1 + the highest batch of (``schedule``, ``processing_date``), else 1 (R6)."""
+    """1 + the highest batch of (``schedule``, ``processing_date``), else 1
+    (loop.md §Discovery and batches)."""
     with conn.cursor() as cur:
         cur.execute("SELECT COALESCE(MAX(batch), 0) + 1 FROM loop_dates "
                     "WHERE schedule = %s AND processing_date = %s",
@@ -452,7 +460,8 @@ def run_state(conn, run_id: str) -> str | None:
 
 
 def jobless_attempts(conn, run_id: str) -> list[str]:
-    """The run's attempts still running with no scheduler job (A2)."""
+    """The run's attempts still running with no scheduler job (loop.md
+    §Concurrency and recovery)."""
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM attempts WHERE run = %s AND disposition IS NULL "
                     "AND scheduler_job_id IS NULL ORDER BY id", (run_id,))
@@ -460,7 +469,8 @@ def jobless_attempts(conn, run_id: str) -> list[str]:
 
 
 def try_lock(conn, schedule: str) -> bool:
-    """A session advisory lock on the schedule, so one loop runs per schedule (A4)."""
+    """A session advisory lock on the schedule, so one loop runs per
+    schedule (loop.md §Concurrency and recovery)."""
     with conn.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(hashtext('rapidpipe.loop:' || %s))",
                     (schedule,))
@@ -479,7 +489,7 @@ def unlock(conn, schedule: str) -> None:
 def repoint_row(conn, schedule: str, processing_date: _dt.date, batch: int, run_id: str,
                 record: dict[str, Any]) -> None:
     """``--retry-failed``: a failed row back to ``open`` on its seeded re-run
-    ``run_id`` (Codex 7-2). Does not commit."""
+    ``run_id`` (loop.md §Concurrency and recovery). Does not commit."""
     with conn.cursor() as cur:
         cur.execute("UPDATE loop_dates SET run = %s, state = 'open', ended_at = NULL, "
                     "promotion = NULL, record = %s WHERE schedule = %s "
@@ -553,9 +563,9 @@ def maintain_unit_id(table: str) -> str:
 def readable_result_set(conn, instance: str, run_id: str, kind: str) -> None:
     """Refuse (:class:`ValueError`) a result set run ``run_id`` may not read.
 
-    ``rapidpipe.db.objects.assert_readable_result_set`` (supervisor step 9
-    ruling R2; Codex 9-2): complete and retained, and ``run_id``'s own or a
-    production run's (custody ``candidate``/``current``) selected output,
+    ``rapidpipe.db.objects.assert_readable_result_set`` (runs.md §Rules):
+    complete and retained, and ``run_id``'s own or a production run's
+    (custody ``candidate``/``current``) selected output,
     of ``kind``. The loop applies it to the source sets it discovers fields
     from and to the base it chooses, with the date's run as the reader.
     """
@@ -626,12 +636,13 @@ class Base:
 def base_for_field(conn, storage: Any, previous: Sequence[LoopRow], field_id: int,
                    run_id: str, skipped: list[dict[str, str]] | None = None
                    ) -> Base | None:
-    """The base for ``field_id`` (R5/A3): the newest of ``previous`` (complete
-    rows, newest first) whose run crossmatched the field and whose
-    association set run ``run_id`` may read (:func:`readable_result_set`,
-    ruling R2), or ``None``. A set it may not read is not eligible: the
-    search goes on to the next earlier date, and ``skipped`` (when given)
-    gets ``{run, processing_date, instance, reason}`` for it."""
+    """The base for ``field_id`` (loop.md §Base catalog): the newest of
+    ``previous`` (complete rows, newest first) whose run crossmatched the
+    field and whose association set run ``run_id`` may read
+    (:func:`readable_result_set`), or ``None``. A set it may not read is
+    not eligible: the search goes on to the next earlier date, and
+    ``skipped`` (when given) gets ``{run, processing_date, instance,
+    reason}`` for it."""
     for row in previous:
         entry = base_entry(conn, storage, row, field_id)
         if entry is None:
@@ -686,7 +697,7 @@ def crossmatch_inputs(run_id: str, field_id: int, source_sets: Sequence[OutputEn
                       base: OutputEntry | None) -> Manifest:
     """Crossmatch's input set for one field: every source set of the date
     (crossmatch filters by field itself, and its neighbour pass reads
-    neighbouring fields' rows from the supplied sets; Codex 7-2), plus the
+    neighbouring fields' rows from the supplied sets), plus the
     field's base."""
     outputs = list(source_sets) + ([base] if base is not None else [])
     return input_set_manifest(run_id, Unit(kind="field", id=str(field_id)), outputs,
@@ -728,7 +739,7 @@ def alert_result_sets(source: OutputEntry, associations: Sequence[str],
                       statistics: Sequence[str], pruned: Sequence[str] = ()) -> list[str]:
     """alerts' ``inputs.result_sets``: the source set, one or more association
     sets, at most one statistics set and at most one pruned set per
-    association set (each field's prune output, supervisor step 9 R5)."""
+    association set (each field's prune output)."""
     if not associations:
         raise LoopError(f"source set {source.instance} has no association sets")
     if len(statistics) > len(associations) or len(set(statistics)) != len(statistics):
@@ -740,7 +751,8 @@ def alert_result_sets(source: OutputEntry, associations: Sequence[str],
 
 def field_pruned_set(entries: Sequence[OutputEntry], location: str, association: str) -> str:
     """The one ``pruned-set`` a field's prune manifest (at ``location``) lists,
-    which must prune ``association``, the field's association set (R5)."""
+    which must prune ``association``, the field's association set
+    (prune.md)."""
     pruned = [e for e in entries if e.kind == "pruned-set"]
     if len(pruned) != 1:
         raise LoopError(f"{location}/manifest.json has {len(pruned)} pruned sets")
@@ -754,7 +766,7 @@ def field_pruned_set(entries: Sequence[OutputEntry], location: str, association:
 def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date, batch: int = 1
              ) -> tuple[str | None, str, str, list[dict[str, Any]]]:
     """(promotion id or None, the record's ``promotion`` text, ``promotion_gate``,
-    the checks run) (R6).
+    the checks run) (loop.md §Promotion).
 
     Resolve the policy (the spec's, else the run's, else the default), run
     its checks over the run's candidates as ``scheduler`` through
@@ -810,7 +822,8 @@ def _at(date: _dt.date, batch: int) -> str:
 def _finish_row(conn, spec: LoopSpec, date: _dt.date, batch: int, run_id: str,
                 record: dict[str, Any], out: Callable[[str], None]) -> int:
     """(f)+(g): promote (or reuse the run's promotion, or record a refusal),
-    then ``finish_run`` and the row's completion in one transaction (A4)."""
+    then ``finish_run`` and the row's completion in one transaction
+    (loop.md §Records)."""
     promotion_id, promotion_text, gate, checks = _promote(conn, run_id, spec, date, batch)
     if run_state(conn, run_id) == "open":
         repository.finish_run(conn, run_id)
@@ -835,7 +848,7 @@ def _fail_row(conn, spec: LoopSpec, date: _dt.date, batch: int, run_id: str,
 
 
 # ----------------------------------------------------------------------
-# The date's run, seeded or not (Codex 7-2)
+# The date's run, seeded or not
 # ----------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -844,10 +857,10 @@ class RunView:
     it was seeded from by ``--retry-failed``, and so on; ``offset`` is the
     position in :data:`SELECTED_STAGES` the run's own stage list starts at (a
     production seed's re-run selects the suffix from its earliest
-    non-complete position, step 6 R7). A unit the run has no row for is
-    inherited when the nearest run of the chain holding it has it
-    ``complete``; its output is read there (a production run's outputs are
-    project custody)."""
+    non-complete position, loop.md §Concurrency and recovery). A unit the
+    run has no row for is inherited when the nearest run of the chain
+    holding it has it ``complete``; its output is read there (a
+    production run's outputs are project custody)."""
 
     run: str
     chain: tuple[str, ...]
@@ -936,9 +949,10 @@ def _fields(conn, loads: dict[str, tuple[str, list[OutputEntry]]], date: _dt.dat
             run_id: str) -> tuple[list[int], list[OutputEntry], dict[str, set[int]]]:
     """The date's fields, every source set of the date (image order, once
     each), and per image the fields its source sets have rows in. Each
-    source set must be readable by run ``run_id`` (:func:`readable_result_set`,
-    ruling R2: its own, or an inherited production seed's selected output)
-    before its rows are read; one that is not is a :class:`LoopError`."""
+    source set must be readable by run ``run_id``
+    (:func:`readable_result_set`: its own, or an inherited production
+    seed's selected output) before its rows are read; one that is not is
+    a :class:`LoopError`."""
     fields: set[int] = set()
     sources: dict[str, OutputEntry] = {}
     image_fields: dict[str, set[int]] = {}
@@ -964,7 +978,7 @@ def incomplete_units(conn, storage: Any, view: RunView, day: LoopDate) -> list[s
     run (or inherited complete from its seeds), as ``"<stage> <unit>
     (<state>|absent)"``: per image admit, register, difference, finalize,
     register, load; maintain; per field crossmatch, statistics, prune; per
-    image alerts (Codex 7-2). Without every load, maintain's units and the
+    image alerts. Without every load, maintain's units and the
     fields cannot be known, and that is said instead."""
     missing: list[str] = []
 
@@ -996,8 +1010,8 @@ def incomplete_units(conn, storage: Any, view: RunView, day: LoopDate) -> list[s
 
 def _phase(items: Sequence[Any], body: Callable[[Any], None]) -> None:
     """Walk every item of one phase; a failed item does not stop the others,
-    but the phase then fails the date with every item's reason (Codex 7-2:
-    a seeded re-run then holds every unit still to run). A timeout or any
+    but the phase then fails the date with every item's reason (a seeded
+    re-run then holds every unit still to run). A timeout or any
     other error propagates at once."""
     failures: list[_Stop] = []
     for item in items:
@@ -1017,7 +1031,8 @@ def _phase(items: Sequence[Any], body: Callable[[Any], None]) -> None:
 # ----------------------------------------------------------------------
 
 def _create_run(conn, spec: LoopSpec, tools: LoopTools, date: _dt.date, batch: int) -> str:
-    """One batch's production run, through ``run create --release``'s path (R4)."""
+    """One batch's production run, through ``run create --release``'s path
+    (loop.md §Per date)."""
     return tools.create_run(
         conn, kind=spec.kind, owner=spec.owner,
         purpose=f"processing date {date} batch {batch} (schedule {spec.schedule})",
@@ -1052,8 +1067,8 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
         view = run_view(conn, run_id)
         state = run_state(conn, run_id)
         if state != "open":
-            # A4: the run was finished before the row was. Codex 7-2: complete
-            # the row only when every unit the date's plan requires is.
+            # The run was finished before the row was. Complete the row
+            # only when every unit the date's plan requires is.
             missing = incomplete_units(conn, storage, view, day)
             if missing:
                 return _fail_row(conn, spec, date, batch, run_id, record, out, reason=(
@@ -1077,10 +1092,11 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                                 timeout=timeout, continue_hint=hint)
                 break
             except InputsRefused as exc:
-                # R4: the launcher refused the unit's input manifest before
-                # writing anything (``run start`` exits 65). The unit cannot
-                # run, so it fails the date with the message, as a unit that
-                # cannot be walked does, rather than ending the loop.
+                # loop.md §Concurrency and recovery: the launcher refused
+                # the unit's input manifest before writing anything
+                # (``run start`` exits 65). The unit cannot run, so it
+                # fails the date with the message, as a unit that cannot
+                # be walked does, rather than ending the loop.
                 conn.rollback()
                 stages = ",".join(SELECTED_STAGES[p + view.offset] for p in positions)
                 raise _Stop(EXIT_FAILED, f"{stages} {unit_id}: inputs refused: {exc}") from exc
@@ -1092,12 +1108,13 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                 if not jobless:
                     raise
                 if resolved:
-                    # A2: resolved once and still job-less; never wait on it.
+                    # Resolved once and still job-less; never wait on it.
                     raise _Stop(EXIT_FAILED, f"attempt {jobless[0]} is running with no "
                                              f"scheduler job: {exc}", jobless=jobless[0])
-                # A2: step 6's resolver (run reconcile --resolve-jobless),
-                # then one more walk: a found job is attached, a lost attempt
-                # leaves its unit ready for the next one.
+                # loop.md §Concurrency and recovery: the resolver
+                # (run reconcile --resolve-jobless), then one more walk: a
+                # found job is attached, a lost attempt leaves its unit
+                # ready for the next one.
                 results = launch_batch.resolve_jobless(
                     conn, run_id=run_id,
                     older_than_seconds=launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS)
@@ -1135,7 +1152,8 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
             return
         # A seeded re-run: one position at a time, skipping what the seeds
         # completed; a seeded unit takes its seed attempt's inputs and
-        # settings (step 6 R8), any other unit its producer's output.
+        # settings (loop.md §Concurrency and recovery), any other unit its
+        # producer's output.
         for absolute, stage, unit_id in image_units(image.unit):
             if inherited(stage, unit_id):
                 continue
@@ -1161,8 +1179,9 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                                                        producer_unit)])
 
     try:
-        # (b) the detector-image chain, admit..load, per image (A1: register
-        # follows finalize only; load reads finalize's output).
+        # (b) the detector-image chain, admit..load, per image (loop.md
+        # §Per date: register follows finalize only; load reads
+        # finalize's output).
         _phase(day.detector_images, image_chain)
         loads, by_maintain = _loads(conn, storage, view, day)
 
@@ -1233,15 +1252,15 @@ def process_date(conn, spec: LoopSpec, day: LoopDate, tools: LoopTools, *,
                 statistics[f] = st_sets[0]
             if not inherited("prune", unit):
                 walk(unit, [position(PRUNE, "prune", unit)], inputs=[xm_out])
-            # R5: the field's prune output (the selected attempt's pruned set)
-            # binds to every alerts input set naming this field.
+            # prune.md: the field's prune output (the selected attempt's
+            # pruned set) binds to every alerts input set naming this field.
             pr_out = _output(conn, view, "prune", unit)
             pruned[f] = field_pruned_set(storage.read_manifest(pr_out).outputs, pr_out,
                                          association[f])
 
         _phase(fields, field_chain)
 
-        # (e) alerts per detector image (A5, stages/alerts.py's input rules).
+        # (e) alerts per detector image (stages/alerts.py's input rules).
         alerts: dict[str, dict[str, Any]] = {}
 
         def image_alerts(image: DetectorImage) -> None:
@@ -1317,8 +1336,8 @@ _FAILURE_KEYS = ("failure", "reason", "jobless_attempt")
 
 
 def reopenable(conn, row: LoopRow) -> bool:
-    """A ``failed`` row whose run can simply be resumed (step 9, R4
-    follow-up): the run is still ``open`` and has no ``failed`` or
+    """A ``failed`` row whose run can simply be resumed (loop.md
+    §Concurrency and recovery): the run is still ``open`` and has no ``failed`` or
     ``cancelled`` unit -- the date failed on a refusal (an input manifest
     refused before submission, or a later stage's composition refused with
     every existing unit complete), not on a unit. A row whose run has a
@@ -1349,9 +1368,10 @@ def reopen_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> None:
 
 
 def retry_date(conn, spec: LoopSpec, row: LoopRow, tools: LoopTools) -> int:
-    """``--retry-failed`` on a ``failed`` row (A4, Codex 7-2): create a run
-    seeded from the row's run through step 6's ``run create --seed <run>
-    --only-failed`` path (``tools.create_seeded_run``), repoint the row to it
+    """``--retry-failed`` on a ``failed`` row (loop.md §Concurrency and
+    recovery): create a run seeded from the row's run through the
+    ``run create --seed <run> --only-failed`` path
+    (``tools.create_seeded_run``), repoint the row to it
     (``open``), append the old run to ``record.previous_runs``, and commit
     both together; the caller then resumes the date as usual. A refusal
     (nothing to re-run, a deleting seed) leaves the row ``failed`` with the
@@ -1397,13 +1417,15 @@ def _selected_dates(spec: LoopSpec, dates: Sequence[_dt.date] | None) -> list[Lo
 
 
 def _stream(spec: LoopSpec, dates: Sequence[_dt.date] | None) -> bool:
-    """Whether ``loop run``/``loop plan`` discovers (R2): an inbox and no ``--date``."""
+    """Whether ``loop run``/``loop plan`` discovers (loop.md §Discovery and
+    batches): an inbox and no ``--date``."""
     return spec.inbox is not None and not dates
 
 
 def stream_images(spec: LoopSpec, locations: Sequence[str]) -> tuple[DetectorImage, ...]:
     """The detector images of discovered deliveries: the delivery prefix, its
-    derived unit id, and the spec's stream-level stage inputs (R1)."""
+    derived unit id, and the spec's stream-level stage inputs (loop.md
+    §Discovery and batches)."""
     if spec.difference_template is None:
         raise LoopSpecError(f"{spec.location}: a discovered batch needs [loop] "
                             "difference_template")
@@ -1415,9 +1437,10 @@ def stream_images(spec: LoopSpec, locations: Sequence[str]) -> tuple[DetectorIma
 
 
 def row_day(conn, spec: LoopSpec, row: LoopRow) -> LoopDate:
-    """The batch a ``loop_dates`` row stands for (R2 step 1): its ``batched``
-    ``loop_deliveries`` with the spec's stream-level inputs, or, for a row
-    with none, the spec's ``[[dates]]`` entry of its date (batch 1)."""
+    """The batch a ``loop_dates`` row stands for (loop.md §Discovery and
+    batches): its ``batched`` ``loop_deliveries`` with the spec's
+    stream-level inputs, or, for a row with none, the spec's ``[[dates]]``
+    entry of its date (batch 1)."""
     locations = discovery.batch_locations(conn, spec.schedule, row.processing_date, row.batch)
     if locations:
         return LoopDate(processing_date=row.processing_date,
@@ -1476,7 +1499,8 @@ def _s3(tools: LoopTools) -> Any:
 
 
 def discover(conn, spec: LoopSpec, tools: LoopTools) -> discovery.Discovery:
-    """R3: the inbox's new deliveries, classified; reads only."""
+    """The inbox's new deliveries, classified (loop.md §Discovery and
+    batches); reads only."""
     assert spec.inbox is not None
     return discovery.discover(conn, spec.schedule, spec.inbox, tools.storage, _s3(tools),
                               detector_unit_id)
@@ -1484,7 +1508,8 @@ def discover(conn, spec: LoopSpec, tools: LoopTools) -> discovery.Discovery:
 
 def form_batches(conn, spec: LoopSpec, tools: LoopTools,
                  found: discovery.Discovery) -> list[LoopDate]:
-    """Record a firing's discovery (R6, R13): first, per processing date and
+    """Record a firing's discovery (loop.md §Discovery and batches): first,
+    per processing date and
     in key order, a batched delivery whose derived unit id repeats an
     earlier batched delivery's is quarantined as a unit id collision
     (:func:`discovery.resolve_unit_collisions`), so two delivery names that
@@ -1525,9 +1550,10 @@ def form_batches(conn, spec: LoopSpec, tools: LoopTools,
 
 def _run_stream(conn, spec: LoopSpec, tools: LoopTools, *, interval: float, timeout: float,
                 retry_failed: bool) -> int:
-    """R2 under the lock: resume the schedule's open (and reopenable or, with
-    ``--retry-failed``, failed) batches in (date, batch) order; then discover,
-    record and form the new batches; then walk them in order."""
+    """Under the lock (loop.md §Concurrency and recovery): resume the
+    schedule's open (and reopenable or, with ``--retry-failed``, failed)
+    batches in (date, batch) order; then discover, record and form the
+    new batches; then walk them in order."""
     out = tools.out
     for row in loop_rows(conn, spec.schedule):
         if row.state == "complete":
@@ -1556,7 +1582,7 @@ def _run_stream(conn, spec: LoopSpec, tools: LoopTools, *, interval: float, time
 def run_loop(conn, spec: LoopSpec, tools: LoopTools, *, dates: Sequence[_dt.date] | None = None,
              dry_run: bool = False, interval: float = 30.0, timeout: float = 14400.0,
              retry_failed: bool = False) -> int:
-    """``loop run`` (R3; step 4 R2), under the schedule's advisory lock. A
+    """``loop run``, under the schedule's advisory lock. A
     spec with an ``inbox`` and no ``dates``: resume, discover, form batches,
     walk them (:func:`_run_stream`). Otherwise every selected ``[[dates]]``
     entry whose row is absent or ``open`` (or ``failed``, with
@@ -1631,7 +1657,7 @@ def plan(conn, spec: LoopSpec, tools: LoopTools, *,
     """``loop plan``: per batch, what ``loop run`` would do; prints and returns
     it. On an inbox spec (no ``dates``): the rows a firing would resume, then
     a dry classification of the inbox (no writes) and the batches it would
-    form (R5)."""
+    form (loop.md §Discovery and batches)."""
     lines: list[dict[str, Any]] = []
     if not _stream(spec, dates):
         for day in _selected_dates(spec, dates):

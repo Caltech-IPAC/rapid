@@ -21,9 +21,9 @@ except clause), so a refused call never leaves partial writes committed.
 
 This module composes ``rapidpipe.db`` (connection, ids) and reads manifest
 data as a plain ``dict`` rather than importing ``rapidpipe.products.
-manifest`` -- another branch is concurrently changing that module's shape,
-and the runs page's "A complete manifest" example fully describes the
-dict shape ``register_manifest`` needs, so no import is required.
+manifest`` because the runs page's "A complete manifest" example fully
+describes the dict shape ``register_manifest`` needs, so no import is
+required.
 """
 
 from __future__ import annotations
@@ -71,8 +71,7 @@ _TERMINAL_RUN_STATES = ("deleting", "deleted")
 #: Run states that refuse new work (a unit, an input binding, an
 #: attempt): a finished run admits nothing more, and a deleting or deleted
 #: one is fenced (runs page, "Deletion"). Result recording and
-#: registration refuse only ``_TERMINAL_RUN_STATES`` (supervisor step 3,
-#: 2026-09-24, amendment A1).
+#: registration refuse only ``_TERMINAL_RUN_STATES`` (runs.md §Rules).
 _NO_ADMISSION_RUN_STATES = ("finished",) + _TERMINAL_RUN_STATES
 
 
@@ -110,9 +109,9 @@ class RunDeletingOrDeleted(RunModelError):
 
 class ProducerDeletingOrDeleted(RunDeletingOrDeleted):
     """An input to bind was produced by a run that is 'deleting' or
-    'deleted' (supervisor step 9, 2026-09-25, Codex amendment to R4):
-    :func:`bind_unit_inputs` refuses the binding, so a producer can never
-    be deleted underneath a consumer bound after its deletion check."""
+    'deleted' (runs.md §Rules): :func:`bind_unit_inputs` refuses the
+    binding, so a producer can never be deleted underneath a consumer
+    bound after its deletion check."""
 
 
 class UnitTerminal(RunModelError):
@@ -138,10 +137,10 @@ class ManifestConflict(RunModelError):
 class DependencyRefused(ManifestConflict):
     """A manifest names another run's result set that this run may not consume.
 
-    Supervisor step 9 ruling R2: another run's result set is a dependency
-    only when it is complete and retained, its custody is ``candidate`` or
-    ``current`` and its producing attempt is the selected attempt of its
-    unit. A subclass of :class:`ManifestConflict`, so the existing refusal
+    Another run's result set is a dependency only when it is complete and
+    retained, its custody is ``candidate`` or ``current`` and its producing
+    attempt is the selected attempt of its unit (runs.md §Rules). A
+    subclass of :class:`ManifestConflict`, so the existing refusal
     path of a conflicting manifest handles it.
     """
 
@@ -151,21 +150,20 @@ class PromotionRefused(RunModelError):
 
 
 #: ``promote_run``'s default ``plan``: no plan was supplied. Distinct from
-#: ``None``, which is a supplied (and malformed) plan (supervisor step 5a,
-#: 2026-09-26, R21).
+#: ``None``, which is a supplied (and malformed) plan (loop.md §Promotion).
 NO_PLAN: Any = object()
 
 
 class StalePlan(PromotionRefused):
     """A frozen promotion plan no longer matches the run's changes read
-    under the promotion lock (supervisor step 5a, 2026-09-26, R5): nothing
-    is written, and the CLI exits 64 as for any refusal."""
+    under the promotion lock (loop.md §Promotion): nothing is written,
+    and the CLI exits 64 as for any refusal."""
 
 
 class CheckPolicyRefused(RunModelError):
     """A check policy is unknown, or does not permit what was asked of it
-    (automatic promotion at run creation; supervisor step 6, 2026-09-24,
-    R5)."""
+    (automatic promotion at run creation; checks.md §Automatic
+    promotion)."""
 
 
 class DeletionRefused(RunModelError):
@@ -182,9 +180,8 @@ class RunNotFinishable(RunModelError):
 #: registration writers and stages use (``rapidpipe/stages/register.py``
 #: ``_KNOWN_KINDS``; ``rapidpipe/stages/difference.py`` for
 #: ``reference-image``). Result sets (``source-catalog`` and the like) and
-#: any other kind have no ``vbest`` and are skipped (supervisor ruling,
-#: step 3, 2026-09-24: "promotion maintains them", products page,
-#: "Registration metadata").
+#: any other kind have no ``vbest`` and are skipped (promotion maintains
+#: them, products.md §Registration metadata).
 _VBEST_TABLES = {
     "l2-image": "l2files",
     "reference-image": "refimages",
@@ -249,11 +246,11 @@ def create_run(
 
     ``check_policy_ref``, when given, must name a shipped check policy
     (``name@version``); it is the policy ``promote_run`` validates this
-    run's promotions under (R4). ``auto_promote`` is refused
-    (:class:`CheckPolicyRefused`) unless the run's policy -- the named one
-    or the default -- permits automatic promotion
-    (:func:`policy_permits_auto_promote`; supervisor step 6, 2026-09-24,
-    R5). No shipped policy does.
+    run's promotions under (checks.md §Check policies). ``auto_promote``
+    is refused (:class:`CheckPolicyRefused`) unless the run's policy --
+    the named one or the default -- permits automatic promotion
+    (:func:`policy_permits_auto_promote`; checks.md §Automatic
+    promotion). No shipped policy does.
     """
     if kind not in ("scratch", "production"):
         raise ValueError(f"kind must be 'scratch' or 'production', got {kind!r}")
@@ -356,8 +353,8 @@ def add_unit(
     the way a conflicting manifest replay is.
 
     ``seeded_from_unit`` is the seed run's unit (``units.id``) this unit
-    re-runs, set only by :func:`seed_failed_units` (supervisor step 6,
-    2026-09-24, R7); a re-declaration of an existing unit leaves it as it
+    re-runs, set only by :func:`seed_failed_units` (loop.md §Concurrency
+    and recovery); a re-declaration of an existing unit leaves it as it
     was.
     """
     with conn.cursor() as cur:
@@ -409,7 +406,7 @@ def bind_unit_inputs(
             # dependency edge: a concurrent mark_run_deleting (FOR UPDATE)
             # either waits for this binding to commit and then counts it,
             # or has already committed 'deleting' and this refuses
-            # (supervisor step 9, 2026-09-25, Codex amendment to R4).
+            # (runs.md §Rules).
             cur.execute(
                 "SELECT run FROM product_instances WHERE id = %s", (producer_instance,))
             producer = cur.fetchone()
@@ -455,7 +452,7 @@ def allocate_attempt(
     With ``outputs_root``, the attempt row is inserted with its final
     output location, :func:`attempt_output_location` -- the attempt id is
     minted before the INSERT, so no placeholder location is ever
-    committed (supervisor step 3, 2026-09-24, amendment A7). Without it
+    committed (runs.md §Storage layout). Without it
     (older callers and tests), the location is the relative placeholder
     ``runs/<run>/<stage>/<unit>/<attempt>``, which
     :func:`record_scheduler_job` or :func:`record_attempt_result` later
@@ -570,8 +567,8 @@ def record_attempt_result(
 
     ``reconcile_note`` replaces ``attempts.reconcile_note`` (cleared to
     NULL by default): ``rapidpipe.launch.batch.resolve_jobless`` records
-    why it declared a job-less attempt ``lost`` (supervisor step 6,
-    2026-09-24, R9).
+    why it declared a job-less attempt ``lost`` (loop.md §Concurrency and
+    recovery).
     """
     valid_dispositions = ("succeeded", "failed", "transient", "killed", "lost")
     if disposition not in valid_dispositions:
@@ -870,12 +867,12 @@ def register_manifest(
     belongs to a deleting or deleted run: each producer's run row is
     locked ``FOR SHARE`` before its edge is written, so the edge and a
     concurrent ``mark_run_deleting`` of the producer's run cannot both
-    commit (supervisor step 3, 2026-09-24, amendment A1). Refuses
-    (:class:`DependencyRefused`) a dependency on another run's result set
-    (a producer with a ``result_sets`` row) unless it is complete and
-    retained, its custody is ``candidate`` or ``current``, and its
-    producing attempt is its unit's selected attempt (supervisor step 9,
-    2026-09-25, ruling R2). File products are not governed by R2.
+    commit (runs.md §Rules). Refuses (:class:`DependencyRefused`) a
+    dependency on another run's result set (a producer with a
+    ``result_sets`` row) unless it is complete and retained, its custody
+    is ``candidate`` or ``current``, and its producing attempt is its
+    unit's selected attempt (runs.md §Rules). File products are not
+    governed by this rule.
 
     Accepts the products page's complete manifest shape (run/unit/stage/
     attempt at the top, ``outputs`` a list of entries each with
@@ -930,7 +927,7 @@ def register_manifest(
 
         # Slot and identity of what was just registered (and of anything
         # else still NULL), derived by the database; a failure is logged,
-        # never fails registration (supervisor step 5a, 2026-09-26, R2).
+        # never fails registration (runs.md §Identifiers).
         fill_identity_safely(cur, f"registering run {run_id} stage {stage}")
 
 
@@ -938,11 +935,10 @@ def _refuse_foreign_dependency(cur, producer_instance: str, run_id: str) -> None
     """Refuse a dependency on another run's product that the read rule does not allow.
 
     The one read rule, ``rapidpipe.db.objects.assert_readable_instance``
-    (supervisor step 6, 2026-09-26, R5; first stated for result sets by
-    supervisor step 9, 2026-09-25, R2), applied at registration to every
-    dependency edge on a product of another run, file product or result
-    set: retained, complete when a result set, custody ``candidate`` or
-    ``current``, produced by its unit's selected attempt.
+    (runs.md §Rules), applied at registration to every dependency edge on
+    a product of another run, file product or result set: retained,
+    complete when a result set, custody ``candidate`` or ``current``,
+    produced by its unit's selected attempt.
     """
     from rapidpipe.db import objects
 
@@ -1118,8 +1114,8 @@ def _register_one_output(
         if producer is not None:
             _refuse_if_run_deleting_or_deleted(cur, producer[0])
             if producer[0] != run_id:
-                # Every foreign edge, file products included (supervisor
-                # step 6, 2026-09-26, R5).
+                # Every foreign edge, file products included (runs.md
+                # §Rules).
                 _refuse_foreign_dependency(cur, producer_instance, run_id)
         cur.execute(
             """
@@ -1132,7 +1128,7 @@ def _register_one_output(
 
 
 # ======================================================================
-# slot and identity (supervisor step 5a, 2026-09-26, R1-R3, R12, R16)
+# slot and identity (runs.md §Identifiers)
 # ======================================================================
 
 def fill_identity(cur) -> list[tuple[str, int, int, int]]:
@@ -1181,7 +1177,7 @@ def parse_selector(
     kind: str, selector: Any, *, recorded_inverse: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """``("slot", slot)`` or ``("logical_key", key)`` from one change's
-    selector (supervisor step 5a, 2026-09-26, R4, R15); refuses
+    selector (loop.md §Promotion); refuses
     (:class:`PromotionRefused`) anything else, an empty slot, and a
     logical_key selector unless ``recorded_inverse``."""
     try:
@@ -1218,10 +1214,10 @@ def promote(
     ``changes`` is a list of ``(kind, selector, expected_before_instance_or_None,
     after_instance_or_None)`` tuples (runs page, "Promotion"). A selector
     is ``{"slot": {...}}``: promotion replaces by slot, at most one
-    instance being current per (kind, slot) (supervisor step 5a,
-    2026-09-26, R4). ``{"logical_key": {...}}`` is accepted only with
+    instance being current per (kind, slot) (loop.md §Promotion).
+    ``{"logical_key": {...}}`` is accepted only with
     ``_recorded_inverse``, i.e. from :func:`rollback_promotion` reversing
-    a change recorded without a slot (R15); any other caller passing it,
+    a change recorded without a slot; any other caller passing it,
     or anything else as a selector, is refused. Takes
     ``pg_advisory_xact_lock`` on one fixed key, then:
 
@@ -1237,21 +1233,20 @@ def promote(
          selected attempt whose slot (or, for a logical_key selector,
          logical key) equals the selector, with every provenance
          dependency, followed through the whole chain, current or
-         accepted (supervisor step 6, 2026-09-26, R2 as amended by A1,
-         A2: each ancestor's state, :mod:`rapidpipe.runs.eligibility`,
-         must be ``current``, ``superseded`` or ``accepted``; with
-         ``_recorded_inverse`` the walk is skipped (A3) and only the
-         direct dependencies must be complete, retained and in project
-         custody, as before). A ``None``
+         accepted (checks.md §The promotion gate: each ancestor's state,
+         :mod:`rapidpipe.runs.eligibility`, must be ``current``,
+         ``superseded`` or ``accepted``; with ``_recorded_inverse`` the
+         walk is skipped and only the direct dependencies must be
+         complete, retained and in project custody, as before). A ``None``
          after-instance is an unselect: there is nothing to validate.
          A slot change is refused when another instance with the after
          instance's kind and logical key is current outside the slot (its
          own slot unresolved or withheld). An ``association-set`` change
          with both a before and an after instance is refused unless the
          before is an ancestor of the after along ``logical_key.base``
-         (R6: the chain switch is not implemented, and ordinary slot
+         (the chain switch is not implemented, and ordinary slot
          replacement does not stand in for it); ``_recorded_inverse``
-         skips this rule only (R13). Then the released-image rule
+         skips this rule only. Then the released-image rule
          (runs page, "Promotion eligibility": "a recorded image digest
          identifying a released artifact"): each after-instance's
          producing attempt's ``execution_records.image_digest`` must equal
@@ -1262,8 +1257,7 @@ def promote(
          ``{"allow_unreleased": true, "attempts": [<the unreleased
          attempts>]}`` in ``request_context`` (the recorded exception).
          Then, when ``check_policy`` is given, the check-policy gate
-         (supervisor step 6, 2026-09-24, R4 and plan-review amendments
-         A1/A2): the policy must be approved
+         (checks.md §The promotion gate): the policy must be approved
          (:func:`policy_permits_promotion`); for each after-instance and
          each policy check of its kind, the latest ``checks`` row for that
          check name and version whose recorded ``detail.params`` equal the
@@ -1368,7 +1362,7 @@ def promote(
                     "attempts": sorted({attempt for attempt, _d, _r in unreleased}),
                 }
 
-        # Step 2c: the check-policy gate (supervisor step 6, R4).
+        # Step 2c: the check-policy gate.
         check_policy_version: str | None = None
         check_result_ids: list[str] = []
         if check_policy is not None:
@@ -1451,8 +1445,8 @@ def _refuse_current_outside_slot(
 
 
 def _refuse_unless_ancestor(cur, where: str, before: str, after: str) -> None:
-    """The association-set ancestor rule (supervisor step 5a, 2026-09-26,
-    R6): ``before`` must be reached from ``after`` by following
+    """The association-set ancestor rule (loop.md §Promotion): ``before``
+    must be reached from ``after`` by following
     ``logical_key.base`` through ``product_instances``; a missing link or
     a cycle ends the walk and refuses."""
     visited = {after}
@@ -1478,22 +1472,22 @@ def _validate_check_policy(
     cur, policy: Policy, after_instances: Sequence[tuple[str, str]],
 ) -> list[str]:
     """The check-policy gate of :func:`promote`; returns the ``checks`` row
-    ids relied on, or raises :class:`PromotionRefused` (supervisor step 6,
-    2026-09-24, R4, A1, A2).
+    ids relied on, or raises :class:`PromotionRefused` (checks.md §The
+    promotion gate).
 
     Requiredness is the policy's own flag, never the ``checks.required``
-    column (which records what the check ran as; A2). Only a row whose
+    column (which records what the check ran as). Only a row whose
     ``detail.params`` equal the policy's params for that check qualifies,
-    and of those the latest (``happened_at`` desc, ``id`` desc) decides
-    (R4 amendment, 19:50): the outcome depends on the bounds, so a run
-    checked under ``rebuild-strict@1`` after ``rebuild-trial@1`` must not
-    poison a trial promotion, and a pass under looser ``--param`` bounds
-    must not admit one.
+    and of those the latest (``happened_at`` desc, ``id`` desc) decides:
+    the outcome depends on the bounds, so a run checked under
+    ``rebuild-strict@1`` after ``rebuild-trial@1`` must not poison a
+    trial promotion, and a pass under looser ``--param`` bounds must not
+    admit one.
 
     Runs inside the promotion transaction with the advisory lock held; the
     rows relied on are read FOR SHARE so they cannot change under the
     promotion. A check row inserted after this read is not seen (recorded
-    and accepted, plan review "LIKELY latest-row race").
+    and accepted as a known race).
     """
     if not policy_permits_promotion(policy):
         raise PromotionRefused(
@@ -1539,11 +1533,11 @@ def _maintain_vbest(
 
     On rows a run wrote (``run IS NOT NULL``), ``vbest`` is a
     current-membership flag: 1 while the instance is current, 0 otherwise;
-    nothing else is inferred from it (supervisor step 3, 2026-09-24,
-    amendment A2). So the before-instance's row gets 0 and the
+    nothing else is inferred from it (products.md §Registration
+    metadata). So the before-instance's row gets 0 and the
     after-instance's row gets 1. A row ``dev`` wrote (``run`` NULL, linked
     to an instance by an import run) keeps ``dev``'s own ``vbest``: it is
-    never rewritten, on promotion or on rollback (amendment to ruling 2).
+    never rewritten, on promotion or on rollback.
 
     Only the kinds in ``_VBEST_TABLES`` have a ``dev`` row; every other
     kind (result sets, catalogs) is skipped. For a mapped kind, an
@@ -1580,7 +1574,7 @@ def _maintain_vbest(
 def _unreleased_attempt(cur, after_instance: str) -> tuple[str, str | None, str | None] | None:
     """``(attempt, image_digest, release)`` of ``after_instance``'s
     producing attempt when its execution record names no complete
-    release's image, else ``None`` (supervisor step 5, 2026-09-24, R8)."""
+    release's image, else ``None`` (releases.md §Promotion eligibility)."""
     cur.execute(
         """
         SELECT pi.producing_attempt, er.image_digest, er.release,
@@ -1603,12 +1597,12 @@ def _validate_promotion_eligibility(
     cur, kind: str, by: str, value: dict[str, Any], after_instance: str,
     *, walk_ancestors: bool = True,
 ) -> None:
-    # The released-image rule and the check-policy gate are checked by
-    # promote() itself, after this (supervisor step 5, 2026-09-24, R8;
-    # supervisor step 6, 2026-09-24, R4). ``by`` is "slot" or
+    # The released-image rule (releases.md §Promotion eligibility) and
+    # the check-policy gate (checks.md §The promotion gate) are checked
+    # by promote() itself, after this. ``by`` is "slot" or
     # "logical_key": the after instance's own slot (or, for a legacy
-    # selector, its logical key) must equal the selector (supervisor step
-    # 5a, 2026-09-26, R4, R15).
+    # selector, its logical key) must equal the selector (loop.md
+    # §Promotion).
     cur.execute(
         """
         SELECT pi.custody, pi.kind, pi.slot, pi.logical_key, pi.deletion_state,
@@ -1633,8 +1627,8 @@ def _validate_promotion_eligibility(
             f"{by}={shown}, not the requested kind={kind!r} "
             f"{by}={canonical_json(value)}; refusing")
     if identity is None:
-        # An unresolved identity is never promotable (supervisor step 5a,
-        # 2026-09-26, R21), whatever the selector.
+        # An unresolved identity is never promotable (runs.md
+        # §Identifiers), whatever the selector.
         raise PromotionRefused(
             f"after instance {after_instance!r} of kind={kind!r} has no identity (its "
             "identity could not be derived from its logical key); refusing")
@@ -1679,16 +1673,16 @@ def _validate_promotion_eligibility(
 
 def _refuse_unaccepted_ancestor(cur, after_instance: str) -> None:
     """Promotion follows every dependency through the whole chain
-    (supervisor step 6, 2026-09-26, R2 as amended by A1, A2).
+    (checks.md §The promotion gate).
 
     Every ancestor of ``after_instance`` along ``dependencies``, to the
     roots (a recursive walk, cycle-guarded, no depth cap), must have the
     acceptance state ``current``, ``superseded`` or ``accepted``
-    (:mod:`rapidpipe.runs.eligibility`, R1): a current or superseded
+    (:mod:`rapidpipe.runs.eligibility`): a current or superseded
     ancestor passes and the walk continues through it, so a rejected
     grandparent behind a current parent still refuses. An ancestor that is
     itself an after instance of the same promotion is judged the same way,
-    under its own run's policy (A2). The refusal names the after instance,
+    under its own run's policy. The refusal names the after instance,
     the ancestor, its kind, its state and what decided it; it is raised in
     step 2 of :func:`promote`, before anything is written.
     """
@@ -1714,8 +1708,8 @@ def _refuse_unaccepted_ancestor(cur, after_instance: str) -> None:
 
 
 def _refuse_unfit_direct_dependency(cur, after_instance: str) -> None:
-    """The direct-dependency rule a rollback keeps (supervisor step 6,
-    2026-09-26, A3): a rollback restores a selection an earlier promotion
+    """The direct-dependency rule a rollback keeps (checks.md §The
+    promotion gate): a rollback restores a selection an earlier promotion
     admitted, so the ancestor walk is skipped, but each direct dependency
     must still be complete, retained and in project custody, as before
     this step."""
@@ -1776,8 +1770,8 @@ def _run_slot_changes(
     cur, run_id: str, kinds: Sequence[str] | None,
 ) -> list[tuple[str, dict[str, Any], str | None, str]]:
     """``(kind, slot, expected_before, after)`` for every deliverable of
-    ``run_id``, sorted by kind then canonical slot (supervisor step 5a,
-    2026-09-26, R4). A deliverable is a ``candidate`` row of the run whose
+    ``run_id``, sorted by kind then canonical slot (loop.md §Promotion).
+    A deliverable is a ``candidate`` row of the run whose
     producing attempt is its unit's selected attempt (optionally one of
     ``kinds``). Refuses a deliverable whose slot is NULL, and two
     deliverables in one (kind, slot). ``expected_before`` is the instance
@@ -1851,7 +1845,7 @@ def promotion_plan(
 ) -> list[PlanEntry]:
     """What :func:`promote_run` would promote now, as a frozen plan: one
     ``{"kind", "slot", "before", "after"}`` per slot, sorted by kind then
-    canonical slot (supervisor step 5a, 2026-09-26, R5). Fills slot and
+    canonical slot (loop.md §Promotion). Fills slot and
     identity first, as ``promote_run`` does; takes no promotion lock and
     writes nothing else, so a caller that wants no write at all rolls back
     (``rapidpipe run promote-plan`` does). Refuses as ``promote_run``
@@ -1871,8 +1865,8 @@ def _refuse_stale_plan(
 ) -> None:
     """Raise :class:`StalePlan` naming the first (kind, slot) where the
     frozen ``plan`` and the actual ``changes`` read under the lock differ
-    (R5): a slot whose current instance moved, a candidate that appeared,
-    disappeared or changed."""
+    (loop.md §Promotion): a slot whose current instance moved, a
+    candidate that appeared, disappeared or changed."""
     try:
         planned = plan_by_slot(plan)
     except ValueError as exc:
@@ -1911,7 +1905,7 @@ def promote_run(
     re-checks them; the transaction-scoped lock is re-entrant), slot and
     identity are filled (:func:`fill_identity`, so a row an older image
     registered gets its slot now), then the deliverables are grouped by
-    (kind, slot) (supervisor step 5a, 2026-09-26, R4): every
+    (kind, slot) (loop.md §Promotion): every
     ``product_instances`` row of the run with custody ``candidate`` whose
     producing attempt is its unit's selected attempt, optionally filtered
     to ``kinds``. A deliverable whose slot is still NULL is refused, and
@@ -1924,15 +1918,15 @@ def promote_run(
     :func:`promote`).
 
     ``plan``, when given, is a frozen plan from :func:`promotion_plan`
-    (R5): a non-empty list of plan entries (anything else, ``None``
-    included, is refused: R21), and the changes read under the lock must
-    equal it slot for slot, else :class:`StalePlan` is raised naming the
+    (loop.md §Promotion): a non-empty list of plan entries (anything else,
+    ``None`` included, is refused), and the changes read under the lock
+    must equal it slot for slot, else :class:`StalePlan` is raised naming the
     first differing slot and nothing is written. Without it (the default,
     :data:`NO_PLAN`) the changes read under the lock are promoted, as
     before.
 
-    Every promotion is validated under a named check policy (supervisor
-    step 6, 2026-09-24, R4): ``check_policy`` (a :class:`Policy` or its
+    Every promotion is validated under a named check policy (checks.md
+    §Check policies): ``check_policy`` (a :class:`Policy` or its
     ``name@version``) > the run's ``check_policy_ref`` > the default
     ``rebuild-trial@1``; an unknown policy is refused. See :func:`promote`
     for the gate itself.
@@ -1980,18 +1974,18 @@ def rollback_promotion(
     (the slot goes back to having no current instance). Each change is
     selected by its recorded slot, or by its recorded logical key when the
     slot is NULL (a promotion recorded before migration 20260926-02 whose
-    instances stayed unresolved; supervisor step 5a, 2026-09-26, R9).
+    instances stayed unresolved).
     ``promote`` refuses the whole reversal if any recorded after-selection
     is no longer current -- a later promotion changed that slot, and the
     runs page reverses a promotion only against the selection it made. The
     new promotions row records ``request_context = {"rollback_of":
     promotion_id}``.
 
-    Rollback skips check-policy revalidation (supervisor step 6,
-    2026-09-24, R4 and amendment A4): no ``check_policy`` is passed, so the
-    row records none. As before (supervisor step 5, R8) it also skips the
-    released-image rule, and, being the recorded inverse, the
-    association-set ancestor rule (step 5a, R13). Every other validation
+    Rollback skips check-policy revalidation (checks.md §Check policies):
+    no ``check_policy`` is passed, so the row records none. As before it
+    also skips the released-image rule (releases.md §Promotion
+    eligibility), and, being the recorded inverse, the association-set
+    ancestor rule (loop.md §Promotion). Every other validation
     in :func:`promote` still runs: the expected-before check, and each
     restored instance's eligibility (candidate from a selected attempt,
     retained, complete if a result set, dependencies in project custody,
@@ -2088,18 +2082,17 @@ def mark_run_deleting(
     kind is 'scratch' -- or, with ``expiry=True`` (the expiry sweeper, an
     explicitly authorised actor), replaces the owner check with the expiry
     predicate re-checked under the lock: not pinned and ``expires_at <
-    now()`` (supervisor step 3, 2026-09-24, amendment A6) -- refuses if any attempt is queued or running
+    now()`` -- refuses if any attempt is queued or running
     (disposition IS NULL), or if any live
     ``unit_inputs``/``dependencies`` row from OUTSIDE the run points at
     one of its instances, then sets state 'deleting' -- all in one
     transaction (runs page, "Deletion"). Live means a ``unit_inputs`` row
     whose unit's run is not 'deleted', and a ``dependencies`` edge whose
-    consumer instance is not 'deleted' (supervisor step 9, 2026-09-25,
-    R3): a deleted consumer's tombstones stay as history and stop
-    blocking.
+    consumer instance is not 'deleted': a deleted consumer's tombstones
+    stay as history and stop blocking.
 
-    A ``lost`` attempt does not block deletion (supervisor step 6,
-    2026-09-24, R10): it is a recorded resolution, never "still running"
+    A ``lost`` attempt does not block deletion (loop.md §Concurrency and
+    recovery): it is a recorded resolution, never "still running"
     -- reconcile records it only when Batch does not return the job at
     all, and ``--resolve-jobless`` only after finding no job named for
     the attempt. Only ``disposition IS NULL`` counts as unresolved.
@@ -2149,10 +2142,10 @@ def mark_run_deleting(
                 "with no recorded disposition; refusing")
 
         # Any LIVE unit_inputs or dependencies row from OUTSIDE this run
-        # pointing at one of its instances (supervisor step 9,
-        # 2026-09-25, R3): a binding whose unit's run is 'deleted', or an
-        # edge whose consumer instance is 'deleted', is a tombstone kept
-        # as history and never blocks its producer's deletion.
+        # pointing at one of its instances: a binding whose unit's run is
+        # 'deleted', or an edge whose consumer instance is 'deleted', is a
+        # tombstone kept as history and never blocks its producer's
+        # deletion.
         cur.execute(
             """
             SELECT count(*)
@@ -2223,12 +2216,12 @@ def mark_run_deleted(conn: psycopg2.extensions.connection, run_id: str) -> None:
 
 # ======================================================================
 # Recovery: frozen attempt inputs and seeded re-runs of failed units
-# (supervisor step 6, 2026-09-24, R7/R8)
+# (loop.md §Concurrency and recovery)
 # ======================================================================
 
 class SeedRefused(RunModelError):
     """``run create --seed <run> --only-failed`` cannot seed from this run:
-    it is deleting or deleted, or it has no non-complete unit (R7)."""
+    it is deleting or deleted, or it has no non-complete unit."""
 
 
 def record_attempt_locations(
@@ -2241,10 +2234,11 @@ def record_attempt_locations(
 
     Called by ``rapidpipe.launch.batch.submit_unit`` in the transaction
     that allocates the attempt, so even an attempt whose Batch submission
-    then fails carries what it would have run with (supervisor step 6,
-    2026-09-24, R7). A seeded re-run's unit resolves its inputs from here
-    (:func:`seeded_inputs_for_unit`, R8). Refuses (AttemptAlreadyResolved)
-    on an attempt that already has a disposition.
+    then fails carries what it would have run with (runs.md §Rules). A
+    seeded re-run's unit resolves its inputs from here
+    (:func:`seeded_inputs_for_unit`, loop.md §Concurrency and recovery).
+    Refuses (AttemptAlreadyResolved) on an attempt that already has a
+    disposition.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -2289,8 +2283,9 @@ def _unit_position(stages: Sequence[str], stage: str, unit_id: str) -> int | Non
 
 def _is_non_complete(state: str, disposition: str | None, job_id: str | None,
                      has_attempt: bool) -> bool:
-    """R7's non-complete unit: failed or cancelled, or running/ready with a
-    latest attempt that never reached the scheduler or was lost/killed."""
+    """A non-complete unit (loop.md §Concurrency and recovery): failed or
+    cancelled, or running/ready with a latest attempt that never reached
+    the scheduler or was lost/killed."""
     if state in ("failed", "cancelled"):
         return True
     if state in ("running", "ready") and has_attempt:
@@ -2303,8 +2298,8 @@ def _is_non_complete(state: str, disposition: str | None, job_id: str | None,
 
 @dataclass(frozen=True)
 class FailedRerunPlan:
-    """What ``run create --seed <run> --only-failed`` creates (R7, with the
-    Codex plan-review amendments B1/B2): the seed's configuration
+    """What ``run create --seed <run> --only-failed`` creates (loop.md
+    §Concurrency and recovery): the seed's configuration
     (``seed``, its ``runs`` columns by name), the new run's stage list
     (the seed's from ``position`` on), the seed units to seed from as
     ``(units.id, stage, unit_kind, unit_id)``, and ``uncarried``: the
@@ -2339,8 +2334,7 @@ def failed_rerun_plan(
     """Work out what a ``--only-failed`` re-run of ``seed_run`` holds.
 
     A non-complete unit is :func:`_is_non_complete`'s. What is re-run
-    depends on the seed's kind (supervisor step 6, 2026-09-24, R7 and the
-    Codex plan-review amendments B1/B2):
+    depends on the seed's kind (loop.md §Concurrency and recovery):
 
     - production seed (its outputs are project custody, which a re-run may
       consume): the stage list starts at the earliest position holding a
@@ -2402,7 +2396,7 @@ def failed_rerun_plan(
         return FailedRerunPlan(seed_run, seed, position, stages[position:], units, [])
 
     # Scratch seed: re-run everything from position 0, carrying only the
-    # first stage's recorded inputs (B1).
+    # first stage's recorded inputs.
     first = stages[0]
     first_units = {unit_id: (unit_row_id, stage, unit_kind, unit_id)
                    for unit_row_id, stage, unit_kind, unit_id, *_ in rows
@@ -2423,7 +2417,8 @@ def failed_rerun_plan(
 def seed_failed_units(
     conn: psycopg2.extensions.connection, *, seed_run: str, new_run: str,
 ) -> list[str]:
-    """Create ``new_run``'s seeded units (R7; amendments B1/B2).
+    """Create ``new_run``'s seeded units (loop.md §Concurrency and
+    recovery).
 
     ``new_run`` must already exist, record ``seed_run`` as its seed and
     select exactly :func:`failed_rerun_plan`'s stage list (the CLI creates
@@ -2432,7 +2427,7 @@ def seed_failed_units(
     ``seeded_from_unit``. The seed unit's ``unit_inputs`` bindings are
     copied to it, so the deletion fence on those producer instances
     protects what the re-run reads -- except, for a scratch seed, bindings
-    to the seed's own instances, which another run may not consume (B1).
+    to the seed's own instances, which another run may not consume.
     Returns the created units' unit ids.
     """
     plan = failed_rerun_plan(conn, seed_run)
@@ -2471,7 +2466,7 @@ def seeded_inputs_for_unit(
     ``(None, None)`` when the unit has no ``seeded_from_unit``, the seed
     unit has no attempt, or its latest attempt predates the columns
     (20260924-10); ``run start`` then falls through to its next input
-    rule (supervisor step 6, 2026-09-24, R8).
+    rule (loop.md §Concurrency and recovery).
     """
     with conn.cursor() as cur:
         cur.execute(

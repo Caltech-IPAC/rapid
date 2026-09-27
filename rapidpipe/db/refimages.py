@@ -7,7 +7,7 @@ frame (``registerRefImImage``), ``register_refimcatalog`` per catalog
 (``registerRefImCatalog``) and ``register_refimmeta``
 (``registerRefImMeta``). All four functions are in the baseline
 (20260921-01-baseline.sql) and the rebuild calls each of them unchanged,
-as ``rapidpipe.db.psfs`` calls ``addPSF`` (supervisor step 8, ruling R7).
+as ``rapidpipe.db.psfs`` calls ``addPSF``.
 
 Column sources, where they are not the manifest itself:
 
@@ -41,12 +41,12 @@ Departures from `dev`, each deliberate:
 - ``vbest`` stays 0: `dev` calls ``updateRefImage`` right after
   ``addRefImage`` to make the new row current; the rebuild never sets a
   legacy current flag at registration (products page, "Registration
-  metadata"; promotion maintains it, step 3 ruling R5).
+  metadata"; promotion maintains it, loop.md §Promotion).
 - A transaction-level advisory lock on (``field``, ``fid``, ``ppid``) is
   taken before ``addRefImage``: its ``max(version) + 1`` is a read then a
   write, and two registrations of one field and filter at once would
   otherwise both read the same maximum and one would fail on
-  ``refimagespk`` (Codex plan review, 2026-09-24).
+  ``refimagespk``.
 - ``refimmeta.npucatsources`` is null when no Photutils reference catalog
   was made (20260924-09 drops the column's NOT NULL); `dev` always makes
   one, so it never writes null.
@@ -85,7 +85,7 @@ from rapidpipe.science.spatial import healpix_indexes
 
 #: Reference recipe to `pipelines` row: `awaicgen` is `dev`'s ppid 12,
 #: "Standard reference-image pipeline" (rapidOpsPipelinesInserts.sql),
-#: fixed with the `reference` stage (supervisor step 8, ruling R3), as
+#: fixed with the `reference` stage, as
 #: ``rapidpipe.db.diffimages.DIFFERENCER_PPIDS`` fixes the differencers'.
 REFERENCE_RECIPE_PPIDS: dict[str, int] = {"awaicgen": 12}
 
