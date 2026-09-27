@@ -14,10 +14,12 @@ fit positions outside the image rejected -> COPY -> optionally CLUSTER and
 ANALYZE (`dev` does this once per date; off by default here).
 
 Inputs. ``--inputs`` is the finalize attempt's output location (chain
-difference -> finalize -> register -> load, supervisor ruling 2026-09-24), or a difference attempt's: its completion manifest and files; ``finalize``
-republishes the same entries under new instance ids. The stage reads the
-``difference-image`` entry of the ``[load] differencer`` setting and that instance's two
-``photutils`` ``source-catalog`` entries (members ``catalog`` and
+difference -> finalize -> register -> load; load page), or a difference
+attempt's: its completion manifest and files; ``finalize``
+republishes the same entries under new instance ids. The stage reads
+the ``difference-image`` entry of the ``[load] differencer`` setting
+and that instance's two ``photutils`` ``source-catalog`` entries
+(members ``catalog`` and
 ``finder``), verifying each member's size and SHA-256. ``pid`` comes from
 the `diffimages` row `register` wrote for the instance, and ``expid``,
 ``sca``, ``fid``, ``mjdobs`` and the child table's date from its `l2files`
@@ -38,7 +40,7 @@ exit 0, no rows, no source set, the reason in the execution record. With
 loaded for the same logical key in this run is reused and nothing is
 written, the rebuild's form of `dev`'s ``source_dbload_jid<jid>.done`` file,
 but only when its producing attempt is this attempt or one that succeeded
-(supervisor step 9 ruling R1): a set a failed attempt committed is not
+(products page, "Database result sets"): a set a failed attempt committed is not
 reused, and the retry loads a new set under its own instance.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,

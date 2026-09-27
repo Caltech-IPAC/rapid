@@ -30,7 +30,7 @@ of the ``stage`` group, with ``stage list`` and ``stage describe``
 ``rapidpipe check list|run|show`` (``rapidpipe.cli.checkctl``) lists the
 registered checks and shipped check policies, runs a policy's checks over
 a run's candidates recording each result, and shows recorded results
-(supervisor step 6, 2026-09-24, R6).
+(checks page, "The check commands").
 
 ``rapidpipe release cut|show|list|verify`` is ``python -m
 rapidpipe.release``: the ``release`` subparser is built and dispatched by
@@ -163,7 +163,7 @@ def _resolve_register_unit_id(*, unit_id_arg: str | None, inputs_location_arg: s
     """The ``--unit`` value to use for a `register` invocation.
 
     register's unit id is always derived from the manifest it reads
-    (register_unit_id, ruling: "a register unit is identified by what it
+    (register_unit_id: "a register unit is identified by what it
     registers"), never chosen by the caller, so an explicit ``--unit`` for
     register is refused rather than silently overridden.
     """
@@ -472,9 +472,8 @@ def _run_selftest_command(args: argparse.Namespace) -> int:
 
     A thin wrapper over :func:`rapidpipe.selftest.run`, which does the
     actual prepare/run/check work; this function only translates argparse
-    into that call. Exit codes per the ruling this subcommand implements
-    (2026-09-23): 0 on a full pass, 1 on a fixture mismatch, and the
-    stage's own exit code on a stage failure.
+    into that call. Exit codes: 0 on a full pass, 1 on a fixture mismatch,
+    and the stage's own exit code on a stage failure.
     """
     return run_selftest(
         stage=args.stage, real_tools=args.real_tools, work_dir=args.work_dir,
@@ -634,7 +633,7 @@ def _run_create_command(args: argparse.Namespace) -> int:
 
 
 #: ``run create`` options ``--only-failed`` refuses: the re-run copies each
-#: from the seed (supervisor step 6, 2026-09-24, R7).
+#: from the seed (runs page, "Rules").
 _ONLY_FAILED_COPIED_OPTIONS = (
     ("--stages", "stages"), ("--release", "release"), ("--lane", "lane"),
     ("--profile", "profile"), ("--db-target", "db_target"),
@@ -659,7 +658,7 @@ def create_only_failed_run(
 ):
     """``run create --seed <run> --only-failed``'s one code path (the
     processing-date loop's ``--retry-failed`` uses it too): a run re-running
-    the seed's non-complete units (supervisor step 6, 2026-09-24, R7).
+    the seed's non-complete units (runs page, "Rules").
 
     Configuration is copied from the seed row
     (:func:`~rapidpipe.runs.repository.failed_rerun_plan`); ``owner`` and
@@ -876,7 +875,7 @@ def _run_show_command(args: argparse.Namespace) -> int:
                     print(f"  {promotion_id}\t{who}\t{happened_at}\t{reason}\t{changes}")
 
             # The acceptance state of each candidate and current instance
-            # (supervisor step 6, 2026-09-26, R4): the lines `check show`
+            # (checks page, "Acceptance"): the lines `check show`
             # prints, from the same function.
             from rapidpipe.runs.eligibility import run_acceptance_states
 
@@ -1142,9 +1141,8 @@ def _run_reconcile_command(args: argparse.Namespace) -> int:
 
     with cm as conn:
         try:
-            # supervisor step 6, 2026-09-24, R9 with amendment B3: look for
-            # each job-less attempt's Batch job first, so a repaired one is
-            # reconciled by the ordinary pass just below.
+            # Look for each job-less attempt's Batch job first, so a
+            # repaired one is reconciled by the ordinary pass just below.
             jobless = (launch_batch.resolve_jobless(
                 conn, run_id=args.run_id, older_than_seconds=older_than)
                 if resolve_jobless else [])
@@ -1268,14 +1266,14 @@ def _run_promote_command(args: argparse.Namespace) -> int:
     if not ok:
         return int(ExitCode.USAGE)
     # promote_run resolves the check policy: --check-policy > the run's
-    # check_policy_ref > rebuild-trial@1 (supervisor step 6, 2026-09-24, R4).
+    # check_policy_ref > rebuild-trial@1 (checks page, "Check policies").
     extra: dict[str, Any] = {} if args.check_policy is None else {
         "check_policy": args.check_policy}
     if args.plan is not None:
-        # A frozen plan (supervisor step 5a, 2026-09-26, R5): a non-empty
+        # A frozen plan (checks page, "The promotion gate"): a non-empty
         # JSON list of {kind, slot, before, after}; anything else, JSON null
-        # included, exits 64 before any connection (R21). A stale one exits
-        # 64 from promote_run under the lock.
+        # included, exits 64 before any connection (tool page, "Exit
+        # codes"). A stale one exits 64 from promote_run under the lock.
         from rapidpipe.runs.slots import plan_by_slot
 
         try:
@@ -1307,7 +1305,7 @@ def _run_promote_plan_command(args: argparse.Namespace) -> int:
             return promotion_plan(conn, args.run_id, kinds=kinds)
         finally:
             # A plan writes nothing: the slot fill it reads through is
-            # rolled back here (supervisor step 5a, 2026-09-26, R5).
+            # rolled back here (checks page, "The promotion gate").
             conn.rollback()
 
     return _run_model_command("promote-plan", _plan,

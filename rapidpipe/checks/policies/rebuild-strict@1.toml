@@ -1,13 +1,12 @@
-# Check policy rebuild-strict@1 (supervisor step 6, 2026-09-24, R3).
+# Check policy rebuild-strict@1 (checks page, "Check policies").
 # The same checks as rebuild-trial@1 with bounds the control run cannot
 # meet: it exists to demonstrate and test the promotion gate's refusal.
 # Immutable once landed: a change is a new version (a new file).
 name = "rebuild-strict"
 version = "1"
 description = "Strict demonstration policy: bounds the control run cannot meet, so promotion under it is refused."
-# Trial approval recorded by supervisor step 6 under the 2026-09-24 grant;
-# lead re-approval pending (plan-review amendment A1). Approved like trial
-# so that a refusal under it is the failed required check, not the approval.
+# A trial policy pending team approval. Approved like trial so that a
+# refusal under it is the failed required check, not the approval.
 approval = "trial"
 approved_by = "rusholme"
 auto_promote = false

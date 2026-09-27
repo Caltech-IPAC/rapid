@@ -1,7 +1,7 @@
 """The photometry stage's :class:`rapidpipe.selftest.runner.StageFixture`.
 
-``photometry`` is a declared stub (supervisor step 8, 2026-09-24, ruling
-R9): ``prepare`` writes a synthetic, structurally valid input-set manifest
+``photometry`` is a declared stub (photometry page): ``prepare`` writes a
+synthetic, structurally valid input-set manifest
 (:func:`rapidpipe.selftest.support.fakephotometry.build_photometry_input_set`)
 and the settings overlay; the fixture's ``expected.json`` declares
 ``exit_code`` 69, so :func:`rapidpipe.selftest.runner.run_fixture` checks

@@ -7,8 +7,8 @@
 # Which differencer's Photutils PSF-fit catalogs to load. `dev` loads SFFT's
 # (output_sfft_psfcat_filename) stamped with the ZOGY diffimages pid
 # (get_best_difference_image(rid, [SCI_IMAGE] ppid = 15)). The rebuild
-# registers both ZOGY and SFFT by default (`[sfft] register_sfft`, lead
-# ruling 2026-09-26), each under its own `pipelines` row (ppid 15, 16).
+# registers both ZOGY and SFFT by default (`[sfft] register_sfft`),
+# each under its own `pipelines` row (ppid 15, 16).
 # Which one this stage loads is a separate, downstream choice: "zogy"
 # loads ZOGY's catalogs against ZOGY's pid, "sfft" loads SFFT's against
 # SFFT's instance. This default stays "zogy" until a promotion choice

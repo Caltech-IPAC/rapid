@@ -5,8 +5,7 @@
 # master config the reference launcher reads, section named beside each
 # table), unless the comment says it is new. Port principle (lead,
 # 2026-09-22): minimise differences to `dev`; a mechanism that can be
-# designed in but left unused is designed in, off by default. Rulings:
-# supervisor step 8, 2026-09-24, R1-R6.
+# designed in but left unused is designed in, off by default.
 
 [paths]
 # `dev`: rapid_sw = "/code", cfg_path = rapid_sw + "/cdf" (hard-coded in
@@ -99,7 +98,7 @@ zprefimg = 17.0
 [psfcat]
 # [PSFCAT_REFIMAGE]. `dev`'s Photutils reference catalog needs a
 # reference PSF input the input set does not carry yet; designed in, off,
-# not produced in this build (R3). true is refused (exit 64). The table's
+# not produced in this build (reference page). true is refused (exit 64). The table's
 # other values are `dev`'s, kept for when it is ported.
 enabled = false
 n_clip_sigma = "3.0"

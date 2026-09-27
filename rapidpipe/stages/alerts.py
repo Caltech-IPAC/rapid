@@ -19,7 +19,7 @@ each pruning one of the named association sets (its key's ``base``), at
 most one per association set. The stage tells them apart by
 ``product_instances.kind``. A named pruned set's excluded (aid, sid) pairs
 (``prunedmerges``) are left out of its base's associations and history
-(supervisor step 9, R5); the execution notes' ``pruned_sets`` lists the
+(alerts page); the execution notes' ``pruned_sets`` lists the
 pruned sets applied, or says ``none``. It reads ``sources`` through its
 parent by ``result_set``, and step 1's standalone per-field tables
 ``merges_<f>``, ``astroobjects_<f>`` and ``astroobjectsmeta_<f>`` by name,
@@ -33,7 +33,8 @@ set's membership is its own rows plus those of the bases it extends
 row and its object are looked up across that chain, the newest set winning
 per aid, and its history is the object's merges anywhere in the chain
 joined to ``sources`` in the source sets the chain names (``logical_key.source_sets``,
-each refused unless this run may read it, supervisor step 9 R2) and the named
+each refused unless this run may read it, products page, "Reading across
+runs") and the named
 one, and in no other. The bases read are added to the
 manifest's ``inputs.result_sets``.
 ``cutoutScience`` and ``cutoutReference`` are null in this port: those
@@ -122,7 +123,7 @@ SOURCE_SET, ASSOCIATION_SET, STATISTICS_SET = "source-set", "association-set", "
 PRUNED_SET = "pruned-set"
 RESULT_SET_KINDS = (SOURCE_SET, ASSOCIATION_SET, STATISTICS_SET, PRUNED_SET)
 
-#: The execution note an input set naming no pruned set gets (supervisor step 9, R5).
+#: The execution note an input set naming no pruned set gets (alerts page).
 NO_PRUNED_SETS = "none"
 
 KAFKA_REFUSAL = "Kafka publication is not enabled in this build"
@@ -388,7 +389,7 @@ def _classify_result_sets(named: tuple[str, ...], found: dict[str, dict[str, Any
     (some value of its logical key names that set) and at most one per
     association set, and any number of ``pruned-set``, each pruning one of
     the named association sets (its logical key's ``base``, as ``prune``
-    writes it) and at most one per association set (supervisor step 9, R5).
+    writes it) and at most one per association set (alerts page).
     Every set must be complete.
     """
     if not named:
@@ -594,7 +595,7 @@ def _body(context: StageContext) -> StageResult:
             except ValueError as exc:
                 raise InputRejected(str(exc)) from exc
             sets = _classify_result_sets(result_sets_read, kinds, difference.instance)
-            # R5: the pairs a named pruned set lists are left out of every
+            # The pairs a named pruned set lists are left out of every
             # association and history read of its base; no pruned set, no
             # exclusion, and the notes say so.
             notes["pruned_sets"] = list(sets.pruned_sets) or NO_PRUNED_SETS
@@ -609,7 +610,7 @@ def _body(context: StageContext) -> StageResult:
                 # rows are in its field's standalone per-field tables.
                 lineages = {a: db.association_chain(a, context.run_id) for a in sets.association_sets}
                 fields = {a: _alerts_db.set_field(kinds[a]["key"]) for a in sets.association_sets}
-                # R2 (Codex 9-2): history sources come from the source sets the
+                # History sources come from the source sets the
                 # chains name, each readable by this run, and from no other.
                 source_sets = db.readable_source_sets(lineages, sets.source_set, context.run_id)
             except ValueError as exc:

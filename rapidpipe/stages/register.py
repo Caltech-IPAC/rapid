@@ -189,7 +189,7 @@ def _body(context: StageContext) -> StageResult:
                             run_id=manifest.run,
                             # The producing attempt: refimages.attempt
                             # names the attempt that made the product
-                            # (20260923-02; supervisor amendment, step 8).
+                            # (20260923-02).
                             attempt_id=manifest.attempt,
                             output_location=context.inputs_location,
                         )

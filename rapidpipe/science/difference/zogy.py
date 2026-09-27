@@ -16,7 +16,7 @@ measured RMS with 0.0 before calling ZOGY ("2025-08-15 Jacob's
 recommendation"). That override is unrelated to what gets registered:
 ``dxrmsfin``/``dyrmsfin`` record the MEASURED astrometric residual RMS
 from gain-matching (`rapidpipe.stages.difference`, matching production;
-ruling "measured", 2026-09-23), and the ZOGY-fed override is recorded
+difference page), and the ZOGY-fed override is recorded
 separately, in the execution record's ``zogy_astrometric_sigma`` note.
 """
 

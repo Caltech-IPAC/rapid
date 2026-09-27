@@ -11,8 +11,7 @@ dict; `register` reads it back with
 whole with :func:`validate_difference_entry`, mirroring
 `rapidpipe.products.l2image` for the l2 image.
 
-Rulings this module encodes (lead, 2026-09-22, recorded on the products
-page):
+Rules this module encodes:
 
 - Bundle roles are declared per differencer. `difference` and
   `uncertainty` always; `significance` where the differencer produces one
@@ -314,7 +313,7 @@ class DifferenceImageRegistration:
 
 
 #: The two fields ``finalize`` adds to the difference-image block it
-#: republishes (supervisor ruling, 2026-09-24): ``finalized_from``, the
+#: republishes (finalize page): ``finalized_from``, the
 #: input instance id, and ``revision``, the output revision (2 for a
 #: finalized instance; a block without them is revision 1, as
 #: ``difference`` writes it). Both present or both absent.

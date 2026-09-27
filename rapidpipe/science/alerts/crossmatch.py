@@ -6,8 +6,8 @@ match (``load_refcat``/``match_refcat``, L668-855), and the NED matcher
 (``select_host_candidates`` to ``match_nedcat``, L881-1254). Pure functions
 over positions and column arrays; nothing here reaches a database.
 
-NED access (lead's ruling, 2026-09-24: off by default, when on "use
-astroquery as dev"): :class:`AstroqueryNedReader` and
+NED access (off by default, when on "use astroquery as dev"; alerts
+page): :class:`AstroqueryNedReader` and
 :func:`ned_table_to_columns` are the astroquery reader as the `rebuild`
 branch's copy of `dev`'s ``alerts/providers.py`` carries it. `origin/dev`
 itself replaced that reader on 2026-09-23 with a local HATS copy of NED

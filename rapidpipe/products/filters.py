@@ -6,15 +6,15 @@ designations (``F062`` etc.) to the RAPID spelling that FITS ``FILTER``
 headers and the `filters` table carry (``R062`` etc.); ``F184`` is spelled
 the same either way.
 
-This is the pipeline's one copy. `rapidpipe.science.reference.prep` (WP-A)
-and `rapidpipe.products.refimage` (WP-B) each ported it separately before
+This is the pipeline's one copy. `rapidpipe.science.reference.prep`
+and `rapidpipe.products.refimage` each ported it separately before
 the two landed on `rebuild` together; it lives here, in
 `rapidpipe.products`, because the stage contract's dependency direction
 (``tests/unit/test_dependency_direction.py``) lets both
 `rapidpipe.science` and `rapidpipe.db` import `rapidpipe.products`, but not
 each other. Both of those modules still expose ``rapid_filter_name`` and
 ``ROMAN_TO_RAPID_FILTER_NAMES`` under their own names, re-exported from
-here, so neither existing import path broke (step 8, WP-E).
+here, so neither existing import path broke.
 """
 
 from __future__ import annotations

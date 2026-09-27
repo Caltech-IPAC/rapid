@@ -7,7 +7,8 @@ of the coverage map (``medncov`` = its ``gmed``), of the uncertainty image
 (``medpixunc`` = its ``gmed``) and of the mosaic, whose saturation level
 is `dev`'s stopgap ``sextractor_SATUR_LEVEL / 60.0`` ("The following is
 incorrect (60 seconds), but used as a stopgap for now"). The names of the
-returned fields are ``refimmeta``'s columns (R6).
+returned fields are ``refimmeta``'s columns (products page, "Registration
+metadata").
 """
 
 from __future__ import annotations

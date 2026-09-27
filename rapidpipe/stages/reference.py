@@ -17,14 +17,14 @@ uncertainty and image statistics (``measure``) -> SExtractor on the mosaic
 with the uncertainty as weight, and its FWHM statistics (``catalog``) ->
 the header stamp on the mosaic and its uncertainty image (``header``).
 
-Unit: ``field``, id ``<rtid>/<filter>`` (R1), e.g. ``4711398/W146``. The
+Unit: ``field``, id ``<rtid>/<filter>`` (reference page), e.g. ``4711398/W146``. The
 filter may be given in either spelling (``F146`` or ``W146``) and is
 normalised to the RAPID spelling FITS ``FILTER`` headers and the
 ``filters`` table carry (`dev`'s ``roman_to_rapid_filter_names``); the
 logical key and the registration block use the RAPID spelling. A bad unit
 id is a usage error (64).
 
-Inputs (R2). ``--inputs`` is an input-set manifest (unit kind ``field``)
+Inputs (reference page). ``--inputs`` is an input-set manifest (unit kind ``field``)
 listing N ``l2-image`` entries, member role ``image`` (the delivered
 ``.fits.gz``) -- the selection, in the order the launcher chose (`dev`:
 ``get_overlapping_l2files``, ordered by mjdobs then distance). Every
@@ -37,11 +37,13 @@ missing or corrupt member, or an unreadable frame is an input rejection
 (65). The stage reads no database and does not check overlap with the
 field: selection is the launcher's.
 
-Outputs (R5, R6). One ``reference-image`` entry: primary member ``image``
+Outputs (products page, "File products" and "Registration metadata"). One
+``reference-image`` entry: primary member ``image``
 (``ref/awaicgen_output_mosaic_image.fits``), members ``coverage`` and
 ``uncertainty``; key ``{"field", "filter" (RAPID spelling), "recipe": "awaicgen",
-"version": <selection digest, 64 hex>}``; the registration block R6 fixes
-(:func:`registration_block`); the SExtractor count is the block's
+"version": <selection digest, 64 hex>}``; the registration block fixed
+(products page, "Registration metadata", :func:`registration_block`); the
+SExtractor count is the block's
 ``nsexcatsources``, which `register` writes to ``refimmeta.nsxcatsources``.
 ``zero_point`` is the zero point the coadd was scaled to, also stamped as
 ``MAGZP``; the difference stage's gain matching reads this keyword from
@@ -62,16 +64,16 @@ names each coadded constituent as ``l2-image/001``, ``l2-image/002``, ...
 written to a scratch directory outside the output location and removed,
 as `dev` never uploads them.
 
-Departures from `dev`, each a ruling:
+Departures from `dev` (reference page):
 
-- ``FID`` is not stamped (R4): a database id; `register` derives ``fid``
+- ``FID`` is not stamped: a database id; `register` derives ``fid``
   from the filter name. The run model's ``RPRUN``, ``RPATTMPT``,
   ``RPINST``, ``RPSTAGE`` are stamped instead, as finalize stamps them.
 - The registration ``md5`` is the published (stamped) mosaic's. `dev`
   records the MD5 of the mosaic before its header is stamped and uploads
   the stamped file, so `dev`'s ``refimages.checksum`` never matches its
   own S3 object; the rebuild's matches the member it names.
-- The Photutils reference catalog is not produced (R3, ``[psfcat]
+- The Photutils reference catalog is not produced (``[psfcat]
   enabled = false``): it needs a reference PSF the input set does not
   carry; ``npucatsources`` is null. ``enabled = true`` is refused (64).
 - Fake-source injection is not ported (a test-only branch in `dev`);
@@ -80,7 +82,7 @@ Departures from `dev`, each a ruling:
   ``input_images_used_for_refimage_jid<jid>.csv`` for ``refimimages``, and
   registers the rows itself; here the input set is the selection, the
   ordered ``constituents`` list replaces the CSV, and `register` writes
-  the rows (R7).
+  the rows (reference page).
 - `dev` never checks a tool's exit code; this stage fails (70) when
   awaicgen or SExtractor leaves no output. A catalog with no sources (no
   FWHM) is rejected (65): `dev`'s ``nanmin`` raises there, and the
@@ -360,7 +362,7 @@ class Selection:
 
 
 def read_selection(context: StageContext, unit_filter: str, checked: _Checked) -> Selection:
-    """Validate the input set against R2; every problem is an input rejection (65)."""
+    """Validate the input set (reference page); every problem is an input rejection (65)."""
     manifest = context.input_manifest
     if manifest.unit.kind != "field":
         raise InputRejected(
@@ -419,7 +421,8 @@ def registration_block(*, md5: str, field_id: int, exposure_filter: str,
                        total_exptime: float, zero_point: float,
                        measurements: measure.MosaicMeasurements,
                        fwhm: catalog.FwhmStatistics, settings_hash: str) -> dict[str, Any]:
-    """The reference-image registration block, exactly R6's fields."""
+    """The reference-image registration block, exactly the fields fixed
+    (products page, "Registration metadata")."""
     block: dict[str, Any] = {
         "md5": md5,
         "status": STATUS,
@@ -449,7 +452,8 @@ def registration_block(*, md5: str, field_id: int, exposure_filter: str,
     return block
 
 
-#: R6's reference-image registration fields, in order.
+#: The reference-image registration fields (products page, "Registration
+#: metadata"), in order.
 REGISTRATION_FIELDS = (
     "md5", "status", "infobits", "field", "filter", "ra_center", "dec_center",
     "constituents", "nframes", "mjdobs_min", "mjdobs_max", "jd_start", "jd_end",
@@ -459,7 +463,8 @@ REGISTRATION_FIELDS = (
     "settings_hash",
 )
 
-#: R6's reference-catalog registration fields.
+#: The reference-catalog registration fields (products page, "Registration
+#: metadata").
 CATALOG_REGISTRATION_FIELDS = ("md5", "status", "catalog_type", "source_count")
 
 

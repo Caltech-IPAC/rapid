@@ -1,4 +1,4 @@
-# Check policy rebuild-trial@1 (supervisor step 6, 2026-09-24, R3).
+# Check policy rebuild-trial@1 (checks page, "Check policies").
 # Immutable once landed: a change is a new version (a new file).
 # Bounds are generous margins around the control run's measured values in
 # rapid_rebuild (scalefacref 17572.896 under gain-1 settings, dxrmsfin 0.25,
@@ -7,8 +7,7 @@
 name = "rebuild-trial"
 version = "1"
 description = "Rebuild trial policy: difference-image statistics required, catalog counts advisory; bounds with generous margins around the control run."
-# Trial approval recorded by supervisor step 6 under the 2026-09-24 grant;
-# lead re-approval pending (plan-review amendment A1).
+# A trial policy pending team approval.
 approval = "trial"
 approved_by = "rusholme"
 auto_promote = false

@@ -1,7 +1,7 @@
 """A synthetic input-set manifest for the `photometry` stage's fixture.
 
-``photometry`` is a declared stub (supervisor step 8, 2026-09-24, ruling
-R9): a valid invocation exits 69 without reading any member file's bytes
+``photometry`` is a declared stub (photometry page): a valid invocation
+exits 69 without reading any member file's bytes
 beyond the validation ``rapidpipe.stages.photometry._read_input_set``
 performs -- but that validation is real, so the fixture still needs a
 structurally valid input-set manifest (stage ``input-set``, unit

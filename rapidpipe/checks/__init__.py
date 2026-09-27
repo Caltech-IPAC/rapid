@@ -1,5 +1,4 @@
-"""Candidate checks and check policies (supervisor step 6, 2026-09-24,
-R1-R6).
+"""Candidate checks and check policies.
 
 - :mod:`rapidpipe.checks.registry` -- the ``@check(name, version)``
   registry of check functions.

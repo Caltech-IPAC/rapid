@@ -6,7 +6,7 @@ FITS files (image, coverage, uncertainty) made by `reference`, landing in
 `refimages`, `refimmeta` and `refimimages`; a `reference-catalog` is a
 field product, logical key (reference instance, catalog type), one text
 file made by `reference`, landing in `refimcatalogs`. The two field lists
-were fixed by the supervisor's step-8 ruling R6 (2026-09-24), as the
+were fixed (products page, "Registration metadata"), as the
 difference image's was:
 
 - `reference-image`: ``md5`` of the primary member, ``status``,
@@ -39,8 +39,8 @@ Unlike `dev`, which reads the frame list back from a CSV it uploaded,
 the constituents travel in the manifest as instance ids and `register`
 resolves each to its `l2files` row.
 
-The key's ``version`` is the selection digest (ruling R5), not
-`refimages.version`: the legacy per-(field, fid, ppid) counter is
+The key's ``version`` is the selection digest (products page, "Identity"),
+not `refimages.version`: the legacy per-(field, fid, ppid) counter is
 allocated at registration by ``addRefImage`` (products page, "legacy
 version columns").
 
@@ -67,12 +67,13 @@ REFERENCE_IMAGE_KEY_FIELDS = ("field", "filter", "recipe", "version")
 REFERENCE_CATALOG_KEY_FIELDS = ("reference", "catalog_type")
 
 #: The recipes a reference image may be built with. `awaicgen` is `dev`'s
-#: only reference recipe (ruling R3); `register` maps it to its
+#: only reference recipe; `register` maps it to its
 #: `pipelines` row (``rapidpipe.db.refimages.REFERENCE_RECIPE_PPIDS``).
 REFERENCE_RECIPES = ("awaicgen",)
 
-#: Bundle roles of a reference image (ruling R5): the primary member is
-#: ``image``; all three are required and no other role is declared.
+#: Bundle roles of a reference image (products page, "File products"): the
+#: primary member is ``image``; all three are required and no other role
+#: is declared.
 REFERENCE_IMAGE_ROLES = ("image", "coverage", "uncertainty")
 
 # ROMAN_TO_RAPID_FILTER_NAMES and rapid_filter_name (imported above from
@@ -81,7 +82,7 @@ REFERENCE_IMAGE_ROLES = ("image", "coverage", "uncertainty")
 # the RAPID names that FITS FILTER headers and the `filters` table carry;
 # F184 is spelled the same either way. The `reference` stage carries the
 # same map (`rapidpipe.science.reference.prep`); the single copy lives in
-# `rapidpipe.products.filters` (step 8, WP-E) and is re-exported here
+# `rapidpipe.products.filters` and is re-exported here
 # under its original name, since this module used to define it.
 
 #: `dev`'s ``refimcatalogs.cattype`` values: 1 for the SExtractor catalog,
@@ -136,7 +137,8 @@ _COUNT_FIELDS = ("npixnan", "clnoutliers", "nsexcatsources")
 @dataclass(frozen=True)
 class ReferenceImageRegistration:
     """Everything `register` needs to write the `refimages`, `refimmeta`
-    and `refimimages` rows of one reference image (ruling R6)."""
+    and `refimimages` rows of one reference image (products page,
+    "Registration metadata")."""
 
     md5: str
     status: int
@@ -234,7 +236,8 @@ class ReferenceImageRegistration:
 
 @dataclass(frozen=True)
 class ReferenceCatalogRegistration:
-    """Everything `register` needs to write one `refimcatalogs` row (ruling R6)."""
+    """Everything `register` needs to write one `refimcatalogs` row
+    (products page, "Registration metadata")."""
 
     md5: str
     status: int

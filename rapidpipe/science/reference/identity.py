@@ -1,16 +1,16 @@
-"""The reference-image instance's logical key and selection digest (R5).
+"""The reference-image instance's logical key and selection digest
+(products page, "Identity").
 
 The key is ``{"field", "filter", "recipe", "version"}``; its ``version``
 is the selection digest -- the full 64-hex SHA-256 over the sorted
 constituent ``l2-image`` instance ids joined by newlines, a newline, and
-the resolved settings hash (Codex plan review amendment, supervisor step
-8: full digest, not 16 hex). Sorting makes the digest a function of the
-selection as a set; the registration block's ``constituents`` list keeps
-manifest (processing) order. The same selection rebuilt with
-the same settings is another instance of one logical product; a different
-selection (or settings) is a new logical product. ``refimages.version``
-is not this: it is the legacy per-(field, fid, ppid) counter `register`
-allocates.
+the resolved settings hash (the full digest, not 16 hex). Sorting makes
+the digest a function of the selection as a set; the registration block's
+``constituents`` list keeps manifest (processing) order. The same
+selection rebuilt with the same settings is another instance of one
+logical product; a different selection (or settings) is a new logical
+product. ``refimages.version`` is not this: it is the legacy
+per-(field, fid, ppid) counter `register` allocates.
 """
 
 from __future__ import annotations

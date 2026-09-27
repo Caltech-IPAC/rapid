@@ -1,5 +1,5 @@
 """Check policies: named, versioned TOML files shipped in the package
-(supervisor step 6, 2026-09-24, R3, with the plan-review amendment A1).
+(checks page, "Check policies").
 
 A policy lives at ``rapidpipe/checks/policies/<name>@<version>.toml`` and
 is loaded by its reference ``name@version``::
@@ -22,12 +22,13 @@ is loaded by its reference ``name@version``::
 
 Policies are immutable once landed: a change is a new version (a new
 file). There is no policy table in the database; a promotion records the
-policy's reference and the ``checks`` row ids it relied on (R3).
+policy's reference and the ``checks`` row ids it relied on (checks page,
+"The promotion gate").
 
-Approval (A1): a policy with ``approval = "none"`` admits no promotion;
+Approval: a policy with ``approval = "none"`` admits no promotion;
 ``trial`` or ``lead`` admits manual promotion; automatic promotion needs
 ``approval = "lead"``, ``approved_by`` set and ``auto_promote = true``
-(:func:`policy_permits_auto_promote`, R5). No shipped policy permits it.
+(:func:`policy_permits_auto_promote`). No shipped policy permits it.
 """
 
 from __future__ import annotations
@@ -42,15 +43,17 @@ from typing import Any
 from rapidpipe.checks.registry import CheckError, UnknownCheck, check_ref, get_check, parse_ref
 
 #: The policy a promotion is validated under when neither ``--check-policy``
-#: nor the run's ``check_policy_ref`` names one (R4).
+#: nor the run's ``check_policy_ref`` names one (checks page, "Check
+#: policies").
 DEFAULT_POLICY = "rebuild-trial@1"
 
 APPROVALS = ("none", "trial", "lead")
 
 #: Test seam: policies not shipped in the package, keyed ``name@version``,
 #: consulted after the shipped files. Only tests put anything here (a
-#: fixture policy that permits automatic promotion, R5); production code
-#: never writes it, so a policy cannot be introduced at run time.
+#: fixture policy that permits automatic promotion; checks page,
+#: "Automatic promotion"); production code never writes it, so a policy
+#: cannot be introduced at run time.
 _FIXTURE_POLICIES: dict[str, "Policy"] = {}
 
 
@@ -74,7 +77,8 @@ class PolicyCheck:
 
     def params_json(self) -> str:
         """The params as canonical JSON, the form recorded in a check row's
-        ``detail.params`` and matched by the promotion gate (A2)."""
+        ``detail.params`` and matched by the promotion gate (checks page,
+        "The promotion gate")."""
         return json.dumps(self.params, sort_keys=True)
 
 
@@ -101,13 +105,14 @@ class Policy:
 
 def policy_permits_promotion(policy: Policy) -> bool:
     """True when the policy is approved (trial or lead, with ``approved_by``
-    recorded) and so may admit a manual promotion (A1)."""
+    recorded) and so may admit a manual promotion (checks page, "Check
+    policies")."""
     return policy.approval in ("trial", "lead") and bool(policy.approved_by)
 
 
 def policy_permits_auto_promote(policy: Policy) -> bool:
     """True only for a lead-approved policy with ``auto_promote = true``
-    (R5, A1). No shipped policy satisfies this."""
+    (checks page, "Automatic promotion"). No shipped policy satisfies this."""
     return policy.approval == "lead" and bool(policy.approved_by) and policy.auto_promote
 
 

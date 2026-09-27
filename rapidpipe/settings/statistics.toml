@@ -7,7 +7,7 @@
 # replace them. What remains is the rebuild's own two knobs.
 
 [statistics]
-# The done check (step 1 ruling R14): a complete statistics set with the
+# The done check: a complete statistics set with the
 # same key (the same membership set) already written in this run is
 # reused, nothing is written, and the manifest names that instance.
 done_check = true

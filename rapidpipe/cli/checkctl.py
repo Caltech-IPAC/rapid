@@ -1,6 +1,6 @@
-"""``rapidpipe check list|run|show|accept``: candidate checks (supervisor
-step 6, 2026-09-24, R6; ``accept`` and the acceptance lines, supervisor
-step 6, 2026-09-26, R3, R4).
+"""``rapidpipe check list|run|show|accept``: candidate checks (checks page,
+"The check commands"; ``accept`` and the acceptance lines, checks page,
+"Acceptance").
 
 - ``list`` -- the registered checks and the shipped check policies (no
   database);
@@ -12,7 +12,7 @@ step 6, 2026-09-26, R3, R4).
   instance / the one check; record one ``checks`` row per result; print
   one line per result. ``--param`` overrides the policy's params for the
   named ``--check`` only; such a row does not count for promotion under
-  the policy (plan-review amendment A2). Exit 0 when every result passed,
+  the policy (checks page, "The promotion gate"). Exit 0 when every result passed,
   1 when any failed, 64 on a usage error;
 - ``show <run> [--instance I]`` -- the recorded results, newest first, each
   line prefixed ``id=<check row id> at=<happened_at>``; then one line per
@@ -222,7 +222,7 @@ def _show_command(args: argparse.Namespace) -> int:
     return _with_connection("show", body)
 
 
-#: What ``check accept`` says for each state it refuses (R3).
+#: What ``check accept`` says for each state it refuses (checks page, "Acceptance").
 _NOT_ACCEPTABLE = {
     "pending": "its required checks have not all run; run the checks first "
                "(`rapidpipe check run`)",

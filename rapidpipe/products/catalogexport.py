@@ -3,10 +3,9 @@
 The products page's "File products" table: a `catalog-export` is a field
 product, a HATS (Hierarchical Adaptive Tiling Scheme) catalog directory
 made by `export` from named result sets; "Today's table": none, exported.
-Its field list, fixed with the `export` port (supervisor step 8,
-2026-09-24, ruling R12), then corrected (supervisor step 8, 2026-09-24,
-ruling R13 -- ``export.py`` keyed a multi-source-set export by
-``source_sets[0]`` alone, so [A,B] and [A,C] shared a key and [B,A]
+Its field list, fixed with the `export` port (products page, "Registration
+metadata"), then corrected (``export.py`` keyed a multi-source-set export
+by ``source_sets[0]`` alone, so [A,B] and [A,C] shared a key and [B,A]
 differed from [A,B]):
 
 - key: ``field`` (the unit), ``export_type`` (``"sources"`` today; the
@@ -79,7 +78,7 @@ def selection_digest(source_sets: Iterable[str]) -> str:
     """The key's ``selection``: SHA-256 hex over the sorted, distinct ``source_sets`` ids.
 
     Mirrors :func:`rapidpipe.science.reference.identity.selection_digest`'s
-    sorted, newline-joined-ids formula (ruling R13); it does not fold in a
+    sorted, newline-joined-ids formula; it does not fold in a
     settings hash, since ``settings_hash`` is already the catalog-export
     key's own field. Order-independent (``[A, B]`` and ``[B, A]`` digest
     the same) but membership-sensitive (``[A, B]`` and ``[A, C]`` differ).

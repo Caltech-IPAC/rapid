@@ -1,7 +1,7 @@
 # Default settings for the photometry stage (rapidpipe.stages.photometry).
 #
-# `photometry` is a declared stub in this build (supervisor step 8,
-# 2026-09-24, ruling R9): it validates its arguments, these settings and
+# `photometry` is a declared stub in this build (photometry page): it
+# validates its arguments, these settings and
 # its input manifest exactly like a real stage, then exits 69 ("declared,
 # not implemented in this build") without running any science. These keys
 # reserve the parameter names the eventual port of `dev`'s forced
