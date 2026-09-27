@@ -38,6 +38,8 @@ from rapidpipe.cli import runctl
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.runs import repository
 
+from tests.db.test_repository import pin_test_slot
+
 from .conftest import FAKE_BUCKET, _delete_run_rows
 
 TABLE = "sources_29990101_01"
@@ -112,8 +114,18 @@ class _FakeStages:
                      "members": [],
                      "registration": {"table": TABLE, "row_count": len(FIELDS)}}]
         if stage == "crossmatch":
+            # crossmatch's key names its base, as the real stage's does: the
+            # field's current association set, or null on the first date (a
+            # replacement must descend from what it replaces, supervisor step
+            # 5a, 2026-09-26, R6).
+            with self.db.cursor() as cur:
+                cur.execute("SELECT id FROM product_instances WHERE kind = 'association-set' "
+                            "AND custody = 'current' AND logical_key ->> 'field' = %s",
+                            (unit_id,))
+                row = cur.fetchone()
             return [{"kind": "association-set", "format_version": "1", "instance": new_ulid(),
-                     "key": {"field": int(unit_id)}, "primary": None, "members": [],
+                     "key": {"field": int(unit_id), "base": row[0] if row else None},
+                     "primary": None, "members": [],
                      "registration": {"astroobjects_table": f"astroobjects_{unit_id}"}}]
         if stage == "statistics":
             return [{"kind": "statistics-set", "format_version": "1", "instance": new_ulid(),
@@ -162,6 +174,11 @@ class _FakeStages:
                     # The real stage registers its own outputs.
                     repository.register_manifest(self.db.connection, manifest,
                                                  registering_attempt_id=attempt_id)
+                    # The fakes never register admit's or finalize's outputs,
+                    # so a set keyed on them derives no slot; it gets the
+                    # stand-in slot tests/db uses (one per logical key).
+                    for output in outputs:
+                        pin_test_slot(self.db.connection, output["instance"], output["key"])
             result = original(conn, run_id)
             if self.stop_after and any(r[0] == self.stop_after for r in rows):
                 self.stop_after = None

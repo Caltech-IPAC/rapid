@@ -37,7 +37,7 @@ from rapidpipe.checks.runner import (
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.runs import repository as repo
 
-from .test_repository import _make_run, _make_unit, _register_simple_instance
+from .test_repository import _make_run, _make_unit, _register_simple_instance, pin_test_slot
 
 TRIAL = "rebuild-trial@1"
 STRICT = "rebuild-strict@1"
@@ -148,6 +148,7 @@ def _source_set(conn, run_id, *, key, rows, complete=True):
                      "key": key, "primary": None, "members": [], "registration": {},
                      "row_count": rows}],
     }, registering_attempt_id=attempt_id)
+    pin_test_slot(conn, instance, key)
     if not complete:
         with conn.cursor() as cur:
             cur.execute("UPDATE result_sets SET complete = false WHERE instance = %s",
@@ -305,13 +306,15 @@ def test_a_check_detail_with_a_raw_nan_is_recorded_failed_with_the_error(conn, m
 # ======================================================================
 
 def _l2(conn, run_id, *, expid, sca, fid):
-    """A registered l2-image instance with an ``l2files`` row carrying
-    (expid, sca, fid). Its reference-table foreign keys are dropped and its
-    other NOT NULL columns filled with placeholders, inside the
-    never-committed transaction."""
+    """A registered l2-image instance keyed as admit keys it (exposure,
+    detector, version), so the database derives its slot, with an
+    ``l2files`` row carrying (expid, sca, fid). Its reference-table
+    foreign keys are dropped and its other NOT NULL columns filled with
+    placeholders, inside the never-committed transaction."""
     attempt_id = _selected_attempt(conn, run_id, stage="admit")
     instance = _register_simple_instance(conn, run_id, "admit", attempt_id, kind="l2-image",
-                                         logical_key={"k": new_ulid()})
+                                         logical_key={"exposure": expid, "detector": sca,
+                                                      "version": new_ulid()})
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -404,7 +407,7 @@ def test_catalog_counts_against_the_current_instance_of_the_same_identity(conn):
     assert result.outcome == "passed", result.summary
     assert result.detail["reference"] == {"instance": reference, "run": control,
                                           "chosen_as": "current", "row_count": 1000}
-    assert result.detail["identity"] == {"expid": identity[0], "sca": 3, "fid": 1,
+    assert result.detail["identity"] == {"exposure": str(identity[0]), "detector": "3",
                                          "catalog_type": "sextractor"}
     assert result.detail["measurements"]["relative_difference"] == pytest.approx(0.08)
     tight = _catalog(conn, candidate, tolerance=0.05)

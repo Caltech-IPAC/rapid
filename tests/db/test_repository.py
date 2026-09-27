@@ -8,6 +8,8 @@ let CI (.github/workflows/db-migrations.yml) run it after the applier.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from rapidpipe.db.ids import new_ulid
@@ -17,6 +19,33 @@ from rapidpipe.runs import repository as repo
 #: so promotion tests need no ``dev`` row; vbest behaviour is tested with
 #: real ``psfs`` rows in test_run_lifecycle.py.
 TEST_KIND = "test-product"
+
+
+def stand_in_slot(logical_key):
+    """The stand-in slot a test instance gets when the database derives
+    none (supervisor step 5a, 2026-09-26): ``test-product`` is no real
+    kind and many fixture keys carry no real fields, so
+    ``product_identity_fill()`` leaves their slot NULL, and promotion,
+    which replaces by slot, would refuse them. One slot per logical key
+    keeps these tests' meaning (one current instance per key); the
+    derivation itself is tested with real keys elsewhere."""
+    return {"test_key": json.dumps(logical_key, sort_keys=True, separators=(",", ":"))}
+
+
+def by_slot(logical_key):
+    """A promote() selector for a test instance registered with ``logical_key``."""
+    return {"slot": stand_in_slot(logical_key)}
+
+
+def pin_test_slot(conn, instance_id, logical_key):
+    """Give ``instance_id`` its :func:`stand_in_slot` (slot and identity)
+    when the fill derived no slot for it; a derived slot is kept."""
+    slot = json.dumps(stand_in_slot(logical_key))
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE product_instances SET slot = %s::jsonb, "
+            "identity = COALESCE(identity, %s::jsonb) WHERE id = %s AND slot IS NULL",
+            (slot, slot, instance_id))
 
 
 # ======================================================================
@@ -98,6 +127,7 @@ def _register_simple_instance(
         ],
     }
     repo.register_manifest(conn, manifest, registering_attempt_id=attempt_id)
+    pin_test_slot(conn, instance_id, logical_key)
     return instance_id
 
 
@@ -443,7 +473,7 @@ def test_promote_happy_path(conn):
 
     promotion_id = repo.promote(
         conn, who="brusholme", reason="regular operations",
-        changes=[(TEST_KIND, key, None, instance_id)],
+        changes=[(TEST_KIND, by_slot(key), None, instance_id)],
         allow_unreleased=True,
     )
     assert promotion_id
@@ -466,8 +496,8 @@ def test_promote_refuses_whole_request_on_mismatch(conn):
         repo.promote(
             conn, who="brusholme", reason="test",
             changes=[
-                (TEST_KIND, key_a, None, instance_a),
-                (TEST_KIND, key_b, new_ulid(), instance_b),  # wrong expected-before
+                (TEST_KIND, by_slot(key_a), None, instance_a),
+                (TEST_KIND, by_slot(key_b), new_ulid(), instance_b),  # wrong expected-before
             ],
             allow_unreleased=True,
         )
@@ -484,7 +514,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     _, _, _, first_instance = _full_chain_to_current_candidate(conn, run_id, logical_key=key)
     repo.promote(
         conn, who="brusholme", reason="initial",
-        changes=[(TEST_KIND, key, None, first_instance)],
+        changes=[(TEST_KIND, by_slot(key), None, first_instance)],
         allow_unreleased=True,
     )
 
@@ -493,7 +523,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     _, _, _, second_instance = _full_chain_to_current_candidate(conn, run_id_2, logical_key=key)
     repo.promote(
         conn, who="brusholme", reason="reprocess",
-        changes=[(TEST_KIND, key, first_instance, second_instance)],
+        changes=[(TEST_KIND, by_slot(key), first_instance, second_instance)],
         allow_unreleased=True,
     )
     with conn.cursor() as cur:
@@ -504,7 +534,7 @@ def test_promote_reversal_restores_previous_selection(conn):
     # Reversal: promote the inverse mapping.
     repo.promote(
         conn, who="brusholme", reason="reversal",
-        changes=[(TEST_KIND, key, second_instance, first_instance)],
+        changes=[(TEST_KIND, by_slot(key), second_instance, first_instance)],
         allow_unreleased=True,
     )
     with conn.cursor() as cur:

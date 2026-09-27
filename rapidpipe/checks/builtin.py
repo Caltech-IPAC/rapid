@@ -135,39 +135,30 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
     return CheckResult(outcome, detail, summary)
 
 
-def _identity(cur, source_set_key: dict[str, Any]) -> tuple[int, int, int] | None:
-    """``(expid, sca, fid)`` of the exposure a source set's chain reaches:
-    key.difference -> that difference-image instance's key.l2 -> the
-    ``l2files`` row carrying that instance. ``None`` when any link is
-    missing."""
-    difference = source_set_key.get("difference")
-    if not difference:
+def _identity(slot: dict[str, Any] | None) -> tuple[str, str, str] | None:
+    """``(exposure, detector, catalog_type)`` of a source set, read from its
+    slot (supervisor step 5a, 2026-09-26, R8), as the text ``->>`` gives in
+    SQL. ``None`` when the slot is NULL (unresolved) or lacks a field."""
+    if not isinstance(slot, dict):
         return None
-    cur.execute(
-        """
-        SELECT l.expid, l.sca, l.fid
-        FROM product_instances d
-        JOIN l2files l ON l.instance::text = d.logical_key->>'l2'
-        WHERE d.id = %s AND d.kind = 'difference-image'
-        """,
-        (difference,),
-    )
-    rows = cur.fetchall()
-    return tuple(rows[0]) if len(rows) == 1 else None
+    values = [slot.get(name) for name in ("exposure", "detector", "catalog_type")]
+    if any(value is None or isinstance(value, (dict, list)) for value in values):
+        return None
+    exposure, detector, catalog_type = (str(value) for value in values)
+    return exposure, detector, catalog_type
 
 
-#: Source-set instances of one catalog type, from runs other than the
-#: candidate's, whose chain reaches the given (expid, sca, fid).
+#: Source-set instances of one kind and catalog type, from runs other than
+#: the candidate's, in the same exposure and detector (any differencer,
+#: as before), found by slot (supervisor step 5a, 2026-09-26, R8). A row
+#: without a slot is never a reference.
 _SAME_IDENTITY = """
     SELECT s.id, s.run, s.custody
     FROM product_instances s
-    JOIN product_instances d ON d.id::text = s.logical_key->>'difference'
-                            AND d.kind = 'difference-image'
-    JOIN l2files l ON l.instance::text = d.logical_key->>'l2'
     WHERE s.kind = %s
-      AND s.logical_key->>'catalog_type' = %s
+      AND s.slot->>'catalog_type' = %s
       AND s.run <> %s
-      AND l.expid = %s AND l.sca = %s AND l.fid = %s
+      AND s.slot->>'exposure' = %s AND s.slot->>'detector' = %s
 """
 
 
@@ -177,11 +168,12 @@ def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) 
     """Result-set row count within a fractional tolerance of a reference's.
 
     Logical keys are per run, so the reference is found by science
-    identity (supervisor step 6, 2026-09-24, live-values correction): the
-    candidate source set's ``key.difference`` -> that difference image's
-    ``key.l2`` -> its ``l2files`` row -> ``(expid, sca, fid)``. The
-    reference is a source set of the same ``catalog_type`` from another
-    run whose chain reaches the same triple: the ``reference_run``'s
+    identity: the candidate source set's slot, ``(exposure, detector,
+    catalog_type)`` (supervisor step 5a, 2026-09-26, R8, replacing the
+    key.difference -> key.l2 -> ``l2files`` walk of supervisor step 6,
+    2026-09-24). A candidate without a slot fails as an unresolved
+    identity. The reference is a source set of the same exposure, detector
+    and ``catalog_type`` from another run: the ``reference_run``'s
     (selected attempt) when that param is non-empty, else the most
     recently published one with custody ``current``. Passes when
     |cand - ref| / ref <= tolerance; with no reference the outcome is
@@ -202,7 +194,7 @@ def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) 
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT pi.kind, pi.logical_key, pi.run, rs.instance IS NOT NULL, rs.complete,
+            SELECT pi.kind, pi.slot, pi.run, rs.instance IS NOT NULL, rs.complete,
                    rs.row_count
             FROM product_instances pi
             LEFT JOIN result_sets rs ON rs.instance = pi.id
@@ -213,7 +205,7 @@ def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) 
         row = cur.fetchone()
         if row is None:
             return fail("instance does not exist", "candidate")
-        kind, logical_key, run, is_result_set, complete, cand_count = row
+        kind, slot, run, is_result_set, complete, cand_count = row
         detail["measurements"]["candidate_row_count"] = cand_count
         if not is_result_set:
             return fail("not a result set", "candidate_row_count")
@@ -221,16 +213,15 @@ def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) 
             return fail("result set is incomplete", "candidate_row_count")
         if cand_count is None:
             return fail("result set has no row count", "candidate_row_count")
-        catalog_type = (logical_key or {}).get("catalog_type")
-        identity = _identity(cur, logical_key or {})
-        if catalog_type is None or identity is None:
-            return fail("cannot resolve the candidate's science identity (key.catalog_type, "
-                        "key.difference -> key.l2 -> l2files)", "identity")
-        expid, sca, fid = identity
-        detail["identity"] = {"expid": expid, "sca": sca, "fid": fid,
+        identity = _identity(slot)
+        if identity is None:
+            return fail("cannot resolve the candidate's science identity (its slot's "
+                        "exposure, detector and catalog_type)", "identity")
+        exposure, detector, catalog_type = identity
+        detail["identity"] = {"exposure": exposure, "detector": detector,
                               "catalog_type": catalog_type}
 
-        query_args = [kind, catalog_type, run, expid, sca, fid]
+        query_args = [kind, catalog_type, run, exposure, detector]
         if reference_run:
             cur.execute(
                 _SAME_IDENTITY + """

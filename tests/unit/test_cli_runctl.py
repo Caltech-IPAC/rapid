@@ -651,25 +651,41 @@ def test_compare_same(monkeypatch, fake_conn, capsys):
     _compare_setup(
         monkeypatch,
         {"A": [("admit", "U", "succeeded", "h1")], "B": [("admit", "U", "succeeded", "h1")]},
-        {"A": [("l2-image", '{"u": 1}', "IA")], "B": [("l2-image", '{"u": 1}', "IB")]})
+        {"A": [("l2-image", '{"u": 1}', "IA", '{"u":1}')], "B": [("l2-image", '{"u": 1}', "IB", '{"u":1}')]})
     assert cli.main(["run", "compare", "A", "B"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert "unit\tadmit\tU\tsucceeded\tsucceeded\tsettings\th1\th1" in out
-    assert 'instance\tl2-image\t{"u": 1}\tIA\tIB' in out
+    assert 'instance\tl2-image\t{"u": 1}\t{"u":1}\tIA\tIB' in out
     assert out[-1] == "same"
 
 
+def test_compare_prints_a_dash_for_a_group_with_no_slot(monkeypatch, fake_conn, capsys):
+    # The slot column (supervisor step 5a, R8): the first recorded slot of
+    # the (kind, logical key) group, "-" when neither run's instance has one.
+    _compare_setup(
+        monkeypatch,
+        {"A": [], "B": []},
+        {"A": [("test-product", '{"u": 2}', "IA", None),
+               ("source-set", '{"d": "X"}', "SA", None)],
+         "B": [("test-product", '{"u": 2}', "IB", None),
+               ("source-set", '{"d": "X"}', "SB", '{"exposure":"e1"}')]})
+    assert cli.main(["run", "compare", "A", "B"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert 'instance\ttest-product\t{"u": 2}\t-\tIA\tIB' in out
+    assert 'instance\tsource-set\t{"d": "X"}\t{"exposure":"e1"}\tSA\tSB' in out
+
+
 @pytest.mark.parametrize("units_b, instances_b, overlays", [
-    ([("admit", "U", "failed", "h1")], [("l2-image", '{"u": 1}', "IB")], ("o", "o")),
-    ([("admit", "U", "succeeded", "h2")], [("l2-image", '{"u": 1}', "IB")], ("o", "o")),
+    ([("admit", "U", "failed", "h1")], [("l2-image", '{"u": 1}', "IB", '{"u":1}')], ("o", "o")),
+    ([("admit", "U", "succeeded", "h2")], [("l2-image", '{"u": 1}', "IB", '{"u":1}')], ("o", "o")),
     ([("admit", "U", "succeeded", "h1")], [], ("o", "o")),
-    ([("admit", "U", "succeeded", "h1")], [("l2-image", '{"u": 1}', "IB")], ("o", "p")),
+    ([("admit", "U", "succeeded", "h1")], [("l2-image", '{"u": 1}', "IB", '{"u":1}')], ("o", "p")),
 ])
 def test_compare_different(monkeypatch, fake_conn, capsys, units_b, instances_b, overlays):
     _compare_setup(
         monkeypatch,
         {"A": [("admit", "U", "succeeded", "h1")], "B": units_b},
-        {"A": [("l2-image", '{"u": 1}', "IA")], "B": instances_b}, overlays)
+        {"A": [("l2-image", '{"u": 1}', "IA", '{"u":1}')], "B": instances_b}, overlays)
     assert cli.main(["run", "compare", "A", "B"]) == 1
     assert capsys.readouterr().out.splitlines()[-1] == "different"
 

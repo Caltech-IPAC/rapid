@@ -24,7 +24,14 @@ from rapidpipe.runs import cleanup
 from rapidpipe.runs import repository as repo
 from tests.unit.fakes3 import FakeVersionedS3
 
-from .test_repository import TEST_KIND, _make_run, _make_unit, _register_simple_instance
+from .test_repository import (
+    TEST_KIND,
+    _make_run,
+    _make_unit,
+    _register_simple_instance,
+    by_slot,
+    pin_test_slot,
+)
 
 MD5 = "9e107d9d372bb6826bd81d3542a419d6"
 SCRATCH_BUCKET = "scratch-bucket"
@@ -142,11 +149,11 @@ def test_promote_with_after_none_unselects(conn):
     run_id = _make_run(conn)
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
-    repo.promote(conn, "brusholme", "select", [(TEST_KIND, key, None, instance)], allow_unreleased=True)
+    repo.promote(conn, "brusholme", "select", [(TEST_KIND, by_slot(key), None, instance)], allow_unreleased=True)
     assert _custody(conn, instance) == "current"
 
     promotion_id = repo.promote(
-        conn, "brusholme", "unselect", [(TEST_KIND, key, instance, None)], allow_unreleased=True)
+        conn, "brusholme", "unselect", [(TEST_KIND, by_slot(key), instance, None)], allow_unreleased=True)
 
     assert _custody(conn, instance) == "candidate"
     ((kind, logical_key, before, after),) = _changes(conn, promotion_id)
@@ -161,11 +168,11 @@ def test_promote_refuses_after_equal_to_before(conn):
     run_id = _make_run(conn)
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
-    repo.promote(conn, "brusholme", "select", [(TEST_KIND, key, None, instance)], allow_unreleased=True)
+    repo.promote(conn, "brusholme", "select", [(TEST_KIND, by_slot(key), None, instance)], allow_unreleased=True)
     with pytest.raises(repo.PromotionRefused):
-        repo.promote(conn, "brusholme", "again", [(TEST_KIND, key, instance, instance)], allow_unreleased=True)
+        repo.promote(conn, "brusholme", "again", [(TEST_KIND, by_slot(key), instance, instance)], allow_unreleased=True)
     with pytest.raises(repo.PromotionRefused):
-        repo.promote(conn, "brusholme", "nothing", [(TEST_KIND, {"k": new_ulid()}, None, None)], allow_unreleased=True)
+        repo.promote(conn, "brusholme", "nothing", [(TEST_KIND, by_slot({"k": new_ulid()}), None, None)], allow_unreleased=True)
 
 
 def test_promote_records_request_context(conn):
@@ -173,7 +180,7 @@ def test_promote_records_request_context(conn):
     key = {"k": new_ulid()}
     instance, attempt = _candidate(conn, run_id, key=key)
     promotion_id = repo.promote(
-        conn, "brusholme", "r", [(TEST_KIND, key, None, instance)],
+        conn, "brusholme", "r", [(TEST_KIND, by_slot(key), None, instance)],
         request_context={"ticket": "T-1"}, allow_unreleased=True)
     with conn.cursor() as cur:
         cur.execute("SELECT request_context FROM promotions WHERE id = %s", (promotion_id,))
@@ -700,10 +707,10 @@ def test_promote_refuses_a_kind_or_key_that_does_not_match_the_instance(conn):
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
     with pytest.raises(repo.PromotionRefused, match="not the requested"):
-        repo.promote(conn, "brusholme", "wrong kind", [("other-kind", key, None, instance)], allow_unreleased=True)
+        repo.promote(conn, "brusholme", "wrong kind", [("other-kind", by_slot(key), None, instance)], allow_unreleased=True)
     with pytest.raises(repo.PromotionRefused, match="not the requested"):
         repo.promote(conn, "brusholme", "wrong key",
-                     [(TEST_KIND, {"k": new_ulid()}, None, instance)], allow_unreleased=True)
+                     [(TEST_KIND, by_slot({"k": new_ulid()}), None, instance)], allow_unreleased=True)
 
 
 def test_promote_refuses_a_deleted_after_instance(conn):
@@ -715,7 +722,7 @@ def test_promote_refuses_a_deleted_after_instance(conn):
             "UPDATE product_instances SET deletion_state = 'deleted' WHERE id = %s",
             (instance,))
     with pytest.raises(repo.PromotionRefused, match="not retained"):
-        repo.promote(conn, "brusholme", "gone", [(TEST_KIND, key, None, instance)], allow_unreleased=True)
+        repo.promote(conn, "brusholme", "gone", [(TEST_KIND, by_slot(key), None, instance)], allow_unreleased=True)
 
 
 def test_promote_refuses_an_incomplete_result_set(conn):
@@ -729,10 +736,11 @@ def test_promote_refuses_an_incomplete_result_set(conn):
         "outputs": [{"kind": "source-set", "format_version": "1", "instance": instance,
                      "key": key, "primary": None, "members": []}],
     }, registering_attempt_id=attempt_id)
+    pin_test_slot(conn, instance, key)
     with conn.cursor() as cur:
         cur.execute("UPDATE result_sets SET complete = false WHERE instance = %s", (instance,))
     with pytest.raises(repo.PromotionRefused, match="incomplete result set"):
-        repo.promote(conn, "brusholme", "partial", [("source-set", key, None, instance)], allow_unreleased=True)
+        repo.promote(conn, "brusholme", "partial", [("source-set", by_slot(key), None, instance)], allow_unreleased=True)
 
 
 def test_the_sweeper_refuses_a_pinned_or_unexpired_run(conn):
