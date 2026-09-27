@@ -43,12 +43,12 @@ to ``InputRejected`` (65), :class:`ReadGuardUnavailable` to
 from __future__ import annotations
 
 import importlib
-import json
 import logging
 import os
 from typing import Any, Callable
 
 from rapidpipe.db import connection as _connection_module
+from rapidpipe.db.objects import Unreadable, assert_readable_instance
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.products.manifest import Manifest, OutputEntry
 from rapidpipe.runs.inputs import manifest_instances
@@ -135,89 +135,11 @@ def connect(*args, **kwargs):
 
 
 # ----------------------------------------------------------------------
-# The read rule. A private copy of rapidpipe.db.objects.assert_readable_instance
-# (step 6 WP-A, R5; origin/ops6-eligibility f544ea10), semantically identical
-# (same refusals, reasons and wording), until that function is on this
-# branch's base. Switching is this one line, replacing the block below:
-#   from rapidpipe.db.objects import assert_readable_instance
+# The read rule: rapidpipe.db.objects.assert_readable_instance (imported
+# above), step 6 WP-A, R5. This module held a private, semantically
+# identical copy (docstring-for-docstring) until this switch (step 6,
+# integration check).
 # ----------------------------------------------------------------------
-
-_READABLE_SQL = """
-    SELECT pi.kind, pi.run, pi.custody, pi.deletion_state, rs.complete, rs.row_count,
-           pi.logical_key::text,
-           COALESCE(u.selected_attempt = pi.producing_attempt, false)
-    FROM product_instances pi
-    LEFT JOIN result_sets rs ON rs.instance = pi.id
-    LEFT JOIN attempts a ON a.id = pi.producing_attempt
-    LEFT JOIN units u ON u.id = a.unit
-    WHERE pi.id = %s
-"""
-
-
-class Unreadable(ValueError):
-    """A read-rule refusal (:func:`assert_readable_instance`); ``reason`` is
-    one of ``unknown``, ``kind``, ``deleted``, ``incomplete``, ``scratch``,
-    ``unselected``."""
-
-    def __init__(self, message: str, reason: str) -> None:
-        super().__init__(message)
-        self.reason = reason
-
-
-def assert_readable_instance(
-    cur, instance: str, run_id: str, *, kind: str | None = None,
-) -> dict[str, Any]:
-    """Refuse (:class:`Unreadable`, a ValueError) a product instance ``run_id``
-    may not read; else describe it.
-
-    The read column of the dependency-eligibility table (supervisor step 6,
-    2026-09-26, R5), for any ``product_instances`` row, file product or
-    result set: retained, complete when a result set, and, when it belongs
-    to another run, custody ``candidate`` or ``current`` and produced by its
-    unit's selected attempt (a unit with no selected attempt counts as
-    unselected). An instance of ``run_id`` itself is readable whatever its
-    custody or attempt. With ``kind``, an instance of any other kind is
-    refused. An id naming no instance is refused (``unknown``); the guard
-    below never hands it one.
-
-    Returns ``{kind, run, custody, row_count, key, result_set}``.
-    """
-    cur.execute(_READABLE_SQL, (instance,))
-    row = cur.fetchone()
-    if row is None:
-        raise Unreadable(f"no product instance {instance!r}", "unknown")
-    (found_kind, owner, custody, deletion_state, complete, row_count, key_text,
-     selected) = row
-    if kind is not None and found_kind != kind:
-        raise Unreadable(f"{instance!r} is a {found_kind}, not a {kind}", "kind")
-    # ``complete`` is NULL exactly when the instance has no result_sets row:
-    # the instance is a file product.
-    is_result_set = complete is not None
-    if is_result_set:
-        if not complete or deletion_state != "retained":
-            raise Unreadable(
-                f"{found_kind} {instance!r} is not complete and retained "
-                f"(complete={complete}, deletion_state={deletion_state})",
-                "deleted" if deletion_state != "retained" else "incomplete")
-    elif deletion_state != "retained":
-        raise Unreadable(
-            f"{found_kind} {instance!r} is not retained (deletion_state={deletion_state})",
-            "deleted")
-    if owner != run_id:
-        what = "result set" if is_result_set else "product"
-        if custody not in FOREIGN_READABLE_CUSTODY:
-            raise Unreadable(
-                f"{found_kind} {instance!r} belongs to run {owner!r} with custody {custody!r}: "
-                f"another run's scratch {what} is not readable by run {run_id!r}", "scratch")
-        if not selected:
-            raise Unreadable(
-                f"{found_kind} {instance!r} of run {owner!r} was produced by an attempt that "
-                f"is not its unit's selected attempt (or its unit has none): not readable "
-                f"by run {run_id!r}", "unselected")
-    key = json.loads(key_text) if isinstance(key_text, str) else (key_text or {})
-    return {"kind": found_kind, "run": owner, "custody": custody, "row_count": row_count,
-            "key": key if isinstance(key, dict) else {}, "result_set": is_result_set}
-
 
 _INSTANCE_SQL = """
     SELECT pi.kind, pi.run, pi.custody, pi.deletion_state,
