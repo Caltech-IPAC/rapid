@@ -150,6 +150,12 @@ class PromotionRefused(RunModelError):
     """A promotion request failed validation; the whole request is refused."""
 
 
+#: ``promote_run``'s default ``plan``: no plan was supplied. Distinct from
+#: ``None``, which is a supplied (and malformed) plan (supervisor step 5a,
+#: 2026-09-26, R21).
+NO_PLAN: Any = object()
+
+
 class StalePlan(PromotionRefused):
     """A frozen promotion plan no longer matches the run's changes read
     under the promotion lock (supervisor step 5a, 2026-09-26, R5): nothing
@@ -1600,7 +1606,7 @@ def _validate_promotion_eligibility(
     cur.execute(
         """
         SELECT pi.custody, pi.kind, pi.slot, pi.logical_key, pi.deletion_state,
-               rs.instance IS NOT NULL, rs.complete
+               rs.instance IS NOT NULL, rs.complete, pi.identity
         FROM product_instances pi
         LEFT JOIN result_sets rs ON rs.instance = pi.id
         WHERE pi.id = %s
@@ -1612,7 +1618,7 @@ def _validate_promotion_eligibility(
         raise PromotionRefused(
             f"after instance {after_instance!r} for kind={kind!r} does not exist")
     (custody, actual_kind, actual_slot, actual_key, deletion_state, is_result_set,
-     complete) = row
+     complete, identity) = row
     actual = actual_slot if by == "slot" else actual_key
     if actual_kind != kind or actual != value:
         shown = "none (unresolved)" if actual is None else canonical_json(actual)
@@ -1620,6 +1626,12 @@ def _validate_promotion_eligibility(
             f"after instance {after_instance!r} is kind={actual_kind!r} "
             f"{by}={shown}, not the requested kind={kind!r} "
             f"{by}={canonical_json(value)}; refusing")
+    if identity is None:
+        # An unresolved identity is never promotable (supervisor step 5a,
+        # 2026-09-26, R21), whatever the selector.
+        raise PromotionRefused(
+            f"after instance {after_instance!r} of kind={kind!r} has no identity (its "
+            "identity could not be derived from its logical key); refusing")
     if deletion_state != "retained":
         raise PromotionRefused(
             f"after instance {after_instance!r} is {deletion_state!r}, not "
@@ -1723,7 +1735,7 @@ def _run_slot_changes(
     current in that slot, or ``None``. Empty when there is nothing to
     promote; the caller decides what that means."""
     query = """
-        SELECT pi.id, pi.kind, pi.slot
+        SELECT pi.id, pi.kind, pi.slot, pi.identity
         FROM product_instances pi
         JOIN attempts a ON a.id = pi.producing_attempt
         JOIN units u ON u.id = a.unit
@@ -1740,13 +1752,19 @@ def _run_slot_changes(
     deliverables = cur.fetchall()
 
     by_slot: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
-    for instance_id, kind, slot in deliverables:
+    for instance_id, kind, slot, identity in deliverables:
         if slot is None:
             raise PromotionRefused(
                 f"run {run_id!r}: candidate {instance_id!r} of kind={kind!r} has no slot "
                 "(its slot could not be derived from its logical key: a missing or "
                 "malformed field, an unresolved or missing producer, or an unknown "
                 "kind; slot_backfill_log counts them); refusing")
+        if identity is None:
+            raise PromotionRefused(
+                f"run {run_id!r}: candidate {instance_id!r} of kind={kind!r} has no identity "
+                "(it could not be derived from its logical key: a missing or malformed "
+                "field, an unresolved or missing producer, or an unknown kind; "
+                "slot_backfill_log counts them); refusing")
         slot_text = canonical_json(slot)
         if (kind, slot_text) in by_slot:
             raise PromotionRefused(
@@ -1810,6 +1828,8 @@ def _refuse_stale_plan(
         planned = plan_by_slot(plan)
     except ValueError as exc:
         raise PromotionRefused(f"the plan is malformed: {exc}; refusing") from None
+    if not planned:
+        raise PromotionRefused("the plan is empty: a plan names at least one slot; refusing")
     actual = plan_by_slot(plan_entries(changes))
     for key in sorted(set(planned) | set(actual)):
         if planned.get(key) != actual.get(key):
@@ -1831,7 +1851,7 @@ def promote_run(
     kinds: Sequence[str] | None = None,
     check_policy: Policy | str | None = None,
     allow_unreleased: bool = False,
-    plan: Sequence[PlanEntry] | None = None,
+    plan: Any = NO_PLAN,
 ) -> str:
     """Promote a production run's deliverables; return the promotion id.
 
@@ -1855,10 +1875,12 @@ def promote_run(
     :func:`promote`).
 
     ``plan``, when given, is a frozen plan from :func:`promotion_plan`
-    (R5): the changes read under the lock must equal it slot for slot,
-    else :class:`StalePlan` is raised naming the first differing slot and
-    nothing is written. Without it the changes read under the lock are
-    promoted, as before.
+    (R5): a non-empty list of plan entries (anything else, ``None``
+    included, is refused: R21), and the changes read under the lock must
+    equal it slot for slot, else :class:`StalePlan` is raised naming the
+    first differing slot and nothing is written. Without it (the default,
+    :data:`NO_PLAN`) the changes read under the lock are promoted, as
+    before.
 
     Every promotion is validated under a named check policy (supervisor
     step 6, 2026-09-24, R4): ``check_policy`` (a :class:`Policy` or its
@@ -1880,7 +1902,7 @@ def promote_run(
 
         fill_identity_safely(cur, f"promoting run {run_id}")
         changes = _run_slot_changes(cur, run_id, kinds)
-        if plan is not None:
+        if plan is not NO_PLAN:
             _refuse_stale_plan(run_id, plan, changes)
         if not changes:
             raise _nothing_to_promote(run_id, kinds)

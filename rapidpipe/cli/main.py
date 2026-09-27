@@ -1261,14 +1261,21 @@ def _run_promote_command(args: argparse.Namespace) -> int:
     extra: dict[str, Any] = {} if args.check_policy is None else {
         "check_policy": args.check_policy}
     if args.plan is not None:
-        # A frozen plan (supervisor step 5a, 2026-09-26, R5); its shape is
-        # checked by promote_run under the lock, a stale one exits 64.
+        # A frozen plan (supervisor step 5a, 2026-09-26, R5): a non-empty
+        # JSON list of {kind, slot, before, after}; anything else, JSON null
+        # included, exits 64 before any connection (R21). A stale one exits
+        # 64 from promote_run under the lock.
+        from rapidpipe.runs.slots import plan_by_slot
+
         try:
             with open(args.plan, encoding="utf-8") as handle:
-                extra["plan"] = json.load(handle)
+                plan = json.load(handle)
+            if not plan_by_slot(plan):
+                raise ValueError("a plan names at least one slot")
         except (OSError, ValueError) as exc:
             sys.stderr.write(f"rapidpipe run promote: cannot read plan {args.plan}: {exc}\n")
             return int(ExitCode.USAGE)
+        extra["plan"] = plan
     return _run_model_command(
         "promote",
         lambda conn: promote_run(conn, args.run_id, who, args.reason, kinds=kinds,
