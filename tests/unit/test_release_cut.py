@@ -8,8 +8,12 @@ actually happened, not from what ``cut`` says it did.
 
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
+from rapidpipe.exitcodes import ExitCode
+from rapidpipe.release import __main__ as release_main
 from rapidpipe.release import core
 from rapidpipe.release.hooks import HookFailed, ReleaseRefused, ReleaseUsage
 from tests.unit.fakereleasedb import FakeReleaseDB
@@ -334,3 +338,34 @@ def test_resume_of_a_different_tag_is_refused_while_another_is_unfinished(setup)
     (hooks / "fail-deploy").unlink()
     with pytest.raises(ReleaseRefused, match=r"rebuild-v0\.2 \(state 'built'\)"):
         _cut(db, repo, hooks, resume="rebuild-v0.1")
+
+
+# ======================================================================
+# A failing hook's exit code never leaks: the release exits 1
+# ======================================================================
+
+def _cut_through_main(monkeypatch, db, repo, hooks):
+    monkeypatch.setattr(release_main, "connect", lambda **_kw: contextlib.nullcontext(db))
+    return release_main.main(
+        ["cut", "--repo", str(repo), "--hooks-dir", str(hooks), "--by", "tester"])
+
+
+@pytest.mark.parametrize("hook_exit", [1, 2, 64, 75])
+def test_any_nonzero_hook_exit_makes_the_cut_exit_1(setup, monkeypatch, capsys, hook_exit):
+    repo, hooks, _log, db = setup
+    build = hooks / "build"
+    build.write_text(f"#!/bin/sh\necho 'progress line from build'\nexit {hook_exit}\n")
+    rc = _cut_through_main(monkeypatch, db, repo, hooks)
+    assert rc == int(ExitCode.FAILURE)
+    assert f"hook build exited {hook_exit}" in capsys.readouterr().err
+    assert db.release("rebuild-v0.1")["state"] == "migrated"
+
+
+def test_a_hook_exiting_0_with_a_non_json_last_line_makes_the_cut_exit_1(
+        setup, monkeypatch, capsys):
+    repo, hooks, _log, db = setup
+    (hooks / "garble-build").write_text("")
+    rc = _cut_through_main(monkeypatch, db, repo, hooks)
+    assert rc == int(ExitCode.FAILURE)
+    assert "not JSON" in capsys.readouterr().err
+    assert db.release("rebuild-v0.1")["state"] == "migrated"
