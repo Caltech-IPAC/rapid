@@ -17,6 +17,7 @@ import pytest
 from rapidpipe.cli import runctl
 from rapidpipe.launch import loop
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
+from rapidpipe.products.storage import parse_location
 from rapidpipe.runs import binding, inputs, repository
 from rapidpipe.runs.inputs import InputsRefused
 # Shared fixtures and worlds of the composers' own tests.
@@ -31,21 +32,61 @@ REPO = Path(__file__).resolve().parents[2]
 # ======================================================================
 
 def _recorder(monkeypatch):
+    """Replace the primitive with a recorder. Each call records its keyword
+    arguments plus ``reused``: whether ``<dest>/manifest.json`` already
+    existed, which the recorder reports the way the primitive does."""
     calls: list[dict] = []
 
     def record(conn, storage, **kw):
-        calls.append(kw)
-        return binding.BoundInputSet(kw["dest"], None, (), (), False)
+        reused = storage.exists(parse_location(kw["dest"]), "manifest.json")
+        calls.append({**kw, "reused": reused})
+        return binding.BoundInputSet(kw["dest"], None, (), (), reused)
 
     monkeypatch.setattr(binding, "bind_input_set", record)
     return calls
 
 
+def _bypass_log(monkeypatch):
+    """Record every call to the seams the primitive alone may use: admission
+    (``repository.add_unit``), binding (``inputs.bind_unit_inputs``) and the
+    registered-instance lookup (``inputs._registered``). With the primitive
+    replaced by the recorder, any entry here is a composer admitting or
+    binding around it. Applied after the worlds' own fixtures, so it
+    overrides their no-ops."""
+    log: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(repository, "add_unit",
+                        lambda *a, **k: log.append(("add_unit", a)))
+    monkeypatch.setattr(inputs, "bind_unit_inputs",
+                        lambda *a, **k: log.append(("bind_unit_inputs", a)))
+    monkeypatch.setattr(inputs, "_registered",
+                        lambda *a, **k: log.append(("_registered", a)) or set())
+    return log
+
+
+def _input_set(unit_id: str) -> Manifest:
+    """A minimal input-set manifest, as a previous composition left it."""
+    return Manifest(run="RUN2", unit=Unit("detector-image", unit_id), stage="input-set",
+                    attempt="A0", execution_record="exec/input-set.json",
+                    inputs=Inputs(manifest="m"), outputs=())
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["absent", "existing"])
 @pytest.mark.parametrize("reuse", [False, True])
 def test_compose_inputs_makes_one_call_to_the_primitive(
-        compose_env, fake_conn, monkeypatch, capsys, reuse):
-    calls = _recorder(monkeypatch)
+        compose_env, fake_conn, monkeypatch, capsys, reuse, existing):
+    """``run inputs`` (reuse off) and ``run start`` (reuse on) call the
+    primitive exactly once whether or not ``<dest>/manifest.json`` exists:
+    reuse is the primitive's rebind, and an overwrite is the primitive's
+    refusal, so the composer never short-circuits on ``exists`` itself, never
+    copies before the call, and never admits or binds around it."""
     dest = str(compose_env["dest"])
+    if existing:
+        compose_env["dest"].mkdir(parents=True)
+        _input_set("U").write(compose_env["dest"] / "manifest.json")
+    calls = _recorder(monkeypatch)
+    bypass = _bypass_log(monkeypatch)
+    copies: list[tuple] = []
+    monkeypatch.setattr(runctl._Storage, "copy", lambda self, *a: copies.append(a))
     assert runctl.compose_inputs(
         fake_conn, run_id="R", stage="difference", unit_id="U", from_stage="admit",
         template=str(compose_env["template"]), dest=dest, reuse_existing=reuse) == dest
@@ -55,32 +96,60 @@ def test_compose_inputs_makes_one_call_to_the_primitive(
         "R", "difference", "detector-image", "U")
     assert call["dest"] == dest
     assert call["reuse_existing"] is reuse
+    assert call["reused"] is existing
     assert callable(call["compose"])
-    assert capsys.readouterr().out.strip() == f"inputs={dest}"
+    assert copies == [] and bypass == []
+    suffix = " (already composed)" if existing else ""
+    assert capsys.readouterr().out.strip() == f"inputs={dest}{suffix}"
 
 
-def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch):
+@pytest.mark.parametrize("existing", [False, True], ids=["absent", "existing"])
+def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch, existing):
+    """Driven twice: with every destination absent, and with every
+    destination already holding a manifest (a resumed date). Reuse must
+    rebind, so both drives make the same one call per consumer; the returned
+    location is what the consumer walks with; and nothing is admitted,
+    bound, copied or written around the (recording) primitive."""
     # _two_image_world: two images whose source sets share one maintain unit
     # from two load outputs (so maintain composes), two fields, two images.
     spec, tools, storage, walks, created, updates, units = _two_image_world(monkeypatch)
-    calls = _recorder(monkeypatch)
-    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
     root = "s3://b/scratch/runs/RUN2/inputs"
+    dests = [f"{root}/maintain/20271001/SCA01", f"{root}/crossmatch/5",
+             f"{root}/crossmatch/6", f"{root}/alerts/{units[0]}", f"{root}/alerts/{units[1]}"]
+    if existing:
+        for dest in dests:
+            storage.written[dest] = _input_set(dest.rsplit("/", 1)[-1])
+    seeded = dict(storage.written)
+    manifest_writes: list[str] = []
+    real_write = storage.write_manifest
+    storage.write_manifest = lambda manifest, location: (
+        manifest_writes.append(f"s3://{location.bucket}/{location.prefix}"),
+        real_write(manifest, location))
+    member_copies: list[tuple] = []
+    monkeypatch.setattr(loop, "_copy_members", lambda *a: member_copies.append(a))
+    calls = _recorder(monkeypatch)
+    bypass = _bypass_log(monkeypatch)
+
+    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
     seen = [(c["run_id"], c["stage"], c["unit_kind"], c["unit_id"], c["dest"]) for c in calls]
     assert seen == [
-        ("RUN2", "maintain", "detector-date", "20271001/SCA01", f"{root}/maintain/20271001/SCA01"),
-        ("RUN2", "crossmatch", "field", "5", f"{root}/crossmatch/5"),
-        ("RUN2", "crossmatch", "field", "6", f"{root}/crossmatch/6"),
-        ("RUN2", "alerts", "detector-image", units[0], f"{root}/alerts/{units[0]}"),
-        ("RUN2", "alerts", "detector-image", units[1], f"{root}/alerts/{units[1]}"),
+        ("RUN2", "maintain", "detector-date", "20271001/SCA01", dests[0]),
+        ("RUN2", "crossmatch", "field", "5", dests[1]),
+        ("RUN2", "crossmatch", "field", "6", dests[2]),
+        ("RUN2", "alerts", "detector-image", units[0], dests[3]),
+        ("RUN2", "alerts", "detector-image", units[1], dests[4]),
     ]
     assert all(c.get("reuse_existing", True) is True for c in calls)
+    assert all(c["reused"] is existing for c in calls)
     # The returned location is what each consumer walks with.
-    walked = {u: i for u, _, i, *_ in walks}
-    assert walked["20271001/SCA01"] == [f"{root}/maintain/20271001/SCA01"]
-    assert walked[units[1]] == [f"{root}/alerts/{units[1]}"]
-    # Nothing was copied or written around the (recording) primitive.
-    assert storage.copies == [] and storage.written == {}
+    walked = [(u, i) for u, _, i, *_ in walks if any(d in i for d in dests)]
+    assert walked == [(unit_id, [dest]) for (*_, unit_id, dest) in seen]
+    # Nothing was admitted, bound, copied or written around the primitive.
+    assert bypass == []
+    assert storage.copies == [] and member_copies == []
+    assert manifest_writes == []
+    assert storage.written == seeded
+    assert all(storage.written[d] is seeded[d] for d in seeded)
 
 
 # ======================================================================
@@ -98,20 +167,34 @@ def _calls_named(tree: ast.AST, name: str) -> list[int]:
     return lines
 
 
+def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    return next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
 def test_no_composer_admits_binds_or_writes_around_the_primitive():
     """Step 2's done condition: both composers (``run inputs``/``run start``
-    and the loop's maintain, crossmatch and alerts sites) bind and write an
-    input set only through ``binding.bind_input_set``. A direct
-    ``bind_unit_inputs``/``bind_registered_inputs`` call, a private
-    registered-instance lookup, or a manifest write outside ``_Storage``
-    reintroduces a second path with its own order."""
+    and the loop's maintain, crossmatch and alerts sites) admit, bind and
+    write an input set only through ``binding.bind_input_set``. A direct
+    ``add_unit`` (admission), ``bind_unit_inputs``/``bind_registered_inputs``
+    call, a private registered-instance lookup, or a manifest write outside
+    ``_Storage`` reintroduces a second path with its own order.
+
+    ``add_unit(`` is forbidden in the whole of both modules: neither has a
+    legitimate caller (``run submit``/``run local`` admission lives in
+    ``launch/batch.py``), so the text check is not scoped to the composers.
+    The primitive must be called inside ``compose_inputs`` and at least
+    three times (maintain, crossmatch, alerts) inside ``process_date``."""
     runctl_text = (REPO / "rapidpipe/cli/runctl.py").read_text()
     loop_text = (REPO / "rapidpipe/launch/loop.py").read_text()
     for text in (runctl_text, loop_text):
         for forbidden in ("bind_unit_inputs", "bind_registered_inputs",
-                          "_registered_instances", "_registered("):
+                          "_registered_instances", "_registered(", "add_unit("):
             assert forbidden not in text
-        assert "binding.bind_input_set(" in text
+    for text, function, at_least in ((runctl_text, "compose_inputs", 1),
+                                     (loop_text, "process_date", 3)):
+        tree = ast.parse(text)
+        assert _calls_named(tree, "add_unit") == []
+        assert len(_calls_named(_function(tree, function), "bind_input_set")) >= at_least
 
     # write_manifest: in runctl only _Storage's own definition; in loop never
     # called (its LoopTools docstring names the interface, so calls are
