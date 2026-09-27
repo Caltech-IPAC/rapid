@@ -18,6 +18,7 @@ import logging
 import sys
 from typing import Callable, Sequence
 
+from rapidpipe import log as rapidpipe_log
 from rapidpipe.exitcodes import ArgumentParser, ExitCode
 from rapidpipe.release import core
 from rapidpipe.release.hooks import HOOKS, ReleaseError
@@ -161,6 +162,15 @@ def _run(command: str, args: argparse.Namespace, conn) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # The same stderr line shape as ``rapidpipe.cli.main`` (which calls
+    # this too before dispatching ``rapidpipe release``), so the
+    # unexpected-error boundary below logs one standard line plus the
+    # traceback; an invalid RAPIDPIPE_LOG_LEVEL is a usage error.
+    try:
+        rapidpipe_log.configure_root()
+    except ValueError as exc:
+        sys.stderr.write(f"rapidpipe release: invalid {rapidpipe_log.LEVEL_ENV_VAR}: {exc}\n")
+        return int(ExitCode.USAGE)
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else sys.argv[1:])
     try:
