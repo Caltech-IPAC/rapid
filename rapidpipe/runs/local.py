@@ -174,7 +174,7 @@ def run_stage_locally(
        input-set manifest at ``inputs`` is read (absent or unreadable:
        :class:`rapidpipe.runs.inputs.InputsRefused`, nothing written), and
        with its registered instances bound in ``unit_inputs`` in the same
-       commit (supervisor step 9, 2026-09-25, R4).
+       commit (runs.md §Rules).
     2. :func:`~rapidpipe.runs.repository.allocate_attempt` -- enforces the
        run fence and the attempt allowance; its exceptions propagate
        uncommitted (the caller's transaction, if any wraps this call, sees
@@ -205,9 +205,9 @@ def run_stage_locally(
     subprocess runs. Never swallows a subprocess launch failure (e.g. the
     interpreter not found): that propagates as an ``OSError``.
     """
-    # R4 (supervisor step 9, 2026-09-25): read the input-set manifest
-    # before anything is written (an absent or unreadable one raises
-    # InputsRefused), then bind its registered instances with the unit.
+    # runs.md §Rules: read the input-set manifest before anything is
+    # written (an absent or unreadable one raises InputsRefused), then
+    # bind its registered instances with the unit.
     input_names = run_inputs.read_input_instances(str(inputs))
 
     add_unit(conn, run_id, stage, unit_kind, unit_id)
@@ -275,7 +275,7 @@ def run_stage_locally(
     # between them cannot leave the attempt 'succeeded' with its unit
     # neither selected nor terminal (rapidpipe.launch.batch.reconcile has
     # the same fix, and a repair pass for exactly this kind of pre-
-    # existing damage; supervisor step 3, 2026-09-24, WP-F).
+    # existing damage; maintain.md).
     record_attempt_result(
         conn, attempt_id, exit_code, disposition, str(output_location),
         execution_record, scheduler_job_id=None)

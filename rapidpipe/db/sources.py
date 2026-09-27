@@ -18,7 +18,7 @@ function runs inside the caller's transaction: none commits or rolls back.
 - :func:`find_complete_source_set`: the rebuild's form of `dev`'s
   ``source_dbload_jid<jid>.done`` check -- a complete source set for the
   same logical key already written in this run by this attempt or by an
-  attempt that succeeded (supervisor step 9 ruling R1).
+  attempt that succeeded (runs.md §Rules).
 - :func:`cluster_and_analyze`: `dev`'s CLUSTER and ANALYZE, through
   ``cluster_sources_child_table``.
 
@@ -144,7 +144,7 @@ def find_complete_source_set(
 ) -> tuple[str, int | None] | None:
     """The earliest reusable complete, retained `source-set` for ``logical_key`` in ``run_id``.
 
-    Reusable (supervisor step 9 ruling R1): its producing attempt is
+    Reusable (runs.md §Rules): its producing attempt is
     ``attempt_id`` (the caller) or an attempt whose disposition is
     ``succeeded``; a set an attempt committed before failing is not reused.
 

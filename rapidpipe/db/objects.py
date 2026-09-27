@@ -28,23 +28,23 @@ caller's transaction: none commits or rolls back.
   ``lookup_source_tables_to_crossmatch_and_distinct_fields`` date scan, by
   instance id rather than processing date.
 - :func:`association_chain`, :func:`set_rows_clause`: the rows a crossmatch
-  pass reads as the existing catalog, "base plus delta" (step 1 ruling R3 as
-  amended 2026-09-24): the association sets its base chain names, never
+  pass reads as the existing catalog, "base plus delta" (loop.md §Base
+  catalog): the association sets its base chain names, never
   "whatever is current".
 - :func:`chain_source_sets`: the source sets a chain's members' keys name,
   the sources its merges rows point at (read by statistics, prune and
   alerts, each validated by the caller).
 - :func:`find_complete_result_set`: the rebuild's done check for the three
   field stages, a complete set of the same kind and key in the same run
-  (ruling R14) whose producing attempt is the calling attempt or one that
-  succeeded (supervisor step 9 ruling R1), as
+  (runs.md §Rules) whose producing attempt is the calling attempt or one
+  that succeeded, as
   :func:`rapidpipe.db.sources.find_complete_source_set` is for `load`.
 - :func:`assert_readable_result_set`: the cross-run read rule for result
-  sets (supervisor step 9 ruling R2), used by :func:`source_set_table`,
+  sets (runs.md §Rules), used by :func:`source_set_table`,
   :func:`association_chain` and the set resolution of statistics, prune,
   alerts and export.
 - :func:`insert_pruned_merges`: a `pruned-set`'s excluded pairs, the rows
-  `dev`'s ``pruneNotBestMerges`` deletes in place (step 1 ruling R6).
+  `dev`'s ``pruneNotBestMerges`` deletes in place (prune.md).
 
 The result-set row itself (`product_instances` plus `result_sets`) is
 written by ``rapidpipe.runs.repository.register_manifest``, the one writer
@@ -198,12 +198,12 @@ def count_result_set_rows(cur, table: str, result_set: str) -> int:
     return int(cur.fetchone()[0])
 
 
-#: The result-set kinds the cross-run read rule governs (ruling R2).
+#: The result-set kinds the cross-run read rule governs (runs.md §Rules).
 READABLE_KINDS: tuple[str, ...] = ("source-set", "association-set", "statistics-set",
                                    "pruned-set")
 
 #: The custody states in which another run's result set may be read: a
-#: production run's output (ruling R2).
+#: production run's output (runs.md §Rules).
 FOREIGN_READABLE_CUSTODY: tuple[str, ...] = ("candidate", "current")
 
 _READABLE_SQL = """
@@ -275,10 +275,10 @@ def assert_readable_instance(
     """Refuse (:class:`Unreadable`, a ValueError) a product instance ``run_id``
     may not read; else describe it.
 
-    The read column of the dependency-eligibility table (supervisor step 6,
-    2026-09-26, R5), for any ``product_instances`` row, file product or
-    result set: it must be retained, complete when it is a result set, and,
-    when it belongs to another run, of custody ``candidate`` or ``current``
+    The read column of the dependency-eligibility table (runs.md §Rules), for
+    any ``product_instances`` row, file product or result set: it must be
+    retained, complete when it is a result set, and, when it belongs to
+    another run, of custody ``candidate`` or ``current``
     (a production run's output) and produced by its unit's selected
     attempt (a unit with no selected attempt counts as unselected). An
     instance of ``run_id`` itself is readable whatever its custody or
@@ -296,9 +296,8 @@ def assert_readable_result_set(
 ) -> dict[str, Any]:
     """Refuse (:class:`ValueError`) a result set ``run_id`` may not read; else describe it.
 
-    :func:`assert_readable_instance` (the one read rule, supervisor step 6,
-    2026-09-26, R5; first stated for result sets by supervisor step 9 ruling
-    R2) that additionally requires the instance to be a result set: a stage
+    :func:`assert_readable_instance` (the one read rule; runs.md §Rules)
+    that additionally requires the instance to be a result set: a stage
     of run ``run_id`` may read a result set only when it is complete and
     retained and either (a) it belongs to ``run_id``, or (b) its custody is
     ``candidate`` or ``current`` (a production run's output) and its
@@ -421,7 +420,7 @@ def find_complete_result_set(
 ) -> tuple[str, int | None] | None:
     """The earliest reusable complete, retained result set of ``kind`` for ``logical_key`` in ``run_id``.
 
-    Reusable (supervisor step 9 ruling R1): its producing attempt is
+    Reusable (runs.md §Rules): its producing attempt is
     ``attempt_id`` (the caller) or an attempt whose disposition is
     ``succeeded``. A set left by an attempt that committed rows and then
     failed, or by another attempt still without a disposition, is not

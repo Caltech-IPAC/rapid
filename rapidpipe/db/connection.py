@@ -15,10 +15,8 @@ steps below):
    ``PG*`` endpoint variables are unset and this variable names a tree:
    its ``db/server``/``db/port``/``db/name``/``db/secret-id`` keys supply
    the endpoint and, via :func:`credentials_from_secret`, the credential.
-   Designed in from the smdc branch's parameter-tree mechanism
-   (``pipeline/entrypoints/job.py``'s ``database_connection_inputs``,
-   ``submission/startup.py``'s ``fetch_parameters``) and unused by any
-   caller in this repository today.
+   The Batch job definitions set ``RAPID_PARAMETER_PATH``, so this is the
+   path Batch jobs use.
 3. Neither of the above: the plain ``PG*`` read, which raises naming the
    missing variable, unchanged from before this fallback existed.
 

@@ -1,8 +1,8 @@
-"""Promotion selectors and frozen promotion plans (supervisor step 5a, 2026-09-26).
+"""Promotion selectors and frozen promotion plans (loop.md §Promotion).
 
 Every product instance carries a ``slot``, the part of its identity a
 consumer selects on; at most one instance is current per (kind, slot) and
-promotion replaces by slot (rulings R1-R5). The slot and the identity are
+promotion replaces by slot. The slot and the identity are
 derived by the database from the provenance key (``logical_key``), in
 ``product_identity_derive()`` of migration 20260926-02, and nowhere in
 Python. This module holds only the plain-data shapes the repository and

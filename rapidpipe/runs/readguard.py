@@ -1,8 +1,8 @@
 """The stage-side read guard: may this run read the instances its input manifest names?
 
-Supervisor step 6, 2026-09-26, rulings R5 and R6 and amendments A5 and A6
-(operations page, "Dependency eligibility", the read column). Every stage
-invocation enters through ``rapidpipe.stages.contract.run_stage``: a
+This implements the operations page's "Dependency eligibility" read
+column (operations.md). Every stage invocation enters through
+``rapidpipe.stages.contract.run_stage``: a
 direct ``rapidpipe stage run <name> ...``, the local launcher's
 ``python -m rapidpipe.stages.<name> ...`` and the command a Batch job
 runs (``rapidpipe stage <name> ...``). ``run_stage`` calls
@@ -18,14 +18,14 @@ and, when it belongs to another run, its custody is ``candidate`` or
 ``current`` and it was produced by its unit's selected attempt (a unit
 with no selected attempt refuses it as unselected). An instance id that
 names no registered instance is not a product of any run and is
-readable, with one exception (A5): a file-product entry whose id is
+readable, with one exception: a file-product entry whose id is
 unregistered but whose members match a registered instance's members
 (same path, against ``product_members.path`` or
 ``product_instances.primary_location``, and same SHA-256) is judged as
 that instance, so a fresh id over another run's scratch files is refused.
 Requiring the SHA-256 as well as the path keeps two runs that merely
 share a relative layout (``l2/<name>.fits``) from matching each other.
-Each member is judged on its own (amendment 3): a member whose bytes
+Each member is judged on its own: a member whose bytes
 match several instances is readable if any of them is, and one member
 that matches only unreadable instances refuses the entry, whatever its
 other members match.
@@ -56,7 +56,7 @@ from rapidpipe.runs.inputs import manifest_instances
 logger = logging.getLogger(__name__)
 
 #: The custody states in which another run's instance may be read: a
-#: production run's output (R5).
+#: production run's output (runs.md §Rules).
 FOREIGN_READABLE_CUSTODY: tuple[str, ...] = ("candidate", "current")
 
 
@@ -86,9 +86,9 @@ class ReadGuardNotConfigured(ReadGuardError):
 
 #: Names a ``module:factory`` whose call returns the guard's connection
 #: context manager in place of the database, honoured only for a selftest
-#: fixture run (ruling R12, amendment 3): the factory's module must be
-#: under :data:`SELFTEST_SUPPORT` and :data:`SELFTEST_ENV` must be ``1``,
-#: which only ``rapidpipe.selftest.runner`` sets on its subprocesses.
+#: fixture run: the factory's module must be under :data:`SELFTEST_SUPPORT`
+#: and :data:`SELFTEST_ENV` must be ``1``, which only
+#: ``rapidpipe.selftest.runner`` sets on its subprocesses.
 #: Anything else is a configuration error (exit 64), never a fallback.
 DATABASE_ENV = "RAPIDPIPE_READGUARD_DATABASE"
 
@@ -136,9 +136,7 @@ def connect(*args, **kwargs):
 
 # ----------------------------------------------------------------------
 # The read rule: rapidpipe.db.objects.assert_readable_instance (imported
-# above), step 6 WP-A, R5. This module held a private, semantically
-# identical copy (docstring-for-docstring) until this switch (step 6,
-# integration check).
+# above).
 # ----------------------------------------------------------------------
 
 _INSTANCE_SQL = """
@@ -225,7 +223,7 @@ def _check_all(cur, manifest: Manifest, names: list[str], run_id: str) -> None:
         entry = entries.get(name)
         if entry is None or not entry.members:
             continue  # an unregistered result-set id reads nothing: readable
-        # Authorised per member (amendment 3): every member whose bytes
+        # Authorised per member: every member whose bytes
         # are a registered product's must be those of a readable one. A
         # readable match for one member never authorises another member.
         for member in entry.members:

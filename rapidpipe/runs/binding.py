@@ -1,5 +1,4 @@
-"""One input-binding primitive for both input-set composers (supervisor
-step 2, 2026-09-26).
+"""One input-binding primitive for both input-set composers.
 
 :func:`bind_input_set` is the only path by which a composed input set is
 admitted, bound and written. Its callers are the two composers:

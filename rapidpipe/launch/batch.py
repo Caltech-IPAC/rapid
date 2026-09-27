@@ -29,9 +29,8 @@ hostnames are injected at deploy time, never committed to `rapid`."):
   project bucket) (:func:`outputs_root_for`).
 - ``RAPIDPIPE_BATCH_JOB_DEFINITION`` / ``RAPIDPIPE_OUTPUTS_ROOT`` -- the
   scratch fallback only. A production run fails closed: it never falls
-  back to an unsuffixed variable (supervisor step 3, 2026-09-24,
-  amendment A4), so a missing production setting cannot send project
-  outputs to a scratch location.
+  back to an unsuffixed variable, so a missing production setting cannot
+  send project outputs to a scratch location.
 - ``RAPIDPIPE_BATCH_JOB_NAME_PREFIX`` -- optional, default ``rapid``.
 
 A run created from a release (``runs.release``) never uses those
@@ -39,7 +38,7 @@ job-definition variables: :func:`submit_unit` submits to the release's own
 ``release_deployments.job_definition`` revision for the run's kind, after
 ``describe_job_definitions`` confirms it is ACTIVE, and refuses
 (:class:`ReleaseDefinitionRefused`) rather than fall back to an
-unversioned name (supervisor step 5, 2026-09-24, R7).
+unversioned name (releases.md §The launcher reads the release).
 
 The run's kind is fixed at creation (runs page, "Runs"), so
 :func:`submit_unit` reads it from the ``runs`` row and picks the root and
@@ -362,8 +361,8 @@ def submit_unit(
     :func:`~rapidpipe.runs.repository.record_scheduler_job`. The attempt's
     ``inputs_location`` and ``settings_location`` are recorded
     (:func:`~rapidpipe.runs.repository.record_attempt_locations`) in the
-    allocation's own transaction (supervisor step 6, 2026-09-24, R7). Commits
-    after each repository call, as
+    allocation's own transaction (runs.md §Rules). Commits after each
+    repository call, as
     :func:`rapidpipe.runs.local.run_stage_locally` does.
 
     Before anything is written, the input-set manifest at
@@ -374,7 +373,7 @@ def submit_unit(
     instance it names that is a registered product instance is bound in
     ``unit_inputs`` (:func:`rapidpipe.runs.inputs.bind_registered_inputs`,
     idempotent, so a retry rebinds nothing new) and committed with the
-    unit (supervisor step 9, 2026-09-25, R4).
+    unit (runs.md §Rules).
 
     ``profile=True`` sets ``RAPIDPIPE_PROFILE=1`` in the job's
     ``containerOverrides.environment``, refused with
@@ -409,7 +408,8 @@ def submit_unit(
     if released is not None:
         _require_active(batch, released[0], job_definition)
 
-    # R4: read first, so a refusal leaves no unit and no attempt behind.
+    # runs.md §Rules: read first, so a refusal leaves no unit and no
+    # attempt behind.
     input_names = run_inputs.read_input_instances(inputs_location, s3_client=s3_client)
 
     add_unit(conn, run_id, stage, unit_kind, unit_id)
@@ -419,7 +419,7 @@ def submit_unit(
     attempt_id = allocate_attempt(conn, run_id, stage, unit_id, outputs_root=outputs_root)
     # Frozen with the allocation, one commit: an attempt whose submission
     # then fails still records what it would have run with, which is what
-    # a seeded re-run reads back (supervisor step 6, 2026-09-24, R7/R8).
+    # a seeded re-run reads back (runs.md §Rules).
     record_attempt_locations(conn, attempt_id, inputs_location, settings_location)
     conn.commit()
 
@@ -844,13 +844,12 @@ def reconcile(
                 # same transaction, one commit, so a process death (or a
                 # failed second commit) between them cannot happen: the
                 # unit either stays exactly as it was, or is both
-                # 'succeeded' and selected/complete together (supervisor
-                # step 3, 2026-09-24, WP-F -- a split commit here left a
-                # unit stranded 'succeeded' with no selected attempt,
-                # invisible to the ``disposition IS NULL`` query below
-                # that finds unresolved attempts; see the repair pass at
-                # the end of this function for units already stranded
-                # that way).
+                # 'succeeded' and selected/complete together (a split
+                # commit here left a unit stranded 'succeeded' with no
+                # selected attempt, invisible to the ``disposition IS
+                # NULL`` query below that finds unresolved attempts; see
+                # the repair pass at the end of this function for units
+                # already stranded that way).
                 record_attempt_result(
                     conn, attempt_id, 0, "succeeded", output_location,
                     _with_batch_scheduler_metadata(
@@ -920,11 +919,11 @@ def _repair_stranded_succeeded_attempts(conn, *, run_id: str) -> list[Reconciled
     and :func:`select_attempt`: a process death, or a failed second commit,
     between the two left the attempt permanently ``succeeded`` with its
     unit neither selected nor terminal -- and invisible to this function's
-    main pass, which only looks at attempts with ``disposition IS NULL``
-    (supervisor step 3, 2026-09-24, WP-F). The main pass above no longer
-    creates new instances of this (it commits both writes together), so
-    this repair pass only ever has pre-existing damage to clean up, and
-    should shrink to nothing as old runs finish reconciling.
+    main pass, which only looks at attempts with ``disposition IS NULL``.
+    The main pass above no longer creates new instances of this (it
+    commits both writes together), so this repair pass only ever has
+    pre-existing damage to clean up, and should shrink to nothing as old
+    runs finish reconciling.
 
     Selecting is the same call the main pass makes, so it enforces the
     same invariants (``select_attempt`` requires ``disposition ==
@@ -962,7 +961,7 @@ def _repair_stranded_succeeded_attempts(conn, *, run_id: str) -> list[Reconciled
     return repaired
 
 
-#: ``run reconcile --resolve-jobless``'s default ``--older-than`` (R9).
+#: ``run reconcile --resolve-jobless``'s default ``--older-than``.
 DEFAULT_JOBLESS_AFTER_SECONDS = 600
 
 
@@ -989,8 +988,8 @@ def _jobs_named(batch: Any, job_queue: str, job_name: str) -> list[str]:
 def resolve_jobless(
     conn, *, run_id: str, older_than_seconds: float, client: Any = None,
 ) -> list[Reconciled]:
-    """Resolve ``run_id``'s job-less attempts (supervisor step 6, 2026-09-24,
-    R9, with the Codex plan-review amendment B3).
+    """Resolve ``run_id``'s job-less attempts (loop.md §Concurrency and
+    recovery).
 
     A job-less attempt has ``disposition IS NULL`` and no
     ``scheduler_job_id``: its allocation committed but the Batch submission

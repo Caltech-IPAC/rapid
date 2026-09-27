@@ -1,5 +1,5 @@
 """Bind a unit's inputs from its input-set manifest before an attempt is
-allocated (supervisor step 9, 2026-09-25, R4).
+allocated.
 
 The runs page ("Units"): "Inputs are bound in unit_inputs before
 execution and retained for retries." Both launch paths --

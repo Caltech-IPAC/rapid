@@ -11,7 +11,8 @@ name, the field taken from the association set's logical key. Every function run
 commits or rolls back.
 
 - :func:`result_set_kinds`: each named result set's kind, completeness and key,
-  each refused unless the reading run may read it (supervisor step 9 ruling R2).
+  each refused unless the reading run may read it (products.md §Reading
+  across runs).
 - :func:`difference_pid`: the `diffimages` row of the difference instance.
 - :func:`flagged_sources`, :func:`alertable_sources`: `dev`'s ``iter_sources``
   split, ``flags <> 0`` counted and ``flags = 0`` selected, in the source set.
@@ -22,17 +23,17 @@ commits or rolls back.
   statistics columns (``_prefetch_chip`` + ``_stats_sql``), over every named
   association set's chain (an image can span fields; a set's membership is
   its rows plus its bases') and the statistics set that describes each,
-  read from step 1's standalone per-field tables ``merges_<f>``,
+  read from the standalone per-field tables ``merges_<f>``,
   ``astroobjects_<f>``, ``astroobjectsmeta_<f>`` by name, as `dev` reads them.
 - :func:`readable_source_sets`: the source sets alerts may read sources
   from: the named one and every one the named association sets' chains
   name (``logical_key.source_sets``), each refused unless the reading run
-  may read it (R2; Codex 9-2).
+  may read it (products.md §Reading across runs).
 - :func:`history`: the objects' sources through merges anywhere in their
   chain, from those source sets only, `dev`'s previous-detection prefetch.
 - Both :func:`associations` and :func:`history` leave out every (aid, sid)
   pair a named pruned set lists in ``prunedmerges`` for that association set
-  (supervisor step 9, R5): a pruned set is its base minus those pairs, and
+  (prune.md): a pruned set is its base minus those pairs, and
   pruning never mutates the base's ``merges_<f>`` rows.
 - :func:`registered_instances`: which input products have instance rows.
 - :func:`attempt_outputs`, :func:`outbox_rows`, :func:`insert_outbox_rows`:
@@ -135,7 +136,7 @@ def association_chain(cur, instance: str, run_id: str) -> list[str]:
     ``rapidpipe.db.objects.association_chain``: crossmatch records the set it
     extends as ``logical_key.base``; a set's membership is its own rows plus
     its bases', recursively. ValueError when a link is missing, wrong, or not
-    readable by run ``run_id`` (ruling R2).
+    readable by run ``run_id`` (products.md §Reading across runs).
     """
     return _objects.association_chain(cur, instance, run_id)
 
@@ -147,9 +148,10 @@ def readable_source_sets(cur, lineages: dict[str, list[str]], source_set: str,
     The named ``source_set`` and every `source-set` the chains in
     ``lineages`` name (:func:`rapidpipe.db.objects.chain_source_sets`), each
     passed through ``rapidpipe.db.objects.assert_readable_result_set`` for
-    run ``run_id`` (supervisor step 9 ruling R2): a chain whose keys name
-    another run's scratch source set, or one from an unselected attempt, is
-    refused with :class:`ValueError` (the stage maps it to InputRejected).
+    run ``run_id`` (products.md §Reading across runs): a chain whose keys
+    name another run's scratch source set, or one from an unselected
+    attempt, is refused with :class:`ValueError` (the stage maps it to
+    InputRejected).
     :func:`associations` and :func:`history` read sources from these sets
     only.
     """
@@ -187,7 +189,7 @@ def _table_exists(cur, table: str) -> bool:
 def _field_tables(cur, field: int, *, meta: bool) -> dict[str, sql.Identifier]:
     """The field's ``merges_<f>``/``astroobjects_<f>`` (and ``astroobjectsmeta_<f>``) as identifiers.
 
-    step 1's per-field tables are standalone tables, not children of the
+    The per-field tables are standalone tables, not children of the
     ``merges``/``astroobjects``/``astroobjectsmeta`` prototypes, so they are
     read by name, as `dev` reads ``merges_<field>``. ValueError when one is
     missing.
@@ -201,7 +203,7 @@ def _field_tables(cur, field: int, *, meta: bool) -> dict[str, sql.Identifier]:
     return {prefix: sql.Identifier(names[prefix]) for prefix in wanted}
 
 
-#: The R5 exclusion: a ``merges_<f>`` pair ``{alias}`` the named pruned sets list.
+#: The pruned-set exclusion (prune.md): a ``merges_<f>`` pair ``{alias}`` the named pruned sets list.
 _NOT_PRUNED = ("NOT EXISTS (SELECT 1 FROM prunedmerges pm "
                "WHERE pm.result_set = ANY(%(pruned)s::text[]) "
                "AND pm.aid = {alias}.aid AND pm.sid = {alias}.sid)")
@@ -238,9 +240,10 @@ def associations(cur, lineages: dict[str, list[str]], fields: dict[str, int],
     (aid, sid) pair present in a base and its extension counts once.
     ``pruned_by_association`` maps a named set to the pruned set applied to it
     (or None): a pair that pruned set lists in ``prunedmerges`` is neither a
-    trigger's association nor counted in the fallback (R5). The fallback
-    counts only sources of ``source_sets`` (:func:`readable_source_sets`,
-    R2); the triggers' ``sids`` are the named source set's.
+    trigger's association nor counted in the fallback (prune.md). The
+    fallback counts only sources of ``source_sets``
+    (:func:`readable_source_sets`, products.md §Reading across runs); the
+    triggers' ``sids`` are the named source set's.
     """
     if not sids or not lineages:
         return []
@@ -304,9 +307,10 @@ def history(cur, lineages: dict[str, list[str]], fields: dict[str, int],
     ``objects`` are (named association set, aid) pairs, read from that set's
     field's ``merges_<f>``. The sources may belong to any of ``source_sets``
     (:func:`readable_source_sets`: the frozen inputs the chain names, each
-    readable by the run, R2), and to no other. ``object_set``/``object_aid`` say which
-    object each row belongs to. A pair the named set's pruned set lists in
-    ``prunedmerges`` (``pruned_by_association``) is not history (R5).
+    readable by the run, products.md §Reading across runs), and to no
+    other. ``object_set``/``object_aid`` say which object each row belongs
+    to. A pair the named set's pruned set lists in ``prunedmerges``
+    (``pruned_by_association``) is not history (prune.md).
     """
     rows: list[dict[str, Any]] = []
     for named, chain in lineages.items():
