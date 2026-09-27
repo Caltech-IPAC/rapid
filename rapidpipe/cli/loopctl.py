@@ -8,7 +8,12 @@ command line and hands the loop the CLI's own code paths
 and the storage helper ``run inputs`` uses (``runctl._Storage``), because
 ``rapidpipe.launch`` may not import ``rapidpipe.cli``.
 
-Exit codes: 0 every processed date complete; 1 a date failed (later dates
+A spec whose ``[loop]`` names an ``inbox`` discovers its deliveries there
+(``rapidpipe.launch.discovery``) and forms one batch per processing date
+with new deliveries; ``loop show`` prints the batches and every classified
+delivery, ``loop plan`` a dry classification.
+
+Exit codes: 0 every processed date complete (or nothing to discover); 1 a date failed (later dates
 not started); 64 a usage error or refusal (a malformed spec, a release that
 is not complete, any ``RunModelError``); 75 a timeout, a transient error, or
 another loop holding the schedule's advisory lock (rerun the same command to
@@ -53,8 +58,12 @@ def add_parser(subparsers: Any) -> None:
                     "load per detector image, maintain, crossmatch/statistics/prune "
                     "per field (the base catalog is the previous complete date's "
                     "association set for the field), alerts per image, promote, "
-                    "finish, and record the date. Exit 0 all complete, 1 a date "
-                    "failed, 64 a refusal, 75 a timeout (rerun to resume).")
+                    "finish, and record the date. With an inbox in the spec and no "
+                    "--date: resume open batches, then discover new deliveries, record "
+                    "each as batched, refused, quarantined or deferred, and walk one new "
+                    "batch per processing date, oldest first. Exit 0 all complete (or "
+                    "nothing to discover), 1 a date failed, 64 a refusal, 75 a timeout "
+                    "(rerun to resume).")
     run.add_argument("--spec", required=True, help="The loop spec's location.")
     run.add_argument("--date", action="append", type=_date, default=[], dest="dates",
                      metavar="YYYY-MM-DD", help="Only this spec date. Repeatable.")
@@ -75,13 +84,17 @@ def add_parser(subparsers: Any) -> None:
         "plan", help="Print what 'loop run' would do for each spec date.",
         description="Per spec date: whether its run would be created, resumed or "
                     "skipped, its detector-image units, and the previous complete "
-                    "date whose association sets would be the fields' bases.")
+                    "date whose association sets would be the fields' bases. With an "
+                    "inbox: the batches a run would resume, then how each new delivery "
+                    "would be classified, writing nothing.")
     plan.add_argument("--spec", required=True, help="The loop spec's location.")
 
     show = sub.add_parser(
-        "show", help="Print a schedule's loop_dates rows.",
-        description="One line per processing date of the schedule: state, run, "
-                    "promotion, start and end; --json adds each row's record.")
+        "show", help="Print a schedule's loop_dates and loop_deliveries rows.",
+        description="One line per batch of the schedule: date, batch, state, run, "
+                    "promotion, start and end (--json adds each row's record); then one "
+                    "line per discovered delivery: date, state, location, identity, and "
+                    "its reason or batch.")
     show.add_argument("schedule")
     show.add_argument("--json", action="store_true", help="Also print each record as JSON.")
 

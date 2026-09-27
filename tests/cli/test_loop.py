@@ -340,7 +340,7 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
         assert r[6] == ["admit", "register", "difference", "finalize", "register", "load",
                         "maintain", "crossmatch", "statistics", "prune", "alerts"]
         assert (r[7], r[8]) == (world["spec"], 2)
-    assert runs[0][9] == f"processing date 2027-10-01 (schedule {world['schedule']})"
+    assert runs[0][9] == f"processing date 2027-10-01 batch 1 (schedule {world['schedule']})"
 
     # The second date's crossmatch input set carries the first date's
     # association set for the same field, and lists both in result_sets.
@@ -436,14 +436,14 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     with db.cursor() as cur:
         cur.execute("SELECT who, reason, request_context->>'run' FROM promotions "
                     "WHERE id = ANY(%s) ORDER BY happened_at", ([r[3] for r in rows],))
-        assert cur.fetchall() == [("scheduler", "processing date 2027-10-01", run1),
-                                  ("scheduler", "processing date 2027-10-02", run2)]
+        assert cur.fetchall() == [("scheduler", "processing date 2027-10-01 batch 1", run1),
+                                  ("scheduler", "processing date 2027-10-02 batch 1", run2)]
 
     shown = cli("loop", "show", world["schedule"])
     assert shown.rc == 0, shown.err
     lines = shown.out.splitlines()
-    assert lines[0].startswith("2027-10-01\tcomplete\trun=" + run1)
-    assert lines[1].startswith("2027-10-02\tcomplete\trun=" + run2)
+    assert lines[0].startswith("2027-10-01\tbatch=1\tcomplete\trun=" + run1)
+    assert lines[1].startswith("2027-10-02\tbatch=1\tcomplete\trun=" + run2)
     as_json = cli("loop", "show", world["schedule"], "--json")
     assert json.loads(as_json.out.splitlines()[1])["run"] == run1
 

@@ -66,7 +66,7 @@ modules never import other stage modules, `launch`, or `cli`;
 | `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), and per-kind modules (`l2image`, `refimage`, `diffimage`, `psf`, `alertcontainer`, `catalogexport`). |
 | `db/` | Persistence: `connection.py`, per-table modules (`l2files`, `refimages`, `diffimages`, `sources`, `objects`, `psfs`, `alerts`, `ids`), and the migrations applier (`database/apply-migrations.sh`, not itself under `rapidpipe/`). |
 | `runs/` | `repository.py` (runs, units, attempts, instances, promotion), `local.py` (subprocess execution of one attempt), `cleanup.py` (deletion guard and blocking-reference checks), `inputs.py` (binding a unit's inputs from its input-set manifest), `binding.py` (`bind_input_set`, the one path by which both composers admit, bind and write an input set). |
-| `launch/` | `batch.py` (turning a run into Batch jobs, reading results back) and `loop.py` (the processing-date loop). |
+| `launch/` | `batch.py` (turning a run into Batch jobs, reading results back), `loop.py` (the processing-date loop) and `discovery.py` (the loop's inbox discovery and delivery classification). |
 | `release/` | `core.py` (`cut`/`show`/`list`/`verify`), `hooks.py` (the account-specific hook contract), `__main__.py`. |
 | `checks/` | `registry.py`, `builtin.py`, `policy.py`, `runner.py`, and shipped policies under `policies/<name>@<version>.toml` (`rebuild-trial@1`, `rebuild-strict@1`). |
 | `cli/` | The `rapidpipe` command-line tool: `main.py` dispatches to `runctl.py` (`run ...`), `stagectl.py` (`stage ...`), `checkctl.py` (`check ...`), `loopctl.py` (`loop ...`); `release` dispatches into `rapidpipe.release`. |

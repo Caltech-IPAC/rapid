@@ -293,17 +293,17 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
         return "RUN2"
 
     updates = {}
-    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: None)
-    monkeypatch.setattr(loop, "_insert_row", lambda conn, s, d, run, record: None)
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d, b: None)
+    monkeypatch.setattr(loop, "_insert_row", lambda conn, s, d, b, run, record: None)
     monkeypatch.setattr(loop, "_update_row",
-                        lambda conn, s, d, **kw: updates.update(kw, record=json.loads(
+                        lambda conn, s, d, b, **kw: updates.update(kw, record=json.loads(
                             json.dumps(kw["record"], default=str))))
     monkeypatch.setattr(loop, "selected_output",
                         lambda conn, run, stage, unit: f"s3://b/out/{stage}")
     monkeypatch.setattr(loop, "source_set_fields", lambda conn, table, instance: [5])
     monkeypatch.setattr(loop, "readable_result_set", lambda conn, instance, run, kind: None)
     monkeypatch.setattr(loop, "previous_complete_rows",
-                        lambda conn, s, d: [] if previous is None else [previous])
+                        lambda conn, s, d, b: [] if previous is None else [previous])
     monkeypatch.setattr(loop, "base_entry", lambda conn, st, prev, f: (
         None if prev is None else _entry("association-set", "AS1", {"field": f})))
     monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
@@ -319,7 +319,7 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
     monkeypatch.setattr(repository, "add_unit", lambda *a, **k: None)
     monkeypatch.setattr(inputs, "bind_unit_inputs", lambda *a, **k: None)
     monkeypatch.setattr(repository, "finish_run", lambda conn, run: None)
-    monkeypatch.setattr(loop, "_promote", lambda conn, run, spec, date: (
+    monkeypatch.setattr(loop, "_promote", lambda conn, run, spec, date, batch=1: (
         "P1", "P1", "check policy rebuild-trial@1", []))
     tools = loop.LoopTools(walk=walk, create_run=create_run, storage=storage,
                            inputs_root=lambda run: f"s3://b/scratch/runs/{run}/inputs",
@@ -332,7 +332,7 @@ def test_process_date_walks_the_chain_and_records_the_date(monkeypatch):
         monkeypatch, previous=_row(run="RUN1"))
     rc = loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10)
     assert rc == 0
-    assert created["purpose"] == "processing date 2027-10-01 (schedule control-loop)"
+    assert created["purpose"] == "processing date 2027-10-01 batch 1 (schedule control-loop)"
     assert (created["release"], created["check_policy_ref"], created["input_selection_ref"],
             created["max_attempts"], created["kind"]) == (
         "rebuild-v0.3", "rebuild-trial@1", "s3://b/loop.toml", 3, "production")
@@ -359,7 +359,7 @@ def test_process_date_walks_the_chain_and_records_the_date(monkeypatch):
     assert updates["state"] == "complete" and updates["promotion"] == "P1"
     record = updates["record"]
     assert record == {
-        "spec": "s3://b/loop.toml", "release": "rebuild-v0.3", "run": "RUN2",
+        "spec": "s3://b/loop.toml", "release": "rebuild-v0.3", "run": "RUN2", "batch": 1, "deliveries": [],
         "units": [{"stage": "admit", "unit": unit, "state": "complete", "attempt": "A",
                    "job": "j"}],
         "fields": [5], "base_sets": {"5": "AS1"},
@@ -404,7 +404,7 @@ def test_process_date_a_timeout_leaves_the_row_open_and_exits_75(monkeypatch):
 def _loop_world(monkeypatch, rows, results):
     spec = loop.parse_spec(SPEC, "x")
     calls = []
-    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: rows.get(str(d)))
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d, b: rows.get(str(d)))
 
     def process(conn, spec, day, tools, *, interval, timeout):
         calls.append(str(day.processing_date))
@@ -456,7 +456,7 @@ def test_run_loop_reopens_a_failed_row_with_no_failed_units_on_the_same_run(monk
                                      {"2027-10-01": 0, "2027-10-02": 0})
     monkeypatch.setattr(loop, "reopenable", lambda conn, row: row.state == "failed")
     repointed = {}
-    monkeypatch.setattr(loop, "repoint_row", lambda conn, s, d, run, record: repointed.update(
+    monkeypatch.setattr(loop, "repoint_row", lambda conn, s, d, b, run, record: repointed.update(
         date=str(d), run=run, record=record))
     conn = _Conn()
     assert loop.run_loop(conn, spec, tools) == 0  # no --retry-failed needed
@@ -524,7 +524,7 @@ def test_run_loop_date_filter(monkeypatch):
 
 def test_run_loop_dry_run_only_plans(monkeypatch):
     spec, tools, calls = _loop_world(monkeypatch, {}, {})
-    monkeypatch.setattr(loop, "previous_complete_rows", lambda conn, s, d: [])
+    monkeypatch.setattr(loop, "previous_complete_rows", lambda conn, s, d, b: [])
     lines = []
     tools.out = lines.append
     assert loop.run_loop(object(), spec, tools, dry_run=True) == 0
@@ -582,7 +582,7 @@ def test_promote_runs_the_policys_checks_then_promotes_under_it(monkeypatch):
     assert checks == [{"id": "C1", "check": "difference-image-statistics@1",
                        "instance": "DI1", "required": True, "outcome": "passed"}]
     assert seen == {"explicit": "rebuild-trial@1", "who": "scheduler"}
-    assert got == {"who": "scheduler", "reason": "processing date 2027-10-01",
+    assert got == {"who": "scheduler", "reason": "processing date 2027-10-01 batch 1",
                    "policy": "rebuild-trial@1"}
 
 
@@ -637,7 +637,7 @@ def test_run_loop_retry_failed_repoints_the_row_to_a_seeded_run_and_resumes(monk
         seeded.append(seed)
         return "RUN3"
 
-    monkeypatch.setattr(loop, "repoint_row", lambda c, s, d, run, record: repointed.update(
+    monkeypatch.setattr(loop, "repoint_row", lambda c, s, d, b, run, record: repointed.update(
         date=str(d), run=run, record=record, commits=conn.commits))
     tools.create_seeded_run = create_seeded_run
     assert loop.run_loop(conn, spec, tools, retry_failed=True) == 0
@@ -662,7 +662,7 @@ def test_run_loop_retry_failed_a_refused_seed_fails_the_date_with_its_message(mo
 
     tools.create_seeded_run = refuse
     monkeypatch.setattr(loop, "repoint_row", lambda *a: pytest.fail("repointed"))
-    monkeypatch.setattr(loop, "_update_row", lambda conn, s, d, **kw: updates.update(kw))
+    monkeypatch.setattr(loop, "_update_row", lambda conn, s, d, b, **kw: updates.update(kw))
     conn = _Conn()
     assert loop.run_loop(conn, spec, tools, retry_failed=True) == 1
     assert calls == []
@@ -874,7 +874,7 @@ def test_process_date_an_input_refusal_fails_the_date_with_its_message(monkeypat
 def test_process_date_resumes_a_finished_run_by_completing_the_row(monkeypatch):
     # Every unit the date requires is complete (_world's unit_state).
     spec, tools, storage, walks, created, updates = _world(monkeypatch)
-    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN2", state="open",
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d, b: _row(run="RUN2", state="open",
                                                                   record={"run": "RUN2"}))
     monkeypatch.setattr(loop, "run_state", lambda conn, run: "finished")
     monkeypatch.setattr(repository, "finish_run", lambda conn, run: pytest.fail("finished"))
@@ -986,7 +986,7 @@ def test_a_failed_image_chain_does_not_stop_the_other_images(monkeypatch):
 def test_a_finished_run_with_units_missing_fails_the_date(monkeypatch):
     spec, tools, storage, walks, created, updates = _world(monkeypatch)
     unit = spec.dates[0].detector_images[0].unit
-    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN2", state="open",
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d, b: _row(run="RUN2", state="open",
                                                                   record={"run": "RUN2"}))
     monkeypatch.setattr(loop, "run_state", lambda conn, run: "finished")
     states = {("statistics", "5"): ("failed", False), ("prune", "5"): None,
@@ -1005,7 +1005,7 @@ def test_a_finished_run_with_units_missing_fails_the_date(monkeypatch):
 def test_a_finished_run_without_its_loads_names_the_image_chain(monkeypatch):
     spec, tools, storage, walks, created, updates = _world(monkeypatch)
     unit = spec.dates[0].detector_images[0].unit
-    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN2", state="open"))
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d, b: _row(run="RUN2", state="open"))
     monkeypatch.setattr(loop, "run_state", lambda conn, run: "finished")
     absent = {("register", f"finalize/{unit}"), ("load", unit), ("alerts", unit)}
     monkeypatch.setattr(loop, "unit_state", lambda conn, run, stage, u: (
@@ -1031,7 +1031,7 @@ def test_process_date_on_a_seeded_re_run_walks_only_what_its_seed_left(monkeypat
     and read there; prune 5 and alerts never ran in RUN2 and run in RUN3."""
     spec, tools, storage, walks, created, updates = _world(monkeypatch)
     unit = spec.dates[0].detector_images[0].unit
-    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN3", state="open",
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d, b: _row(run="RUN3", state="open",
                                                                   record={"run": "RUN3"}))
     monkeypatch.setattr(loop, "run_lineage",
                         lambda conn, run: (("RUN3", "RUN2"), ["statistics", "prune", "alerts"]))
@@ -1093,7 +1093,7 @@ def test_a_seeded_re_run_composes_difference_against_its_seeds_admit_only(
     start composes against admit's output in RUN3 or its seed, no further."""
     spec, tools, storage, walks, created, updates = _world(monkeypatch)
     unit = spec.dates[0].detector_images[0].unit
-    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d: _row(run="RUN3", state="open"))
+    monkeypatch.setattr(loop, "loop_row", lambda conn, s, d, b: _row(run="RUN3", state="open"))
     monkeypatch.setattr(loop, "run_lineage",
                         lambda conn, run: (chain, list(loop.SELECTED_STAGES[1:])))
 
