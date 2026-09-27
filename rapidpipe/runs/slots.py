@@ -1,4 +1,4 @@
-"""Promotion selectors and frozen promotion plans (loop.md §Promotion).
+"""Promotion selectors and frozen promotion plans (runs.md §Rules).
 
 Every product instance carries a ``slot``, the part of its identity a
 consumer selects on; at most one instance is current per (kind, slot) and

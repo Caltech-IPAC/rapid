@@ -21,7 +21,7 @@ most one per association set. The stage tells them apart by
 (``prunedmerges``) are left out of its base's associations and history
 (alerts page); the execution notes' ``pruned_sets`` lists the
 pruned sets applied, or says ``none``. It reads ``sources`` through its
-parent by ``result_set``, and step 1's standalone per-field tables
+parent by ``result_set``, and the standalone per-field tables
 ``merges_<f>``, ``astroobjects_<f>`` and ``astroobjectsmeta_<f>`` by name,
 the field taken from the association set's logical key, by ``result_set``. Triggers come
 only from the source set. An input product without a ``product_instances``
@@ -363,7 +363,7 @@ def _primary(entry: OutputEntry) -> Member:
 
 @dataclass(frozen=True)
 class _Sets:
-    """The input set's result sets, by kind (amendment: an image can span fields)."""
+    """The input set's result sets, by kind (an image can span fields)."""
 
     source_set: str
     association_sets: tuple[str, ...]

@@ -5,7 +5,7 @@ runs: a grandparent difference image G (run A) whose required check
 ``difference-image-statistics@1`` failed under ``rebuild-trial@1`` -> a
 parent source set P (run B; the policy names no required check for its
 kind) -> a child association set C (run C). Promoting C walks the whole
-chain (loop.md §Promotion); ``check accept`` on G through ``rapidpipe.cli.main``
+chain (runs.md §Rules); ``check accept`` on G through ``rapidpipe.cli.main``
 lets it through; the refusal writes nothing. The acceptance lines of
 ``check show`` and ``run show`` and the registration-time read rule
 for file products (products.md §Registration metadata) are proved here too.

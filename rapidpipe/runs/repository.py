@@ -150,13 +150,13 @@ class PromotionRefused(RunModelError):
 
 
 #: ``promote_run``'s default ``plan``: no plan was supplied. Distinct from
-#: ``None``, which is a supplied (and malformed) plan (loop.md §Promotion).
+#: ``None``, which is a supplied (and malformed) plan (runs.md §Rules).
 NO_PLAN: Any = object()
 
 
 class StalePlan(PromotionRefused):
     """A frozen promotion plan no longer matches the run's changes read
-    under the promotion lock (loop.md §Promotion): nothing is written,
+    under the promotion lock (runs.md §Rules): nothing is written,
     and the CLI exits 64 as for any refusal."""
 
 
@@ -1128,7 +1128,7 @@ def _register_one_output(
 
 
 # ======================================================================
-# slot and identity (runs.md §Identifiers)
+# slot and identity (products.md §Identity)
 # ======================================================================
 
 def fill_identity(cur) -> list[tuple[str, int, int, int]]:
@@ -1177,7 +1177,7 @@ def parse_selector(
     kind: str, selector: Any, *, recorded_inverse: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """``("slot", slot)`` or ``("logical_key", key)`` from one change's
-    selector (loop.md §Promotion); refuses
+    selector (runs.md §Rules); refuses
     (:class:`PromotionRefused`) anything else, an empty slot, and a
     logical_key selector unless ``recorded_inverse``."""
     try:
@@ -1214,7 +1214,7 @@ def promote(
     ``changes`` is a list of ``(kind, selector, expected_before_instance_or_None,
     after_instance_or_None)`` tuples (runs page, "Promotion"). A selector
     is ``{"slot": {...}}``: promotion replaces by slot, at most one
-    instance being current per (kind, slot) (loop.md §Promotion).
+    instance being current per (kind, slot) (runs.md §Rules).
     ``{"logical_key": {...}}`` is accepted only with
     ``_recorded_inverse``, i.e. from :func:`rollback_promotion` reversing
     a change recorded without a slot; any other caller passing it,
@@ -1445,7 +1445,7 @@ def _refuse_current_outside_slot(
 
 
 def _refuse_unless_ancestor(cur, where: str, before: str, after: str) -> None:
-    """The association-set ancestor rule (loop.md §Promotion): ``before``
+    """The association-set ancestor rule (runs.md §Rules): ``before``
     must be reached from ``after`` by following
     ``logical_key.base`` through ``product_instances``; a missing link or
     a cycle ends the walk and refuses."""
@@ -1770,7 +1770,7 @@ def _run_slot_changes(
     cur, run_id: str, kinds: Sequence[str] | None,
 ) -> list[tuple[str, dict[str, Any], str | None, str]]:
     """``(kind, slot, expected_before, after)`` for every deliverable of
-    ``run_id``, sorted by kind then canonical slot (loop.md §Promotion).
+    ``run_id``, sorted by kind then canonical slot (runs.md §Rules).
     A deliverable is a ``candidate`` row of the run whose
     producing attempt is its unit's selected attempt (optionally one of
     ``kinds``). Refuses a deliverable whose slot is NULL, and two
@@ -1845,7 +1845,7 @@ def promotion_plan(
 ) -> list[PlanEntry]:
     """What :func:`promote_run` would promote now, as a frozen plan: one
     ``{"kind", "slot", "before", "after"}`` per slot, sorted by kind then
-    canonical slot (loop.md §Promotion). Fills slot and
+    canonical slot (runs.md §Rules). Fills slot and
     identity first, as ``promote_run`` does; takes no promotion lock and
     writes nothing else, so a caller that wants no write at all rolls back
     (``rapidpipe run promote-plan`` does). Refuses as ``promote_run``
@@ -1865,7 +1865,7 @@ def _refuse_stale_plan(
 ) -> None:
     """Raise :class:`StalePlan` naming the first (kind, slot) where the
     frozen ``plan`` and the actual ``changes`` read under the lock differ
-    (loop.md §Promotion): a slot whose current instance moved, a
+    (runs.md §Rules): a slot whose current instance moved, a
     candidate that appeared, disappeared or changed."""
     try:
         planned = plan_by_slot(plan)
@@ -1905,7 +1905,7 @@ def promote_run(
     re-checks them; the transaction-scoped lock is re-entrant), slot and
     identity are filled (:func:`fill_identity`, so a row an older image
     registered gets its slot now), then the deliverables are grouped by
-    (kind, slot) (loop.md §Promotion): every
+    (kind, slot) (runs.md §Rules): every
     ``product_instances`` row of the run with custody ``candidate`` whose
     producing attempt is its unit's selected attempt, optionally filtered
     to ``kinds``. A deliverable whose slot is still NULL is refused, and
@@ -1918,7 +1918,7 @@ def promote_run(
     :func:`promote`).
 
     ``plan``, when given, is a frozen plan from :func:`promotion_plan`
-    (loop.md §Promotion): a non-empty list of plan entries (anything else,
+    (runs.md §Rules): a non-empty list of plan entries (anything else,
     ``None`` included, is refused), and the changes read under the lock
     must equal it slot for slot, else :class:`StalePlan` is raised naming the
     first differing slot and nothing is written. Without it (the default,
@@ -1985,7 +1985,7 @@ def rollback_promotion(
     no ``check_policy`` is passed, so the row records none. As before it
     also skips the released-image rule (releases.md §Promotion
     eligibility), and, being the recorded inverse, the association-set
-    ancestor rule (loop.md §Promotion). Every other validation
+    ancestor rule (runs.md §Rules). Every other validation
     in :func:`promote` still runs: the expected-before check, and each
     restored instance's eligibility (candidate from a selected attempt,
     retained, complete if a result set, dependencies in project custody,

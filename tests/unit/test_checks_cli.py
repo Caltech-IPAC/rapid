@@ -1,4 +1,4 @@
-"""``rapidpipe check`` and the step-6 flags on ``run create``/``run
+"""``rapidpipe check`` and the check flags on ``run create``/``run
 promote``/``run start``, with no database (checks.md §The check
 commands)."""
 
