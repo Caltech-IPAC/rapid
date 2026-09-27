@@ -17,6 +17,7 @@ import pytest
 import rapidpipe.exitcodes as exitcodes
 from rapidpipe.cli import checkctl
 from rapidpipe.cli import main as cli
+from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
 from rapidpipe.exitcodes import ArgumentParser, ExitCode
 from rapidpipe.release import __main__ as release_main
 from rapidpipe.selftest import _report
@@ -203,6 +204,69 @@ def test_the_boundary_never_swallows_keyboard_interrupt(monkeypatch):
     monkeypatch.setattr(checkctl, "dispatch", interrupt)
     with pytest.raises(KeyboardInterrupt):
         cli.main(["check", "list"])
+
+
+# ======================================================================
+# Database connection errors reach 64/75, not 70 (supervisor step 1,
+# 2026-09-26): ``connect()`` is a @contextmanager generator, so
+# ConnectionConfigError/ConnectionUnavailable raise at ``__enter__``
+# (the ``with cm as conn:`` line), not at the ``connect(...)`` call --
+# every per-command ``try: cm = connect(...) except ...`` block is dead.
+# ======================================================================
+
+class _RaisingConnect:
+    """A ``connect()`` replacement whose returned context manager raises
+    on ``__enter__``, matching where the real generator-based context
+    manager raises."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def __call__(self, **_kw):
+        return self
+
+    def __enter__(self):
+        raise self._exc
+
+    def __exit__(self, *_exc_info):
+        return False
+
+
+@pytest.mark.parametrize("exc_type, code, word", [
+    (ConnectionConfigError, ExitCode.USAGE, "configuration error"),
+    (ConnectionUnavailable, ExitCode.TRANSIENT_FAILURE, "unavailable"),
+])
+@pytest.mark.parametrize("argv, command", [
+    (["run", "create", "--kind", "scratch", "--purpose", "p", "--stages", "admit"], "run"),
+    (["check", "show", "run-1"], "check"),
+    (["loop", "show", "schedule-1"], "loop"),
+])
+def test_cli_classifies_a_connection_error_at_the_boundary(
+        monkeypatch, capsys, argv, command, exc_type, code, word):
+    monkeypatch.setattr(cli, "connect", _RaisingConnect(exc_type("boom")))
+    rc = cli.main(argv)
+    assert rc == int(code)
+    err = capsys.readouterr().err
+    assert f"rapidpipe {command}: database {word}: boom" in err
+    assert "Traceback" not in err
+
+
+@pytest.mark.parametrize("exc_type, code, word", [
+    (ConnectionConfigError, ExitCode.USAGE, "configuration error"),
+    (ConnectionUnavailable, ExitCode.TRANSIENT_FAILURE, "unavailable"),
+])
+@pytest.mark.parametrize("entry", ["release_main", "cli"])
+def test_release_classifies_a_connection_error_at_the_with_block(
+        entry, monkeypatch, capsys, exc_type, code, word):
+    monkeypatch.setattr(release_main, "connect", _RaisingConnect(exc_type("boom")))
+    if entry == "release_main":
+        rc = release_main.main(["list"])
+    else:
+        rc = cli.main(["release", "list"])
+    assert rc == int(code)
+    err = capsys.readouterr().err
+    assert f"rapidpipe release list: database {word}: boom" in err
+    assert "Traceback" not in err
 
 
 # ======================================================================

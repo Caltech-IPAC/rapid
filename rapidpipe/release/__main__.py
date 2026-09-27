@@ -109,14 +109,7 @@ def dispatch(args: argparse.Namespace) -> int:
         ConnectionConfigError = ConnectionUnavailable = ()  # type: ignore[assignment]
 
     needs_db = not (command == "cut" and args.dry_run and args.resume is None)
-    try:
-        cm = _open(command) if needs_db else _no_connection()
-    except ConnectionConfigError as exc:  # type: ignore[misc]
-        sys.stderr.write(f"rapidpipe release {command}: database configuration error: {exc}\n")
-        return int(ExitCode.USAGE)
-    except ConnectionUnavailable as exc:  # type: ignore[misc]
-        sys.stderr.write(f"rapidpipe release {command}: database unavailable: {exc}\n")
-        return int(ExitCode.TRANSIENT_FAILURE)
+    cm = _open(command) if needs_db else _no_connection()
 
     try:
         with cm as conn:
@@ -126,6 +119,12 @@ def dispatch(args: argparse.Namespace) -> int:
                 if conn is not None:
                     conn.rollback()
                 raise
+    except ConnectionConfigError as exc:  # type: ignore[misc]
+        sys.stderr.write(f"rapidpipe release {command}: database configuration error: {exc}\n")
+        return int(ExitCode.USAGE)
+    except ConnectionUnavailable as exc:  # type: ignore[misc]
+        sys.stderr.write(f"rapidpipe release {command}: database unavailable: {exc}\n")
+        return int(ExitCode.TRANSIENT_FAILURE)
     except ReleaseError as exc:
         sys.stderr.write(f"rapidpipe release {command}: {exc}\n")
         return int(exc.exit_code)
