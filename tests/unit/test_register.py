@@ -208,7 +208,7 @@ def test_bad_difference_manifest_exits_65_without_connecting(tmp_path, monkeypat
 
 
 # ----------------------------------------------------------------------
-# reference-image / reference-catalog (supervisor step 8, ruling R7)
+# reference-image / reference-catalog
 # ----------------------------------------------------------------------
 
 def _reference_outputs():
@@ -258,7 +258,7 @@ def test_bad_reference_manifest_exits_65_without_connecting(tmp_path, monkeypatc
 
 
 # ----------------------------------------------------------------------
-# catalog-export (supervisor step 8, ruling R12): instance row only
+# catalog-export: instance row only
 # ----------------------------------------------------------------------
 
 def _catalog_export_entry():

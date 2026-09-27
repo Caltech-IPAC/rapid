@@ -15,6 +15,6 @@ def test_zogy_registers_under_the_science_pipeline_row():
 
 
 def test_sfft_registers_under_its_own_pipelines_row():
-    # database/migrations/20260924-01-pipelines-sfft.sql (lead ruling
-    # 2026-09-24: ppid 16, priority 6).
+    # database/migrations/20260924-01-pipelines-sfft.sql: ppid 16,
+    # priority 6.
     assert DIFFERENCER_PPIDS["sfft"] == 16

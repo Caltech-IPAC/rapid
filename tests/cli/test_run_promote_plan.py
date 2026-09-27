@@ -1,5 +1,5 @@
 """Behavioural, black-box tests of ``rapidpipe run promote-plan`` and
-``run promote --plan`` (supervisor step 5a, 2026-09-26, R5): argv in,
+``run promote --plan`` (loop.md §Promotion): argv in,
 exit code / stdout / stderr and database state out, against a real
 PostgreSQL with Batch and S3 faked (see
 ``tests/cli/test_run_lifecycle.py``'s module docstring for the shared
@@ -142,7 +142,7 @@ def test_promote_plan_nothing_to_promote_exits_64(cli, db):
 
 
 # ======================================================================
-# R21 (migration 20260926-03-product-slots-identity-first.sql): a
+# The migration 20260926-03-product-slots-identity-first.sql: a
 # malformed --plan file is refused before any connection is even made,
 # JSON null included, not read as "no plan".
 # ======================================================================

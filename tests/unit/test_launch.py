@@ -285,7 +285,7 @@ def test_submit_unit_uses_the_run_kinds_root_and_definition(clean_kind_env, kind
                      "production": "s3://project-bucket/p"}[kind]
     assert calls["run_kind"] == "RUN01"
     assert submission.output_location == f"{expected_root}/runs/RUN01/admit/u1/ATT1"
-    # The attempt row is inserted with its final location (amendment A7).
+    # The attempt row is inserted with its final location (runs.md §Storage layout).
     assert calls["allocate_outputs_root"] == expected_root
     assert fake.submitted[0]["jobDefinition"] == f"{kind}-def"
 

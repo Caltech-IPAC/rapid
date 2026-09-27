@@ -263,7 +263,7 @@ def test_delete_removes_composed_input_set_objects_too(
 
 
 # ======================================================================
-# Binding (supervisor step 2): the primitive's guarantees through the CLI.
+# Binding: the primitive's guarantees through the CLI.
 # ======================================================================
 
 def test_inputs_binds_a_templates_registered_result_set_and_registered_output_entries(
@@ -372,7 +372,7 @@ def test_inputs_commits_bindings_before_the_manifest_write_and_recovers_after_a_
 
 def test_inputs_admission_before_copying_and_rollback_after_a_compose_failure(
         cli, db, fake_batch, fake_s3, batch_env):
-    """R13: a copied member's size disagreeing with its manifest fails
+    """A copied member's size disagreeing with its manifest fails
     compose after admission (``add_unit``'s insert is uncommitted) but
     before any binding or manifest write, so ``_with_connection``'s
     rollback undoes the consumer unit too, leaving nothing behind. A run

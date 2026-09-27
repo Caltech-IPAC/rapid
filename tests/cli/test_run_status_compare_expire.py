@@ -44,7 +44,7 @@ def test_status_exit_codes_and_one_row_per_unit(cli, db, fake_batch, fake_s3, ba
 
     still_running = cli("run", "status", run_id)
     # ExitCode.INCOMPLETE (2): a unit still non-terminal without --watch
-    # (rapidpipe/exitcodes.py, supervisor step 1, 2026-09-26).
+    # (rapidpipe/exitcodes.py).
     assert still_running.rc == ExitCode.INCOMPLETE
     lines = still_running.out.splitlines()
     assert lines[0] == _STATUS_HEADER
@@ -104,7 +104,7 @@ def test_compare_same_dispositions_and_instance_counts(cli, db, fake_batch, fake
 
 
 def test_compare_prints_the_slot_column(cli, db, fake_batch, fake_s3, batch_env):
-    """R8: `run compare`'s instance line gains a slot column; the
+    """`run compare`'s instance line gains a slot column; the
     same/different verdict is otherwise unchanged (both runs' candidates
     get the same stand-in slot, since they share a logical key -- test
     above already covers "same" without looking at this column)."""
@@ -163,7 +163,7 @@ def test_expire_deletes_unpinned_expired_scratch_runs_and_spares_pinned(
     # A scratch run otherwise defaults to expiring 14 days from now
     # (runs.repository.create_run) and no CLI flag backdates it; --now
     # only widens run expire's own candidate SELECT, while the actual
-    # deletion gate (runs.repository.mark_run_deleting, amendment A6)
+    # deletion gate (runs.repository.mark_run_deleting)
     # re-checks 'expires_at < now()' under the row lock using the
     # database's real now(), not --now. Both runs are backdated here so
     # the pinned one is genuinely expired too -- proving its own

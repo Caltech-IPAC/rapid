@@ -1,7 +1,6 @@
 """Tests for rapidpipe.stages.photometry: a declared stub, exit code 69.
 
-photometry is not ported in this build (supervisor step 8, 2026-09-24,
-ruling R9): every check here is about the contract around the stub --
+photometry is not ported in this build: every check here is about the contract around the stub --
 argument/settings/input-manifest validation still runs and still maps to
 64/65 as a real stage's would, and only a fully valid invocation reaches
 the stub's fixed exit 69, writing no manifest. The fixture itself (``make

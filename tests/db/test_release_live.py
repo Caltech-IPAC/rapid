@@ -1,7 +1,7 @@
 """Releases against a live PostgreSQL with the migration stream applied:
 the 20260924-08 schema, ``cut``/``show``/``verify`` end to end, the
-released-image promotion rule (R8), the execution record's release column
-and a released run's Batch submission (R7).
+released-image promotion rule, the execution record's release column
+and a released run's Batch submission.
 
 Skips cleanly if PGHOST is unset (see conftest.py). ``cut`` commits at
 every checkpoint by design, so the end-to-end test uses a fresh random tag
@@ -109,7 +109,7 @@ def test_record_attempt_result_writes_the_release(conn, value, stored):
 
 
 # ======================================================================
-# promotion eligibility: the released-image rule (R8)
+# promotion eligibility: the released-image rule
 # ======================================================================
 
 def test_promotion_accepts_the_image_of_a_complete_release(conn):
@@ -163,7 +163,7 @@ def test_allow_unreleased_promotes_and_records_the_exception(conn):
 
 
 # ======================================================================
-# a released run submits to its release's revision (R7)
+# a released run submits to its release's revision
 # ======================================================================
 
 @pytest.mark.parametrize("kind, expected", [

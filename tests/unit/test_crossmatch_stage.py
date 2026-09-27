@@ -1,8 +1,9 @@
 """Tests for rapidpipe.stages.crossmatch with the fake database.
 
 The unit id, the input manifest's entries, the settings checks, both passes
-through the fake (counts, rows, manifest), the base chain (ruling R3), the
-done check (R14), the legacy catalog switch, the count check and the exit
+through the fake (counts, rows, manifest), the base chain (loop.md §Base
+catalog), the
+done check, the legacy catalog switch, the count check and the exit
 codes. PostgreSQL-backed behaviour is in tests/db/test_crossmatch.py.
 """
 

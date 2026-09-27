@@ -41,8 +41,8 @@ The fake database (`rapidpipe.selftest.support.fakestatisticsdb.FakeStatisticsDa
 selected by `RAPIDPIPE_STATISTICS_DATABASE`) is seeded by
 `seed_from_fixture` from `expected.json`'s `inputs`:
 
-- two association sets, the input and its base (base plus delta, step 1
-  ruling R3), each naming one source set in its own `sources` child table;
+- two association sets, the input and its base (base plus delta), each
+  naming one source set in its own `sources` child table;
 - four objects: 101 has three sources spanning the RA 0/360 wrap, one
   under the base and two under the input set, to exercise `dev`'s
   mean-vector method; 102 has a single source; 103 has one source in each
@@ -60,7 +60,7 @@ database does not check geometry. The same stage against PostgreSQL is
 |---|---|---|
 | exit code; one `statistics-set` entry, no members; key `{membership: <association set>}`; `inputs.result_sets` | exact | the manifest shape the products page fixes |
 | `registration.table`, `row_count` (4), `objects_in_set` (4) | exact | literal counts |
-| the chain read and one SELECT per source set | exact | the membership rule (R3, R7) |
+| the chain read and one SELECT per source set | exact | the membership rule (statistics.md) |
 | per-object `nsources` | exact | literal |
 | per-object `meanra`, `stdevra`, `meandec`, `stdevdec`, `meanflux`, `stdevflux` | 1e-9 absolute | recomputed in the check with the ported `compute_radec_statistics` and `numpy` from the object's own sources |
 | object 101's mean RA is at the wrap (within 1e-3 degrees of 0/360) | exact bound | a naive arithmetic mean would give about 120 degrees |

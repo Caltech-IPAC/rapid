@@ -1,5 +1,4 @@
-"""Recovery (supervisor step 6, 2026-09-24, R7-R9 and the Codex plan-review
-amendments B1-B4) against a real
+"""Recovery (loop.md §Concurrency and recovery) against a real
 PostgreSQL with the migrations applied: the 20260924-10 columns,
 ``submit_unit`` freezing an attempt's inputs and settings, ``run create
 --seed <run> --only-failed``, ``run start`` resolving a seeded unit's
@@ -169,7 +168,7 @@ def test_migration_adds_the_recovery_columns(conn):
 
 
 # ======================================================================
-# submit_unit freezes the attempt's inputs and settings (R7)
+# submit_unit freezes the attempt's inputs and settings
 # ======================================================================
 
 def test_submit_unit_records_inputs_and_settings_on_the_attempt(held, fake_batch):
@@ -205,7 +204,7 @@ def test_submit_unit_records_locations_even_when_the_submission_fails(held, fake
 
 
 # ======================================================================
-# run create --seed <run> --only-failed (R7)
+# run create --seed <run> --only-failed
 # ======================================================================
 
 def _seed_with_failed_difference(held):
@@ -307,7 +306,7 @@ def test_only_failed_seeds_non_complete_units_at_every_position_from_the_earlies
     code, run_id, err = _create(capsys, "--seed", seed, "--only-failed")
     assert code == 0, err
     assert _one(held, "SELECT selected_stages FROM runs WHERE id = %s", (run_id,)) == (CHAIN,)
-    # B2: every non-complete unit is seeded, wherever it sits.
+    # Every non-complete unit is seeded, wherever it sits.
     assert _all(held, "SELECT stage, unit_id FROM units WHERE run = %s ORDER BY unit_id",
                 (run_id,)) == [("difference", "U-cancel"), ("admit", "U-lost")]
 
@@ -356,7 +355,7 @@ def test_seed_failed_units_refuses_a_run_that_is_not_the_plans(held):
 
 
 # ======================================================================
-# run start on a seeded unit (R8)
+# run start on a seeded unit
 # ======================================================================
 
 def _start(capsys, run_id, *extra):
@@ -459,7 +458,7 @@ def test_seeded_inputs_for_unit_reads_the_latest_seed_attempt(held):
 
 
 # ======================================================================
-# run reconcile --resolve-jobless (R9)
+# run reconcile --resolve-jobless
 # ======================================================================
 
 def test_resolve_jobless_records_lost_and_returns_the_unit_by_allowance(held, fake_batch):
@@ -472,7 +471,7 @@ def test_resolve_jobless_records_lost_and_returns_the_unit_by_allowance(held, fa
     results = launch_batch.resolve_jobless(held, run_id=run_id, older_than_seconds=600)
     assert [(r.attempt_id, r.job_id, r.batch_status, r.disposition) for r in results] == [
         (first, "-", "NOJOB", "lost")]
-    # B3: both job-less attempts were looked up by name first.
+    # Both job-less attempts were looked up by name first.
     assert [c for c in fake_batch.calls if c[0] == "list_jobs"] == [
         ("list_jobs", f"rapid-admit-{first}"), ("list_jobs", f"rapid-admit-{young}")]
     assert _one(held, "SELECT disposition, exit_code, reconcile_note FROM attempts "
@@ -558,8 +557,8 @@ def test_start_names_resolve_jobless_for_a_jobless_attempt(held, cli_db, fake_ba
 
 
 # ======================================================================
-# Codex amendments B1 (bindings, scratch seeds), B2 (every position,
-# inherited stages) and B4 (seeded register keeps its id)
+# Bindings and scratch seeds; every position, inherited stages; and a
+# seeded register that keeps its id
 # ======================================================================
 
 def _instance(held, run_id, stage, unit_id):
@@ -666,7 +665,7 @@ def test_start_inherits_stages_the_seed_completed(held, cli_db, fake_batch, caps
 
 def test_start_seeded_register_at_a_later_position_keeps_the_seed_unit_id(
         held, cli_db, fake_batch, capsys):
-    """B4: register has a producing stage (difference) in the new run, but
+    """Register has a producing stage (difference) in the new run, but
     its seeded unit's id and inputs are the seed's, not derived."""
     seed = _production_seed_with_later_failures(held)
     _, run_id, _ = _create(capsys, "--seed", seed, "--only-failed")
@@ -721,8 +720,8 @@ def test_start_after_a_first_position_register_reads_the_seeds_producer(
 
 
 # ======================================================================
-# Codex diff review of step 6: the leading register position of a seeded
-# run, and an explicit --template on an inheritable stage
+# The leading register position of a seeded run, and an explicit
+# --template on an inheritable stage
 # ======================================================================
 
 def _seed_failed_at_both_registers(held):

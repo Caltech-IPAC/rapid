@@ -1,5 +1,5 @@
-"""Check registry and policy loading, no database (supervisor step 6,
-2026-09-24, R1, R3, R5, amendment A1)."""
+"""Check registry and policy loading, no database (checks.md §Check
+policies)."""
 
 from __future__ import annotations
 

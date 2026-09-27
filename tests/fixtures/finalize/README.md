@@ -63,7 +63,7 @@ All exact; nothing here is floating-point science.
 
 | Check | Why |
 |---|---|
-| one `difference-image` entry and every input `source-catalog` entry (four here; finalize passes through 0..n), every instance a new ULID, none reused from the input | the ruling: new instances, same kinds |
+| one `difference-image` entry and every input `source-catalog` entry (four here; finalize passes through 0..n), every instance a new ULID, none reused from the input | new instances, same kinds |
 | difference-image key, primary path and roles unchanged; block validates | same logical key |
 | registration = the input's, `md5` recomputed, plus `finalized_from` (input instance) and `revision` 2 | the products page: the manifest records the input instance and the output revision |
 | registration `md5` = MD5 of the stamped file | `diffimages.checksum` |
@@ -72,7 +72,7 @@ All exact; nothing here is floating-point science.
 | the input header's own keywords kept; pixels and dtype unchanged | only the header is stamped |
 | every other member byte-identical (SHA-256) to its input | copied, not rewritten |
 | each catalog's key names the finalized instance, `copied_from` names its input, members identical | catalogs follow the new instance |
-| `inputs.products` names only the difference manifest's own l2 and reference instances; `inputs.manifest` references the difference manifest; no execution notes | ruling option (b): only registered instances are dependencies |
+| `inputs.products` names only the difference manifest's own l2 and reference instances; `inputs.manifest` references the difference manifest; no execution notes | option (b): only registered instances are dependencies |
 
 Provenance is otherwise checked for shape only, by the shared runner: the
 manifest's run, unit and attempt are the invocation's, the execution

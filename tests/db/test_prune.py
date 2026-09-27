@@ -3,7 +3,7 @@
 Runs `test_load.py`'s own chain helpers (difference -> register -> load,
 for real against PostgreSQL) to get a loaded source set whose one
 difference image is registered with `vbest = 0` and `run` the test's own
-run -- ruling R6's own-run clause -- then fabricates an association-set
+run, under the own-run clause (prune.md), then fabricates an association-set
 instance over that source set (`register_manifest`, as `crossmatch` would)
 and a handful of `merges_<field>` pairs naming its one `sid`. The first
 prune attempt, within the same run, excludes nothing (its source's
@@ -189,7 +189,7 @@ def test_done_check_reuses_the_pruned_set_within_the_run(conn, tmp_path, monkeyp
                                           unit_id=str(field), name="first")
     assert rc == 0
     first_instance = Manifest.read(first / "manifest.json").outputs[0].instance
-    set_disposition(conn, first_attempt, "succeeded")  # ruling R1: only a succeeded set is reused
+    set_disposition(conn, first_attempt, "succeeded")  # only a succeeded set is reused (runs.md §Rules)
 
     rc, _, second = _run_prune(conn, monkeypatch, tmp_path, run_id, inputs, unit_id=str(field),
                                name="second")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The photometry stage's fixture: prepare, run, check. ``make stage-photometry``.
 
-``photometry`` is a declared stub (supervisor step 8, 2026-09-24, ruling
-R9): a valid invocation exits 69 and publishes no manifest, so "PASS"
+``photometry`` is a declared stub (photometry.md): a valid invocation
+exits 69 and publishes no manifest, so "PASS"
 here means exactly that, not a completed run -- see
 ``rapidpipe/selftest/photometry.py`` and
 ``rapidpipe/selftest/fixtures/photometry/expected.json``.

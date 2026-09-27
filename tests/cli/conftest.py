@@ -103,7 +103,7 @@ def _delete_run_rows(connection, run_ids: list[str], promotion_ids: list[str]) -
             cur.execute(
                 "UPDATE units SET selected_attempt = NULL WHERE run = ANY(%s)",
                 (run_ids,))
-            # unit_inputs (bound at submission, R4) and dependencies
+            # unit_inputs (bound at submission) and dependencies
             # reference both units and instances; they go first.
             cur.execute(
                 "DELETE FROM unit_inputs WHERE unit IN "

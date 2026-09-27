@@ -621,8 +621,8 @@ def test_pin_run_sets_and_clears_the_flag(conn):
 
 
 # ======================================================================
-# Amendments (supervisor step 3, 2026-09-24): A1 fence, A2 vbest,
-# A3 eligibility, A6 sweeper predicate, A7 final attempt location
+# Fence, vbest, eligibility, sweeper predicate, and final attempt
+# location
 # ======================================================================
 
 def test_allocate_attempt_records_the_final_location(conn):

@@ -18,7 +18,7 @@ directory holds only this thin reference, not a second copy.
 ``rapidpipe.selftest.support.fakereftools``; ``--tools real`` runs the
 pipeline image's own. Exit 0 when every check passes, 1 otherwise. The
 stage declares no database access (``register``'s handling of its
-manifest is WP-B's, ``rapidpipe/db/refimages.py``).
+manifest is in ``rapidpipe/db/refimages.py``).
 """
 
 from __future__ import annotations

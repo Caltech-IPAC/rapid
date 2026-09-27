@@ -91,7 +91,7 @@ def test_republishes_the_difference_attempt_under_new_instances(tmp_path):
         validate_source_catalog_entry(catalog.to_dict())
         assert catalog.key["difference"] == diff.instance
         assert catalog.registration["copied_from"] in {e.instance for e in source.outputs}
-    # Ruling (option b): the difference's own registered upstream only.
+    # The difference's own registered upstream only.
     assert manifest.inputs.products == {"l2-image": L2_INSTANCE,
                                         "reference-image": REFERENCE_INSTANCE}
     assert manifest.inputs.manifest == str(tmp_path / "inputs" / "manifest.json")

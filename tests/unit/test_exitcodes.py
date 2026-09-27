@@ -1,6 +1,6 @@
 """``rapidpipe.exitcodes``: the one exit-code vocabulary, the stage subset,
 the parser class every entrypoint uses, and the unexpected-error boundary
-of both command-line entrypoints (supervisor step 1, 2026-09-26)."""
+of both command-line entrypoints (tool.md §Exit codes)."""
 
 from __future__ import annotations
 
@@ -207,8 +207,8 @@ def test_the_boundary_never_swallows_keyboard_interrupt(monkeypatch):
 
 
 # ======================================================================
-# Database connection errors reach 64/75, not 70 (supervisor step 1,
-# 2026-09-26): ``connect()`` is a @contextmanager generator, so
+# Database connection errors reach 64/75, not 70: ``connect()`` is a
+# @contextmanager generator, so
 # ConnectionConfigError/ConnectionUnavailable raise at ``__enter__``
 # (the ``with cm as conn:`` line), not at the ``connect(...)`` call --
 # every per-command ``try: cm = connect(...) except ...`` block is dead.

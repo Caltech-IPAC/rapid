@@ -1,5 +1,5 @@
 """Tests for rapidpipe.products.refimage: the reference-image and
-reference-catalog registration blocks (supervisor step 8, ruling R6).
+reference-catalog registration blocks (products.md §Registration metadata).
 
 ``reference_image_entry`` and ``reference_catalog_entry`` build valid
 entries; tests/db/test_register_reference.py reuses them.

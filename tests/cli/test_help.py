@@ -53,10 +53,10 @@ def test_every_subcommand_help_exits_0(path, capsys):
         assert found is not None, f"{name!r} not found on the way to {path}"
         target = found
 
-    # rapidpipe stage's own subparser used to have add_help=False (fixed
-    # on branch step4-cli, supervisor step 4): --help was refused with
-    # exit 2 there instead of printing help and exiting 0. No subparser
-    # should set add_help=False today, so this is an ordinary assertion
+    # rapidpipe stage's own subparser used to have add_help=False: --help
+    # was refused with exit 2 there instead of printing help and exiting
+    # 0. No subparser should set add_help=False today, so this is an
+    # ordinary assertion
     # rather than a dynamic xfail.
     assert target.add_help is not False, (
         f"rapidpipe {' '.join(path)}: add_help=False again; every "

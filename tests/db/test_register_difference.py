@@ -86,7 +86,7 @@ def _instance_refimage(conn) -> tuple[int, str]:
             (fid, svid, run_id, attempt_id, instance))
         rfid = cur.fetchone()[0]
     # A difference of another run depends on it: its attempt must be selected
-    # (supervisor step 6, 2026-09-26, R5).
+    # (products.md §Reading across runs).
     succeed_and_select(conn, attempt_id)
     return rfid, instance
 
@@ -129,8 +129,8 @@ def _admitted_l2(conn, tmp_path, monkeypatch):
     assert rc == int(ExitCode.SUCCESS)
     # Another run reads this l2 image, so its attempt must be its unit's
     # selected attempt, as the launcher's reconcile would make it (the read
-    # rule applies to file products at registration too: supervisor step 6,
-    # 2026-09-26, R5).
+    # rule applies to file products at registration too; products.md
+    # §Reading across runs).
     succeed_and_select(conn, admit_manifest.attempt)
     return admit_manifest.outputs[0].instance
 
@@ -139,7 +139,7 @@ def _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, name="reg
     """Register the difference manifest at ``outputs``.
 
     The registering unit id is derived from that manifest
-    (``register_unit_id``, ruling: "a register unit is identified by what
+    (``register_unit_id``: "a register unit is identified by what
     it registers" -- <producing stage>/<producing unit id>), the same
     derivation the CLI now performs at submission time
     (rapidpipe.cli.main._resolve_register_unit_id) rather than a
@@ -291,8 +291,8 @@ def test_unregistered_l2_instance_exits_65(conn, tmp_path, monkeypatch):
 
 
 def test_register_writes_an_sfft_instance_under_its_pipelines_row(conn, tmp_path, monkeypatch):
-    # database/migrations/20260924-01-pipelines-sfft.sql (lead ruling 2026-09-24:
-    # ppid 16, priority 6) replaces the earlier refusal -- an SFFT instance used
+    # database/migrations/20260924-01-pipelines-sfft.sql (ppid 16, priority 6)
+    # replaces the earlier refusal -- an SFFT instance used
     # to be rejected here for having no `pipelines` row to register under.
     l2_instance = _admitted_l2(conn, tmp_path, monkeypatch)
     with conn.cursor() as cur:
@@ -326,8 +326,8 @@ def _run_finalize(conn, tmp_path, run_id, diff_outputs):
 
 def test_register_records_a_finalized_instance_whose_difference_was_never_registered(
         conn, tmp_path, monkeypatch):
-    # Chain difference -> finalize -> register(finalize output) (supervisor
-    # ruling 2026-09-24, option b): the raw difference instance is never
+    # Chain difference -> finalize -> register(finalize output) (option b):
+    # the raw difference instance is never
     # registered; finalize's inputs.products names the l2 instance (and the
     # reference only when it has an instance row), so every dependency edge
     # resolves. One diffimages row per image, as dev.
@@ -375,7 +375,7 @@ def test_two_registers_in_one_run_get_distinct_derived_ids(conn, tmp_path, monke
     diffchain shape: admit, register, difference, register) gets two
     distinct `register` units, each named for its own producer -- no
     hand-keyed ``<unit>/difference`` suffix and no occurrence counter
-    (Ben, 2026-09-23 ruling: "a register unit is identified by what it
+    ("a register unit is identified by what it
     registers"; id = <producing stage>/<producing unit id>).
     """
     admit_run_id, admit_outputs = _run_admit(conn, tmp_path, name="twice")
@@ -386,7 +386,7 @@ def test_two_registers_in_one_run_get_distinct_derived_ids(conn, tmp_path, monke
         unit_id=admit_register_id, tmp_path=tmp_path, name="twice-admit-reg")
     assert rc == int(ExitCode.SUCCESS)
     l2_instance = admit_manifest.outputs[0].instance
-    succeed_and_select(conn, admit_manifest.attempt)   # read across runs (step 6, R5)
+    succeed_and_select(conn, admit_manifest.attempt)   # read across runs
 
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)

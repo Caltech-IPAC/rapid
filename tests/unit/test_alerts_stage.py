@@ -108,7 +108,7 @@ def test_success_writes_container_outbox_and_both_outputs(tmp_path, monkeypatch,
     assert db.nalertpackets == [{"instance": DIFFERENCE_INSTANCE, "run": RUN, "value": 1}]
     # register can replay this manifest: both kinds are known to it
     _reject_unknown_kinds(manifest.outputs)
-    # R5: an input set naming no pruned set says so in the execution notes
+    # An input set naming no pruned set says so in the execution notes
     record = json.loads((outputs / manifest.execution_record).read_text())
     assert record["notes"]["pruned_sets"] == "none"
 
@@ -414,7 +414,7 @@ def test_merges_count_fallback_counts_a_pair_in_base_and_extension_once(
 
 
 # ----------------------------------------------------------------------
-# R5 (supervisor step 9, 2026-09-25): prune binds to alerts
+# Prune binds to alerts (alerts.md)
 # ----------------------------------------------------------------------
 
 PRUNED_SET = "01J8Y6QZ3M00000000000PRUN1"
@@ -522,7 +522,7 @@ def test_one_pruned_set_per_association_set_is_accepted():
 
 
 def test_the_fake_scopes_a_pruned_set_to_its_own_association_set(prepared):
-    """Codex 9-1 amendment: a pair pruned under B stays when reading A."""
+    """A pair pruned under B stays when reading A (products.md §Reading across runs)."""
     _, _, seed = prepared
     _extend_from_a_base(seed)
     _pruned(seed, base=ASSOCIATION_SET_2, instance="01J8Y6QZ3M00000000000PRUN2",
@@ -540,7 +540,7 @@ def test_the_fake_scopes_a_pruned_set_to_its_own_association_set(prepared):
 @pytest.mark.parametrize("change", ["unreadable", "incomplete", "missing"])
 def test_a_chain_naming_an_unreadable_source_set_exits_65(tmp_path, monkeypatch, prepared,
                                                           change):
-    """R2 (Codex 9-2): history sources come only from source sets the run may read."""
+    """History sources come only from source sets the run may read (products.md §Reading across runs)."""
     inputs, _, seed = prepared
     _extend_from_a_base(seed)
     instances = seed["product_instances"]

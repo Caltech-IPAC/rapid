@@ -9,7 +9,7 @@ a source set, and `crossmatch` associates the field. Covers the child
 tables, the rows and their values, both passes, ON CONFLICT on a repeated
 position, the association-set instance with its `result_sets` row and
 dependency edges, the CLUSTER, a second attempt over the same inputs, the
-done check, a base read as catalog (ruling R3), and an unknown source set.
+done check, a base read as catalog, and an unknown source set.
 
 Skips cleanly if PGHOST is unset (see conftest.py).
 """
@@ -205,7 +205,7 @@ def test_done_check_reuses_the_set(conn, tmp_path, monkeypatch):
     rc, first_attempt, first = _run_crossmatch(conn, monkeypatch, tmp_path, run_id,
                                                load_outputs, name="first")
     assert rc == 0
-    set_disposition(conn, first_attempt, "succeeded")  # ruling R1: only a succeeded set is reused
+    set_disposition(conn, first_attempt, "succeeded")  # only a succeeded set is reused (runs.md §Rules)
     rc, _, second = _run_crossmatch(conn, monkeypatch, tmp_path, run_id, load_outputs,
                                     name="second")
     assert rc == 0

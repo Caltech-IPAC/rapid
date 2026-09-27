@@ -1,5 +1,5 @@
-"""Behavioural, black-box tests of delivery discovery and batches (supervisor
-step 4, rulings R1-R6, R12-R14): ``rapidpipe loop run|plan|show`` over an
+"""Behavioural, black-box tests of delivery discovery and batches (loop.md
+§Discovery and batches): ``rapidpipe loop run|plan|show`` over an
 ``inbox`` spec, argv in, exit code / stdout and database state out, against
 the CI PostgreSQL with Batch and S3 faked -- the same contract
 ``test_loop.py`` documents, extended with ``rapidpipe.launch.discovery``'s
@@ -34,11 +34,11 @@ INBOX_NAME = "stream-inbox"
 def _stage(fake_s3, inbox: str, date: str, exposure: str, *, name: str | None = None,
           detector: str = "1", version: str = "1", data: bytes = b"L2" * 8) -> tuple[str, str]:
     """Seed one delivery manifest at ``<inbox>/<date>/<name>/manifest.json``
-    (R1; ``name`` defaults to ``<exposure>-sca01``); return ``(location, unit
+    (``name`` defaults to ``<exposure>-sca01``); return ``(location, unit
     id)``. The delivery's *identity* is ``(exposure, detector, version)``, not
     its location: an explicit ``name`` stages a second location under the
     same or a different exposure -- same exposure/detector/version and the
-    same ``data`` reproduces an identical re-delivery (R3), same
+    same ``data`` reproduces an identical re-delivery, same
     exposure/detector/version with different ``data`` a checksum conflict."""
     name = name or f"{exposure}-sca01"
     location = f"{inbox}/{date}/{name}"
@@ -174,7 +174,7 @@ def test_discovery_end_to_end_two_dates_duplicate_conflict_and_a_new_batch(
     stages.install(monkeypatch)
 
     # Two dates staged: both runs (and their loop_dates/loop_deliveries rows)
-    # must exist before the walk fake is first called (R6: frozen membership,
+    # must exist before the walk fake is first called (frozen membership,
     # batches committed before any is processed). ``stages.install`` above
     # already wrapped the true ``runctl._reconcile``; wrap that wrapper once
     # more (not a second ``stages.install`` -- that would double-apply the
@@ -209,7 +209,7 @@ def test_discovery_end_to_end_two_dates_duplicate_conflict_and_a_new_batch(
         ("2027-11-01", locA, "batched", 1), ("2027-11-02", locB, "batched", 1)]
 
     # A duplicate (same identity+checksum as A, new location) and a checksum
-    # conflict (B's identity, different bytes) discovered together: R13, the
+    # conflict (B's identity, different bytes) discovered together, the
     # disposition-only commit -- no new run, no new loop_dates row.
     locD, _ = _stage(fake_s3, inbox, "2027-11-02", "exp001", name="again-exp001-sca01",
                      data=b"A" * 16)  # same identity+checksum as A, new location
@@ -225,7 +225,7 @@ def test_discovery_end_to_end_two_dates_duplicate_conflict_and_a_new_batch(
     assert rows_by_loc[locE] == ("quarantined", "checksum conflict")
 
     # A genuinely new delivery for 2027-11-02: forms batch 2 of that date,
-    # based on batch 1 of the SAME date (R5: a later batch extends its
+    # based on batch 1 of the SAME date (a later batch extends its
     # predecessor before any earlier date), not on 2027-11-01's run.
     locC, _ = _stage(fake_s3, inbox, "2027-11-02", "exp003", data=b"C" * 16)
     again = cli("loop", "run", "--spec", stream_world["spec"])
@@ -247,7 +247,7 @@ def test_discovery_end_to_end_two_dates_duplicate_conflict_and_a_new_batch(
     assert locE in shown.out and "checksum conflict" in shown.out
 
     # Nothing left to discover: every location is now recorded. Exit 0, no
-    # writes (R2: "a firing that resumes nothing and discovers nothing").
+    # writes ("a firing that resumes nothing and discovers nothing").
     before_empty = _counts(db, schedule, tag)
     empty = cli("loop", "run", "--spec", stream_world["spec"])
     assert empty.rc == 0, empty.err + empty.out
@@ -283,11 +283,11 @@ def test_discovery_crash_after_batches_committed_resumes_the_same_run(
     # rapidpipe.cli.main's unclassified-error boundary catches any plain
     # exception escaping a command and exits 70 (ExitCode.STAGE_ERROR) --
     # the in-process stand-in for the process actually being killed; what
-    # matters for R6 is what is left in the database, not this exit code.
+    # matters here is what is left in the database, not this exit code.
     crashed = cli("loop", "run", "--spec", stream_world["spec"])
     assert crashed.rc == int(ExitCode.STAGE_ERROR), crashed.err + crashed.out
 
-    # The batches were committed (their own transaction, R6) before the walk
+    # The batches were committed (their own transaction) before the walk
     # fake ever ran.
     dates = _date_rows(db, schedule)
     assert [(d, b, s) for d, b, _, s, _ in dates] == [
@@ -331,7 +331,7 @@ def test_discovery_exits_75_while_another_loop_holds_the_schedule(
 
 def test_sibling_isolation_finishing_or_failing_one_batch_leaves_the_other_open(
         db, stream_world):
-    """R14: ``_fail_row`` (and, by the same ``_update_row`` call, ``_finish_row``)
+    """``_fail_row`` (and, by the same ``_update_row`` call, ``_finish_row``)
     is batch-qualified -- with two open batches of one date, acting on batch 1
     leaves batch 2's row untouched."""
     conn = db.connection

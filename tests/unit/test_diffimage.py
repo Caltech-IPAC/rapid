@@ -222,7 +222,7 @@ def test_invalid_source_catalog_entry(overrides, match):
         validate_source_catalog_entry(_catalog_entry(**overrides))
 
 
-# finalize's provenance fields (supervisor ruling, 2026-09-24).
+# finalize's provenance fields (products.md §Registration metadata).
 
 
 def test_an_entry_without_provenance_fields_still_validates():

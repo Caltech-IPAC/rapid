@@ -1,4 +1,4 @@
-# Test fixture only, never shipped in the package (supervisor step 6, A1):
+# Test fixture only, never shipped in the package:
 # rebuild-trial@1's checks with approval "none" and auto_promote = false.
 name = "unapproved"
 version = "1"

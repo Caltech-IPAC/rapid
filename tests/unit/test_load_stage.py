@@ -234,7 +234,7 @@ def test_a_manifest_from_another_stage_exits_65(tmp_path, db):
 
 
 def test_a_finalize_manifest_is_read_like_a_difference_one(tmp_path, db):
-    # Chain difference -> finalize -> register -> load (ruling 2026-09-24):
+    # Chain difference -> finalize -> register -> load:
     # finalize republishes the same entries, so load reads its manifest too.
     inputs = tmp_path / "inputs"
     path = build_load_input_set(inputs, {"positive": POSITIVE, "negative": NEGATIVE})

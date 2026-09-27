@@ -11,16 +11,16 @@ of the run gets a SUCCEEDED job and a manifest shaped like its stage's
 writes into a real ``sources_<yyyymmdd>_<sca>`` table (two fields), and
 crossmatch an ``association-set``, both registered in ``product_instances``
 -- which the real stages do themselves; the loop reads a source set's
-fields, and chooses a base, only when its run may read the set
-(supervisor step 9 R2), and the association set is how the next date
-finds its base (R5). Everything else writes an empty-output manifest or a
+fields, and chooses a base, only when its run may read the set, and the
+association set is how the next date finds its base (loop.md §Base
+catalog). Everything else writes an empty-output manifest or a
 result-set entry. Every stage that registers its own outputs (load,
 crossmatch, statistics, prune, alerts) registers them here too; register
 is not faked, so admit's l2-image and finalize's difference image stay
 unregistered.
 
 Every test uses the launcher's real input-manifest read
-(``real_input_manifest``; supervisor step 9, R4): the delivery and the
+(``real_input_manifest``): the delivery and the
 difference template are seeded with manifests, the template registered
 under a producer run of its own, so each unit's ``unit_inputs`` rows are
 written at submission and asserted.
@@ -116,8 +116,7 @@ class _FakeStages:
         if stage == "crossmatch":
             # crossmatch's key names its base, as the real stage's does: the
             # field's current association set, or null on the first date (a
-            # replacement must descend from what it replaces, supervisor step
-            # 5a, 2026-09-26, R6).
+            # replacement must descend from what it replaces).
             with self.db.cursor() as cur:
                 cur.execute("SELECT id FROM product_instances WHERE kind = 'association-set' "
                             "AND custody = 'current' AND logical_key ->> 'field' = %s",
@@ -208,8 +207,8 @@ def world(db, fake_batch, fake_s3, batch_env, monkeypatch):
         cur.execute(f"CREATE TABLE IF NOT EXISTS {TABLE} (field integer, result_set text)")
     fake_batch.job_definitions[PROD_DEF] = "ACTIVE"
 
-    # The difference template is an earlier run's registered product (R4:
-    # the difference and alerts units bind its instances at submission).
+    # The difference template is an earlier run's registered product (the
+    # difference and alerts units bind its instances at submission).
     conn = db.connection
     template_run = repository.create_run(
         conn, "scratch", "test", "loop template producer", ["difference"], "a" * 40,
@@ -232,7 +231,7 @@ def world(db, fake_batch, fake_s3, batch_env, monkeypatch):
     conn.commit()
 
     # admit's input: a delivery manifest naming one raw image that no run
-    # registered, so the real reader (R4) accepts it and binds nothing.
+    # registered, so the real reader accepts it and binds nothing.
     delivery_prefix = _prefix(DELIVERY)
     delivery = _manifest("delivery", "delivery", UNIT, new_ulid(), [
         {"kind": "l1-image", "format_version": "1", "instance": new_ulid(),
@@ -310,7 +309,7 @@ def _rows(db, schedule):
 
 
 def _bound(db, run_id, stage, unit_id) -> set[str]:
-    """The instances ``unit_inputs`` binds to one unit (R4)."""
+    """The instances ``unit_inputs`` binds to one unit."""
     with db.cursor() as cur:
         cur.execute("SELECT ui.producer_instance FROM unit_inputs ui JOIN units u "
                     "ON u.id = ui.unit WHERE u.run = %s AND u.stage = %s AND u.unit_id = %s",
@@ -353,7 +352,7 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     assert [r[0] for r in runs] == [run1, run2]
     for r in runs:
         assert r[1:6] == ("production", "scheduler-test", "prompt", world["tag"], "finished")
-        # A1: the raw difference is never registered.
+        # The raw difference is never registered.
         assert r[6] == ["admit", "register", "difference", "finalize", "register", "load",
                         "maintain", "crossmatch", "statistics", "prune", "alerts"]
         assert (r[7], r[8]) == (world["spec"], 2)
@@ -386,7 +385,7 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     alerts_in = _read(fake_s3, f"s3://{FAKE_BUCKET}/scratch/runs/{run2}/inputs/alerts/"
                                f"{UNIT}/manifest.json")
     assert [o["kind"] for o in alerts_in["outputs"]] == ["difference-image", "reference-catalog"]
-    # R5: per field, the association, statistics and pruned sets.
+    # Per field, the association, statistics and pruned sets.
     assert len(alerts_in["inputs"]["result_sets"]) == 1 + 3 * len(FIELDS)
     for f in FIELDS:
         assert record2["pruned_sets"][str(f)] in alerts_in["inputs"]["result_sets"]
@@ -394,7 +393,7 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
                         Key=f"scratch/runs/{run2}/inputs/alerts/{UNIT}/diff/final.fits")
     assert record2["alerts"][UNIT]["instance"]
 
-    # R4 under the real manifest reader: every unit binds, at submission,
+    # Under the real manifest reader: every unit binds, at submission,
     # the registered instances its input set names.
     template = world["template"]
     for run in (run1, run2):
@@ -442,9 +441,9 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
         assert record["promotion"]  # a promotion id or "refused: ..."
     for _, _, _, promotion, record in rows:
         assert promotion is not None and record["promotion"] == promotion
-        # Step 6's gate: the default policy (the spec names none) checks
+        # The gate: the default policy (the spec names none) checks
         # difference-image and source-set candidates. The fake load registers
-        # its source set, as the real stage does (R2: the loop reads only
+        # its source set, as the real stage does (the loop reads only
         # registered, readable sets), so the policy's optional catalog check
         # runs on it; it is not required, and the promotion stands.
         assert record["promotion_gate"] == "check policy rebuild-trial@1"
@@ -473,7 +472,7 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
 def test_loop_records_a_refused_promotion_and_still_completes_the_date(
         cli, db, fake_batch, fake_s3, world, monkeypatch):
     # No execution records: no attempt ran a released image, so promote_run
-    # refuses -- a science outcome recorded on the row, not a failure (R6).
+    # refuses, a science outcome recorded on the row, not a failure.
     _FakeStages(db, fake_batch, fake_s3).install(monkeypatch)
     result = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01")
     assert result.rc == 0, result.err + result.out
@@ -509,7 +508,7 @@ def test_loop_resumes_an_interrupted_date_with_the_same_run(
         cur.execute("SELECT count(*) FROM attempts WHERE run = %s AND stage = 'admit'",
                     (run_id,))
         assert cur.fetchone()[0] == 1
-    # R4 across the interruption: difference bound before it, crossmatch and
+    # Across the interruption: difference bound before it, crossmatch and
     # alerts after it, each under the real manifest reader.
     assert _bound(db, run_id, "difference", UNIT) == {world["template"]["reference-catalog"]}
     record = row[4]
@@ -571,7 +570,7 @@ def test_loop_retry_failed_re_runs_the_failed_units_on_a_seeded_run(
     assert cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01").rc == 1
     ((_, run1, state, _, record),) = _rows(db, world["schedule"])
     assert state == "failed" and "statistics 102" in record["failure"]
-    # Codex 7-2: field 101's chain ran to the end although 102 failed.
+    # Field 101's chain ran to the end although 102 failed.
     with db.cursor() as cur:
         cur.execute("SELECT stage, unit_id, state FROM units WHERE run = %s "
                     "AND stage IN ('statistics', 'prune', 'alerts')", (run1,))
@@ -608,7 +607,7 @@ def test_loop_retry_failed_re_runs_the_failed_units_on_a_seeded_run(
                                f"{UNIT}/manifest.json")
     assert record["association_sets"]["101"] in alerts_in["inputs"]["result_sets"]
     assert record["promotion"]
-    # R4 on the seeded run: statistics 102 (seeded; it re-reads its seed
+    # On the seeded run: statistics 102 (seeded; it re-reads its seed
     # attempt's input location) binds the seed's association set for 102;
     # alerts binds both fields' pruned sets, 101's inherited from the seed.
     assert _bound(db, run2, "statistics", "102") == {record["association_sets"]["102"]}
@@ -668,7 +667,7 @@ def test_loop_resolves_a_jobless_attempt_and_keeps_its_bindings(
         cli, db, fake_batch, fake_s3, world, monkeypatch):
     # Batch accepts crossmatch 101's job but the response never arrives:
     # the attempt (and its inputs, bound before allocation) is committed,
-    # job-less. loop run exits 75; the rerun resolves it through step 6's
+    # job-less. loop run exits 75; the rerun resolves it through the
     # resolver (the job is found by name and attached) and completes.
     _FakeStages(db, fake_batch, fake_s3).install(monkeypatch)
     original = fake_batch.submit_job
@@ -714,8 +713,8 @@ def test_loop_resolves_a_jobless_attempt_and_keeps_its_bindings(
 
 def test_loop_a_spec_listed_date_runs_as_batch_1(
         cli, db, fake_batch, fake_s3, world, monkeypatch):
-    """A spec with [[dates]] and no inbox still runs as batch 1 (step 4,
-    R1/R5): the migration's batch/kind columns default a spec-listed date to
+    """A spec with [[dates]] and no inbox still runs as batch 1:
+    the migration's batch/kind columns default a spec-listed date to
     (1, 'batch'), the record carries batch=1, and 'loop show' prints it."""
     _FakeStages(db, fake_batch, fake_s3, execution_record={
         "image_digest": world["digest"], "release": world["tag"]}).install(monkeypatch)

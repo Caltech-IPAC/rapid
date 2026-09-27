@@ -51,7 +51,7 @@ commit. The same stage against PostgreSQL (the child tables, the
 not-best exclusion for real, `prunedmerges`, provenance) is tested in
 `tests/db/test_prune.py`.
 
-Three difference images, over five `merges_<field>` pairs (ruling R6, the
+Three difference images, over five `merges_<field>` pairs (R6, the
 run-model form of `dev`'s not-best rule):
 
 | pid | `vbest` | `run` | Fate |

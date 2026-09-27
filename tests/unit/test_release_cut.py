@@ -286,9 +286,9 @@ def test_verify_passes_then_reports_a_moved_remote_tag_and_live_drift(setup, tmp
 
 
 # ----------------------------------------------------------------------
-# R8 (supervisor step 9, 2026-09-25): concurrent cuts are serialised by
-# the record -- no new cut while a releases row is not complete, unless
-# --resume names it.
+# Concurrent cuts are serialised by the record (releases.md §Concurrent
+# cuts are serialised): no new cut while a releases row is not complete,
+# unless --resume names it.
 # ----------------------------------------------------------------------
 
 def test_a_new_cut_is_refused_before_tagging_while_a_release_is_unfinished(setup):

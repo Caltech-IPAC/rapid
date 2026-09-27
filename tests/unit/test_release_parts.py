@@ -155,7 +155,7 @@ def test_list_and_show_print_the_rows(monkeypatch, capsys):
 
 
 # ======================================================================
-# the execution record carries the release (R7)
+# the execution record carries the release
 # ======================================================================
 
 @pytest.mark.parametrize("env, expected", [
@@ -181,7 +181,7 @@ def test_repository_records_unreleased_as_null(value, expected):
 
 
 # ======================================================================
-# a released run submits to its release's job definition revision (R7)
+# a released run submits to its release's job definition revision
 # ======================================================================
 
 class _Cursor:
@@ -301,7 +301,7 @@ def test_run_submit_exits_1_on_a_release_refusal(monkeypatch, capsys):
 
 
 # ======================================================================
-# rapidpipe run create --release (R7)
+# rapidpipe run create --release
 # ======================================================================
 
 def test_run_create_release_fills_revision_and_digest(monkeypatch, capsys):

@@ -158,7 +158,7 @@ def test_statistics_writes_one_row_per_object_and_one_complete_set(conn, tmp_pat
         assert cur.fetchone() == ("u",)
 
     # A second attempt on the same membership reuses the set: no second row per object
-    # (ruling R1: the first attempt succeeded).
+    # (the first attempt succeeded).
     set_disposition(conn, attempt_id, "succeeded")
     rc, _, again = _run_statistics(conn, monkeypatch, tmp_path, run_id, association,
                                    name="again", source_sets=[source_set])

@@ -1,5 +1,5 @@
-"""Behavioural, black-box tests of recovery (supervisor step 6, 2026-09-24,
-R7-R9): argv in, exit code / stdout / stderr and database state out,
+"""Behavioural, black-box tests of recovery (loop.md §Concurrency and
+recovery): argv in, exit code / stdout / stderr and database state out,
 against a real PostgreSQL with Batch faked -- ``submit_unit`` freezing an
 attempt's inputs/settings, a killed job with no container exit code,
 ``run create --seed <run> --only-failed``, ``run start`` resolving a
@@ -9,7 +9,7 @@ Every run/unit/attempt here, including a seed run's prior history, is
 built through the CLI itself (``run submit``/``run reconcile``/``run
 start``), the same convention ``test_run_lifecycle.py``'s module docstring
 describes, with one addition: a job-less attempt (a submission whose Batch
-call fails after the allocation already committed, R7) is produced by
+call fails after the allocation already committed) is produced by
 making the faked ``submit_job`` raise once, mirroring the real failure
 this feature recovers from, rather than inserting the attempt row by hand.
 ``tests/db/test_recovery.py`` covers the same behaviour in detail against
@@ -34,7 +34,7 @@ class _BatchClientError(Exception):
 def _raise_once_then_restore(monkeypatch, fake_batch):
     """The next ``submit_job`` call raises a Batch-shaped error and
     restores the real one, standing in for one submission whose response
-    never reached the caller (R7's motivating failure)."""
+    never reached the caller (the motivating failure)."""
     original = fake_batch.submit_job
 
     def _boom(**_kwargs):
@@ -82,7 +82,7 @@ def _unit_state(db, run_id, stage, unit_id):
 
 
 # ======================================================================
-# submit_unit freezes the attempt's inputs and settings (R7)
+# submit_unit freezes the attempt's inputs and settings
 # ======================================================================
 
 def test_run_start_records_attempt_inputs_and_settings_locations(
@@ -112,7 +112,7 @@ def test_batch_failure_with_no_container_exit_code_becomes_killed(
                     "admit=s3://in-bucket/x", "--no-wait")
     assert submitted.rc == 0, submitted.err
     job_id = _kv(submitted.out, "job")
-    fake_batch.set_status(job_id, "FAILED")  # no container_exit_code: "killed" (R9 inventory)
+    fake_batch.set_status(job_id, "FAILED")  # no container_exit_code: "killed"
 
     result = cli("run", "start", run_id, "--unit", "U")
     assert result.rc == 1
@@ -127,7 +127,7 @@ def test_batch_failure_with_no_container_exit_code_becomes_killed(
 # run create --seed <run> --only-failed: the new run's id and stage
 # suffix, one seeded unit per non-complete seed unit, configuration
 # copied; and run start resolving a seeded unit's inputs/settings from
-# the seed attempt (R8), with an explicit --inputs winning.
+# the seed attempt, with an explicit --inputs winning.
 # ======================================================================
 
 def _build_seed_with_failed_difference(cli, db, fake_batch, fake_s3, batch_env, monkeypatch):
@@ -196,7 +196,7 @@ def test_only_failed_creates_a_re_run_with_the_copied_configuration_and_seeded_u
         assert cur.fetchone() == (2,)
 
     # run start with no --inputs resolves the seed attempt's own recorded
-    # inputs/settings (R8).
+    # inputs/settings.
     started = cli("run", "start", new_run, "--unit", UNIT, "--no-wait")
     assert started.rc == 0, started.err
     _command, flags = _submitted_flags(fake_batch)
@@ -237,7 +237,7 @@ def test_only_failed_refuses_a_seed_with_nothing_failed(cli, db, fake_batch, fak
 
 
 # ======================================================================
-# run reconcile --resolve-jobless (R9): a job-less attempt is recorded
+# run reconcile --resolve-jobless: a job-less attempt is recorded
 # lost; the unit returns to ready with allowance left, else failed; run
 # start then allocates a new attempt.
 # ======================================================================

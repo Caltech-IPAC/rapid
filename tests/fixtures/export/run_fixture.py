@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The export stage's fixture: prepare, run, check. ``make stage-export``.
 
-``export`` is the real HATS source-catalog export (supervisor step 8,
-2026-09-24, ruling R12): a fake database, hats-import run for real, one
+``export`` is the real HATS source-catalog export (export.md): a fake
+database, hats-import run for real, one
 ``catalog-export`` checked -- see ``rapidpipe/selftest/export.py`` and
 ``rapidpipe/selftest/fixtures/export/expected.json``.
 

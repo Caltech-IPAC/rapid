@@ -61,7 +61,7 @@ PostgreSQL 18 with Q3C is `tests/db/test_crossmatch.py`.
 | `row_counts`: 5 objects, 9 merges rows (8 in pass 1, 1 in pass 2), 6 new-object lines | exact | the scenario above |
 | objects' `aid`, `ra0`, `dec0` | exact | recomputed with `radec_index` from the named sources |
 | merges pairs | exact | named as (the object's first source, the source) |
-| every row's run columns, one lock, one CLUSTER, one commit | exact | ruling R3, R13, R5 |
+| every row's run columns, one lock, one CLUSTER, one commit | exact | loop.md §One transaction per batch |
 | each source's `field` | exact | recomputed with `tessellation_field` |
 
 Provenance is checked for shape only: the manifest's run, unit and attempt

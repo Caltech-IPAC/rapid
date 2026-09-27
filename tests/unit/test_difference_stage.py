@@ -344,8 +344,8 @@ def test_uncovered_reference_pixels_are_nan_in_the_difference(tmp_path, fakes):
 
 
 # ----------------------------------------------------------------------
-# SFFT: runs as dev runs it; registration on by default (lead ruling
-# 2026-09-26), alongside ZOGY, each under its own `pipelines` row
+# SFFT: runs as dev runs it; registration on by default (difference.md),
+# alongside ZOGY, each under its own `pipelines` row
 # ----------------------------------------------------------------------
 
 

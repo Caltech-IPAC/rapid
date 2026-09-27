@@ -7,8 +7,8 @@ reuses).
 
 Building a candidate's science rows (``diffimmeta``, ``l2files``) and its
 run/unit/attempt/instance chain is exactly what ``tests/db/test_checks.py``
-already does for the database-level suite (supervisor step 6, WP-A); this
-module imports those builders rather than duplicating them, and drives the
+already does for the database-level suite; this module imports those
+builders rather than duplicating them, and drives the
 actual behaviour under test -- ``check list|run|show``, ``run create
 --check-policy/--auto-promote``, ``run promote --check-policy`` -- only
 through ``main(argv)``. Those builders call ``rapidpipe.runs.repository``
@@ -169,8 +169,8 @@ def test_check_run_trial_passes_strict_fails_and_show_lists_newest_first(cli, db
 
     shown = cli("check", "show", run_id)
     assert shown.rc == 0, shown.err
-    # The check rows; the acceptance lines after them (supervisor step 6,
-    # 2026-09-26, R4) are asserted by the acceptance tests below.
+    # The check rows; the acceptance lines after them are asserted by the
+    # acceptance tests below.
     lines = [line for line in shown.out.splitlines() if line.startswith("id=")]
     # Newest first: the strict-run rows (recorded second) precede the
     # trial-run rows (recorded first).
@@ -314,7 +314,7 @@ def test_run_create_auto_promote_refused_then_permitted_and_run_start_promotes(
     _seed_manifest(fake_s3, output_location, run_id=run_id, stage="admit",
                    unit_id="U", attempt_id=attempt_id)
 
-    # The released-image rule (step 5, R8) applies to automatic promotion
+    # The released-image rule applies to automatic promotion
     # too (maybe_auto_promote calls promote_run with no --allow-unreleased):
     # a complete release whose image_digest matches this attempt's
     # execution record, so the only thing left to refuse promotion would
@@ -362,7 +362,7 @@ def test_run_create_auto_promote_refused_then_permitted_and_run_start_promotes(
 def test_run_start_prints_auto_promote_off_for_an_ordinary_run(
         cli, db, fake_batch, fake_s3, batch_env):
     """The ordinary path: no shipped policy permits automatic promotion, so
-    every real run today prints 'auto-promote off' (R5)."""
+    every real run today prints 'auto-promote off'."""
     run_id = cli("run", "create", "--kind", "scratch", "--purpose", "auto-promote off",
                 "--stages", "admit").out.strip()
     db.track_run(run_id)
@@ -398,8 +398,7 @@ def test_check_help_walk(cli):
 
 
 # ======================================================================
-# check accept and the acceptance lines (supervisor step 6, 2026-09-26,
-# R3, R4)
+# check accept and the acceptance lines
 # ======================================================================
 
 def test_check_accept_records_one_row_and_check_show_prints_the_state(cli, db):

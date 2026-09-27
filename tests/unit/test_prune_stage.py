@@ -2,7 +2,7 @@
 
 Unit id parsing, the association-set entry selection by field, settings
 validation (the only pruning rule, `done_check`), the done check, and the
-not-best exclusion across all three `vbest`/`run` cases (ruling R6):
+not-best exclusion across all three `vbest`/`run` cases:
 promoted current, made by another run, made by this run.
 PostgreSQL-backed behaviour is in tests/db/test_prune.py.
 """
@@ -43,7 +43,7 @@ def _seed(**overrides):
         "diffimages": {
             101: {"vbest": 1, "run": None},       # best: promoted current
             102: {"vbest": 0, "run": OTHER_RUN},   # not best: another run
-            103: {"vbest": 0, "run": RUN},         # best: this run (R6's own-run clause)
+            103: {"vbest": 0, "run": RUN},         # best: this run, under the own-run clause (prune.md)
         },
         "merges": {str(FIELD): [
             {"aid": 10, "sid": 1, "result_set": ASSOCIATION_INSTANCE},

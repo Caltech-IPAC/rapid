@@ -248,7 +248,7 @@ def test_insert_pruned_merges_is_one_statement():
 
 # ----------------------------------------------------------------------
 # assert_readable_instance: the read rule for any product instance,
-# file products included (supervisor step 6, 2026-09-26, R5)
+# file products included (runs.md §Rules)
 # ----------------------------------------------------------------------
 
 def _file(kind="l2-image", run="OTHER", custody="candidate", deletion_state="retained",

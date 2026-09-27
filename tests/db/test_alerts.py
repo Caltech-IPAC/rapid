@@ -9,7 +9,7 @@ and `statistics` stages are not ported yet -- with one object for positive
 row 1 (and its statistics) and a merges row for negative row 1 whose object
 is missing (an orphan). `alerts` runs against the rolled-back transaction.
 
-Crossmatch's and statistics' rows live in step 1's standalone per-field
+Crossmatch's and statistics' rows live in standalone per-field
 tables `merges_<field>`, `astroobjects_<field>` and
 `astroobjectsmeta_<field>` (not children of the prototypes), made here as in
 production by `create_field_object_tables(field)` and
@@ -44,7 +44,7 @@ ALERTS_UNIT = "e20260821001234/SCA07"
 
 
 def _field_tables(cur, field):
-    """Make field ``field``'s per-field tables through step 1's functions."""
+    """Make field ``field``'s per-field tables through these functions."""
     cur.execute("SELECT create_field_object_tables(%s)", (field,))
     cur.execute("SELECT create_astroobjectsmeta_child_table(%s)", (field,))
 
@@ -232,7 +232,7 @@ def test_alerts_writes_outbox_rows_instances_and_nalertpackets(conn, tmp_path, m
 
 
 def test_a_pruned_set_of_an_unnamed_association_set_exits_65(conn, tmp_path, monkeypatch):
-    """R5 (supervisor step 9): a pruned set's base must be a named association set."""
+    """A pruned set's base must be a named association set (alerts.md)."""
     run_id, diff_outputs, sets, _ = _seeded_chain(conn, tmp_path, monkeypatch)
     pruned, _ = _register_set(conn, run_id, stage="prune", kind="pruned-set",
                               key={"base": new_ulid(), "settings_hash": "sha256:0"},
@@ -351,7 +351,7 @@ def test_the_merges_count_fallback_counts_a_duplicated_pair_once(conn, tmp_path,
 
 
 # ----------------------------------------------------------------------
-# R5 (supervisor step 9, 2026-09-25): prune binds to alerts
+# Prune binds to alerts (alerts.md)
 # ----------------------------------------------------------------------
 
 
@@ -431,7 +431,7 @@ def test_the_exclusion_applies_only_with_the_pruned_set_named(conn, tmp_path, mo
 
 def test_a_pair_pruned_under_one_association_set_stays_under_another(
         conn, tmp_path, monkeypatch):
-    """Codex 9-1 amendment to R5: the exclusion is per association set. B's
+    """The exclusion is per association set (alerts.md). B's
     pruned set lists (aid, flagged); A's pruned set lists nothing. A's
     history and fallback count keep the pair; B's leave it out."""
     run_id, _, sets, ids, _ = _pruned_chain(conn, tmp_path, monkeypatch)
@@ -476,7 +476,7 @@ def test_a_pair_pruned_under_one_association_set_stays_under_another(
 
 
 # ----------------------------------------------------------------------
-# Supervisor step 9 R2 (Codex 9-2): history reads only readable source sets
+# History reads only readable source sets (alerts.md)
 # ----------------------------------------------------------------------
 
 
@@ -578,8 +578,8 @@ def test_the_loop_case_reads_history_from_the_earlier_dates_selected_source_set(
 @pytest.mark.parametrize("source_state", ["unselected", "scratch"])
 def test_a_chain_naming_an_unreadable_foreign_source_set_exits_65(
         conn, tmp_path, monkeypatch, source_state):
-    """Codex 9-2: a selected base whose key names another run's scratch source
-    set, or one from an unselected attempt, is refused before any source is read."""
+    """A selected base whose key names another run's scratch source
+    set, or one from an unselected attempt, is refused before any source is read (alerts.md)."""
     run_id, diff_outputs, sets, ids = _foreign_history(conn, tmp_path, monkeypatch,
                                                        source_state=source_state)
     with conn.cursor() as cur:

@@ -1,6 +1,6 @@
 """``rapidpipe check`` and the step-6 flags on ``run create``/``run
-promote``/``run start``, with no database (supervisor step 6,
-2026-09-24, R4-R6)."""
+promote``/``run start``, with no database (checks.md §The check
+commands)."""
 
 from __future__ import annotations
 

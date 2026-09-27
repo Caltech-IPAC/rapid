@@ -1,4 +1,4 @@
-"""Supersession by slot without a database (supervisor step 5a, 2026-09-26).
+"""Supersession by slot without a database (loop.md §Promotion).
 
 The selector and plan helpers (``rapidpipe.runs.slots``); ``promote``'s
 selector handling, refusals and the association-set ancestor rule;
@@ -190,7 +190,7 @@ def test_plan_by_slot_refuses_a_malformed_plan(plan):
 
 
 # ======================================================================
-# promote: selectors and refusals (R4, R15)
+# promote: selectors and refusals
 # ======================================================================
 
 def test_promote_by_slot_replaces_the_current_instance_and_records_the_slot():
@@ -265,7 +265,7 @@ def test_promote_refuses_an_after_instance_in_another_slot_or_with_none():
 
 
 def test_promote_refuses_an_after_instance_without_an_identity():
-    # R21: a slot without an identity (as 20260926-02 could leave) is never promotable.
+    # A slot without an identity (as 20260926-02 could leave) is never promotable.
     db = _Db([{"id": "NEW", "kind": "association-set", "slot": {"field": 1}, "identity": None}])
     with pytest.raises(repository.PromotionRefused, match="'NEW' of kind='association-set' "
                                                           "has no identity"):
@@ -285,7 +285,7 @@ def test_promote_refuses_when_the_logical_key_is_current_outside_the_slot():
 
 
 # ======================================================================
-# the association-set ancestor rule (R6, R13)
+# the association-set ancestor rule
 # ======================================================================
 
 def _chain_db(after_base):
@@ -333,7 +333,7 @@ def test_association_initial_selection_and_recorded_inverse_skip_the_ancestor_ru
 
 
 # ======================================================================
-# promote_run: grouping by slot, frozen plans (R4, R5)
+# promote_run: grouping by slot, frozen plans
 # ======================================================================
 
 def _run_db():
@@ -402,7 +402,7 @@ def test_promote_run_refuses_a_candidate_without_an_identity():
 
 @pytest.mark.parametrize("plan", [None, [], {}, "plan"])
 def test_promote_run_refuses_a_supplied_plan_that_is_not_a_non_empty_list(plan):
-    # R21: a supplied None is a malformed plan, never "no plan".
+    # A supplied None is a malformed plan, never "no plan".
     db = _run_db()
     with pytest.raises(repository.PromotionRefused, match="plan is (malformed|empty)"):
         repository.promote_run(_Conn(db), "R", "ops", "r", plan=plan)
@@ -425,7 +425,7 @@ def test_promotion_plan_refuses_a_run_with_nothing_to_promote():
 
 
 # ======================================================================
-# rollback: the recorded selector (R9, R13)
+# rollback: the recorded selector
 # ======================================================================
 
 def test_rollback_selects_by_recorded_slot_or_logical_key(monkeypatch):
@@ -455,7 +455,7 @@ def test_rollback_selects_by_recorded_slot_or_logical_key(monkeypatch):
 
 
 # ======================================================================
-# the fill wrapper and its callers (R2, R16)
+# the fill wrapper and its callers
 # ======================================================================
 
 def test_fill_identity_returns_the_report():
@@ -496,7 +496,7 @@ def test_run_policy_checks_fills_before_loading_candidates(monkeypatch):
 
 
 # ======================================================================
-# the reference check reads the slot (R8)
+# the reference check reads the slot
 # ======================================================================
 
 def test_the_reference_identity_comes_from_the_slot():
@@ -530,7 +530,7 @@ def test_a_candidate_without_a_slot_fails_as_an_unresolved_identity():
 
 
 # ======================================================================
-# the CLI: run promote-plan, run promote --plan (R5)
+# the CLI: run promote-plan, run promote --plan
 # ======================================================================
 
 class _CliConn:
