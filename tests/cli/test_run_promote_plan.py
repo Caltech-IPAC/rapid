@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from rapidpipe.db.ids import new_ulid
 from tests.db.test_repository import TEST_KIND, by_slot
 
@@ -137,3 +139,37 @@ def test_promote_plan_nothing_to_promote_exits_64(cli, db):
     result = cli("run", "promote-plan", run_id)
     assert result.rc == 64
     assert "nothing to promote" in result.err
+
+
+# ======================================================================
+# R21 (migration 20260926-03-product-slots-identity-first.sql): a
+# malformed --plan file is refused before any connection is even made,
+# JSON null included, not read as "no plan".
+# ======================================================================
+
+@pytest.mark.parametrize("plan_contents", ["null", "[]", "{}"])
+def test_promote_plan_file_null_empty_or_object_exits_64_writes_nothing(
+        cli, db, fake_batch, fake_s3, batch_env, tmp_path, plan_contents):
+    run_id = _create_run(cli, db, kind="production")
+    attempt_id, _job_id, _location = _submit_and_complete(
+        cli, fake_batch, fake_s3, run_id, unit_id="cli-plan-004/SCA07")
+    instance_id, _key = _register_candidate(db, run_id, "admit", attempt_id)
+
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(plan_contents)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT count(*) FROM promotions")
+        before_count = cur.fetchone()[0]
+
+    result = cli(
+        "run", "promote", run_id, "--reason", "malformed plan file",
+        "--allow-unreleased", "--plan", str(plan_path))
+    assert result.rc == 64
+    assert "cannot read plan" in result.err
+
+    with db.cursor() as cur:
+        cur.execute("SELECT custody FROM product_instances WHERE id = %s", (instance_id,))
+        assert cur.fetchone()[0] == "candidate"  # nothing written
+        cur.execute("SELECT count(*) FROM promotions")
+        assert cur.fetchone()[0] == before_count

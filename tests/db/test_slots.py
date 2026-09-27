@@ -14,6 +14,7 @@ maps needs a matching ``dev`` row for before it can be promoted.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -912,3 +913,65 @@ def test_two_depth_duplicate_current_withholds_together(conn):
         rows = dict(cur.fetchall())
     for instance_id in six:
         assert rows[instance_id] is None, f"{instance_id} kept a slot; not withheld with its peer"
+
+
+# ======================================================================
+# R21 (migration 20260926-03-product-slots-identity-first.sql, from the
+# Codex review of #172): a slot only ever comes with an identity; the
+# identity phase of the fill runs to a true fixpoint before any depth of
+# association chain is slotted; a malformed or unresolved-identity
+# candidate is refused by promote_run, and a malformed --plan file is
+# refused before promote_run is even called.
+# ======================================================================
+
+def test_malformed_association_set_gets_no_slot_and_is_refused(conn):
+    """An association-set whose source_sets is an object, not an array
+    (malformed): identity cannot be derived, so R21 withholds its slot
+    too (previously it kept slot={field} even though unresolved)."""
+    run_id, malformed = _register(
+        conn, "association-set",
+        {"field": 92000, "base": None, "source_sets": {}, "settings_hash": "sha256:r21-bad"})
+    slot, identity = _slot_identity(conn, malformed)
+    assert slot is None
+    assert identity is None
+
+    with pytest.raises(repo.PromotionRefused, match=re.escape(malformed)):
+        repo.promote_run(
+            conn, run_id, who="brusholme", reason="malformed", allow_unreleased=True,
+            check_policy=_NO_CHECKS_POLICY)
+
+
+def test_forty_deep_association_chain_resolves_in_one_fill_call(conn):
+    """R21: the identity phase runs to a true fixpoint (a cycle guard
+    only, no longer capped at 32 passes), so a chain deeper than the old
+    cap resolves fully in one product_identity_fill() call, with a slot
+    only where the identity is set."""
+    depth = 40
+    base = None
+    chain = []
+    for i in range(depth):
+        _run, assoc = _register(
+            conn, "association-set",
+            {"field": 93000, "base": base, "source_sets": [],
+             "settings_hash": f"sha256:r21-chain-{i}"})
+        chain.append(assoc)
+        base = assoc
+
+    for instance_id in chain:
+        _clear_slot_and_identity(conn, instance_id)
+
+    with conn.cursor() as cur:
+        report = repo.fill_identity(cur)
+    by_kind = {kind: (converted, unresolved, dup) for kind, converted, unresolved, dup in report}
+    assert by_kind["association-set"][0] == depth  # converted
+    assert by_kind["association-set"][1] == 0       # unresolved
+    assert by_kind["association-set"][2] == 0       # duplicate_current
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, slot, identity FROM product_instances WHERE id = ANY(%s)",
+                    (chain,))
+        rows = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+    for instance_id in chain:
+        slot, identity = rows[instance_id]
+        assert slot == {"field": 93000}
+        assert identity is not None
