@@ -31,7 +31,8 @@ class _Db:
 
     def __init__(self, instances):
         self.instances = {i["id"]: {"custody": "candidate", "deletion_state": "retained",
-                                    "logical_key": {}, "slot": None, **i}
+                                    "logical_key": {}, "slot": None, "identity": {"i": i["id"]},
+                                    **i}
                           for i in instances}
         self.changes: list[tuple] = []
         self.promotions: list[tuple] = []
@@ -56,8 +57,8 @@ class _Db:
             return [("source-set", 1, 0, 0)]
         if text.startswith("SELECT kind, state, check_policy_ref FROM runs"):
             return [self.run]
-        if text.startswith("SELECT pi.id, pi.kind, pi.slot FROM product_instances pi"):
-            return [(r["id"], r["kind"], r["slot"]) for r in sorted(
+        if text.startswith("SELECT pi.id, pi.kind, pi.slot, pi.identity FROM product_instances"):
+            return [(r["id"], r["kind"], r["slot"], r["identity"]) for r in sorted(
                         self.instances.values(), key=lambda r: (r["kind"], r["id"]))
                     if r.get("run") == params[0] and r["custody"] == "candidate"]
         if text.startswith("SELECT id FROM product_instances WHERE kind = %s AND slot = %s"):
@@ -69,7 +70,7 @@ class _Db:
         if text.startswith("SELECT pi.custody, pi.kind, pi.slot, pi.logical_key"):
             r = self.instances.get(params[0])
             return [] if r is None else [(r["custody"], r["kind"], r["slot"], r["logical_key"],
-                                          r["deletion_state"], False, None)]
+                                          r["deletion_state"], False, None, r["identity"])]
         if text.startswith("SELECT pi.producing_attempt, u.selected_attempt"):
             return [("A", "A")]
         if "FROM dependencies d" in text:
@@ -263,6 +264,15 @@ def test_promote_refuses_an_after_instance_in_another_slot_or_with_none():
         _promote(db, [("source-set", {"slot": S1}, None, "NULL")])
 
 
+def test_promote_refuses_an_after_instance_without_an_identity():
+    # R21: a slot without an identity (as 20260926-02 could leave) is never promotable.
+    db = _Db([{"id": "NEW", "kind": "association-set", "slot": {"field": 1}, "identity": None}])
+    with pytest.raises(repository.PromotionRefused, match="'NEW' of kind='association-set' "
+                                                          "has no identity"):
+        _promote(db, [("association-set", {"slot": {"field": 1}}, None, "NEW")])
+    assert db.changes == []
+
+
 def test_promote_refuses_when_the_logical_key_is_current_outside_the_slot():
     db = _Db([
         {"id": "LEGACY", "kind": "l2-image", "slot": None, "custody": "current",
@@ -380,6 +390,23 @@ def test_promote_run_refuses_a_candidate_without_a_slot():
     db.instances["C2"]["slot"] = None
     with pytest.raises(repository.PromotionRefused, match="'C2' of kind='source-set' has no slot"):
         repository.promote_run(_Conn(db), "R", "ops", "r")
+
+
+def test_promote_run_refuses_a_candidate_without_an_identity():
+    db = _run_db()
+    db.instances["C2"]["identity"] = None
+    with pytest.raises(repository.PromotionRefused, match="'C2' of kind='source-set' has no "
+                                                          "identity"):
+        repository.promote_run(_Conn(db), "R", "ops", "r")
+
+
+@pytest.mark.parametrize("plan", [None, [], {}, "plan"])
+def test_promote_run_refuses_a_supplied_plan_that_is_not_a_non_empty_list(plan):
+    # R21: a supplied None is a malformed plan, never "no plan".
+    db = _run_db()
+    with pytest.raises(repository.PromotionRefused, match="plan is (malformed|empty)"):
+        repository.promote_run(_Conn(db), "R", "ops", "r", plan=plan)
+    assert db.changes == [] and db.promotions == []
 
 
 def test_promote_run_refuses_two_candidates_in_one_slot():
@@ -570,6 +597,22 @@ def test_promote_with_a_plan_passes_it_and_a_stale_plan_exits_64(
     assert cli.main(["run", "promote", "R1", "--reason", "r", "--plan", str(path)]) == 64
     assert seen["plan"] == plan
     assert "stale plan" in capsys.readouterr().err
+    assert cli_conn.committed == 0
+
+
+@pytest.mark.parametrize("content", ["null", "[]", "{}", '"x"', "[1]",
+                                     '[{"kind": "k", "slot": {"a": 1}, "before": null}]'])
+def test_promote_with_a_plan_that_is_not_a_non_empty_list_of_entries_exits_64(
+        monkeypatch, cli_conn, capsys, tmp_path, content):
+    path = tmp_path / "plan.json"
+    path.write_text(content)
+
+    def _never(*_a, **_k):
+        raise AssertionError("promote_run must not be called")
+
+    monkeypatch.setattr(repository, "promote_run", _never)
+    assert cli.main(["run", "promote", "R1", "--reason", "r", "--plan", str(path)]) == 64
+    assert "cannot read plan" in capsys.readouterr().err
     assert cli_conn.committed == 0
 
 
