@@ -28,7 +28,15 @@ import pytest
 from rapidpipe.checks import policy as policy_mod
 from rapidpipe.checks.policy import load_policy_file
 from rapidpipe.db.ids import new_ulid
-from tests.db.test_checks import FIXTURES, STRICT, TRIAL, _diff_candidate, _l2, _selected_attempt
+from tests.db.test_checks import (
+    FIXTURES,
+    STRICT,
+    TRIAL,
+    _diff_candidate,
+    _l2,
+    _reference,
+    _selected_attempt,
+)
 from tests.db.test_repository import TEST_KIND, _make_run, _register_simple_instance
 
 from .conftest import FAKE_BUCKET
@@ -80,7 +88,7 @@ def _catalog_source_set(db, run_id, *, rows, catalog_type="sextractor"):
     attempt_id = _selected_attempt(conn, aux_run)
     diff = _register_simple_instance(
         conn, aux_run, "difference", attempt_id, kind="difference-image",
-        logical_key={"l2": l2, "reference": "REF", "differencer": "sfft",
+        logical_key={"l2": l2, "reference": _reference(conn, aux_run), "differencer": "sfft",
                      "settings_hash": new_ulid()})
     return _source_set(conn, run_id, key={"difference": diff, "catalog_type": catalog_type},
                        rows=rows)

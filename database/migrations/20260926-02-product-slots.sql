@@ -12,8 +12,8 @@
 --     `product_instances_current_slot_uq`, and promotion replaces by slot.
 -- Both are derived by the database, never by the stage that wrote the manifest:
 -- `product_identity_derive(kind, logical_key)` computes one row's pair from its provenance
--- key and its producers' already-filled slot and identity (the derivation table of ruling
--- R3, with R14's hash chain for association sets), and `product_identity_fill()` fills
+-- key and its producers' already-filled identity (the derivation table of ruling R3, with
+-- R14's hash chain for association sets; a producer's slot is read from its identity, R18), and `product_identity_fill()` fills
 -- every row whose slot or identity is NULL, pass by pass (at most 32), withholding the slot
 -- of any current row whose (kind, slot) another current row holds or would take in the same
 -- pass (R12: an ambiguous conversion is refused, left NULL and counted, never raised). The
@@ -83,6 +83,49 @@ LANGUAGE sql IMMUTABLE AS $fn$
     SELECT CASE WHEN jsonb_typeof(v) = 'string' THEN v #>> '{}' END
 $fn$;
 
+-- The subset of an identity object holding exactly ``fields``; NULL unless all are present.
+CREATE OR REPLACE FUNCTION product_identity_pick(i jsonb, fields text[]) RETURNS jsonb
+LANGUAGE sql IMMUTABLE AS $fn$
+    SELECT CASE WHEN jsonb_typeof(i) = 'object' AND i ?& fields
+                THEN (SELECT jsonb_object_agg(f, i -> f) FROM unnest(fields) AS f) END
+$fn$;
+
+-- The slot of a product of ``p_kind`` read from its identity (ruling R18): every slot is
+-- a subset of its kind's identity fields, and identity is stored even when a duplicate
+-- current row's slot is withheld, so a consumer derives from its producer's identity and
+-- a descendant of a withheld producer is classified on its own.
+CREATE OR REPLACE FUNCTION product_identity_slot(p_kind text, i jsonb) RETURNS jsonb
+LANGUAGE plpgsql IMMUTABLE AS $fn$
+DECLARE
+    m jsonb;
+BEGIN
+    RETURN CASE p_kind
+        WHEN 'l2-image' THEN product_identity_pick(i, ARRAY['detector', 'exposure'])
+        WHEN 'psf' THEN product_identity_pick(i, ARRAY['detector', 'filter'])
+        WHEN 'reference-image' THEN product_identity_pick(i, ARRAY['field', 'filter'])
+        WHEN 'reference-catalog' THEN
+            product_identity_pick(i, ARRAY['catalog_type', 'field', 'filter'])
+        WHEN 'difference-image' THEN
+            product_identity_pick(i, ARRAY['detector', 'differencer', 'exposure'])
+        WHEN 'source-catalog' THEN product_identity_pick(
+            i, ARRAY['catalog_type', 'detector', 'differencer', 'exposure', 'sign'])
+        WHEN 'source-set' THEN product_identity_pick(
+            i, ARRAY['catalog_type', 'detector', 'differencer', 'exposure'])
+        WHEN 'alert-container' THEN
+            product_identity_pick(i, ARRAY['detector', 'differencer', 'exposure'])
+        WHEN 'alert-set' THEN
+            product_identity_pick(i, ARRAY['detector', 'differencer', 'exposure'])
+        WHEN 'association-set' THEN product_identity_pick(i, ARRAY['field'])
+        WHEN 'pruned-set' THEN product_identity_pick(i -> 'association', ARRAY['field'])
+        WHEN 'statistics-set' THEN
+            product_identity_slot(i ->> 'membership_kind', i -> 'membership')
+            || product_identity_pick(i, ARRAY['membership_kind'])
+        WHEN 'light-curve' THEN product_identity_pick(i, ARRAY['field', 'request_id'])
+        WHEN 'catalog-export' THEN product_identity_pick(i, ARRAY['export_type', 'field'])
+    END;
+END
+$fn$;
+
 CREATE OR REPLACE FUNCTION product_identity_derive(p_kind text, k jsonb)
 RETURNS TABLE (slot jsonb, identity jsonb)
 LANGUAGE plpgsql STABLE AS $fn$
@@ -137,7 +180,8 @@ BEGIN
 
     WHEN 'reference-catalog' THEN
         a := product_identity_scalar(k -> 'catalog_type');
-        SELECT pi.kind, pi.slot, pi.identity INTO pk, ps, pv
+        SELECT pi.kind, product_identity_slot(pi.kind, pi.identity), pi.identity
+        INTO pk, ps, pv
         FROM product_instances pi WHERE pi.id = product_identity_ref(k -> 'reference');
         IF a IS NOT NULL AND pk = 'reference-image' THEN
             IF ps IS NOT NULL THEN
@@ -151,7 +195,8 @@ BEGIN
     WHEN 'difference-image' THEN
         a := product_identity_scalar(k -> 'differencer');
         b := product_identity_scalar(k -> 'settings_hash');
-        SELECT pi.kind, pi.slot, pi.identity INTO pk, ps, pv
+        SELECT pi.kind, product_identity_slot(pi.kind, pi.identity), pi.identity
+        INTO pk, ps, pv
         FROM product_instances pi WHERE pi.id = product_identity_ref(k -> 'l2');
         SELECT pi.kind, pi.identity INTO rk, rv
         FROM product_instances pi WHERE pi.id = product_identity_ref(k -> 'reference');
@@ -185,7 +230,8 @@ BEGIN
             c := '{}'::jsonb;
             d := jsonb_build_object('schema_version', a);
         END IF;
-        SELECT pi.kind, pi.slot, pi.identity INTO pk, ps, pv
+        SELECT pi.kind, product_identity_slot(pi.kind, pi.identity), pi.identity
+        INTO pk, ps, pv
         FROM product_instances pi WHERE pi.id = product_identity_ref(k -> 'difference');
         IF ok AND pk = 'difference-image' THEN
             IF ps IS NOT NULL THEN
@@ -238,7 +284,8 @@ BEGIN
 
     WHEN 'pruned-set' THEN
         a := product_identity_scalar(k -> 'settings_hash');
-        SELECT pi.kind, pi.slot, pi.identity INTO pk, ps, pv
+        SELECT pi.kind, product_identity_slot(pi.kind, pi.identity), pi.identity
+        INTO pk, ps, pv
         FROM product_instances pi WHERE pi.id = product_identity_ref(k -> 'base');
         IF pk = 'association-set' THEN
             slot := ps;
@@ -248,7 +295,8 @@ BEGIN
         END IF;
 
     WHEN 'statistics-set' THEN
-        SELECT pi.kind, pi.slot, pi.identity INTO pk, ps, pv
+        SELECT pi.kind, product_identity_slot(pi.kind, pi.identity), pi.identity
+        INTO pk, ps, pv
         FROM product_instances pi WHERE pi.id = product_identity_ref(k -> 'membership');
         IF pk IS NOT NULL THEN
             IF ps IS NOT NULL THEN
@@ -288,8 +336,7 @@ $fn$;
 
 COMMENT ON FUNCTION product_identity_derive(text, jsonb) IS
     'The (slot, identity) of one product instance of the given kind from its logical_key '
-    'and its producers'' filled slot and identity (supervisor step 5a, rulings R3, R14, '
-    'R16); NULL where a field is missing or malformed, a producer is missing, of the wrong '
+    'and its producers'' filled identity (supervisor step 5a, rulings R3, R14, R16, R18); NULL where a field is missing or malformed, a producer is missing, of the wrong '
     'kind or unresolved, or the kind is unknown.';
 
 -- ======================================================================
@@ -437,6 +484,8 @@ BEGIN
         GRANT SELECT, INSERT ON slot_backfill_log TO rapid_rebuild_pipeline;
         GRANT EXECUTE ON FUNCTION product_identity_scalar(jsonb) TO rapid_rebuild_pipeline;
         GRANT EXECUTE ON FUNCTION product_identity_ref(jsonb) TO rapid_rebuild_pipeline;
+        GRANT EXECUTE ON FUNCTION product_identity_pick(jsonb, text[]) TO rapid_rebuild_pipeline;
+        GRANT EXECUTE ON FUNCTION product_identity_slot(text, jsonb) TO rapid_rebuild_pipeline;
         GRANT EXECUTE ON FUNCTION product_identity_derive(text, jsonb) TO rapid_rebuild_pipeline;
         GRANT EXECUTE ON FUNCTION product_identity_fill() TO rapid_rebuild_pipeline;
     ELSE
