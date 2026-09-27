@@ -842,3 +842,63 @@ def test_catalog_counts_vs_reference_candidate_with_no_slot_fails(conn):
     result = catalog_counts_vs_reference(conn, cand, params)
     assert result.outcome == "failed"
     assert "identity" in result.detail["failing"]
+
+
+# ======================================================================
+# R20: a duplicate-current set is withheld together at any depth.
+# ======================================================================
+
+def _clear_slot_and_identity(conn, instance_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE product_instances SET slot = NULL, identity = NULL WHERE id = %s",
+            (instance_id,))
+
+
+def test_two_depth_duplicate_current_withholds_together(conn):
+    """R20 (supervisor ledger, after Rehearsal 2): the fill derives to a
+    fixpoint first and only then withholds every member of a
+    duplicate-current set together, whatever its dependency depth. Two
+    current association-sets share one field slot (the second's base is
+    the first, the loop's ordinary next-date shape); each has a current
+    pruned-set and a current statistics-set built on it. Against
+    713421f2 (R18, before amendment 4) the two pruned-sets and the two
+    statistics-sets resolve their slot one pass apart, because the
+    second association-set's own identity (needed by its descendants'
+    derivation) is itself one pass behind the first's -- so the
+    depth-1 descendant that happens to resolve first keeps a slot
+    nobody else contests YET, and only its sibling is later caught as
+    the duplicate. R20 requires the full fixpoint be reached first, so
+    all three (kind, slot) collisions -- association-set, pruned-set,
+    statistics-set -- are counted duplicate_current in pairs, and all
+    six rows end up with slot NULL."""
+    _run, base_a = _register(
+        conn, "association-set",
+        {"field": 91000, "base": None, "source_sets": [], "settings_hash": "sha256:r20-a"})
+    _run, base_b = _register(
+        conn, "association-set",
+        {"field": 91000, "base": base_a, "source_sets": [], "settings_hash": "sha256:r20-b"})
+    _run, pruned_a = _register(
+        conn, "pruned-set", {"base": base_a, "settings_hash": "sha256:r20-pa"})
+    _run, pruned_b = _register(
+        conn, "pruned-set", {"base": base_b, "settings_hash": "sha256:r20-pb"})
+    _run, stats_a = _register(conn, "statistics-set", {"membership": base_a})
+    _run, stats_b = _register(conn, "statistics-set", {"membership": base_b})
+
+    six = [base_a, base_b, pruned_a, pruned_b, stats_a, stats_b]
+    for instance_id in six:
+        _clear_slot_and_identity(conn, instance_id)
+        _set_custody(conn, instance_id, "current")
+
+    with conn.cursor() as cur:
+        report = repo.fill_identity(cur)
+    by_kind = {kind: (converted, unresolved, dup) for kind, converted, unresolved, dup in report}
+    assert by_kind.get("association-set", (0, 0, 0))[2] == 2
+    assert by_kind.get("pruned-set", (0, 0, 0))[2] == 2
+    assert by_kind.get("statistics-set", (0, 0, 0))[2] == 2
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, slot FROM product_instances WHERE id = ANY(%s)", (six,))
+        rows = dict(cur.fetchall())
+    for instance_id in six:
+        assert rows[instance_id] is None, f"{instance_id} kept a slot; not withheld with its peer"
