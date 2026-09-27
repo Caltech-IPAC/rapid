@@ -1,5 +1,4 @@
-"""Running checks and recording their results; automatic promotion
-(supervisor step 6, 2026-09-24, R1, R5, R6).
+"""Running checks and recording their results; automatic promotion.
 
 Every function here works inside the caller's transaction and never
 commits, like :mod:`rapidpipe.runs.repository`: the CLI commits around
@@ -64,7 +63,8 @@ class RecordedCheck:
         return str(self.detail.get("summary", ""))
 
     def line(self) -> str:
-        """The one-line form ``check run`` and ``check show`` print (R6)."""
+        """The one-line form ``check run`` and ``check show`` print (checks
+        page, "The check commands")."""
         key = json.dumps(self.logical_key, sort_keys=True, separators=(",", ":"))
         return (f"instance={self.instance} kind={self.kind} key={key} "
                 f"check={self.check_ref} required={'true' if self.required else 'false'} "
@@ -73,7 +73,8 @@ class RecordedCheck:
 
 def resolve_run_policy(conn, run_id: str, explicit: str | None = None) -> Policy:
     """The policy for ``run_id``: ``explicit`` > the run's
-    ``check_policy_ref`` > :data:`DEFAULT_POLICY` (R4)."""
+    ``check_policy_ref`` > :data:`DEFAULT_POLICY` (checks page, "Check
+    policies")."""
     if explicit:
         return load_policy(explicit)
     with conn.cursor() as cur:
@@ -118,12 +119,14 @@ def _finite_json(value: Any) -> Any:
 def run_check(conn, candidate: Candidate, policy_check: PolicyCheck, *,
               policy_ref: str, params: dict[str, Any] | None = None,
               who: str | None = None) -> RecordedCheck:
-    """Run one check over one instance and record its ``checks`` row (R1).
+    """Run one check over one instance and record its ``checks`` row
+    (checks page, "What a check is").
 
     ``params`` defaults to the policy's params for the check. The row's
     ``required`` is the policy's flag; its ``detail`` holds the check's own
-    detail plus ``policy``, ``params`` (what the promotion gate matches,
-    A2), ``summary`` and ``who``. A check that raises is recorded as
+    detail plus ``policy``, ``params`` (what the promotion gate matches;
+    checks page, "The promotion gate"), ``summary`` and ``who``. A check
+    that raises is recorded as
     ``failed`` with the error in detail -- never nothing. The function
     runs under a savepoint so a database error inside it does not abort
     the caller's transaction.
@@ -138,7 +141,7 @@ def run_check(conn, candidate: Candidate, policy_check: PolicyCheck, *,
                 raise TypeError(f"check {registered.ref} returned {type(result).__name__}, "
                                 "not CheckResult")
             cur.execute("RELEASE SAVEPOINT rapid_check")
-        except Exception as exc:  # noqa: BLE001 - recorded, never lost (R1)
+        except Exception as exc:  # noqa: BLE001 - recorded, never lost
             cur.execute("ROLLBACK TO SAVEPOINT rapid_check")
             cur.execute("RELEASE SAVEPOINT rapid_check")
             message = f"{type(exc).__name__}: {exc}"
@@ -155,7 +158,7 @@ def run_check(conn, candidate: Candidate, policy_check: PolicyCheck, *,
             # jsonb has no NaN/Infinity: a detail carrying one would fail the
             # INSERT below and lose the row. Record a failed check whose
             # detail keeps the evidence with non-finite floats as text, and
-            # the error (R1: a check is recorded failed, never nothing).
+            # the error: a check is recorded failed, never nothing.
             outcome = "failed"
             message = f"{type(exc).__name__}: {exc}"
             detail = _finite_json(detail)
@@ -184,18 +187,19 @@ def run_policy_checks(conn, run_id: str, policy: Policy, *, instance: str | None
                       param_overrides: dict[str, Any] | None = None,
                       who: str | None = None) -> list[RecordedCheck]:
     """Run every applicable policy check over the run's candidates (or the
-    one ``instance`` / the one ``check``), record each, return them (R6).
+    one ``instance`` / the one ``check``), record each, return them (checks
+    page, "The check commands").
 
     ``param_overrides`` replace the policy's params for ``check`` only,
     and only names that check takes; the recorded params then differ from
-    the policy's, so the promotion gate does not count that row (A2).
-    Raises :class:`CheckUsageError` for an instance that is not a
-    candidate of the run, a check the policy does not name, overrides
-    without ``check``, or an unknown parameter.
+    the policy's, so the promotion gate does not count that row (checks
+    page, "The promotion gate"). Raises :class:`CheckUsageError` for an
+    instance that is not a candidate of the run, a check the policy does
+    not name, overrides without ``check``, or an unknown parameter.
 
-    Slot and identity are filled first (supervisor step 5a, 2026-09-26,
-    R16), so a check that finds its reference by slot never sees a NULL
-    the fill could have resolved; a failed fill is logged, not raised.
+    Slot and identity are filled first (products page, "Identity"), so a
+    check that finds its reference by slot never sees a NULL the fill
+    could have resolved; a failed fill is logged, not raised.
     """
     from rapidpipe.runs import repository
 
@@ -240,7 +244,8 @@ def run_policy_checks(conn, run_id: str, policy: Policy, *, instance: str | None
 
 
 def recorded_checks(conn, run_id: str, *, instance: str | None = None) -> list[RecordedCheck]:
-    """Recorded ``checks`` rows of the run's instances, newest first (R6)."""
+    """Recorded ``checks`` rows of the run's instances, newest first (checks
+    page, "The check commands")."""
     query = """
         SELECT c.id, c.instance, pi.kind, pi.logical_key, c.check_name, c.version,
                c.required, c.outcome, c.detail, c.happened_at
@@ -271,7 +276,8 @@ class AutoPromoteOutcome:
 
 
 def maybe_auto_promote(conn, run_id: str, *, who: str = "auto-promote") -> AutoPromoteOutcome:
-    """Automatic promotion at the end of a ``run start`` walk (R5).
+    """Automatic promotion at the end of a ``run start`` walk (checks page,
+    "Automatic promotion").
 
     With ``runs.auto_promote`` false (every run today), returns ``off``
     with the message ``auto-promote off (policy <ref>)``. Otherwise,

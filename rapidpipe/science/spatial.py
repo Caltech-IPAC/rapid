@@ -27,7 +27,7 @@ they are expected to be in this repository's own test environment.
 
 ``radec_index``/``index_to_radec``, ``compute_angular_separation``, and the
 ``field_neighbours``/``field_center``/``field_corners`` tessellation
-wrappers below are `crossmatch`'s science helpers (step-1 ruling R8), also
+wrappers below are `crossmatch`'s science helpers (crossmatch page), also
 ported here rather than imported for the same ``rapid_pipeline_subs``
 reason. Like ``tessellation_field``, the three wrappers go through
 ``RomanTessellationClosedForm`` and so need no SQLite tessellation

@@ -2,8 +2,8 @@
 
 - :func:`build_prune_input_set` writes a completion manifest shaped like
   `crossmatch`'s own (stage ``crossmatch``, unit kind ``field``, a single
-  ``association-set`` output entry) -- the shape ``prune`` reads (step 1
-  ruling R2).
+  ``association-set`` output entry) -- the shape ``prune`` reads
+  (crossmatch page).
 - :class:`FakePruneDatabase` has
   :class:`rapidpipe.stages.prune.PostgresPruneDatabase`'s methods over
   in-memory state: seeded `merges` rows, `sources` rows (pid only -- the
@@ -182,8 +182,9 @@ STATE_ENV = "RAPIDPIPE_FAKE_PRUNE_STATE"
 
 #: A packaged fixture cannot know the invocation's run id in advance (it is
 #: minted by ``rapidpipe.selftest.runner.run_fixture`` after ``prepare``
-#: writes the seed file), but R6's own-run clause needs a `diffimages.run`
-#: value that matches it. A seeded row's ``"run"`` of this sentinel is
+#: writes the seed file), but the own-run clause (prune page) needs a
+#: `diffimages.run` value that matches it. A seeded row's ``"run"`` of
+#: this sentinel is
 #: replaced with the running attempt's own ``--run`` argument, read from
 #: ``sys.argv`` since :func:`fake_database` executes inside that same
 #: subprocess.

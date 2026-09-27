@@ -1,7 +1,7 @@
 # Default settings for the export stage (rapidpipe.stages.export).
 #
 # Ported from origin/dev's pipeline/generateSourceHATSCatalog.py
-# (supervisor step 8, 2026-09-24, ruling R12), whose parameters come from
+# (export page), whose parameters come from
 # the [HATS_CATALOGS] section of
 # cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini; each key below
 # names the dev parameter it replaces and keeps dev's value unless it says

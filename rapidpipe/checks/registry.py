@@ -1,5 +1,5 @@
 """The check registry: named, versioned Python functions over one product
-instance (supervisor step 6, 2026-09-24, R1).
+instance (checks page, "What a check is").
 
 A check is registered with :func:`check`::
 

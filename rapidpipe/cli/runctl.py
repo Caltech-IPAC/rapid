@@ -691,9 +691,10 @@ def compose_inputs(
         )
 
     try:
-        # Labelled (supervisor step 2 R4): the id rule is manifest_instances,
-        # so a template's inputs.result_sets are bound too; a deleting or
-        # deleted producer at bind time exits 65 (InputsRefused), not 64.
+        # Labelled (stage contract, "The manifest"): the id rule is
+        # manifest_instances, so a template's inputs.result_sets are bound
+        # too; a deleting or deleted producer at bind time exits 65
+        # (InputsRefused), not 64.
         result = binding.bind_input_set(
             conn, storage, run_id=run_id, stage=stage, unit_kind=declaration.unit,
             unit_id=unit_id, dest=dest_text, compose=compose,
@@ -807,7 +808,7 @@ class _StartWalk:
 
     def _seeded(self, stage: str, unit_id: str | None) -> tuple[str | None, str | None]:
         """The seed attempt's (inputs, settings) locations for a seeded unit,
-        else ``(None, None)`` (supervisor step 6, 2026-09-24, R8)."""
+        else ``(None, None)`` (runs page, "Rules")."""
         if unit_id is None:
             return None, None
         unit_row_id = _seeded_unit(self.conn, self.args.run_id, stage, unit_id)
@@ -821,9 +822,9 @@ class _StartWalk:
         in this run (a seeded run starting at a register), the producer is
         the one before the matching position in the seed's stage list, so a
         leading ``register`` stands for ``register(admit)``, never a later
-        register unit such as ``difference/<unit>`` (Codex diff review of
-        step 6). Only when the seed's list does not end with this run's
-        does it fall back to any producing stage's."""
+        register unit such as ``difference/<unit>``. Only when the seed's
+        list does not end with this run's does it fall back to any
+        producing stage's."""
         unit_id = self.args.unit_id
         if selected[position] != "register":
             return [unit_id]
@@ -836,11 +837,11 @@ class _StartWalk:
 
     def _inherited(self, selected: list[str], position: int, first: int) -> bool:
         """Whether a seeded run inherits this position's result from its seed
-        (supervisor step 6, 2026-09-24, Codex amendment B2): no unit row for
-        the unit here or at any earlier position, no explicit inputs or
-        ``--template`` for this stage (an explicit template asks for the
-        stage to run; Codex diff review of step 6), and a seeded unit for it
-        at a later position -- its upstream completed in the seed."""
+        (runs page, "Rules"): no unit row for the unit here or at any
+        earlier position, no explicit inputs or ``--template`` for this
+        stage (an explicit template asks for the stage to run), and a
+        seeded unit for it at a later position -- its upstream completed
+        in the seed."""
         run_id = self.args.run_id
         if self.run.seed_run is None:
             return False
@@ -862,9 +863,8 @@ class _StartWalk:
         """For a ``register`` position with no explicit inputs, the seeded
         register unit's ``(unit_id, inputs, settings)`` when this run has
         one for the unit here: its unit id is the seed's, copied as is, so
-        it is not derived from the inputs' manifest (supervisor step 6,
-        2026-09-24, R7/R8; Codex amendment B4). ``None`` when there is no
-        such unit; more than one is a usage error."""
+        it is not derived from the inputs' manifest (runs page, "Rules").
+        ``None`` when there is no such unit; more than one is a usage error."""
         if self._explicit_inputs("register", position, first) is not None:
             return None
         units = _units_at(self.conn, self.args.run_id, "register",
@@ -883,7 +883,8 @@ class _StartWalk:
     def _inputs_for(self, selected: list[str], position: int, first: int,
                     unit_id: str | None = None) -> str:
         """``--inputs`` > ``--template`` > a seeded unit's seed attempt's
-        recorded inputs (R8) > the preceding producing stage's output."""
+        recorded inputs (runs page, "Rules") > the preceding producing
+        stage's output."""
         stage = selected[position]
         explicit = self._explicit_inputs(stage, position, first)
         if explicit is not None:
@@ -945,7 +946,7 @@ class _StartWalk:
         """The run whose ``producer`` output this run reads: its own, or --
         when the producer's unit was inherited from a production seed (no
         unit row here) -- the seed, whose outputs are project custody
-        (Codex amendments B1/B2). A scratch seed's outputs never feed
+        (runs page, "Rules"). A scratch seed's outputs never feed
         another run."""
         run_id = self.args.run_id
         if _units_at(self.conn, run_id, producer, [self.args.unit_id]):
@@ -955,7 +956,8 @@ class _StartWalk:
     def _settings_for(self, stage: str, position: int, first: int,
                       unit_id: str | None = None) -> str | None:
         """``--settings`` > a seeded unit's seed attempt's recorded settings
-        location when its inputs came from the seed too (R8) > none.
+        location when its inputs came from the seed too (runs page,
+        "Rules") > none.
         A seed attempt recorded with no settings ran with the defaults, so
         ``None`` from it is kept."""
         explicit = self._explicit_settings(stage, position, first)
@@ -1034,7 +1036,8 @@ class _StartWalk:
             seeded_register = (self._seeded_register(selected, position, first)
                                if stage == "register" else None)
             if seeded_register is not None:
-                # R7/R8: the seeded unit's id is the seed's, not derived.
+                # The seeded unit's id is the seed's, not derived (runs page,
+                # "Rules").
                 unit_id, inputs_location, settings_location = seeded_register
                 settings_resolved = inputs_location is not None
                 explicit_settings = self._explicit_settings(stage, position, first)
@@ -1136,7 +1139,7 @@ class _StartWalk:
 
 def maybe_auto_promote(conn, run_id: str) -> None:
     """End of a ``run start`` walk: automatic promotion, designed in and off
-    (supervisor step 6, 2026-09-24, R5).
+    (checks page, "Automatic promotion").
 
     Calls :func:`rapidpipe.checks.runner.maybe_auto_promote`, commits what
     it recorded (check rows, and the promotion when one was made), and
@@ -1279,7 +1282,7 @@ def _compare_units(conn, run_id: str) -> list[tuple[str, str, str | None, str | 
 def _compare_instances(conn, run_id: str) -> list[tuple[str, str, str, str | None]]:
     """(kind, logical key as canonical jsonb text, instance id, slot as
     canonical JSON or ``None``) per product instance of the run (the slot:
-    supervisor step 5a, 2026-09-26, R8)."""
+    products page, "Identity")."""
     from rapidpipe.runs.slots import canonical_json
 
     with conn.cursor() as cur:
@@ -1315,7 +1318,7 @@ def _compare_command(args: argparse.Namespace) -> int:
 
         # Grouped by (kind, logical key) as before; the slot is shown as one
         # more column (the first recorded for the group, "-" when none is),
-        # with no change to what counts as different (R8).
+        # with no change to what counts as different (runs page, "Rules").
         instances_a: dict[tuple[str, str], list[str]] = {}
         instances_b: dict[tuple[str, str], list[str]] = {}
         slots: dict[tuple[str, str], str] = {}

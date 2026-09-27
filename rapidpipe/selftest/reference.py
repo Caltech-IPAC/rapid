@@ -3,10 +3,11 @@
 ``prepare`` copies the packaged input set (three gzipped L2-shaped frames
 and their input-set manifest, ``rapidpipe/selftest/fixtures/reference/``,
 written by :func:`rapidpipe.selftest.support.fakereftools.write_frames`)
-and the settings overlay; ``check`` asserts what rulings R5 and R6 fix
-(supervisor step 8, 2026-09-24): one ``reference-image`` entry (members
-image/coverage/uncertainty, the logical key with the selection digest,
-exactly R6's registration fields, the ordered constituents), one
+and the settings overlay; ``check`` asserts what is fixed (products page,
+"File products" and "Registration metadata"): one ``reference-image``
+entry (members image/coverage/uncertainty, the logical key with the
+selection digest, exactly the registration fields, the ordered
+constituents), one
 ``reference-catalog`` entry keyed to it, ``inputs.products`` naming the
 constituents, the stamped header (verified checksums) on the image and
 the uncertainty image, and the numbers ``expected.json`` fixes for the

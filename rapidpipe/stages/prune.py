@@ -4,11 +4,12 @@ Ported from `dev`'s ``pipeline/pruneNotBestMerges.py``, one field's worth of
 it: `dev` loops over every field a processing date touched, in parallel,
 re-deriving the field list itself; the rebuild's unit is one field, and the
 launcher's fan-out replaces `dev`'s field loop and process pool. What
-remains is `dev`'s per-field exclusion, ported into the run model (step 1
-ruling R6, 2026-09-24):
+remains is `dev`'s per-field exclusion, ported into the run model (prune
+page):
 
 read the crossmatch completion manifest's one ``association-set`` entry for
-this field -> follow its base chain (``base plus delta``, ruling R3) and
+this field -> follow its base chain (``base plus delta``; products
+page, "Database result sets") and
 every chain member's named source sets -> build the not-best `sid` set over
 those source sets, `dev`'s ``vbest = 0`` rule widened by the run model's own
 clause (a difference image is "best" when it is promoted current, or when
@@ -21,14 +22,14 @@ pairs").
 `dev` deletes the excluded rows from `merges_<field>` in place, then drops
 an emptied table and VACUUMs the rest, in two further parallel passes. None
 of that is ported: a pruned set records exclusions rather than mutating its
-base, and a stage never drops a table (ruling R6). `dev`'s
+base, and a stage never drops a table (prune page). `dev`'s
 ``pruneNotBestSources`` (a global `sources` flag deleted by a separate
 script) is not ported either -- it would delete rows another run's science
 still depends on, breaking "science rows only by their own run".
 
 Inputs. ``--inputs`` is a crossmatch completion manifest carrying exactly
 one ``association-set`` output entry whose key names this field (products
-page, "Database result sets"; step 1 ruling R2). ``result_sets_read`` names
+page, "Database result sets"). ``result_sets_read`` names
 that instance.
 
 Output. One ``pruned-set`` result set (products page): unit field, logical
@@ -40,11 +41,11 @@ keys to it (as `load` registers before it COPYs); registration and the
 insert commit in the same transaction, so a set is complete or absent, and
 an empty exclusion list is still a complete set.
 
-With ``[prune] done_check`` on (ruling R14, the default), a complete pruned
+With ``[prune] done_check`` on (prune page; the default), a complete pruned
 set already written for the same base and settings hash in this run is
 reused and nothing is written, the rebuild's form of `dev` having no done
 file for this stage at all, only when its producing attempt is this attempt
-or one that succeeded (supervisor step 9 ruling R1).
+or one that succeeded (products page, "Database result sets").
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
@@ -81,10 +82,10 @@ from rapidpipe.stages.contract import (
 
 _SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings" / "prune.toml"
 
-#: `dev`'s only pruning rule, ported (ruling R6).
+#: `dev`'s only pruning rule, ported (prune page).
 KNOWN_RULES = ("not-best",)
 
-#: The unit id's shape (ruling R2): the Roman tessellation tile (rtid) as a
+#: The unit id's shape (prune page): the Roman tessellation tile (rtid) as a
 #: non-negative decimal string, `dev`'s "field".
 _UNIT_ID_RE = re.compile(r"^[0-9]+$")
 
@@ -122,8 +123,9 @@ def _chain_source_sets(cur, chain: list[str]) -> list[str]:
     """The deduplicated `source-set` instances every chain member's logical key names.
 
     Reads ``product_instances.logical_key->>'source_sets'`` for each chain
-    member (the crossmatch association-set key's own field, R10) rather
-    than trusting a driver-level JSONB decode, and parses it as JSON.
+    member (the crossmatch association-set key's own field; crossmatch
+    page) rather than trusting a driver-level JSONB decode, and parses it
+    as JSON.
     """
     if not chain:
         return []
@@ -143,7 +145,7 @@ def _build_notbest_sids(cur, tables_and_sets: list[tuple[str, str]], run_id: str
     """`dev`'s not-best `sid` set (pruneNotBestMerges.py), the run model's own-run clause added.
 
     One temporary table for the whole attempt, built over every source set
-    named by the association chain (ruling R6): a `sid` is not-best when its
+    named by the association chain (prune page): a `sid` is not-best when its
     difference image is neither promoted current (``vbest > 0``) nor made by
     this run. ``UNION``, not ``UNION ALL``, as `dev`'s own comment explains:
     a `sid` occurring in more than one source-set table would otherwise

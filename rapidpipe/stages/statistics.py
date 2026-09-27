@@ -14,17 +14,18 @@ COPY -> the loaded row count read back and checked.
 
 Inputs. ``--inputs`` is ``crossmatch``'s completion manifest: exactly one
 ``association-set`` entry, whose ``key.field`` must equal the unit. The
-set's membership is base plus delta (step 1 ruling R3): its own rows plus
+set's membership is base plus delta (products page, "Database result
+sets"): its own rows plus
 its base's, recursively (``rapidpipe.db.objects.association_chain``). The
 sources an object's statistics are drawn from are the rows of the source
 sets named in the ``source_sets`` key of every set in that chain, each
 resolved to its ``sources`` child table by instance
 (``rapidpipe.db.objects.source_set_table``). This replaces `dev`'s
 ``l2files`` overlap lookup, its ``pg_class`` existence check and its
-``diffimages.vbest > 0`` filter (ruling R7): the association set names
+``diffimages.vbest > 0`` filter: the association set names
 exactly the source sets it was made from.
 
-Not ported (ruling R7): `dev`'s three DELETEs on ``astroobjects_<field>``
+Not ported: `dev`'s three DELETEs on ``astroobjects_<field>``
 (the aid self-dedupe, orphans without ``merges`` rows, objects with no
 best source) -- a stage never mutates another set's rows, and the
 set-scoped UNIQUE constraints make the self-dedupe moot; `dev`'s
@@ -42,9 +43,9 @@ run, this attempt and the result-set instance. The instance row, its
 is either complete or absent; an association set whose membership has no
 ``merges`` rows gives an empty set, still complete. With
 ``[statistics] done_check`` on, a complete statistics set with the same key
-already written in this run is reused (ruling R14), only when its
-producing attempt is this attempt or one that succeeded (supervisor step 9
-ruling R1).
+already written in this run is reused, only when its
+producing attempt is this attempt or one that succeeded (products page,
+"Database result sets").
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
@@ -197,7 +198,7 @@ class PostgresStatisticsDatabase:
 
         One SELECT per ``(sources table, source-set instance)``: the
         ``merges_<field>`` rows of every set in ``chain`` joined on ``sid``
-        to that source set's rows (ruling R7: the membership replaces
+        to that source set's rows (the membership replaces
         `dev`'s ``diffimages.vbest > 0`` join).
         """
         if not source_tables:

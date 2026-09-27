@@ -5,12 +5,12 @@ image for that date has loaded; running it per image would recluster the
 table on every load (`rapid_docs` ``system/load.md``, "The child
 tables"). The rebuild keeps that timing but moves it out of ``load`` into
 this stage, scheduled after the date's last ``load`` unit and before
-``crossmatch`` (supervisor step 1, ruling R1, 2026-09-24). It calls
+``crossmatch`` (maintain page). It calls
 ``cluster_sources_child_table`` through ``rapidpipe.db.sources.cluster_and_analyze``,
 the same SQL function ``load`` itself may call inline (off by default
 there).
 
-Unit: ``detector-date``, id ``<yyyymmdd>/SCA<nn>`` (ruling R2) -- the
+Unit: ``detector-date``, id ``<yyyymmdd>/SCA<nn>`` (maintain page) -- the
 observation date and detector a run's ``load`` units for that date and
 detector share, and the child table's own name is built from. No other
 declared unit kind fits: ``detector-image`` is one image/attempt,
@@ -79,7 +79,7 @@ DECLARATION = StageDeclaration(
     resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
-#: The unit id's shape (ruling R2): the observation date and two-digit SCA
+#: The unit id's shape (maintain page): the observation date and two-digit SCA
 #: a run's `load` units for that date and detector share.
 _UNIT_ID_RE = re.compile(r"^(?P<obs_date>[0-9]{8})/SCA(?P<sca>[0-9]{2})$")
 

@@ -1,6 +1,6 @@
 """`photometry`: a declared stub for forced photometry over a field.
 
-Not ported in this build (supervisor step 8, 2026-09-24, ruling R9): the
+Not ported in this build (photometry page): the
 declaration below, ``settings/photometry.toml`` and this module's
 validation are real, but the science is not. A valid invocation always
 exits **69** ("declared, not implemented in this build") once its
@@ -111,8 +111,8 @@ DECLARATION = StageDeclaration(
     ),
 )
 
-#: The message NotImplementedInBuild carries; fixed by the supervisor
-#: ruling and checked verbatim by the selftest fixture and unit tests.
+#: The message NotImplementedInBuild carries (photometry page); checked
+#: verbatim by the selftest fixture and unit tests.
 STUB_MESSAGE = "stage `photometry` is declared but not implemented in this build"
 
 

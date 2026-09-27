@@ -1,7 +1,7 @@
 """`export`: a field's sources, from named source sets, as one HATS catalog.
 
 Ported from `origin/dev`'s ``pipeline/generateSourceHATSCatalog.py``
-(supervisor step 8, 2026-09-24, ruling R12): dump ``sources`` rows to CSV
+(export page): dump ``sources`` rows to CSV
 files (dev's column list, ``[HATS_CATALOGS] sources_cols``, and its SELECT
 ``SELECT <sources_cols> FROM sources WHERE sid >= .. AND sid <= .. ORDER BY
 sid``), then build a HATS (Hierarchical Adaptive Tiling Scheme) catalog from
@@ -49,15 +49,15 @@ association set is checked (registered, complete) and recorded in
 ``result_sets_read`` and the execution notes, never read: the source
 catalog does not use it. Every named set must be registered, complete and
 retained, and this run's own or a production run's selected output
-(``rapidpipe.db.objects.assert_readable_result_set``, supervisor step 9
-ruling R2), else exit 65. The source sets' field is not checked against the
+(``rapidpipe.db.objects.assert_readable_result_set``, products page,
+"Reading across runs"), else exit 65. The source sets' field is not checked against the
 unit (a source set's key names its difference instance, not a field; the
 rows carry ``field``).
 
 Output. One ``catalog-export`` file product
 (:mod:`rapidpipe.products.catalogexport`): key ``{field, export_type
 "sources", selection <SHA-256 digest of the sorted, distinct source_sets>,
-settings_hash}`` (ruling R13: the digest, not just the first named source
+settings_hash}`` (the digest, not just the first named source
 set, so a differently-ordered but identical selection shares a key and a
 different selection does not), members every file of the catalog
 directory, primary its root ``properties`` file, registration
@@ -184,7 +184,7 @@ class PostgresExportDatabase:
         """Each named set's state; ValueError unless run ``run_id`` may read every one that exists.
 
         The read rule is ``rapidpipe.db.objects.assert_readable_result_set``
-        (supervisor step 9 ruling R2).
+        (products page, "Reading across runs").
         """
         with self.conn.cursor() as cur:
             found = _sources_db.result_set_states(cur, instances)

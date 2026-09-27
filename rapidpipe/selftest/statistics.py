@@ -8,8 +8,9 @@ prepared inputs, named by the environment variables
 (:data:`~rapidpipe.selftest.support.fakestatisticsdb.SEED_ENV` /
 ``STATE_ENV``).
 
-The seed is a two-set chain (the input association set and its base, step
-1 ruling R3) over two source sets, plus one association set and source
+The seed is a two-set chain (the input association set and its base;
+products page, "Database result sets") over two source sets, plus one
+association set and source
 set outside the chain whose rows must not be read. The expected
 statistics are recomputed here, per object, with the ported
 ``compute_radec_statistics`` from the fixture's own source list, and

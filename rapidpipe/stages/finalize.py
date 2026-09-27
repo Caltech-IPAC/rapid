@@ -10,7 +10,7 @@ informational keywords to its primary header, rewrites it with astropy's
 updates the database row; the rebuild never overwrites a published
 instance (products page, "Identity"), so this stage writes a new instance
 of the same kind in its own attempt location and `register` records it.
-Chain (supervisor ruling, 2026-09-24): difference -> finalize ->
+Chain (finalize page): difference -> finalize ->
 register(finalize output) -> load(finalize output); one `diffimages` row
 per image, as `dev`. The raw instances are never registered, so
 ``inputs.products`` names the difference's own registered upstream (l2,
@@ -158,8 +158,7 @@ class _InputSet:
 def _catalog_entries(manifest: Manifest, difference: OutputEntry) -> list[OutputEntry]:
     """Every source-catalog entry keyed to the difference instance, in input order.
 
-    However many the input carries (0..n) pass through; none is required
-    (supervisor amendment, 2026-09-24).
+    However many the input carries (0..n) pass through; none is required.
     """
     return [e for e in manifest.outputs if e.kind == "source-catalog"
             and e.key.get("difference") == difference.instance]
@@ -194,8 +193,8 @@ def _read_input_set(context: StageContext) -> _InputSet:
         except ValueError as exc:
             raise InputRejected(f"source-catalog {entry.instance!r}: {exc}") from exc
 
-    # Another differencer's instance and its catalogs are dropped, and noted
-    # (supervisor ruling, 2026-09-24); anything else is refused.
+    # Another differencer's instance and its catalogs are dropped, and noted;
+    # anything else is refused.
     others = {e.instance for e in differences if e is not difference}
     dropped = [e for e in manifest.outputs
                if e.instance in others
@@ -331,8 +330,8 @@ UPSTREAM_KINDS = ("l2-image", "reference-image")
 def products_read(inputs: _InputSet) -> dict[str, str]:
     """The difference manifest's own registered upstream: its l2 and reference.
 
-    Supervisor ruling (2026-09-24, option b): ``inputs.products`` names only
-    instances that have rows for `register`'s dependency edges. The raw
+    ``inputs.products`` names only instances that have rows for
+    `register`'s dependency edges (finalize page, option b). The raw
     difference and catalog instances are never registered (chain
     difference -> finalize -> register), so they are recorded in
     ``finalized_from``/``copied_from``, ``RPFINFRM`` and ``inputs.manifest``

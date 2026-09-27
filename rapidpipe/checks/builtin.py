@@ -1,4 +1,4 @@
-"""The two shipped checks (supervisor step 6, 2026-09-24, R2).
+"""The two shipped checks (checks page, "The two checks").
 
 Both read the database only. Each returns a :class:`CheckResult` whose
 detail records every measurement, every bound it was held to, and the
@@ -98,15 +98,14 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
     bounds: dict[str, list[Any]] = {}
     failing: list[str] = []
     for name, value, lo, hi in tests:
-        # A null or non-finite measurement fails whatever its bounds
-        # (supervisor step 6, 2026-09-24, live-values correction).
+        # A null or non-finite measurement fails whatever its bounds.
         finite = value is not None and math.isfinite(value)
         measurements[name] = _recordable(value)
         bounds[name] = [lo, hi]
         if not finite or (lo is not None and value < lo) or (hi is not None and value > hi):
             failing.append(name)
-    # The signed medians, sanitised like every other measurement (Codex
-    # diff review of step 6: a raw NaN here made the failed row unrecordable).
+    # The signed medians, sanitised like every other measurement: a raw NaN
+    # here would make the failed row unrecordable.
     measurements["dxmedianfin"] = _recordable(_num(dxmed))
     measurements["dymedianfin"] = _recordable(_num(dymed))
     measurements["source_counts"] = source_counts
@@ -137,7 +136,7 @@ def difference_image_statistics(conn, instance_id: str, params: dict[str, Any]) 
 
 def _identity(slot: dict[str, Any] | None) -> tuple[str, str, str] | None:
     """``(exposure, detector, catalog_type)`` of a source set, read from its
-    slot (supervisor step 5a, 2026-09-26, R8), as the text ``->>`` gives in
+    slot (products page, "Identity"), as the text ``->>`` gives in
     SQL. ``None`` when the slot is NULL (unresolved) or lacks a field."""
     if not isinstance(slot, dict):
         return None
@@ -150,7 +149,7 @@ def _identity(slot: dict[str, Any] | None) -> tuple[str, str, str] | None:
 
 #: Source-set instances of one kind and catalog type, from runs other than
 #: the candidate's, in the same exposure and detector (any differencer,
-#: as before), found by slot (supervisor step 5a, 2026-09-26, R8). A row
+#: as before), found by slot (products page, "Identity"). A row
 #: without a slot is never a reference.
 _SAME_IDENTITY = """
     SELECT s.id, s.run, s.custody
@@ -169,10 +168,9 @@ def catalog_counts_vs_reference(conn, instance_id: str, params: dict[str, Any]) 
 
     Logical keys are per run, so the reference is found by science
     identity: the candidate source set's slot, ``(exposure, detector,
-    catalog_type)`` (supervisor step 5a, 2026-09-26, R8, replacing the
-    key.difference -> key.l2 -> ``l2files`` walk of supervisor step 6,
-    2026-09-24). A candidate without a slot fails as an unresolved
-    identity. The reference is a source set of the same exposure, detector
+    catalog_type)`` (products page, "Identity"). A candidate without a
+    slot fails as an unresolved identity. The reference is a source set
+    of the same exposure, detector
     and ``catalog_type`` from another run: the ``reference_run``'s
     (selected attempt) when that param is non-empty, else the most
     recently published one with custody ``current``. Passes when

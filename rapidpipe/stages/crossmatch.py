@@ -6,7 +6,7 @@ and distinct fields and loops over the fields in parallel; the rebuild's
 unit is one field (a Roman tessellation rtid), and the sources it reads are
 named by ``source-set`` instances in the input manifest, so the date scan,
 the field fan-out and the process pool are the launcher's, not the stage's
-(supervisor step 1, rulings R2, 2026-09-24). What remains runs in `dev`'s
+(crossmatch page). What remains runs in `dev`'s
 order, in one transaction:
 
 advisory lock on the field -> make ``astroobjects_<field>`` and
@@ -22,7 +22,8 @@ unflagged sources against the catalog (inside the field's inclusion cone
 when it has eight neighbours) and write merges rows only -> verify the
 counts -> register the association set -> commit.
 
-The catalog (ruling R3, "base plus delta"). An association set's rows are
+The catalog ("base plus delta"; products page, "Database result sets").
+An association set's rows are
 its own plus its base's, recursively. The input manifest names at most one
 base ``association-set`` (the field's prior catalog, frozen by whoever
 composed the inputs); a pass reads ``astroobjects`` rows whose
@@ -48,18 +49,19 @@ known only once both passes have run; the per-field tables carry no
 foreign keys, so nothing requires the instance row first.
 
 Idempotence. A retry is a new attempt with a new instance: rows are unique
-per set (``UNIQUE (result_set, aid)`` and ``(result_set, aid, sid)``,
-ruling R4), and each COPY goes through a temporary table and ``INSERT ...
-ON CONFLICT DO NOTHING``, which drops repeats within one attempt (two
-unmatched sources at one position in one exposure make one object, as
-`dev`'s ``pruneRedundantMerges`` would leave). With ``[crossmatch]
-done_check`` on, a complete set already written in this run for the same
-logical key is reused and nothing is written (ruling R14), only when its
-producing attempt is this attempt or one that succeeded (supervisor step 9
-ruling R1). Every set read (source sets, the base chain) must be readable
-by this run (supervisor step 9 ruling R2,
-``rapidpipe.db.objects.assert_readable_result_set``). Two attempts on
-one field are serialised by ``pg_advisory_xact_lock`` (ruling R13).
+per set (``UNIQUE (result_set, aid)`` and ``(result_set, aid, sid)``;
+crossmatch page), and each COPY goes through a temporary table and
+``INSERT ... ON CONFLICT DO NOTHING``, which drops repeats within one
+attempt (two unmatched sources at one position in one exposure make one
+object, as `dev`'s ``pruneRedundantMerges`` would leave). With
+``[crossmatch] done_check`` on, a complete set already written in this
+run for the same logical key is reused and nothing is written, only when
+its producing attempt is this attempt or one that succeeded (products
+page, "Database result sets"). Every set read (source sets, the base
+chain) must be readable by this run (products page, "Reading across
+runs", ``rapidpipe.db.objects.assert_readable_result_set``). Two
+attempts on one field are serialised by ``pg_advisory_xact_lock``
+(crossmatch page).
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
@@ -98,8 +100,8 @@ from rapidpipe.stages.contract import (
 
 _SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings" / "crossmatch.toml"
 
-#: The first key of the field's transaction-scoped advisory lock (ruling
-#: R13); the second is the field. Fixed, distinct from the child-table
+#: The first key of the field's transaction-scoped advisory lock
+#: (crossmatch page); the second is the field. Fixed, distinct from the child-table
 #: functions' own locks.
 ADVISORY_LOCK_CLASS = 20260924
 
@@ -161,7 +163,7 @@ NEIGHBOUR_MATCHES_SQL = ("SELECT a.sid, b.aid FROM {sources} AS a, {astroobjects
 
 
 def catalog_clause(catalog_sets: Sequence[str], legacy_catalog: bool) -> tuple[str, tuple]:
-    """The WHERE clause on ``b`` naming the catalog rows a pass reads (ruling R3)."""
+    """The WHERE clause on ``b`` naming the catalog rows a pass reads (crossmatch page)."""
     clause, params = _objects.set_rows_clause("b", catalog_sets)
     if legacy_catalog:
         clause = f"({clause} OR b.run IS NULL)"

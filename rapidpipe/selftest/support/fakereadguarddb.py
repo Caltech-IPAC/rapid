@@ -4,7 +4,7 @@
 subprocess on a packaged fixture with no database: every other database
 the stage touches is a fake named by its own ``RAPIDPIPE_<STAGE>_DATABASE``
 variable. The read guard inside ``run_stage``
-(``rapidpipe.runs.readguard``; supervisor step 6, 2026-09-26, R6) needs a
+(``rapidpipe.runs.readguard``; stage contract, "Invocation") needs a
 database whenever the input manifest names an instance, and a fixture's
 input manifest names instance ids minted for the fixture, which no run
 registered. :func:`empty_registry` is the factory

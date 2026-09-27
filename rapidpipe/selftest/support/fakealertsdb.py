@@ -175,7 +175,7 @@ class FakeAlertsDatabase:
         self.merges: list[dict] = list(seed.get("merges", []))
         self.astroobjects: list[dict] = list(seed.get("astroobjects", []))
         self.astroobjectsmeta: list[dict] = list(seed.get("astroobjectsmeta", []))
-        #: ``prunedmerges``: {result_set, aid, sid} per excluded pair (R5).
+        #: ``prunedmerges``: {result_set, aid, sid} per excluded pair (alerts page).
         self.prunedmerges: list[dict] = list(seed.get("prunedmerges", []))
         self.members: dict[str, list[dict]] = dict(seed.get("members", {}))
         self.outbox: list[dict] = list(seed.get("outbox", []))
@@ -239,7 +239,8 @@ class FakeAlertsDatabase:
 
         As PostgreSQL does, each must be a registered, complete source set
         (the fake has no runs or custody: ``readable`` False on a seeded
-        instance stands for a set the reading run may not read, R2).
+        instance stands for a set the reading run may not read; products
+        page, "Reading across runs").
         """
         readable = [source_set]
         for chain in lineages.values():
@@ -260,7 +261,7 @@ class FakeAlertsDatabase:
         return {i for i in instances if i in self.product_instances}
 
     def _excluded(self, pruned_by_association, root) -> set[tuple[int, int]]:
-        """The (aid, sid) pairs the pruned set applied to ``root`` lists (R5)."""
+        """The (aid, sid) pairs the pruned set applied to ``root`` lists (alerts page)."""
         pruned = (pruned_by_association or {}).get(root)
         return {(p["aid"], p["sid"]) for p in self.prunedmerges
                 if pruned is not None and p["result_set"] == pruned}

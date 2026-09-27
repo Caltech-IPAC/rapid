@@ -30,7 +30,7 @@ files beside the manifest --
 
 Outputs. One ``difference-image`` instance for ZOGY, registered as in
 `dev`; an SFFT instance when ``[sfft] register_sfft`` is on (the
-default, lead ruling 2026-09-26) and SFFT succeeded (never a partial
+default) and SFFT succeeded (never a partial
 bundle). Both instances register under their own `pipelines` row (ZOGY
 ppid 15, SFFT ppid 16); which one consumers see is a promotion choice
 downstream, not this stage's job. ``source-catalog`` entries for each

@@ -65,7 +65,7 @@ SELFTEST_ENV = "RAPIDPIPE_SELFTEST"
 
 #: The stages a fixture exists for today (stage contract, "Local
 #: execution"; ``tests/fixtures/<stage>/``). ``photometry`` is a
-#: declared stub (supervisor step 8, 2026-09-24, ruling R9): its fixture
+#: declared stub (photometry page): its fixture
 #: asserts exit 69 and no published manifest, not a completed run.
 STAGE_NAMES = ("reference", "difference", "finalize", "load", "maintain", "crossmatch", "alerts",
                "statistics", "prune", "photometry", "export")
@@ -225,8 +225,8 @@ def run_stage_subprocess(python: str, module: str, inputs: Path, outputs_locatio
     # The fixture's input manifest names ids minted for the fixture, which
     # no run registered; the stage read guard gets an empty registry in
     # place of a database, as every other database here is a fake
-    # (supervisor step 6, 2026-09-26, R6).
-    # The guard honours the fake only in a run marked as a selftest (R12).
+    # (stage contract, "Invocation").
+    # The guard honours the fake only in a run marked as a selftest.
     env[READGUARD_DATABASE_ENV] = READGUARD_FAKE_DATABASE
     env[SELFTEST_ENV] = "1"
     env.update(extra_env)

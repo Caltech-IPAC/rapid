@@ -2,8 +2,8 @@
 
 ``prepare`` writes a synthetic difference attempt's output location
 (:func:`rapidpipe.selftest.support.fakefinalize.build_difference_output`)
-and the settings overlay; ``check`` asserts what the supervisor's ruling
-fixes (2026-09-24, with the review amendments): one difference-image entry
+and the settings overlay; ``check`` asserts what is fixed (finalize
+page): one difference-image entry
 and the input's source-catalog entries (four here), all
 under new instance ids, the stamped primary member opening with checksum
 verification and carrying every keyword with its expected value, every
@@ -183,7 +183,7 @@ def _check(checks: Checks, manifest: Manifest, expected: dict[str, Any],
                      and all(_sha256(outputs / m.path) == m.sha256 for m in catalog.members),
                      f"{label} members byte-identical to the input's")
 
-    # Ruling (option b): only the difference's own registered upstream.
+    # Only the difference's own registered upstream (finalize page, option b).
     checks.check(manifest.inputs.products == spec["products_read"],
                  f"inputs.products: expected {spec['products_read']}, "
                  f"got {manifest.inputs.products}")

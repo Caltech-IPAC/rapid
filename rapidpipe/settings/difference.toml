@@ -69,7 +69,7 @@ astrometric_uncert_y = 0.05
 # ZOGY's astrometric-uncertainty inputs (dx = dy), registered as
 # dxrmsfin/dyrmsfin. New as a setting; 0.0 reproduces `dev`, which
 # overrides the measured RMS with 0.0 ("2025-08-15 Jacob's
-# recommendation"). Ruling 1, lead 2026-09-22.
+# recommendation").
 astrometric_sigma = 0.0
 post_zogy_keep_diffimg_lower_cov_map_thresh = 0.5
 zogy_sn_sr_from_uncertainty_maps = true
@@ -77,7 +77,7 @@ zogy_output_diffimage_file = "zogy_diffimage.fits"
 zogy_output_diffpsf_file = "diffpsf.fits"
 zogy_output_scorrimage_file = "scorrimage.fits"
 # The bundle member the catalogs detect on, recorded with the instance.
-# New; `dev` detects on S_corr. Ruling 3.
+# New; `dev` detects on S_corr.
 detection_role = "significance"
 
 [sfft]
@@ -100,13 +100,13 @@ python_cmd = ""
 # "source /sfft_env/bin/activate" for its own venv image. New default.
 activate_cmd = ""
 # New: whether SFFT's output is registered as its own difference-image
-# instance, alongside ZOGY's. On by default (lead ruling 2026-09-26):
-# when the stage runs both, both are registered, each under its own
+# instance, alongside ZOGY's. On by default: when the stage runs both,
+# both are registered, each under its own
 # `pipelines` row (ZOGY ppid 15, SFFT ppid 16). Which instance consumers
 # see is a promotion choice downstream, not this setting.
 register_sfft = true
 # New: the member SFFT's catalogs detect on (the cross-convolved image
-# when crossconv_flag is set, as in `dev`). Ruling 3.
+# when crossconv_flag is set, as in `dev`).
 detection_role = "difference"
 
 [naive_diffimage]

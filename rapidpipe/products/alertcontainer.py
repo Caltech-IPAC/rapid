@@ -3,8 +3,7 @@
 The products page's "File products" table: an `alert-container` is a
 detector-image product, logical key (difference instance, alert schema
 version), an Avro object container plus a JSON summary, made by `alerts`,
-recorded in the alert outbox. Its field list, fixed with the `alerts` stage
-(lead's ruling, 2026-09-24):
+recorded in the alert outbox. Its field list, fixed with the `alerts` stage:
 
 - key: ``difference`` (the difference instance the alerts were cut from)
   and ``schema_version`` (the Avro schema, ``"00.04"``);

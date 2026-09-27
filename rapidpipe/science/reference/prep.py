@@ -15,7 +15,7 @@ caller does that from :class:`PreparedFrame`.
 
 The filter-name map and :func:`rapid_filter_name` are `dev`'s
 (``modules/utils/rapid_pipeline_subs.py``); the single copy lives in
-:mod:`rapidpipe.products.filters` (step 8, WP-E) and is re-exported here
+:mod:`rapidpipe.products.filters` and is re-exported here
 under its original name, since this module used to define it.
 :func:`get_reference_image_zeropoint` is `dev`'s too, ported because that
 module imports boto3 at module scope.

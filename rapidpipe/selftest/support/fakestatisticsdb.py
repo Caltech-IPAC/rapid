@@ -1,7 +1,7 @@
 """Stand-ins for the statistics stage's boundaries: a crossmatch-shaped input manifest, a fake database.
 
 - :func:`build_statistics_input_set` writes a completion manifest shaped
-  like ``crossmatch``'s own (step 1 ruling R2, R10): stage ``crossmatch``,
+  like ``crossmatch``'s own (crossmatch page): stage ``crossmatch``,
   unit kind ``field``, unit id the rtid, one ``association-set`` output
   entry with key ``{field, base, source_sets, settings_hash}`` and
   ``registration`` naming the two tables and their row counts, no members.

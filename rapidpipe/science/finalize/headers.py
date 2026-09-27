@@ -7,8 +7,8 @@ lines 1891-1926: ``writeto(..., checksum=True)``). The rebuild keeps that
 write and replaces `dev`'s database-id keywords (``PID``, ``RID``,
 ``EXPID``, ``FID``, ``DIFIMVER``) and S3 keywords (``S3BUCKN``,
 ``S3OBJPRF``) with the run model's own identifiers: `register` holds the
-legacy ids, and the output location is one keyword (supervisor ruling,
-2026-09-24). ``PPID``, ``INFOBITS``, ``FIELD``, ``DIFFILEN`` and ``DATE``
+legacy ids, and the output location is one keyword (finalize page).
+``PPID``, ``INFOBITS``, ``FIELD``, ``DIFFILEN`` and ``DATE``
 keep `dev`'s names and meanings.
 
 :func:`stamp_cards` is pure: it turns :class:`StampValues` into the

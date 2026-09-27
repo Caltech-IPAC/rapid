@@ -1,15 +1,15 @@
 """``rapidpipe selftest``: run a stage's own packaged fixture, in place.
 
-Ruling (Ben, 2026-09-23): the stage fixtures become runnable inside the
+The stage fixtures become runnable inside the
 pipeline image on AWS Batch through the fixed entrypoint (``python -m
 rapidpipe.cli.main``), as ``rapidpipe selftest --stage difference|finalize|load|maintain|crossmatch|alerts|statistics|prune|photometry|export
 [--real-tools] [--work-dir DIR] [--output-location s3://... or path]``.
 The fixture gate then runs as a submitted Batch job whose execution
 record is the evidence -- no separate test harness needs installing
 inside the image. ``photometry`` is a declared stub
-(supervisor step 8, 2026-09-24, ruling R9): its fixture asserts exit 69
+(photometry page): its fixture asserts exit 69
 and no published manifest, the same either side of ``--real-tools``.
-``export`` (ruling R12) runs hats-import for real either side of it,
+``export`` (export page) runs hats-import for real either side of it,
 against a fake database.
 
 :mod:`rapidpipe.selftest.runner` holds the prepare/run/check machinery

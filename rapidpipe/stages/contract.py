@@ -459,9 +459,8 @@ def _write_execution_record(
     ``RapidRebuildJobDefinition``) if that is set, else ``None``; and the
     release, from ``RAPIDPIPE_RELEASE`` if set, else the job definition's
     ``RAPID_RELEASE_IDENTITY`` (set at deploy time by ``release cut``),
-    recorded as ``None`` when absent or the placeholder ``unreleased``
-    (supervisor step 5, 2026-09-24, R7) -- the
-    execution record's minimal content per the stage contract's "The
+    recorded as ``None`` when absent or the placeholder ``unreleased`` --
+    the execution record's minimal content per the stage contract's "The
     manifest": "the source revision, working-copy changes if any, image
     digest when applicable, database schema version, and the resolved
     settings." Schema version and working-copy changes are not recorded
@@ -539,7 +538,7 @@ def run_stage(
     ``--dry-run`` promises for them. Unset, ``run_stage`` behaves exactly
     as before.
 
-    The read guard (supervisor step 6, 2026-09-26, R6, A5, A6): once the
+    The read guard (stage contract, "Invocation"): once the
     input manifest is parsed -- on an S3 ``--inputs`` only
     ``manifest.json`` has been fetched at that point; after the guard
     passes, only the member files that manifest names are fetched, one
@@ -699,7 +698,8 @@ def run_stage(
             if inputs_location.is_s3():
                 inputs_dir.mkdir(parents=True, exist_ok=True)
                 # The manifest alone first: the read guard below judges it
-                # before any other object is fetched (A6).
+                # before any other object is fetched (stage contract,
+                # "Invocation").
                 try:
                     fetch_object(
                         inputs_location, "manifest.json",

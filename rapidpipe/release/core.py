@@ -270,8 +270,8 @@ def _releases_table_exists(conn) -> bool:
 
 
 def _refuse_unfinished(conn, resume: str | None) -> None:
-    """Concurrent cuts are serialised by the record (supervisor step 9,
-    2026-09-25, R8): refuse to start -- before any tag -- while a
+    """Concurrent cuts are serialised by the record (releases page,
+    "Concurrent cuts are serialised"): refuse to start -- before any tag -- while a
     ``releases`` row is in a state other than 'complete', unless
     ``resume`` names that row. Raises :class:`ReleaseRefused` (exit 1)
     naming each such row's tag and state."""
