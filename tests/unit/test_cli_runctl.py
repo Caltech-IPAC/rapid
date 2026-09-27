@@ -660,7 +660,7 @@ def test_compare_same(monkeypatch, fake_conn, capsys):
 
 
 def test_compare_prints_a_dash_for_a_group_with_no_slot(monkeypatch, fake_conn, capsys):
-    # The slot column (supervisor step 5a, R8): the first recorded slot of
+    # The slot column: the first recorded slot of
     # the (kind, logical key) group, "-" when neither run's instance has one.
     _compare_setup(
         monkeypatch,
@@ -747,7 +747,7 @@ def compose_env(tmp_path, monkeypatch, fake_conn):
                         lambda conn, run_id, stage, kind, unit_id:
                             calls["add_unit"].append((run_id, stage, kind, unit_id)))
     # Seams of the binding primitive (rapidpipe.runs.binding goes through
-    # rapidpipe.runs.inputs; supervisor step 2 R7).
+    # rapidpipe.runs.inputs; runs.md §Python interface).
     monkeypatch.setattr(inputs, "bind_unit_inputs",
                         lambda conn, run_id, stage, unit_id, instances:
                             calls["bind"].append((run_id, stage, unit_id, list(instances))))
@@ -843,7 +843,7 @@ def test_inputs_admission_fence_fires_before_any_copy(compose_env, monkeypatch, 
         raise repository.RunDeletingOrDeleted("run 'R' is 'deleting'; it admits no new work")
 
     monkeypatch.setattr(repository, "add_unit", _refuse)
-    # Admission is the first write-side check (supervisor step 2 R13): no
+    # Admission is the first write-side check: no
     # template or producer manifest is read before it.
     reads: list[str] = []
     real_read = runctl._Storage.read_manifest
@@ -861,7 +861,7 @@ def test_inputs_admission_fence_fires_before_any_copy(compose_env, monkeypatch, 
 
 def test_inputs_a_compose_failure_after_admission_commits_nothing(
         compose_env, fake_conn, capsys):
-    # supervisor step 2 R13: admission comes first, so a size mismatch in the
+    # Admission comes first, so a size mismatch in the
     # copies follows add_unit; nothing is committed and no manifest written.
     (compose_env["template"] / "ref/image.fits").write_bytes(b"short")
     dest = compose_env["dest"]

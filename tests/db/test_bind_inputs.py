@@ -1,5 +1,4 @@
-"""``run local``'s input binding (supervisor step 9, 2026-09-25, R4)
-against a real PostgreSQL: the manifest at ``--inputs`` is read before
+"""``run local``'s input binding against a real PostgreSQL: the manifest at ``--inputs`` is read before
 anything is written, its registered instances are bound in
 ``unit_inputs`` with the unit, and a missing manifest refuses with
 nothing written. The stage subprocess is a script that exits 75

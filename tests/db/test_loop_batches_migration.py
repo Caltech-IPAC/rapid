@@ -1,5 +1,5 @@
-"""DB-backed proof of migration ``20260926-01-loop-batches.sql`` (step 4,
-rulings R4-R6): ``loop_dates`` gains ``batch``/``kind`` and a widened primary
+"""DB-backed proof of migration ``20260926-01-loop-batches.sql``:
+``loop_dates`` gains ``batch``/``kind`` and a widened primary
 key, and the new ``loop_deliveries`` table exists with its state ``CHECK``
 and primary key. Each test runs inside the never-committed outer transaction
 ``tests/db/conftest.py`` gives every test, so nothing here needs cleanup.
@@ -92,7 +92,7 @@ def test_loop_dates_accepts_two_batches_of_one_date_but_not_a_duplicate_batch(co
 
 def test_loop_dates_existing_rows_default_to_batch_1_kind_batch(conn):
     """A row inserted the pre-batches way (no batch/kind named) still gets
-    batch=1, kind='batch' from the column defaults (R4: existing rows keep
+    batch=1, kind='batch' from the column defaults (existing rows keep
     batch 1)."""
     schedule = f"test-default-{new_ulid()}"
     run_id = _make_run(conn)
@@ -145,7 +145,7 @@ def test_loop_deliveries_rejects_an_unknown_state(conn):
 
 def test_loop_deliveries_two_locations_same_identity_both_insert(conn):
     """Identity (exposure, detector, version) is indexed, not unique: the
-    index only speeds classification lookups (R3); a re-delivery is refused
+    index only speeds classification lookups; a re-delivery is refused
     by the code, not the schema, so two rows may share an identity (a
     ``batched`` one and a ``refused``/``quarantined`` one for the repeat)."""
     schedule = f"test-identity-{new_ulid()}"

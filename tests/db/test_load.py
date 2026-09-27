@@ -157,7 +157,7 @@ def test_done_check_reuses_the_set_and_off_loads_again(conn, tmp_path, monkeypat
                                          name="first")
     assert rc == 0
     first_instance = Manifest.read(first / "manifest.json").outputs[0].instance
-    set_disposition(conn, first_attempt, "succeeded")  # ruling R1: only a succeeded set is reused
+    set_disposition(conn, first_attempt, "succeeded")  # only a succeeded set is reused (runs.md §Rules)
 
     rc, _, second = _run_load(conn, monkeypatch, tmp_path, run_id, diff_outputs, name="second")
     assert rc == 0

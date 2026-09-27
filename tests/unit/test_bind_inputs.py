@@ -1,5 +1,5 @@
 """``rapidpipe.runs.inputs`` and its wiring into ``submit_unit`` and
-``run_stage_locally`` (supervisor step 9, 2026-09-25, R4), with no
+``run_stage_locally`` (stage-contract.md §Local execution), with no
 database: FakeS3 for the manifest, a fake connection for the
 ``product_instances`` lookup. Uses the real manifest read
 (``real_input_manifest``; see tests/conftest.py).

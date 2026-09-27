@@ -23,7 +23,7 @@ TEST_KIND = "test-product"
 
 def stand_in_slot(logical_key):
     """The stand-in slot a test instance gets when the database derives
-    none (supervisor step 5a, 2026-09-26): ``test-product`` is no real
+    none: ``test-product`` is no real
     kind and many fixture keys carry no real fields, so
     ``product_identity_fill()`` leaves their slot NULL, and promotion,
     which replaces by slot, would refuse them. One slot per logical key
@@ -603,7 +603,7 @@ def _record_lost(conn, run_id, stage, unit_id):
 
 
 def test_mark_run_deleting_allows_a_lost_attempt_whose_unit_then_completed(conn):
-    """R10 (supervisor step 6, 2026-09-24): a ``lost`` attempt is a recorded
+    """R10: a ``lost`` attempt is a recorded
     resolution, so a unit re-attempted to completion after it deletes
     cleanly (the live scratch run 01M3BA39VQ6BWZN876YNZW609Y was refused)."""
     run_id = _make_run(conn, kind="scratch")
@@ -637,7 +637,7 @@ def test_mark_run_deleting_allows_a_lost_attempt_alone(conn):
 def _legacy_dependency(conn, consumer, producer):
     """A dependency edge from another run on a scratch run's instance, as
     recorded before registration applied the read rule to file products
-    (supervisor step 6, 2026-09-26, R5 refuses registering it now); the
+    (products.md §Reading across runs refuses registering it now); the
     deletion guard must still count such an edge."""
     with conn.cursor() as cur:
         cur.execute("INSERT INTO dependencies (id, consumer_instance, producer_instance) "
@@ -661,7 +661,7 @@ def test_mark_run_deleting_refuses_outside_dependency(conn):
         repo.mark_run_deleting(conn, run_id, requested_by="brusholme")
 
 
-# R3 (supervisor step 9, 2026-09-25): the guard counts only LIVE
+# The guard counts only LIVE
 # consumers; a deleted consumer's tombstones stop blocking its producer.
 
 def _delete_scratch_run(conn, run_id):

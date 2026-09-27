@@ -1,6 +1,5 @@
 """The stage read guard on all three invocation paths, against a real PostgreSQL.
 
-Supervisor step 6, 2026-09-26, rulings R6 and R7 (amendments A5, A6).
 The done condition: a stage reading another run's scratch file product
 exits 65 on all three paths.
 
@@ -21,7 +20,7 @@ P has a unit and an attempt; an input manifest (a local directory holding
    ``stage difference ...`` form ``main`` rewrites) is run through
    ``rapidpipe.cli.main.main`` as the container's ``rapidpipe``
    entrypoint would, with S3 ``--inputs``: exit 65, and only
-   ``manifest.json`` was fetched (A6).
+   ``manifest.json`` was fetched.
 
 No stage body runs: the guard refuses first. The controls use
 ``--dry-run``, which runs the guard and returns before the body.

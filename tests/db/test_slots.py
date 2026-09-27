@@ -1,8 +1,8 @@
-"""Database-backed tests for supersession by slot (supervisor step 5a,
-2026-09-26): the migration ``20260926-02-product-slots.sql``, the
-per-kind derivation (R3, amended by R14/R16/R18), promotion by slot
-(R4), the frozen plan (R5), the association-set ancestor rule (R6),
-old-release compatibility, and rollback (R9).
+"""Database-backed tests for supersession by slot: the migration
+``20260926-02-product-slots.sql``, the
+per-kind derivation, promotion by slot
+the frozen plan, the association-set ancestor rule,
+old-release compatibility, and rollback.
 
 Skips cleanly if PGHOST is unset (see conftest.py). Reuses the
 run/unit/attempt helpers from test_repository.py and the legacy
@@ -379,7 +379,7 @@ def test_derivation_per_kind_exact_json(conn):
 
 
 def test_derivation_association_set_equal_deltas_different_bases_differ(conn):
-    """R14: two association sets with the same field/settings_hash/source_sets
+    """Two association sets with the same field/settings_hash/source_sets
     but different bases get different identities (the base hash chain)."""
     _run, _srcset = _register(
         conn, "source-set", {"difference": new_ulid(), "catalog_type": "sextractor"})
@@ -424,7 +424,7 @@ def test_missing_producer_registers_unresolved_then_resolves(conn):
     assert by_kind.get("difference-image", (0, 0, 0))[1] >= 1  # unresolved
 
     # Register the missing producer; register_manifest's own internal
-    # fill_identity call (R2) then resolves the waiting difference-image.
+    # fill_identity call then resolves the waiting difference-image.
     _register_l2(conn, 34009009, 1, version=1, instance_id=missing_l2_id)
 
     slot, identity = _slot_identity(conn, diff)
@@ -497,7 +497,7 @@ def test_old_release_v08_insert_then_fill_then_promote_by_slot(conn):
 
 
 # ======================================================================
-# Predicate 5: duplicate currents (R12).
+# Predicate 5: duplicate currents.
 # ======================================================================
 
 def test_duplicate_currents_withheld_and_logged(conn):
@@ -530,7 +530,7 @@ def test_duplicate_currents_withheld_and_logged(conn):
 
 
 # ======================================================================
-# Predicate 6: supersession by slot (R4).
+# Predicate 6: supersession by slot.
 # ======================================================================
 
 def test_supersession_by_slot(conn):
@@ -584,7 +584,7 @@ def test_promote_run_refuses_a_candidate_with_no_slot(conn):
     stage, unit_id = _make_unit(conn, run_id)
     _succeed_and_select(conn, run_id, stage, unit_id)
     instance_id = new_ulid()
-    # An unknown kind never derives a slot (R3: "An unknown kind: NULL").
+    # An unknown kind never derives a slot ("An unknown kind: NULL").
     _run_out, instance_id = _register(
         conn, "unknown-kind-for-test", {"anything": "here"},
         run_id=run_id, instance_id=instance_id)
@@ -594,7 +594,7 @@ def test_promote_run_refuses_a_candidate_with_no_slot(conn):
 
 
 # ======================================================================
-# Predicate 7 (library form): frozen plan and StalePlan (R5).
+# Predicate 7 (library form): frozen plan and StalePlan.
 # ======================================================================
 
 def test_promotion_plan_matches_and_stale_plan_refuses(conn):
@@ -642,7 +642,7 @@ def test_promotion_plan_matches_and_stale_plan_refuses(conn):
 
 
 # ======================================================================
-# Predicate 8: association-set ancestor rule (R6, R13).
+# Predicate 8: association-set ancestor rule.
 # ======================================================================
 
 def test_association_ancestor_rule(conn):
@@ -682,7 +682,7 @@ def test_association_ancestor_rule(conn):
 
 
 # ======================================================================
-# Predicate 9: rollback (R9, R13).
+# Predicate 9: rollback.
 # ======================================================================
 
 def test_rollback_legacy_promotion_recorded_without_a_slot(conn):
@@ -768,13 +768,12 @@ def test_rollback_slot_promotion_exact_inverse_and_refused_when_moved(conn):
 
 # ======================================================================
 # Predicate 11: catalog-counts-vs-reference finds its reference by slot
-# (R8, R16).
 # ======================================================================
 
 def _resolved_source_set(conn):
     """A source set over a registered l2 -> reference -> difference chain,
     so it and an association set built on it derive an identity (a slot
-    comes only with an identity, 20260926-03, R21)."""
+    comes only with an identity, 20260926-03)."""
     exposure = int(new_ulid()[-6:], 36) % 10**6
     _run, l2 = _register_l2(conn, exposure, 1, version=1)
     _run, ref = _register_reference(conn, exposure, "F184")
@@ -832,7 +831,7 @@ def test_catalog_counts_vs_reference_finds_reference_by_slot(conn):
     assert result.detail["reference"]["instance"] == ref_srcset
     assert result.detail["measurements"]["reference_row_count"] == 100
 
-    # Withhold the reference's slot (as R12/duplicate-current would): it
+    # Withhold the reference's slot (as duplicate-current would): it
     # is not a reference lookup match any more, reported as missing, the
     # same as a broken link is today.
     _clear_slot(conn, ref_srcset)
@@ -848,7 +847,7 @@ def test_catalog_counts_vs_reference_candidate_with_no_slot_fails(conn):
         conn, "source-set", {"difference": new_ulid(), "catalog_type": "sextractor"},
         row_count=10)
     # The producer difference-image doesn't exist, so the candidate's own
-    # slot is NULL (R3): the check refuses to guess an identity for it.
+    # slot is NULL: the check refuses to guess an identity for it.
     params = {"tolerance": 0.1, "missing_reference": "pass", "reference_run": None}
     result = catalog_counts_vs_reference(conn, cand, params)
     assert result.outcome == "failed"
@@ -856,7 +855,7 @@ def test_catalog_counts_vs_reference_candidate_with_no_slot_fails(conn):
 
 
 # ======================================================================
-# R20: a duplicate-current set is withheld together at any depth.
+# A duplicate-current set is withheld together at any depth.
 # ======================================================================
 
 def _clear_slot_and_identity(conn, instance_id):
@@ -867,19 +866,19 @@ def _clear_slot_and_identity(conn, instance_id):
 
 
 def test_two_depth_duplicate_current_withholds_together(conn):
-    """R20 (supervisor ledger, after Rehearsal 2): the fill derives to a
+    """The fill derives to a
     fixpoint first and only then withholds every member of a
     duplicate-current set together, whatever its dependency depth. Two
     current association-sets share one field slot (the second's base is
     the first, the loop's ordinary next-date shape); each has a current
     pruned-set and a current statistics-set built on it. Against
-    713421f2 (R18, before amendment 4) the two pruned-sets and the two
+    713421f2 the two pruned-sets and the two
     statistics-sets resolve their slot one pass apart, because the
     second association-set's own identity (needed by its descendants'
     derivation) is itself one pass behind the first's -- so the
     depth-1 descendant that happens to resolve first keeps a slot
     nobody else contests YET, and only its sibling is later caught as
-    the duplicate. R20 requires the full fixpoint be reached first, so
+    the duplicate. This requires the full fixpoint be reached first, so
     all three (kind, slot) collisions -- association-set, pruned-set,
     statistics-set -- are counted duplicate_current in pairs, and all
     six rows end up with slot NULL."""
@@ -916,8 +915,8 @@ def test_two_depth_duplicate_current_withholds_together(conn):
 
 
 # ======================================================================
-# R21 (migration 20260926-03-product-slots-identity-first.sql, from the
-# Codex review of #172): a slot only ever comes with an identity; the
+# The migration 20260926-03-product-slots-identity-first.sql: a slot
+# only ever comes with an identity; the
 # identity phase of the fill runs to a true fixpoint before any depth of
 # association chain is slotted; a malformed or unresolved-identity
 # candidate is refused by promote_run, and a malformed --plan file is
@@ -926,7 +925,7 @@ def test_two_depth_duplicate_current_withholds_together(conn):
 
 def test_malformed_association_set_gets_no_slot_and_is_refused(conn):
     """An association-set whose source_sets is an object, not an array
-    (malformed): identity cannot be derived, so R21 withholds its slot
+    (malformed): identity cannot be derived, so it withholds its slot
     too (previously it kept slot={field} even though unresolved)."""
     run_id, malformed = _register(
         conn, "association-set",
@@ -942,7 +941,7 @@ def test_malformed_association_set_gets_no_slot_and_is_refused(conn):
 
 
 def test_forty_deep_association_chain_resolves_in_one_fill_call(conn):
-    """R21: the identity phase runs to a true fixpoint (a cycle guard
+    """The identity phase runs to a true fixpoint (a cycle guard
     only, no longer capped at 32 passes), so a chain deeper than the old
     cap resolves fully in one product_identity_fill() call, with a slot
     only where the identity is set."""
@@ -978,7 +977,7 @@ def test_forty_deep_association_chain_resolves_in_one_fill_call(conn):
 
 
 # ======================================================================
-# R22 (migration 20260926-04-product-slots-rederive.sql): -02's 32-pass
+# The migration 20260926-04-product-slots-rederive.sql: -02's 32-pass
 # identity cap could crown a shallow member of a duplicate-current pair
 # before its deeper peer's identity ever reached the collision check;
 # -03's one-time cleanup only clears a slot with no identity, so that

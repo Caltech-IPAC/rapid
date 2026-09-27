@@ -1,5 +1,4 @@
-"""The one input-binding primitive, ``rapidpipe.runs.binding`` (supervisor
-step 2, 2026-09-26).
+"""The one input-binding primitive, ``rapidpipe.runs.binding`` (runs.md §Python interface).
 
 Three groups: the recorder tests (both composers reach the primitive,
 exactly once per consumer), the static bypass guard (neither composer can
@@ -199,7 +198,7 @@ def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
 
 
 def test_no_composer_admits_binds_or_writes_around_the_primitive():
-    """Step 2's done condition: both composers (``run inputs``/``run start``
+    """The done condition: both composers (``run inputs``/``run start``
     and the loop's maintain, crossmatch and alerts sites) admit, bind and
     write an input set only through ``binding.bind_input_set``. A direct
     ``add_unit`` (admission), ``bind_unit_inputs``/``bind_registered_inputs``

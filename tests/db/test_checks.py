@@ -1,5 +1,4 @@
-"""Candidate checks and the promotion gate against a live PostgreSQL
-(supervisor step 6, 2026-09-24, R1-R5 and plan-review amendments A1-A3).
+"""Candidate checks and the promotion gate against a live PostgreSQL.
 
 Covers: both shipped checks recorded as ``checks`` rows (measurements,
 bounds, policy and params in detail; required flag from the policy; a
@@ -42,8 +41,7 @@ from .test_repository import _make_run, _make_unit, _register_simple_instance, p
 TRIAL = "rebuild-trial@1"
 STRICT = "rebuild-strict@1"
 
-#: The control run's diffimmeta values in rapid_rebuild (supervisor step 6,
-#: live-values correction): inside rebuild-trial@1's bounds, outside
+#: The control run's diffimmeta values in rapid_rebuild: inside rebuild-trial@1's bounds, outside
 #: rebuild-strict@1's.
 GOOD_STATS = {"scalefacref": 17572.896, "dxrmsfin": 0.25, "dyrmsfin": 0.56,
               "dxmedianfin": 0.004, "dymedianfin": -0.48, "nsexcatsources": 21749,
@@ -262,7 +260,7 @@ def test_a_raising_check_is_recorded_failed_with_the_error(conn, monkeypatch):
 
 
 def test_non_finite_medians_record_the_failed_check(conn):
-    """Codex diff review of step 6 (P1): NaN/Infinity signed medians are
+    """NaN/Infinity signed medians are
     recorded as text, so the failed check's row is written, not lost to a
     jsonb error."""
     run_id = _make_run(conn)
@@ -354,8 +352,7 @@ def _l2(conn, run_id, *, expid, sca, fid):
 def _reference(conn, run_id):
     """A registered reference-image instance keyed as the reference stage
     keys it, so a difference image naming it derives an identity (its
-    consumers derive their slots from that identity, supervisor step 5a,
-    2026-09-26, R18). Never promoted, so it needs no ``refimages`` row."""
+    consumers derive their slots from that identity). Never promoted, so it needs no ``refimages`` row."""
     attempt_id = _selected_attempt(conn, run_id, stage="reference")
     return _register_simple_instance(
         conn, run_id, "reference", attempt_id, kind="reference-image",
@@ -461,7 +458,7 @@ def test_catalog_counts_fail_an_incomplete_or_unresolvable_candidate(conn):
 
 
 # ======================================================================
-# The promotion gate (R4, A1, A2)
+# The promotion gate
 # ======================================================================
 
 def test_promotion_refuses_a_required_check_with_no_result(conn):
@@ -513,7 +510,7 @@ def test_the_latest_row_under_the_policy_params_decides(conn):
     run_id = _make_run(conn)
     instance = _diff_candidate(conn, run_id)
     trial = load_policy(TRIAL)
-    # A later pass under overridden params does not count (A2) ...
+    # A later pass under overridden params does not count ...
     run_policy_checks(conn, run_id, load_policy(STRICT))
     with conn.cursor() as cur:
         cur.execute("UPDATE checks SET detail = jsonb_set(detail, '{params}', %s::jsonb) "
@@ -591,7 +588,7 @@ def test_candidates_are_selected_attempt_instances_of_any_custody(conn):
 
 
 # ======================================================================
-# Automatic promotion (R5)
+# Automatic promotion
 # ======================================================================
 
 def test_create_run_refuses_auto_promote_and_unknown_policies(conn):

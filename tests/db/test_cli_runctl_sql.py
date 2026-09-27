@@ -64,11 +64,11 @@ def test_status_rows_and_compare(conn):
     rows = runctl._compare_instances(conn, run_a)
     assert [(k, i) for k, _key, i, _slot in rows] == [(TEST_KIND, instances[run_a])]
     assert rows[0][1] == runctl._compare_instances(conn, run_b)[0][1]
-    # The slot column (supervisor step 5a, R8), as canonical JSON.
+    # The slot column, as canonical JSON.
     assert rows[0][3] == canonical_json(stand_in_slot(key))
 
     unregistered = new_ulid()
-    # The registered-instance lookup lives in rapidpipe.runs.inputs since
-    # supervisor step 2 (R12); it returns a set.
+    # The registered-instance lookup lives in rapidpipe.runs.inputs;
+    # it returns a set.
     assert inputs._registered(conn, [instances[run_a], unregistered]) == {instances[run_a]}
     assert inputs._registered(conn, []) == set()

@@ -1,4 +1,4 @@
-"""Supervisor step 9 rulings R1 and R2 against a real PostgreSQL.
+"""R1 and R2 (products.md §Database result sets) against a real PostgreSQL.
 
 R1 (retry provenance): a done check reuses a complete set of this run only
 when its producing attempt is the calling attempt or one whose disposition

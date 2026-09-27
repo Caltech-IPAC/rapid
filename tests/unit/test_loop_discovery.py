@@ -1,5 +1,5 @@
 """Unit tests of delivery discovery and batches in the processing-date loop
-(supervisor step 4 of the operations campaign, rulings R1-R7, R13, R14).
+(loop.md §Discovery and batches).
 
 Database-free: :class:`_DB` interprets exactly the SQL ``rapidpipe.launch.loop``
 and ``rapidpipe.launch.discovery`` send for ``loop_dates`` and
@@ -339,7 +339,7 @@ def _recording_process(monkeypatch, db, *, result=0, finish=True, during=None):
 
 
 # ======================================================================
-# The spec (R1)
+# The spec
 # ======================================================================
 
 def test_an_inbox_spec_needs_no_dates_and_carries_the_stream_inputs():
@@ -368,7 +368,7 @@ def test_an_inbox_spec_is_refused_when_malformed(mutate, message):
 
 
 # ======================================================================
-# Discovery and classification (R3)
+# Discovery and classification
 # ======================================================================
 
 def test_discovery_lists_once_ignores_other_keys_and_skips_recorded_locations():
@@ -460,7 +460,7 @@ def test_an_invalid_manifest_exit_64_from_the_cli_storage_is_malformed():
 
 
 def test_an_attribute_or_index_error_from_manifest_validation_is_malformed_not_fatal():
-    # P1 (Codex 4-2): AttributeError/IndexError used to propagate and abort the
+    # P1: AttributeError/IndexError used to propagate and abort the
     # whole firing before any classification committed; one bad object then
     # blocked the inbox forever. They are malformed like ValueError etc.
     db, s3, storage = _DB(), _S3(), _Inbox()
@@ -478,7 +478,7 @@ def test_an_attribute_or_index_error_from_manifest_validation_is_malformed_not_f
 
 
 # ======================================================================
-# Batches (R2, R6, R13)
+# Batches
 # ======================================================================
 
 def test_two_dates_become_two_batches_oldest_first_all_committed_before_any_walk(monkeypatch):
@@ -589,7 +589,7 @@ def test_an_already_recorded_inbox_is_nothing_to_discover(monkeypatch):
 
 
 def test_a_firing_of_only_rejections_records_them_and_creates_no_run(monkeypatch):
-    # R13: a duplicate and a conflict of an admitted delivery.
+    # A duplicate and a conflict of an admitted delivery.
     db, s3, storage = _DB(), _S3(), _Inbox()
     db.seed_row(D1, 1, "RUN0", "complete")
     db.seed_delivery(_loc(D1, "r1-sca01"), D1, "r1", "1", SHA_A, "batched", batch=1)
@@ -631,7 +631,7 @@ def test_rejections_commit_before_the_first_batch(monkeypatch):
 
 def test_a_unit_id_collision_is_quarantined_naming_the_earlier_delivery_and_the_batch_has_one_image(
         monkeypatch):
-    # P2 (Codex 4-2): "image-sca01" and "image_sca01" both derive unit
+    # P2: "image-sca01" and "image_sca01" both derive unit
     # "image/SCA01". This used to raise LoopError with nothing recorded, so
     # neither delivery was ever batched. Now the later one (key order) is a
     # durable quarantine naming the earlier, and the earlier batches alone.
@@ -722,7 +722,7 @@ def test_a_date_filter_on_an_inbox_spec_runs_only_listed_dates(monkeypatch):
 
 
 # ======================================================================
-# Crash and restart (R6)
+# Crash and restart
 # ======================================================================
 
 def _science(monkeypatch, storage):
@@ -797,7 +797,7 @@ def test_a_crash_after_the_batches_commit_resumes_the_same_runs(monkeypatch):
 
 
 # ======================================================================
-# Batch-qualified reads and writes (R14)
+# Batch-qualified reads and writes
 # ======================================================================
 
 def _execute_sql(tree: ast.AST) -> list[str]:
@@ -871,7 +871,7 @@ def test_reopen_repoints_only_its_own_batch(monkeypatch):
 
 
 # ======================================================================
-# plan and show (R5)
+# plan and show
 # ======================================================================
 
 def test_plan_on_an_inbox_spec_classifies_without_writing(monkeypatch):

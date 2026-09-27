@@ -425,8 +425,8 @@ def test_run_stage_s3_missing_manifest_exits_input_rejected(monkeypatch, tmp_pat
 
 
 def test_run_stage_s3_connection_error_exits_transient_failure(monkeypatch, tmp_path, capsys):
-    # The input fetch is per object (step 6, amendment 3: never the whole
-    # prefix), so the network failure is on the object download.
+    # The input fetch is per object, never the whole
+    # prefix, so the network failure is on the object download.
     class _BrokenS3(FakeS3):
         def download_file(self, bucket, key, filename, **kwargs):
             raise FakeEndpointConnectionError("could not connect")

@@ -1,4 +1,4 @@
-"""Tests for rapidpipe.stages.export: the real HATS source-catalog export (ruling R12).
+"""Tests for rapidpipe.stages.export: the real HATS source-catalog export (export.md).
 
 Settings, input-set and result-set validation map to 64/65 as the stage
 contract says; the CSV dump carries dev's columns in dev's order; the
@@ -421,14 +421,14 @@ def test_stage_with_a_stub_import_writes_the_manifest(tmp_path, fake_db, monkeyp
 
 
 def test_selection_digest_is_order_independent_but_membership_sensitive():
-    """WP-G (ruling R13): [A, B] and [B, A] digest the same; [A, B] and [A, C] differ."""
+    """[A, B] and [B, A] digest the same; [A, B] and [A, C] differ."""
     a, b, c = SOURCE_SET_INSTANCE, SECOND_SOURCE_SET_INSTANCE, UNNAMED_SOURCE_SET_INSTANCE
     assert selection_digest([a, b]) == selection_digest([b, a])
     assert selection_digest([a, b]) != selection_digest([a, c])
 
 
 def test_stage_key_is_the_same_regardless_of_named_result_set_order(tmp_path, fake_db, monkeypatch):
-    """WP-G (ruling R13): before, ``export.py`` keyed on ``source_sets[0]`` alone, so a
+    """Before, ``export.py`` keyed on ``source_sets[0]`` alone, so a
     run named [A, B] and one named [B, A] got different keys though they export the same
     selection; now both share one key, and a different selection gets a different one."""
     def _stub(csv_paths, hats, output_path, tmp_dir):

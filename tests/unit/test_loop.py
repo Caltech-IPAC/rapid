@@ -140,7 +140,7 @@ def test_source_set_fields_refuses_a_bad_table_before_any_sql():
 
 def test_selected_stages_and_positions_match_the_stage_names():
     assert set(loop.SELECTED_STAGES) <= set(STAGE_NAMES)
-    # A1: the raw difference is never registered; register follows finalize.
+    # The raw difference is never registered; register follows finalize.
     assert loop.SELECTED_STAGES == (
         "admit", "register", "difference", "finalize", "register", "load", "maintain",
         "crossmatch", "statistics", "prune", "alerts")
@@ -314,7 +314,7 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
     monkeypatch.setattr(loop, "jobless_attempts", lambda conn, run: [])
     monkeypatch.setattr(loop, "unit_records", lambda conn, run: [
         {"stage": "admit", "unit": img.unit, "state": "complete", "attempt": "A", "job": "j"}])
-    # The binding primitive's seams (supervisor step 2 R7).
+    # The binding primitive's seams.
     monkeypatch.setattr(inputs, "_registered", lambda conn, ids: set())
     monkeypatch.setattr(repository, "add_unit", lambda *a, **k: None)
     monkeypatch.setattr(inputs, "bind_unit_inputs", lambda *a, **k: None)
@@ -610,10 +610,6 @@ def test_promote_a_missing_run_is_not_a_refusal(monkeypatch):
         loop._promote(_Conn(), "R", loop.parse_spec(SPEC, "x"), dt.date(2027, 10, 1))
 
 
-# ======================================================================
-# Amendments A2-A5
-# ======================================================================
-
 def test_run_loop_exits_75_when_another_loop_holds_the_schedule(monkeypatch):
     spec, tools, calls = _loop_world(monkeypatch, {}, {"2027-10-01": 0, "2027-10-02": 0})
     monkeypatch.setattr(loop, "try_lock", lambda conn, schedule: False)
@@ -711,7 +707,7 @@ def _bases_world(monkeypatch, refused):
 
 
 def test_base_for_field_checks_the_read_rule_with_the_new_run_as_reader(monkeypatch):
-    """R2 (Codex 9-2): the chosen base passes assert_readable_result_set for the date's run."""
+    """The chosen base passes assert_readable_result_set for the date's run."""
     rows, storage, reads = _bases_world(monkeypatch, {})
     base = loop.base_for_field(object(), storage, rows, 5, "RUN4")
     assert base.entry.instance == "AS3"
@@ -754,7 +750,7 @@ def test_process_date_records_a_skipped_base(monkeypatch):
 
 
 def test_field_discovery_reads_only_a_readable_source_set(monkeypatch):
-    """R2 (Codex 9-2): the source set is checked, as the date's run, before its rows are read."""
+    """The source set is checked, as the date's run, before its rows are read."""
     spec, tools, *_ = _world(monkeypatch)
     order = []
     monkeypatch.setattr(loop, "readable_result_set",
@@ -848,7 +844,7 @@ def test_process_date_other_refusals_propagate(monkeypatch):
 
 
 def test_process_date_an_input_refusal_fails_the_date_with_its_message(monkeypatch):
-    # Step 9 R4: run start's launcher refuses a unit whose input manifest is
+    # run start's launcher refuses a unit whose input manifest is
     # absent or unreadable (InputsRefused, exit 65). The loop fails the date
     # with the message instead of ending the whole loop with the row open.
     from rapidpipe.runs.inputs import InputsRefused
@@ -901,7 +897,7 @@ def test_alert_inputs_follow_the_alerts_stage_rules():
         loop.alert_result_sets(s1, [], [])
     with pytest.raises(loop.LoopError, match="more statistics"):
         loop.alert_result_sets(s1, ["AS1"], ["ST1", "ST2"])
-    # R5: each field's pruned set follows the statistics sets, one per field.
+    # Each field's pruned set follows the statistics sets, one per field.
     assert loop.alert_result_sets(s1, ["AS1", "AS2"], ["ST1"], ["PS1", "PS2"]) == [
         "S1", "AS1", "AS2", "ST1", "PS1", "PS2"]
     with pytest.raises(loop.LoopError, match="more pruned"):
@@ -909,7 +905,7 @@ def test_alert_inputs_follow_the_alerts_stage_rules():
 
 
 def test_field_pruned_set_names_the_prune_output_of_the_fields_association_set():
-    """R5: the loop binds the field's one pruned set, which must prune the
+    """The loop binds the field's one pruned set, which must prune the
     association set the same date's crossmatch produced for that field."""
     ps = _entry("pruned-set", "PS1", {"base": "AS1", "settings_hash": "sha256:0"})
     assert loop.field_pruned_set([ps], "s3://b/out/prune", "AS1") == "PS1"
@@ -922,7 +918,7 @@ def test_field_pruned_set_names_the_prune_output_of_the_fields_association_set()
 
 
 # ======================================================================
-# Codex 7-2
+# Two detector images per field
 # ======================================================================
 
 TWO_IMAGES = SPEC.split("[[dates]]\nprocessing_date = 2027-10-02")[0] + """
@@ -1118,7 +1114,7 @@ def test_a_seeded_re_run_composes_difference_against_its_seeds_admit_only(
 
 
 # ======================================================================
-# Refusals from the binding primitive (supervisor step 2 R11)
+# Refusals from the binding primitive
 # ======================================================================
 
 def _refuse_at_maintain(monkeypatch):
@@ -1151,7 +1147,7 @@ def test_process_date_an_input_refusal_at_composition_propagates(monkeypatch):
 
 def test_loop_run_exits_65_on_an_input_refusal_at_composition(monkeypatch, capsys):
     # loop run maps it through runctl._with_connection (loopctl): 65, with a
-    # rollback and the message on stderr (supervisor step 2 R4/R11; was 64).
+    # rollback and the message on stderr (was 64).
     import contextlib
 
     from rapidpipe.cli import loopctl, runctl

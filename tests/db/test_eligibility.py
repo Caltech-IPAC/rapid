@@ -1,15 +1,14 @@
-"""Dependency eligibility against a real PostgreSQL (supervisor step 6,
-2026-09-26, R1-R5, R8, amendments A1-A4, A7).
+"""Dependency eligibility against a real PostgreSQL.
 
 The chain proofs build a three-generation chain across three production
 runs: a grandparent difference image G (run A) whose required check
 ``difference-image-statistics@1`` failed under ``rebuild-trial@1`` -> a
 parent source set P (run B; the policy names no required check for its
 kind) -> a child association set C (run C). Promoting C walks the whole
-chain (R2, A1); ``check accept`` (R3) on G through ``rapidpipe.cli.main``
+chain (loop.md §Promotion); ``check accept`` on G through ``rapidpipe.cli.main``
 lets it through; the refusal writes nothing. The acceptance lines of
-``check show`` and ``run show`` (R4) and the registration-time read rule
-for file products (R5) are proved here too.
+``check show`` and ``run show`` and the registration-time read rule
+for file products (products.md §Registration metadata) are proved here too.
 
 Skips cleanly if PGHOST is unset (see conftest.py).
 """
@@ -116,7 +115,7 @@ def _acceptance_rows(conn, instance):
 
 
 # ======================================================================
-# R1: the states
+# The states
 # ======================================================================
 
 def test_states_of_the_chain(conn):
@@ -125,7 +124,7 @@ def test_states_of_the_chain(conn):
     assert g.state == "rejected"
     assert g.required_checks == [("difference-image-statistics@1", "failed")]
     assert g.policy_ref == TRIAL and len(g.check_ids) == 1
-    # source-set: only an advisory check under the policy, so none is required (A4).
+    # source-set: only an advisory check under the policy, so none is required.
     assert p.state == "accepted" and p.required_checks == []
     assert c.state == "accepted"
     assert "rejected: difference-image-statistics@1 failed" in g.why()
@@ -142,7 +141,7 @@ def test_state_precedence(conn):
                     "(SELECT a.unit FROM attempts a JOIN product_instances pi "
                     " ON pi.producing_attempt = a.id WHERE pi.id = %s)", (chain.g,))
     unselected = _state(conn, chain.g)
-    assert unselected.state == "unselected"          # before current (A4)
+    assert unselected.state == "unselected"          # before current
     assert "selected_attempt=none" in unselected.detail()
     with conn.cursor() as cur:
         cur.execute("UPDATE product_instances SET custody = 'scratch' WHERE id = %s", (chain.g,))
@@ -162,7 +161,7 @@ def test_state_precedence(conn):
 
 
 # ======================================================================
-# R2: the promotion walk
+# The promotion walk
 # ======================================================================
 
 def test_promoting_the_child_is_refused_naming_the_grandparent(conn):
@@ -277,7 +276,7 @@ def test_a_same_promotion_sibling_chain_promotes(conn):
 
 
 def test_a_rejected_sibling_in_the_same_promotion_is_not_laundered(conn):
-    """A2: no sibling skip; the ancestor is judged under its own run's policy."""
+    """No sibling skip; the ancestor is judged under its own run's policy."""
     _run, (d_key, diff), (s_key, source_set) = _sibling_pair(conn, passes=False)
     _savepoint_raises(conn, repo.PromotionRefused, lambda: repo.promote(conn, "t", "pair", [
         ("difference-image", by_slot(d_key), None, diff),
@@ -319,7 +318,7 @@ def test_a_candidate_reference_of_another_production_run_promotes(conn):
 
 
 def test_rollback_skips_the_walk(conn):
-    """A3: a rollback restores what an earlier promotion admitted."""
+    """A rollback restores what an earlier promotion admitted."""
     chain = Chain(conn, grandparent_passes=True)
     p_key = {"difference": chain.g, "catalog_type": "t"}
     repo.promote(conn, "t", "first", [("source-set", by_slot(p_key), None, chain.p)])
@@ -345,7 +344,7 @@ def test_rollback_skips_the_walk(conn):
 
 
 # ======================================================================
-# R3: check accept refusals
+# Check accept refusals
 # ======================================================================
 
 @pytest.mark.parametrize("case, message", [
@@ -410,7 +409,7 @@ def test_the_acceptances_table_refuses_an_empty_reason(conn):
 
 
 # ======================================================================
-# R4: check show and run show
+# Check show and run show
 # ======================================================================
 
 def test_check_show_and_run_show_print_acceptance_lines(conn, cli_conn, capsys):  # noqa: F811
@@ -444,7 +443,7 @@ def test_check_show_and_run_show_print_acceptance_lines(conn, cli_conn, capsys):
 
 
 # ======================================================================
-# R5: registration applies the read rule to file products
+# Registration applies the read rule to file products
 # ======================================================================
 
 def test_registration_refuses_another_runs_scratch_file_product(conn):

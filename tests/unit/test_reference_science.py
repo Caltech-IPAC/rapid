@@ -76,8 +76,8 @@ def test_rapid_filter_name_normalises_to_the_rapid_spelling():
 
 
 def test_both_former_filter_map_copies_resolve_to_the_one_in_products():
-    """`rapidpipe.science.reference.prep` (WP-A) and `rapidpipe.products.refimage`
-    (WP-B) each ported `dev`'s filter map separately; step 8's WP-E kept one
+    """`rapidpipe.science.reference.prep` and `rapidpipe.products.refimage`
+    each ported `dev`'s filter map separately; a later pass kept one
     copy, in `rapidpipe.products.filters`, and re-exported it under both
     former names. Both import paths must still resolve to that one function
     and that one map, not merely equal copies of them.
@@ -93,7 +93,7 @@ def test_mjd_to_jd():
 
 
 # ----------------------------------------------------------------------
-# Per-frame preparation (R4): dev's arithmetic
+# Per-frame preparation: dev's arithmetic
 # ----------------------------------------------------------------------
 
 
@@ -291,7 +291,7 @@ def test_measure_mosaic_reports_refimmeta_fields(tmp_path):
 
 
 # ----------------------------------------------------------------------
-# Header stamp (R4)
+# Header stamp
 # ----------------------------------------------------------------------
 
 
@@ -335,7 +335,7 @@ def test_stamp_writes_devs_keywords_without_fid_plus_the_run_model(tmp_path):
 
 
 # ----------------------------------------------------------------------
-# Identity (R5)
+# Identity
 # ----------------------------------------------------------------------
 
 

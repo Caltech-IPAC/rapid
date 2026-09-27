@@ -1,5 +1,5 @@
-"""Black-box exit-code coverage for every ``rapidpipe`` command family
-(supervisor step 1, 2026-09-26): every argparse parse failure exits
+"""Black-box exit-code coverage for every ``rapidpipe`` command family:
+every argparse parse failure exits
 :data:`ExitCode.USAGE` (64), ``--help`` exits 0 everywhere, and the CLI's
 own runtime refusals map onto the vocabulary in ``rapidpipe.exitcodes``
 (SUCCESS/FAILURE/INCOMPLETE/USAGE/INPUT_REJECTED/NOT_IMPLEMENTED/
@@ -180,7 +180,7 @@ def test_release_cut_hook_exit_is_mapped_to_failure(tmp_path, monkeypatch):
 
     The underlying mapping (a hook exiting 1/2/64/75, and a bad result
     line, all raising HookFailed) is tests/unit/test_release_cut.py's and
-    test_release_parts.py's job (WP-A, supervisor step 1); this is the
+    test_release_parts.py's job; this is the
     one CLI-dispatch form of it, built the way
     tests/unit/test_release_parts.py's test_run_submit_exits_1_on_a_
     release_refusal monkeypatches connect and calls main() directly.

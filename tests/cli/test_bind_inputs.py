@@ -1,7 +1,7 @@
-"""Behavioural tests of input binding at submission (supervisor step 9,
-2026-09-25, R4) and of the deletion guard ignoring a deleted consumer's
-tombstones (R3): argv in, exit code / stderr and ``unit_inputs`` rows out,
-against a real PostgreSQL with Batch and S3 faked.
+"""Behavioural tests of input binding at submission and of the deletion
+guard ignoring a deleted consumer's tombstones: argv in, exit code /
+stderr and ``unit_inputs`` rows out, against a real PostgreSQL with Batch
+and S3 faked.
 
 Every test here uses the launcher's real input-manifest read
 (``real_input_manifest``; the suite-wide stub in ``tests/conftest.py`` is
@@ -152,7 +152,7 @@ def test_a_live_consumer_blocks_its_producers_deletion_until_it_is_deleted(
     submitted = cli("run", "submit", consumer, "difference", "--unit", "U", "--inputs", inputs)
     assert submitted.rc == 0, submitted.err
 
-    # R4 + R3: bound at submission, so the producer is guarded from then on,
+    # Bound at submission, so the producer is guarded from then on,
     # before the consumer registers any output.
     refused = cli("run", "delete", producer)
     assert refused.rc == 64, refused.out + refused.err
@@ -218,7 +218,7 @@ def test_a_seeded_only_failed_rerun_reads_the_seeds_recorded_inputs_and_binds_th
 
 
 # ----------------------------------------------------------------------
-# Codex amendment to R4: binding fences the producer's run.
+# Binding fences the producer's run.
 # ----------------------------------------------------------------------
 
 def test_binding_an_input_of_a_deleted_producer_is_refused_with_65(

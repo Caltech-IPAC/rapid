@@ -1,5 +1,5 @@
 """``difference-image-statistics@1`` over a stand-in cursor, and the
-``check`` result-line format (supervisor step 6, 2026-09-24, R2, R6)."""
+``check`` result-line format (checks.md §The check commands)."""
 
 from __future__ import annotations
 
@@ -126,8 +126,8 @@ def test_a_non_finite_measurement_is_recorded_as_text_and_named():
     {"dxmedianfin": float("inf"), "dymedianfin": float("nan")},
 ])
 def test_non_finite_signed_medians_are_recorded_as_text(override):
-    """Codex diff review of step 6: the signed medians reached detail raw,
-    so a NaN median made the failed row unrecordable (jsonb has no NaN)."""
+    """The signed medians reached detail raw, so a NaN median made the
+    failed row unrecordable (jsonb has no NaN)."""
     import json
 
     result = difference_image_statistics(_Conn([_row(**override)]), "I",

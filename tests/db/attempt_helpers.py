@@ -2,9 +2,9 @@
 
 The stage tests run a stage under an attempt that is only allocated; the
 launcher's reconcile later records its disposition and, on success,
-selects it. Supervisor step 9 rulings R1 (a done check reuses only this
-attempt's set or a succeeded attempt's) and R2 (another run's result set is
-readable only when its producing attempt is selected) make both visible to
+selects it. A done check reuses only this attempt's set or a succeeded
+attempt's, and another run's result set is readable only when its
+producing attempt is selected (runs.md §Rules); both are made visible to
 the stages, so the tests set them explicitly.
 """
 

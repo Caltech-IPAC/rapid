@@ -1,7 +1,6 @@
 """The stage read guard's own logic, with no database: a stubbed cursor.
 
-``rapidpipe.runs.readguard.assert_inputs_readable`` (supervisor step 6,
-2026-09-26, R5, R6, A5, A6) and its call inside ``run_stage``. The
+``rapidpipe.runs.readguard.assert_inputs_readable`` and its call inside ``run_stage``. The
 database-backed proof on all three invocation paths is
 ``tests/cli/test_readguard.py``.
 """
@@ -43,7 +42,7 @@ def _instance(kind="l2-image", run=OTHER, custody="candidate", deletion_state="r
 def _row(sql, found):
     """``found`` in the column shape of whichever instance query ``sql`` is:
     the guard's own description, or ``rapidpipe.db.objects``'
-    ``_READABLE_SQL`` (the shared rule's, R5)."""
+    ``_READABLE_SQL`` (the shared rule)."""
     if "logical_key" in sql:
         complete = found["complete"] if found["result_set"] else None
         return (found["kind"], found["run"], found["custody"], found["deletion_state"],

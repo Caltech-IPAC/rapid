@@ -1,7 +1,7 @@
 """Suite-wide fixtures shared by tests/unit, tests/db and tests/cli.
 
 The launcher reads a unit's input-set manifest before it submits
-(``rapidpipe.runs.inputs``; supervisor step 9, 2026-09-25, R4) and refuses
+(``rapidpipe.runs.inputs``) and refuses
 (exit 65) when there is none. Most launcher tests predate that read and
 pass a placeholder ``--inputs`` (``s3://d``, ``s3://in/x``) that names no
 manifest, because what they test is not the binding. For those, the
@@ -14,7 +14,7 @@ with ``@pytest.mark.real_input_manifest`` (tests/cli/test_bind_inputs.py,
 tests/unit/test_bind_inputs.py).
 
 Every stage invocation runs the read guard inside ``run_stage``
-(``rapidpipe.runs.readguard``; supervisor step 6, 2026-09-26, R6), which
+(``rapidpipe.runs.readguard``), which
 needs the database whenever the input manifest names an instance. The
 existing stage tests are database-free, so the guard is stubbed to a
 no-op in-process the same way. A test that exercises the real guard

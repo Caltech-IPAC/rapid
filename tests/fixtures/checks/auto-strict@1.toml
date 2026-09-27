@@ -1,4 +1,4 @@
-# Test fixture only, never shipped in the package (supervisor step 6, A1):
+# Test fixture only, never shipped in the package:
 # rebuild-strict@1's checks with approval "lead" and auto_promote = true.
 name = "auto-strict"
 version = "1"

@@ -1,5 +1,5 @@
-"""Database-backed tests for ``rapidpipe.runs.binding.bind_input_set``
-(supervisor step 2, 2026-09-26): the one primitive both composers use to
+"""Database-backed tests for ``rapidpipe.runs.binding.bind_input_set``:
+the one primitive both composers use to
 admit, bind and write an input set. Local (non-S3) storage is enough --
 ``rapidpipe.cli.runctl._Storage``'s local-path branch needs no S3 client
 -- so this suite calls the primitive directly against a real PostgreSQL,

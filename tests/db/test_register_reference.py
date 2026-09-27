@@ -2,8 +2,7 @@
 
 Constituent l2 images are admitted and registered for real
 (tests/db/test_register_l2.py's helpers); the reference manifest is
-written by hand in the shape rulings R5/R6 fix (the `reference` stage is
-WP-A's), then `register` runs for real against it. Covers `dev`'s
+written by hand, then `register` runs for real against it. Covers `dev`'s
 ``addRefImage`` version allocation, ``vbest`` 0, the run columns,
 `refimmeta`, one `refimimages` row per constituent, `refimcatalogs` with
 columns copied from the `refimages` row, replay, an unregistered
@@ -314,8 +313,8 @@ def test_a_difference_naming_the_new_reference_resolves_its_rfid(conn, tmp_path,
     with conn.cursor() as cur:
         rfid = _refimages_row(cur, reference)["rfid"]
         # The difference's run reads the reference and the l2 image across
-        # runs: their attempts must be selected (supervisor step 6,
-        # 2026-09-26, R5).
+        # runs: their attempts must be selected (products.md
+        # §Reading across runs).
         cur.execute("SELECT producing_attempt FROM product_instances WHERE id = ANY(%s)",
                     ([reference, constituents[0]],))
         producers = [row[0] for row in cur.fetchall()]
@@ -335,8 +334,8 @@ def test_a_difference_naming_the_new_reference_resolves_its_rfid(conn, tmp_path,
 
 
 def test_deleting_a_scratch_run_removes_its_reference_rows(conn, tmp_path, monkeypatch):
-    """cleanup: refimimages/refimcatalogs/refimmeta go with their rfid's run
-    (supervisor step 8, ruling R7); before this, they blocked deletion."""
+    """cleanup: refimimages/refimcatalogs/refimmeta go with their rfid's run;
+    before this, they blocked deletion."""
     constituents, filter_ = _admitted_l2s(conn, tmp_path, monkeypatch, n=1)
     run_id = _make_run(conn, kind="scratch", selected_stages=["reference", "register"])
     repo.add_unit(conn, run_id, "reference", "field", "del")
