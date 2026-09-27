@@ -8,14 +8,14 @@ shared setup and registration correction this module reuses).
 
 from __future__ import annotations
 
-import pytest
+import json
 
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.runs import cleanup
+from tests.db.test_repository import by_slot
 from tests.unit.fakes3 import FakeClientError
 
-from .conftest import FAKE_BUCKET
 from .test_run_lifecycle import (
     _create_run,
     _kv,
@@ -100,6 +100,32 @@ def test_compare_same_dispositions_and_instance_counts(cli, db, fake_batch, fake
 
     result = cli("run", "compare", run_a, run_b)
     assert result.rc == 0, result.err
+    assert result.out.splitlines()[-1] == "same"
+
+
+def test_compare_prints_the_slot_column(cli, db, fake_batch, fake_s3, batch_env):
+    """R8: `run compare`'s instance line gains a slot column; the
+    same/different verdict is otherwise unchanged (both runs' candidates
+    get the same stand-in slot, since they share a logical key -- test
+    above already covers "same" without looking at this column)."""
+    run_a = _create_run(cli, db, kind="production", purpose="compare-slot-a")
+    run_b = _create_run(cli, db, kind="production", purpose="compare-slot-b")
+    attempt_a, _job_a, _out_a = _submit_and_complete(
+        cli, fake_batch, fake_s3, run_a, unit_id="cli-cmp-slot-001/SCA07")
+    attempt_b, _job_b, _out_b = _submit_and_complete(
+        cli, fake_batch, fake_s3, run_b, unit_id="cli-cmp-slot-001/SCA07")
+
+    key = {"k": new_ulid()}
+    _register_candidate(db, run_a, "admit", attempt_a, key=key)
+    _register_candidate(db, run_b, "admit", attempt_b, key=key)
+
+    result = cli("run", "compare", run_a, run_b)
+    assert result.rc == 0, result.err
+    instance_lines = [line for line in result.out.splitlines() if line.startswith("instance\t")]
+    assert len(instance_lines) == 1
+    fields = instance_lines[0].split("\t")
+    assert len(fields) == 6  # instance, kind, key, slot, a_ids, b_ids
+    assert json.loads(fields[3]) == by_slot(key)["slot"]
     assert result.out.splitlines()[-1] == "same"
 
 
