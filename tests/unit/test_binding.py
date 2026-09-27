@@ -87,6 +87,13 @@ def test_compose_inputs_makes_one_call_to_the_primitive(
     bypass = _bypass_log(monkeypatch)
     copies: list[tuple] = []
     monkeypatch.setattr(runctl._Storage, "copy", lambda self, *a: copies.append(a))
+    # A runtime write spy on the class: an aliased bound call
+    # (``publish = storage.write_manifest; publish(...)``) or an unbound one
+    # still lands here, which the static guard's text match cannot see. With
+    # the primitive replaced by the recorder, no manifest may be written.
+    writes: list[tuple] = []
+    monkeypatch.setattr(runctl._Storage, "write_manifest",
+                        lambda self, *a, **k: writes.append(a))
     assert runctl.compose_inputs(
         fake_conn, run_id="R", stage="difference", unit_id="U", from_stage="admit",
         template=str(compose_env["template"]), dest=dest, reuse_existing=reuse) == dest
@@ -98,7 +105,7 @@ def test_compose_inputs_makes_one_call_to_the_primitive(
     assert call["reuse_existing"] is reuse
     assert call["reused"] is existing
     assert callable(call["compose"])
-    assert copies == [] and bypass == []
+    assert copies == [] and bypass == [] and writes == []
     suffix = " (already composed)" if existing else ""
     assert capsys.readouterr().out.strip() == f"inputs={dest}{suffix}"
 
@@ -109,7 +116,7 @@ def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch, exis
     destination already holding a manifest (a resumed date). Reuse must
     rebind, so both drives make the same one call per consumer; the returned
     location is what the consumer walks with; and nothing is admitted,
-    bound, copied or written around the (recording) primitive."""
+    bound, copied, written or composed around the (recording) primitive."""
     # _two_image_world: two images whose source sets share one maintain unit
     # from two load outputs (so maintain composes), two fields, two images.
     spec, tools, storage, walks, created, updates, units = _two_image_world(monkeypatch)
@@ -120,13 +127,32 @@ def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch, exis
         for dest in dests:
             storage.written[dest] = _input_set(dest.rsplit("/", 1)[-1])
     seeded = dict(storage.written)
+    # Manifest writes are spied on the instance (any alias of
+    # ``storage.write_manifest`` taken inside process_date is taken after
+    # this wrap, so it hits the wrapper) and on the fake's class (an unbound
+    # ``type(storage).write_manifest(storage, ...)`` call, even one that
+    # rewrites the identical object, which ``storage.written`` alone would
+    # not show).
     manifest_writes: list[str] = []
     real_write = storage.write_manifest
     storage.write_manifest = lambda manifest, location: (
         manifest_writes.append(f"s3://{location.bucket}/{location.prefix}"),
         real_write(manifest, location))
+    class_writes: list[tuple] = []
+    monkeypatch.setattr(type(storage), "write_manifest",
+                        lambda self, *a, **k: class_writes.append(a))
     member_copies: list[tuple] = []
     monkeypatch.setattr(loop, "_copy_members", lambda *a: member_copies.append(a))
+    # Composition belongs inside the primitive's ``compose`` callback, which
+    # the recorder never calls: neither composition helper may run, so
+    # composing eagerly (before admission, or on reuse) is caught. This
+    # covers the maintain site's input_set_manifest lambda, the crossmatch
+    # site's crossmatch_inputs lambda and the alerts site's local compose.
+    composed: list[str] = []
+    monkeypatch.setattr(loop, "crossmatch_inputs",
+                        lambda *a, **k: composed.append("crossmatch_inputs"))
+    monkeypatch.setattr(loop, "input_set_manifest",
+                        lambda *a, **k: composed.append("input_set_manifest"))
     calls = _recorder(monkeypatch)
     bypass = _bypass_log(monkeypatch)
 
@@ -147,7 +173,8 @@ def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch, exis
     # Nothing was admitted, bound, copied or written around the primitive.
     assert bypass == []
     assert storage.copies == [] and member_copies == []
-    assert manifest_writes == []
+    assert manifest_writes == [] and class_writes == []
+    assert composed == [], "composed outside the primitive"
     assert storage.written == seeded
     assert all(storage.written[d] is seeded[d] for d in seeded)
 
