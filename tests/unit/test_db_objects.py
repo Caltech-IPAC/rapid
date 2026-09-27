@@ -244,3 +244,52 @@ def test_insert_pruned_merges_is_one_statement():
     empty = FakeCursor()
     assert objects.insert_pruned_merges(empty, [], "P", "B", "R", "T") == 0
     assert empty.executed == []
+
+
+# ----------------------------------------------------------------------
+# assert_readable_instance: the read rule for any product instance,
+# file products included (supervisor step 6, 2026-09-26, R5)
+# ----------------------------------------------------------------------
+
+def _file(kind="l2-image", run="OTHER", custody="candidate", deletion_state="retained",
+          selected=True):
+    """A file product's row: no result_sets row, so complete and row_count are NULL."""
+    return (kind, run, custody, deletion_state, None, None, json.dumps({"exposure": 1}),
+            selected)
+
+
+@pytest.mark.parametrize("custody", ["candidate", "current"])
+def test_readable_instance_another_runs_selected_file_product(custody):
+    state = objects.assert_readable_instance(FakeCursor([_file(custody=custody)]), "F", "RUN")
+    assert state == {"kind": "l2-image", "run": "OTHER", "custody": custody, "row_count": None,
+                     "key": {"exposure": 1}, "result_set": False}
+
+
+@pytest.mark.parametrize("row, reason, match", [
+    (_file(custody="scratch"), "scratch", "another run's scratch product is not readable"),
+    (_file(custody="candidate", selected=False), "unselected", "not its unit's selected"),
+    (_file(custody="current", selected=False), "unselected", "not its unit's selected"),
+    (_file(deletion_state="deleted"), "deleted", "is not retained"),
+    (None, "unknown", "no product instance 'F'"),
+])
+def test_readable_instance_refuses_a_file_product(row, reason, match):
+    with pytest.raises(objects.Unreadable, match=match) as info:
+        objects.assert_readable_instance(FakeCursor([row] if row else []), "F", "RUN")
+    assert info.value.reason == reason
+    assert isinstance(info.value, ValueError)
+
+
+def test_readable_instance_own_run_file_product_whatever_its_custody():
+    state = objects.assert_readable_instance(
+        FakeCursor([_file(run="RUN", custody="scratch", selected=False)]), "F", "RUN")
+    assert state["custody"] == "scratch" and state["result_set"] is False
+
+
+def test_readable_result_set_refuses_a_file_product():
+    with pytest.raises(ValueError, match="not complete and retained"):
+        objects.assert_readable_result_set(FakeCursor([_file(run="RUN")]), "F", "RUN")
+
+
+def test_readable_instance_refuses_the_wrong_kind():
+    with pytest.raises(objects.Unreadable, match="is a l2-image, not a psf"):
+        objects.assert_readable_instance(FakeCursor([_file()]), "F", "RUN", kind="psf")
