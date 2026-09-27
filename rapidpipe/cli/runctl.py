@@ -1276,15 +1276,19 @@ def _compare_units(conn, run_id: str) -> list[tuple[str, str, str | None, str | 
         return cur.fetchall()
 
 
-def _compare_instances(conn, run_id: str) -> list[tuple[str, str, str]]:
-    """(kind, logical key as canonical jsonb text, instance id) per product
-    instance of the run."""
+def _compare_instances(conn, run_id: str) -> list[tuple[str, str, str, str | None]]:
+    """(kind, logical key as canonical jsonb text, instance id, slot as
+    canonical JSON or ``None``) per product instance of the run (the slot:
+    supervisor step 5a, 2026-09-26, R8)."""
+    from rapidpipe.runs.slots import canonical_json
+
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT kind, logical_key::text, id FROM product_instances "
+            "SELECT kind, logical_key::text, id, slot FROM product_instances "
             "WHERE run = %s ORDER BY kind, logical_key::text, id",
             (run_id,))
-        return cur.fetchall()
+        return [(kind, key, instance, None if slot is None else canonical_json(slot))
+                for kind, key, instance, slot in cur.fetchall()]
 
 
 def _compare_command(args: argparse.Namespace) -> int:
@@ -1309,17 +1313,23 @@ def _compare_command(args: argparse.Namespace) -> int:
                   f"settings\t{show(a[1])}\t{show(b[1])}")
             different |= a != b
 
+        # Grouped by (kind, logical key) as before; the slot is shown as one
+        # more column (the first recorded for the group, "-" when none is),
+        # with no change to what counts as different (R8).
         instances_a: dict[tuple[str, str], list[str]] = {}
         instances_b: dict[tuple[str, str], list[str]] = {}
+        slots: dict[tuple[str, str], str] = {}
         for rows, into in ((_compare_instances(conn, args.run_a), instances_a),
                            (_compare_instances(conn, args.run_b), instances_b)):
-            for kind, key, instance in rows:
+            for kind, key, instance, slot in rows:
                 into.setdefault((kind, key), []).append(instance)
+                if slot is not None:
+                    slots.setdefault((kind, key), slot)
         for key in sorted(set(instances_a) | set(instances_b)):
             a_ids = instances_a.get(key, [])
             b_ids = instances_b.get(key, [])
-            print(f"instance\t{key[0]}\t{key[1]}\t{','.join(a_ids) or '-'}\t"
-                  f"{','.join(b_ids) or '-'}")
+            print(f"instance\t{key[0]}\t{key[1]}\t{slots.get(key, '-')}\t"
+                  f"{','.join(a_ids) or '-'}\t{','.join(b_ids) or '-'}")
             different |= len(a_ids) != len(b_ids)
 
         print("different" if different else "same")

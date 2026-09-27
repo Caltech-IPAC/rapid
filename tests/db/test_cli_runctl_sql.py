@@ -10,6 +10,7 @@ from rapidpipe.cli import runctl
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.runs import inputs
 from rapidpipe.runs import repository as repo
+from rapidpipe.runs.slots import canonical_json
 
 from .test_repository import (
     TEST_KIND,
@@ -17,6 +18,7 @@ from .test_repository import (
     _make_unit,
     _register_simple_instance,
     _succeed_and_select,
+    stand_in_slot,
 )
 
 
@@ -60,8 +62,10 @@ def test_status_rows_and_compare(conn):
     assert runctl._compare_units(conn, run_a) == [
         ("difference", "e001/SCA01", "succeeded", "sha256:xyz")]
     rows = runctl._compare_instances(conn, run_a)
-    assert [(k, i) for k, _key, i in rows] == [(TEST_KIND, instances[run_a])]
+    assert [(k, i) for k, _key, i, _slot in rows] == [(TEST_KIND, instances[run_a])]
     assert rows[0][1] == runctl._compare_instances(conn, run_b)[0][1]
+    # The slot column (supervisor step 5a, R8), as canonical JSON.
+    assert rows[0][3] == canonical_json(stand_in_slot(key))
 
     unregistered = new_ulid()
     # The registered-instance lookup lives in rapidpipe.runs.inputs since

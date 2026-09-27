@@ -192,7 +192,15 @@ def run_policy_checks(conn, run_id: str, policy: Policy, *, instance: str | None
     Raises :class:`CheckUsageError` for an instance that is not a
     candidate of the run, a check the policy does not name, overrides
     without ``check``, or an unknown parameter.
+
+    Slot and identity are filled first (supervisor step 5a, 2026-09-26,
+    R16), so a check that finds its reference by slot never sees a NULL
+    the fill could have resolved; a failed fill is logged, not raised.
     """
+    from rapidpipe.runs import repository
+
+    with conn.cursor() as cur:
+        repository.fill_identity_safely(cur, f"checking run {run_id}")
     candidates = run_candidates(conn, run_id)
     if instance is not None:
         candidates = [c for c in candidates if c.id == instance]

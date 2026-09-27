@@ -925,7 +925,7 @@ def register_manifest(
         # Slot and identity of what was just registered (and of anything
         # else still NULL), derived by the database; a failure is logged,
         # never fails registration (supervisor step 5a, 2026-09-26, R2).
-        _fill_identity_quietly(cur, f"registering run {run_id} stage {stage}")
+        fill_identity_safely(cur, f"registering run {run_id} stage {stage}")
 
 
 def _refuse_foreign_dependency(
@@ -1141,21 +1141,28 @@ def fill_identity(cur) -> list[tuple[str, int, int, int]]:
     return [tuple(row) for row in cur.fetchall()]
 
 
-def _fill_identity_quietly(cur, context: str) -> list[tuple[str, int, int, int]]:
+def fill_identity_safely(cur, context: str) -> list[tuple[str, int, int, int]]:
     """:func:`fill_identity` inside a savepoint: a failure is logged and
     rolled back to the savepoint, never raised, so the caller's
     registration, check or promotion goes on (a row the fill could not
-    reach keeps a NULL slot, which promotion refuses with its reason)."""
-    cur.execute("SAVEPOINT rapidpipe_fill_identity")
+    reach keeps a NULL slot, which promotion refuses with its reason).
+    On an autocommit connection there is no transaction to protect: the
+    fill is one statement, atomic on its own, and runs without a
+    savepoint."""
+    in_transaction = not getattr(getattr(cur, "connection", None), "autocommit", False)
+    if in_transaction:
+        cur.execute("SAVEPOINT rapidpipe_fill_identity")
     try:
         report = fill_identity(cur)
     except psycopg2.Error as exc:
-        cur.execute("ROLLBACK TO SAVEPOINT rapidpipe_fill_identity")
-        cur.execute("RELEASE SAVEPOINT rapidpipe_fill_identity")
+        if in_transaction:
+            cur.execute("ROLLBACK TO SAVEPOINT rapidpipe_fill_identity")
+            cur.execute("RELEASE SAVEPOINT rapidpipe_fill_identity")
         logger.warning("slot and identity fill failed while %s; going on: %s",
                        context, str(exc).strip())
         return []
-    cur.execute("RELEASE SAVEPOINT rapidpipe_fill_identity")
+    if in_transaction:
+        cur.execute("RELEASE SAVEPOINT rapidpipe_fill_identity")
     for kind, converted, unresolved, duplicate_current in report:
         if unresolved or duplicate_current:
             logger.info("slot fill while %s: kind=%s converted=%s unresolved=%s "
@@ -1784,7 +1791,7 @@ def promotion_plan(
     does, including when there is nothing to promote."""
     with conn.cursor() as cur:
         _promotable_run(cur, run_id)
-        _fill_identity_quietly(cur, f"planning the promotion of run {run_id}")
+        fill_identity_safely(cur, f"planning the promotion of run {run_id}")
         changes = _run_slot_changes(cur, run_id, kinds)
     if not changes:
         raise _nothing_to_promote(run_id, kinds)
@@ -1871,7 +1878,7 @@ def promote_run(
             except PolicyError as exc:
                 raise PromotionRefused(f"{exc}; refusing") from None
 
-        _fill_identity_quietly(cur, f"promoting run {run_id}")
+        fill_identity_safely(cur, f"promoting run {run_id}")
         changes = _run_slot_changes(cur, run_id, kinds)
         if plan is not None:
             _refuse_stale_plan(run_id, plan, changes)

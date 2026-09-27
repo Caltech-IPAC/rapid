@@ -14,7 +14,9 @@ of the ``stage`` group, with ``stage list`` and ``stage describe``
 - ``submit``, ``reconcile``, ``cancel`` -- one attempt on AWS Batch,
   through ``rapidpipe.launch.batch``;
 - ``promote`` -- promote a production run's deliverables
-  (``repository.promote_run``); ``rollback`` -- reverse one promotion
+  (``repository.promote_run``), optionally against a frozen plan;
+  ``promote-plan`` -- print that plan as JSON, writing nothing
+  (``repository.promotion_plan``); ``rollback`` -- reverse one promotion
   (``repository.rollback_promotion``);
 - ``finish`` -- mark a run whose units are all terminal finished
   (``repository.finish_run``);
@@ -371,6 +373,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--check-policy", default=None, metavar="NAME@VERSION", dest="check_policy",
         help="Validate under this check policy (default: the run's check policy, "
              "else rebuild-trial@1).")
+    promote_parser.add_argument(
+        "--plan", default=None, metavar="FILE",
+        help="A frozen plan from 'run promote-plan': promote only if the run's changes, "
+             "read under the promotion lock, still equal it slot for slot; else exit 64 "
+             "(stale plan), writing nothing.")
+
+    plan_parser = run_subparsers.add_parser(
+        "promote-plan",
+        help="Print what 'run promote' would change, one entry per slot, as JSON.",
+        description="Print what 'run promote' would change now, as a JSON list of "
+                    "{kind, slot, before, after} sorted by kind then slot, writing "
+                    "nothing. Exit 64 when the run has nothing to promote or is refused.")
+    plan_parser.add_argument("run_id")
+    plan_parser.add_argument(
+        "--kinds", default=None,
+        help="Comma-separated product kinds to plan (default: every kind).")
 
     rollback_parser = run_subparsers.add_parser(
         "rollback", help="Reverse one promotion; print the reversing promotion id.",
@@ -1220,24 +1238,62 @@ def _run_model_command(
     return int(ExitCode.SUCCESS)
 
 
+def _parse_kinds(name: str, value: str | None) -> tuple[bool, list[str] | None]:
+    """``(ok, kinds)`` from a ``--kinds`` value; writes the usage error."""
+    if value is None:
+        return True, None
+    kinds = [k.strip() for k in value.split(",") if k.strip()]
+    if not kinds:
+        sys.stderr.write(f"rapidpipe run {name}: --kinds must name at least one kind\n")
+        return False, None
+    return True, kinds
+
+
 def _run_promote_command(args: argparse.Namespace) -> int:
     from rapidpipe.runs.repository import promote_run
 
     who = args.who or getpass.getuser()
-    kinds = None
-    if args.kinds is not None:
-        kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
-        if not kinds:
-            sys.stderr.write("rapidpipe run promote: --kinds must name at least one kind\n")
-            return int(ExitCode.USAGE)
+    ok, kinds = _parse_kinds("promote", args.kinds)
+    if not ok:
+        return int(ExitCode.USAGE)
     # promote_run resolves the check policy: --check-policy > the run's
     # check_policy_ref > rebuild-trial@1 (supervisor step 6, 2026-09-24, R4).
-    policy_kwargs = {} if args.check_policy is None else {"check_policy": args.check_policy}
+    extra: dict[str, Any] = {} if args.check_policy is None else {
+        "check_policy": args.check_policy}
+    if args.plan is not None:
+        # A frozen plan (supervisor step 5a, 2026-09-26, R5); its shape is
+        # checked by promote_run under the lock, a stale one exits 64.
+        try:
+            with open(args.plan, encoding="utf-8") as handle:
+                extra["plan"] = json.load(handle)
+        except (OSError, ValueError) as exc:
+            sys.stderr.write(f"rapidpipe run promote: cannot read plan {args.plan}: {exc}\n")
+            return int(ExitCode.USAGE)
     return _run_model_command(
         "promote",
         lambda conn: promote_run(conn, args.run_id, who, args.reason, kinds=kinds,
-                                 allow_unreleased=args.allow_unreleased, **policy_kwargs),
+                                 allow_unreleased=args.allow_unreleased, **extra),
         print_result=print)
+
+
+def _run_promote_plan_command(args: argparse.Namespace) -> int:
+    from rapidpipe.runs.repository import promotion_plan
+    from rapidpipe.runs.slots import plan_json
+
+    ok, kinds = _parse_kinds("promote-plan", args.kinds)
+    if not ok:
+        return int(ExitCode.USAGE)
+
+    def _plan(conn):
+        try:
+            return promotion_plan(conn, args.run_id, kinds=kinds)
+        finally:
+            # A plan writes nothing: the slot fill it reads through is
+            # rolled back here (supervisor step 5a, 2026-09-26, R5).
+            conn.rollback()
+
+    return _run_model_command("promote-plan", _plan,
+                              print_result=lambda plan: print(plan_json(plan)))
 
 
 def _run_rollback_command(args: argparse.Namespace) -> int:
@@ -1307,6 +1363,8 @@ def _run_command(args: argparse.Namespace) -> int:
         return _run_cancel_command(args)
     if args.run_command == "promote":
         return _run_promote_command(args)
+    if args.run_command == "promote-plan":
+        return _run_promote_plan_command(args)
     if args.run_command == "rollback":
         return _run_rollback_command(args)
     if args.run_command == "delete":
