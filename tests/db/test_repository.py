@@ -634,6 +634,16 @@ def test_mark_run_deleting_allows_a_lost_attempt_alone(conn):
         assert cur.fetchone() == ("deleting",)
 
 
+def _legacy_dependency(conn, consumer, producer):
+    """A dependency edge from another run on a scratch run's instance, as
+    recorded before registration applied the read rule to file products
+    (supervisor step 6, 2026-09-26, R5 refuses registering it now); the
+    deletion guard must still count such an edge."""
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO dependencies (id, consumer_instance, producer_instance) "
+                    "VALUES (%s, %s, %s)", (new_ulid(), consumer, producer))
+
+
 def test_mark_run_deleting_refuses_outside_dependency(conn):
     run_id = _make_run(conn, kind="scratch")
     key = {"unit": "e001/SCA01", "v": "outside-dep"}
@@ -644,9 +654,8 @@ def test_mark_run_deleting_refuses_outside_dependency(conn):
     consumer_run = _make_run(conn, kind="scratch")
     consumer_stage, consumer_unit_id = _make_unit(conn, consumer_run)
     consumer_attempt = _succeed_and_select(conn, consumer_run, consumer_stage, consumer_unit_id)
-    _register_simple_instance(
-        conn, consumer_run, consumer_stage, consumer_attempt,
-        input_products={"difference-image": producer_instance})
+    consumer = _register_simple_instance(conn, consumer_run, consumer_stage, consumer_attempt)
+    _legacy_dependency(conn, consumer, producer_instance)
 
     with pytest.raises(repo.DeletionRefused):
         repo.mark_run_deleting(conn, run_id, requested_by="brusholme")
@@ -680,10 +689,10 @@ def test_a_deleted_consumers_dependency_edge_no_longer_blocks_the_producer(conn)
     consumer_run = _make_run(conn, kind="scratch")
     stage, unit_id = _make_unit(conn, consumer_run)
     attempt_id = _succeed_and_select(conn, consumer_run, stage, unit_id)
-    _register_simple_instance(
+    consumer = _register_simple_instance(
         conn, consumer_run, stage, attempt_id,
-        logical_key={"unit": "e001/SCA01", "v": "r3-dep-consumer"},
-        input_products={"difference-image": producer_instance})
+        logical_key={"unit": "e001/SCA01", "v": "r3-dep-consumer"})
+    _legacy_dependency(conn, consumer, producer_instance)
 
     # B alive: A refuses.
     with pytest.raises(repo.DeletionRefused, match="dependency"):

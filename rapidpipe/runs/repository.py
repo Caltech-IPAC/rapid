@@ -934,31 +934,39 @@ def register_manifest(
         fill_identity_safely(cur, f"registering run {run_id} stage {stage}")
 
 
-def _refuse_foreign_dependency(
-    producer_instance: str, run_id: str, producer_run: str, custody: str,
-    deletion_state: str, is_result_set: bool, complete: bool, selected: bool,
-) -> None:
-    """Refuse a dependency on another run's result set that ruling R2 does not allow.
+def _refuse_foreign_dependency(cur, producer_instance: str, run_id: str) -> None:
+    """Refuse a dependency on another run's product that the read rule does not allow.
 
-    The same rule as ``rapidpipe.db.objects.assert_readable_result_set``
-    (supervisor step 9, 2026-09-25, R2), applied to a result set outside
-    ``run_id``: complete and retained, custody ``candidate`` or
+    The one read rule, ``rapidpipe.db.objects.assert_readable_instance``
+    (supervisor step 6, 2026-09-26, R5; first stated for result sets by
+    supervisor step 9, 2026-09-25, R2), applied at registration to every
+    dependency edge on a product of another run, file product or result
+    set: retained, complete when a result set, custody ``candidate`` or
     ``current``, produced by its unit's selected attempt.
     """
-    where = f"input {producer_instance!r} of run {producer_run!r}"
-    if deletion_state != "retained":
-        raise DependencyRefused(f"{where} is {deletion_state}; run {run_id!r} may not depend on it")
-    if not (is_result_set and complete):
-        raise DependencyRefused(f"{where} is not a complete result set; run {run_id!r} "
-                                f"may not depend on it")
-    if custody not in ("candidate", "current"):
-        raise DependencyRefused(
-            f"{where} has custody {custody!r}: another run's scratch output is not an "
-            f"input run {run_id!r} may depend on")
-    if not selected:
-        raise DependencyRefused(
-            f"{where} was produced by an attempt that is not its unit's selected attempt; "
-            f"run {run_id!r} may not depend on it")
+    from rapidpipe.db import objects
+
+    try:
+        objects.assert_readable_instance(cur, producer_instance, run_id)
+    except objects.Unreadable as exc:
+        cur.execute("SELECT run, deletion_state FROM product_instances WHERE id = %s",
+                    (producer_instance,))
+        producer_run, deletion_state = cur.fetchone()
+        where = f"input {producer_instance!r} of run {producer_run!r}"
+        tail = f"run {run_id!r} may not depend on it"
+        if exc.reason == "deleted":
+            raise DependencyRefused(f"{where} is {deletion_state}; {tail}") from None
+        if exc.reason == "incomplete":
+            raise DependencyRefused(f"{where} is not a complete result set; {tail}") from None
+        if exc.reason == "scratch":
+            raise DependencyRefused(
+                f"{where} has custody 'scratch': another run's scratch output is not an "
+                f"input run {run_id!r} may depend on") from None
+        if exc.reason == "unselected":
+            raise DependencyRefused(
+                f"{where} was produced by an attempt that is not its unit's selected "
+                f"attempt (or its unit has none); {tail}") from None
+        raise DependencyRefused(f"{where}: {exc}; {tail}") from None
 
 
 def _entry_instance_id(entry: dict[str, Any]) -> str:
@@ -1105,22 +1113,14 @@ def _register_one_output(
 
     dependency_producers: list[str] = list(input_products.values()) + list(input_result_sets)
     for producer_instance in dependency_producers:
-        cur.execute(
-            """
-            SELECT pi.run, pi.custody, pi.deletion_state, rs.instance IS NOT NULL,
-                   COALESCE(rs.complete, false),
-                   COALESCE(u.selected_attempt = pi.producing_attempt, false)
-            FROM product_instances pi
-            LEFT JOIN result_sets rs ON rs.instance = pi.id
-            LEFT JOIN attempts a ON a.id = pi.producing_attempt
-            LEFT JOIN units u ON u.id = a.unit
-            WHERE pi.id = %s
-            """, (producer_instance,))
+        cur.execute("SELECT run FROM product_instances WHERE id = %s", (producer_instance,))
         producer = cur.fetchone()
         if producer is not None:
             _refuse_if_run_deleting_or_deleted(cur, producer[0])
-            if producer[0] != run_id and producer[3]:
-                _refuse_foreign_dependency(producer_instance, run_id, *producer)
+            if producer[0] != run_id:
+                # Every foreign edge, file products included (supervisor
+                # step 6, 2026-09-26, R5).
+                _refuse_foreign_dependency(cur, producer_instance, run_id)
         cur.execute(
             """
             INSERT INTO dependencies (id, consumer_instance, producer_instance)
@@ -1236,9 +1236,13 @@ def promote(
       2. Validates each non-``None`` after-instance is a candidate from a
          selected attempt whose slot (or, for a logical_key selector,
          logical key) equals the selector, with every provenance
-         dependency in project custody (runs page, "Promotion
-         eligibility": "Every provenance dependency must identify a
-         complete, retained instance in project custody."). A ``None``
+         dependency, followed through the whole chain, current or
+         accepted (supervisor step 6, 2026-09-26, R2 as amended by A1,
+         A2: each ancestor's state, :mod:`rapidpipe.runs.eligibility`,
+         must be ``current``, ``superseded`` or ``accepted``; with
+         ``_recorded_inverse`` the walk is skipped (A3) and only the
+         direct dependencies must be complete, retained and in project
+         custody, as before). A ``None``
          after-instance is an unselect: there is nothing to validate.
          A slot change is refused when another instance with the after
          instance's kind and logical key is current outside the slot (its
@@ -1333,7 +1337,8 @@ def promote(
         for kind, by, value, where, expected_before, after_instance in parsed:
             if after_instance is None:
                 continue
-            _validate_promotion_eligibility(cur, kind, by, value, after_instance)
+            _validate_promotion_eligibility(cur, kind, by, value, after_instance,
+                                            walk_ancestors=not _recorded_inverse)
             if by == "slot":
                 _refuse_current_outside_slot(cur, where, expected_before, after_instance)
             if (kind == "association-set" and expected_before is not None
@@ -1596,6 +1601,7 @@ def _unreleased_attempt(cur, after_instance: str) -> tuple[str, str | None, str 
 
 def _validate_promotion_eligibility(
     cur, kind: str, by: str, value: dict[str, Any], after_instance: str,
+    *, walk_ancestors: bool = True,
 ) -> None:
     # The released-image rule and the check-policy gate are checked by
     # promote() itself, after this (supervisor step 5, 2026-09-24, R8;
@@ -1665,11 +1671,54 @@ def _validate_promotion_eligibility(
             f"after instance {after_instance!r} was not produced by its "
             "unit's selected attempt; refusing")
 
-    # Every provenance dependency must identify a complete, retained
-    # instance in project custody (candidate or current; scratch is not
-    # project custody).
-    # A dependency that is a result set must be complete (plan-review
-    # amendment A3, supervisor step 6, 2026-09-24).
+    if walk_ancestors:
+        _refuse_unaccepted_ancestor(cur, after_instance)
+    else:
+        _refuse_unfit_direct_dependency(cur, after_instance)
+
+
+def _refuse_unaccepted_ancestor(cur, after_instance: str) -> None:
+    """Promotion follows every dependency through the whole chain
+    (supervisor step 6, 2026-09-26, R2 as amended by A1, A2).
+
+    Every ancestor of ``after_instance`` along ``dependencies``, to the
+    roots (a recursive walk, cycle-guarded, no depth cap), must have the
+    acceptance state ``current``, ``superseded`` or ``accepted``
+    (:mod:`rapidpipe.runs.eligibility`, R1): a current or superseded
+    ancestor passes and the walk continues through it, so a rejected
+    grandparent behind a current parent still refuses. An ancestor that is
+    itself an after instance of the same promotion is judged the same way,
+    under its own run's policy (A2). The refusal names the after instance,
+    the ancestor, its kind, its state and what decided it; it is raised in
+    step 2 of :func:`promote`, before anything is written.
+    """
+    from rapidpipe.checks.registry import CheckError
+    from rapidpipe.runs import eligibility
+
+    found = eligibility.ancestors(cur, after_instance)
+    try:
+        states = eligibility.acceptance_states(cur, found, for_share=True)
+    except CheckError as exc:
+        raise PromotionRefused(
+            f"after instance {after_instance!r}: an ancestor's check policy cannot be "
+            f"resolved ({exc}); refusing") from None
+    for ancestor in found:
+        state = states.get(ancestor)
+        if state is None or state.state in eligibility.PROMOTABLE_ANCESTOR_STATES:
+            continue
+        hint = ("; accept it with `check accept` or replace it"
+                if state.state == "rejected" else "")
+        raise PromotionRefused(
+            f"after instance {after_instance!r} depends on {ancestor!r} "
+            f"({state.kind}, {state.why()}{hint}); refusing")
+
+
+def _refuse_unfit_direct_dependency(cur, after_instance: str) -> None:
+    """The direct-dependency rule a rollback keeps (supervisor step 6,
+    2026-09-26, A3): a rollback restores a selection an earlier promotion
+    admitted, so the ancestor walk is skipped, but each direct dependency
+    must still be complete, retained and in project custody, as before
+    this step."""
     cur.execute(
         """
         SELECT d.producer_instance, pi.custody, pi.deletion_state,

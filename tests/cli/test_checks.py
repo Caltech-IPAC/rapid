@@ -63,6 +63,9 @@ def _science_row_cleanup(db):
         return
     with db.cursor() as cur:
         cur.execute(
+            "DELETE FROM acceptances WHERE instance IN "
+            "(SELECT id FROM product_instances WHERE run = ANY(%s))", (db.run_ids,))
+        cur.execute(
             "DELETE FROM checks WHERE instance IN "
             "(SELECT id FROM product_instances WHERE run = ANY(%s))", (db.run_ids,))
         cur.execute("DELETE FROM diffimmeta WHERE run = ANY(%s)", (db.run_ids,))
@@ -166,7 +169,9 @@ def test_check_run_trial_passes_strict_fails_and_show_lists_newest_first(cli, db
 
     shown = cli("check", "show", run_id)
     assert shown.rc == 0, shown.err
-    lines = shown.out.splitlines()
+    # The check rows; the acceptance lines after them (supervisor step 6,
+    # 2026-09-26, R4) are asserted by the acceptance tests below.
+    lines = [line for line in shown.out.splitlines() if line.startswith("id=")]
     # Newest first: the strict-run rows (recorded second) precede the
     # trial-run rows (recorded first).
     assert len(lines) == 4
@@ -386,6 +391,57 @@ def test_check_help_walk(cli):
         ["check", "list", "--help"],
         ["check", "run", "--help"],
         ["check", "show", "--help"],
+        ["check", "accept", "--help"],
     ):
         result = cli(*argv)
         assert result.rc == 0, (argv, result.err)
+
+
+# ======================================================================
+# check accept and the acceptance lines (supervisor step 6, 2026-09-26,
+# R3, R4)
+# ======================================================================
+
+def test_check_accept_records_one_row_and_check_show_prints_the_state(cli, db):
+    run_id = _make_run(db.connection, kind="production")
+    db.track_run(run_id)
+    diff = _diff_candidate(db.connection, run_id, stats={"nsexcatsources": 10})
+
+    pending = cli("check", "accept", run_id, "--instance", diff, "--reason", "why")
+    assert pending.rc == 64
+    assert "is pending" in pending.err and "run the checks first" in pending.err
+
+    assert cli("check", "run", run_id).rc == 1
+    shown = cli("check", "show", run_id)
+    assert shown.rc == 0, shown.err
+    assert shown.out.splitlines()[-1] == (
+        f"acceptance instance={diff} kind=difference-image state=rejected "
+        f"check=difference-image-statistics@1 outcome=failed policy={TRIAL}")
+
+    empty = cli("check", "accept", run_id, "--instance", diff, "--reason", "")
+    assert empty.rc == 64 and "--reason must not be empty" in empty.err
+
+    accepted = cli("check", "accept", run_id, "--instance", diff, "--reason", "known low count",
+                   "--who", "lead")
+    assert accepted.rc == 0, accepted.err
+    assert accepted.out.startswith(f"accepted instance={diff} kind=difference-image acceptance=")
+    assert accepted.out.rstrip().endswith(f"policy={TRIAL} checks=1")
+    with db.cursor() as cur:
+        cur.execute("SELECT id, who, reason, policy_ref FROM acceptances WHERE instance = %s",
+                    (diff,))
+        (acceptance_id, who, reason, policy_ref), = cur.fetchall()
+    assert (who, reason, policy_ref) == ("lead", "known low count", TRIAL)
+
+    again = cli("check", "accept", run_id, "--instance", diff, "--reason", "twice")
+    assert again.rc == 64 and "already accepted" in again.err
+
+    shown = cli("check", "show", run_id, "--instance", diff)
+    assert shown.out.splitlines()[-1] == (
+        f"acceptance instance={diff} kind=difference-image state=accepted "
+        f"acceptance={acceptance_id} policy={TRIAL}")
+    run_show = cli("run", "show", run_id)
+    assert run_show.rc == 0, run_show.err
+    lines = run_show.out.splitlines()
+    assert lines[lines.index("acceptance:") + 1] == (
+        f"  acceptance instance={diff} kind=difference-image state=accepted "
+        f"acceptance={acceptance_id} policy={TRIAL}")

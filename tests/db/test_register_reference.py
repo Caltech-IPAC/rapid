@@ -30,6 +30,7 @@ from tests.unit.test_refimage_products import (
     reference_image_entry,
 )
 
+from .attempt_helpers import succeed_and_select
 from .test_register_difference import _diffimages_row, _register_difference, _run_difference
 from .test_register_l2 import _run_admit, _run_register
 from .test_repository import _make_run
@@ -312,6 +313,14 @@ def test_a_difference_naming_the_new_reference_resolves_its_rfid(conn, tmp_path,
     assert _register(conn, monkeypatch, ref_outputs, ref_run, tmp_path, "d")[0] == 0
     with conn.cursor() as cur:
         rfid = _refimages_row(cur, reference)["rfid"]
+        # The difference's run reads the reference and the l2 image across
+        # runs: their attempts must be selected (supervisor step 6,
+        # 2026-09-26, R5).
+        cur.execute("SELECT producing_attempt FROM product_instances WHERE id = ANY(%s)",
+                    ([reference, constituents[0]],))
+        producers = [row[0] for row in cur.fetchall()]
+    for attempt_id in producers:
+        succeed_and_select(conn, attempt_id)
 
     # The difference input set names the new reference instance, rfid null.
     run_id, outputs = _run_difference(
