@@ -57,9 +57,10 @@ _TEMPLATE_ENTRIES = (
 )
 
 
-def _seed_template(fake_s3, bucket: str, prefix: str, *, result_sets: tuple[str, ...] = ()) -> str:
+def _seed_template(fake_s3, bucket: str, prefix: str, *, result_sets: tuple[str, ...] = (),
+                   entries=_TEMPLATE_ENTRIES) -> str:
     outputs = []
-    for kind, instance, files in _TEMPLATE_ENTRIES:
+    for kind, instance, files in entries:
         outputs.append(_output_entry(kind, instance, files))
         for path, data in files.items():
             fake_s3.seed(bucket, f"{prefix}/{path}", data)
@@ -112,6 +113,24 @@ def _register_producer_instance(cli, db, fake_batch, fake_s3, *, kind, instance_
         db.connection, producer_run, "difference", attempt_id,
         instance_id=instance_id, kind=kind, logical_key={"unit": "P", "instance": instance_id})
     return producer_run
+
+
+def _template_with_registered_entry(cli, db, fake_batch, fake_s3, *, purpose):
+    """:data:`_TEMPLATE_ENTRIES`, but with its reference-image entry's
+    instance id swapped for a fresh ULID that is actually registered as a
+    ``product_instances`` row (``product_instances.id`` is a ``rapid_ulid``
+    domain: the literal ``"REF1"`` the rest of this module uses is fine as
+    a bare S3 manifest field, elsewhere never registered, but fails that
+    domain's check constraint). Returns ``(entries, ref_instance_id)``."""
+    ref_instance_id = new_ulid()
+    entries = (
+        ("l2-image", "OLDL2", {"l2/old.fits": b"old"}),
+        ("reference-image", ref_instance_id, {"ref/image.fits": b"reference!"}),
+        ("psf", "PSF1", {"psf/a.fits": b"psf-a", "psf/b.fits": b"psf-b"}),
+    )
+    _register_producer_instance(cli, db, fake_batch, fake_s3, kind="reference-image",
+                                instance_id=ref_instance_id, purpose=purpose)
+    return entries, ref_instance_id
 
 
 # ======================================================================
@@ -256,15 +275,15 @@ def test_inputs_binds_a_templates_registered_result_set_and_registered_output_en
     over unchanged."""
     result_set_id = new_ulid()
     unregistered_id = new_ulid()
+    entries, ref_instance_id = _template_with_registered_entry(
+        cli, db, fake_batch, fake_s3, purpose="inputs-ref1-producer")
     _register_producer_instance(cli, db, fake_batch, fake_s3, kind="source-set",
                                 instance_id=result_set_id, purpose="inputs-resultset-producer")
-    _register_producer_instance(cli, db, fake_batch, fake_s3, kind="reference-image",
-                                instance_id="REF1", purpose="inputs-ref1-producer")
 
     run_id = _create_run(cli, db, kind="scratch", stages="admit,difference",
                          purpose="inputs-resultsets")
     template_loc = _seed_template(fake_s3, FAKE_BUCKET, "templates/difference-resultsets",
-                                  result_sets=(result_set_id, unregistered_id))
+                                  result_sets=(result_set_id, unregistered_id), entries=entries)
     _submit_and_complete_with_l2(cli, fake_batch, fake_s3, run_id, unit_id="U")
 
     result = cli("run", "inputs", run_id, "difference", "--unit", "U",
@@ -272,7 +291,7 @@ def test_inputs_binds_a_templates_registered_result_set_and_registered_output_en
     assert result.rc == 0, result.err
 
     bound = _bound(db, run_id, "difference", "U")
-    assert bound == {result_set_id, "REF1"}
+    assert bound == {result_set_id, ref_instance_id}
 
     expected_dest = f"s3://{FAKE_BUCKET}/scratch/runs/{run_id}/inputs/difference/U"
     dest_prefix = expected_dest[len(f"s3://{FAKE_BUCKET}/"):]
@@ -287,11 +306,12 @@ def test_inputs_commits_bindings_before_the_manifest_write_and_recovers_after_a_
     failure leaves the ``unit_inputs`` rows in place and no manifest at
     dest; a retry composes again and writes the manifest, binding nothing
     new (each (unit, instance) bound exactly once)."""
-    _register_producer_instance(cli, db, fake_batch, fake_s3, kind="reference-image",
-                                instance_id="REF1", purpose="inputs-commit-ref1-producer")
+    entries, _ref_instance_id = _template_with_registered_entry(
+        cli, db, fake_batch, fake_s3, purpose="inputs-commit-ref1-producer")
     run_id = _create_run(cli, db, kind="scratch", stages="admit,difference",
                          purpose="inputs-commit-before-publish")
-    template_loc = _seed_template(fake_s3, FAKE_BUCKET, "templates/difference-commit")
+    template_loc = _seed_template(fake_s3, FAKE_BUCKET, "templates/difference-commit",
+                                  entries=entries)
     _submit_and_complete_with_l2(cli, fake_batch, fake_s3, run_id, unit_id="U")
 
     real_write_manifest = runctl._Storage.write_manifest
@@ -352,6 +372,7 @@ def test_inputs_admission_before_copying_and_rollback_after_a_compose_failure(
     ref_data = b"reference!"
     bad_entry = _output_entry("reference-image", "REFBAD", {"ref/image.fits": ref_data})
     bad_entry["members"][0]["bytes"] = len(ref_data) + 5  # disagrees with the seeded object
+    fake_s3.seed(bucket, f"{prefix}/ref/image.fits", ref_data)
     manifest = _manifest(
         run_id="REFRUN", stage="input-set", unit_id="U", attempt_id="REFATT",
         outputs=[bad_entry])
