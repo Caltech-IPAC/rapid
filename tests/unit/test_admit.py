@@ -366,10 +366,12 @@ def test_cli_dispatches_to_admit_stage(tmp_path):
     # The delivery names an instance, so the stage read guard (run_stage,
     # supervisor step 6, 2026-09-26, R6) would need a database; this
     # suite has none, so the subprocess gets the selftest's empty
-    # registry, which answers "unregistered" as a database would.
+    # registry, which answers "unregistered" as a database would, under
+    # the selftest marker the guard requires for it (R12).
     env = {**os.environ,
            "RAPIDPIPE_READGUARD_DATABASE":
-               "rapidpipe.selftest.support.fakereadguarddb:empty_registry"}
+               "rapidpipe.selftest.support.fakereadguarddb:empty_registry",
+           "RAPIDPIPE_SELFTEST": "1"}
     result = subprocess.run(
         [sys.executable, "-m", "rapidpipe.cli.main",
          "stage", "admit", *_argv(inputs_dir, outputs_dir)],

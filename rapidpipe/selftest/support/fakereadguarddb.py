@@ -11,7 +11,10 @@ registered. :func:`empty_registry` is the factory
 ``RAPIDPIPE_READGUARD_DATABASE`` names for those runs: a connection whose
 every query finds no row, which is exactly what a real database answers
 for those ids (unregistered, so readable). It is never a way to admit a
-registered instance: it knows none.
+registered instance: it knows none. The guard honours it only when
+``RAPIDPIPE_SELFTEST=1`` marks the run as a selftest (set by
+``rapidpipe.selftest.runner`` alone) and logs a WARNING each time;
+anywhere else the variable is a configuration error (exit 64).
 
 Packaged under ``rapidpipe.selftest.support`` so the pipeline image can
 import it (``tests/`` is excluded at build time).

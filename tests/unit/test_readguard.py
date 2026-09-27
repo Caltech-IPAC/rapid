@@ -283,17 +283,49 @@ def test_the_default_connection_goes_through_the_module_level_indirection(monkey
         readguard.assert_inputs_readable(_manifest(_entry("F")), RUN)
 
 
-def test_the_selftest_empty_registry_reads_every_named_id_as_unregistered(monkeypatch):
-    monkeypatch.setenv(readguard.DATABASE_ENV,
-                       "rapidpipe.selftest.support.fakereadguarddb:empty_registry")
-    readguard.assert_inputs_readable(_manifest(_entry("F"), result_sets=["S"]), RUN)
+EMPTY_REGISTRY = "rapidpipe.selftest.support.fakereadguarddb:empty_registry"
 
 
-def test_a_database_override_that_names_no_factory_is_a_configuration_error(monkeypatch):
-    monkeypatch.setenv(readguard.DATABASE_ENV, "rapidpipe.no_such_module:factory")
+def test_the_selftest_registry_in_a_selftest_run_reads_ids_as_unregistered_and_warns(
+        monkeypatch, caplog):
+    monkeypatch.setenv(readguard.DATABASE_ENV, EMPTY_REGISTRY)
+    monkeypatch.setenv(readguard.SELFTEST_ENV, "1")
+    with caplog.at_level("WARNING", logger="rapidpipe.runs.readguard"):
+        readguard.assert_inputs_readable(_manifest(_entry("F"), result_sets=["S"]), RUN)
+    assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == [
+        "read guard: selftest registry in use, no product custody enforced"]
+
+
+def test_the_selftest_registry_outside_a_selftest_run_is_a_configuration_error(monkeypatch):
+    monkeypatch.setenv(readguard.DATABASE_ENV, EMPTY_REGISTRY)
+    monkeypatch.delenv(readguard.SELFTEST_ENV, raising=False)
     with pytest.raises(readguard.ReadGuardNotConfigured) as err:
         readguard.assert_inputs_readable(_manifest(_entry("F")), RUN)
+    assert readguard.DATABASE_ENV in str(err.value)
     assert err.value.exit_code == ExitCode.USAGE
+
+
+@pytest.mark.parametrize("value", [
+    "rapidpipe.no_such_module:factory",
+    "tests.unit.test_readguard:_opener",
+    "rapidpipe.selftest.support.fakereadguarddb",
+    "",
+])
+def test_any_other_seam_value_is_a_configuration_error_even_in_a_selftest(monkeypatch, value):
+    monkeypatch.setenv(readguard.DATABASE_ENV, value)
+    monkeypatch.setenv(readguard.SELFTEST_ENV, "1")
+    with pytest.raises(readguard.ReadGuardNotConfigured) as err:
+        readguard.assert_inputs_readable(_manifest(_entry("F")), RUN)
+    assert readguard.DATABASE_ENV in str(err.value)
+
+
+def test_the_seam_outside_a_selftest_exits_64_from_run_stage(tmp_path, monkeypatch):
+    monkeypatch.setenv(readguard.DATABASE_ENV, EMPTY_REGISTRY)
+    monkeypatch.delenv(readguard.SELFTEST_ENV, raising=False)
+    inputs = _write_inputs(tmp_path / "in", _manifest(_entry("F")))
+    rc = run_stage(DECLARATION, lambda context: StageResult(outputs=()),
+                   _argv(inputs, tmp_path / "out", "--dry-run"))
+    assert rc == 64
 
 
 # ----------------------------------------------------------------------

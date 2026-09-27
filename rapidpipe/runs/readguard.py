@@ -85,28 +85,52 @@ class ReadGuardNotConfigured(ReadGuardError):
 
 
 #: Names a ``module:factory`` whose call returns the guard's connection
-#: context manager in place of the database, as ``RAPIDPIPE_LOAD_DATABASE``
-#: does for the load stage. Only the selftest sets it
-#: (``rapidpipe.selftest.support.fakereadguarddb``, an empty registry).
+#: context manager in place of the database, honoured only for a selftest
+#: fixture run (ruling R12, amendment 3): the factory's module must be
+#: under :data:`SELFTEST_SUPPORT` and :data:`SELFTEST_ENV` must be ``1``,
+#: which only ``rapidpipe.selftest.runner`` sets on its subprocesses.
+#: Anything else is a configuration error (exit 64), never a fallback.
 DATABASE_ENV = "RAPIDPIPE_READGUARD_DATABASE"
+
+#: Set to ``1`` by ``rapidpipe.selftest.runner`` on a fixture subprocess.
+SELFTEST_ENV = "RAPIDPIPE_SELFTEST"
+
+#: The package a selftest registry factory must live in.
+SELFTEST_SUPPORT = "rapidpipe.selftest.support."
+
+#: The line every use of a selftest registry logs.
+SELFTEST_WARNING = "read guard: selftest registry in use, no product custody enforced"
+
+
+def _selftest_registry(override: str):
+    module_name, _, factory_name = override.partition(":")
+    if os.environ.get(SELFTEST_ENV) != "1":
+        raise ReadGuardNotConfigured(
+            f"{DATABASE_ENV} is set, but this is not a selftest fixture run "
+            f"({SELFTEST_ENV} is not 1); it is honoured only there")
+    if not module_name.startswith(SELFTEST_SUPPORT) or not factory_name:
+        raise ReadGuardNotConfigured(
+            f"{DATABASE_ENV}={override!r} does not name a factory under "
+            f"{SELFTEST_SUPPORT.rstrip('.')}")
+    try:
+        factory = getattr(importlib.import_module(module_name), factory_name)
+    except (ImportError, AttributeError, ValueError) as exc:
+        raise ReadGuardNotConfigured(
+            f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
+    logger.warning(SELFTEST_WARNING)
+    return factory()
 
 
 def connect(*args, **kwargs):
     """Module-level indirection to ``rapidpipe.db.connection.connect``, for tests.
 
-    When ``RAPIDPIPE_READGUARD_DATABASE`` names a factory, that factory's
-    connection is used instead; a name that is not a factory is a
-    configuration error (exit 64).
+    ``RAPIDPIPE_READGUARD_DATABASE`` replaces the database only in a
+    selftest fixture run (see :data:`DATABASE_ENV`); set anywhere else, or
+    naming anything else, it is a configuration error (exit 64).
     """
     override = os.environ.get(DATABASE_ENV)
-    if override:
-        module_name, _, factory_name = override.partition(":")
-        try:
-            factory = getattr(importlib.import_module(module_name), factory_name)
-        except (ImportError, AttributeError, ValueError) as exc:
-            raise ReadGuardNotConfigured(
-                f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
-        return factory()
+    if override is not None:
+        return _selftest_registry(override)
     return _connection_module.connect(*args, **kwargs)
 
 
@@ -344,6 +368,7 @@ __all__ = [
     "ReadGuardUnavailable",
     "Unreadable",
     "DATABASE_ENV",
+    "SELFTEST_ENV",
     "assert_inputs_readable",
     "assert_readable_instance",
     "connect",

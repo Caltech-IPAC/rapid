@@ -59,6 +59,10 @@ from rapidpipe.selftest.support.fakereadguarddb import FACTORY as READGUARD_FAKE
 #: needs no import of the guard itself.
 READGUARD_DATABASE_ENV = "RAPIDPIPE_READGUARD_DATABASE"
 
+#: ``rapidpipe.runs.readguard.SELFTEST_ENV``: marks a fixture subprocess
+#: as a selftest run, the only place the guard honours the fake above.
+SELFTEST_ENV = "RAPIDPIPE_SELFTEST"
+
 #: The stages a fixture exists for today (stage contract, "Local
 #: execution"; ``tests/fixtures/<stage>/``). ``photometry`` is a
 #: declared stub (supervisor step 8, 2026-09-24, ruling R9): its fixture
@@ -222,7 +226,9 @@ def run_stage_subprocess(python: str, module: str, inputs: Path, outputs_locatio
     # no run registered; the stage read guard gets an empty registry in
     # place of a database, as every other database here is a fake
     # (supervisor step 6, 2026-09-26, R6).
+    # The guard honours the fake only in a run marked as a selftest (R12).
     env[READGUARD_DATABASE_ENV] = READGUARD_FAKE_DATABASE
+    env[SELFTEST_ENV] = "1"
     env.update(extra_env)
     argv = [python, "-m", module,
             "--run", run_id, "--unit", unit_id, "--attempt", attempt_id,
