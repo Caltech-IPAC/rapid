@@ -218,47 +218,102 @@ _READABLE_SQL = """
 """
 
 
+class Unreadable(ValueError):
+    """A read-rule refusal (:func:`assert_readable_instance`); ``reason`` is
+    one of ``unknown``, ``kind``, ``deleted``, ``incomplete``, ``scratch``,
+    ``unselected`` (a ValueError, so every stage's existing mapping to
+    InputRejected, exit 65, applies)."""
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def _judge_readable(
+    instance: str, row, run_id: str, kind: str | None, *, result_set_only: bool,
+) -> dict[str, Any]:
+    if row is None:
+        raise Unreadable(
+            f"no result set with instance {instance!r}" if result_set_only
+            else f"no product instance {instance!r}", "unknown")
+    (found_kind, owner, custody, deletion_state, complete, row_count, key_text,
+     selected) = row
+    if kind is not None and found_kind != kind:
+        raise Unreadable(f"{instance!r} is a {found_kind}, not a {kind}", "kind")
+    # ``complete`` is NULL exactly when the instance has no result_sets row
+    # (result_sets.complete is NOT NULL): the instance is a file product.
+    is_result_set = complete is not None
+    if result_set_only or is_result_set:
+        if not complete or deletion_state != "retained":
+            raise Unreadable(
+                f"{found_kind} {instance!r} is not complete and retained "
+                f"(complete={complete}, deletion_state={deletion_state})",
+                "deleted" if deletion_state != "retained" else "incomplete")
+    elif deletion_state != "retained":
+        raise Unreadable(
+            f"{found_kind} {instance!r} is not retained (deletion_state={deletion_state})",
+            "deleted")
+    if owner != run_id:
+        what = "result set" if is_result_set else "product"
+        if custody not in FOREIGN_READABLE_CUSTODY:
+            raise Unreadable(
+                f"{found_kind} {instance!r} belongs to run {owner!r} with custody {custody!r}: "
+                f"another run's scratch {what} is not readable by run {run_id!r}", "scratch")
+        if not selected:
+            raise Unreadable(
+                f"{found_kind} {instance!r} of run {owner!r} was produced by an attempt that "
+                f"is not its unit's selected attempt (or its unit has none): not readable "
+                f"by run {run_id!r}", "unselected")
+    key = json.loads(key_text) if isinstance(key_text, str) else (key_text or {})
+    return {"kind": found_kind, "run": owner, "custody": custody, "row_count": row_count,
+            "key": key if isinstance(key, dict) else {}, "result_set": is_result_set}
+
+
+def assert_readable_instance(
+    cur, instance: str, run_id: str, *, kind: str | None = None,
+) -> dict[str, Any]:
+    """Refuse (:class:`Unreadable`, a ValueError) a product instance ``run_id``
+    may not read; else describe it.
+
+    The read column of the dependency-eligibility table (supervisor step 6,
+    2026-09-26, R5), for any ``product_instances`` row, file product or
+    result set: it must be retained, complete when it is a result set, and,
+    when it belongs to another run, of custody ``candidate`` or ``current``
+    (a production run's output) and produced by its unit's selected
+    attempt (a unit with no selected attempt counts as unselected). An
+    instance of ``run_id`` itself is readable whatever its custody or
+    attempt. With ``kind``, an instance of any other kind is refused.
+
+    Returns ``{kind, run, custody, row_count, key, result_set}`` (``key``
+    the decoded logical key, ``row_count`` None for a file product).
+    """
+    cur.execute(_READABLE_SQL, (instance,))
+    return _judge_readable(instance, cur.fetchone(), run_id, kind, result_set_only=False)
+
+
 def assert_readable_result_set(
     cur, instance: str, run_id: str, *, kind: str | None = None,
 ) -> dict[str, Any]:
     """Refuse (:class:`ValueError`) a result set ``run_id`` may not read; else describe it.
 
-    The rule (supervisor step 9 ruling R2): a stage of run ``run_id`` may
-    read a result set only when it is complete and retained and either
-    (a) it belongs to ``run_id``, or (b) its custody is ``candidate`` or
-    ``current`` (a production run's output) and its producing attempt is
-    the selected attempt of that attempt's unit. Another run's scratch set,
-    or a set from an unselected attempt, is refused; the stage maps the
-    ValueError to InputRejected (exit 65). With ``kind``, a set of any other
-    kind is refused too.
+    :func:`assert_readable_instance` (the one read rule, supervisor step 6,
+    2026-09-26, R5; first stated for result sets by supervisor step 9 ruling
+    R2) that additionally requires the instance to be a result set: a stage
+    of run ``run_id`` may read a result set only when it is complete and
+    retained and either (a) it belongs to ``run_id``, or (b) its custody is
+    ``candidate`` or ``current`` (a production run's output) and its
+    producing attempt is the selected attempt of that attempt's unit.
+    Another run's scratch set, or a set from an unselected attempt, is
+    refused; the stage maps the ValueError to InputRejected (exit 65). With
+    ``kind``, a set of any other kind is refused too.
 
     Returns ``{kind, run, custody, row_count, key}`` (``key`` the decoded
     logical key).
     """
     cur.execute(_READABLE_SQL, (instance,))
-    row = cur.fetchone()
-    if row is None:
-        raise ValueError(f"no result set with instance {instance!r}")
-    (found_kind, owner, custody, deletion_state, complete, row_count, key_text,
-     selected) = row
-    if kind is not None and found_kind != kind:
-        raise ValueError(f"{instance!r} is a {found_kind}, not a {kind}")
-    if not complete or deletion_state != "retained":
-        raise ValueError(
-            f"{found_kind} {instance!r} is not complete and retained "
-            f"(complete={complete}, deletion_state={deletion_state})")
-    if owner != run_id:
-        if custody not in FOREIGN_READABLE_CUSTODY:
-            raise ValueError(
-                f"{found_kind} {instance!r} belongs to run {owner!r} with custody {custody!r}: "
-                f"another run's scratch result set is not readable by run {run_id!r}")
-        if not selected:
-            raise ValueError(
-                f"{found_kind} {instance!r} of run {owner!r} was produced by an attempt that "
-                f"is not its unit's selected attempt: not readable by run {run_id!r}")
-    key = json.loads(key_text) if isinstance(key_text, str) else (key_text or {})
-    return {"kind": found_kind, "run": owner, "custody": custody, "row_count": row_count,
-            "key": key if isinstance(key, dict) else {}}
+    state = _judge_readable(instance, cur.fetchone(), run_id, kind, result_set_only=True)
+    state.pop("result_set")
+    return state
 
 
 def source_set_table(cur, instance: str, run_id: str) -> tuple[str, int | None]:
