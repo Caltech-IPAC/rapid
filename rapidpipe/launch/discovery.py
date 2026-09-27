@@ -23,15 +23,25 @@ deliveries plus the ones already classified in this firing:
   -> ``deferred``, ``corrected delivery awaits a correction run``;
 - otherwise ``batched``.
 
+A manifest that fails to read or fails validation with ``ValueError``,
+``TypeError``, ``KeyError``, ``AttributeError`` or ``IndexError`` is
+``malformed`` (quarantined), not a fatal error: one bad object never blocks
+the rest of the firing. Anything else (a transient storage error) propagates
+so the delivery stays unrecorded and is retried next firing.
+
 It reads and never writes; :func:`insert_deliveries` records the outcome
-(the caller commits). ``rapidpipe.launch.loop`` forms the batches.
+(the caller commits). :func:`resolve_unit_collisions` reclassifies, per
+processing date and in key order, a batched delivery whose derived unit id
+repeats an earlier batched delivery's as ``quarantined``, reason
+:data:`COLLISION` (two delivery names can derive the same unit id), before
+``rapidpipe.launch.loop`` forms the batches.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable, Sequence
 
 from rapidpipe.exitcodes import ExitCode
@@ -43,6 +53,7 @@ MALFORMED = "malformed"
 IDENTICAL = "identical re-delivery"
 CONFLICT = "checksum conflict"
 CORRECTED = "corrected delivery awaits a correction run"
+COLLISION = "unit id collision"
 
 
 @dataclass(frozen=True)
@@ -163,11 +174,13 @@ def classify(identity: Identity | None, history: Sequence[Identity]) -> tuple[st
 def _read(storage: Any, location: str) -> Manifest | None:
     """The manifest at ``location``, or ``None`` when it is not a readable manifest
     (``_Storage.read_manifest`` exits 64 on an invalid one; a fake raises
-    ``ValueError``). Anything else (a transient storage error) propagates, so
-    the delivery stays unrecorded and is read again by the next firing."""
+    ``ValueError``, ``TypeError``, ``KeyError``, ``AttributeError`` or
+    ``IndexError``, any of which manifest validation can raise on a malformed
+    object). Anything else (a transient storage error) propagates, so the
+    delivery stays unrecorded and is read again by the next firing."""
     try:
         return storage.read_manifest(location)
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         return None
     except Exception as exc:
         if getattr(exc, "code", None) == ExitCode.USAGE:
@@ -197,6 +210,30 @@ def discover(conn, schedule: str, inbox: str, storage: Any, client: Any,
                                    unit=unit_of(location), identity=identity,
                                    state=state, reason=reason))
     return Discovery(deliveries=tuple(deliveries), ignored=ignored, recorded=already)
+
+
+def resolve_unit_collisions(deliveries: Iterable[Delivery],
+                            unit_of: Callable[[str], str]) -> list[Delivery]:
+    """Walk ``deliveries`` in the given (key) order; a ``batched`` delivery
+    whose derived unit id repeats an earlier ``batched`` delivery's of the
+    same processing date is reclassified ``quarantined``, reason
+    :data:`COLLISION` naming the earlier location, and dropped from the
+    batch (two delivery names can derive the same unit id). Every other
+    delivery is returned unchanged. Pure: no reads, no writes."""
+    earliest: dict[tuple[_dt.date, str], str] = {}
+    out: list[Delivery] = []
+    for d in deliveries:
+        if d.state != BATCHED:
+            out.append(d)
+            continue
+        key = (d.processing_date, unit_of(d.location))
+        earlier = earliest.get(key)
+        if earlier is None:
+            earliest[key] = d.location
+            out.append(d)
+        else:
+            out.append(replace(d, state=QUARANTINED, reason=f"{COLLISION} with {earlier}"))
+    return out
 
 
 # ======================================================================

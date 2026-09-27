@@ -459,6 +459,24 @@ def test_an_invalid_manifest_exit_64_from_the_cli_storage_is_malformed():
     assert (d.state, d.reason, d.identity) == ("quarantined", "malformed", None)
 
 
+def test_an_attribute_or_index_error_from_manifest_validation_is_malformed_not_fatal():
+    # P1 (Codex 4-2): AttributeError/IndexError used to propagate and abort the
+    # whole firing before any classification committed; one bad object then
+    # blocked the inbox forever. They are malformed like ValueError etc.
+    db, s3, storage = _DB(), _S3(), _Inbox()
+    _stage(s3, storage, D1, "bad-attr-sca01", AttributeError("'int' object has no attribute 'get'"))
+    _stage(s3, storage, D1, "bad-index-sca01", IndexError("list index out of range"))
+    _stage(s3, storage, D1, "good-sca01", _delivery("r1"))
+    found = discovery.discover(db, "ops4-stream", "s3://bkt/ops4/inbox", storage, s3,
+                               loop.detector_unit_id)
+    assert [(d.location.rsplit("/", 1)[1], d.state, d.reason, d.identity)
+            for d in found.deliveries] == [
+        ("bad-attr-sca01", "quarantined", "malformed", None),
+        ("bad-index-sca01", "quarantined", "malformed", None),
+        ("good-sca01", "batched", None, found.deliveries[2].identity)]
+    assert found.deliveries[2].identity is not None
+
+
 # ======================================================================
 # Batches (R2, R6, R13)
 # ======================================================================
@@ -609,6 +627,43 @@ def test_rejections_commit_before_the_first_batch(monkeypatch):
     assert seen["committed"] == [(_loc(D1, "b-sca01"), "refused")]
     assert [(d["location"], d["state"], d["batch"]) for d in db.deliveries] == [
         (_loc(D1, "b-sca01"), "refused", None), (_loc(D1, "a-sca01"), "batched", 1)]
+
+
+def test_a_unit_id_collision_is_quarantined_naming_the_earlier_delivery_and_the_batch_has_one_image(
+        monkeypatch):
+    # P2 (Codex 4-2): "image-sca01" and "image_sca01" both derive unit
+    # "image/SCA01". This used to raise LoopError with nothing recorded, so
+    # neither delivery was ever batched. Now the later one (key order) is a
+    # durable quarantine naming the earlier, and the earlier batches alone.
+    db, s3, storage = _DB(), _S3(), _Inbox()
+    _stage(s3, storage, D1, "image-sca01", _delivery("eA"))
+    _stage(s3, storage, D1, "image_sca01", _delivery("eB"))
+    t = _Tools(s3, storage)
+    calls = _recording_process(monkeypatch, db)
+    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert [(c["date"], c["batch"], c["deliveries"], c["units"]) for c in calls] == [
+        (D1, 1, (_loc(D1, "image-sca01"),), ["image/SCA01"])]
+    assert [(d["location"], d["state"], d["reason"], d["batch"]) for d in db.deliveries] == [
+        (_loc(D1, "image_sca01"), "quarantined",
+         f"unit id collision with {_loc(D1, 'image-sca01')}", None),
+        (_loc(D1, "image-sca01"), "batched", None, 1)]
+    assert (f"delivery {_loc(D1, 'image_sca01')} eB/1/v1 state=quarantined reason=unit id "
+            f"collision with {_loc(D1, 'image-sca01')}") in t.lines
+
+
+def test_resolve_unit_collisions_leaves_deliveries_without_a_collision_unchanged():
+    same_unit_other_date = discovery.Delivery(
+        location=_loc(D2, "b-sca01"), processing_date=D2, unit="b/SCA01", identity=None,
+        state=discovery.BATCHED)
+    batched = discovery.Delivery(
+        location=_loc(D1, "a-sca01"), processing_date=D1, unit="a/SCA01", identity=None,
+        state=discovery.BATCHED)
+    already_rejected = discovery.Delivery(
+        location=_loc(D1, "c-sca01"), processing_date=D1, unit="a/SCA01", identity=None,
+        state=discovery.QUARANTINED, reason="malformed")
+    deliveries = [batched, already_rejected, same_unit_other_date]
+    resolved = discovery.resolve_unit_collisions(deliveries, loop.detector_unit_id)
+    assert resolved == deliveries
 
 
 def test_a_held_lock_exits_75_before_any_discovery(monkeypatch):
