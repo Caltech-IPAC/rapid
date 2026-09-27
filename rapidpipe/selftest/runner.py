@@ -53,6 +53,11 @@ from typing import Any, Callable
 from rapidpipe.db.ids import is_valid_ulid, new_ulid
 from rapidpipe.products.manifest import Manifest, hash_file
 from rapidpipe.products.storage import parse_location, publish_dir
+from rapidpipe.selftest.support.fakereadguarddb import FACTORY as READGUARD_FAKE_DATABASE
+
+#: ``rapidpipe.runs.readguard.DATABASE_ENV``, spelled here so the runner
+#: needs no import of the guard itself.
+READGUARD_DATABASE_ENV = "RAPIDPIPE_READGUARD_DATABASE"
 
 #: The stages a fixture exists for today (stage contract, "Local
 #: execution"; ``tests/fixtures/<stage>/``). ``photometry`` is a
@@ -213,6 +218,11 @@ def run_stage_subprocess(python: str, module: str, inputs: Path, outputs_locatio
                           extra_env: dict[str, str], repo_root: Path) -> int:
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(repo_root), env.get("PYTHONPATH")]))
+    # The fixture's input manifest names ids minted for the fixture, which
+    # no run registered; the stage read guard gets an empty registry in
+    # place of a database, as every other database here is a fake
+    # (supervisor step 6, 2026-09-26, R6).
+    env[READGUARD_DATABASE_ENV] = READGUARD_FAKE_DATABASE
     env.update(extra_env)
     argv = [python, "-m", module,
             "--run", run_id, "--unit", unit_id, "--attempt", attempt_id,

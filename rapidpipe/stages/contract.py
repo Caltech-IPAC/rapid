@@ -363,6 +363,28 @@ def _read_input_manifest_from(inputs_dir: Path, inputs_arg: str) -> Manifest:
         raise InputRejected(f"{manifest_path}: invalid manifest: {exc}") from exc
 
 
+def _assert_inputs_readable(input_manifest: Manifest, run_id: str) -> None:
+    """Run the read guard and map its outcomes onto this module's exceptions.
+
+    ``rapidpipe.runs`` may not import this module (the fixed dependency
+    direction), so the guard raises its own exceptions and they are
+    translated here: not readable -> :class:`InputRejected` (65), no
+    database configured -> :class:`UsageError` (64), database unreachable
+    -> :class:`TransientFailure` (75). Looked up on the module at call
+    time, so a test can replace ``readguard.assert_inputs_readable``.
+    """
+    from rapidpipe.runs import readguard
+
+    try:
+        readguard.assert_inputs_readable(input_manifest, run_id)
+    except readguard.InputNotReadable as exc:
+        raise InputRejected(str(exc)) from exc
+    except readguard.ReadGuardNotConfigured as exc:
+        raise UsageError(str(exc)) from exc
+    except readguard.ReadGuardUnavailable as exc:
+        raise TransientFailure(str(exc)) from exc
+
+
 def _work_root() -> Path:
     """The base directory for a stage attempt's temporary work directory.
 
@@ -507,6 +529,20 @@ def run_stage(
     ``--dry-run`` promises for them. Unset, ``run_stage`` behaves exactly
     as before.
 
+    The read guard (supervisor step 6, 2026-09-26, R6, A5, A6): once the
+    input manifest is parsed -- on an S3 ``--inputs`` only
+    ``manifest.json`` has been fetched at that point, and the members are
+    fetched only after the guard passes, so forbidden bytes are never
+    downloaded -- and before ``validate_inputs``, the ``--dry-run`` return
+    and ``body``, :func:`rapidpipe.runs.readguard.assert_inputs_readable`
+    checks that this run may read every instance the manifest names. A
+    direct ``rapidpipe stage run``, the local launcher's ``python -m`` and
+    a Batch job's ``rapidpipe stage`` command all pass through here, so
+    no path skips it. A refused instance exits 65; with instances named,
+    the guard needs the database: no database configured exits 64, and a
+    database that cannot be reached exits 75, dry run or not. A manifest
+    naming no instance makes no connection.
+
     Also (additive, no manifest member): mirrors every log line to
     ``<outputs>/log/<stage>.log`` (skipped under ``--dry-run``, which
     writes nothing); measures wall-clock ``fetch``/``body``/``publish``
@@ -649,22 +685,39 @@ def run_stage(
                     log_path, run_id=args.run_id, attempt_id=args.attempt_id,
                     stage=declaration.name, unit_id=args.unit_id)
 
+            manifest_dir = inputs_dir
             if inputs_location.is_s3():
                 inputs_dir.mkdir(parents=True, exist_ok=True)
+                # The manifest alone first, beside (not into) the inputs
+                # directory, which fetch_prefix needs empty: the read
+                # guard below judges it before any member is fetched (A6).
+                # Under --dry-run it is the only object fetched.
+                assert work_dir is not None
+                manifest_dir = inputs_dir if args.dry_run else work_dir / "input-manifest"
                 try:
-                    if args.dry_run:
-                        # Validate without fetching the whole prefix: one object.
-                        fetch_object(
-                            inputs_location, "manifest.json",
-                            inputs_dir / "manifest.json")
-                    else:
-                        fetch_prefix(inputs_location, inputs_dir)
+                    fetch_object(
+                        inputs_location, "manifest.json",
+                        manifest_dir / "manifest.json")
                 except LocationError as exc:
                     raise InputRejected(str(exc)) from exc
                 except Exception as exc:  # noqa: BLE001
                     raise _map_storage_error(exc) from exc
 
-            input_manifest = _read_input_manifest_from(inputs_dir, args.inputs)
+            input_manifest = _read_input_manifest_from(manifest_dir, args.inputs)
+
+            _assert_inputs_readable(input_manifest, args.run_id)
+
+            if inputs_location.is_s3() and not args.dry_run:
+                try:
+                    fetch_prefix(inputs_location, inputs_dir)
+                except LocationError as exc:
+                    raise InputRejected(str(exc)) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise _map_storage_error(exc) from exc
+                if _read_input_manifest_from(inputs_dir, args.inputs) != input_manifest:
+                    raise InputRejected(
+                        f"input manifest {args.inputs} changed between the read "
+                        "guard and the fetch of its members")
         except BaseException:
             # The fetch phase reached here (fetch_start is always set just
             # above), and ran for a measurable time before this failure, so
