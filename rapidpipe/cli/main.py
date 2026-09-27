@@ -875,6 +875,17 @@ def _run_show_command(args: argparse.Namespace) -> int:
                 for promotion_id, who, happened_at, reason, changes in promotions:
                     print(f"  {promotion_id}\t{who}\t{happened_at}\t{reason}\t{changes}")
 
+            # The acceptance state of each candidate and current instance
+            # (supervisor step 6, 2026-09-26, R4): the lines `check show`
+            # prints, from the same function.
+            from rapidpipe.runs.eligibility import run_acceptance_states
+
+            states = run_acceptance_states(cur, args.run_id)
+            if states:
+                print("acceptance:")
+                for state in states:
+                    print(f"  {state.line()}")
+
     return int(ExitCode.SUCCESS)
 
 

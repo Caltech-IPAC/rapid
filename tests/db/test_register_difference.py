@@ -32,6 +32,7 @@ from tests.unit.fakedifftools import (
     fake_sip_to_pv,
 )
 
+from .attempt_helpers import succeed_and_select
 from .test_register_l2 import _run_admit, _run_register
 from .test_repository import _make_run, _make_unit
 
@@ -83,7 +84,11 @@ def _instance_refimage(conn) -> tuple[int, str]:
             VALUES (5321, 1, 1, %s, 12, 1, 0, %s, 0, %s, %s, %s) RETURNING rfid
             """,
             (fid, svid, run_id, attempt_id, instance))
-        return cur.fetchone()[0], instance
+        rfid = cur.fetchone()[0]
+    # A difference of another run depends on it: its attempt must be selected
+    # (supervisor step 6, 2026-09-26, R5).
+    succeed_and_select(conn, attempt_id)
+    return rfid, instance
 
 
 def _run_difference(conn, tmp_path, monkeypatch, *, l2_instance, reference_instance=None,
@@ -122,6 +127,11 @@ def _admitted_l2(conn, tmp_path, monkeypatch):
                           unit_id=register_unit_id(admit_manifest),
                           tmp_path=tmp_path, name="l2")
     assert rc == int(ExitCode.SUCCESS)
+    # Another run reads this l2 image, so its attempt must be its unit's
+    # selected attempt, as the launcher's reconcile would make it (the read
+    # rule applies to file products at registration too: supervisor step 6,
+    # 2026-09-26, R5).
+    succeed_and_select(conn, admit_manifest.attempt)
     return admit_manifest.outputs[0].instance
 
 
@@ -376,6 +386,7 @@ def test_two_registers_in_one_run_get_distinct_derived_ids(conn, tmp_path, monke
         unit_id=admit_register_id, tmp_path=tmp_path, name="twice-admit-reg")
     assert rc == int(ExitCode.SUCCESS)
     l2_instance = admit_manifest.outputs[0].instance
+    succeed_and_select(conn, admit_manifest.attempt)   # read across runs (step 6, R5)
 
     with conn.cursor() as cur:
         rfid = _legacy_refimage(cur)
