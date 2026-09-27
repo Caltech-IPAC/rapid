@@ -351,6 +351,17 @@ def _l2(conn, run_id, *, expid, sca, fid):
     return instance
 
 
+def _reference(conn, run_id):
+    """A registered reference-image instance keyed as the reference stage
+    keys it, so a difference image naming it derives an identity (its
+    consumers derive their slots from that identity, supervisor step 5a,
+    2026-09-26, R18). Never promoted, so it needs no ``refimages`` row."""
+    attempt_id = _selected_attempt(conn, run_id, stage="reference")
+    return _register_simple_instance(
+        conn, run_id, "reference", attempt_id, kind="reference-image",
+        logical_key={"field": "1", "filter": "F158", "recipe": "r", "version": new_ulid()})
+
+
 def _chain(conn, run_id, *, identity=(7001, 3, 1), rows, catalog_type="sextractor",
            complete=True):
     """l2 -> difference-image -> source-set, keyed as the live stages key
@@ -360,7 +371,7 @@ def _chain(conn, run_id, *, identity=(7001, 3, 1), rows, catalog_type="sextracto
     attempt_id = _selected_attempt(conn, run_id)
     diff = _register_simple_instance(
         conn, run_id, "difference", attempt_id, kind="difference-image",
-        logical_key={"l2": l2, "reference": "REF", "differencer": "sfft",
+        logical_key={"l2": l2, "reference": _reference(conn, run_id), "differencer": "sfft",
                      "settings_hash": new_ulid()})
     return _source_set(conn, run_id, key={"difference": diff, "catalog_type": catalog_type},
                        rows=rows, complete=complete)
