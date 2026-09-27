@@ -13,10 +13,11 @@
 -- Both are derived by the database, never by the stage that wrote the manifest:
 -- `product_identity_derive(kind, logical_key)` computes one row's pair from its provenance
 -- key and its producers' already-filled identity (the derivation table of ruling R3, with
--- R14's hash chain for association sets; a producer's slot is read from its identity, R18), and `product_identity_fill()` fills
--- every row whose slot or identity is NULL, pass by pass (at most 32), withholding the slot
--- of any current row whose (kind, slot) another current row holds or would take in the same
--- pass (R12: an ambiguous conversion is refused, left NULL and counted, never raised). The
+-- R14's hash chain for association sets; a producer's slot is read from its identity,
+-- R18), and `product_identity_fill()` fills every row whose slot or identity is NULL:
+-- identities to a fixpoint (at most 32 passes), then every slot at once, withholding the
+-- slot of each current row whose (kind, slot) another current row holds or would take
+-- (R12, R20: an ambiguous conversion is refused, left NULL and counted, never raised). The
 -- fill logs one row per kind it touched in `slot_backfill_log` and returns the same rows.
 -- This file calls it once (the backfill of every existing row), then backfills
 -- `promotion_changes.slot`, then installs the unique index.
@@ -350,63 +351,64 @@ LANGUAGE plpgsql AS $fn$
 DECLARE
     pass integer := 0;
     changed bigint;
-    gave jsonb;                 -- kind -> rows given a slot by one pass
     acc jsonb := '{}'::jsonb;   -- kind -> rows given a slot by this call
     report jsonb;
-    e record;
 BEGIN
+    -- Identities first, to a fixpoint (at most 32 passes; R20). An identity carries no
+    -- uniqueness rule and is only ever written NULL -> value, so writing it pass by pass
+    -- decides nothing; every slot depends only on the row's own key and its producers'
+    -- identities (R18), so once identities are at their fixpoint each slot is derived in
+    -- one pass, below.
     LOOP
         pass := pass + 1;
-        WITH work AS (
-            SELECT p.id, p.kind, p.custody, p.slot AS old_slot, d.slot AS new_slot,
-                   d.identity AS new_identity
-            FROM product_instances p
-            CROSS JOIN LATERAL product_identity_derive(p.kind, p.logical_key) d
-            WHERE p.slot IS NULL OR p.identity IS NULL
-        ),
-        prospective AS (
-            -- A current row's derived slot is withheld when another current row holds
-            -- it or would take it in this pass (R12).
-            SELECT w.id, w.kind, w.new_identity,
-                   CASE WHEN w.old_slot IS NULL AND w.new_slot IS NOT NULL AND NOT (
-                            w.custody = 'current' AND (
-                                EXISTS (SELECT 1 FROM product_instances c
-                                        WHERE c.custody = 'current' AND c.kind = w.kind
-                                          AND c.slot = w.new_slot AND c.id <> w.id)
-                                OR EXISTS (SELECT 1 FROM work w2
-                                           WHERE w2.custody = 'current'
-                                             AND w2.old_slot IS NULL
-                                             AND w2.kind = w.kind
-                                             AND w2.new_slot = w.new_slot
-                                             AND w2.id <> w.id)))
-                        THEN w.new_slot END AS give_slot
-            FROM work w
-        ),
-        upd AS (
-            UPDATE product_instances p
-            SET slot = COALESCE(p.slot, pr.give_slot),
-                identity = COALESCE(p.identity, pr.new_identity)
-            FROM prospective pr
-            WHERE p.id = pr.id
-              AND ((p.slot IS NULL AND pr.give_slot IS NOT NULL)
-                   OR (p.identity IS NULL AND pr.new_identity IS NOT NULL))
-            RETURNING pr.kind AS k, pr.give_slot IS NOT NULL AS gave_slot
-        ),
-        per_kind AS (
-            SELECT upd.k, count(*) AS n, count(*) FILTER (WHERE upd.gave_slot) AS g
-            FROM upd GROUP BY upd.k
-        )
-        SELECT COALESCE(sum(per_kind.n), 0),
-               COALESCE(jsonb_object_agg(per_kind.k, per_kind.g)
-                        FILTER (WHERE per_kind.g > 0), '{}'::jsonb)
-        INTO changed, gave
-        FROM per_kind;
-
-        FOR e IN SELECT j.key, j.value::bigint AS n FROM jsonb_each_text(gave) j LOOP
-            acc := acc || jsonb_build_object(e.key, COALESCE((acc ->> e.key)::bigint, 0) + e.n);
-        END LOOP;
+        UPDATE product_instances p
+        SET identity = w.new_identity
+        FROM (
+            SELECT q.id, d.identity AS new_identity
+            FROM product_instances q
+            CROSS JOIN LATERAL product_identity_derive(q.kind, q.logical_key) d
+            WHERE q.identity IS NULL
+        ) w
+        WHERE p.id = w.id AND p.identity IS NULL AND w.new_identity IS NOT NULL;
+        GET DIAGNOSTICS changed = ROW_COUNT;
         EXIT WHEN changed = 0 OR pass >= 32;
     END LOOP;
+
+    -- Then every NULL slot at once: the collision rule is applied once over the filled
+    -- currents and all prospective currents together, and the slots are written once. A
+    -- current row whose (kind, slot) another current row holds or would take is withheld,
+    -- every member of such a group alike (R12, R20); a filled slot is never rewritten.
+    WITH work AS (
+        SELECT p.id, p.kind, p.custody, d.slot AS new_slot
+        FROM product_instances p
+        CROSS JOIN LATERAL product_identity_derive(p.kind, p.logical_key) d
+        WHERE p.slot IS NULL
+    ),
+    prospective AS (
+        SELECT w.id, w.kind,
+               CASE WHEN w.new_slot IS NOT NULL AND NOT (
+                        w.custody = 'current' AND (
+                            EXISTS (SELECT 1 FROM product_instances c
+                                    WHERE c.custody = 'current' AND c.kind = w.kind
+                                      AND c.slot = w.new_slot AND c.id <> w.id)
+                            OR EXISTS (SELECT 1 FROM work w2
+                                       WHERE w2.custody = 'current'
+                                         AND w2.kind = w.kind
+                                         AND w2.new_slot = w.new_slot
+                                         AND w2.id <> w.id)))
+                    THEN w.new_slot END AS give_slot
+        FROM work w
+    ),
+    upd AS (
+        UPDATE product_instances p
+        SET slot = pr.give_slot
+        FROM prospective pr
+        WHERE p.id = pr.id AND p.slot IS NULL AND pr.give_slot IS NOT NULL
+        RETURNING pr.kind AS k
+    )
+    SELECT COALESCE(jsonb_object_agg(per_kind.k, per_kind.n), '{}'::jsonb)
+    INTO acc
+    FROM (SELECT upd.k, count(*) AS n FROM upd GROUP BY upd.k) per_kind;
 
     -- What is still NULL: a current row whose slot is derivable was withheld
     -- (duplicate_current); every other NULL slot is unresolved.
@@ -446,10 +448,10 @@ END
 $fn$;
 
 COMMENT ON FUNCTION product_identity_fill() IS
-    'Fill slot and identity on every product_instances row where either is NULL, at most '
-    '32 passes, never rewriting a filled value and never giving a current row a (kind, '
-    'slot) another current row holds or would take; log and return one row per kind '
-    'touched (supervisor step 5a, 2026-09-26, R12).';
+    'Fill identity on every product_instances row where it is NULL, to a fixpoint of at '
+    'most 32 passes, then every NULL slot in one write, never rewriting a filled value and '
+    'never giving a current row a (kind, slot) another current row holds or would take; '
+    'log and return one row per kind touched (supervisor step 5a, 2026-09-26, R12, R20).';
 
 -- ======================================================================
 -- The backfill, then the index
