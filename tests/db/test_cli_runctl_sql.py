@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from rapidpipe.cli import runctl
 from rapidpipe.db.ids import new_ulid
+from rapidpipe.runs import inputs
 from rapidpipe.runs import repository as repo
 
 from .test_repository import (
@@ -63,6 +64,7 @@ def test_status_rows_and_compare(conn):
     assert rows[0][1] == runctl._compare_instances(conn, run_b)[0][1]
 
     unregistered = new_ulid()
-    assert runctl._registered_instances(conn, [instances[run_a], unregistered]) == [
-        instances[run_a]]
-    assert runctl._registered_instances(conn, []) == []
+    # The registered-instance lookup lives in rapidpipe.runs.inputs since
+    # supervisor step 2 (R12); it returns a set.
+    assert inputs._registered(conn, [instances[run_a], unregistered]) == {instances[run_a]}
+    assert inputs._registered(conn, []) == set()

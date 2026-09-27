@@ -12,7 +12,7 @@ import pytest
 
 from rapidpipe.launch import loop
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
-from rapidpipe.runs import repository
+from rapidpipe.runs import binding, inputs, repository
 from rapidpipe.stages.contract import STAGE_NAMES
 from tests.unit.fakes3 import FakeS3
 
@@ -314,9 +314,10 @@ def _world(monkeypatch, *, previous=None, walk_rc=None):
     monkeypatch.setattr(loop, "jobless_attempts", lambda conn, run: [])
     monkeypatch.setattr(loop, "unit_records", lambda conn, run: [
         {"stage": "admit", "unit": img.unit, "state": "complete", "attempt": "A", "job": "j"}])
-    monkeypatch.setattr(loop, "_registered", lambda conn, ids: [])
+    # The binding primitive's seams (supervisor step 2 R7).
+    monkeypatch.setattr(inputs, "_registered", lambda conn, ids: set())
     monkeypatch.setattr(repository, "add_unit", lambda *a, **k: None)
-    monkeypatch.setattr(repository, "bind_unit_inputs", lambda *a, **k: None)
+    monkeypatch.setattr(inputs, "bind_unit_inputs", lambda *a, **k: None)
     monkeypatch.setattr(repository, "finish_run", lambda conn, run: None)
     monkeypatch.setattr(loop, "_promote", lambda conn, run, spec, date: (
         "P1", "P1", "check policy rebuild-trial@1", []))
@@ -1114,3 +1115,63 @@ def test_a_seeded_re_run_composes_difference_against_its_seeds_admit_only(
     else:
         assert len(walks) == 1
         assert "not in RUN3 or its seed RUN2" in updates["record"]["failure"]
+
+
+# ======================================================================
+# Refusals from the binding primitive (supervisor step 2 R11)
+# ======================================================================
+
+def _refuse_at_maintain(monkeypatch):
+    from rapidpipe.runs.inputs import InputsRefused
+
+    real = binding.bind_input_set
+
+    def bind(conn, storage, *, stage, **kw):
+        if stage == "maintain":
+            raise InputsRefused("input S1 is from a deleting run; refusing to submit")
+        return real(conn, storage, stage=stage, **kw)
+
+    monkeypatch.setattr(binding, "bind_input_set", bind)
+    monkeypatch.setattr(loop, "_fail_row",
+                        lambda *a, **k: pytest.fail("a refusal must not fail the date"))
+
+
+def test_process_date_an_input_refusal_at_composition_propagates(monkeypatch):
+    # A refusal from bind_input_set at a composition site (maintain) is not
+    # turned into _Stop and does not fail the date row: it propagates, as a
+    # RunModelError from the composer always has.
+    from rapidpipe.runs.inputs import InputsRefused
+
+    spec, tools, storage, walks, created, updates, units = _two_image_world(monkeypatch)
+    _refuse_at_maintain(monkeypatch)
+    with pytest.raises(InputsRefused, match="deleting run"):
+        loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10)
+    assert updates == {}
+
+
+def test_loop_run_exits_65_on_an_input_refusal_at_composition(monkeypatch, capsys):
+    # loop run maps it through runctl._with_connection (loopctl): 65, with a
+    # rollback and the message on stderr (supervisor step 2 R4/R11; was 64).
+    import contextlib
+
+    from rapidpipe.cli import loopctl, runctl
+    from rapidpipe.cli import main as cli
+
+    spec, tools, storage, walks, created, updates, units = _two_image_world(monkeypatch)
+    _refuse_at_maintain(monkeypatch)
+    monkeypatch.setattr(loop, "try_lock", lambda conn, schedule: True)
+    monkeypatch.setattr(loop, "unlock", lambda conn, schedule: None)
+    conn = _Conn()
+
+    @contextlib.contextmanager
+    def connect(**_kwargs):
+        yield conn
+
+    monkeypatch.setattr(cli, "connect", connect)
+    rc = runctl._with_connection(
+        "run", lambda c: loop.run_loop(c, spec, tools, interval=1, timeout=10),
+        prog="rapidpipe loop", usage_errors=loopctl._usage_errors())
+    assert rc == 65
+    assert conn.rollbacks >= 1
+    assert "rapidpipe loop run: input S1 is from a deleting run" in capsys.readouterr().err
+
