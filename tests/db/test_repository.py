@@ -603,9 +603,9 @@ def _record_lost(conn, run_id, stage, unit_id):
 
 
 def test_mark_run_deleting_allows_a_lost_attempt_whose_unit_then_completed(conn):
-    """R10: a ``lost`` attempt is a recorded
+    """A ``lost`` attempt is a recorded
     resolution, so a unit re-attempted to completion after it deletes
-    cleanly (the live scratch run 01M3BA39VQ6BWZN876YNZW609Y was refused)."""
+    cleanly."""
     run_id = _make_run(conn, kind="scratch")
     stage, unit_id = _make_unit(conn, run_id)
     _record_lost(conn, run_id, stage, unit_id)
@@ -623,7 +623,7 @@ def test_mark_run_deleting_allows_a_lost_attempt_whose_unit_then_completed(conn)
 
 
 def test_mark_run_deleting_allows_a_lost_attempt_alone(conn):
-    """R10: a unit left ``ready`` after a ``lost`` attempt has nothing
+    """A unit left ``ready`` after a ``lost`` attempt has nothing
     running; only ``disposition IS NULL`` blocks deletion."""
     run_id = _make_run(conn, kind="scratch")
     stage, unit_id = _make_unit(conn, run_id)

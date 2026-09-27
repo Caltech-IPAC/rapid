@@ -1,11 +1,12 @@
-"""R1 and R2 (products.md §Database result sets) against a real PostgreSQL.
+"""Retry provenance and cross-run result-set isolation (products.md
+§Database result sets) against a real PostgreSQL.
 
-R1 (retry provenance): a done check reuses a complete set of this run only
+Retry provenance: a done check reuses a complete set of this run only
 when its producing attempt is the calling attempt or one whose disposition
 is ``succeeded``; a set a failed attempt committed is not reused and the
 retry writes its own.
 
-R2 (cross-run result-set isolation): a stage reads a result set only when
+Cross-run result-set isolation: a stage reads a result set only when
 it is complete and retained and either belongs to the reading run or is a
 production run's output (custody ``candidate``/``current``) made by its
 unit's selected attempt; ``register_manifest`` applies the same rule to a
@@ -73,7 +74,7 @@ def _custody(conn, instance, custody):
 
 
 # ----------------------------------------------------------------------
-# R1: done checks
+# Retry provenance: done checks
 # ----------------------------------------------------------------------
 
 
@@ -123,14 +124,14 @@ def test_a_succeeded_but_unselected_set_is_reused_in_run_and_refused_across_runs
     retry = repo.allocate_attempt(conn, producer, "crossmatch", unit_id)
     reader = _run(conn, "production")
     with conn.cursor() as cur:
-        # R1: the retry in the same run reuses it...
+        # Retry provenance: the retry in the same run reuses it...
         assert objects.find_complete_result_set(
             cur, "association-set", producer, key, retry) == (instance, 1)
         # ...and the reuse leaves its producing provenance alone.
         cur.execute("SELECT producing_attempt, custody FROM product_instances WHERE id = %s",
                     (instance,))
         assert cur.fetchone() == (first, "candidate")
-        # R2: another run may not read it, its producer not being selected.
+        # Isolation: another run may not read it, its producer not being selected.
         with pytest.raises(ValueError, match="not its unit's selected attempt"):
             objects.assert_readable_result_set(cur, instance, reader)
         with pytest.raises(ValueError, match="not its unit's selected attempt"):
@@ -218,7 +219,7 @@ def test_a_crossmatch_retry_after_a_failed_attempt_writes_its_own_set(
 
 
 # ----------------------------------------------------------------------
-# R2: the read rule, one helper
+# Isolation: the read rule, one helper
 # ----------------------------------------------------------------------
 
 
@@ -347,7 +348,7 @@ def test_a_deleted_or_incomplete_production_set_is_refused(conn):
 
 
 # ----------------------------------------------------------------------
-# R2 through the crossmatch stage: the loop's two dates
+# Isolation through the crossmatch stage: the loop's two dates
 # ----------------------------------------------------------------------
 
 
