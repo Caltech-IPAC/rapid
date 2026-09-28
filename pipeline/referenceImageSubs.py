@@ -1,3 +1,4 @@
+import ast
 import csv
 import re
 from botocore.exceptions import ClientError
@@ -175,6 +176,8 @@ def generateReferenceImage(s3_client,
                 injection_mag_min = fake_sources_dict['mag_min']
                 injection_mag_max = fake_sources_dict['mag_max']
                 star_galaxy_cut = fake_sources_dict['star_galaxy_cut']
+                injections_by_field = ast.literal_eval(fake_sources_dict['injections_by_field_flag'])
+                injections_by_image = ast.literal_eval(fake_sources_dict['injections_by_image_flag'])
 
                 python_cmd = '/usr/bin/python3.11'
                 fake_sources_code = rapid_sw + '/modules/fake_src/rapid_source_injections.py'
@@ -189,12 +192,19 @@ def generateReferenceImage(s3_client,
                                     injection_mag_min,
                                     '--mag_max',
                                     injection_mag_max,
-                                    '--injections_by_field_flag',
                                     '--field_catalogs_input_filename',
                                     injection_catalog_list_filename,
                                     '--star_galaxy_cut',
                                     star_galaxy_cut,
                                     fname_input]
+
+                if injections_by_field:
+                    injections_by_field_flag = '--injections_by_field_flag'
+                    fake_sources_cmd.append(injections_by_field_flag)
+
+                if injections_by_image:
+                    injections_by_image_flag = '--injections_by_image_flag'
+                    fake_sources_cmd.append(injections_by_image_flag)
 
                 exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
 

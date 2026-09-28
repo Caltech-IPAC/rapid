@@ -227,7 +227,7 @@ if __name__ == '__main__':
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
-    inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
+    inject_fake_sources_ref_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_ref_flag'])
 
     saturation_level_refimage = float(sextractor_refimage_dict["sextractor_SATUR_LEVEL".lower()])
 
@@ -323,7 +323,7 @@ if __name__ == '__main__':
                                                                              sca_readout_noise,
                                                                              product_s3_bucket,
                                                                              upload_to_s3_bucket,
-                                                                             inject_fake_sources_flag,
+                                                                             inject_fake_sources_ref_flag,
                                                                              fake_sources_dict,
                                                                              rapid_sw,
                                                                              overlapping_fields_refimage)
