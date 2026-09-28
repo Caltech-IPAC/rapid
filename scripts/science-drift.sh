@@ -19,10 +19,22 @@
 # repository; it finds the repository root itself.
 #
 # Usage:
-#   scripts/science-drift.sh [--dev-ref <ref>] [--out <file>]
+#   scripts/science-drift.sh [--dev-ref <ref>] [--out <file>] [--watch-file <file>]
 #
-#   --dev-ref <ref>   the dev-pipeline ref to diff against (default origin/dev)
-#   --out <file>      write the markdown report here instead of stdout
+#   --dev-ref <ref>     the dev-pipeline ref to diff against (default origin/dev)
+#   --out <file>        write the markdown report here instead of stdout
+#   --watch-file <file> the watch list to read (default
+#                       scripts/science-drift-watch.txt); a relative
+#                       path is resolved against the repository root,
+#                       like the default, so a probe passes an absolute
+#                       path to a temporary copy to test a bogus or
+#                       non-ancestor entry without committing one
+#
+# A failed history read (git log for a pin, git show for a settings
+# .ini) is reported as "read failed" and a Pin error, never silently as
+# "no change": SCIENCE_DRIFT_FORCE_FAIL=<dev path> is a testing-only
+# hook (never set in CI) that substitutes an all-zero revision for that
+# one path's pin, forcing a real git failure to exercise this path.
 #
 # bash 3.2 compatible (macOS ships bash 3.2 as /bin/bash; this also runs
 # under the newer bash on the GitHub Actions Ubuntu runner): no
@@ -36,6 +48,7 @@ set -uo pipefail
 
 dev_ref="origin/dev"
 out_file=""
+watch_file="scripts/science-drift-watch.txt"
 
 while [ $# -gt 0 ]; do
   case "${1:-}" in
@@ -45,6 +58,10 @@ while [ $# -gt 0 ]; do
       ;;
     --out)
       out_file="${2:-}"
+      shift 2 2>/dev/null || shift "$#"
+      ;;
+    --watch-file)
+      watch_file="${2:-scripts/science-drift-watch.txt}"
       shift 2 2>/dev/null || shift "$#"
       ;;
     *)
@@ -158,6 +175,59 @@ done < "$all_files"
 cut -f2,3 "$triples_file" | sort -u > "$groups_file"
 
 # ---------------------------------------------------------------------
+# Emit one "By source" / "Watched dev paths" block: the header, the
+# caller-supplied detail (rebuild files, or a watch reason), and the
+# commit log or "no change". A failed `git log` (bad revision, a
+# missing object) is never read as "no change": its exit status is
+# captured, "read failed" is printed in the block, and a Pin error is
+# recorded, so a broken read is always visible.
+# ---------------------------------------------------------------------
+
+emit_group_report() {
+  local target="$1" path="$2" pin="$3" suffix="$4" detail="$5" tag="$6"
+  local log_pin="$pin"
+  local log_out log_rc pairs pairs_rc
+
+  if [ "${SCIENCE_DRIFT_FORCE_FAIL:-}" = "$path" ]; then
+    log_pin="0000000000000000000000000000000000000000"
+  fi
+
+  {
+    echo "### \`$path\` @ \`$pin\`$suffix"
+    echo
+    [ -n "${detail:-}" ] && printf '%s\n' "$detail"
+    echo
+    log_out="$(git log --oneline --abbrev=8 "$log_pin..$ref_sha" -- "$path" 2>/dev/null)"
+    log_rc=$?
+    if [ "$log_rc" -ne 0 ]; then
+      echo "read failed"
+    elif [ -z "${log_out:-}" ]; then
+      echo "no change"
+    else
+      printf '%s\n' "$log_out" | sed 's/^/- /'
+    fi
+    echo
+  } >> "$target"
+
+  if [ "$log_rc" -ne 0 ]; then
+    echo "history read failed: $path @ $pin" >> "$errors_file"
+    return 0
+  fi
+
+  pairs="$(git log --abbrev=8 --date=short --pretty=format:'%h	%ad	%s' "$log_pin..$ref_sha" -- "$path" 2>/dev/null)"
+  pairs_rc=$?
+  if [ "$pairs_rc" -ne 0 ] || [ -z "${pairs:-}" ]; then
+    return 0
+  fi
+  printf '%s\n' "$pairs" |
+    while IFS="$(printf '\t')" read -r sha date subject; do
+      [ -z "${sha:-}" ] && continue
+      printf '%s\t%s\t%s\t%s\t%s\n' "$sha" "$date" "$subject" "$path" "$tag" >> "$commit_rows"
+    done
+  return 0
+}
+
+# ---------------------------------------------------------------------
 # Validate each (dev path, pin) group and run its log.
 # ---------------------------------------------------------------------
 
@@ -183,43 +253,24 @@ done < "$groups_file"
 
 while IFS="$(printf '\t')" read -r path pin; do
   [ -z "${path:-}" ] && continue
-  {
-    echo "### \`$path\` @ \`$pin\`"
-    echo
-    echo "Rebuild files:"
-    awk -F'\t' -v p="$path" -v c="$pin" '$2==p && $3==c {print "- `" $1 "`"}' "$triples_file"
-    echo
-    log_out="$(git log --oneline --abbrev=8 "$pin..$ref_sha" -- "$path" 2>/dev/null || true)"
-    if [ -z "${log_out:-}" ]; then
-      echo "no change"
-    else
-      printf '%s\n' "$log_out" | sed 's/^/- /'
-    fi
-    echo
-  } >> "$by_source_out"
-
-  # Captured into a variable first, then re-fed with a guaranteed
-  # trailing newline: `git log --pretty=format:...` output has none,
-  # and a bare `git log ... | while read` silently drops the last
-  # commit (the loop's final `read` hits EOF before a newline and the
-  # while condition fails before the body runs for it).
-  pairs="$(git log --abbrev=8 --date=short --pretty=format:'%h	%ad	%s' "$pin..$ref_sha" -- "$path" 2>/dev/null || true)"
-  if [ -n "${pairs:-}" ]; then
-    printf '%s\n' "$pairs" |
-      while IFS="$(printf '\t')" read -r sha date subject; do
-        [ -z "${sha:-}" ] && continue
-        printf '%s\t%s\t%s\t%s\tnormal\n' "$sha" "$date" "$subject" "$path" >> "$commit_rows"
-      done
-  fi
+  detail="Rebuild files:
+$(awk -F'\t' -v p="$path" -v c="$pin" '$2==p && $3==c {print "- `" $1 "`"}' "$triples_file")"
+  emit_group_report "$by_source_out" "$path" "$pin" "" "$detail" "normal"
 done < "$valid_groups_file"
 
 # ---------------------------------------------------------------------
 # The watch list: dev paths not copied, watched for drift. A watched
 # path need not exist at its pin (several were created later); that is
-# not an error, so no existence check runs here.
+# not a Pin error. It does get the same validation a ported pin gets
+# (commit exists, is an ancestor of the dev ref), plus a check the
+# watch list itself does not need: the watched path must exist at the
+# dev ref right now, or watching it is pointless. A line that is not
+# "<path> @ <8-hex>" once its trailing "# reason" is stripped is a Pin
+# error too, never silently skipped (a blank or comment-only line is
+# not a line at all, so it is not an error).
 # ---------------------------------------------------------------------
 
-watch_path="scripts/science-drift-watch.txt"
+watch_path="$watch_file"
 if [ -f "$watch_path" ]; then
   while IFS= read -r wline || [ -n "${wline:-}" ]; do
     case "${wline:-}" in
@@ -230,46 +281,47 @@ if [ -f "$watch_path" ]; then
     [ "$reason" = "$wline" ] && reason=""
     entry="$(printf '%s' "$entry" | sed -e 's/^ *//' -e 's/ *$//')"
     reason="$(printf '%s' "$reason" | sed -e 's/^ *//' -e 's/ *$//')"
+    [ -z "${entry:-}" ] && continue
+
+    malformed=0
     case "$entry" in
       *' @ '*)
         wpath="${entry%% @ *}"
         wpin="${entry##* @ }"
         ;;
       *)
-        continue
+        malformed=1
         ;;
     esac
-    [ -z "${wpath:-}" ] && continue
-    [ -z "${wpin:-}" ] && continue
+    if [ "$malformed" = "0" ]; then
+      if [ -z "${wpath:-}" ] || [ -z "${wpin:-}" ]; then
+        malformed=1
+      elif ! printf '%s' "$wpin" | grep -Eq '^[0-9a-f]{8}$'; then
+        malformed=1
+      fi
+    fi
+    if [ "$malformed" = "1" ]; then
+      echo "malformed watch-list line: $wline" >> "$errors_file"
+      continue
+    fi
 
     kind="$(git cat-file -t "$wpin" 2>/dev/null || true)"
     if [ "${kind:-}" != "commit" ]; then
       echo "$wpath @ $wpin (watched): unknown commit" >> "$errors_file"
       continue
     fi
-
-    {
-      echo "### \`$wpath\` @ \`$wpin\` (watched)"
-      echo
-      [ -n "${reason:-}" ] && echo "Reason: $reason"
-      echo
-      log_out="$(git log --oneline --abbrev=8 "$wpin..$ref_sha" -- "$wpath" 2>/dev/null || true)"
-      if [ -z "${log_out:-}" ]; then
-        echo "no change"
-      else
-        printf '%s\n' "$log_out" | sed 's/^/- /'
-      fi
-      echo
-    } >> "$watch_out"
-
-    pairs="$(git log --abbrev=8 --date=short --pretty=format:'%h	%ad	%s' "$wpin..$ref_sha" -- "$wpath" 2>/dev/null || true)"
-    if [ -n "${pairs:-}" ]; then
-      printf '%s\n' "$pairs" |
-        while IFS="$(printf '\t')" read -r sha date subject; do
-          [ -z "${sha:-}" ] && continue
-          printf '%s\t%s\t%s\t%s\twatch\n' "$sha" "$date" "$subject" "$wpath" >> "$commit_rows"
-        done
+    if ! git merge-base --is-ancestor "$wpin" "$ref_sha" 2>/dev/null; then
+      echo "$wpath @ $wpin (watched): pin is not an ancestor of $dev_ref ($ref_sha)" >> "$errors_file"
+      continue
     fi
+    if ! git cat-file -e "${ref_sha}:${wpath}" 2>/dev/null; then
+      echo "$wpath @ $wpin (watched): watched path absent at $ref_sha" >> "$errors_file"
+      continue
+    fi
+
+    detail=""
+    [ -n "${reason:-}" ] && detail="Reason: $reason"
+    emit_group_report "$watch_out" "$wpath" "$wpin" " (watched)" "$detail" "watch"
   done < "$watch_path"
 fi
 
@@ -343,7 +395,10 @@ def read_ini(rev, path):
 old = read_ini(pin, path)
 new = read_ini(ref, path)
 if old is None or new is None:
-    print("(could not read `%s` at one revision)" % path)
+    # The exact sentinel science-drift.sh checks for: a failed `git
+    # show` (bad revision, or content that will not parse as an .ini)
+    # must read as a read failure, never silently as "no key changes".
+    print("READ_FAILED")
     sys.exit(0)
 
 sections = sorted(set(old.sections()) | set(new.sections()))
@@ -379,12 +434,24 @@ elif [ "$have_python3" != "1" ]; then
 else
   while IFS="$(printf '\t')" read -r f path pin; do
     [ -z "${f:-}" ] && continue
+    diff_pin="$pin"
+    if [ "${SCIENCE_DRIFT_FORCE_FAIL:-}" = "$path" ]; then
+      diff_pin="0000000000000000000000000000000000000000"
+    fi
+    diff_out="$(run_ini_diff "$diff_pin" "$ref_sha" "$path")"
     {
       echo "### \`$f\` (pinned to \`$path\` @ \`$pin\`)"
       echo
-      run_ini_diff "$pin" "$ref_sha" "$path"
+      if [ "$diff_out" = "READ_FAILED" ]; then
+        echo "read failed"
+      else
+        printf '%s\n' "$diff_out"
+      fi
       echo
     } >> "$settings_out"
+    if [ "$diff_out" = "READ_FAILED" ]; then
+      echo "history read failed: $path @ $pin" >> "$errors_file"
+    fi
   done < "$tmpdir/toml_triples.tsv"
 fi
 
@@ -443,7 +510,10 @@ echo
 echo "## Pin errors"
 echo
 if [ -s "$errors_file" ]; then
-  sort "$errors_file" | sed 's/^/- /'
+  # -u: an ini pin is validated both as an ordinary "By source" group
+  # (git log) and again for its settings-drift diff (git show); a pin
+  # that fails both legitimately produces the same message twice.
+  sort -u "$errors_file" | sed 's/^/- /'
 else
   echo "(none)"
 fi
