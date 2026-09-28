@@ -1,22 +1,22 @@
 # AGENTS.md
 
-Operating contract for any coding agent working in this repository (the
-`rapid` repository, Caltech-IPAC/rapid), self-contained for an agent
-with no other context.
+Self-contained operating contract for coding agents in the `rapid`
+repository, Caltech-IPAC/rapid.
 
 ## What this repository is
 
-This is the RAPID (Roman Alerts Promptly from Image Differencing)
-pipeline: it builds and runs the software that finds transients in
-Roman Space Telescope images and issues alerts. The repository is
-**public and portable**. Never commit account identifiers, bucket
-names tied to an account, hostnames, or credentials; they are injected
-at deploy time through environment variables. `scripts/check-public-safety.sh`
-scans for these (12-digit AWS account numbers, personal filesystem
-paths, personal note-taking directories, the operations database host
-IP, a retired ECR alias) and runs in CI (`public-safety.yml`) and in
-`.githooks/pre-push`; install the hook with
-`git config core.hooksPath .githooks` before your first push.
+RAPID (Roman Alerts Promptly from Image Differencing) builds and runs
+the pipeline software that finds transients in Roman Space Telescope
+images and issues alerts. This repository is **public and portable**.
+Never commit account identifiers, account-specific bucket names,
+hostnames, or credentials; inject them at deploy time through environment
+variables. `scripts/check-public-safety.sh` scans for 12-digit AWS account
+numbers, personal filesystem paths, personal note-taking directories,
+the operations database host IP and a retired ECR alias. It runs in CI
+(`public-safety.yml`) and `.githooks/pre-push`. Before your first push,
+install the hook with `git config core.hooksPath .githooks`.
+
+## Design authority
 
 **Design authority** is the readthedocs system pages
 (https://roman-rapid.readthedocs.io/en/latest/system/), sourced from
@@ -27,26 +27,33 @@ contract), `runs.md` (runs/attempts/custody), `products.md`,
 (logging, monitoring, job timing), and per-stage pages; `operations.md`
 holds the direction pass's operations-readiness proposal (2026-09-26),
 not yet ruled.
-When a page and this code disagree, **the page is corrected first**;
-never quietly patch code around a stale page. This repository's own
-README.md carries a longer prose walkthrough of the same rules and the
-CLI surface; where the two overlap, this file is the summary and
-README.md has the detail.
+When a page and code disagree, **correct the page first**; never quietly
+patch code around a stale page. README.md gives a longer prose walkthrough
+of these rules and the CLI surface. Where they overlap, this file is the
+summary and README.md has the detail.
 
-## Branches and releases
+## Branches, pull requests and releases
 
 - `rebuild` is the rebuild's integration branch. All rebuild work lands
   on it by pull request; nobody pushes to it directly.
 - `main` and `dev` belong to the team's existing (pre-rebuild) pipeline.
   Do not touch them from rebuild work.
+- Pull requests target `rebuild`. Describe what changed, why, and which
+  `rapid_docs` page(s) the PR implements or corrects. Watch CI to green
+  before handing back; CI green is the merge gate, never merge a red PR.
+  Use rebase merge (squash only when the branch carries a merge commit).
+  Do not merge your own PR without permission from the person directing
+  the work.
 - Releases are annotated tags `rebuild-v0.<n>` cut from `rebuild`'s head
   by `rapidpipe release cut` (`rapidpipe.release.core`), which tags,
   migrates, records, builds, deploys and pins in one guarded sequence.
   Once cut, the scheme becomes `v1.<n>` at the point the rebuild
   replaces `main` (not yet).
-- Pull requests target `rebuild`. Merge by rebase merge (squash only
-  when the branch itself carries a merge commit). CI green is the
-  merge gate; never merge a red PR.
+
+Cut a release with `python -m rapidpipe.release cut` (or
+`rapidpipe release cut`). It invokes `rapid_systems`-supplied hooks for
+the account-specific steps (migrate, build, deploy, pins); this repository
+names no account, host or bucket itself.
 
 ## Repository layout
 
@@ -70,17 +77,20 @@ README.md has the detail.
 ## The `rapidpipe` package map
 
 The distribution is `rapid-pipeline`; the import package is `rapidpipe`
-(`pyproject.toml`). Dependency direction is a fixed layer order,
-enforced by `tests/unit/test_dependency_direction.py` over every
-subpackage and top-level module, lazy and relative imports included: a
-unit imports only units strictly below it. The order is the leaf modules
+(`pyproject.toml`). `tests/unit/test_dependency_direction.py` enforces a
+fixed dependency order across every subpackage and top-level module,
+including lazy and relative imports. A unit imports only units strictly
+below it in this order:
+
+Leaf modules
 (`exitcodes`, `log`, `revision`, `seams`: no `rapidpipe` import) <
 `products` < `db` and `science` (which do not import each other) <
 `checks` < `runs` < `stages` < `launch` < `selftest` < `cli`. `release`
-imports only the leaves and `db`, and only `cli` imports it. Stage
-modules never import other stage modules. A failure names the offending
-edge and file:line; a new edge that goes up the order is a design
-question for the stage-contract page, not a test to relax.
+imports only the leaves and `db`, and only `cli` imports it. Stage modules
+never import other stage modules.
+
+A failure names the offending edge and file:line. A new edge up the order
+is a design question for the stage-contract page, not a test to relax.
 
 | Subpackage | Holds |
 |---|---|
@@ -99,22 +109,21 @@ question for the stage-contract page, not a test to relax.
 
 ## Migrations
 
-`database/migrations/*.sql`, applied in filename order by
-`database/apply-migrations.sh` against `PG*` environment variables
-(PostgreSQL 16+ with the Q3C extension; CI uses PostgreSQL 18). Full
-rules are in `database/migrations/README.md`; the essentials:
+`database/apply-migrations.sh` applies `database/migrations/*.sql` in
+filename order using `PG*` environment variables. It requires PostgreSQL
+16+ with the Q3C extension; CI uses PostgreSQL 18. Full rules are in
+`database/migrations/README.md`:
 
 - **New files only**, named `YYYYMMDD-NN-short-name.sql` (today's date,
-  next unused two-digit sequence for that date). Never edit a file once
-  applied anywhere; the applier hashes each applied file and refuses a
-  changed one.
+  next unused two-digit sequence for that date). Never edit a file applied
+  anywhere; the applier hashes each applied file and refuses changes.
 - **The migration number is claimed at merge, not at authorship**: if
-  another PR merges its own same-date `NN` first, rebase and take the
-  next free number before your PR merges.
+  another PR merges the same-date `NN` first, rebase and take the next
+  free number before your PR merges.
 - **One change per file.** A schema change and the code that needs it
-  land in the same pull request; CI (`db-migrations.yml`) applies the
-  whole stream to a fresh database, re-applies to confirm idempotence,
-  and checks that a modified already-applied file is refused.
+  land in the same pull request. CI (`db-migrations.yml`) applies the
+  whole stream to a fresh database, re-applies it to confirm idempotence,
+  and checks that changes to an already-applied file are refused.
 - **Additive only while an earlier release's runs are open** (no drop
   or rename of a column or table a live release still reads): this is
   a constraint of the release model (`releases.md`, ruling R7), not
@@ -137,61 +146,55 @@ a `tests/db` test, not only a mocked `tests/unit` one.
 | n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version`, `stage admit --help`, the imports of the kept helpers outside `rapidpipe/` and the presence of the `/code` script and config files. Proves the build recipe only, not the production science environment. |
 | n/a | `public-safety.yml` | `scripts/check-public-safety.sh`, see above. |
 
-Stage fixtures under `tests/fixtures/<name>/` back both `make
-stage-<name>` (runs the stage locally, `fake` tools by default, `real`
-where a target exists) and `rapidpipe selftest --stage <name>
-[--real-tools]`, which submits the same fixture as an ordinary Batch
-job against the deployed image: the venue for exercising a stage
-against real tools and a real database, owned by `rapid_systems`'
-Batch recipes, not run from this repository's own CI. A release is cut
-with `python -m rapidpipe.release cut` (or `rapidpipe release cut`),
-which invokes `rapid_systems`-supplied hooks for the account-specific
-steps (migrate, build, deploy, pins); this repository names no account,
-host or bucket itself.
+Stage fixtures under `tests/fixtures/<name>/` back both:
+
+- `make stage-<name>` (runs the stage locally, `fake` tools by default,
+  or `real` where a target exists).
+- `rapidpipe selftest --stage <name> [--real-tools]`: submits the same
+  fixture as an ordinary Batch job against the deployed image. This is
+  the venue for exercising a stage against real tools and a real database,
+  owned by `rapid_systems`' Batch recipes, outside this repository's CI.
 
 ## Settings and secrets
 
 Each stage ships default settings and a schema at
-`rapidpipe/settings/<name>.toml`; `--settings` supplies an overlay that
-merges recursively, replacing scalars and arrays the overlay names.
-Unknown keys or invalid values fail with exit 64. Algorithm parameters
-(including random seeds) belong in settings; deployment locations and
-credentials never do.
+`rapidpipe/settings/<name>.toml`. A `--settings` overlay merges
+recursively, replacing the scalars and arrays it names. Unknown keys or
+invalid values fail with exit 64. Algorithm parameters (including random
+seeds) belong in settings; deployment locations and credentials never do.
 
-Database credentials reach `rapidpipe.db` only through the `PG*`
-environment variables or an AWS Secrets Manager secret named by
-`RAPID_DB_SECRET_ID`, never as a command-line argument and never
-committed to this repository. The same rule applies to every other
-account-specific value the tool reads (`RAPIDPIPE_BATCH_JOB_QUEUE`,
+Database credentials reach `rapidpipe.db` only through `PG*` environment
+variables or an AWS Secrets Manager secret named by `RAPID_DB_SECRET_ID`,
+never as command-line arguments or committed to this repository. Every other
+account-specific value the tool reads follows the same rule (`RAPIDPIPE_BATCH_JOB_QUEUE`,
 `RAPIDPIPE_OUTPUTS_ROOT_*`, `RAPIDPIPE_CLEANUP_ROLE_ARN`, and siblings
 documented in README.md): named environment variables only.
 
 ## Output and logging
 
-A command prints its data on stdout and nothing else there; everything
-else goes through `rapidpipe.log`, which writes one line shape to stderr
-(`<UTC> <LEVEL> run= attempt= stage= unit= <logger> <message>`) and, for
-a stage invocation, the same lines to `log/<stage>.log` beside the
-attempt's outputs. A new subcommand follows the same split, and a
-command whose output is a record should offer `--json` (the direction
-pass's proposal, 2026-09-26). The exit-code vocabulary is
+A command prints only data on stdout. Everything else goes through
+`rapidpipe.log` to stderr in one line shape:
+`<UTC> <LEVEL> run= attempt= stage= unit= <logger> <message>`.
+A stage invocation writes the same lines to `log/<stage>.log` beside the
+attempt's outputs. New subcommands follow this split; commands that output
+records should offer `--json` (the direction pass's proposal, 2026-09-26).
+`RAPIDPIPE_LOG_LEVEL` sets the level; `--profile` (or
+`RAPIDPIPE_PROFILE=1`) profiles a stage body on a scratch run.
+
+The exit-code vocabulary is
 `rapidpipe/exitcodes.py` (`ExitCode`); stages use its subset
 `STAGE_EXIT_CODES` (`rapidpipe/stages/contract.py`); every parser is
 `rapidpipe.exitcodes.ArgumentParser`, so a parse failure exits 64. The
 tables on the `rapid_docs` tool and stage-contract pages document it; do
 not invent a new code or a second list.
-`RAPIDPIPE_LOG_LEVEL` sets the level; `--profile` (or
-`RAPIDPIPE_PROFILE=1`) profiles a stage body on a scratch run.
 
 ## Writing conventions
 
-- When porting a stage or script from the team's existing `dev`
-  pipeline, cite `dev`'s script name in the docstring or commit message
-  so the correspondence is traceable.
-- Every departure from `dev`'s behaviour is stated on the relevant
-  `rapid_docs` page, not only in a code comment. The page is the
-  design authority, so it is where a reader (and a future agent) looks
-  first.
+- When porting a stage or script from the team's existing `dev` pipeline,
+  cite `dev`'s script name in the docstring or commit message for traceability.
+- State every departure from `dev`'s behaviour on the relevant `rapid_docs`
+  page, not only in a code comment. Readers and future agents look first
+  to that page as the design authority.
 - Rulings (a supervisor's or the lead's decision that changes a
   contract) are dated and attributed on the `rapid_docs` page they
   affect (for example "supervisor step 6, 2026-09-24"); do not bury a
@@ -199,7 +202,7 @@ not invent a new code or a second list.
 - No em dashes in docs or commit messages written for this repository
   (house style; use a comma, colon, or a new sentence instead).
 
-## Ported-from headers
+### Ported-from headers
 
 Every module under `rapidpipe/science` and `rapidpipe/stages`, plus
 `rapidpipe/products/spatial.py`,
@@ -207,17 +210,9 @@ Every module under `rapidpipe/science` and `rapidpipe/stages`, plus
 line 1 comment `# ported-from: <dev path>[, <dev path>...] @ <8-hex dev
 commit>`, or `# ported-from: none` for rebuild-only code.
 `tests/unit/test_ported_from.py` fails the build if a module lacks one.
-`scripts/science-drift.sh` reads these headers straight out of the
-tree, never a separate table, and reports which `origin/dev` commits
-are unported per pin, plus watched paths
-(`scripts/science-drift-watch.txt`) and settings-.ini drift;
-`.github/workflows/science-drift.yml` runs it on push/PR to `rebuild`
-but never fails the build. A dev commit the report lists is ported by
-hand or recorded as declined, never auto-applied.
-
-## Pull requests from an agent
-
-Base branch `rebuild`. Body describes what changed and why, and which
-`rapid_docs` page(s) it implements or corrects. Watch CI to green
-before handing back; do not merge your own PR unless the person
-directing the work has said you may.
+`scripts/science-drift.sh` reads these headers from the tree, never a
+separate table. It reports unported `origin/dev` commits per pin, watched
+paths (`scripts/science-drift-watch.txt`) and settings-.ini drift.
+`.github/workflows/science-drift.yml` runs it on push/PR to `rebuild` but
+never fails the build. Port listed dev commits by hand or record them as
+declined; never auto-apply them.
