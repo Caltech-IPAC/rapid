@@ -1,10 +1,20 @@
 """Submit run units to AWS Batch, resolve their inputs, and reconcile results.
 
-Implements the stage contract's "Invocation" ("the Batch wrapper allocates
-one per Batch attempt") and "Exit codes" (75 retries, 70 stops; "The
-launcher also records terminations without a stage exit code and
-unexpected codes"), and the runs page's "Attempts" (``lost`` means the
-scheduler lost the job) over ``rapidpipe.runs.repository``.
+Implements the stage contract's "Invocation" (every submission is a fresh
+attempt; a Batch job runs its container once) and "Exit codes" (75 and
+the approved infrastructure failures are retried by the launcher, 70
+stops; "The launcher also records terminations without a stage exit code
+and unexpected codes"), and the runs page's "Attempts" (``lost`` means
+the scheduler lost the job) over ``rapidpipe.runs.repository``.
+
+Batch does not retry: the rebuild's job definitions carry
+``RetryStrategy: Attempts: 1`` (rapid_systems
+``cloudformation/rapid-batch.yaml``), so one Batch job is one RAPID
+attempt with one output location. A retryable outcome -- exit 75, or one
+of :data:`RETRYABLE_INFRASTRUCTURE_REASONS` -- is recorded ``transient``,
+which returns the unit to ``ready`` while the run's
+``max_attempts_per_unit`` allows, and the run walk submits it again as a
+fresh attempt.
 
 This module composes ``rapidpipe.runs.repository``, ``rapidpipe.products``
 and ``rapidpipe.db``; it never imports a stage module or the command-line tool
@@ -82,6 +92,19 @@ _UNRESOLVED_BATCH_STATUSES = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "R
 _DESCRIBE_JOBS_BATCH_SIZE = 100
 
 _TRANSIENT_FAILURE_CODE = ExitCode.TRANSIENT_FAILURE
+
+#: The approved infrastructure failures (stage contract, "Exit codes";
+#: runs page, "Attempts"): a FAILED job with no container exit code whose
+#: reason starts with one of these is recorded ``transient`` rather than
+#: ``killed``, so the launcher retries it. ``statusReason`` is the job's or
+#: its last attempt's (an EC2 host reclaimed under the job); ``reason`` is
+#: the last attempt's container reason (an image pull or Docker daemon
+#: failure before the stage started). The same three patterns the rebuild
+#: job definitions' ``EvaluateOnExit`` rows carried while Batch retried.
+RETRYABLE_INFRASTRUCTURE_REASONS: dict[str, tuple[str, ...]] = {
+    "statusReason": ("Host EC2",),
+    "reason": ("Cannot", "DockerTimeoutError"),
+}
 
 logger = logging.getLogger(__name__)
 
@@ -606,6 +629,21 @@ def _last_container_exit_code(job: dict[str, Any]) -> int | None:
     return container.get("exitCode")
 
 
+def is_retryable_infrastructure_failure(job: dict[str, Any]) -> bool:
+    """Whether a FAILED ``job`` with no container exit code failed for one of
+    :data:`RETRYABLE_INFRASTRUCTURE_REASONS`."""
+    attempts = job.get("attempts") or []
+    last = attempts[-1] if attempts else {}
+    status_reasons = [job.get("statusReason"), last.get("statusReason")]
+    container_reasons = [(last.get("container") or {}).get("reason"),
+                         (job.get("container") or {}).get("reason")]
+    for reasons, prefixes in ((status_reasons, RETRYABLE_INFRASTRUCTURE_REASONS["statusReason"]),
+                              (container_reasons, RETRYABLE_INFRASTRUCTURE_REASONS["reason"])):
+        if any(isinstance(r, str) and r.startswith(prefixes) for r in reasons):
+            return True
+    return False
+
+
 def _epoch_ms_to_iso(value: Any) -> str | None:
     """A Batch epoch-milliseconds timestamp field as a UTC ISO 8601 string,
     or ``None`` for a missing or unparseable value."""
@@ -709,9 +747,14 @@ def reconcile(
       later :func:`reconcile` call retries it.
     - ``FAILED`` with a container exit code: :func:`disposition_for` maps
       it (75 -> ``transient``, else ``failed``).
-    - ``FAILED`` with no container exit code (a ``statusReason`` and no
-      container exit -- e.g. the task was killed before it could exit):
-      ``killed``, exit code ``None``.
+    - ``FAILED`` with no container exit code and an approved
+      infrastructure reason (:func:`is_retryable_infrastructure_failure`:
+      an EC2 host reclaimed, an image pull or Docker timeout):
+      ``transient``, exit code ``None``, so the launcher retries it as a
+      fresh attempt.
+    - ``FAILED`` with no container exit code otherwise (a ``statusReason``
+      and no container exit -- e.g. the task was killed before it could
+      exit): ``killed``, exit code ``None``.
     - a job id ``describe_jobs`` does not return at all: ``lost`` (the
       scheduler lost the job).
     - ``SUBMITTED``/``PENDING``/``RUNNABLE``/``STARTING``/``RUNNING``:
@@ -835,6 +878,11 @@ def reconcile(
             exit_code = _last_container_exit_code(job)
             if exit_code is not None:
                 disposition = disposition_for(exit_code, manifest_ok=False)
+            elif is_retryable_infrastructure_failure(job):
+                # An approved infrastructure failure: Batch no longer
+                # retries (Attempts: 1), so the launcher does, as a fresh
+                # attempt (runs page, "Attempts").
+                disposition = "transient"
             else:
                 # No container exit code recorded (e.g. a statusReason
                 # from being killed before it could exit): the launcher
