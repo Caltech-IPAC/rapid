@@ -66,3 +66,26 @@ jobs:
 
       - name: smoke test -- stage admit --help
         run: docker run --rm rapid-pipeline:ci stage admit --help
+
+      # build.sh archives an explicit include list; this proves the kept
+      # helpers outside rapidpipe/ made it into the installed package and
+      # the script/config files the stages run from /code are present.
+      # sympy (which sip_to_pv imports) comes with the production base
+      # environment and is not in requirements.txt, so it is installed
+      # into this throwaway container only, before the imports.
+      - name: smoke test -- kept imports and /code files
+        run: |
+          docker run --rm --entrypoint /bin/sh rapid-pipeline:ci -c '
+            set -e
+            /usr/local/bin/python -m pip install --no-cache-dir -q sympy
+            /usr/local/bin/python -c "import rapidpipe, rapidpipe.science.spatial, rapidpipe.science.difference.resample, database.modules.utils.roman_tessellation_db, modules.sip_tpv.sip_tpv.sip_to_pv"
+          '
+          docker run --rm --entrypoint /usr/local/bin/python rapid-pipeline:ci -c '
+          import glob, pathlib, sys
+          missing = [p for p in ["/code/modules/zogy/v21Aug2018/py_zogy.py"] if not pathlib.Path(p).is_file()]
+          if not glob.glob("/code/modules/sfft/sfft_rapid*.py"):
+              missing.append("/code/modules/sfft/sfft_rapid*.py")
+          if not glob.glob("/code/cdf/rapidSex*"):
+              missing.append("/code/cdf/rapidSex*")
+          sys.exit("missing under /code: " + ", ".join(missing) if missing else 0)
+          '

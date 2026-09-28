@@ -6,12 +6,10 @@
 # resulting digest").
 #
 # This recipe replaces the equivalent Containerfile that used to live in
-# `rapid_systems` (containers/rapid-pipeline/Containerfile there), and the
-# legacy per-repo `docker/Dockerfile_ubuntu_runSingleSciencePipeline` and
-# its siblings under `docker/`. Those legacy files stay in this repository
-# untouched on this branch; retiring them is a separate change for
-# whoever owns that follow-up, not this one. There is no
-# `pipeline.entrypoints.job` entrypoint here — the current stage contract
+# `rapid_systems` (containers/rapid-pipeline/Containerfile there), and
+# `dev`'s per-repo `docker/Dockerfile_ubuntu_runSingleSciencePipeline` and
+# its siblings under `docker/`, which are not carried on this branch.
+# There is no `pipeline.entrypoints.job` entrypoint here — the current stage contract
 # (rapid_docs/system/stage-contract.md, "Invocation") is `rapidpipe stage
 # <name> --run ... --unit ... --attempt ... --inputs ... --outputs ...`,
 # and that is the only invocation this image knows.
@@ -52,8 +50,8 @@ LABEL org.opencontainers.image.title="rapid-pipeline" \
 
 # The filtered source tree that build.sh's `git archive` assembles into
 # ./src (a sibling of this Containerfile, inside the build context) --
-# see build.sh's header for the exact exclude list and why each entry is
-# excluded. One layer, no RUN rm/exclude logic and no multi-stage build,
+# see build.sh's header for the explicit include list and why each entry
+# is included. One layer, no RUN rm/exclude logic and no multi-stage build,
 # by design: all filtering happens in build.sh's archive step, not here.
 COPY src/ /code/
 

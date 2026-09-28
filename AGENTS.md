@@ -48,6 +48,25 @@ README.md has the detail.
   when the branch itself carries a merge commit). CI green is the
   merge gate; never merge a red PR.
 
+## Repository layout
+
+| Path | Holds |
+|---|---|
+| `rapidpipe/` | The pipeline package (map below). |
+| `database/` | `migrations/` and `apply-migrations.sh` (the schema), and `modules/utils/roman_tessellation{,_db}.py` (closed-form sky tessellation, imported by `rapidpipe.science`). |
+| `modules/` | Helpers the stages use from `dev`: `sip_tpv/` (imported by `science/difference/resample.py`), `zogy/` and `sfft/` (scripts the difference stage runs from `/code/modules/...`). |
+| `cdf/` | SExtractor/SWarp configuration files the stages read at `/code/cdf`. |
+| `c/` | Vendored C tool source; the image takes the tools from the base image's RPMs instead. |
+| `containers/` | The pipeline image recipe (`rapid-pipeline/build.sh`, `Containerfile`). |
+| `tests/` | `unit/`, `db/`, `cli/` and `fixtures/<stage>/`. |
+| `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list. |
+| `docs/` | The Sphinx source of the readthedocs site. |
+
+`dev`'s `pipeline/`, `alerts/`, `aws/`, `soc/`, `sims/`, `docker/`,
+`modules/{coadd,fake_src,solarsystem,utils}` and most of `database/` and
+`scripts/` are not carried on `rebuild`; `dev` keeps them, and
+`scripts/science-drift.sh` watches the paths the rebuild ported from.
+
 ## The `rapidpipe` package map
 
 The distribution is `rapid-pipeline`; the import package is `rapidpipe`
@@ -61,7 +80,7 @@ modules never import other stage modules, `launch`, or `cli`;
 
 | Subpackage | Holds |
 |---|---|
-| `stages/` | One module per stage (`admit`, `reference`, `difference`, `finalize`, `register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `photometry`, `export`), plus the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (`photometry` only in this build; `export` was ported for real in step 8), 70 unclassified error, 75 retryable transient failure. |
+| `stages/` | One module per stage (`admit`, `reference`, `difference`, `finalize`, `register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export`), plus the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (reserved: no stage in this build returns it), 70 unclassified error, 75 retryable transient failure. |
 | `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `finalize`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
 | `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), and per-kind modules (`l2image`, `refimage`, `diffimage`, `psf`, `alertcontainer`, `catalogexport`). |
 | `db/` | Persistence: `connection.py`, per-table modules (`l2files`, `refimages`, `diffimages`, `sources`, `objects`, `psfs`, `alerts`, `ids`), and the migrations applier (`database/apply-migrations.sh`, not itself under `rapidpipe/`). |
@@ -111,7 +130,7 @@ a `tests/db` test, not only a mocked `tests/unit` one.
 | `tests/unit` | `unit-tests.yml` | No database; `rapidpipe.db`/`rapidpipe.runs` import `psycopg2` but tests mock it. Run locally: `python -m pytest tests/unit -q` in any interpreter that has `pip install -r requirements.txt pytest`; requirements.txt is the one dependency authority (pyproject.toml reads it, the CI workflows install from it). No per-checkout venv is needed or assumed. |
 | `tests/db` | `db-migrations.yml` | Real PostgreSQL 18 + Q3C service container, migrations applied first. Needs a live PostgreSQL; there is none on the laptop, so this suite is CI-only for a laptop-based agent. |
 | `tests/cli` | `cli-behaviour.yml` | Real PostgreSQL 18 + Q3C, Batch and S3 faked (`tests/unit/fakebatch.py`, `fakes3.py`). Black-box: argv in, exit code/stdout/stderr/database state out. CI-only, same reason. |
-| n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version` and `stage admit --help`. Proves the build recipe only, not the production science environment. |
+| n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version`, `stage admit --help`, the imports of the kept helpers outside `rapidpipe/` and the presence of the `/code` script and config files. Proves the build recipe only, not the production science environment. |
 | n/a | `public-safety.yml` | `scripts/check-public-safety.sh`, see above. |
 
 Stage fixtures under `tests/fixtures/<name>/` back both `make

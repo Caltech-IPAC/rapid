@@ -1,5 +1,6 @@
 """
-Generate RST tables for the alert schema from alerts/param_registry.py.
+Generate RST tables for the alert schema from
+rapidpipe/science/alerts/param_registry.py.
 
 Called by conf.py at the start of every Sphinx build; writes
 prod/alert_params.inc (git-ignored), which products.rst pulls in with an
@@ -20,7 +21,7 @@ OUTPUT = DOCS_SOURCE / "prod" / "alert_params.inc"
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from alerts.param_registry import RECORDS, VERSION, Status  # noqa: E402
+from rapidpipe.science.alerts.param_registry import RECORDS, VERSION, Status  # noqa: E402
 
 STATUS_LABEL = {
     Status.IMPLEMENTED: "**Implemented**",
