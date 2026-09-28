@@ -24,6 +24,8 @@ import pytest
 
 from tests.unit.test_dependency_direction import (
     PACKAGE_ROOT,
+    _dynamic_import,
+    _import_aliases,
     _module_parts,
     import_from_base,
 )
@@ -56,9 +58,14 @@ def _chain(node: ast.Attribute) -> tuple[str, list[str]] | None:
 
 def launch_names(source: str, module: list[str], is_package: bool = False
                  ) -> set[tuple[str, str, int]]:
-    """``(module, name, line)`` for every name ``source`` takes from launch."""
+    """``(module, name, line)`` for every name ``source`` takes from launch.
+    A local name accumulates every module it is ever bound to across the
+    file (never overwritten by a later, unrelated rebinding of the same
+    name in another scope), including ``name = importlib.import_module(...)``
+    and its alias forms."""
     tree = ast.parse(source)
-    bound: dict[str, str] = {}     # local name -> the module it is bound to
+    importlib_names, import_module_names = _import_aliases(tree)
+    bound: dict[str, set[str]] = {}     # local name -> every module it is bound to
     taken: set[tuple[str, str, int]] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -66,30 +73,35 @@ def launch_names(source: str, module: list[str], is_package: bool = False
             for alias in node.names:
                 dotted = f"{base}.{alias.name}"
                 if _is_module(dotted):
-                    bound[alias.asname or alias.name] = dotted
+                    bound.setdefault(alias.asname or alias.name, set()).add(dotted)
                 elif _in_launch(base):
                     taken.add((base, alias.name, node.lineno))
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname:
-                    bound[alias.asname] = alias.name
+                    bound.setdefault(alias.asname, set()).add(alias.name)
                 else:
                     top = alias.name.split(".")[0]
-                    bound[top] = top
+                    bound.setdefault(top, set()).add(top)
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+              and isinstance(node.targets[0], ast.Name)
+              and isinstance(node.value, ast.Call)
+              and (dotted := _dynamic_import(node.value, importlib_names,
+                                             import_module_names))):
+            bound.setdefault(node.targets[0].id, set()).add(dotted)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Attribute) or (chain := _chain(node)) is None:
             continue
         name, attrs = chain
-        if name not in bound:
-            continue
-        current = bound[name]
-        for attr in attrs:
-            if _is_module(f"{current}.{attr}"):
-                current = f"{current}.{attr}"
-                continue
-            if _in_launch(current):
-                taken.add((current, attr, node.lineno))
-            break
+        for start in bound.get(name, ()):
+            current = start
+            for attr in attrs:
+                if _is_module(f"{current}.{attr}"):
+                    current = f"{current}.{attr}"
+                    continue
+                if _in_launch(current):
+                    taken.add((current, attr, node.lineno))
+                break
     return taken
 
 
@@ -145,9 +157,18 @@ def _names(source: str) -> set[tuple[str, str]]:
     "import rapidpipe.db\ndef f():\n    return rapidpipe.launch.walk._declaration()\n",
     "from rapidpipe import launch\nlaunch.walk._declaration.__name__\n",
     "import rapidpipe.launch as L\nL.walk._declaration\n",
+    "from rapidpipe.launch import walk as w\ndef f():\n    return w._declaration\n"
+    "def g():\n    import os as w\n    return w.getcwd()\n",
+    "import importlib\nw = importlib.import_module('rapidpipe.launch.walk')\nw._declaration\n",
+    "import importlib as il\nw = il.import_module('rapidpipe.launch.walk')\nw._declaration\n",
+    "from importlib import import_module\n"
+    "w = import_module('rapidpipe.launch.walk')\nw._declaration\n",
+    "from importlib import import_module as im\nw = im('rapidpipe.launch.walk')\nw._declaration\n",
 ], ids=["absolute-from", "relative-from", "relative-module", "relative-package-chain",
         "from-alias", "import-alias", "import-unaliased", "import-other-then-chain",
-        "nested-chain", "package-alias-chain"])
+        "nested-chain", "package-alias-chain", "alias-rebound-in-another-scope",
+        "dynamic-import-module", "dynamic-import-module-aliased-importlib",
+        "dynamic-import-module-bare-name", "dynamic-import-module-bare-name-aliased"])
 def test_the_scan_sees_each_import_form(source):
     assert ("rapidpipe.launch.walk", "_declaration") in _names(source)
 

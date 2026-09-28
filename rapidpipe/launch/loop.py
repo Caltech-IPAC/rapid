@@ -1590,8 +1590,8 @@ def run_loop(conn, spec: LoopSpec, *, dates: Sequence[_dt.date] | None = None,
     if not try_lock(conn, spec.schedule):
         _out(f"another loop holds schedule {spec.schedule}")
         return EXIT_TIMEOUT
-    storage = products_storage.Storage()   # one per invocation, discovery and every date
     try:
+        storage = products_storage.Storage()   # one per invocation, discovery and every date
         if stream:
             return _run_stream(conn, spec, interval=interval, timeout=timeout,
                                retry_failed=retry_failed, storage=storage)
