@@ -4,15 +4,13 @@ RAPID Operations Database
 Introduction
 ************************************
 
-The RAPID pipeline utilizes a PostgreSQL database.  The Q3C library
-has been installed as a plug-in for fast queries on sky position.
-
-.. note::
-    The database design described below is evolving and subject to change.
+The RAPID pipeline uses a PostgreSQL database with the Q3C library
+installed as a plug-in for fast sky-position queries.
 
 .. note::
    This page describes the database design as built on the ``dev``
-   branch. On the ``rebuild`` branch, the schema is versioned SQL under
+   branch and is evolving and subject to change. On the ``rebuild``
+   branch, the schema is versioned SQL under
    ``database/migrations/`` in the RAPID git repository, applied in
    filename order by ``database/apply-migrations.sh``; see
    ``database/README.md`` for the rules and how to run the applier
@@ -22,51 +20,54 @@ has been installed as a plug-in for fast queries on sky position.
 Schema
 ************************************
 
-A diagram of the database-table schema is given as follows:
+The database-table schema is shown below:
 
 .. image:: dbschema.png
 
 
-There are multiple provisions for indexing on sky position:
+Sky positions are indexed in several ways:
 
 * Q3C indexing
-* The field column in various tables stores the Roman tessellation index for the sky tile associated with sky position.
-  For the RAPID project, the Roman-tessellation parameter setting NSIDE=512 will be used,
-  which results in tile sizes somewhat smaller than that of a Roman SCA image,
-  and a total of 6,291,458 tiles covering the entire sky.
-* Healpix level-6 index (hp6), with an approximate resolution of 0.92 degrees (almost the width of the Roman WFI or 6 SCAs plus gaps).
-  There are 49,152 level-6 indices.
-* Healpix level-9 index (hp9), with an approximate resolution of 0.11 degrees (almost the width of a Roman SCA).
-  There are 3,145,728 level-9 indices.
+* The field column in various tables stores the Roman tessellation index
+  of the sky tile containing the position. RAPID will use the
+  Roman-tessellation parameter NSIDE=512, giving 6,291,458 tiles across
+  the sky, each somewhat smaller than a Roman SCA image.
+* Healpix level-6 index (hp6): 49,152 indices with an approximate
+  resolution of 0.92 degrees, almost the width of the Roman WFI
+  (6 SCAs plus gaps).
+* Healpix level-9 index (hp9): 3,145,728 indices with an approximate
+  resolution of 0.11 degrees, almost the width of a Roman SCA.
 
 
-The L2Files database table has the ``overlapfields`` int[] column for a storing list of field numbers that a given
-Roman SCA image, with its unique orientation on the sky, for fields that it overlaps.  The algorithm that computes
-the overlapping fields omits fields with less than 25 pixels of overlap.
+The L2Files ``overlapfields`` int[] column lists the field numbers
+overlapped by a Roman SCA image at its particular sky orientation.
+The overlap algorithm omits fields with less than 25 pixels of overlap.
 
 
 Record Versioning
 ************************************
 
-L2 files, difference images, and reference images are versioned in their
-respective database tables (L2Files, DiffImages, and RefImages), given by the version column.  The version
-is also embedded in the filesystem paths of the corresponding data files.
-The best version is given by vbest, a smallint table
-column that stores 0 for not best, 1 for best that is usually the
-latest version, or 2 if the version is locked.  It is a matter of
-policy whether old versions will be kept in the filesystem and/or
-database (these could be removed at will).
+L2 files, difference images, and reference images carry a version in
+their respective tables (L2Files, DiffImages, and RefImages), in the
+version column and in the corresponding data files' filesystem paths.
+The smallint column vbest identifies the best version:
+
+* 0: not best
+* 1: best, usually the latest version
+* 2: locked version
+
+Policy determines whether old versions remain in the filesystem and/or
+database; they can be removed at will.
 
 
 Sky-Position Queries Using Q3C Library Functions
-************************************
+**********************************************
 
-The L2FileMeta and DiffImages database tables store the image centers
-(ra0, dec0) and their four corners (rai, deci, i=1,...,4).
-Database queries involving Q3C functions like the following can find all images that
-overlap a given image and acquired before the image of interest,
-such as the one with rid = 152336 (rid = L2File primary key), where the (ra, dec) values
-below are for that image's center and four corners:
+L2FileMeta and DiffImages store image centers (ra0, dec0) and four corners
+(rai, deci, i=1,...,4). Q3C queries can find all images that overlap a
+given image and were acquired before it. This example uses rid = 152336
+(rid = L2File primary key); the (ra, dec) values are that image's center
+and four corners:
 
 .. code-block::
 
@@ -85,7 +86,7 @@ below are for that image's center and four corners:
     order by dist;
 
 
-Once the relevant rids are found, the filenames can be looked up as follows:
+Use the relevant rids to look up filenames:
 
 .. code-block::
 
@@ -98,7 +99,7 @@ Once the relevant rids are found, the filenames can be looked up as follows:
 Reference-Image QA
 ************************************
 
-The RefImMeta database table stores various QA measures for reference images.
+RefImMeta stores reference-image QA measures:
 
 +--------------------+-----------------------------------------------------------------------------------+
 | Database column    | Definition                                                                        |
@@ -142,19 +143,18 @@ The RefImMeta database table stores various QA measures for reference images.
 | nsexcatsources     | Number of sources in RefImage SourceExtractor catalog                             |
 +--------------------+-----------------------------------------------------------------------------------+
 
-The quality-assurance metric ``cov5percent``, given by FITS keyword ``COV5PERC``,
-is an absolute quantifier for the aggregate areal-depth coverage of a reference image at a
-reference depth of 5, corresponding to a coadd depth of at least 5 input images.
-It is computed from the reference-image coverage map.
-It is defined as a percentage of the sum of the limited coverage of all pixels in an image,
-where the limited coverage is all coverage and any coverage greater than 5 that is reset to 5
-for scoring purposes, relative to 5 times the total number of pixels in the image.
+The quality-assurance metric ``cov5percent`` (FITS keyword ``COV5PERC``)
+is an absolute measure of aggregate areal-depth coverage at a reference
+depth of 5, corresponding to a coadd depth of at least 5 input images.
+It is computed from the reference-image coverage map: cap each pixel's
+coverage at 5, sum the capped values, and express the result as a
+percentage of 5 times the total number of image pixels.
 
 
 Difference-Image QA
 ************************************
 
-The DiffImMeta database table stores various QA measures for difference images.
+DiffImMeta stores difference-image QA measures:
 
 +--------------------+-------------------------------------------------------------------------------------------+
 | Database column    | Definition                                                                                |
@@ -179,102 +179,105 @@ The DiffImMeta database table stores various QA measures for difference images.
 Source Matching
 ************************************
 
-Four basic PostgreSQL database tables are used for source cross-matching PSF-fit catalogs
-made by the Python photutils package from the SFFT difference images and curating
-source-extracted lightcurves (until a final decision on which image-differencing and
-source-extraction methods are best):
+Four PostgreSQL tables support cross-matching sources from PSF-fit
+catalogs made by the Python photutils package from SFFT difference
+images, and curating source-extracted lightcurves. These methods are used
+until a final decision on the best image-differencing and source-extraction
+methods:
 
 * Sources (extracted/selected from catalogs)
 * AstroObjects (astronomical objects for which time-dependent sources form light curves)
 * Merges (associations between Sources and AstroObjects via source cross-matching)
 * AstroObjectsMeta (statistics on astronomical-object lightcurves added after source matching)
 
-A diagram of the source-matching database-table schema is given as follows:
+The source-matching schema is shown below:
 
 .. image:: source_matching.png
 
-As indicated in the diagram, there will be several Sources tables
-named differently, according to the observing-date and SCA parameters.
-Same for Merges, AstroObjects, and AstroObjectsMeta tables, according to field number.
-This is to partition the data into manageable chunks.
-The partitioning schemes for these tables are discussed below in more detail.
+Partitioning
+============
 
-The parent or prototype tables have the generic names: Sources, Merges, AstroObjects, and AstroObjectsMeta.
-No actual records are stored in prototype tables.
+The parent or prototype tables, Sources, Merges, AstroObjects, and
+AstroObjectsMeta, contain no actual records. Records reside in child
+tables, partitioned into manageable chunks:
 
-Database-table inheritance is or can be used to tie child tables, which store the actual records,
-to the parent table.
-At this time, only the Sources tables utilize inheritance.  This is because the source ID
-in the Merges table can be most easily associated with a record in the correct child-table name
-by querying the Sources parent table.
+* Sources child tables are created and named by observation date and SCA
+  (time and chip number). Each can contain different fields, filters,
+  and exposures. This balances parallel processing against table
+  proliferation. Most sources to be matched are expected to be spurious;
+  the scheme will need reassessment when source counts are better estimated.
+* Merges, AstroObjects, and AstroObjectsMeta tables are created for each
+  Roman-tessellation sky tile or field and named by field number. Objects
+  and their source associations are therefore partitioned by sky position.
 
-A Sources child table is created for each observation date and SCA.
-Thus the partitioning scheme for sources is by time and chip number.
-This design strikes a balance between partitioning for parallel processing
-and non-proliferation of Sources tables.  It is anticipated that most of
-sources to be matched are spurious, and so this partitioning scheme will
-have to be reassessed after the actual number of sources involved can be
-better estimated.
-PhotUtils-catalog source extractions are loaded into the Sources tables via
-parallel processes in observation-date-time order.
-This includes all sources, regardless of their bit-wise ``flags`` attribute.
+Inheritance can tie child tables to their parents; currently only
+Sources uses it. Querying the Sources parent is the easiest way to
+associate a source ID in Merges with a record in the correct child table.
 
-AstroObjects and AstroObjectsMeta database tables are created for each Roman-tessellation sky tile or field.
-Merges tables are also created for each Roman-tessellation sky tile or field.
-Thus the partitioning scheme for astronomical objects and associated cross-matching with
-sources (via Merges tables) are by sky position.
+Each AstroObjects_<field> record has a unique index, ``aid``, computed
+deterministically rather than through a database sequence. The method
+scales (ra, dec) to 1/3300-arcsecond precision and concatenates the scaled
+coordinates. The result fits in an ``int64`` data type.
 
-A unique index, called ``aid``, for each AstroObjects_<field> database record is computed,
-not via a database sequence, but by a deterministic method that scales (ra, dec) to have
-1/3300-arcsecond precision and then concatenates these scaled sky coordinates together.
-This index fits within an ``int64`` data type.
+Source Loading and Attributes
+=============================
 
-Sources and AstroObjects database tables are cross-matched for the appropriate partitions,
-in observing-time order, using the join function from the Q3C-library PostgreSQL extension,
-and records in the associated Merges tables are then populated.
-Only sources with ``flags = 0`` are considered.
-A given Sources child table can contain records for different fields, filters, and exposures.
-The cross-matching is done for all sources in one observation at a time, for all SCAs, in ascending time order.
+PhotUtils-catalog source extractions are loaded into Sources in parallel,
+in observation-date-time order, regardless of their bit-wise ``flags``
+attribute.
 
-.. note::
-   Sources that are NOT matched become new records in the AstroObjects tables.
+RAPID makes PSF-fit catalogs for both positive difference images
+("science image minus reference image") and negative difference images
+("reference image minus science image"). The Sources boolean column
+``isdiffpos`` records which extraction type produced each source.
 
-Source matching is done in parallel by field.  Thus multiple cores
-on the database-server machine will be utilized, and scaling up the architecture is possible
-by moving the database server to a machine with more cores and memory (as can be afforded).
-Cross-matching the sources results in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables.
-The source cross-matching extends across field boundaries for sources near field edges.
+The Sources float column ``rb`` stores real-bogus scores from a
+Machine-Learning algorithm optimized for Roman WFI data. A score is a
+fractional number in [0.0, 1.0] corresponding to the likelihood that the
+source is real rather than bogus.
 
-The RAPID pipeline makes PSF-fit catalogs for both positive difference images (i,e, "science image
-minus reference image") and negative difference image (i,e, "reference image minus science image").
-The Sources database table has the boolean ``isdiffpos`` column to indicate for a given source
-from which type of source extraction it originated.
+Cross-Matching
+==============
 
-For the 7/22/2026 test with SOC sims, ~250 million sources were loaded into
-Sources_<yyyymmdd>_<sca> child database tables in 1.3 hours with 8 parallel processes
-(regardless of ``flags`` value).
-Source cross-matching took 35 minutes with 8 parallel processes
-for ~198 million sources (with ``flags = 0``).  The test covered 360 different fields.
-A match radius of 0.055 arcsec or half a Roman WFI pixel was used.
-There were ~90 million AstroObjects records and 211,394,526 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 33,223 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.0157% in terms of number of merges.
+The Q3C-library PostgreSQL extension's join function cross-matches Sources
+and AstroObjects in the appropriate partitions. Matching considers only
+sources with ``flags = 0`` and proceeds one observation at a time, across
+all SCAs, in ascending observing-time order. Matches populate the
+associated Merges tables; unmatched sources become new AstroObjects
+records. The resulting records are loaded into Merges_<field> and
+AstroObjects_<fields> tables.
 
-The lightcurve statistics are stored in the AstroObjectsMeta_<fields> database tables, and are inserted after the
-cross-matching.  This is done as a separate process, after the source cross-matching.
-The script that computes the lightcurve statistics drops all
-AstroObjectsMeta_<fields> database tables and then recreates them, before the statistical computations.
-The AstroObjectsMeta_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
-For the 7/22/2026 test with SOC sims, it took 1.6 hours with 8 parallel processes to compute
-statistics for ~90 million AstroObjects.
+Matching runs in parallel by field, using multiple database-server cores,
+and extends across field boundaries for sources near field edges. The
+architecture can scale by moving the database server to a machine with
+more cores and memory, as affordable.
 
-Because reprocessing generates new product versions (usually latest is best), there are
-separate processes that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
-and then explicitly clusters, vacuums, and analyzes these database tables.
+Lightcurve Statistics and Maintenance
+=====================================
 
-The Sources database table has the ``rb`` float column for storing real-bogus scores,
-computed from a Machine-Learning algorithm that is optimized for Roman WFI data,
-which is a fractional number in the [0.0, 1.0] range that corresponds to the likelihood
-that a source is real (as opposed to bogus).
+A separate process computes lightcurve statistics after cross-matching
+and stores them in AstroObjectsMeta_<fields>. Its script drops and
+recreates all AstroObjectsMeta_<fields> tables before computing and
+inserting statistics, then explicitly vacuums and analyzes them at the end.
+
+Reprocessing generates new product versions, usually with the latest
+designated best. Separate processes remove not-best lightcurve data
+points from Sources and Merges_<field>, then explicitly cluster, vacuum,
+and analyze those tables.
+
+SOC-Sim Test Results
+====================
+
+The 7/22/2026 test with SOC sims covered 360 different fields, using a
+match radius of 0.055 arcsec, or half a Roman WFI pixel:
+
+* ~250 million sources, regardless of ``flags`` value, were loaded into
+  Sources_<yyyymmdd>_<sca> child tables in 1.3 hours with 8 parallel processes.
+* ~198 million sources with ``flags = 0`` were cross-matched in
+  35 minutes with 8 parallel processes.
+* ~90 million AstroObjects records and 211,394,526 Merges records were
+  loaded into PostgreSQL. Of those merges (a.k.a. lightcurve data points),
+  33,223 came from cross-matching across field boundaries, where the match
+  radius can extend across a boundary, increasing the merge count by 0.0157%.
+* Computing statistics for ~90 million AstroObjects took 1.6 hours with
+  8 parallel processes.

@@ -4,64 +4,57 @@ RAPID Pipeline Development
 Increasing AWS Cloud Limits
 ************************************
 
-Submit a ticket to the IPAC Support Group (ISG) requesting an AWS increase
-in the relevant limit for the RAPID project
-(this involves Wendy submitting a ticket to AWS).
+Submit a ticket to the IPAC Support Group (ISG) requesting an increase in
+the relevant AWS limit for RAPID. Wendy then submits a ticket to AWS.
 
 `ISG Request URL <https://jira.ipac.caltech.edu/servicedesk/customer/portal/4/>`_
 
-Login with your IPAC credentials (not sure whether VPN must be running).
+Log in with your IPAC credentials; whether VPN must be running is uncertain.
 
 
 Development Guidelines
 ************************************
 
-#. Set up your text editor to clip trailing spaces when saving source-code file
-   (e.g., BBEdit has a setting that does this).
+#. Configure your editor to remove trailing spaces on save and use spaces,
+   never tabs, for Python indentation. BBEdit has settings for both.
 
-#. Ensure no tab characters are used for indentation in your Python code; use spaces always
-   (e.g., BBEdit has a setting that does this).
+#. Keep revision diffs clear and unambiguous. Put extensive stylistic
+   changes in a separate revision so they do not hide behavior changes.
 
-#. Think strategically when pushing a source-code file to the git repo whether a simple git diff between revisions
-   will allow a clear and unambiguous indication of the code changes.  For example, numerous stylistic changes can
-   hide substantive changes that affect code behavior and should be deferred to a separate revision.
+#. Before committing changes to someone else's code, establish the expected
+   level of trust and tell the author what to expect.
 
-#. Before checking into the git repo modifications to someone else's source code,
-   let that person know what to expect (and assure there is the expected level of trust beforehand).
+#. Write descriptive, self-explanatory commit messages so reports do not
+   require rereading the source code.
 
-#. Your git commits should have self-explanatory descriptive messages (saves time not having to review source code later for reports).
+#. Test changes before putting code into operations. Development is not
+   complete until the changes have been tested.
 
-#. Always test code changes before the code is put into operations; the development is not done until
-   the code changes have been tested.
+#. Include enough source-code comments.
 
-#. Include a sufficiency of comments in your source code!
+#. Run ``git pull`` often and before every ``git push`` to keep your RAPID
+   git repo up to date.
 
-#. Remember to ``git pull`` before any ``git push`` and often, in order to make sure your RAPID git repo is up to date.
+Exitcodes follow the Spitzer convention:
 
-#. For exitcodes, we follow the Spitzer convention:
-
-==============   ================
+==============   =================================
 Exitcode range   Definition
-==============   ================
+==============   =================================
 [0,31]           Normal termination, with messages
 [32,61]          Warnings
 [64+]            Error
-==============   ================
+==============   =================================
 
 
 GitHub Merging, Branching, and Pull Requests
 ********************************************
 
-This section describes the recommended git workflow for contributing to the
-RAPID code base.
-
 .. note::
 
-   Pending approval of the team, we will be migrating to a ``dev`` branch
-   workflow and **disabling direct pushes to** ``main``. Once this is in
-   effect, all routine development will target ``dev``, and changes will
-   reach ``main`` only through pull requests. The instructions
-   below assume this workflow.
+   Migration to a ``dev`` branch workflow and **disabling direct pushes to**
+   ``main`` are pending team approval. Once in effect, routine development
+   will target ``dev``, and changes will reach ``main`` only through pull
+   requests. The recommended contribution workflow below assumes this model.
 
 
 GitHub Branches
@@ -69,15 +62,14 @@ GitHub Branches
 
 The RAPID repository follows a two-branch model:
 
-* ``main`` — the stable, production branch. Direct pushes will be disabled;
+* ``main``: the stable, production branch. Direct pushes will be disabled;
   it is updated only via approved pull requests.
-* ``dev`` — the active development branch. Day-to-day work lands here.
+* ``dev``: the active development branch. Day-to-day work lands here.
 
-The general rule of thumb: **small changes can go straight to** ``dev``, while
-**large changes or new features get their own branch** off ``dev`` and can be
-merged back via a pull request. The diagram below illustrates the full flow:
-a feature branch off ``dev``, two commits of work, a pull request merging the
-feature back into ``dev``, and ``dev`` later merging into ``main``.
+**Small changes can go straight to** ``dev``; **large changes or new features
+get their own branch** off ``dev`` and can merge back through a pull request.
+The diagram shows a feature branch off ``dev``, two commits, a pull request
+back into ``dev``, and a later merge of ``dev`` into ``main``.
 
 .. figure:: code_astro_feature_graph.png
    :width: 600
@@ -98,8 +90,8 @@ pushed directly to ``dev``. The basic cycle is **pull, commit, push**:
    git commit -m "Describe your change"
    git push
 
-If you have unsaved changes and ``git pull`` reports a
-conflict, stash your changes, pull, then re-apply your stash:
+If ``git pull`` reports a conflict with unsaved changes, stash them, pull,
+then re-apply the stash:
 
 .. code-block:: bash
 
@@ -107,18 +99,18 @@ conflict, stash your changes, pull, then re-apply your stash:
    git pull
    git stash pop
 
-After ``git stash pop``, resolve any conflicts that git reports
-(see merge conflicts, below), then commit and push as above.
+After ``git stash pop``, resolve any conflicts (see Resolving Merge
+Conflicts below), then commit and push as above.
 
-If you have a local commit that conflicts with a pulled commit, causing
-``git pull`` to fail:
+If ``git pull`` fails because a local commit conflicts with a pulled commit:
 
 .. code-block:: bash
 
    git pull --rebase
 
-This will move HEAD to the latest commit from the remote branch and replay
-your changes on top. Resolve the merge conflict (see below), and run:
+This moves HEAD to the remote branch's latest commit and replays your
+changes on top. Resolve the conflict (see Resolving Merge Conflicts below),
+then run:
 
 .. code-block:: bash
 
@@ -128,8 +120,8 @@ your changes on top. Resolve the merge conflict (see below), and run:
 Large Changes / Feature Additions
 ============================================
 
-For larger changes or new features, create a dedicated branch off ``dev``
-so that work-in-progress does not destabilize the shared branch.
+Use a dedicated branch off ``dev`` for larger changes or new features to
+keep work-in-progress from destabilizing the shared branch.
 
 
 Create a branch from ``dev``
@@ -143,26 +135,26 @@ If you are already on ``dev``, create and switch to a new branch:
    # or
    git checkout -b my_branch dev # if you are on another branch
 
-Then push the branch to GitHub and set it to track the remote, so that
-future ``git push`` / ``git pull`` commands work without extra arguments:
+Push to GitHub and enable remote tracking so future ``git push`` /
+``git pull`` commands need no extra arguments:
 
 .. code-block:: bash
 
    git push -u origin my_branch
 
-After this, make commits as normal to your new branch.
+Commit to the new branch as usual.
 
 
 Open a Pull Request back to ``dev``
 --------------------------------------------
 
-When you are done with your feature branch or have completed major changes,
-open a pull request on GitHub to merge it into ``dev``:
+When the feature or major changes are complete, open a GitHub pull request
+to merge the branch into ``dev``:
 
 1. Push your latest commits (``git push``).
-2. On GitHub, navigate to the repository. A banner usually appears offering
-   to **Compare & pull request** for your recently pushed branch — click it.
-   Otherwise, go to the **Pull requests** tab and click **New pull request**.
+2. In the GitHub repository, click the **Compare & pull request** banner
+   that usually appears for a recently pushed branch. Otherwise, open
+   **Pull requests** and click **New pull request**.
 
    .. image:: pull_request_open.png
       :width: 600
@@ -190,10 +182,9 @@ open a pull request on GitHub to merge it into ``dev``:
 Close the branch after merging (optional)
 --------------------------------------------
 
-Once the pull request is merged, if you are finished editing a particular
-feature, delete the branch to keep the repository tidy. On GitHub, click the
-**Delete branch** button shown on the merged pull request. To delete the
-branch locally and on the remote from the command line:
+After merging, delete the branch if work on the feature is finished.
+On GitHub, click **Delete branch** on the merged pull request. To delete
+it locally and remotely from the command line:
 
 .. code-block:: bash
 
@@ -230,15 +221,15 @@ Resolve any conflicts git reports, then commit the merge and push:
 Resolving Merge Conflicts
 ============================================
 
-A conflict happens when two changes touch the same lines of a file and git
-cannot decide which to keep. This can come up after any of the operations
-above. Git will report which files conflicted, for example::
+A conflict occurs when changes touch the same lines and git cannot choose
+which to keep. Any operation above can cause one. Git reports the affected
+files, for example::
 
    Auto-merging pipeline.py
    CONFLICT (content): Merge conflict in pipeline.py
    Automatic merge failed; fix conflicts and then commit the result.
 
-You can always list the files that still need attention:
+List files that still need attention:
 
 .. code-block:: bash
 
@@ -250,8 +241,7 @@ Conflicted files are shown under **"Unmerged paths"**.
 Editing the conflict markers
 --------------------------------------------
 
-Open each conflicted file. Git inserts markers around the disagreeing
-sections:
+Open each conflicted file and find git's conflict markers:
 
 .. code-block:: text
 
@@ -261,14 +251,14 @@ sections:
    the incoming version of the lines
    >>>>>>> origin/dev
 
-The block above ``=======`` is your current branch's version (``HEAD``);
-the block below is the incoming version (here, ``origin/dev``). Edit the
-file so it contains exactly what you want the final result to be, and
-**delete all three marker lines** (``<<<<<<<``, ``=======``, ``>>>>>>>``).
+Above ``=======`` is your current branch's version (``HEAD``); below it is
+the incoming version (here, ``origin/dev``). Edit the file to the desired
+result and **delete all three marker lines** (``<<<<<<<``, ``=======``,
+``>>>>>>>``).
 
 .. note::
 
-   VS Code makes this easier: it highlights each conflict and offers
+   VS Code highlights conflicts and offers
    **Accept Current Change**, **Accept Incoming Change**, **Accept Both
    Changes**, or **Compare Changes** buttons directly above the conflict.
    Click the one you want, or edit manually, then save the file.
@@ -277,8 +267,7 @@ file so it contains exactly what you want the final result to be, and
 Completing the merge
 --------------------------------------------
 
-Once a file looks correct, stage it to mark the conflict resolved, then
-repeat for every conflicted file:
+Stage each corrected file to mark its conflict resolved:
 
 .. code-block:: bash
 
@@ -305,24 +294,25 @@ Then push as usual.
 Bailing out
 --------------------------------------------
 
-If things get tangled and you want to start over, you can abort and return
-to the state before the operation began:
+To start over, abort and return to the state before the operation:
 
 .. code-block:: bash
 
    git merge --abort      # during a conflicted merge
    git rebase --abort     # during a conflicted rebase
 
-If you applied a stash with ``git stash pop`` and want to undo it, note that
-``pop`` removes the stash once applied; use ``git stash apply`` instead when
-you want to keep the stash entry around as a safety net while resolving.
+If you want to undo a stash applied with ``git stash pop``, remember that
+``pop`` removes it once applied. Use ``git stash apply`` instead to keep the
+stash as a safety net while resolving conflicts.
 
 
 Log into EC2 Instance Machine
 ********************************************
 
-This assumes you have already set up an EC2 instance under the AWS console, and that the EC2 instance is stopped.
-Also, a key pair has been assigned to the EC2 instance, and the private key is installed in a ``.pem`` file on your laptop.
+Start with a stopped EC2 instance already set up in the AWS console, an
+assigned key pair, and its private key in a ``.pem`` file on your laptop.
+The instance needs enough boot-disk space for ``docker build``; at least
+32 GB is recommended.
 
 1. Ensure the following environment variables are set on your laptop:
 
@@ -335,9 +325,7 @@ Also, a key pair has been assigned to the EC2 instance, and the private key is i
    AWS_EC2_VOLUME_ID
    AWS_EC2_VOLUME_DEVICE
 
-The two latter ones are only needed if your EC2 instance is to have an EBS volume attached.
-
-Your EC2 instance should have a large enough book-disk volume as ``docker build`` requires a lot of space; at least 32 GB is recommended.
+The last two variables are needed only when attaching an EBS volume.
 
 2. Ensure python3 is installed on your laptop and restart your EC2 instance:
 
@@ -345,7 +333,7 @@ Your EC2 instance should have a large enough book-disk volume as ``docker build`
 
    python /source-code/location/rapid/aws/start_ec2_instance.py
 
-Here is how to stop your EC2 instance later:
+To stop the instance later:
 
 .. code-block::
 
@@ -361,10 +349,8 @@ Here is how to stop your EC2 instance later:
 Build Docker Image for RAPID Science Pipeline
 *********************************************
 
-Check your latest source-code changes into the RAPID git repo.
-
-Under root on your EC2 instance, check out the latest source code from the RAPID git repo,
-and then build the Docker image for the RAPID pipeline:
+Check your latest source-code changes into the RAPID git repo, then fetch
+the latest code as root on your EC2 instance:
 
 .. code-block::
 
@@ -372,31 +358,31 @@ and then build the Docker image for the RAPID pipeline:
    cd /home/ubuntu/rapid
    git pull
 
-The following command removes ALL Docker images from your EC2 instance,
-but has the advantage of removing all Docker debris from the boot-disk volume,
-thus reclaiming disk space:
-
-.. code-block::
-
-   docker system prune -a -f
-
 .. warning::
 
-   The above ``docker system prune`` command and the ``docker build`` command below will not work properly or as intended,
-   meaning the expected disk space will not be reclaimed,
-   unless all containers running the Docker image ``rapid_science_pipeline:1.0`` are stopped!
+   Stop all containers running ``rapid_science_pipeline:1.0`` before the
+   ``docker system prune`` and ``docker build`` commands below. Otherwise,
+   the commands will not work as intended and will not reclaim the expected
+   disk space.
 
-Here is how to get a listing of your Docker containers that are running:
+List running Docker containers:
 
 .. code-block::
 
    docker ps
 
-Here is how to get a listing of your Docker images:
+List Docker images:
 
 .. code-block::
 
    docker image ls
+
+Remove ALL Docker images and debris from the instance's boot-disk volume
+to reclaim space:
+
+.. code-block::
+
+   docker system prune -a -f
 
 Rebuild the Docker image from scratch:
 
@@ -406,36 +392,37 @@ Rebuild the Docker image from scratch:
    docker build --build-arg RAPID_BRANCH=<current branch> --file /home/ubuntu/rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline --tag rapid_science_pipeline:1.0 .
 
 
-Push Docker image to the Amazon public elastic container registry (ECR):
+Push to Amazon public elastic container registry (ECR)
+======================================================
 
-Note that the RAPID-pipeline image has already been registered at
+The RAPID-pipeline image is already registered at:
 
 .. code-block::
 
    public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline
 
-and so this step involves simply updating the Docker image in the registry.
+This step updates that registry image.
 
-Authenticate your Docker client to the registry as follows:
+Authenticate your Docker client:
 
 .. code-block::
 
    aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/<ecr-public-alias>
 
-Now get the Docker image ID as follows:
+Get the Docker image ID:
 
 .. code-block::
 
    docker image ls
 
-The response will be something like:
+Example response:
 
 .. code-block::
 
    REPOSITORY               TAG       IMAGE ID       CREATED         SIZE
    rapid_science_pipeline   1.0       a76b1373bfe2   6 minutes ago   2.36GB
 
-Tag the Docker image with "latest" and push to ECR with these two commands:
+Tag the image with "latest" and push to ECR with these two commands:
 
 .. code-block::
 
@@ -446,12 +433,13 @@ Tag the Docker image with "latest" and push to ECR with these two commands:
 Running an Instance of the RAPID Science Pipeline under AWS Batch
 *****************************************************************
 
-The following shows commands to launch an instance of the RAPID science pipeline as AWS Batch job.
-The to-be-run-under-AWS-Batch Docker container rapid_science_pipeline:1.0 has /code built in,
-so there is no need to mount an external volume for /code.
-The container name is arbitrary, and is set to "russ-test-jobsubmit" in the example below.
-Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
-(and do not put ``bash`` at the end of the command).
+Launch the RAPID science pipeline as an AWS Batch job with the commands
+below. The Docker container rapid_science_pipeline:1.0 includes /code, so
+no external volume is needed for /code. Its name is arbitrary; this example
+uses "russ-test-jobsubmit". Override the image's ENTRYPOINT instruction
+with ``--entrypoint bash``; do not put ``bash`` at the end of the command.
+
+Python 3.11 is required and installed in the image at /usr/bin/python3.11.
 
 .. code-block::
 
@@ -490,9 +478,10 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
 
    exit
 
-Python 3.11 is required and it is installed inside the Docker image (/usr/bin/python3.11).
+Examine outputs
+============================================
 
-After the AWS Batch job finishes, there are files written to S3 buckets that can be examined:
+After the AWS Batch job finishes, examine the files written to S3 buckets:
 
 .. code-block::
 
@@ -560,28 +549,29 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
    2025-03-14 09:19:57        730 20250314/jid1/refiminputs/refimage_unc_inputs.txt
    2025-03-14 11:28:32   66890880 20250314/jid1/scorrimage_masked.fits
 
-The general scheme for how the output files are organized in the S3 buckets is according to
-processing date (Pacific Time) and the associated job ID.  The same job ID can exist under
-different processing dates if reprocessing occurred on different dates (reprocessing on the same date will overwrite products).
+S3 output files are organized by processing date (Pacific Time) and job ID.
+Reprocessing on different dates can place the same job ID under multiple
+dates; reprocessing on the same date overwrites products.
 
-The files under ``refiminputs`` are only written if the ``upload_inputs`` flag in the software is set to True.  These are for
-off-line analysis and rerunning awaicgen for experimental and tuning purposes.
+Files under ``refiminputs`` are written only when the software's
+``upload_inputs`` flag is True. They support off-line analysis and rerunning
+awaicgen for experiments and tuning.
 
-The reference-image products from ``awaicgen``
-are initially given generic filenames in these buckets, and, later, will be renamed to filenames like:
+Reference-image products from ``awaicgen`` initially have generic filenames
+in these buckets. After registration in the RAPID pipeline operations
+database, they are renamed to filenames such as:
 
 .. code-block::
 
    rapid_field1234567_fid7_ppid15_v2_rfid12394758_refimage.fits
    rapid_field1234567_fid7_ppid15_v2_rfid12394758_covmap.fits
 
-The above filenames are created after these products are registered in the RAPID pipeline operations database.
-The products are then copied to
-a more permanent location (and ultimately archived in MAST).  The ``ppid`` gives the pipeline number
-that generated the reference image, which could be either the difference-image pipeline (``ppid=15``)
-or a dedicated reference-image pipeline (``ppid=12``).
+The products are then copied to a more permanent location and ultimately
+archived in MAST. The ``ppid`` identifies the pipeline that generated the
+reference image: either the difference-image pipeline (``ppid=15``) or a
+dedicated reference-image pipeline (``ppid=12``).
 
-Download and examine log file:
+Download and examine the log file:
 
 .. code-block::
 
@@ -589,4 +579,3 @@ Download and examine log file:
    cat rapid_pipeline_job_20250314_jid1_log.txt
 
 Last modified: Tue 2026 Jun 16 8:48 a.m.
-
