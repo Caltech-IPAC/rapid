@@ -63,10 +63,7 @@ import getpass
 import importlib
 import json
 import logging
-import os
 import sys
-import tempfile
-from pathlib import Path
 from typing import Any, Sequence
 
 from rapidpipe import __version__
@@ -81,11 +78,14 @@ from rapidpipe.launch.batch import (
     ReleaseDefinitionRefused,
 )
 from rapidpipe.launch import batch as launch_batch
-from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_id
-from rapidpipe.products.storage import fetch_object, parse_location
+from rapidpipe.launch.walk import RegisterUnitIdError, resolve_register_unit_id
 from rapidpipe.cli import checkctl, loopctl, runctl, stagectl
 from rapidpipe.release import __main__ as release_cli
-from rapidpipe.revision import git_revision
+from rapidpipe.runs.create import (
+    ReleaseNotComplete,
+    create_only_failed_run,
+    create_run_record,
+)
 from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
@@ -123,56 +123,6 @@ def _is_batch_error(exc: BaseException) -> bool:
 #: ``rapidpipe.db.connection`` and affecting other callers -- the same
 #: pattern ``rapidpipe.stages.register`` uses for the same reason.
 connect = _default_connect
-
-
-class RegisterUnitIdError(ValueError):
-    """The register unit id could not be derived from its input manifest."""
-
-
-def _read_manifest_at(location_arg: str) -> Manifest:
-    """Read ``manifest.json`` from a local directory or S3 prefix.
-
-    Same fetch used by a stage's own ``--dry-run`` path
-    (``rapidpipe.stages.contract._read_input_manifest_from``, one object,
-    not the whole prefix): a local location is read directly; an S3
-    location is fetched to a throwaway temp file first, since
-    :meth:`~rapidpipe.products.manifest.Manifest.read` only takes a local
-    path.
-    """
-    location = parse_location(location_arg)
-    if not location.is_s3():
-        manifest_path = Path(location_arg) / "manifest.json"
-    else:
-        with tempfile.TemporaryDirectory(prefix="rapidpipe-register-unit-") as tmp:
-            manifest_path = fetch_object(
-                location, "manifest.json", Path(tmp) / "manifest.json")
-            return _load_manifest(manifest_path)
-    return _load_manifest(manifest_path)
-
-
-def _load_manifest(manifest_path: Path) -> Manifest:
-    try:
-        return Manifest.read(manifest_path)
-    except FileNotFoundError as exc:
-        raise RegisterUnitIdError(f"input manifest not found: {manifest_path}") from exc
-    except (json.JSONDecodeError, ManifestError) as exc:
-        raise RegisterUnitIdError(f"{manifest_path}: invalid manifest: {exc}") from exc
-
-
-def _resolve_register_unit_id(*, unit_id_arg: str | None, inputs_location_arg: str) -> str:
-    """The ``--unit`` value to use for a `register` invocation.
-
-    register's unit id is always derived from the manifest it reads
-    (register_unit_id: "a register unit is identified by what it
-    registers"), never chosen by the caller, so an explicit ``--unit`` for
-    register is refused rather than silently overridden.
-    """
-    if unit_id_arg is not None:
-        raise RegisterUnitIdError(
-            "--unit is not accepted for register: its unit id is always "
-            "derived from the manifest it reads")
-    manifest = _read_manifest_at(inputs_location_arg)
-    return register_unit_id(manifest)
 
 
 #: The five titled sections ``rapidpipe run --help`` groups its
@@ -410,7 +360,7 @@ def _build_parser() -> argparse.ArgumentParser:
     reconcile_parser.add_argument(
         "--older-than", type=float, default=None, dest="older_than", metavar="SECONDS",
         help="With --resolve-jobless: the minimum age of a job-less attempt "
-             f"(default {launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS}).")
+             f"(default {launch_batch.default_jobless_after_seconds()}).")
 
     cancel_parser = run_subparsers.add_parser(
         "cancel", help="Terminate an attempt's Batch job.",
@@ -545,88 +495,6 @@ def _run_selftest_command(args: argparse.Namespace) -> int:
         output_location=args.output_location, python=args.python)
 
 
-def _last_applied_schema_version(cur) -> str | None:
-    """The filename of the most recently applied migration.
-
-    ``database/apply-migrations.sh`` tracks applied migrations in
-    ``schema_migrations(filename, sha256, applied_at)``; filenames sort
-    lexicographically in applied order (``YYYYMMDD-NN-short-name.sql``),
-    so the greatest filename is the last one applied.
-    """
-    cur.execute("SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 1")
-    row = cur.fetchone()
-    return row[0] if row else None
-
-
-class ReleaseNotComplete(Exception):
-    """``run create --release`` (and ``loop run``) named a release that is
-    absent or not ``complete``; the run is not created."""
-
-
-def create_run_record(
-    conn,
-    *,
-    kind: str,
-    owner: str,
-    purpose: str,
-    stages: Sequence[str],
-    release: str | None,
-    lane: str,
-    profile: str,
-    db_target: str | None,
-    max_attempts: int,
-    settings_overlay_ref: str | None = None,
-    input_selection_ref: str | None = None,
-    check_policy_ref: str | None = None,
-    auto_promote: bool = False,
-    seed: str | None = None,
-) -> str:
-    """``run create``'s one code path (``rapidpipe loop run`` uses it too):
-    with ``release``, the run's source revision and image digest are the
-    ``releases`` row's, and a release that is absent or not ``complete``
-    raises :class:`ReleaseNotComplete`; without, the checkout's revision
-    and ``RAPIDPIPE_IMAGE_DIGEST``. Does not commit."""
-    from rapidpipe.runs.repository import create_run
-
-    with conn.cursor() as cur:
-        schema_version = _last_applied_schema_version(cur) or "unknown"
-        release_row = None
-        if release is not None:
-            cur.execute(
-                "SELECT state, source_revision, image_digest FROM releases "
-                "WHERE tag = %s", (release,))
-            release_row = cur.fetchone()
-    if release is not None:
-        if release_row is None or release_row[0] != "complete":
-            state = "absent" if release_row is None else release_row[0]
-            raise ReleaseNotComplete(f"release {release} is {state}, not complete; refusing")
-        _, code_revision, image_digest = release_row
-    else:
-        code_revision = git_revision() or "unknown"
-        image_digest = os.environ.get("RAPIDPIPE_IMAGE_DIGEST")
-
-    return create_run(
-        conn,
-        kind=kind,
-        owner=owner,
-        purpose=purpose,
-        selected_stages=list(stages),
-        code_revision=code_revision,
-        image_digest=image_digest,
-        schema_version=schema_version,
-        settings_overlay_ref=settings_overlay_ref,
-        input_selection_ref=input_selection_ref,
-        lane=lane,
-        resource_profile=profile,
-        database_target=db_target or os.environ.get("PGDATABASE", ""),
-        max_attempts_per_unit=max_attempts,
-        auto_promote=auto_promote,
-        check_policy_ref=check_policy_ref,
-        release=release,
-        seed_run=seed,
-    )
-
-
 def _run_create_command(args: argparse.Namespace) -> int:
     if args.only_failed:
         return _run_create_only_failed_command(args)
@@ -693,67 +561,6 @@ _ONLY_FAILED_COPIED_OPTIONS = (
     ("--input-selection-ref", "input_selection_ref"),
     ("--check-policy", "check_policy"),
 )
-
-
-class OnlyFailedKindMismatch(RunModelError):
-    """``run create --seed <run> --only-failed --kind K`` with K not the seed's kind."""
-
-
-def create_only_failed_run(
-    conn,
-    seed_run: str,
-    *,
-    owner: str | None = None,
-    purpose: str | None = None,
-    kind: str | None = None,
-):
-    """``run create --seed <run> --only-failed``'s one code path (the
-    processing-date loop's ``--retry-failed`` uses it too): a run re-running
-    the seed's non-complete units (runs page, "Rules").
-
-    Configuration is copied from the seed row
-    (:func:`~rapidpipe.runs.repository.failed_rerun_plan`); ``owner`` and
-    ``purpose`` may be given, ``kind`` only if it equals the seed's
-    (:class:`OnlyFailedKindMismatch` otherwise). Creates the run and its
-    seeded units (:func:`~rapidpipe.runs.repository.seed_failed_units`);
-    does not commit. Returns ``(run id, plan, seeded unit ids)``; a refusal
-    is a :class:`RunModelError` (``SeedRefused``, ``RunNotFound``).
-    """
-    from rapidpipe.runs.repository import create_run, failed_rerun_plan, seed_failed_units
-
-    plan = failed_rerun_plan(conn, seed_run)
-    seed = plan.seed
-    if kind is not None and kind != seed["kind"]:
-        raise OnlyFailedKindMismatch(
-            f"--kind {kind} differs from seed run {seed_run}'s kind {seed['kind']}; a "
-            "--only-failed re-run keeps the seed's kind")
-    with conn.cursor() as cur:
-        schema_version = _last_applied_schema_version(cur) or "unknown"
-    purpose = purpose or (
-        f"re-run of failed units of {seed_run}: {seed['purpose']}"
-        if seed["purpose"] else f"re-run of failed units of {seed_run}")
-    run_id = create_run(
-        conn,
-        kind=seed["kind"],
-        owner=owner or seed["owner"],
-        purpose=purpose,
-        selected_stages=plan.stages,
-        code_revision=seed["code_revision"],
-        image_digest=seed["image_digest"],
-        schema_version=schema_version,
-        settings_overlay_ref=seed["settings_overlay_ref"],
-        input_selection_ref=seed["input_selection_ref"],
-        lane=seed["lane"],
-        resource_profile=seed["resource_profile"],
-        database_target=seed["database_target"],
-        max_attempts_per_unit=seed["max_attempts_per_unit"],
-        auto_promote=False,
-        check_policy_ref=seed["check_policy_ref"],
-        release=seed["release"],
-        seed_run=seed_run,
-    )
-    unit_ids = seed_failed_units(conn, seed_run=seed_run, new_run=run_id)
-    return run_id, plan, unit_ids
 
 
 def _run_create_only_failed_command(args: argparse.Namespace) -> int:
@@ -961,7 +768,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
 
     if args.stage == "register":
         try:
-            unit_id = _resolve_register_unit_id(
+            unit_id = resolve_register_unit_id(
                 unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
         except RegisterUnitIdError as exc:
             sys.stderr.write(f"rapidpipe run local: {exc}\n")
@@ -988,7 +795,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
         # carries (local.py's subprocess otherwise inherits it), not only
         # via an explicit --profile this command would refuse outright.
         try:
-            kind = launch_batch._run_kind(conn, args.run_id)
+            kind = launch_batch.run_kind(conn, args.run_id)
         except RunModelError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run local: {exc}\n")
@@ -1075,7 +882,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
     if args.stage == "register":
         if args.inputs_from_stage is None:
             try:
-                unit_id = _resolve_register_unit_id(
+                unit_id = resolve_register_unit_id(
                     unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
             except RegisterUnitIdError as exc:
                 sys.stderr.write(f"rapidpipe run submit: {exc}\n")
@@ -1107,7 +914,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
                 inputs_location = launch_batch.resolve_inputs_from_stage(
                     conn, run_id=args.run_id, unit_id=args.unit_id,
                     upstream_stage=args.inputs_from_stage)
-                unit_id = _resolve_register_unit_id(
+                unit_id = resolve_register_unit_id(
                     unit_id_arg=None, inputs_location_arg=inputs_location)
             elif args.inputs_from_stage is not None:
                 inputs_location = launch_batch.resolve_inputs_from_stage(
@@ -1175,9 +982,7 @@ def _run_reconcile_command(args: argparse.Namespace) -> int:
     if older_than is not None and not resolve_jobless:
         sys.stderr.write("rapidpipe run reconcile: --older-than needs --resolve-jobless\n")
         return int(ExitCode.USAGE)
-    if older_than is None:
-        older_than = launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS
-    if older_than < 0:
+    if older_than is not None and older_than < 0:
         sys.stderr.write("rapidpipe run reconcile: --older-than must be >= 0\n")
         return int(ExitCode.USAGE)
     try:

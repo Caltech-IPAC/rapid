@@ -7,10 +7,10 @@ already does that) and "Storage layout" (``runs/<run-id>/<stage>/<unit-id>/
 contract's "Invocation" form for the subprocess command line.
 
 This module may import ``rapidpipe.products`` and ``rapidpipe.db``, never
-a stage module, ``rapidpipe.launch`` or ``rapidpipe.cli`` (the package's
+a stage module, ``rapidpipe.launch`` or the command-line tool (the package's
 fixed dependency direction; see ``tests/unit/test_dependency_direction.py``).
 It never imports ``rapidpipe.stages.contract`` or any stage's
-``DECLARATION`` -- the caller (``rapidpipe.cli``, which may import
+``DECLARATION`` -- the caller (the command-line tool, which may import
 anything) resolves the stage name to a module and passes down only the
 plain strings this module needs: the stage name and the unit kind.
 """

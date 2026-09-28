@@ -19,7 +19,7 @@ import random
 
 import pytest
 
-from rapidpipe.cli import runctl
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.launch import loop as launch_loop
@@ -176,11 +176,11 @@ def test_discovery_end_to_end_two_dates_duplicate_conflict_and_a_new_batch(
     # Two dates staged: both runs (and their loop_dates/loop_deliveries rows)
     # must exist before the walk fake is first called (frozen membership,
     # batches committed before any is processed). ``stages.install`` above
-    # already wrapped the true ``runctl._reconcile``; wrap that wrapper once
+    # already wrapped the true ``launch_walk._reconcile``; wrap that wrapper once
     # more (not a second ``stages.install`` -- that would double-apply the
     # stage fakes) to record the count at the first call only.
     date_count_at_first_walk = []
-    after_stages = runctl._reconcile
+    after_stages = launch_walk._reconcile
 
     def counting_reconcile(conn, run_id):
         if not date_count_at_first_walk:
@@ -189,7 +189,7 @@ def test_discovery_end_to_end_two_dates_duplicate_conflict_and_a_new_batch(
                 date_count_at_first_walk.append(cur.fetchone()[0])
         return after_stages(conn, run_id)
 
-    monkeypatch.setattr(runctl, "_reconcile", counting_reconcile)
+    monkeypatch.setattr(launch_walk, "_reconcile", counting_reconcile)
 
     locA, _ = _stage(fake_s3, inbox, "2027-11-01", "exp001", data=b"A" * 16)
     locB, _ = _stage(fake_s3, inbox, "2027-11-02", "exp002", data=b"B" * 16)
@@ -274,12 +274,12 @@ def test_discovery_crash_after_batches_committed_resumes_the_same_run(
     class _Crash(RuntimeError):
         pass
 
-    real_walk_unit = runctl.walk_unit
+    real_walk_unit = launch_walk.walk_unit
 
     def crashing_walk(*args, **kwargs):
         raise _Crash("simulated crash: process killed after the batches were committed")
 
-    monkeypatch.setattr(runctl, "walk_unit", crashing_walk)
+    monkeypatch.setattr(launch_walk, "walk_unit", crashing_walk)
     # rapidpipe.cli.main's unclassified-error boundary catches any plain
     # exception escaping a command and exits 70 (ExitCode.STAGE_ERROR) --
     # the in-process stand-in for the process actually being killed; what
@@ -295,7 +295,7 @@ def test_discovery_crash_after_batches_committed_resumes_the_same_run(
     run1, run2 = dates[0][2], dates[1][2]
     before = _counts(db, schedule, tag)
 
-    monkeypatch.setattr(runctl, "walk_unit", real_walk_unit)  # restore, not undo()
+    monkeypatch.setattr(launch_walk, "walk_unit", real_walk_unit)  # restore, not undo()
     _FakeStages(db, fake_batch, fake_s3, execution_record={
         "image_digest": stream_world["digest"], "release": tag}).install(monkeypatch)
     resumed = cli("loop", "run", "--spec", stream_world["spec"])

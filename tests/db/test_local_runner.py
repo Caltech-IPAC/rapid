@@ -173,7 +173,7 @@ def test_admit_then_register_end_to_end(conn, tmp_path):
 
         # register's unit id is derived from the producer manifest it
         # reads, never hand-picked: the CLI does
-        # this derivation itself (rapidpipe.cli.main._resolve_register_
+        # this derivation itself (rapidpipe.launch.walk.resolve_register_
         # unit_id) before calling run_stage_locally, exercised here
         # directly since this test drives run_stage_locally, not the CLI.
         register_unit = derive_register_unit_id(admit_manifest)

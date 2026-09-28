@@ -9,7 +9,7 @@ import contextlib
 import pytest
 
 from rapidpipe.cli import main as cli
-from rapidpipe.cli import runctl
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.runs import repository
 
 
@@ -142,10 +142,10 @@ def test_run_promote_passes_check_policy_through(monkeypatch, fake_conn, capsys)
 
 
 def test_run_start_end_prints_the_auto_promote_line(monkeypatch, fake_conn, capsys):
-    monkeypatch.setattr(runctl, "_run_row",
-                        lambda conn, run_id: runctl.RunRow("production", ["admit"], "open", None))
-    monkeypatch.setattr(runctl, "_unit_row",
-                        lambda conn, run_id, stage, unit_id: runctl.UnitRow(
+    monkeypatch.setattr(launch_walk, "_run_row",
+                        lambda conn, run_id: launch_walk.RunRow("production", ["admit"], "open", None))
+    monkeypatch.setattr(launch_walk, "_unit_row",
+                        lambda conn, run_id, stage, unit_id: launch_walk.UnitRow(
                             "complete", "A1", "A1", "succeeded", "j", "s3://o"))
     assert cli.main(["run", "start", "R", "--unit", "U"]) == 0
     out = capsys.readouterr().out.splitlines()

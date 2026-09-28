@@ -8,7 +8,12 @@ directory or an S3 location." This module gives that a small type
 needs to fetch inputs down to local disk before a stage body runs, and
 publish outputs back up after it returns.
 
-This module imports nothing from ``rapidpipe`` outside ``rapidpipe.products``.
+:class:`Storage` is the copy, size, existence and manifest read/write
+helper the input-set composers (``run inputs``, ``run start`` and the
+processing-date loop) share across local and S3 locations.
+
+This module imports nothing from ``rapidpipe`` outside ``rapidpipe.products``
+except ``rapidpipe.exitcodes``.
 ``boto3`` is imported lazily, inside the functions that need it, so importing
 this module -- and running a stage entirely against local directories --
 never requires it to be installed.
@@ -16,9 +21,14 @@ never requires it to be installed.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from rapidpipe.exitcodes import CommandExit, ExitCode
+from rapidpipe.products.manifest import Manifest
 
 
 class LocationError(ValueError):
@@ -289,3 +299,88 @@ def is_transient(exc: BaseException) -> bool:
     """Whether ``exc``'s class name is network-shaped (:data:`TRANSIENT_EXCEPTION_NAMES`)."""
     class_name = type(exc).__name__
     return any(class_name.endswith(name) for name in TRANSIENT_EXCEPTION_NAMES)
+
+
+class Storage:
+    """Copy, size and existence checks across local and S3 locations.
+
+    The S3 client is made on first use only (:func:`s3_client`, which tests
+    monkeypatch), so a purely local composition never imports boto3.
+    """
+
+    def __init__(self, client: Any = None):
+        self._client = client
+
+    @property
+    def s3(self) -> Any:
+        if self._client is None:
+            self._client = s3_client()
+        return self._client
+
+    def exists(self, location: Location, relative: str) -> bool:
+        if not location.is_s3():
+            return (location.path / relative).exists()
+        try:
+            self.s3.head_object(Bucket=location.bucket, Key=_key(location, relative))
+        except Exception as exc:  # noqa: BLE001 - ClientError-shaped
+            if is_not_found(exc):
+                return False
+            raise
+        return True
+
+    def size(self, location: Location, relative: str) -> int:
+        if not location.is_s3():
+            return (location.path / relative).stat().st_size
+        head = self.s3.head_object(Bucket=location.bucket, Key=_key(location, relative))
+        return int(head["ContentLength"])
+
+    def copy(self, src: Location, src_rel: str, dst: Location, dst_rel: str) -> None:
+        if src.is_s3() and dst.is_s3():
+            # Server-side; copy_object handles objects up to 5 GB.
+            self.s3.copy_object(
+                Bucket=dst.bucket, Key=_key(dst, dst_rel),
+                CopySource={"Bucket": src.bucket, "Key": _key(src, src_rel)})
+        elif src.is_s3():
+            target = dst.path / dst_rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self.s3.download_file(src.bucket, _key(src, src_rel), str(target))
+        elif dst.is_s3():
+            self.s3.upload_file(str(src.path / src_rel), dst.bucket, _key(dst, dst_rel))
+        else:
+            target = dst.path / dst_rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src.path / src_rel, target)
+
+    def read_manifest(self, location_text: str) -> Manifest:
+        """``<location_text>/manifest.json``; :class:`CommandExit` 64 when it
+        is absent or invalid."""
+        location = parse_location(location_text)
+        try:
+            if not location.is_s3():
+                return Manifest.read(location.path / "manifest.json")
+            with tempfile.TemporaryDirectory(prefix="rapidpipe-run-inputs-") as tmp:
+                path = Path(tmp) / "manifest.json"
+                try:
+                    self.s3.download_file(
+                        location.bucket, _key(location, "manifest.json"), str(path))
+                except Exception as exc:  # noqa: BLE001 - ClientError-shaped
+                    if is_not_found(exc):
+                        raise FileNotFoundError(path) from exc
+                    raise
+                return Manifest.read(path)
+        except FileNotFoundError as exc:
+            raise CommandExit(int(ExitCode.USAGE),
+                              f"no manifest.json at {location_text}") from exc
+        except (ValueError, TypeError, KeyError) as exc:
+            raise CommandExit(int(ExitCode.USAGE),
+                              f"{location_text}/manifest.json: invalid manifest: {exc}") from exc
+
+    def write_manifest(self, manifest: Manifest, location: Location) -> None:
+        if not location.is_s3():
+            location.path.mkdir(parents=True, exist_ok=True)
+            manifest.write(location.path / "manifest.json")
+            return
+        with tempfile.TemporaryDirectory(prefix="rapidpipe-run-inputs-") as tmp:
+            path = Path(tmp) / "manifest.json"
+            manifest.write(path)
+            self.s3.upload_file(str(path), location.bucket, _key(location, "manifest.json"))

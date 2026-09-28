@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import rapidpipe.cli.main as cli_main
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.db.connection import ConnectionUnavailable
 from rapidpipe.products.manifest import Inputs, Manifest, Unit, register_unit_id
 from rapidpipe.runs.local import LocalAttempt, disposition_for
@@ -412,7 +413,7 @@ def test_resolve_register_unit_id_reads_a_local_manifest(tmp_path):
     (inputs / "manifest.json").write_text(
         _manifest_json(stage="admit", unit_id="e1/SCA07"))
 
-    unit_id = cli_main._resolve_register_unit_id(
+    unit_id = launch_walk.resolve_register_unit_id(
         unit_id_arg=None, inputs_location_arg=str(inputs))
 
     assert unit_id == "admit/e1/SCA07"
@@ -425,7 +426,7 @@ def test_resolve_register_unit_id_refuses_an_explicit_unit(tmp_path):
         _manifest_json(stage="admit", unit_id="e1/SCA07"))
 
     with pytest.raises(cli_main.RegisterUnitIdError):
-        cli_main._resolve_register_unit_id(
+        launch_walk.resolve_register_unit_id(
             unit_id_arg="hand-picked", inputs_location_arg=str(inputs))
 
 
@@ -434,7 +435,7 @@ def test_resolve_register_unit_id_refuses_a_missing_manifest(tmp_path):
     inputs.mkdir()
 
     with pytest.raises(cli_main.RegisterUnitIdError):
-        cli_main._resolve_register_unit_id(
+        launch_walk.resolve_register_unit_id(
             unit_id_arg=None, inputs_location_arg=str(inputs))
 
 
@@ -444,7 +445,7 @@ def test_resolve_register_unit_id_refuses_invalid_json(tmp_path):
     (inputs / "manifest.json").write_text("not json")
 
     with pytest.raises(cli_main.RegisterUnitIdError):
-        cli_main._resolve_register_unit_id(
+        launch_walk.resolve_register_unit_id(
             unit_id_arg=None, inputs_location_arg=str(inputs))
 
 

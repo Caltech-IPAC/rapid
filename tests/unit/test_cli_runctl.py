@@ -16,6 +16,7 @@ from rapidpipe.cli import main as cli
 from rapidpipe.cli import runctl
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.launch import batch as launch_batch
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.products.manifest import (
     Inputs,
     Manifest,
@@ -24,6 +25,7 @@ from rapidpipe.products.manifest import (
     member_for_file,
 )
 from rapidpipe.runs import cleanup, inputs, repository
+from rapidpipe.runs import create as runs_create
 from tests.unit.fakes3 import FakeClientError, FakeS3
 
 
@@ -87,7 +89,7 @@ class World:
     """
 
     def __init__(self, stages, *, max_attempts=1, kind="scratch"):
-        self.run = runctl.RunRow(kind, list(stages), "open", None)
+        self.run = launch_walk.RunRow(kind, list(stages), "open", None)
         self.max_attempts = max_attempts
         self.units: dict[tuple[str, str], dict] = {}
         self.outcomes: dict[str, list[str]] = {}
@@ -118,7 +120,7 @@ class World:
         if u is None:
             return None
         last = u["attempts"][-1] if u["attempts"] else {}
-        return runctl.UnitRow(u["state"], u["selected"], last.get("id"),
+        return launch_walk.UnitRow(u["state"], u["selected"], last.get("id"),
                               last.get("disposition"), last.get("job"), last.get("out"))
 
     # -- rapidpipe.launch.batch ------------------------------------------
@@ -182,20 +184,20 @@ def world(monkeypatch, fake_conn):
 
     def install(stages, **kwargs):
         w = World(stages, **kwargs)
-        monkeypatch.setattr(runctl, "_run_row", w.run_row)
-        monkeypatch.setattr(runctl, "_unit_row", w.unit_row)
+        monkeypatch.setattr(launch_walk, "_run_row", w.run_row)
+        monkeypatch.setattr(launch_walk, "_unit_row", w.unit_row)
         monkeypatch.setattr(launch_batch, "submit_unit", w.submit_unit)
         monkeypatch.setattr(launch_batch, "reconcile", w.reconcile)
         monkeypatch.setattr(launch_batch, "resolve_inputs_from_stage", w.resolve)
         # register's unit id is "<producing stage>/<unit>"; the stand-in
         # reads it off the producer's output location instead of a manifest.
         monkeypatch.setattr(
-            cli, "_resolve_register_unit_id",
+            launch_walk, "resolve_register_unit_id",
             lambda *, unit_id_arg, inputs_location_arg:
                 "/".join(inputs_location_arg.split("/runs/R/")[1].split("/")[:-1]))
         clock = {"t": 0.0}
-        monkeypatch.setattr(runctl, "now", lambda: clock["t"])
-        monkeypatch.setattr(runctl, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+        monkeypatch.setattr(launch_walk, "now", lambda: clock["t"])
+        monkeypatch.setattr(launch_walk, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
         holder["world"] = w
         return w
 
@@ -213,7 +215,7 @@ def test_start_walks_every_stage_in_order_with_inputs_by_precedence(world, monke
         composed.append(kw)
         return "s3://b/runs/R/inputs/difference/U"
 
-    monkeypatch.setattr(runctl, "compose_inputs", _compose)
+    monkeypatch.setattr(launch_walk, "compose_inputs", _compose)
     rc = cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://deliv/U",
                    "--template", "difference=s3://tmpl/ref", "--settings", "s3://s/admit.toml",
                    "--settings", "load=s3://s/load.toml"])
@@ -430,7 +432,7 @@ def test_start_attempt_running_without_a_scheduler_job_exits_64(world, capsys):
 
 def test_start_template_on_register_is_refused(world, monkeypatch, capsys):
     w = world(["admit", "register"])
-    monkeypatch.setattr(runctl, "compose_inputs", lambda *a, **k: pytest.fail("composed"))
+    monkeypatch.setattr(launch_walk, "compose_inputs", lambda *a, **k: pytest.fail("composed"))
     assert cli.main(["run", "start", "R", "--unit", "U", "--inputs", "s3://d",
                      "--template", "register=s3://t"]) == 64
     assert "--template is refused for register" in capsys.readouterr().err
@@ -461,14 +463,14 @@ def test_start_batch_error_exits_75(world, monkeypatch, capsys):
 # ======================================================================
 
 def _status_setup(monkeypatch, rows_sequence, *, reconcile=None):
-    monkeypatch.setattr(runctl, "_run_row",
-                        lambda conn, run_id: runctl.RunRow("scratch", [], "open", None)
+    monkeypatch.setattr(launch_walk, "_run_row",
+                        lambda conn, run_id: launch_walk.RunRow("scratch", [], "open", None)
                         if run_id == "R" else None)
     seq = list(rows_sequence)
     monkeypatch.setattr(runctl, "_status_rows",
                         lambda conn, run_id: seq.pop(0) if len(seq) > 1 else seq[0])
     monkeypatch.setattr(launch_batch, "reconcile", reconcile or (lambda conn, *, run_id: []))
-    monkeypatch.setattr(runctl, "sleep", lambda s: None)
+    monkeypatch.setattr(launch_walk, "sleep", lambda s: None)
 
 
 ROW_DONE = ("admit", "U", "complete", "A1", "A1", "job-1", "succeeded")
@@ -509,8 +511,8 @@ def test_status_unknown_run_and_batch_error(monkeypatch, fake_conn, capsys):
 # ======================================================================
 
 def _timings_setup(monkeypatch, rows, *, capture=None):
-    monkeypatch.setattr(runctl, "_run_row",
-                        lambda conn, run_id: runctl.RunRow("scratch", [], "open", None)
+    monkeypatch.setattr(launch_walk, "_run_row",
+                        lambda conn, run_id: launch_walk.RunRow("scratch", [], "open", None)
                         if run_id == "R" else None)
 
     def _fake_timings_rows(conn, run_id, *, stage=None):
@@ -640,9 +642,9 @@ def test_timings_no_attempts_prints_header_only(monkeypatch, fake_conn, capsys):
 # ======================================================================
 
 def _compare_setup(monkeypatch, units, instances, overlays=("o", "o")):
-    runs = {"A": runctl.RunRow("scratch", [], "open", overlays[0]),
-            "B": runctl.RunRow("scratch", [], "open", overlays[1])}
-    monkeypatch.setattr(runctl, "_run_row", lambda conn, run_id: runs.get(run_id))
+    runs = {"A": launch_walk.RunRow("scratch", [], "open", overlays[0]),
+            "B": launch_walk.RunRow("scratch", [], "open", overlays[1])}
+    monkeypatch.setattr(launch_walk, "_run_row", lambda conn, run_id: runs.get(run_id))
     monkeypatch.setattr(runctl, "_compare_units", lambda conn, run_id: units[run_id])
     monkeypatch.setattr(runctl, "_compare_instances", lambda conn, run_id: instances[run_id])
 
@@ -738,8 +740,8 @@ def compose_env(tmp_path, monkeypatch, fake_conn):
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_SCRATCH", str(tmp_path / "outputs"))
     monkeypatch.delenv("RAPIDPIPE_OUTPUTS_ROOT", raising=False)
     calls = {"add_unit": [], "bind": []}
-    monkeypatch.setattr(runctl, "_run_row",
-                        lambda conn, run_id: runctl.RunRow("scratch", [], "open", None)
+    monkeypatch.setattr(launch_walk, "_run_row",
+                        lambda conn, run_id: launch_walk.RunRow("scratch", [], "open", None)
                         if run_id == "R" else None)
     monkeypatch.setattr(launch_batch, "resolve_inputs_from_stage",
                         lambda conn, *, run_id, unit_id, upstream_stage: str(producer))
@@ -816,8 +818,8 @@ def test_inputs_missing_template_manifest_exits_64(compose_env, capsys):
 
 def test_inputs_default_dest_is_the_scratch_root_for_every_run_kind(
         compose_env, monkeypatch, capsys):
-    monkeypatch.setattr(runctl, "_run_row",
-                        lambda conn, run_id: runctl.RunRow("production", [], "open", None))
+    monkeypatch.setattr(launch_walk, "_run_row",
+                        lambda conn, run_id: launch_walk.RunRow("production", [], "open", None))
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT_PRODUCTION", str(compose_env["tmp"] / "products"))
     rc = cli.main(["run", "inputs", "R", "difference", "--unit", "U", "--from-stage", "admit",
                    "--template", str(compose_env["template"])])
@@ -924,11 +926,11 @@ def test_inputs_binds_and_commits_before_the_manifest_is_written(
     kw = dict(run_id="R", stage="difference", unit_id="U", from_stage="admit",
               template=str(compose_env["template"]), dest=str(dest))
     with pytest.raises(OSError):
-        runctl.compose_inputs(fake_conn, **kw)
+        launch_walk.compose_inputs(fake_conn, **kw)
     assert seen["bind_at_write"] == [("R", "difference", "U", ["L2NEW", "REF1"])]
     assert seen["committed_at_write"] == 1
     assert not (dest / "manifest.json").exists()
-    assert runctl.compose_inputs(fake_conn, **kw) == str(dest)
+    assert launch_walk.compose_inputs(fake_conn, **kw) == str(dest)
     assert (dest / "manifest.json").exists()
 
 
@@ -944,7 +946,7 @@ def test_start_reuse_of_an_existing_manifest_rebinds_and_commits(
     calls["add_unit"].clear()
     calls["bind"].clear()          # as if the first bind had been rolled back
     committed = fake_conn.committed
-    out = runctl.compose_inputs(
+    out = launch_walk.compose_inputs(
         fake_conn, run_id="R", stage="difference", unit_id="U", from_stage="admit",
         template=str(compose_env["template"]), dest=str(dest), reuse_existing=True)
     assert out == str(dest)
@@ -1134,7 +1136,7 @@ def test_create_seed_is_passed_through(monkeypatch, fake_conn, capsys):
         return "NEWRUN"
 
     monkeypatch.setattr(repository, "create_run", _create_run)
-    monkeypatch.setattr(cli, "git_revision", lambda: "rev")
+    monkeypatch.setattr(runs_create, "git_revision", lambda: "rev")
     rc = cli.main(["run", "create", "--kind", "scratch", "--purpose", "p", "--stages", "admit",
                    "--seed", "OLDRUN"])
     assert rc == 0
@@ -1150,7 +1152,7 @@ def test_create_fills_lane_profile_and_target_with_the_defaults(monkeypatch, fak
         return "NEWRUN"
 
     monkeypatch.setattr(repository, "create_run", _create_run)
-    monkeypatch.setattr(cli, "git_revision", lambda: "rev")
+    monkeypatch.setattr(runs_create, "git_revision", lambda: "rev")
     monkeypatch.setenv("PGDATABASE", "somedb")
     assert cli.main(["run", "create", "--kind", "scratch", "--purpose", "p",
                      "--stages", "admit"]) == 0
@@ -1171,7 +1173,7 @@ def test_create_unknown_seed_exits_64(monkeypatch, fake_conn, capsys):
         raise repository.RunNotFound(f"seed_run {kwargs['seed_run']!r} does not exist")
 
     monkeypatch.setattr(repository, "create_run", _create_run)
-    monkeypatch.setattr(cli, "git_revision", lambda: "rev")
+    monkeypatch.setattr(runs_create, "git_revision", lambda: "rev")
     assert cli.main(["run", "create", "--kind", "scratch", "--purpose", "p", "--stages",
                      "admit", "--seed", "NOPE"]) == 64
     assert "seed_run 'NOPE' does not exist" in capsys.readouterr().err

@@ -7,7 +7,7 @@ unexpected codes"), and the runs page's "Attempts" (``lost`` means the
 scheduler lost the job) over ``rapidpipe.runs.repository``.
 
 This module composes ``rapidpipe.runs.repository``, ``rapidpipe.products``
-and ``rapidpipe.db``; it never imports a stage module or ``rapidpipe.cli``
+and ``rapidpipe.db``; it never imports a stage module or the command-line tool
 (the package's fixed dependency direction, ``rapid_docs``'
 stage-contract.md, "The package"). ``boto3`` is never imported at module
 level: :func:`batch_client` is the one indirection point a test
@@ -104,7 +104,7 @@ class ReleaseDefinitionRefused(LaunchError):
 class ProfileNotAllowed(LaunchError):
     """``profile=True`` was refused for a production run.
 
-    Profiling is scratch-only (``--profile``, ``rapidpipe.cli.main``): a
+    Profiling is scratch-only (``--profile`` on ``run submit`` or ``run start``): a
     profile file is written into the attempt's own outputs prefix, which
     for a production run is the products bucket, not a scratch location.
     Permanent, not retryable; the CLI maps it to exit 64.
@@ -204,6 +204,11 @@ def _run_kind(conn, run_id: str) -> str:
     if row is None:
         raise RunNotFound(f"run {run_id!r} does not exist")
     return row[0]
+
+
+def run_kind(conn, run_id: str) -> str:
+    """The ``runs.kind`` of ``run_id``; :class:`RunNotFound` if there is none."""
+    return _run_kind(conn, run_id)
 
 
 def _release_job_definition(conn, run_id: str) -> tuple[str, str] | None:
@@ -867,6 +872,12 @@ def reconcile(
 DEFAULT_JOBLESS_AFTER_SECONDS = 600
 
 
+def default_jobless_after_seconds() -> int:
+    """The age :func:`resolve_jobless` applies when given none
+    (:data:`DEFAULT_JOBLESS_AFTER_SECONDS`)."""
+    return DEFAULT_JOBLESS_AFTER_SECONDS
+
+
 def _jobs_named(batch: Any, job_queue: str, job_name: str) -> list[str]:
     """Every job id on ``job_queue`` whose name is ``job_name``, in any
     status: with a ``filters`` argument ``ListJobs`` ignores ``jobStatus``
@@ -888,7 +899,7 @@ def _jobs_named(batch: Any, job_queue: str, job_name: str) -> list[str]:
 
 
 def resolve_jobless(
-    conn, *, run_id: str, older_than_seconds: float, client: Any = None,
+    conn, *, run_id: str, older_than_seconds: float | None = None, client: Any = None,
 ) -> list[Reconciled]:
     """Resolve ``run_id``'s job-less attempts (loop.md §Concurrency and
     recovery).
@@ -913,10 +924,14 @@ def resolve_jobless(
       while attempts remain and otherwise ``failed`` -- ``NOJOB``;
     - none, and younger: left for a later call, not reported.
 
+    ``older_than_seconds`` ``None`` is :data:`DEFAULT_JOBLESS_AFTER_SECONDS`.
+
     Before any write the row is re-read ``FOR UPDATE`` and skipped if a job
     id or a disposition arrived meanwhile. One commit per attempt, as
     :func:`reconcile` does.
     """
+    if older_than_seconds is None:
+        older_than_seconds = DEFAULT_JOBLESS_AFTER_SECONDS
     if older_than_seconds < 0:
         raise ValueError(f"older_than_seconds must be >= 0, got {older_than_seconds!r}")
     with conn.cursor() as cur:

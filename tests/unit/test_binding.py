@@ -15,6 +15,7 @@ import pytest
 
 from rapidpipe.cli import runctl
 from rapidpipe.launch import loop
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
 from rapidpipe.products.storage import parse_location
 from rapidpipe.runs import binding, inputs, repository
@@ -93,7 +94,7 @@ def test_compose_inputs_makes_one_call_to_the_primitive(
     writes: list[tuple] = []
     monkeypatch.setattr(runctl._Storage, "write_manifest",
                         lambda self, *a, **k: writes.append(a))
-    assert runctl.compose_inputs(
+    assert launch_walk.compose_inputs(
         fake_conn, run_id="R", stage="difference", unit_id="U", from_stage="admit",
         template=str(compose_env["template"]), dest=dest, reuse_existing=reuse) == dest
     assert len(calls) == 1
@@ -118,7 +119,7 @@ def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch, exis
     bound, copied, written or composed around the (recording) primitive."""
     # _two_image_world: two images whose source sets share one maintain unit
     # from two load outputs (so maintain composes), two fields, two images.
-    spec, tools, storage, walks, created, updates, units = _two_image_world(monkeypatch)
+    spec, storage, walks, created, updates, units = _two_image_world(monkeypatch)
     root = "s3://b/scratch/runs/RUN2/inputs"
     dests = [f"{root}/maintain/20271001/SCA01", f"{root}/crossmatch/5",
              f"{root}/crossmatch/6", f"{root}/alerts/{units[0]}", f"{root}/alerts/{units[1]}"]
@@ -155,7 +156,7 @@ def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch, exis
     calls = _recorder(monkeypatch)
     bypass = _bypass_log(monkeypatch)
 
-    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
+    assert loop.process_date(_Conn(), spec, spec.dates[0], interval=1, timeout=10) == 0
     seen = [(c["run_id"], c["stage"], c["unit_kind"], c["unit_id"], c["dest"]) for c in calls]
     assert seen == [
         ("RUN2", "maintain", "detector-date", "20271001/SCA01", dests[0]),
@@ -203,7 +204,7 @@ def test_no_composer_admits_binds_or_writes_around_the_primitive():
     write an input set only through ``binding.bind_input_set``. A direct
     ``add_unit`` (admission), ``bind_unit_inputs``/``bind_registered_inputs``
     call, a private registered-instance lookup, or a manifest write outside
-    ``_Storage`` reintroduces a second path with its own order.
+    ``Storage`` reintroduces a second path with its own order.
 
     ``add_unit(`` is forbidden in the whole of both modules: neither has a
     legitimate caller (``run submit``/``run local`` admission lives in
@@ -211,27 +212,32 @@ def test_no_composer_admits_binds_or_writes_around_the_primitive():
     The primitive must be called inside ``compose_inputs`` and at least
     three times (maintain, crossmatch, alerts) inside ``process_date``."""
     runctl_text = (REPO / "rapidpipe/cli/runctl.py").read_text()
+    walk_text = (REPO / "rapidpipe/launch/walk.py").read_text()
     loop_text = (REPO / "rapidpipe/launch/loop.py").read_text()
-    for text in (runctl_text, loop_text):
+    for text in (runctl_text, walk_text, loop_text):
         for forbidden in ("bind_unit_inputs", "bind_registered_inputs",
                           "_registered_instances", "_registered(", "add_unit("):
             assert forbidden not in text
-    for text, function, at_least in ((runctl_text, "compose_inputs", 1),
+    for text, function, at_least in ((walk_text, "compose_inputs", 1),
                                      (loop_text, "process_date", 3)):
         tree = ast.parse(text)
         assert _calls_named(tree, "add_unit") == []
         assert len(_calls_named(_function(tree, function), "bind_input_set")) >= at_least
 
-    # write_manifest: in runctl only _Storage's own definition; in loop never
-    # called (its LoopTools docstring names the interface, so calls are
-    # found through the syntax tree, not the text).
-    runctl_tree = ast.parse(runctl_text)
-    storage_cls = next(n for n in runctl_tree.body
-                       if isinstance(n, ast.ClassDef) and n.name == "_Storage")
+    # write_manifest: defined only by products.storage.Storage, whose own
+    # definition holds every write_manifest( line of that module; the
+    # composers never write a manifest themselves (loop.py's calls are
+    # found through the syntax tree, since its docstrings name the method).
+    storage_text = (REPO / "rapidpipe/products/storage.py").read_text()
+    storage_tree = ast.parse(storage_text)
+    storage_cls = next(n for n in storage_tree.body
+                       if isinstance(n, ast.ClassDef) and n.name == "Storage")
     inside = range(storage_cls.lineno, storage_cls.end_lineno + 1)
-    lines = [i for i, line in enumerate(runctl_text.splitlines(), 1)
+    lines = [i for i, line in enumerate(storage_text.splitlines(), 1)
              if "write_manifest(" in line]
     assert lines and all(i in inside for i in lines)
+    assert "write_manifest(" not in runctl_text
+    assert "write_manifest(" not in walk_text
     assert _calls_named(ast.parse(loop_text), "write_manifest") == []
 
 

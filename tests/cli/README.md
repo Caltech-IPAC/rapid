@@ -23,7 +23,7 @@ Pass 2 adds `run start`/`status`/`inputs`/`compare`/`expire` coverage
 (`test_run_start.py`, `test_run_inputs.py`,
 `test_run_status_compare_expire.py`), plus `stage list`/`stage describe`
 and the two forms of a stage's own `-h` in `test_help.py`. `run start`'s
-own wait loop is driven by monkeypatching `rapidpipe.cli.runctl._reconcile`
+own wait loop is driven by monkeypatching `rapidpipe.launch.walk._reconcile`
 to give any attempt of the run still unresolved a SUCCEEDED status and a
 valid manifest before the real reconcile runs, standing in for Batch
 finishing a job between polls without a side thread. `run expire`'s

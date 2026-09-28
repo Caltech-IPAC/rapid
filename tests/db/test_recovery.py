@@ -792,7 +792,7 @@ def test_an_explicit_template_disables_inheritance(held, cli_db, fake_batch, cap
     follows), but ``--template difference=...`` asks for it to run: the
     template is composed against the seed's producer (admit) and difference
     is submitted with it."""
-    from rapidpipe.cli import runctl
+    from rapidpipe.launch import walk as launch_walk
 
     seed = _production_seed_with_later_failures(held)
     _, run_id, _ = _create(capsys, "--seed", seed, "--only-failed")
@@ -802,7 +802,7 @@ def test_an_explicit_template_disables_inheritance(held, cli_db, fake_batch, cap
         calls.append(kwargs)
         return "s3://composed/U2"
 
-    monkeypatch.setattr(runctl, "compose_inputs", _compose)
+    monkeypatch.setattr(launch_walk, "compose_inputs", _compose)
     code = cli.main(["run", "start", run_id, "--unit", "U2", "--no-wait",
                      "--template", "difference=s3://tmpl/ref"])
     out, err = capsys.readouterr()
