@@ -543,17 +543,37 @@ class _Recorded:
         self.instance, self.required, self.outcome = "DI1", True, outcome
 
 
-def _gate(monkeypatch, *, promote, recorded=("passed",)):
+def _trial_policy():
+    """A stand-in for ``rebuild-trial@1``: approved for a person's promotion
+    but not for the loop's own (``auto_promote`` false, checks/policy.py's
+    ``policy_permits_auto_promote``)."""
+    class Policy:
+        ref = "rebuild-trial@1"
+        approval = "trial"
+        approved_by = "lead-1"
+        auto_promote = False
+
+    return Policy()
+
+
+def _permitting_policy():
+    """A policy ``policy_permits_auto_promote`` does admit (built with the
+    dataclass directly, no policy file: no shipped policy permits this)."""
+    from rapidpipe.checks.policy import Policy
+
+    return Policy(name="rebuild-permitting", version="1", approval="lead",
+                 approved_by="lead-1", auto_promote=True, checks=())
+
+
+def _gate(monkeypatch, *, promote, recorded=("passed",), policy=None):
     from rapidpipe.checks import runner
 
     seen = {}
-
-    class Policy:
-        ref = "rebuild-trial@1"
+    resolved = policy if policy is not None else _trial_policy()
 
     def resolve(conn, run_id, explicit=None):
         seen["explicit"] = explicit
-        return Policy()
+        return resolved
 
     def run_checks(conn, run_id, policy, *, who=None, **_):
         seen["who"] = who
@@ -563,10 +583,28 @@ def _gate(monkeypatch, *, promote, recorded=("passed",)):
     monkeypatch.setattr(runner, "run_policy_checks", run_checks)
     monkeypatch.setattr(repository, "promote_run", promote)
     monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
-    return seen, Policy
+    return seen, resolved
 
 
-def test_promote_runs_the_policys_checks_then_promotes_under_it(monkeypatch):
+def test_promote_runs_the_policys_checks_but_leaves_a_candidate_when_it_forbids_auto_promote(
+        monkeypatch):
+    def promote_run(conn, run_id, who, reason, *, kinds=None, check_policy=None,
+                    allow_unreleased=False):
+        pytest.fail("promoted under a policy that does not permit it")
+
+    seen, policy = _gate(monkeypatch, promote=promote_run)
+    conn = _Conn()
+    promotion, text, gate, checks = loop._promote(conn, "R", loop.parse_spec(SPEC, "x"),
+                                                  dt.date(2027, 10, 1))
+    assert promotion is None
+    assert text == f"candidate; promotion is a person's (policy {policy.ref})"
+    assert gate == f"check policy {policy.ref}"
+    assert checks == [{"id": "C1", "check": "difference-image-statistics@1",
+                       "instance": "DI1", "required": True, "outcome": "passed"}]
+    assert seen == {"explicit": "rebuild-trial@1", "who": "scheduler"}
+
+
+def test_promote_promotes_under_a_policy_that_permits_automatic_promotion(monkeypatch):
     got = {}
 
     def promote_run(conn, run_id, who, reason, *, kinds=None, check_policy=None,
@@ -574,16 +612,17 @@ def test_promote_runs_the_policys_checks_then_promotes_under_it(monkeypatch):
         got.update(who=who, reason=reason, policy=check_policy.ref)
         return "P1"
 
-    seen, _ = _gate(monkeypatch, promote=promote_run)
+    permitting = _permitting_policy()
+    seen, _ = _gate(monkeypatch, promote=promote_run, policy=permitting)
     conn = _Conn()
     promotion, text, gate, checks = loop._promote(conn, "R", loop.parse_spec(SPEC, "x"),
                                                   dt.date(2027, 10, 1))
-    assert (promotion, text, gate) == ("P1", "P1", "check policy rebuild-trial@1")
+    assert (promotion, text, gate) == ("P1", "P1", f"check policy {permitting.ref}")
     assert checks == [{"id": "C1", "check": "difference-image-statistics@1",
                        "instance": "DI1", "required": True, "outcome": "passed"}]
     assert seen == {"explicit": "rebuild-trial@1", "who": "scheduler"}
     assert got == {"who": "scheduler", "reason": "processing date 2027-10-01 batch 1",
-                   "policy": "rebuild-trial@1"}
+                   "policy": permitting.ref}
 
 
 def test_promote_records_a_refusal_as_a_science_outcome(monkeypatch):
@@ -591,7 +630,7 @@ def test_promote_records_a_refusal_as_a_science_outcome(monkeypatch):
                allow_unreleased=False):
         raise repository.PromotionRefused("required check difference-image-statistics failed")
 
-    _gate(monkeypatch, promote=refuse, recorded=("failed",))
+    _gate(monkeypatch, promote=refuse, recorded=("failed",), policy=_permitting_policy())
     conn = _Conn()
     promotion, text, gate, checks = loop._promote(conn, "R", loop.parse_spec(SPEC, "x"),
                                                   dt.date(2027, 10, 1))
@@ -605,7 +644,7 @@ def test_promote_a_missing_run_is_not_a_refusal(monkeypatch):
                 allow_unreleased=False):
         raise repository.RunNotFound("no run")
 
-    _gate(monkeypatch, promote=missing)
+    _gate(monkeypatch, promote=missing, policy=_permitting_policy())
     with pytest.raises(repository.RunNotFound):
         loop._promote(_Conn(), "R", loop.parse_spec(SPEC, "x"), dt.date(2027, 10, 1))
 

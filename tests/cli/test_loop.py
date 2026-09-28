@@ -324,7 +324,10 @@ def _read(fake_s3, location):
 
 def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
         cli, db, fake_batch, fake_s3, world, monkeypatch):
-    # Every attempt ran the release's image, so the date's run promotes.
+    # Every attempt ran the release's image; under the trial policy (the
+    # spec names none, so the default) the loop still leaves each date a
+    # candidate (decision-loop-promotion): no shipped policy permits
+    # automatic promotion, a person promotes.
     _FakeStages(db, fake_batch, fake_s3, execution_record={
         "image_digest": world["digest"], "release": world["tag"]}).install(monkeypatch)
 
@@ -366,8 +369,11 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     for f in FIELDS:
         first_set = record1["association_sets"][str(f)]
         assert record2["base_sets"][str(f)] == first_set
+        # Date 1 stays a candidate under the trial policy, so date 2's
+        # base is not promoted, but still binds to it as today
+        # (decision-loop-promotion).
         assert record2["bases"][str(f)] == {"run": run1, "processing_date": "2027-10-01",
-                                            "base_promoted": True}
+                                            "base_promoted": False}
         manifest = _read(fake_s3, f"s3://{FAKE_BUCKET}/scratch/runs/{run2}/inputs/"
                                   f"crossmatch/{f}/manifest.json")
         bases = [o for o in manifest["outputs"] if o["kind"] == "association-set"]
@@ -438,22 +444,28 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
         assert registers == [f"admit/{UNIT}", f"finalize/{UNIT}"]
         assert all(u["state"] == "complete" and u["attempt"] and u["job"]
                    for u in record["units"])
-        assert record["promotion"]  # a promotion id or "refused: ..."
+        # A candidate text, not a promotion id: rebuild-trial@1 does not
+        # permit automatic promotion (decision-loop-promotion).
+        assert record["promotion"] == "candidate; promotion is a person's (policy " \
+                                      "rebuild-trial@1)"
     for _, _, _, promotion, record in rows:
-        assert promotion is not None and record["promotion"] == promotion
+        # The loop_dates row's own promotion column holds a promotion id
+        # only; it stays NULL, the candidate text lives in the record.
+        assert promotion is None
         # The gate: the default policy (the spec names none) checks
         # difference-image and source-set candidates. The fake load registers
         # its source set, as the real stage does (the loop reads only
         # registered, readable sets), so the policy's optional catalog check
-        # runs on it; it is not required, and the promotion stands.
+        # runs on it; it is not required, and the checks are recorded either
+        # way, so a person promoting later sees them.
         assert record["promotion_gate"] == "check policy rebuild-trial@1"
         assert [(c["check"], c["required"]) for c in record["checks"]] == [
             ("catalog-counts-vs-reference@1", False)]
     with db.cursor() as cur:
-        cur.execute("SELECT who, reason, request_context->>'run' FROM promotions "
-                    "WHERE id = ANY(%s) ORDER BY happened_at", ([r[3] for r in rows],))
-        assert cur.fetchall() == [("scheduler", "processing date 2027-10-01 batch 1", run1),
-                                  ("scheduler", "processing date 2027-10-02 batch 1", run2)]
+        # No scheduler promotion happened for either run.
+        cur.execute("SELECT count(*) FROM promotions WHERE request_context->>'run' = ANY(%s)",
+                    ([run1, run2],))
+        assert cur.fetchone()[0] == 0
 
     shown = cli("loop", "show", world["schedule"])
     assert shown.rc == 0, shown.err
@@ -469,20 +481,25 @@ def test_loop_runs_two_dates_binding_the_first_dates_association_sets(
     assert again.out.count("(skipped)") == 2
 
 
-def test_loop_records_a_refused_promotion_and_still_completes_the_date(
+def test_loop_leaves_a_candidate_when_the_policy_forbids_automatic_promotion(
         cli, db, fake_batch, fake_s3, world, monkeypatch):
-    # No execution records: no attempt ran a released image, so promote_run
-    # refuses, a science outcome recorded on the row, not a failure.
+    # rebuild-trial@1 (the default; the spec names none) never permits
+    # automatic promotion, so the loop never calls promote_run at all --
+    # not even to find out whether it would refuse (e.g. no attempt ran a
+    # released image here). The date still completes and a person
+    # promotes later (decision-loop-promotion).
     _FakeStages(db, fake_batch, fake_s3).install(monkeypatch)
     result = cli("loop", "run", "--spec", world["spec"], "--date", "2027-10-01")
     assert result.rc == 0, result.err + result.out
     ((_, run_id, state, promotion, record),) = _rows(db, world["schedule"])
     assert (state, promotion) == ("complete", None)
-    assert record["promotion"].startswith("refused: ")
-    assert "not the image of a complete release" in record["promotion"]
+    assert record["promotion"] == "candidate; promotion is a person's (policy rebuild-trial@1)"
     with db.cursor() as cur:
         cur.execute("SELECT state FROM runs WHERE id = %s", (run_id,))
         assert cur.fetchone()[0] == "finished"
+        cur.execute("SELECT count(*) FROM promotions WHERE request_context->>'run' = %s",
+                    (run_id,))
+        assert cur.fetchone()[0] == 0
 
 
 def test_loop_resumes_an_interrupted_date_with_the_same_run(
