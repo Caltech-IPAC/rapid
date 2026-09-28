@@ -1,27 +1,24 @@
 Projections of RAPID Reference-Image Numbers
 ####################################################
 
-
 Overview
 ************************************
 
-For the RAPID project, the Roman sky-tessellation parameter NSIDE=512 is used,
-and this gives tile sizes somewhat smaller than that of a Roman SCA image
-(4K x 4K pixels, 0.11 arcsecond per pixel), which
-results in 6,291,458 tiles covering the entire sky.
-Each sky tile is assigned a field number.  A "field" is just another name for a sky tile.
+This analysis estimates the number and coverage depths of RAPID reference
+images possible from planned observations. The statistics cover all Roman
+WFI-camera surveys, epochs, and SCAs, excluding PRISM/GRISM observations.
+The output from the Python code count_fields_imaged.py appears below.
 
-A RAPID reference image for a given field and bandpass filter is a coaddition of some
-number of SCA images in the vicinity of the field.
-Images from different SCAs can be coadded.
-Reference images are 7K x 7K pixels, a tangent projection (no distortion),
-centered on a field, with no rotation (CROTA2 = 0 degrees).
-Reference-image pixels are the same size as SCA images.
+RAPID uses the Roman sky-tessellation parameter NSIDE=512, giving 6,291,458
+tiles across the entire sky. Each tile, also called a field, has a field
+number and is somewhat smaller than a Roman SCA image (4K x 4K pixels,
+0.11 arcsecond per pixel).
 
-To get a handle on the number of reference images and their coverage depths possible
-for the planned observations, statistics are computed covering all Roman WFI-camera surveys,
-all epochs, and all SCAs, but excluding PRISM/GRISM observations.
-The output from python code count_fields_imaged.py is given in a separate section below.
+A RAPID reference image coadds SCA images near a given field in a given
+bandpass filter; images from different SCAs can be coadded. Reference images
+are 7K x 7K pixels, centered on a field, with a distortion-free tangent
+projection and no rotation (CROTA2 = 0 degrees). Their pixels are the same
+size as SCA-image pixels.
 
 
 Reference-Image Numbers
@@ -41,8 +38,8 @@ F213                 25099
 ===============      =====================================================================
 
 
-Below are histograms of numbers of fields imaged as a function of number of images overlapping a field.
-The histograms are given separately for the different WFI-camera bandpass filters.
+The histograms show the number of fields imaged versus the number of images
+overlapping a field, separately for each WFI-camera bandpass filter.
 
 .. image:: histogram_imaged_fields_bandpassF062.png
 .. image:: histogram_imaged_fields_bandpassF087.png
@@ -52,8 +49,6 @@ The histograms are given separately for the different WFI-camera bandpass filter
 .. image:: histogram_imaged_fields_bandpassF158.png
 .. image:: histogram_imaged_fields_bandpassF184.png
 .. image:: histogram_imaged_fields_bandpassF213.png
-
-
 
 Code Output
 ************************************
