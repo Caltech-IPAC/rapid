@@ -175,6 +175,71 @@ def _resolve_register_unit_id(*, unit_id_arg: str | None, inputs_location_arg: s
     return register_unit_id(manifest)
 
 
+#: The five titled sections ``rapidpipe run --help`` groups its
+#: subcommands into; tuple order is display order, and each inner
+#: tuple's order is that section's display order. Every ``run``
+#: subcommand must appear in exactly one group;
+#: :func:`_group_run_subcommands` enforces this at parser-build time so
+#: a new subcommand cannot silently vanish from help.
+RUN_COMMAND_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("lifecycle", ("create", "start", "status", "show", "list", "finish")),
+    ("recovery", ("submit", "reconcile", "cancel", "local", "inputs")),
+    ("promotion", ("promote", "promote-plan", "rollback")),
+    ("housekeeping", ("pin", "unpin", "expire", "delete")),
+    ("inspection", ("compare", "timings")),
+)
+
+
+class _RunHelpFormatter(argparse.HelpFormatter):
+    """Formats ``rapidpipe run --help`` without ``run_command``'s own
+    flat subcommand listing: :func:`_group_run_subcommands` places the
+    same pseudo-actions under titled groups instead, so printing them
+    again beneath the plain ``COMMAND`` positional would show every
+    subcommand twice."""
+
+    def _iter_indented_subactions(self, action):
+        if isinstance(action, argparse._SubParsersAction) and action.dest == "run_command":
+            return iter(())
+        return super()._iter_indented_subactions(action)
+
+
+def _group_run_subcommands(
+        run_parser: argparse.ArgumentParser,
+        run_subparsers: argparse._SubParsersAction) -> None:
+    """Add ``run_parser``'s titled argument groups (``RUN_COMMAND_GROUPS``)
+    and move each of ``run_subparsers``'s subcommand pseudo-actions into
+    its group's display, so ``rapidpipe run --help`` shows five titled
+    sections instead of one flat list. This only changes how help is
+    displayed: dispatch, ``choices``, ``dest`` and exit codes are
+    untouched, and the pseudo-actions stay in ``run_subparsers``'s own
+    ``_choices_actions`` (tests/cli/test_help.py reads help text from
+    there).
+    """
+    pseudo_actions = {action.dest: action for action in run_subparsers._choices_actions}
+    seen: dict[str, str] = {}
+    for title, names in RUN_COMMAND_GROUPS:
+        group = run_parser.add_argument_group(title=title)
+        for name in names:
+            if name in seen:
+                raise ValueError(
+                    f"rapidpipe run {name!r} is in two help groups: "
+                    f"{seen[name]!r} and {title!r}")
+            if name not in pseudo_actions:
+                raise ValueError(f"rapidpipe run {name!r} has no subcommand to group")
+            seen[name] = title
+            group._group_actions.append(pseudo_actions[name])
+
+    missing = sorted(set(pseudo_actions) - set(seen))
+    if missing:
+        raise ValueError(f"rapidpipe run subcommand(s) {missing} are in no help group")
+
+    # Replaces the brace-joined choices list ("{create,list,...}") in
+    # the usage line and the "positional arguments" heading; the
+    # formatter above drops the per-choice lines there, since the same
+    # subcommands are listed once each, above, under their titled group.
+    run_subparsers.metavar = "COMMAND"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = ArgumentParser(
         prog="rapidpipe", description="The RAPID pipeline command-line tool.")
@@ -214,7 +279,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser(
         "run", help="Create, list, inspect, run, promote and delete runs.",
-        description="Create, list, inspect, run, promote and delete runs.")
+        description="Create, list, inspect, run, promote and delete runs.",
+        formatter_class=_RunHelpFormatter)
     run_parser.set_defaults(run_group_parser=run_parser)
     run_subparsers = run_parser.add_subparsers(dest="run_command")
 
@@ -420,6 +486,8 @@ def _build_parser() -> argparse.ArgumentParser:
     unpin_parser.add_argument("run_id")
 
     runctl.add_parsers(run_subparsers)
+
+    _group_run_subcommands(run_parser, run_subparsers)
 
     release_parser = subparsers.add_parser(
         "release", help="Cut, show, list and verify releases (python -m rapidpipe.release).",
