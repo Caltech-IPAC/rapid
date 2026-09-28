@@ -314,7 +314,7 @@ def test_run_create_release_fills_revision_and_digest(monkeypatch, capsys):
     conn = _Conn([("20260924-08-releases.sql",)], [("complete", "c" * 40, DIGEST)])
     monkeypatch.setattr(cli, "connect", lambda **_kw: contextlib.nullcontext(conn))
     monkeypatch.setattr(repository, "create_run", _create_run)
-    monkeypatch.setattr(cli, "_source_revision_or_unknown",
+    monkeypatch.setattr(cli, "git_revision",
                         lambda: pytest.fail("a released run reads no git"))
     rc = cli.main(["run", "create", "--kind", "production", "--purpose", "p",
                    "--stages", "admit", "--release", "rebuild-v0.1"])
