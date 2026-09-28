@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from rapidpipe.seams import database_env
 import rapidpipe.stages.maintain as maintain
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.stages.contract import ExitCode
@@ -149,7 +150,7 @@ def test_dry_run_touches_nothing(tmp_path, monkeypatch):
 
 
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(maintain.DATABASE_ENV, "tests.unit.fakemaintaindb:no_such_factory")
+    monkeypatch.setenv(database_env("maintain"), "tests.unit.fakemaintaindb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE
 
 

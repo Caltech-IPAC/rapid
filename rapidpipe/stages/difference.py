@@ -49,9 +49,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
-import importlib
 import math
-import os
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -68,7 +66,13 @@ from rapidpipe.products.diffimage import (
     catalog_outcome_bit,
 )
 from rapidpipe.products.l2image import L2ImageRegistration, L2ImageRegistrationError
-from rapidpipe.products.manifest import Manifest, Member, OutputEntry, member_for_file
+from rapidpipe.products.manifest import (
+    Manifest,
+    Member,
+    OutputEntry,
+    member_for_file,
+    sha256_of_file,
+)
 from rapidpipe.science.difference import (
     background,
     gainmatch,
@@ -88,6 +92,7 @@ from rapidpipe.science.difference import (
 )
 from rapidpipe.science.difference.fitsops import scale_image_data
 from rapidpipe.science.difference.tools import ToolRunner
+from rapidpipe.seams import load_factory, toolkit_env
 from rapidpipe.stages.contract import (
     InputRejected,
     StageContext,
@@ -140,27 +145,13 @@ class Toolkit:
     psf_catalog: Callable = psfcat.psf_catalog
 
 
-#: Names a ``module:factory`` returning a :class:`Toolkit` to use instead
-#: of the real tools. Unset in every deployment; the stage fixture
-#: (``make stage-difference``) and the ``run local`` smoke test set it to
-#: the fakes, since a stage run as a subprocess cannot be monkeypatched.
-TOOLKIT_ENV = "RAPIDPIPE_DIFFERENCE_TOOLKIT"
-
-
 def toolkit() -> Toolkit:
     """The real tools, unless ``RAPIDPIPE_DIFFERENCE_TOOLKIT`` names others.
 
     In-process tests monkeypatch this name instead.
     """
-    override = os.environ.get(TOOLKIT_ENV)
-    if not override:
-        return Toolkit()
-    module_name, _, factory_name = override.partition(":")
-    try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError) as exc:
-        raise UsageError(f"{TOOLKIT_ENV}={override!r} does not name a factory: {exc}") from exc
-    return factory()
+    factory = load_factory(toolkit_env("difference"), UsageError)
+    return factory() if factory else Toolkit()
 
 
 # ----------------------------------------------------------------------
@@ -184,14 +175,6 @@ class _InputSet:
     reference_psf: str
 
 
-def _sha256_of_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _md5_of_file(path: Path) -> str:
     digest = hashlib.md5()
     with path.open("rb") as fh:
@@ -208,7 +191,7 @@ def _verified_member_path(inputs_dir: Path, member: Member) -> Path:
         raise InputRejected(
             f"input member {member.path!r}: manifest declares {member.bytes} bytes, "
             f"file is {path.stat().st_size} bytes")
-    if _sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
+    if sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
         raise InputRejected(f"input member {member.path!r}: SHA-256 mismatch")
     return path
 

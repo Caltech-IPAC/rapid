@@ -75,7 +75,7 @@ def test_dry_run_exits_zero_without_connecting(tmp_path, monkeypatch):
     def _raise_if_called(*args, **kwargs):
         raise AssertionError("register must not connect to the database on --dry-run")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
 
     rc = main(_argv(inputs_dir, outputs_dir, extra=["--dry-run"]))
     assert rc == int(ExitCode.SUCCESS)
@@ -103,7 +103,7 @@ def test_unknown_output_kind_exits_65_without_connecting(tmp_path, monkeypatch):
         raise AssertionError(
             "register must reject an unknown output kind before connecting")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
 
     rc = main(_argv(inputs_dir, outputs_dir))
     assert rc == int(ExitCode.INPUT_REJECTED)
@@ -161,7 +161,7 @@ def test_difference_manifest_registers_each_difference_image(tmp_path, monkeypat
     diff_outputs = _difference_manifest(tmp_path, monkeypatch)
     conn = _FakeConn()
     calls = {"manifest": [], "difference": []}
-    monkeypatch.setattr(register_module, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: conn)
     monkeypatch.setattr(register_module, "register_manifest",
                         lambda c, m, registering_attempt_id: calls["manifest"].append(m))
     monkeypatch.setattr(register_module, "register_difference_image",
@@ -203,7 +203,7 @@ def test_bad_difference_manifest_exits_65_without_connecting(tmp_path, monkeypat
     def _raise_if_called(*args, **kwargs):
         raise AssertionError("register must refuse a malformed manifest before connecting")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
     assert main(_argv(diff_outputs, tmp_path / "register-outputs")) == int(ExitCode.INPUT_REJECTED)
 
 
@@ -222,7 +222,7 @@ def test_reference_manifest_registers_the_image_before_its_catalog(tmp_path, mon
     _write_manifest(inputs_dir, _reference_outputs())
     conn = _FakeConn()
     order = []
-    monkeypatch.setattr(register_module, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: conn)
     monkeypatch.setattr(register_module, "register_manifest", lambda *a, **k: None)
     monkeypatch.setattr(register_module, "register_reference_image",
                         lambda c, **kw: order.append(("image", kw)))
@@ -253,7 +253,7 @@ def test_bad_reference_manifest_exits_65_without_connecting(tmp_path, monkeypatc
     def _raise_if_called(*args, **kwargs):
         raise AssertionError("register must refuse a malformed manifest before connecting")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
     assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.INPUT_REJECTED)
 
 
@@ -289,7 +289,7 @@ def test_catalog_export_registers_the_instance_row_only(tmp_path, monkeypatch):
     _write_manifest(inputs_dir, [_catalog_export_entry()])
     conn = _FakeConn()
     registered = []
-    monkeypatch.setattr(register_module, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: conn)
     monkeypatch.setattr(register_module, "register_manifest",
                         lambda c, manifest, **kw: registered.append(manifest))
     assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.SUCCESS)
@@ -306,5 +306,5 @@ def test_bad_catalog_export_exits_65_without_connecting(tmp_path, monkeypatch):
     def _raise_if_called(*args, **kwargs):
         raise AssertionError("register must refuse a malformed manifest before connecting")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
     assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.INPUT_REJECTED)

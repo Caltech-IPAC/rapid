@@ -83,10 +83,7 @@ This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import importlib
 import json
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -99,10 +96,17 @@ from rapidpipe.db import connection as _connection_module
 from rapidpipe.db.connection import ConnectionUnavailable
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.diffimage import DIFFERENCERS
-from rapidpipe.products.manifest import Manifest, Member, OutputEntry, member_for_file
+from rapidpipe.products.manifest import (
+    Manifest,
+    Member,
+    OutputEntry,
+    member_for_file,
+    sha256_of_file,
+)
 from rapidpipe.runs.repository import register_manifest
 from rapidpipe.science.alerts import assemble, crossmatch, cutouts
 from rapidpipe.science.alerts.records import Source
+from rapidpipe.seams import database_env, load_factory
 from rapidpipe.stages.contract import (
     InputRejected,
     StageContext,
@@ -155,11 +159,6 @@ DECLARATION = StageDeclaration(
 # ----------------------------------------------------------------------
 # The database, replaceable in tests
 # ----------------------------------------------------------------------
-
-
-def connect(*args, **kwargs):
-    """Module-level indirection to ``rapidpipe.db.connection.connect``, for tests."""
-    return _connection_module.connect(*args, **kwargs)
 
 
 class PostgresAlertsDatabase:
@@ -234,16 +233,9 @@ class PostgresAlertsDatabase:
         self.conn.commit()
 
 
-#: Names a ``module:factory`` returning a context manager that yields an
-#: object with :class:`PostgresAlertsDatabase`'s methods, used instead of
-#: PostgreSQL. Unset in every deployment; the stage fixture
-#: (``make stage-alerts``) sets it, since a subprocess cannot be monkeypatched.
-DATABASE_ENV = "RAPIDPIPE_ALERTS_DATABASE"
-
-
 @contextlib.contextmanager
 def _postgres() -> Iterator[PostgresAlertsDatabase]:
-    with connect() as conn:
+    with _connection_module.connect() as conn:
         try:
             yield PostgresAlertsDatabase(conn)
         except BaseException:
@@ -253,15 +245,8 @@ def _postgres() -> Iterator[PostgresAlertsDatabase]:
 
 def open_database():
     """PostgreSQL, unless ``RAPIDPIPE_ALERTS_DATABASE`` names another; tests monkeypatch this."""
-    override = os.environ.get(DATABASE_ENV)
-    if not override:
-        return _postgres()
-    module_name, _, factory_name = override.partition(":")
-    try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError) as exc:
-        raise UsageError(f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
-    return factory()
+    factory = load_factory(database_env("alerts"), UsageError)
+    return factory() if factory else _postgres()
 
 
 # ----------------------------------------------------------------------
@@ -315,14 +300,6 @@ def _kona_lookup(path_text: str) -> Callable[[int], Any] | None:
     return {int(expid): predictions for expid, predictions in data.items()}.get
 
 
-def _sha256_of_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _verified_member_path(inputs_dir: Path, member: Member) -> Path:
     path = inputs_dir / member.path
     if not path.exists():
@@ -331,7 +308,7 @@ def _verified_member_path(inputs_dir: Path, member: Member) -> Path:
         raise InputRejected(
             f"input member {member.path!r}: manifest declares {member.bytes} bytes, "
             f"file is {path.stat().st_size} bytes")
-    if _sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
+    if sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
         raise InputRejected(f"input member {member.path!r}: SHA-256 mismatch")
     return path
 

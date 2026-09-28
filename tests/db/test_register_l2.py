@@ -4,7 +4,7 @@ migration (20260921-05-l2-run-columns.sql) applied.
 
 Builds a genuine admit manifest by running admit's own `main` on the FITS
 fixture from tests/unit/test_admit.py, then runs register's `main`
-for real against it, with `rapidpipe.stages.register.connect` monkeypatched
+for real against it, with `rapidpipe.db.connection.connect` monkeypatched
 to hand back the test's own `conn` (wrapped so commit()/close() are
 no-ops, so the outer per-test transaction -- rolled back at teardown, per
 conftest.py -- is the only thing that ever actually commits or closes).
@@ -159,10 +159,8 @@ def _run_admit(conn, tmp_path, *, name="admit1", sca_value=None, **fits_kwargs):
 
 
 def _run_register(conn, monkeypatch, admit_outputs_dir, *, run_id, unit_id, tmp_path, name):
-    import rapidpipe.stages.register as register_module
-
     monkeypatch.setattr(
-        register_module, "connect",
+        "rapidpipe.db.connection.connect",
         lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
 
     attempt_id = _allocate_registering_attempt(conn, run_id, unit_id=unit_id)

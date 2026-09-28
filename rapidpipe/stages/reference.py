@@ -96,7 +96,6 @@ This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 from __future__ import annotations
 
 import hashlib
-import importlib
 import os
 import re
 import shutil
@@ -107,10 +106,11 @@ from pathlib import Path
 from typing import Any
 
 from rapidpipe.db.ids import new_ulid
-from rapidpipe.products.manifest import Member, OutputEntry, member_for_file
+from rapidpipe.products.manifest import Member, OutputEntry, member_for_file, sha256_of_file
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.reference import awaicgen, catalog, header, identity, measure, prep
 from rapidpipe.science.spatial import field_center
+from rapidpipe.seams import load_factory, toolkit_env
 from rapidpipe.stages.contract import (
     InputRejected,
     StageContext,
@@ -168,23 +168,10 @@ class Toolkit:
     runner: Any = field(default_factory=ToolRunner)
 
 
-#: Names a ``module:factory`` returning a :class:`Toolkit` to use instead
-#: of the real tools. Unset in every deployment; the selftest sets it to
-#: the fakes, since a stage run as a subprocess cannot be monkeypatched.
-TOOLKIT_ENV = "RAPIDPIPE_REFERENCE_TOOLKIT"
-
-
 def toolkit() -> Toolkit:
     """The real tools, unless ``RAPIDPIPE_REFERENCE_TOOLKIT`` names others."""
-    override = os.environ.get(TOOLKIT_ENV)
-    if not override:
-        return Toolkit()
-    module_name, _, factory_name = override.partition(":")
-    try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError) as exc:
-        raise UsageError(f"{TOOLKIT_ENV}={override!r} does not name a factory: {exc}") from exc
-    return factory()
+    factory = load_factory(toolkit_env("reference"), UsageError)
+    return factory() if factory else Toolkit()
 
 
 # ----------------------------------------------------------------------
@@ -304,14 +291,6 @@ def check_settings(settings: dict[str, Any]) -> _Checked:
 # ----------------------------------------------------------------------
 
 
-def _sha256_of_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _md5_of_file(path: Path) -> str:
     digest = hashlib.md5()
     with path.open("rb") as fh:
@@ -328,7 +307,7 @@ def _verified_member_path(inputs_dir: Path, member: Member) -> Path:
         raise InputRejected(
             f"input member {member.path!r}: manifest declares {member.bytes} bytes, "
             f"file is {path.stat().st_size} bytes")
-    if _sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
+    if sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
         raise InputRejected(f"input member {member.path!r}: SHA-256 mismatch")
     return path
 

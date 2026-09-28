@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from rapidpipe.seams import toolkit_env
 import rapidpipe.stages.difference as difference
 from rapidpipe.stages.contract import UsageError
 
@@ -39,18 +40,18 @@ def test_fixture_refuses_a_non_empty_workdir(tmp_path):
 
 
 def test_toolkit_defaults_to_the_real_tools(monkeypatch):
-    monkeypatch.delenv(difference.TOOLKIT_ENV, raising=False)
+    monkeypatch.delenv(toolkit_env("difference"), raising=False)
     kit = difference.toolkit()
     assert type(kit.runner).__name__ == "ToolRunner"
 
 
 def test_toolkit_environment_hook_selects_the_fakes(monkeypatch):
-    monkeypatch.setenv(difference.TOOLKIT_ENV, "tests.unit.fakedifftools:fake_toolkit")
+    monkeypatch.setenv(toolkit_env("difference"), "tests.unit.fakedifftools:fake_toolkit")
     # By name: under importlib import mode the hook imports its own copy.
     assert type(difference.toolkit().runner).__name__ == FakeToolRunner.__name__
 
 
 def test_toolkit_environment_hook_refuses_a_bad_name(monkeypatch):
-    monkeypatch.setenv(difference.TOOLKIT_ENV, "tests.unit.fakedifftools:no_such_factory")
+    monkeypatch.setenv(toolkit_env("difference"), "tests.unit.fakedifftools:no_such_factory")
     with pytest.raises(UsageError):
         difference.toolkit()

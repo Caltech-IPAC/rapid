@@ -42,7 +42,6 @@ to ``InputRejected`` (65), :class:`ReadGuardUnavailable` to
 
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 from typing import Any, Callable
@@ -52,6 +51,7 @@ from rapidpipe.db.objects import Unreadable, assert_readable_instance
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.products.manifest import Manifest, OutputEntry
 from rapidpipe.runs.inputs import manifest_instances
+from rapidpipe.seams import database_env, load_factory
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class ReadGuardNotConfigured(ReadGuardError):
 #: and :data:`SELFTEST_ENV` must be ``1``, which only
 #: ``rapidpipe.selftest.runner`` sets on its subprocesses.
 #: Anything else is a configuration error (exit 64), never a fallback.
-DATABASE_ENV = "RAPIDPIPE_READGUARD_DATABASE"
+DATABASE_ENV = database_env("readguard")
 
 #: Set to ``1`` by ``rapidpipe.selftest.runner`` on a fixture subprocess.
 SELFTEST_ENV = "RAPIDPIPE_SELFTEST"
@@ -112,11 +112,7 @@ def _selftest_registry(override: str):
         raise ReadGuardNotConfigured(
             f"{DATABASE_ENV}={override!r} does not name a factory under "
             f"{SELFTEST_SUPPORT.rstrip('.')}")
-    try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError, ValueError) as exc:
-        raise ReadGuardNotConfigured(
-            f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
+    factory = load_factory(DATABASE_ENV, ReadGuardNotConfigured)
     logger.warning(SELFTEST_WARNING)
     return factory()
 

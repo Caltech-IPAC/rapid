@@ -17,11 +17,11 @@ from astropy.io import fits
 
 from rapidpipe.products.diffimage import validate_difference_entry, validate_source_catalog_entry
 from rapidpipe.products.manifest import Manifest
+from rapidpipe.seams import toolkit_env
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture, fixture_dir
 from rapidpipe.selftest.support.fakedifftools import build_input_set, cdf_dir
 
 FAKE_TOOLKIT = "rapidpipe.selftest.support.fakedifftools:fake_toolkit"
-TOOLKIT_ENV = "RAPIDPIPE_DIFFERENCE_TOOLKIT"
 UNIT_ID = "e20260821001234/SCA07"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -134,7 +134,7 @@ FIXTURE = StageFixture(
     module="rapidpipe.stages.difference",
     unit_kind="detector-image",
     unit_id=UNIT_ID,
-    fake_toolkit_env={TOOLKIT_ENV: FAKE_TOOLKIT},
+    fake_toolkit_env={toolkit_env("difference"): FAKE_TOOLKIT},
     prepare=_prepare,
     check=_check,
 )
