@@ -1,8 +1,8 @@
 """The `ported-from` guard: every module under ``rapidpipe/science`` and
-``rapidpipe/stages``, plus the two settings tomls that mirror dev's
-science .ini, must carry a well-formed ``# ported-from: ...`` header
-within its first 5 lines (AGENTS.md), so a new module cannot land
-unpinned. ``scripts/science-drift.sh`` reads the same headers to build
+``rapidpipe/stages``, plus ``rapidpipe/products/spatial.py`` and the two
+settings tomls that mirror dev's science .ini, must carry a well-formed
+``# ported-from: ...`` header within its first 5 lines (AGENTS.md), so a
+new module cannot land unpinned. ``scripts/science-drift.sh`` reads the same headers to build
 its drift report; this test only checks their shape, never git.
 """
 
@@ -16,6 +16,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCIENCE_DIR = REPO_ROOT / "rapidpipe" / "science"
 STAGES_DIR = REPO_ROOT / "rapidpipe" / "stages"
+#: Ported science outside science/: the register derivations rapidpipe.db uses.
+PORTED_PRODUCTS_MODULES = (REPO_ROOT / "rapidpipe" / "products" / "spatial.py",)
 SETTINGS_TOMLS = (
     REPO_ROOT / "rapidpipe" / "settings" / "difference.toml",
     REPO_ROOT / "rapidpipe" / "settings" / "reference.toml",
@@ -29,6 +31,7 @@ PORTED_FROM_RE = re.compile(
 def _guarded_py_files():
     for subdir in (SCIENCE_DIR, STAGES_DIR):
         yield from sorted(subdir.rglob("*.py"))
+    yield from PORTED_PRODUCTS_MODULES
 
 
 def _first_lines(path: Path, n: int = 5) -> list[str]:
