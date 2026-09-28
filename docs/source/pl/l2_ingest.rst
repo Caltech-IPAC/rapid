@@ -92,10 +92,20 @@ SIP fit inside it, is by far the most expensive step.
 
 A converted FITS file **older** than its ASDF file is a different thing
 entirely: it was made from a *previous* delivery, which is exactly the state a
-redelivery leaves behind, the S3 object name being unchanged while the pixels
-are not.  Reusing it would register the superseded data as the new version, so
-it is converted afresh.  The two are told apart by the last-modified times,
-which come free with the S3 listings.
+redelivery leaves behind, the name being unchanged while the pixels are not.
+Reusing it would register the superseded data as the new version, so it is
+converted afresh.  The two are told apart by the last-modified times, which come
+free with the S3 listings.
+
+Because the date subdirectory is not knowable before the file is read, the match
+is on the filename rather than the whole object name, and the reused file may
+turn out to be somewhere other than where it now belongs -- at the top of the
+bucket, if it was converted before files were filed by observation date.  It is
+then uploaded to its dated object name and registered there, rather than
+registered where it lies, so that the bucket ends up organised the same way
+throughout.  That is a re-upload of a file already on local disk, not a
+reconversion, so it is still far cheaper than converting it again.  A reused
+file already at the right object name is not re-uploaded at all.
 
 Within a run, the work list is sorted by SCA and then by observation, so that
 the files belonging to one exposure are spread across the list instead of being
@@ -131,12 +141,9 @@ night an object is from readable from its key.
    rows written before files were filed by date still match, and nothing is
    re-ingested across the change.
 
-   A file found in the output bucket to reuse (see `Reusing a converted file`_)
-   is likewise matched by filename, and is uploaded to the dated object name if
-   it is not already there.  One converted before this change, sitting at the top
-   of the bucket, is therefore moved into its date subdirectory rather than
-   registered where it lies -- a re-upload, not a reconversion, so still far
-   cheaper than converting it again.
+   A file found in the output bucket to reuse is likewise matched by filename;
+   see `Reusing a converted file`_ for what happens to one that is not already
+   filed by date.
 
    A file whose ``DATE-OBS`` is missing or unreadable cannot be filed, and fails
    like any other bad file: logged, skipped, and left on the next run's work
@@ -428,13 +435,32 @@ times can be summed or averaged straight out of the log:
 
    grep "^Elapsed time in seconds to convert" ingestL2Files.log
 
-The top-level steps reported per file are: downloading the ASDF file, gunzipping
-it, converting it to FITS, gzipping the FITS, uploading it, registering it in
-the database, cleaning up the work directory, and the whole file as
-``ingest L2 file``.  A file taken back from the output bucket instead of
-converted (see `Reusing a converted file`_) reports downloading and gunzipping
-that FITS in place of the four middle steps.  These steps partition the file's
-time between them, so they sum to the ``ingest L2 file`` total.
+The step names are worth having exactly, since they are what a ``grep`` has to
+match:
+
+=======================================================   =========================================
+Step                                                      Reported for
+=======================================================   =========================================
+``download ASDF file from S3 bucket``                     a file being converted
+``gunzip ASDF file``                                      a file being converted, if it is gzipped
+``convert ASDF file to FITS file``                        a file being converted
+``gzip FITS file``                                        a file being converted
+``download already-converted FITS file from S3 bucket``   a file being reused
+``gunzip already-converted FITS file``                    a file being reused
+``upload FITS file to S3 bucket``                         every file not already at its object name
+``register L2 file in database``                          every file
+``clean up work directory for L2 file``                   every file
+``ingest L2 file``                                        every file -- the whole of it
+=======================================================   =========================================
+
+A file being converted reports the first four; one taken back from the output
+bucket (see `Reusing a converted file`_) reports the two ``already-converted``
+steps instead.  The upload is reported for both, except for a reused file that
+is already at the object name it belongs at, which is not uploaded and so
+reports no upload step.
+
+These steps partition the file's time between them, so they sum to the
+``ingest L2 file`` total.
 
 Two further steps are reported from *inside* ``register L2 file in database``,
 that step having turned out to hold the two things whose cost is least
