@@ -8,7 +8,7 @@ database allocation or default -- and nothing substitutes zero for an
 unavailable measurement.
 
 This module imports ``rapidpipe.db`` (its own package: :mod:`rapidpipe.db.
-ids`) and ``rapidpipe.science.spatial``, and nothing else in
+ids`) and ``rapidpipe.products.spatial``, and nothing else in
 ``rapidpipe`` -- never ``rapidpipe.runs`` or any stage module, matching
 ``rapidpipe.db``'s package contract of providing persistence only
 (``rapidpipe/db/connection.py``'s module docstring).
@@ -20,7 +20,7 @@ from typing import Any
 
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.l2image import L2ImageRegistration
-from rapidpipe.science.spatial import (
+from rapidpipe.products.spatial import (
     healpix_indexes,
     overlapping_fields,
     tessellation_field,

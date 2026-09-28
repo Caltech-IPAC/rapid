@@ -26,7 +26,7 @@ Sources, column by column, where they are not the manifest itself:
 - ``vbest`` 0 and ``status`` 0: never current at registration.
 
 This module imports ``rapidpipe.db``, ``rapidpipe.products`` and
-``rapidpipe.science.spatial`` only, matching ``rapidpipe.db``'s package
+``rapidpipe.products.spatial`` only, matching ``rapidpipe.db``'s package
 contract (no ``rapidpipe.runs``, no stage module).
 """
 
@@ -36,7 +36,7 @@ import json
 from typing import Any
 
 from rapidpipe.products.diffimage import validate_difference_entry
-from rapidpipe.science.spatial import healpix_indexes
+from rapidpipe.products.spatial import healpix_indexes
 
 #: The differencer-to-`pipelines` map, fixed with the difference stage
 #: (products page: "the name-to-row mapping is fixed with the `difference`
