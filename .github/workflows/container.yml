@@ -70,22 +70,19 @@ jobs:
       # build.sh archives an explicit include list; this proves the kept
       # helpers outside rapidpipe/ made it into the installed package and
       # the script/config files the stages run from /code are present.
-      # sympy (which sip_to_pv imports) comes with the production base
-      # environment and is not in requirements.txt, so it is installed
-      # into this throwaway container only, before the imports.
+      # sip_to_pv is checked as a file, not imported: vendored sip_tpv's
+      # __init__ needs pkg_resources and an installed sip_tpv distribution,
+      # which the real base has and this stand-in does not.
       - name: smoke test -- kept imports and /code files
         run: |
-          docker run --rm --entrypoint /bin/sh rapid-pipeline:ci -c '
-            set -e
-            /usr/local/bin/python -m pip install --no-cache-dir -q sympy
-            /usr/local/bin/python -c "import rapidpipe, rapidpipe.science.spatial, rapidpipe.science.difference.resample, database.modules.utils.roman_tessellation_db, modules.sip_tpv.sip_tpv.sip_to_pv"
-          '
+          docker run --rm --entrypoint /usr/local/bin/python rapid-pipeline:ci -c \
+            "import rapidpipe, rapidpipe.science.spatial, rapidpipe.science.difference.resample, database.modules.utils.roman_tessellation_db"
           docker run --rm --entrypoint /usr/local/bin/python rapid-pipeline:ci -c '
           import glob, pathlib, sys
-          missing = [p for p in ["/code/modules/zogy/v21Aug2018/py_zogy.py"] if not pathlib.Path(p).is_file()]
-          if not glob.glob("/code/modules/sfft/sfft_rapid*.py"):
-              missing.append("/code/modules/sfft/sfft_rapid*.py")
-          if not glob.glob("/code/cdf/rapidSex*"):
-              missing.append("/code/cdf/rapidSex*")
+          files = ["/code/modules/zogy/v21Aug2018/py_zogy.py", "/code/modules/sip_tpv/sip_tpv/sip_to_pv.py"]
+          missing = [p for p in files if not pathlib.Path(p).is_file()]
+          for pattern in ["/code/modules/sfft/sfft_rapid*.py", "/code/cdf/rapidSex*"]:
+              if not glob.glob(pattern):
+                  missing.append(pattern)
           sys.exit("missing under /code: " + ", ".join(missing) if missing else 0)
           '
