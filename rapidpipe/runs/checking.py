@@ -22,6 +22,7 @@ from rapidpipe.checks.policy import (
 )
 from rapidpipe.checks.registry import CheckResult, get_check
 from rapidpipe.db.ids import new_ulid
+from rapidpipe.runs import repository
 
 
 class CheckUsageError(Exception):
@@ -201,8 +202,6 @@ def run_policy_checks(conn, run_id: str, policy: Policy, *, instance: str | None
     check that finds its reference by slot never sees a NULL the fill
     could have resolved; a failed fill is logged, not raised.
     """
-    from rapidpipe.runs import repository
-
     with conn.cursor() as cur:
         repository.fill_identity_safely(cur, f"checking run {run_id}")
     candidates = run_candidates(conn, run_id)
@@ -289,8 +288,6 @@ def maybe_auto_promote(conn, run_id: str, *, who: str = "auto-promote") -> AutoP
     refused promotion is rolled back to a savepoint, so the recorded
     check rows stay in the caller's transaction either way.
     """
-    from rapidpipe.runs import repository
-
     with conn.cursor() as cur:
         cur.execute("SELECT auto_promote, check_policy_ref FROM runs WHERE id = %s", (run_id,))
         row = cur.fetchone()

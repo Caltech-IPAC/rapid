@@ -93,7 +93,7 @@ def test_check_run_accepts_check_policy_as_an_alias_of_policy(monkeypatch, fake_
         seen["policy_ref"] = policy_ref
         raise LookupError("stop before running checks")
 
-    monkeypatch.setattr("rapidpipe.checks.runner.resolve_run_policy", _fake_resolve_run_policy)
+    monkeypatch.setattr("rapidpipe.runs.checking.resolve_run_policy", _fake_resolve_run_policy)
     monkeypatch.setattr(checkctl, "_require_run", lambda conn, run_id: None)
     cli.main(["check", "run", "R", "--check-policy", "rebuild-strict@1"])
     assert seen["policy_ref"] == "rebuild-strict@1"

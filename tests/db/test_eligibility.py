@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from rapidpipe.checks.policy import load_policy
-from rapidpipe.checks.runner import run_policy_checks
+from rapidpipe.runs.checking import run_policy_checks
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.runs import eligibility
 from rapidpipe.runs import repository as repo

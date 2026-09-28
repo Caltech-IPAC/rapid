@@ -25,7 +25,7 @@ from rapidpipe.checks import policy as policy_mod
 from rapidpipe.checks import registry
 from rapidpipe.checks.policy import PolicyCheck, load_policy, load_policy_file
 from rapidpipe.checks.registry import CheckResult
-from rapidpipe.checks.runner import (
+from rapidpipe.runs.checking import (
     Candidate,
     maybe_auto_promote,
     recorded_checks,

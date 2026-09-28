@@ -130,7 +130,7 @@ def _require_run(conn, run_id: str) -> None:
 
 def _with_connection(command: str, body) -> int:
     from rapidpipe.checks.registry import CheckError
-    from rapidpipe.checks.runner import CheckUsageError
+    from rapidpipe.runs.checking import CheckUsageError
 
     try:
         cm = _connect(command)
@@ -153,7 +153,7 @@ def _with_connection(command: str, body) -> int:
 
 
 def _run_command(args: argparse.Namespace) -> int:
-    from rapidpipe.checks.runner import resolve_run_policy, run_policy_checks
+    from rapidpipe.runs.checking import resolve_run_policy, run_policy_checks
 
     try:
         overrides = _parse_params(args.param)
@@ -180,7 +180,7 @@ def _run_command(args: argparse.Namespace) -> int:
 
 
 def _show_command(args: argparse.Namespace) -> int:
-    from rapidpipe.checks.runner import recorded_checks
+    from rapidpipe.runs.checking import recorded_checks
 
     def body(conn) -> int:
         _require_run(conn, args.run_id)

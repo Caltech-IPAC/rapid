@@ -1146,7 +1146,7 @@ def maybe_auto_promote(conn, run_id: str) -> None:
     """End of a ``run start`` walk: automatic promotion, designed in and off
     (checks page, "Automatic promotion").
 
-    Calls :func:`rapidpipe.checks.runner.maybe_auto_promote`, commits what
+    Calls :func:`rapidpipe.runs.checking.maybe_auto_promote`, commits what
     it recorded (check rows, and the promotion when one was made), and
     prints its one line -- ``auto-promote off (policy <ref>)`` for every
     run today, since no shipped policy permits automatic promotion. A
@@ -1154,7 +1154,7 @@ def maybe_auto_promote(conn, run_id: str) -> None:
     printed as a refusal, not raised: the walk itself succeeded.
     """
     from rapidpipe.checks.registry import CheckError
-    from rapidpipe.checks.runner import maybe_auto_promote as _maybe_auto_promote
+    from rapidpipe.runs.checking import maybe_auto_promote as _maybe_auto_promote
 
     conn.commit()  # the walk's own writes are already committed; start clean
     try:
