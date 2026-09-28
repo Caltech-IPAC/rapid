@@ -1,0 +1,59 @@
+# Runs scripts/science-drift.sh against origin/dev on every push and
+# pull request to `rebuild`, plus on demand. This never fails the build
+# (`continue-on-error: true` on the job, `|| true` on the script step,
+# and the script itself always exits 0): it is a report, not a gate.
+# The report is written to the job summary and uploaded as an artifact.
+#
+# No schedule trigger: GitHub only runs a workflow's `schedule` trigger
+# from the repository's default branch, which is `main` here (never
+# touched by rebuild work), so a cron trigger on this file would never
+# fire.
+#
+# actions/checkout is pinned by SHA, following this repo's existing
+# convention (see .github/workflows/public-safety.yml); fetch-depth 0
+# so the full history is present for the `<pin>..<dev ref>` ranges the
+# script walks. actions/upload-artifact is pinned by SHA the same way
+# (v4 tag, resolved with `gh api repos/actions/upload-artifact/git/refs/tags/v4`).
+name: science-drift
+
+on:
+  push:
+    branches: [rebuild]
+  pull_request:
+    branches: [rebuild]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: science-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          fetch-depth: 0
+
+      - name: fetch origin/dev
+        run: git fetch --no-tags origin dev:refs/remotes/origin/dev || true
+
+      - name: run science-drift.sh
+        run: scripts/science-drift.sh --out science-drift.md || true
+
+      - name: append report to the job summary
+        run: cat science-drift.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: science-drift-report
+          path: science-drift.md
+          if-no-files-found: ignore
