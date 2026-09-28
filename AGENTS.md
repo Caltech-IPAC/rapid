@@ -176,6 +176,21 @@ not invent a new code or a second list.
 - No em dashes in docs or commit messages written for this repository
   (house style; use a comma, colon, or a new sentence instead).
 
+## Ported-from headers
+
+Every module under `rapidpipe/science` and `rapidpipe/stages`, plus
+`rapidpipe/settings/difference.toml` and `reference.toml`, carries a
+line 1 comment `# ported-from: <dev path>[, <dev path>...] @ <8-hex dev
+commit>`, or `# ported-from: none` for rebuild-only code.
+`tests/unit/test_ported_from.py` fails the build if a module lacks one.
+`scripts/science-drift.sh` reads these headers straight out of the
+tree, never a separate table, and reports which `origin/dev` commits
+are unported per pin, plus watched paths
+(`scripts/science-drift-watch.txt`) and settings-.ini drift;
+`.github/workflows/science-drift.yml` runs it on push/PR to `rebuild`
+but never fails the build. A dev commit the report lists is ported by
+hand or recorded as declined, never auto-applied.
+
 ## Pull requests from an agent
 
 Base branch `rebuild`. Body describes what changed and why, and which

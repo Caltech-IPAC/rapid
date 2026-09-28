@@ -1,0 +1,19 @@
+# scripts/science-drift-watch.txt: dev paths the rebuild did not copy
+# but must watch for drift, one per line:
+#
+#   <dev path> @ <8-hex dev commit>  # <short reason>
+#
+# A watched path need not exist at its pin (several were created
+# later); science-drift.sh does not treat that as an error. Read by
+# scripts/science-drift.sh; see its "Watched dev paths" report section
+# and AGENTS.md.
+
+alerts/schema @ c740f3e3  # new alert schema versions land here
+alerts/ned_catalog.py @ c740f3e3  # NED catalog access, not ported
+alerts/ned_reader.py @ c740f3e3  # NED from S3, not ported
+database/schema @ c740f3e3  # dev table changes, e.g. l2files.limmag
+database/modules/utils/rapid_db.py @ c740f3e3  # dev's registration functions the rebuild's db layer mirrors
+database/sims/db_backfill_l2files_limmag.py @ c740f3e3  # limmag backfill
+modules/utils/rapid_data_analysis.py @ c740f3e3  # limmag analysis
+scripts/compute_limiting_magnitude.py @ c740f3e3  # limmag computation
+database/scripts/db_register_sciimg_psfs.py @ c740f3e3  # PSF families
