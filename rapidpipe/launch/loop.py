@@ -130,7 +130,7 @@ from rapidpipe.db.ids import new_ulid
 from rapidpipe.launch import batch as launch_batch
 from rapidpipe.launch import discovery
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
-from rapidpipe.products.storage import join, parse_location
+from rapidpipe.products.storage import is_not_found, join, parse_location
 from rapidpipe.runs import binding, repository
 from rapidpipe.runs.inputs import InputsRefused
 
@@ -338,8 +338,7 @@ def read_spec_text(location: str, *, s3_client: Any = None) -> str:
     except (OSError, UnicodeDecodeError) as exc:
         raise LoopSpecError(f"cannot read spec {location}: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 - ClientError-shaped
-        code = (getattr(exc, "response", None) or {}).get("Error", {}).get("Code")
-        if code in ("404", "NoSuchKey", "NotFound"):
+        if is_not_found(exc):
             raise LoopSpecError(f"no spec at {location}") from exc
         raise
 
