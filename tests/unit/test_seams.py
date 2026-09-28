@@ -51,7 +51,13 @@ def test_an_unresolvable_value_raises_the_callers_error(monkeypatch, value):
         load_factory(ENV, _Refused)
 
 
-def test_a_failure_inside_the_module_propagates(monkeypatch):
+@pytest.mark.parametrize("failure", [
+    ValueError("broken at import"),
+    ModuleNotFoundError("No module named 'missing_dependency'", name="missing_dependency"),
+    ImportError("cannot import name 'x' from 'somewhere'"),
+    AttributeError("module 'somewhere' has no attribute 'x'"),
+])
+def test_a_failure_inside_the_module_propagates(monkeypatch, failure):
     class _Finder:
         def find_spec(self, name, path=None, target=None):
             if name != "_seam_broken":
@@ -63,11 +69,47 @@ def test_a_failure_inside_the_module_propagates(monkeypatch):
                     return None
 
                 def exec_module(self, module):
-                    raise ValueError("broken at import")
+                    raise failure
 
             return importlib.util.spec_from_loader(name, _Loader())
 
     monkeypatch.setattr(sys, "meta_path", [_Finder(), *sys.meta_path])
     monkeypatch.setenv(ENV, "_seam_broken:factory")
-    with pytest.raises(ValueError, match="broken at import"):
+    with pytest.raises(type(failure)) as exc:
         load_factory(ENV, _Refused)
+    assert exc.value is failure
+
+
+class _FalsyFactory:
+    """A factory whose truth value is False, so only an ``is not None``
+    test tells it from an unset variable."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __bool__(self):
+        return False
+
+    def __call__(self):
+        self.calls += 1
+        return "from-factory"
+
+
+@pytest.mark.parametrize("stage, loader, env_of", [
+    (stage, "open_database", database_env)
+    for stage in ("alerts", "crossmatch", "export", "load", "maintain", "prune", "statistics")
+] + [
+    ("difference", "toolkit", toolkit_env),
+    ("reference", "toolkit", toolkit_env),
+])
+def test_every_stage_seam_calls_a_falsy_factory(monkeypatch, stage, loader, env_of):
+    import importlib
+
+    factory = _FalsyFactory()
+    module = types.ModuleType("_seam_falsy_callable")
+    module.factory = factory
+    monkeypatch.setitem(sys.modules, "_seam_falsy_callable", module)
+    monkeypatch.setenv(env_of(stage), "_seam_falsy_callable:factory")
+    stage_module = importlib.import_module(f"rapidpipe.stages.{stage}")
+    assert getattr(stage_module, loader)() == "from-factory"
+    assert factory.calls == 1
