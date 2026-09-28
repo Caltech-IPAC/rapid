@@ -1,12 +1,9 @@
 """``rapidpipe loop run|plan|show``: the scheduled processing-date loop.
 
-The loop itself is ``rapidpipe.launch.loop``; this module parses the
-command line and hands the loop the CLI's own code paths
-(:class:`rapidpipe.launch.loop.LoopTools`): ``run start``'s walk
-(``runctl.walk_unit``), ``run create --release`` (``main.create_run_record``),
-``run create --seed <run> --only-failed`` (``main.create_only_failed_run``)
-and the storage helper ``run inputs`` uses (``runctl._Storage``), because
-``rapidpipe.launch`` may not import ``rapidpipe.cli``.
+The loop itself is ``rapidpipe.launch.loop``, which runs through the same
+code paths as ``run start`` (``rapidpipe.launch.walk``), ``run create``
+(``rapidpipe.runs.create``) and ``run inputs``; this module parses the
+command line, calls the loop and maps its exceptions to exit codes.
 
 A spec whose ``[loop]`` names an ``inbox`` discovers its deliveries there
 (``rapidpipe.launch.discovery``) and forms one batch per processing date
@@ -29,7 +26,7 @@ from typing import Any
 
 from rapidpipe.cli import runctl
 from rapidpipe.launch import loop as launch_loop
-from rapidpipe.launch import walk as launch_walk
+from rapidpipe.runs.create import ReleaseNotComplete
 from rapidpipe.exitcodes import ExitCode
 
 
@@ -102,17 +99,8 @@ def add_parser(subparsers: Any) -> None:
     show.add_argument("--json", action="store_true", help="Also print each record as JSON.")
 
 
-def _tools() -> launch_loop.LoopTools:
-    main = runctl._main_module()
-    return launch_loop.LoopTools(
-        walk=launch_walk.walk_unit, create_run=main.create_run_record,
-        storage=runctl._Storage(), inputs_root=launch_walk.inputs_root,
-        create_seeded_run=lambda conn, seed: main.create_only_failed_run(conn, seed)[0])
-
-
 def _usage_errors() -> tuple[type[BaseException], ...]:
-    main = runctl._main_module()
-    return (launch_loop.LoopSpecError, launch_loop.LoopError, main.ReleaseNotComplete)
+    return (launch_loop.LoopSpecError, launch_loop.LoopError, ReleaseNotComplete)
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -123,7 +111,7 @@ def _run(args: argparse.Namespace) -> int:
         return int(ExitCode.USAGE)
     return runctl._with_connection(
         "run", lambda conn: launch_loop.run_loop(
-            conn, spec, _tools(), dates=args.dates, dry_run=args.dry_run,
+            conn, spec, dates=args.dates, dry_run=args.dry_run,
             interval=args.interval, timeout=args.timeout, retry_failed=args.retry_failed),
         prog="rapidpipe loop", usage_errors=_usage_errors())
 
@@ -136,7 +124,7 @@ def _plan(args: argparse.Namespace) -> int:
         return int(ExitCode.USAGE)
 
     def body(conn) -> int:
-        launch_loop.plan(conn, spec, _tools())
+        launch_loop.plan(conn, spec)
         conn.rollback()
         return int(ExitCode.SUCCESS)
 

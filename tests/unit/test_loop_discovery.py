@@ -19,7 +19,10 @@ from pathlib import Path
 import pytest
 
 from rapidpipe.launch import discovery, loop
+from rapidpipe.launch import walk as launch_walk
+from rapidpipe.products import storage as products_storage
 from rapidpipe.products.manifest import Inputs, Manifest, Member, OutputEntry, Unit
+from rapidpipe.runs import create as runs_create
 from rapidpipe.runs import inputs, repository
 from tests.unit.test_loop import _Storage, _entry, _manifest
 
@@ -294,12 +297,21 @@ def _stage(s3, storage, date, name, manifest):
 
 
 class _Tools:
-    def __init__(self, s3, storage):
+    """The loop's collaborators, installed on the module attributes it calls:
+    run creation recorded in ``created``, progress lines in ``lines``, the
+    fake inbox client and storage; the walk is never reached here."""
+
+    def __init__(self, monkeypatch, s3, storage):
         self.created: list[dict] = []
         self.lines: list[str] = []
-        self.tools = loop.LoopTools(walk=None, create_run=self.create_run, storage=storage,
-                                    inputs_root=lambda run: f"s3://bkt/scratch/runs/{run}/inputs",
-                                    out=self.lines.append, s3_client=s3)
+        monkeypatch.setattr(launch_walk, "walk_unit",
+                            lambda *a, **k: pytest.fail("walk_unit called"))
+        monkeypatch.setattr(runs_create, "create_run_record", self.create_run)
+        monkeypatch.setattr(products_storage, "Storage", lambda: storage)
+        monkeypatch.setattr(products_storage, "s3_client", lambda: s3)
+        monkeypatch.setattr(launch_walk, "inputs_root",
+                            lambda run: f"s3://bkt/scratch/runs/{run}/inputs")
+        monkeypatch.setattr(loop, "_out", self.lines.append)
 
     def create_run(self, conn, **kwargs):
         self.created.append(kwargs)
@@ -318,7 +330,7 @@ def _recording_process(monkeypatch, db, *, result=0, finish=True, during=None):
     """Replace ``process_date``: record the batch, then complete its row."""
     calls = []
 
-    def process(conn, spec, day, tools, *, interval, timeout):
+    def process(conn, spec, day, *, interval, timeout):
         calls.append({"date": day.processing_date, "batch": day.batch,
                       "deliveries": day.deliveries,
                       "units": [i.unit for i in day.detector_images],
@@ -485,9 +497,9 @@ def test_two_dates_become_two_batches_oldest_first_all_committed_before_any_walk
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D2, "r2-sca01", _delivery("r2"))
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert [c["purpose"] for c in t.created] == [
         "processing date 2027-11-01 batch 1 (schedule ops4-stream)",
         "processing date 2027-11-02 batch 1 (schedule ops4-stream)"]
@@ -515,9 +527,9 @@ def test_two_dates_become_two_batches_oldest_first_all_committed_before_any_walk
 def test_the_batch_record_names_its_batch_and_deliveries(monkeypatch):
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     _recording_process(monkeypatch, db, finish=False)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert db.row(D1, 1)["record"] == {
         "spec": "s3://bkt/ops4/loop/ops4-stream.toml", "release": "rebuild-v0.4",
         "run": "RUN1", "batch": 1, "deliveries": [_loc(D1, "r1-sca01")]}
@@ -527,11 +539,11 @@ def test_a_later_arrival_for_a_date_is_its_next_batch_and_extends_the_first(monk
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
     _stage(s3, storage, D2, "r2-sca01", _delivery("r2"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     _stage(s3, storage, D2, "r3-sca01", _delivery("r3"))
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert [(c["date"], c["batch"]) for c in calls] == [(D1, 1), (D2, 1), (D2, 2)]
     assert t.created[-1]["purpose"] == "processing date 2027-11-02 batch 2 (schedule ops4-stream)"
     assert db.row(D2, 2)["record"]["deliveries"] == [_loc(D2, "r3-sca01")]
@@ -546,29 +558,29 @@ def test_a_later_arrival_for_a_date_is_its_next_batch_and_extends_the_first(monk
 def test_membership_is_frozen_at_the_listing(monkeypatch):
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
 
     def arrive(day):
         if day.batch == 1 and day.processing_date == D1 and len(s3.keys) == 1:
             _stage(s3, storage, D1, "late-sca01", _delivery("r9"))
 
     calls = _recording_process(monkeypatch, db, during=arrive)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert [(c["date"], c["batch"], c["deliveries"]) for c in calls] == [
         (D1, 1, (_loc(D1, "r1-sca01"),))]
     assert _loc(D1, "late-sca01") not in storage.reads
     assert len(s3.listings) == 1
     # The next firing forms the late delivery's batch.
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert [(c["date"], c["batch"], c["deliveries"]) for c in calls][1:] == [
         (D1, 2, (_loc(D1, "late-sca01"),))]
 
 
 def test_an_empty_firing_writes_nothing_and_exits_0(monkeypatch):
     db, s3, storage = _DB(), _S3([f"{INBOX}/README.txt"]), _Inbox()
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert t.lines == ["schedule ops4-stream: nothing to discover"]
     assert db.writes() == [] and t.created == [] and calls == []
     assert db.dates == [] and db.deliveries == []
@@ -577,13 +589,13 @@ def test_an_empty_firing_writes_nothing_and_exits_0(monkeypatch):
 def test_an_already_recorded_inbox_is_nothing_to_discover(monkeypatch):
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     before = len(db.writes())
     t.lines.clear()
     storage.reads.clear()
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert t.lines == ["schedule ops4-stream: nothing to discover"]
     assert len(db.writes()) == before and storage.reads == [] and len(t.created) == 1
 
@@ -596,10 +608,10 @@ def test_a_firing_of_only_rejections_records_them_and_creates_no_run(monkeypatch
     s3.add(_key(D1, "r1-sca01"))
     _stage(s3, storage, D2, "again-r1-sca01", _delivery("r1"))
     _stage(s3, storage, D2, "bad-r1-sca01", _delivery("r1", sha=SHA_B))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = _recording_process(monkeypatch, db)
     commits = db.commits
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert t.created == [] and calls == []
     assert [sql.split(" (")[0] for sql in db.writes()] == ["INSERT INTO loop_deliveries"] * 2
     assert [(d["location"], d["state"], d["reason"], d["batch"]) for d in db.deliveries[1:]] == [
@@ -614,16 +626,16 @@ def test_rejections_commit_before_the_first_batch(monkeypatch):
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D1, "a-sca01", _delivery("r1"))
     _stage(s3, storage, D1, "b-sca01", _delivery("r1"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     seen = {}
 
     def create_run(conn, **kwargs):
         seen["committed"] = [(d["location"], d["state"]) for d in db._committed["deliveries"]]
         return "RUN1"
 
-    t.tools.create_run = create_run
+    monkeypatch.setattr(runs_create, "create_run_record", create_run)
     _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert seen["committed"] == [(_loc(D1, "b-sca01"), "refused")]
     assert [(d["location"], d["state"], d["batch"]) for d in db.deliveries] == [
         (_loc(D1, "b-sca01"), "refused", None), (_loc(D1, "a-sca01"), "batched", 1)]
@@ -638,9 +650,9 @@ def test_a_unit_id_collision_is_quarantined_naming_the_earlier_delivery_and_the_
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D1, "image-sca01", _delivery("eA"))
     _stage(s3, storage, D1, "image_sca01", _delivery("eB"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert [(c["date"], c["batch"], c["deliveries"], c["units"]) for c in calls] == [
         (D1, 1, (_loc(D1, "image-sca01"),), ["image/SCA01"])]
     assert [(d["location"], d["state"], d["reason"], d["batch"]) for d in db.deliveries] == [
@@ -669,9 +681,9 @@ def test_resolve_unit_collisions_leaves_deliveries_without_a_collision_unchanged
 def test_a_held_lock_exits_75_before_any_discovery(monkeypatch):
     db, s3, storage = _DB(lock_held=True), _S3(), _Inbox()
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 75
+    assert loop.run_loop(db, _spec()) == 75
     assert t.lines == ["another loop holds schedule ops4-stream"]
     assert s3.listings == [] and storage.reads == [] and calls == [] and t.created == []
     assert [sql for sql, _ in db.executed] == [
@@ -683,9 +695,9 @@ def test_a_failed_batch_stops_the_firing_before_discovery(monkeypatch):
     db.seed_row(D1, 1, "RUN1", "failed")
     db.seed_delivery(_loc(D1, "r1-sca01"), D1, "r1", "1", SHA_A, "batched", batch=1)
     _stage(s3, storage, D2, "r2-sca01", _delivery("r2"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 1
+    assert loop.run_loop(db, _spec()) == 1
     assert s3.listings == [] and calls == [] and db.writes() == []
     assert t.lines[-1] == ("date=2027-11-01: failed; stopping before later dates "
                            "(--retry-failed re-runs its failed units)")
@@ -699,9 +711,9 @@ def test_open_batches_resume_before_discovery_in_date_and_batch_order(monkeypatc
     for date, batch, name in ((D2, 1, "a-sca01"), (D2, 2, "b-sca01"), (D1, 1, "c-sca01")):
         db.seed_delivery(_loc(date, name), date, name, "1", SHA_A, "batched", batch=batch)
         s3.add(_key(date, name))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = _recording_process(monkeypatch, db)
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert [(c["date"], c["batch"], c["deliveries"]) for c in calls] == [
         (D1, 1, (_loc(D1, "c-sca01"),)), (D2, 2, (_loc(D2, "b-sca01"),))]
     assert calls[0]["units"] == ["c/SCA01"]
@@ -712,12 +724,12 @@ def test_open_batches_resume_before_discovery_in_date_and_batch_order(monkeypatc
 def test_a_date_filter_on_an_inbox_spec_runs_only_listed_dates(monkeypatch):
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     calls = []
-    monkeypatch.setattr(loop, "process_date", lambda conn, spec, day, tools, **kw: (
+    monkeypatch.setattr(loop, "process_date", lambda conn, spec, day, **kw: (
         calls.append((day.processing_date, day.batch, day.deliveries)) or 0))
     _no_resume_state(monkeypatch)
-    assert loop.run_loop(db, _spec(LISTED), t.tools, dates=[dt.date(2027, 10, 1)]) == 0
+    assert loop.run_loop(db, _spec(LISTED), dates=[dt.date(2027, 10, 1)]) == 0
     assert calls == [(dt.date(2027, 10, 1), 1, ())] and s3.listings == []
 
 
@@ -764,7 +776,7 @@ def test_a_crash_after_the_batches_commit_resumes_the_same_runs(monkeypatch):
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
     _stage(s3, storage, D2, "r2-sca01", _delivery("r2"))
     _science(monkeypatch, storage)
-    t = _Tools(s3, storage)
+    t = _Tools(monkeypatch, s3, storage)
     walked: list[tuple[str, str]] = []
     crash = {"armed": True}
 
@@ -775,16 +787,16 @@ def test_a_crash_after_the_batches_commit_resumes_the_same_runs(monkeypatch):
         walked.append((run_id, unit_id))
         return 0
 
-    t.tools.walk = walk
+    monkeypatch.setattr(launch_walk, "walk_unit", walk)
     with pytest.raises(RuntimeError, match="terminated"):
-        loop.run_loop(db, _spec(), t.tools)
+        loop.run_loop(db, _spec())
     assert [(r["processing_date"], r["batch"], r["run"], r["state"]) for r in db.dates] == [
         (D1, 1, "RUN1", "open"), (D2, 1, "RUN2", "open")]
     assert len(db.deliveries) == 2 and len(t.created) == 2
     inserts_before = [sql for sql in db.writes() if sql.startswith("INSERT")]
 
     t.lines.clear()
-    assert loop.run_loop(db, _spec(), t.tools) == 0
+    assert loop.run_loop(db, _spec()) == 0
     assert len(t.created) == 2                    # create_run not called again
     assert [sql for sql in db.writes() if sql.startswith("INSERT")] == inserts_before
     assert [(r["processing_date"], r["batch"], r["run"], r["state"]) for r in db.dates] == [
@@ -850,11 +862,12 @@ def test_retry_failed_repoints_only_the_batch_being_retried(monkeypatch):
     db = _DB()
     db.seed_row(D1, 1, "RUN1", "failed", record={"run": "RUN1", "failure": "f1"})
     db.seed_row(D1, 2, "RUN2", "failed", record={"run": "RUN2", "failure": "f2"})
-    t = _Tools(_S3(), _Inbox())
-    t.tools.create_seeded_run = lambda conn, seed: f"{seed}-retry"
+    t = _Tools(monkeypatch, _S3(), _Inbox())
+    monkeypatch.setattr(runs_create, "create_only_failed_run",
+                        lambda conn, seed: (f"{seed}-retry", None, []))
     row2 = loop.loop_row(db, "ops4-stream", D1, 2)
     assert row2.batch == 2
-    assert loop.retry_date(db, _spec(), row2, t.tools) == 0
+    assert loop.retry_date(db, _spec(), row2) == 0
     assert (db.row(D1, 2)["run"], db.row(D1, 2)["state"]) == ("RUN2-retry", "open")
     assert (db.row(D1, 1)["run"], db.row(D1, 1)["state"]) == ("RUN1", "failed")
     assert t.lines == ["date=2027-11-01 batch=2 run=RUN2-retry reopened (--retry-failed, "
@@ -865,8 +878,8 @@ def test_reopen_repoints_only_its_own_batch(monkeypatch):
     db = _DB()
     db.seed_row(D1, 1, "RUN1", "failed", record={"run": "RUN1", "failure": "f1"})
     db.seed_row(D1, 2, "RUN2", "failed", record={"run": "RUN2", "failure": "f2"})
-    t = _Tools(_S3(), _Inbox())
-    loop.reopen_date(db, _spec(), loop.loop_row(db, "ops4-stream", D1, 1), t.tools)
+    t = _Tools(monkeypatch, _S3(), _Inbox())
+    loop.reopen_date(db, _spec(), loop.loop_row(db, "ops4-stream", D1, 1))
     assert db.row(D1, 1)["state"] == "open" and db.row(D1, 2)["state"] == "failed"
 
 
@@ -882,8 +895,8 @@ def test_plan_on_an_inbox_spec_classifies_without_writing(monkeypatch):
     _stage(s3, storage, D1, "r2-sca01", _delivery("r2"))
     _stage(s3, storage, D1, "again-r1-sca01", _delivery("r1"))
     _no_resume_state(monkeypatch)
-    t = _Tools(s3, storage)
-    lines = loop.plan(db, _spec(), t.tools)
+    t = _Tools(monkeypatch, s3, storage)
+    lines = loop.plan(db, _spec())
     assert db.writes() == [] and t.created == []
     assert [(line["processing_date"], line["action"], line.get("batch")) for line in lines] == [
         ("2027-11-01", "resume", 1), ("2027-11-01", "refused", None),
@@ -898,8 +911,8 @@ def test_plan_on_an_inbox_spec_classifies_without_writing(monkeypatch):
 def test_dry_run_on_an_inbox_spec_is_the_plan(monkeypatch):
     db, s3, storage = _DB(), _S3(), _Inbox()
     _stage(s3, storage, D1, "r1-sca01", _delivery("r1"))
-    t = _Tools(s3, storage)
-    assert loop.run_loop(db, _spec(), t.tools, dry_run=True) == 0
+    t = _Tools(monkeypatch, s3, storage)
+    assert loop.run_loop(db, _spec(), dry_run=True) == 0
     assert db.writes() == [] and t.created == []
     assert t.lines[-1].endswith("action=batched batch=1 unit=r1/SCA01")
 

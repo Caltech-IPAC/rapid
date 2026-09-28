@@ -119,7 +119,7 @@ def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch, exis
     bound, copied, written or composed around the (recording) primitive."""
     # _two_image_world: two images whose source sets share one maintain unit
     # from two load outputs (so maintain composes), two fields, two images.
-    spec, tools, storage, walks, created, updates, units = _two_image_world(monkeypatch)
+    spec, storage, walks, created, updates, units = _two_image_world(monkeypatch)
     root = "s3://b/scratch/runs/RUN2/inputs"
     dests = [f"{root}/maintain/20271001/SCA01", f"{root}/crossmatch/5",
              f"{root}/crossmatch/6", f"{root}/alerts/{units[0]}", f"{root}/alerts/{units[1]}"]
@@ -156,7 +156,7 @@ def test_the_loops_three_sites_each_make_one_call_per_consumer(monkeypatch, exis
     calls = _recorder(monkeypatch)
     bypass = _bypass_log(monkeypatch)
 
-    assert loop.process_date(_Conn(), spec, spec.dates[0], tools, interval=1, timeout=10) == 0
+    assert loop.process_date(_Conn(), spec, spec.dates[0], interval=1, timeout=10) == 0
     seen = [(c["run_id"], c["stage"], c["unit_kind"], c["unit_id"], c["dest"]) for c in calls]
     assert seen == [
         ("RUN2", "maintain", "detector-date", "20271001/SCA01", dests[0]),
