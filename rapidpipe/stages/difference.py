@@ -107,21 +107,10 @@ _SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings" / "differen
 DECLARATION = StageDeclaration(
     name="difference",
     unit="detector-image",
-    argument_schema={
-        "description": (
-            "rapidpipe stage difference --run <run-id> --unit <unit-id> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds an input-set "
-            "manifest.json listing one l2-image, one reference-image, one "
-            "reference-catalog and two psf entries (applies_to science and "
-            "reference), with their member files."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("l2-image", "reference-image", "reference-catalog", "psf"),
     produces=("difference-image", "source-catalog"),
     database_access="none",
-    resource_defaults={"vcpus": 4, "memory_mib": 16384},
 )
 
 

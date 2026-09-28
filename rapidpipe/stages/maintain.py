@@ -34,6 +34,9 @@ clusters and analyzes rows other stages wrote. ``result_sets_read``
 names every source-set instance the input manifest listed, so the run
 records which loads this maintenance pass covered.
 
+Settings. None: the stage declares no settings file, so a ``--settings``
+overlay is valid only if it is empty.
+
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli``.
@@ -63,19 +66,10 @@ from rapidpipe.stages.contract import (
 DECLARATION = StageDeclaration(
     name="maintain",
     unit="detector-date",
-    argument_schema={
-        "description": (
-            "rapidpipe stage maintain --run <run-id> --unit <yyyymmdd>/SCA<nn> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> [--dry-run]. "
-            "--inputs holds a manifest of one or more source-set entries for "
-            "the unit's sources child table; no --settings overlay is accepted."
-        ),
-    },
     settings_schema_path=None,
     consumes=("source-set",),
     produces=(),
     database_access="read-write",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 #: The unit id's shape (maintain page): the observation date and two-digit SCA

@@ -137,22 +137,11 @@ CODECS = ("deflate", "null")
 DECLARATION = StageDeclaration(
     name="alerts",
     unit="detector-image",
-    argument_schema={
-        "description": (
-            "rapidpipe stage alerts --run <run-id> --unit <unit-id> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds an input-set "
-            "manifest (stage input-set) naming one difference-image entry, "
-            "optionally one reference-catalog entry, and in inputs.result_sets "
-            "the source, association, statistics and pruned sets by instance id."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("difference-image", "reference-catalog", "source-set", "association-set",
               "statistics-set", "pruned-set"),
     produces=("alert-container", "alert-set"),
     database_access="read-write",
-    resource_defaults={"vcpus": 1, "memory_mib": 8192},
 )
 
 

@@ -91,20 +91,10 @@ DESIGNED_IN_MEMBERSHIPS = ("pruned",)
 DECLARATION = StageDeclaration(
     name="statistics",
     unit="field",
-    argument_schema={
-        "description": (
-            "rapidpipe stage statistics --run <run-id> --unit <rtid> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds crossmatch's "
-            "completion manifest: one association-set entry for the unit's "
-            "field, already registered."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("association-set",),
     produces=("statistics-set",),
     database_access="read-write",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 _UNIT_ID_RE = re.compile(r"[0-9]+")

@@ -91,20 +91,10 @@ _UNIT_ID_RE = re.compile(r"^[0-9]+$")
 DECLARATION = StageDeclaration(
     name="prune",
     unit="field",
-    argument_schema={
-        "description": (
-            "rapidpipe stage prune --run <run-id> --unit <field-rtid> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds crossmatch's "
-            "completion manifest, with exactly one association-set entry "
-            "naming this field."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("association-set",),
     produces=("pruned-set",),
     database_access="read-write",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 

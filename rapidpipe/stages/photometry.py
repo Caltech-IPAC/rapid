@@ -84,23 +84,10 @@ PSF_SOURCES = ("difference", "reference", "difference-then-reference")
 DECLARATION = StageDeclaration(
     name="photometry",
     unit="field",
-    argument_schema={
-        "description": (
-            "rapidpipe stage photometry --run <run-id> --unit <unit-id> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds an input-set "
-            "manifest (stage input-set) naming one or more difference-image "
-            "entries, one or more psf entries, and in inputs.result_sets "
-            "exactly one object set (a statistics-set or association-set "
-            "instance) to fit forced photometry for. Declared, not "
-            "implemented in this build: a valid invocation exits 69."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("difference-image", "psf", "statistics-set", "association-set"),
     produces=("light-curve",),
     database_access="none",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
     supported_exit_codes=(
         ExitCode.SUCCESS,
         ExitCode.USAGE,

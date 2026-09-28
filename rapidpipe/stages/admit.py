@@ -91,20 +91,10 @@ _SIP_COEFF_RE = re.compile(r"^([AB])_(\d+)_(\d+)$")
 DECLARATION = StageDeclaration(
     name="admit",
     unit="detector-image",
-    argument_schema={
-        "description": (
-            "rapidpipe stage admit --run <run-id> --unit <unit-id> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds a delivery "
-            "manifest.json (stage 'delivery', one l2-image entry, format "
-            "version 'delivered')."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=(),
     produces=("l2-image",),
     database_access="none",
-    resource_defaults={"vcpus": 1, "memory_mib": 2048},
 )
 
 

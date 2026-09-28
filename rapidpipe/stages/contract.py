@@ -160,7 +160,7 @@ class TransientFailure(StageContractError):
 
 @dataclass(frozen=True)
 class StageDeclaration:
-    """What a stage is: its name, unit, schemas, dependencies and limits.
+    """What a stage is: its name, unit, settings, dependencies and exit codes.
 
     Importing a declaration performs no I/O (stage contract, "Declaration").
     ``consumes`` and ``produces`` name the product kinds the stage requires
@@ -172,12 +172,10 @@ class StageDeclaration:
 
     name: str
     unit: str
-    argument_schema: dict[str, Any]
     settings_schema_path: str | None
     consumes: tuple[str, ...]
     produces: tuple[str, ...]
     database_access: str
-    resource_defaults: dict[str, Any] = field(default_factory=dict)
     supported_exit_codes: tuple[ExitCode, ...] = (
         ExitCode.SUCCESS,
         ExitCode.USAGE,
