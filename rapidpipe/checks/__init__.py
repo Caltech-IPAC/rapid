@@ -5,7 +5,7 @@
 - :mod:`rapidpipe.checks.builtin` -- the two shipped checks,
   ``difference-image-statistics@1`` and ``catalog-counts-vs-reference@1``.
 - :mod:`rapidpipe.checks.policy` -- versioned TOML policies shipped in
-  ``policies/`` (``rebuild-trial@1``, ``rebuild-strict@1``).
+  ``policies/`` (``rebuild-trial@1``).
 - :mod:`rapidpipe.checks.runner` -- running and recording checks, and
   automatic promotion (designed in, off).
 

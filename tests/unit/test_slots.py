@@ -3,7 +3,7 @@
 The selector and plan helpers (``rapidpipe.runs.slots``); ``promote``'s
 selector handling, refusals and the association-set ancestor rule;
 ``promote_run``'s frozen plan; ``rollback_promotion``'s recorded
-selectors; the quiet fill; ``run promote-plan`` and ``run promote --plan``
+slots; the quiet fill; ``run promote-plan`` and ``run promote --plan``
 through the CLI; the reference check reading the slot. The derivation
 itself is SQL (migration 20260926-02) and is proven by the DB-backed tests.
 """
@@ -64,12 +64,9 @@ class _Db:
         if text.startswith("SELECT id FROM product_instances WHERE kind = %s AND slot = %s"):
             found = self.current(params[0], "slot", json.loads(params[1]))
             return [(found,)] if found else []
-        if text.startswith("SELECT id FROM product_instances WHERE kind = %s AND logical_key"):
-            found = self.current(params[0], "logical_key", json.loads(params[1]))
-            return [(found,)] if found else []
-        if text.startswith("SELECT pi.custody, pi.kind, pi.slot, pi.logical_key"):
+        if text.startswith("SELECT pi.custody, pi.kind, pi.slot, pi.deletion_state"):
             r = self.instances.get(params[0])
-            return [] if r is None else [(r["custody"], r["kind"], r["slot"], r["logical_key"],
+            return [] if r is None else [(r["custody"], r["kind"], r["slot"],
                                           r["deletion_state"], False, None, r["identity"])]
         if text.startswith("SELECT pi.producing_attempt, u.selected_attempt"):
             return [("A", "A")]
@@ -151,7 +148,7 @@ def test_canonical_json_sorts_keys_and_drops_spaces():
 
 @pytest.mark.parametrize("selector", [
     None, {}, {"slot": {}}, {"slot": [1]}, {"slot": {"a": 1}, "logical_key": {"a": 1}},
-    {"key": {"a": 1}}, "slot",
+    {"key": {"a": 1}}, "slot", {"logical_key": {"a": 1}},
 ])
 def test_selector_parts_refuses_what_is_not_a_selector(selector):
     with pytest.raises(ValueError):
@@ -160,7 +157,6 @@ def test_selector_parts_refuses_what_is_not_a_selector(selector):
 
 def test_selector_parts_returns_the_kind_and_value():
     assert slots.selector_parts({"slot": {"a": 1}}) == ("slot", {"a": 1})
-    assert slots.selector_parts({"logical_key": {}}) == ("logical_key", {})
 
 
 def test_plan_entries_sort_by_kind_then_canonical_slot_and_round_trip():
@@ -215,35 +211,19 @@ def test_an_unselect_records_the_before_instances_logical_key():
     assert db.changes[0][4] is None
 
 
-@pytest.mark.parametrize("selector", [{"difference": "D1"}, {"slot": {}}, {"slot": S1, "x": {}}])
+@pytest.mark.parametrize("selector", [{"difference": "D1"}, {"slot": {}}, {"slot": S1, "x": {}},
+                                      {"logical_key": {"d": 1}}])
 def test_promote_refuses_what_is_not_a_selector(selector):
-    db = _Db([{"id": "NEW", "kind": "source-set", "slot": S1}])
-    with pytest.raises(repository.PromotionRefused, match="refusing the whole promotion"):
+    db = _Db([{"id": "NEW", "kind": "source-set", "slot": S1, "logical_key": {"d": 1}}])
+    with pytest.raises(repository.RequestInvalid, match="refusing the whole promotion"):
         _promote(db, [("source-set", selector, None, "NEW")])
     assert db.changes == []
-
-
-def test_promote_refuses_a_logical_key_selector_from_a_direct_caller():
-    db = _Db([{"id": "NEW", "kind": "source-set", "slot": None, "logical_key": {"d": 1}}])
-    with pytest.raises(repository.PromotionRefused, match="only when rolling back"):
-        _promote(db, [("source-set", {"logical_key": {"d": 1}}, None, "NEW")])
-
-
-def test_promote_accepts_a_logical_key_selector_as_the_recorded_inverse():
-    db = _Db([
-        {"id": "OLD", "kind": "source-set", "custody": "current", "logical_key": {"d": 1}},
-        {"id": "NEW", "kind": "source-set", "logical_key": {"d": 1}},
-    ])
-    _promote(db, [("source-set", {"logical_key": {"d": 1}}, "OLD", "NEW")],
-             _recorded_inverse=True)
-    assert db.changes[0][2] is None     # no slot recorded
-    assert json.loads(db.changes[0][1]) == {"d": 1}
 
 
 def test_promote_refuses_the_same_slot_twice():
     db = _Db([{"id": "A", "kind": "source-set", "slot": S1},
               {"id": "B", "kind": "source-set", "slot": S1}])
-    with pytest.raises(repository.PromotionRefused, match="more than once"):
+    with pytest.raises(repository.RequestInvalid, match="more than once"):
         _promote(db, [("source-set", {"slot": S1}, None, "A"),
                       ("source-set", {"slot": dict(reversed(S1.items()))}, None, "B")])
 
@@ -319,17 +299,18 @@ def test_association_replacement_refused_unless_before_is_an_ancestor(after, aft
     assert db.instances["X1"]["custody"] == "current"
 
 
-def test_association_initial_selection_and_recorded_inverse_skip_the_ancestor_rule():
+def test_association_initial_selection_and_rollback_skip_the_ancestor_rule():
     db = _chain_db(None)
     db.instances["X1"]["custody"] = "candidate"
     _promote(db, [("association-set", {"slot": {"field": 100}}, None, "X3")])
-    # the recorded inverse of a replacement X1 -> X2: X2 is not X1's ancestor
+    # the rollback of a replacement X1 -> X2: X2 is not X1's ancestor
     db = _chain_db(None)
     db.instances["X1"]["custody"] = "candidate"
     db.instances["X2"]["custody"] = "current"
     _promote(db, [("association-set", {"slot": {"field": 100}}, "X2", "X1")],
-             _recorded_inverse=True)
+             _rollback_of="P0")
     assert db.instances["X1"]["custody"] == "current"
+    assert json.loads(db.promotions[0][5]) == {"rollback_of": "P0"}
 
 
 # ======================================================================
@@ -381,7 +362,7 @@ def test_promote_run_refuses_a_plan_missing_a_candidate():
 
 
 def test_promote_run_refuses_a_malformed_plan():
-    with pytest.raises(repository.PromotionRefused, match="plan is malformed"):
+    with pytest.raises(repository.RequestInvalid, match="plan is malformed"):
         repository.promote_run(_Conn(_run_db()), "R", "ops", "r", plan=[{"kind": "x"}])
 
 
@@ -404,7 +385,7 @@ def test_promote_run_refuses_a_candidate_without_an_identity():
 def test_promote_run_refuses_a_supplied_plan_that_is_not_a_non_empty_list(plan):
     # A supplied None is a malformed plan, never "no plan".
     db = _run_db()
-    with pytest.raises(repository.PromotionRefused, match="plan is (malformed|empty)"):
+    with pytest.raises(repository.RequestInvalid, match="plan is (malformed|empty)"):
         repository.promote_run(_Conn(db), "R", "ops", "r", plan=plan)
     assert db.changes == [] and db.promotions == []
 
@@ -425,22 +406,27 @@ def test_promotion_plan_refuses_a_run_with_nothing_to_promote():
 
 
 # ======================================================================
-# rollback: the recorded selector
+# rollback: the recorded slot
 # ======================================================================
 
-def test_rollback_selects_by_recorded_slot_or_logical_key(monkeypatch):
-    class _RollbackCursor(_Cursor):
-        def execute(self, sql, params=()):
-            if "FROM promotion_changes" in sql:
-                self.rows = [("source-set", {"d": 1}, S1, "B1", "A1"),
-                             ("l2-image", {"e": 1}, None, None, "A2")]
-            else:
-                self.rows = [(1,)]
+class _RollbackCursor(_Cursor):
+    recorded: list = []
+    exists = True
 
-    class _RollbackConn:
-        def cursor(self):
-            return _RollbackCursor(None)
+    def execute(self, sql, params=()):
+        if "FROM promotion_changes" in sql:
+            self.rows = list(self.recorded)
+        else:
+            self.rows = [(1,)] if self.exists else []
 
+
+class _RollbackConn:
+    def cursor(self):
+        return _RollbackCursor(None)
+
+
+def test_rollback_selects_by_recorded_slot(monkeypatch):
+    monkeypatch.setattr(_RollbackCursor, "recorded", [("source-set", S1, "B1", "A1")])
     seen = {}
 
     def _promote_stub(conn, who, reason, changes, **kw):
@@ -449,9 +435,23 @@ def test_rollback_selects_by_recorded_slot_or_logical_key(monkeypatch):
 
     monkeypatch.setattr(repository, "promote", _promote_stub)
     assert repository.rollback_promotion(_RollbackConn(), "P1", "ops", "r") == "UNDO"
-    assert seen["changes"] == [("source-set", {"slot": S1}, "A1", "B1"),
-                               ("l2-image", {"logical_key": {"e": 1}}, "A2", None)]
-    assert seen["_recorded_inverse"] is True and seen["_check_release"] is False
+    assert seen["changes"] == [("source-set", {"slot": S1}, "A1", "B1")]
+    assert seen["_rollback_of"] == "P1"
+
+
+def test_rollback_refuses_a_change_recorded_without_a_slot(monkeypatch):
+    monkeypatch.setattr(_RollbackCursor, "recorded", [("source-set", S1, "B1", "A1"),
+                                                      ("l2-image", None, None, "A2")])
+    monkeypatch.setattr(repository, "promote", lambda *a, **k: pytest.fail("promoted"))
+    with pytest.raises(repository.PromotionRefused,
+                       match="recorded before slot identity; not reversible"):
+        repository.rollback_promotion(_RollbackConn(), "P1", "ops", "r")
+
+
+def test_rollback_of_an_unknown_promotion_is_a_usage_error(monkeypatch):
+    monkeypatch.setattr(_RollbackCursor, "exists", False)
+    with pytest.raises(repository.RequestInvalid, match="'P9' does not exist"):
+        repository.rollback_promotion(_RollbackConn(), "P9", "ops", "r")
 
 
 # ======================================================================
@@ -572,17 +572,17 @@ def test_promote_plan_prints_the_plan_as_json_and_rolls_back(monkeypatch, cli_co
     assert cli_conn.rolled_back == 1
 
 
-def test_promote_plan_exits_64_when_there_is_nothing_to_promote(monkeypatch, cli_conn, capsys):
+def test_promote_plan_exits_1_when_there_is_nothing_to_promote(monkeypatch, cli_conn, capsys):
     def _refuse(conn, run_id, *, kinds=None):
         raise repository.PromotionRefused(f"run {run_id!r} has nothing to promote")
 
     monkeypatch.setattr(repository, "promotion_plan", _refuse)
-    assert cli.main(["run", "promote-plan", "R1"]) == 64
+    assert cli.main(["run", "promote-plan", "R1"]) == 1
     captured = capsys.readouterr()
     assert captured.out == "" and "nothing to promote" in captured.err
 
 
-def test_promote_with_a_plan_passes_it_and_a_stale_plan_exits_64(
+def test_promote_with_a_plan_passes_it_and_a_stale_plan_exits_1(
         monkeypatch, cli_conn, capsys, tmp_path):
     plan = [{"kind": "source-set", "slot": S1, "before": None, "after": "C1"}]
     path = tmp_path / "plan.json"
@@ -594,7 +594,7 @@ def test_promote_with_a_plan_passes_it_and_a_stale_plan_exits_64(
         raise repository.StalePlan("stale plan for run 'R1': kind='source-set'")
 
     monkeypatch.setattr(repository, "promote_run", _promote_run)
-    assert cli.main(["run", "promote", "R1", "--reason", "r", "--plan", str(path)]) == 64
+    assert cli.main(["run", "promote", "R1", "--reason", "r", "--plan", str(path)]) == 1
     assert seen["plan"] == plan
     assert "stale plan" in capsys.readouterr().err
     assert cli_conn.committed == 0

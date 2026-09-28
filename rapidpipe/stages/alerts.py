@@ -236,7 +236,7 @@ def _postgres() -> Iterator[PostgresAlertsDatabase]:
 def open_database():
     """PostgreSQL, unless ``RAPIDPIPE_ALERTS_DATABASE`` names another; tests monkeypatch this."""
     factory = load_factory(database_env("alerts"), UsageError)
-    return factory() if factory else _postgres()
+    return factory() if factory is not None else _postgres()
 
 
 # ----------------------------------------------------------------------

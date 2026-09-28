@@ -1,21 +1,20 @@
 """Dependency eligibility against a real PostgreSQL.
 
 The chain proofs build a three-generation chain across three production
-runs: a grandparent difference image G (run A) whose required check
-``difference-image-statistics@1`` failed under ``rebuild-trial@1`` -> a
-parent source set P (run B; the policy names no required check for its
-kind) -> a child association set C (run C). Promoting C walks the whole
-chain (runs.md §Rules); ``check accept`` on G through ``rapidpipe.cli.main``
-lets it through; the refusal writes nothing. The acceptance lines of
-``check show`` and ``run show`` and the registration-time read rule
-for file products (products.md §Registration metadata) are proved here too.
+runs: a grandparent difference image G (run A) -> a parent source set P
+(run B) -> a child association set C (run C). Promoting C walks the whole
+chain (runs.md §Rules): every ancestor must be current or superseded, or
+an after instance of the same request; the refusal writes nothing.
+A dependency chain within one run promotes in one ``promote_run``; a run
+depending on another run's candidates waits until those are promoted.
+The ``state:`` block of ``run show`` and the registration-time read rule
+for file products (products.md §Registration metadata) are proved here
+too.
 
 Skips cleanly if PGHOST is unset (see conftest.py).
 """
 
 from __future__ import annotations
-
-import json
 
 import pytest
 
@@ -28,6 +27,12 @@ from rapidpipe.runs import repository as repo
 from .test_checks import TRIAL, _diff_candidate, _savepoint_raises, _selected_attempt
 from .test_checks import cli_conn  # noqa: F401  (pytest fixture)
 from .test_repository import _make_run, _register_simple_instance, by_slot, pin_test_slot
+from .test_slots import (
+    _NO_CHECKS_POLICY,
+    _register_difference,
+    _register_l2,
+    _register_reference,
+)
 
 #: Statistics ``rebuild-trial@1`` refuses (n_min is 1000).
 BAD_STATS = {"nsexcatsources": 10}
@@ -38,7 +43,7 @@ BAD_STATS = {"nsexcatsources": 10}
 # ======================================================================
 
 def _check(conn, run_id, instance):
-    """Run the run's policy checks over ``instance`` and record them."""
+    """Run the trial policy's checks over ``instance`` and record them."""
     return run_policy_checks(conn, run_id, load_policy(TRIAL), instance=instance, who="test")
 
 
@@ -61,25 +66,32 @@ def _result_set(conn, run_id, kind, *, key, products=None, result_sets=()):
 class Chain:
     """G (difference-image, run A) -> P (source-set, run B) -> C (association-set, run C)."""
 
-    def __init__(self, conn, *, grandparent_checked=True, grandparent_passes=False):
+    def __init__(self, conn):
         self.run_a = _make_run(conn)
         self.run_b = _make_run(conn)
         self.run_c = _make_run(conn)
         self.g_key = {"k": new_ulid()}
-        self.g = _diff_candidate(conn, self.run_a, key=self.g_key,
-                                 stats=None if grandparent_passes else BAD_STATS)
-        if grandparent_checked:
-            _check(conn, self.run_a, self.g)
-        self.p = _result_set(conn, self.run_b, "source-set",
-                             key={"difference": self.g, "catalog_type": "t"},
+        self.g = _diff_candidate(conn, self.run_a, key=self.g_key)
+        self.p_key = {"difference": self.g, "catalog_type": "t"}
+        self.p = _result_set(conn, self.run_b, "source-set", key=self.p_key,
                              products={"difference": self.g})
         self.c_key = {"field": new_ulid(), "base": None}
         self.c = _result_set(conn, self.run_c, "association-set", key=self.c_key,
                              result_sets=[self.p])
 
+    def change(self, which):
+        kind, key, instance = {
+            "g": ("difference-image", self.g_key, self.g),
+            "p": ("source-set", self.p_key, self.p),
+            "c": ("association-set", self.c_key, self.c),
+        }[which]
+        return (kind, by_slot(key), None, instance)
+
+    def promote(self, conn, *which, **kw):
+        return repo.promote(conn, "t", "chain", [self.change(w) for w in which], **kw)
+
     def promote_child(self, conn):
-        return repo.promote(conn, "t", "chain", [
-            ("association-set", by_slot(self.c_key), None, self.c)])
+        return self.promote(conn, "c")
 
 
 def _custody(conn, instance):
@@ -90,7 +102,7 @@ def _custody(conn, instance):
 
 def _state(conn, instance):
     with conn.cursor() as cur:
-        return eligibility.acceptance_state(cur, instance)
+        return eligibility.instance_state(cur, instance)
 
 
 def _counts(conn, instances):
@@ -99,19 +111,17 @@ def _counts(conn, instances):
         promotions = cur.fetchone()[0]
         cur.execute("SELECT count(*) FROM promotion_changes")
         changes = cur.fetchone()[0]
-        cur.execute("SELECT count(*) FROM acceptances")
-        acceptances = cur.fetchone()[0]
         cur.execute("SELECT id, custody FROM product_instances WHERE id = ANY(%s) ORDER BY id",
                     (list(instances),))
         custody = cur.fetchall()
-    return promotions, changes, acceptances, custody
+    return promotions, changes, custody
 
 
-def _acceptance_rows(conn, instance):
+def _unselect(conn, instance):
     with conn.cursor() as cur:
-        cur.execute("SELECT who, reason, policy_ref, check_ids::text[], detail "
-                    "FROM acceptances WHERE instance = %s", (instance,))
-        return cur.fetchall()
+        cur.execute("UPDATE units SET selected_attempt = NULL WHERE id = "
+                    "(SELECT a.unit FROM attempts a JOIN product_instances pi "
+                    " ON pi.producing_attempt = a.id WHERE pi.id = %s)", (instance,))
 
 
 # ======================================================================
@@ -120,26 +130,23 @@ def _acceptance_rows(conn, instance):
 
 def test_states_of_the_chain(conn):
     chain = Chain(conn)
-    g, p, c = (_state(conn, i) for i in (chain.g, chain.p, chain.c))
-    assert g.state == "rejected"
-    assert g.required_checks == [("difference-image-statistics@1", "failed")]
-    assert g.policy_ref == TRIAL and len(g.check_ids) == 1
-    # source-set: only an advisory check under the policy, so none is required.
-    assert p.state == "accepted" and p.required_checks == []
-    assert c.state == "accepted"
-    assert "rejected: difference-image-statistics@1 failed" in g.why()
+    for instance in (chain.g, chain.p, chain.c):
+        state = _state(conn, instance)
+        assert (state.state, state.detail()) == ("candidate", "custody=candidate")
+    # A failed check changes no state: states are custody, completeness and
+    # selection facts only.
+    _check(conn, chain.run_a, chain.g)
+    assert _state(conn, chain.g).state == "candidate"
+    assert _state(conn, chain.g).why() == "candidate: not current or superseded"
 
 
 def test_state_precedence(conn):
-    chain = Chain(conn, grandparent_checked=False)
-    assert _state(conn, chain.g).state == "pending"
+    chain = Chain(conn)
+    assert _state(conn, chain.g).state == "candidate"
     with conn.cursor() as cur:
         cur.execute("UPDATE product_instances SET custody = 'current' WHERE id = %s", (chain.g,))
     assert _state(conn, chain.g).state == "current"
-    with conn.cursor() as cur:
-        cur.execute("UPDATE units SET selected_attempt = NULL WHERE id = "
-                    "(SELECT a.unit FROM attempts a JOIN product_instances pi "
-                    " ON pi.producing_attempt = a.id WHERE pi.id = %s)", (chain.g,))
+    _unselect(conn, chain.g)
     unselected = _state(conn, chain.g)
     assert unselected.state == "unselected"          # before current
     assert "selected_attempt=none" in unselected.detail()
@@ -157,7 +164,13 @@ def test_state_precedence(conn):
     assert _state(conn, chain.p).state == "incomplete"
     with conn.cursor() as cur:
         with pytest.raises(LookupError):
-            eligibility.acceptance_state(cur, "0" * 26)
+            eligibility.instance_state(cur, "0" * 26)
+
+
+def test_the_acceptances_table_is_gone(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('acceptances')")
+        assert cur.fetchone()[0] is None
 
 
 # ======================================================================
@@ -169,8 +182,8 @@ def test_promoting_the_child_is_refused_naming_the_grandparent(conn):
     info = _savepoint_raises(conn, repo.PromotionRefused, lambda: chain.promote_child(conn))
     message = str(info.value)
     assert f"after instance {chain.c!r} depends on {chain.g!r}" in message
-    assert "difference-image, rejected: difference-image-statistics@1 failed" in message
-    assert "accept it with `check accept` or replace it" in message
+    assert ("(difference-image, candidate: not current or superseded; promote it first "
+            "or in the same request); refusing") in message
 
 
 def test_the_refusal_changes_nothing(conn):
@@ -179,81 +192,63 @@ def test_the_refusal_changes_nothing(conn):
     before = _counts(conn, instances)
     _savepoint_raises(conn, repo.PromotionRefused, lambda: chain.promote_child(conn))
     assert _counts(conn, instances) == before
-    assert [c for _, c in before[3]] == ["candidate"] * 3
+    assert [c for _, c in before[2]] == ["candidate"] * 3
 
 
-def test_check_accept_on_the_grandparent_permits_the_promotion(conn, cli_conn, capsys):  # noqa: F811
+def test_the_whole_chain_promotes_in_one_request(conn):
     chain = Chain(conn)
-    assert cli_conn.main(["check", "accept", chain.run_a, "--instance", chain.g,
-                          "--reason", "scalefacref known high on this date",
-                          "--who", "lead"]) == 0
-    out = capsys.readouterr().out.strip()
-    (row,) = _acceptance_rows(conn, chain.g)
-    who, reason, policy_ref, check_ids, detail = row
-    assert (who, reason, policy_ref) == ("lead", "scalefacref known high on this date", TRIAL)
-    assert check_ids == _state(conn, chain.g).check_ids and len(check_ids) == 1
-    assert detail["failed"][0]["check"] == "difference-image-statistics@1"
-    assert detail["failed"][0]["outcome"] == "failed" and detail["failed"][0]["summary"]
-    assert out.startswith(f"accepted instance={chain.g} kind=difference-image acceptance=")
-    assert out.endswith(f"policy={TRIAL} checks=1")
-    accepted = _state(conn, chain.g)
-    assert accepted.state == "accepted" and accepted.reason == "scalefacref known high on this date"
+    chain.promote(conn, "g", "p", "c")
+    assert [_custody(conn, i) for i in (chain.g, chain.p, chain.c)] == ["current"] * 3
 
+
+def test_the_chain_promotes_ancestor_first(conn):
+    chain = Chain(conn)
+    _savepoint_raises(conn, repo.PromotionRefused, lambda: chain.promote(conn, "p", "c"),
+                      match=f"depends on {chain.g!r} .*promote it first")
+    chain.promote(conn, "g")
+    chain.promote(conn, "p")
     chain.promote_child(conn)
-    assert _custody(conn, chain.c) == "current"
-    # Acceptance is separate from selection: the ancestors stay candidates.
-    assert (_custody(conn, chain.g), _custody(conn, chain.p)) == ("candidate", "candidate")
+    assert [_custody(conn, i) for i in (chain.g, chain.p, chain.c)] == ["current"] * 3
 
 
 def test_a_superseded_grandparent_permits(conn):
     chain = Chain(conn)
-    # G current (promoted without a policy), then replaced in its slot.
-    repo.promote(conn, "t", "g", [("difference-image", by_slot(chain.g_key), None, chain.g)])
+    # G current, then replaced in its slot.
+    chain.promote(conn, "g")
     replacement = _diff_candidate(conn, _make_run(conn), key=chain.g_key)
     repo.promote(conn, "t", "g2",
                  [("difference-image", by_slot(chain.g_key), chain.g, replacement)])
     assert _state(conn, chain.g).state == "superseded"
-    chain.promote_child(conn)
-    assert _custody(conn, chain.c) == "current"
+    chain.promote(conn, "p", "c")
+    assert (_custody(conn, chain.p), _custody(conn, chain.c)) == ("current", "current")
 
 
-def test_a_rejected_grandparent_behind_a_current_parent_still_refuses(conn):
+def test_a_candidate_grandparent_behind_a_current_parent_still_refuses(conn):
     chain = Chain(conn)
     with conn.cursor() as cur:
         cur.execute("UPDATE product_instances SET custody = 'current' WHERE id = %s", (chain.p,))
     _savepoint_raises(conn, repo.PromotionRefused, lambda: chain.promote_child(conn),
-                      match=f"depends on {chain.g!r}.*rejected")
+                      match=f"depends on {chain.g!r} .*candidate")
 
 
-def test_an_unselected_ancestor_refuses(conn):
-    chain = Chain(conn, grandparent_passes=True)
-    with conn.cursor() as cur:
-        cur.execute("UPDATE units SET selected_attempt = NULL WHERE id = "
-                    "(SELECT a.unit FROM attempts a JOIN product_instances pi "
-                    " ON pi.producing_attempt = a.id WHERE pi.id = %s)", (chain.g,))
+def test_an_unselected_ancestor_refuses_even_in_the_same_request(conn):
+    chain = Chain(conn)
+    _unselect(conn, chain.g)
     _savepoint_raises(conn, repo.PromotionRefused, lambda: chain.promote_child(conn),
                       match=f"depends on {chain.g!r} .*unselected")
+    # A same-request ancestor is still validated as an after instance itself.
+    _savepoint_raises(conn, repo.PromotionRefused,
+                      lambda: chain.promote(conn, "g", "p", "c"),
+                      match=f"after instance {chain.g!r} was not produced by its unit's "
+                            "selected attempt")
 
 
 def test_a_scratch_ancestor_refuses(conn):
-    chain = Chain(conn, grandparent_passes=True)
+    chain = Chain(conn)
     with conn.cursor() as cur:
         cur.execute("UPDATE product_instances SET custody = 'scratch' WHERE id = %s", (chain.g,))
-    _savepoint_raises(conn, repo.PromotionRefused, lambda: chain.promote_child(conn),
-                      match=f"depends on {chain.g!r} .*scratch: not project custody")
-
-
-def test_a_not_yet_checked_ancestor_refuses_as_pending(conn):
-    chain = Chain(conn, grandparent_checked=False)
-    _savepoint_raises(conn, repo.PromotionRefused, lambda: chain.promote_child(conn),
-                      match=f"depends on {chain.g!r} .*pending: "
-                            "difference-image-statistics@1 has not run")
-
-
-def test_a_passed_grandparent_permits(conn):
-    chain = Chain(conn, grandparent_passes=True)
-    chain.promote_child(conn)
-    assert _custody(conn, chain.c) == "current"
+    _savepoint_raises(conn, repo.PromotionRefused, lambda: chain.promote(conn, "p", "c"),
+                      match=f"depends on {chain.g!r} .*scratch: not project custody\\); ")
 
 
 def _sibling_pair(conn, *, passes):
@@ -267,179 +262,130 @@ def _sibling_pair(conn, *, passes):
     return run_id, (d_key, diff), (s_key, source_set)
 
 
-def test_a_same_promotion_sibling_chain_promotes(conn):
+def test_a_same_request_sibling_chain_promotes(conn):
     _run, (d_key, diff), (s_key, source_set) = _sibling_pair(conn, passes=True)
+    # Alone, the source set's ancestor is a candidate outside the request.
+    _savepoint_raises(conn, repo.PromotionRefused, lambda: repo.promote(conn, "t", "one", [
+        ("source-set", by_slot(s_key), None, source_set)], check_policy=load_policy(TRIAL)),
+        match=f"depends on {diff!r} .*promote it first or in the same request")
     repo.promote(conn, "t", "pair", [
         ("difference-image", by_slot(d_key), None, diff),
         ("source-set", by_slot(s_key), None, source_set)], check_policy=load_policy(TRIAL))
     assert (_custody(conn, diff), _custody(conn, source_set)) == ("current", "current")
 
 
-def test_a_rejected_sibling_in_the_same_promotion_is_not_laundered(conn):
-    """No sibling skip; the ancestor is judged under its own run's policy."""
+def test_a_failed_sibling_in_the_same_request_is_not_laundered(conn):
+    """The same-request ancestor passes the walk but is gated as an after
+    instance by the request's own policy."""
     _run, (d_key, diff), (s_key, source_set) = _sibling_pair(conn, passes=False)
     _savepoint_raises(conn, repo.PromotionRefused, lambda: repo.promote(conn, "t", "pair", [
         ("difference-image", by_slot(d_key), None, diff),
-        ("source-set", by_slot(s_key), None, source_set)]),
-        match=f"depends on {diff!r} .*rejected")
+        ("source-set", by_slot(s_key), None, source_set)], check_policy=load_policy(TRIAL)),
+        match=f"required check difference-image-statistics@1 on instance {diff} "
+              "\\(kind difference-image\\) is failed")
+    assert (_custody(conn, diff), _custody(conn, source_set)) == ("candidate", "candidate")
 
 
-def test_a_candidate_reference_of_another_production_run_promotes(conn):
-    """The live loop: a difference image of this date's run depends on a
-    candidate reference image of another production run that was never
-    promoted, a kind with no policy check."""
-    ref_run = _make_run(conn)
-    attempt_id = _selected_attempt(conn, ref_run, stage="reference")
-    reference = _register_simple_instance(
-        conn, ref_run, "reference", attempt_id, kind="reference-image",
-        logical_key={"field": "1", "filter": "F158", "recipe": "r", "version": new_ulid()})
-    assert _state(conn, reference).state == "accepted"
-    run_id = _make_run(conn)
-    d_attempt = _selected_attempt(conn, run_id)
-    d_key = {"k": new_ulid()}
-    diff = _register_simple_instance(conn, run_id, "difference", d_attempt,
-                                     kind="difference-image", logical_key=d_key,
-                                     input_products={"reference": reference})
-    s_key = {"difference": diff, "catalog_type": "t"}
-    source_set = _result_set(conn, run_id, "source-set", key=s_key,
-                             products={"difference": diff})
-    # The difference image itself has no diffimages row here, so promote its
-    # consumer: the walk reaches diff (pending until checked) and reference.
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO checks (id, instance, check_name, version, required, outcome, "
-            "detail) VALUES (%s, %s, 'difference-image-statistics', '1', true, 'passed', "
-            "%s)", (new_ulid(), diff, json.dumps({
-                "params": load_policy(TRIAL).find_check(
-                    "difference-image-statistics@1").params, "summary": "ok"})))
-    repo.promote(conn, "t", "loop", [("source-set", by_slot(s_key), None, source_set)])
-    assert _custody(conn, source_set) == "current"
-    assert _custody(conn, reference) == "candidate"
+def test_a_same_run_dependency_chain_promotes_in_one_promote_run(conn):
+    """A difference image depending on the same run's reference candidate:
+    one promote_run promotes both (runs.md §Rules)."""
+    run_id, l2 = _register_l2(conn, 71001, 4, version=1)
+    _run, reference = _register_reference(conn, 4700, "F184", run_id=run_id)
+    _run, diff = _register_difference(conn, l2, reference, settings_hash="sha256:chain",
+                                      run_id=run_id,
+                                      input_products={"reference": reference, "l2": l2})
+    _savepoint_raises(conn, repo.PromotionRefused, lambda: repo.promote_run(
+        conn, run_id, "t", "diff only", kinds=["difference-image"], allow_unreleased=True,
+        check_policy=_NO_CHECKS_POLICY),
+        match="promote it first or in the same request")
+    repo.promote_run(conn, run_id, "t", "whole run", allow_unreleased=True,
+                     check_policy=_NO_CHECKS_POLICY)
+    assert [_custody(conn, i) for i in (l2, reference, diff)] == ["current"] * 3
 
 
-def test_rollback_skips_the_walk(conn):
+def test_a_later_date_waits_for_the_earlier_dates_promotion(conn):
+    """Date 2's difference image binds date 1's reference candidate (loop.md
+    §Promotion): date 2 is refused while date 1 is a candidate, then
+    promotes once date 1 has (runs.md §Rules)."""
+    date1, l2_1 = _register_l2(conn, 71101, 5, version=1)
+    _run, reference = _register_reference(conn, 4800, "F184", run_id=date1)
+    date2, l2_2 = _register_l2(conn, 71102, 5, version=1)
+    _run, diff = _register_difference(conn, l2_2, reference, settings_hash="sha256:date2",
+                                      run_id=date2,
+                                      input_products={"reference": reference, "l2": l2_2})
+
+    def promote(run_id):
+        return repo.promote_run(conn, run_id, "t", "date", allow_unreleased=True,
+                                check_policy=_NO_CHECKS_POLICY)
+
+    info = _savepoint_raises(conn, repo.PromotionRefused, lambda: promote(date2))
+    assert (f"after instance {diff!r} depends on {reference!r} (reference-image, candidate: "
+            "not current or superseded; promote it first or in the same request)"
+            in str(info.value))
+    assert _custody(conn, diff) == "candidate"
+    promote(date1)
+    promote(date2)
+    assert [_custody(conn, i) for i in (l2_1, reference, l2_2, diff)] == ["current"] * 4
+
+
+def test_rollback_skips_the_walk_but_not_the_direct_dependencies(conn):
     """A rollback restores what an earlier promotion admitted."""
-    chain = Chain(conn, grandparent_passes=True)
-    p_key = {"difference": chain.g, "catalog_type": "t"}
-    repo.promote(conn, "t", "first", [("source-set", by_slot(p_key), None, chain.p)])
-    replacement = _result_set(conn, _make_run(conn), "source-set", key=p_key)
+    chain = Chain(conn)
+    chain.promote(conn, "g", "p")
+    replacement = _result_set(conn, _make_run(conn), "source-set", key=chain.p_key)
     second = repo.promote(conn, "t", "replace", [
-        ("source-set", by_slot(p_key), chain.p, replacement)])
-    # G's check now fails on a later row: G is rejected.
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO checks (id, instance, check_name, version, required, outcome, "
-            "detail, happened_at) VALUES (%s, %s, 'difference-image-statistics', '1', true, "
-            "'failed', %s, now() + interval '1 second')", (new_ulid(), chain.g, json.dumps({
-                "params": load_policy(TRIAL).find_check(
-                    "difference-image-statistics@1").params, "summary": "late"})))
-    assert _state(conn, chain.g).state == "rejected"
+        ("source-set", by_slot(chain.p_key), chain.p, replacement)])
+    # G's unit loses its selection: G is unselected.
+    _unselect(conn, chain.g)
+    assert _state(conn, chain.g).state == "unselected"
     # A fresh promotion of the old source set would now be refused...
     _savepoint_raises(conn, repo.PromotionRefused, lambda: repo.promote(
-        conn, "t", "again", [("source-set", by_slot(p_key), replacement, chain.p)]),
-        match=f"depends on {chain.g!r} .*rejected")
-    # ...but the rollback restores it.
-    repo.rollback_promotion(conn, second, "t", "undo")
+        conn, "t", "again", [("source-set", by_slot(chain.p_key), replacement, chain.p)]),
+        match=f"depends on {chain.g!r} .*unselected")
+    # ...a deleted direct dependency refuses the rollback too...
+    with conn.cursor() as cur:
+        cur.execute("UPDATE product_instances SET deletion_state = 'deleted' WHERE id = %s",
+                    (chain.g,))
+    _savepoint_raises(conn, repo.PromotionRefused,
+                      lambda: repo.rollback_promotion(conn, second, "t", "undo"),
+                      match=f"depends on {chain.g!r}, which is 'deleted'")
+    with conn.cursor() as cur:
+        cur.execute("UPDATE product_instances SET deletion_state = 'retained' WHERE id = %s",
+                    (chain.g,))
+    # ...but otherwise the rollback restores it.
+    undo = repo.rollback_promotion(conn, second, "t", "undo")
     assert _custody(conn, chain.p) == "current"
-
-
-# ======================================================================
-# Check accept refusals
-# ======================================================================
-
-@pytest.mark.parametrize("case, message", [
-    ("pending", "is pending: .*run the checks first"),
-    ("accepted", "is accepted: it is already accepted"),
-    ("current", "is current, so already accepted"),
-    ("wrong-run", "is not a product of run"),
-    ("unselected", "is unselected: .*not acceptable"),
-])
-def test_check_accept_refusals_exit_64_and_write_nothing(conn, cli_conn, capsys,  # noqa: F811
-                                                         case, message):
-    chain = Chain(conn, grandparent_checked=case != "pending",
-                  grandparent_passes=case == "accepted")
-    run_id = chain.run_b if case == "wrong-run" else chain.run_a
     with conn.cursor() as cur:
-        if case == "current":
-            cur.execute("UPDATE product_instances SET custody = 'current' WHERE id = %s",
-                        (chain.g,))
-        if case == "unselected":
-            cur.execute("UPDATE units SET selected_attempt = NULL WHERE id = "
-                        "(SELECT a.unit FROM attempts a JOIN product_instances pi "
-                        " ON pi.producing_attempt = a.id WHERE pi.id = %s)", (chain.g,))
-    capsys.readouterr()
-    assert cli_conn.main(["check", "accept", run_id, "--instance", chain.g,
-                          "--reason", "why"]) == 64
-    err = capsys.readouterr().err
-    assert err.startswith("rapidpipe check: accept: ")
-    import re
-    assert re.search(message, err), err
-    assert _acceptance_rows(conn, chain.g) == []
-
-
-@pytest.mark.parametrize("reason", ["", "   "])
-def test_check_accept_refuses_an_empty_reason(conn, cli_conn, capsys, reason):  # noqa: F811
-    chain = Chain(conn)
-    assert cli_conn.main(["check", "accept", chain.run_a, "--instance", chain.g,
-                          "--reason", reason]) == 64
-    assert "--reason must not be empty" in capsys.readouterr().err
-    assert _acceptance_rows(conn, chain.g) == []
-
-
-def test_check_accept_twice_says_already_accepted(conn, cli_conn, capsys):  # noqa: F811
-    chain = Chain(conn)
-    argv = ["check", "accept", chain.run_a, "--instance", chain.g, "--reason", "ok"]
-    assert cli_conn.main(argv) == 0
-    assert cli_conn.main(argv) == 64
-    assert "already accepted" in capsys.readouterr().err
-    assert len(_acceptance_rows(conn, chain.g)) == 1
-
-
-def test_the_acceptances_table_refuses_an_empty_reason(conn):
-    chain = Chain(conn)
-    import psycopg2
-
-    with conn.cursor() as cur:
-        cur.execute("SAVEPOINT t")
-        with pytest.raises(psycopg2.errors.CheckViolation):
-            cur.execute("INSERT INTO acceptances (id, instance, who, reason, policy_ref, "
-                        "check_ids) VALUES (%s, %s, 'x', '', %s, '{}')",
-                        (new_ulid(), chain.g, TRIAL))
-        cur.execute("ROLLBACK TO SAVEPOINT t")
+        cur.execute("SELECT request_context FROM promotions WHERE id = %s", (undo,))
+        assert cur.fetchone()[0] == {"rollback_of": second}
 
 
 # ======================================================================
 # Check show and run show
 # ======================================================================
 
-def test_check_show_and_run_show_print_acceptance_lines(conn, cli_conn, capsys):  # noqa: F811
+def test_check_show_prints_results_only_and_run_show_prints_states(
+        conn, cli_conn, capsys):  # noqa: F811
     chain = Chain(conn)
+    _check(conn, chain.run_a, chain.g)
     capsys.readouterr()
     assert cli_conn.main(["check", "show", chain.run_a]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].startswith("id=") and f"instance={chain.g}" in lines[0]
-    assert lines[-1] == (f"acceptance instance={chain.g} kind=difference-image "
-                         f"state=rejected check=difference-image-statistics@1 "
-                         f"outcome=failed policy={TRIAL}")
-
-    assert cli_conn.main(["check", "accept", chain.run_a, "--instance", chain.g,
-                          "--reason", "ok"]) == 0
-    acceptance_id = capsys.readouterr().out.split("acceptance=")[1].split()[0]
-    assert cli_conn.main(["check", "show", chain.run_a, "--instance", chain.g]) == 0
-    assert capsys.readouterr().out.splitlines()[-1] == (
-        f"acceptance instance={chain.g} kind=difference-image state=accepted "
-        f"acceptance={acceptance_id} policy={TRIAL}")
-
-    assert cli_conn.main(["check", "show", chain.run_b]) == 0
-    assert capsys.readouterr().out.splitlines() == [
-        f"acceptance instance={chain.p} kind=source-set state=accepted "
-        f"policy={TRIAL} required_checks=none"]
+    assert lines and all(line.startswith("id=") for line in lines)
+    assert f"instance={chain.g}" in lines[0]
 
     assert cli_conn.main(["run", "show", chain.run_a]) == 0
     out = capsys.readouterr().out.splitlines()
-    at = out.index("acceptance:")
-    assert out[at + 1] == (f"  acceptance instance={chain.g} kind=difference-image "
-                           f"state=accepted acceptance={acceptance_id} policy={TRIAL}")
+    assert "acceptance:" not in out
+    at = out.index("state:")
+    assert out[at + 1] == (f"  instance={chain.g} kind=difference-image state=candidate "
+                           "custody=candidate")
+
+    chain.promote(conn, "g")
+    assert cli_conn.main(["run", "show", chain.run_a]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[out.index("state:") + 1] == (
+        f"  instance={chain.g} kind=difference-image state=current custody=current")
 
 
 # ======================================================================

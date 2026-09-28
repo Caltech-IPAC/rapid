@@ -1142,6 +1142,30 @@ def test_create_seed_is_passed_through(monkeypatch, fake_conn, capsys):
     assert capsys.readouterr().out.strip() == "NEWRUN"
 
 
+def test_create_fills_lane_profile_and_target_with_the_defaults(monkeypatch, fake_conn):
+    seen = {}
+
+    def _create_run(conn, **kwargs):
+        seen.update(kwargs)
+        return "NEWRUN"
+
+    monkeypatch.setattr(repository, "create_run", _create_run)
+    monkeypatch.setattr(cli, "git_revision", lambda: "rev")
+    monkeypatch.setenv("PGDATABASE", "somedb")
+    assert cli.main(["run", "create", "--kind", "scratch", "--purpose", "p",
+                     "--stages", "admit"]) == 0
+    assert (seen["lane"], seen["resource_profile"], seen["database_target"]) == (
+        "local", "local", "somedb")
+
+
+@pytest.mark.parametrize("flag", ["--lane", "--profile", "--db-target"])
+def test_create_refuses_the_removed_flags(fake_conn, capsys, flag):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", "create", "--kind", "scratch", "--purpose", "p",
+                  "--stages", "admit", flag, "x"])
+    assert exc.value.code == 64
+
+
 def test_create_unknown_seed_exits_64(monkeypatch, fake_conn, capsys):
     def _create_run(conn, **kwargs):
         raise repository.RunNotFound(f"seed_run {kwargs['seed_run']!r} does not exist")
@@ -1152,3 +1176,25 @@ def test_create_unknown_seed_exits_64(monkeypatch, fake_conn, capsys):
                      "admit", "--seed", "NOPE"]) == 64
     assert "seed_run 'NOPE' does not exist" in capsys.readouterr().err
     assert fake_conn.rolled_back == 1
+
+
+# ======================================================================
+# _with_connection: a policy refusal exits 1, any other refusal 64
+# (tool.md §Exit codes)
+# ======================================================================
+
+@pytest.mark.parametrize("exc, code", [
+    (repository.PromotionRefused("refused"), ExitCode.FAILURE),
+    (repository.StalePlan("stale plan"), ExitCode.FAILURE),
+    (repository.CheckPolicyRefused("team approval pending"), ExitCode.FAILURE),
+    (repository.RunNotFound("run 'R' does not exist"), ExitCode.USAGE),
+    (repository.RequestInvalid("the plan is empty"), ExitCode.USAGE),
+])
+def test_with_connection_maps_policy_refusals_to_1_and_other_refusals_to_64(
+        fake_conn, capsys, exc, code):
+    def body(_conn):
+        raise exc
+
+    assert runctl._with_connection("start", body) == int(code)
+    assert fake_conn.rolled_back == 1
+    assert capsys.readouterr().err == f"rapidpipe run start: {exc}\n"

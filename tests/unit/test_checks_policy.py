@@ -56,9 +56,9 @@ def test_check_result_refuses_an_unknown_outcome():
 
 
 def test_shipped_policies_load_and_ship_as_package_data():
-    assert shipped_policies() == ["rebuild-strict@1", "rebuild-trial@1"]
+    assert shipped_policies() == ["rebuild-trial@1"]
     files = {p.name for p in resources.files("rapidpipe.checks").joinpath("policies").iterdir()}
-    assert {"rebuild-trial@1.toml", "rebuild-strict@1.toml"} <= files
+    assert "rebuild-trial@1.toml" in files and "rebuild-strict@1.toml" not in files
     assert DEFAULT_POLICY == "rebuild-trial@1"
 
 
@@ -78,7 +78,7 @@ def test_rebuild_trial_bounds_and_flags():
     assert trial.checks_for_kind("psf") == []
 
 
-def test_rebuild_strict_is_tighter():
+def test_rebuild_strict_is_tighter(strict_policy):
     strict = load_policy("rebuild-strict@1")
     diff = strict.find_check("difference-image-statistics@1").params
     assert diff == {"scalefacref_lo": 0.99, "scalefacref_hi": 1.01, "rms_max": 0.01,
@@ -101,10 +101,10 @@ def test_permission_rules():
     trial = load_policy("rebuild-trial@1")
     assert not policy_permits_promotion(replace(trial, approval="none", approved_by=None))
     assert not policy_permits_auto_promote(replace(trial, auto_promote=True))   # trial only
-    assert not policy_permits_auto_promote(replace(trial, approval="lead"))     # flag off
-    assert policy_permits_auto_promote(replace(trial, approval="lead", auto_promote=True))
+    assert not policy_permits_auto_promote(replace(trial, approval="team"))     # flag off
+    assert policy_permits_auto_promote(replace(trial, approval="team", auto_promote=True))
     assert not policy_permits_auto_promote(
-        replace(trial, approval="lead", approved_by=None, auto_promote=True))
+        replace(trial, approval="team", approved_by=None, auto_promote=True))
 
 
 def _trial_doc():
@@ -143,10 +143,10 @@ def test_unknown_policy_and_the_fixture_seam(monkeypatch):
 
 
 def test_load_policy_file(tmp_path):
-    source = resources.files("rapidpipe.checks").joinpath("policies", "rebuild-strict@1.toml")
+    source = resources.files("rapidpipe.checks").joinpath("policies", "rebuild-trial@1.toml")
     path = tmp_path / "p.toml"
     path.write_bytes(source.read_bytes())
-    assert policy_mod.load_policy_file(path).ref == "rebuild-strict@1"
+    assert policy_mod.load_policy_file(path).ref == "rebuild-trial@1"
 
 
 def test_the_test_fixture_policies_load_and_are_not_shipped():
@@ -158,4 +158,7 @@ def test_the_test_fixture_policies_load_and_are_not_shipped():
     assert not policy_permits_promotion(policy_mod.load_policy_file(fixtures / "unapproved@1.toml"))
     assert policy_permits_auto_promote(
         policy_mod.load_policy_file(fixtures / "auto-strict@1.toml"))
+    strict = policy_mod.load_policy_file(fixtures / "rebuild-strict@1.toml")
+    assert policy_permits_promotion(strict) and not policy_permits_auto_promote(strict)
+    assert strict.ref not in shipped_policies()
     assert "auto-trial@1" not in shipped_policies()
