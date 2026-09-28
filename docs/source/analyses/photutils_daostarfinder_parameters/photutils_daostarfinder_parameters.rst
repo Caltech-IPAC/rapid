@@ -1,21 +1,20 @@
 PhotUtils DAOStarFinder Parameter Study
-####################################################
+#######################################
 
 
 Overview
-************************************
+********
 
-The analysis described below is for the purpose of understanding
-the effects of varying PhotUtils DAOStarFinder input parameters.
-This is a systematic study with 1000 independent samples as input.
-These results can be compared with the three SExtractor input configurations that are documented below.
+This systematic study tests how varying PhotUtils DAOStarFinder input
+parameters affects results for 1000 independent samples. Three SExtractor
+input configurations provide a baseline for comparison.
 
 
 Input Difference Images
-************************************
+***********************
 
-One thousand sets of ZOGY difference-image products are used.
-Here is an example of how to download the input files needed for a single sample:
+The inputs are one thousand sets of ZOGY difference-image products.
+To download the files for a single sample:
 
 .. code-block::
 
@@ -26,14 +25,13 @@ Here is an example of how to download the input files needed for a single sample
     aws s3 cp s3://rapid-product-files/20250927/jid79170/diffpsf.fits .
     aws s3 cp s3://rapid-product-files/20250927/jid79170/Roman_TDS_simple_model_Y106_124_5_lite_inject.txt .
 
-The Python script ``scripts/download_files.py`` was used to do the bulk downloading (see next section).
+The Python script ``scripts/download_files.py`` handled bulk downloading.
 
 Analysis Software
-************************************
+*****************
 
-The following Python scripts are used to download the input data,
-regenerate the catalogs for the various input configurations,
-and make plots (offline, on a laptop):
+The analysis uses these Python scripts to download data, regenerate catalogs
+for each input configuration, and make plots offline on a laptop:
 
 .. code-block::
 
@@ -48,11 +46,11 @@ and make plots (offline, on a laptop):
 
 
 SExtractor Baseline for Comparison
-************************************
+**********************************
 
-Three SExtractor configurations were tested.
-
-The first SExtractor configuration below is similar to ZTF.  The others were determined by Alice Ciobanu and Lynn Yan in experiments with OpenUniverse simulated images.
+Of the three SExtractor configurations tested, the first is similar to ZTF.
+Alice Ciobanu and Lynn Yan determined the others in experiments with
+OpenUniverse simulated images.
 
 ===============      ===================      ===================      ======================      =======================================================================
 Configuraton              ZTF                      AL1                      A2                     Description
@@ -66,13 +64,12 @@ WEIGHT_TYPE            "NONE,MAP_RMS"           "NONE,MAP_RMS"          "BACKGRO
 FILTER                 "N"                      "N"                     "N"                        Do not apply filter for detection
 ===============      ===================      ===================      ======================      =======================================================================
 
-The ZOGY scorr image is used for detection, and the difference image for analysis.
+Detection uses the ZOGY scorr image; analysis uses the difference image.
+Before ZOGY, 100 fake sources were injected into the input image. The
+SExtractor ZTF baseline averaged 64.83 matches between extracted and
+fake-source positions within 1.0 pixels.
 
-Fake sources were injected into the input image before ZOGY.  100 fake sources were injected.
-In matching within 1.0 pixels for the SExtractor ZTF baseline,
-there were on average 64.83 matches between extracted source positions and fake source positions.
-
-Statistical results over all filters or WFI bands:
+The table summarizes results across all filters (WFI bands).
 
 ================================= ======================== ======================== ======================== ===============================================================================
 Statistic                         ZTF                      AL1                      A2                       Description
@@ -88,23 +85,26 @@ margin_of_error_ns_true           0.5020                   0.5235               
 
 
 .. note::
-    The ``XWIN_IMAGE, YWIN_IMAGE`` pixel coordinates are one-based indices, while the pixel coordinates
-    of the fake-source truth list and PhotUtils PSF-fit catalog are zero-based indices.
+    The ``XWIN_IMAGE, YWIN_IMAGE`` pixel coordinates are one-based indices.
+    Coordinates in the fake-source truth list and PhotUtils PSF-fit catalog
+    are zero-based indices.
 
 
 PhotUtils DAOStarFinder Input-Parameter Variation
-************************************
+*************************************************
 
-In all ten cases below, the input threshold is 5 times the clipped standard deviation
-of the ZOGY difference image (multiplied by a Gaussian correction factor to account for the data clipping)::
+All ten cases use an input threshold of 5 times the clipped standard
+deviation of the ZOGY difference image, multiplied by a Gaussian correction
+factor for data clipping::
 
     threshold = 0.2488752235542349 DN/s for the aforementioned single sample
 
-This is the same threshold sigma that was used in the 9/27/2025 test.
+The threshold sigma and Case #1 parameters match those used in the
+9/27/2025 test.
 
-Case #1 defines the parameters that were used in the 9/27/2025 test.
-
-Statistical results covering all filters or WFI bands, for sample size = 1000.  The same inputs were used as for the above SExtractor ZTF baseline.
+The results cover all filters (WFI bands), using the same 1000 samples as
+the SExtractor ZTF baseline. Each average is followed by its standard
+deviation and uncertainty (95% confidence level) in parentheses.
 
 ===== ==== ======= ======= ======= ======= ======= =============================== ==========================================================
 Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources (std,unc)           num_matches_with_fake_sources (std,unc)
@@ -121,14 +121,56 @@ Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources (std,unc)        
 10    1.0  -1.0    10.0    -1.0    1.0     0.0     2516.48 (1131.74,70.15)         62.42 (8.11,0.5029)
 ===== ==== ======= ======= ======= ======= ======= =============================== ==========================================================
 
-The average results are each given with corresponding standard deviation and uncertainty (95% confidence level) in parentheses.
+Case #6 yielded both the most PhotoUtils PSF-fit catalog sources and the
+most fake-source matches (68.13) within 1.0 pixels.
 
-Case #6 gave the largest number of PhotoUtils PSF-fit catalog sources and also
-the largest number of fake-source matches (68.13) within 1.0 pixels.
+
+PhotUtils-Attribute Plots
+*************************
+
+Scatter plots of PhotUtils source attributes (sharpness, roundness1,
+roundness2, and reduced_chi2) cover 7 WFI filters and the 10 PhotUtils
+cases, a total of 210 plots. All are checked into the RAPID git repository:
+
+.. code-block::
+
+   rapid/docs/source/analyses/photutils_daostarfinder_parameters/photutils_attribute_plots
+
+The examples below show F184 and H158, the filters with the most extracted
+sources, for PhotUtils case #6, which covered the widest parameter range:
+
+.. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=F184.png
+.. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=F184.png
+.. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=F184.png
+.. image:: photutils_attribute_plots/photutils_reducedchi2_case=6_filter=F184.png
+
+.. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=H158.png
+.. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=H158.png
+.. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=H158.png
+.. image:: photutils_attribute_plots/photutils_reducedchi2_case=6_filter=H158.png
+
+
+Sky-Position Plots
+******************
+
+These plots compare the SExtractor ZTF baseline with the ten PhotUtils
+cases for the download example's single sample, using a match radius of
+1.0 pixels.
+
+.. image:: sex_vs_psf_fwhm=2.0_sharplo=0.2_sharphi=1.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
+.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
+.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=1.0.png
+.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=2.0.png
+.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=1.0_roundlo=-1.0_roundhi=1.0_min_sep=1.0.png
+.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=10.0_roundlo=-2.0_roundhi=2.0_min_sep=1.0.png
+.. image:: sex_vs_psf_fwhm=1.4_sharplo=0.2_sharphi=1.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
+.. image:: sex_vs_psf_fwhm=1.4_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
+.. image:: sex_vs_psf_fwhm=1.0_sharplo=0.2_sharphi=1.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
+.. image:: sex_vs_psf_fwhm=1.0_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
 
 
 Results Broken Down By Filter
-************************************
+*****************************
 
 .. code-block::
 
@@ -286,49 +328,4 @@ Results Broken Down By Filter
 
     Statistical results for filter = W146:
     No data for filter...
-
-
-PhotUtils-Attribute Plots
-************************************
-
-Scatter plots for PhotUtils source attributes (sharpness, roundness1, roundness2, and reduced_chi2)
-were made for 7 WFI filters, for the above 10 PhotUtils cases, a total of 210 plots.
-All of these plots have been checked into the RAPID git repository at the following location:
-
-.. code-block::
-
-   rapid/docs/source/analyses/photutils_daostarfinder_parameters/photutils_attribute_plots
-
-Below are examples for the filters with the highest numbers of extracted sources (F184 and H158), for the above
-PhotUtils case #6 (which covered the widest range of parameter space):
-
-.. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=F184.png
-.. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=F184.png
-.. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=F184.png
-.. image:: photutils_attribute_plots/photutils_reducedchi2_case=6_filter=F184.png
-
-.. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=H158.png
-.. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=H158.png
-.. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=H158.png
-.. image:: photutils_attribute_plots/photutils_reducedchi2_case=6_filter=H158.png
-
-
-Sky-Position Plots
-************************************
-
-Plots for the SExtractor ZTF baseline versus the ten PhotUtils cases are given below for the aforementioned single sample,
-and a match radius of 1.0 pixels.
-
-.. image:: sex_vs_psf_fwhm=2.0_sharplo=0.2_sharphi=1.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
-.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
-.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=1.0.png
-.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=2.0.png
-.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=1.0_roundlo=-1.0_roundhi=1.0_min_sep=1.0.png
-.. image:: sex_vs_psf_fwhm=2.0_sharplo=-1.0_sharphi=10.0_roundlo=-2.0_roundhi=2.0_min_sep=1.0.png
-.. image:: sex_vs_psf_fwhm=1.4_sharplo=0.2_sharphi=1.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
-.. image:: sex_vs_psf_fwhm=1.4_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
-.. image:: sex_vs_psf_fwhm=1.0_sharplo=0.2_sharphi=1.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
-.. image:: sex_vs_psf_fwhm=1.0_sharplo=-1.0_sharphi=10.0_roundlo=-1.0_roundhi=1.0_min_sep=0.0.png
-
-
 
