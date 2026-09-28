@@ -17,6 +17,7 @@ from rapidpipe.launch import loop
 from rapidpipe.runs import repository as repo
 
 from .test_checks import _diff_candidate, _source_set
+from .test_register_l2 import _NoCloseNoCommitConnProxy
 from .test_repository import _make_run
 
 SPEC = """
@@ -55,8 +56,10 @@ def test_loop_leaves_a_candidate_under_the_trial_policy_then_a_person_promotes(c
     catalog = _source_set(conn, run_id, key={"k": "x"}, rows=10)
     spec = loop.parse_spec(SPEC, "test")
 
+    # _promote commits its recorded checks; the proxy keeps the test inside
+    # the conftest's outer transaction.
     promotion_id, text, gate, checks = loop._promote(
-        conn, run_id, spec, dt.date(2027, 10, 1))
+        _NoCloseNoCommitConnProxy(conn), run_id, spec, dt.date(2027, 10, 1))
 
     # rebuild-trial@1 (the spec names none, so the default) does not
     # permit automatic promotion: the loop never calls promote_run.
