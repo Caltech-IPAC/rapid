@@ -1,131 +1,143 @@
 RAPID Pipeline Evaluation
-####################################################
+#########################
 
 
 Overview
-************************************
+********
 
-Here we describe the procedures for evaluating the performance of the RAPID pipeline, 
-downselecting algorithms (e.g., for difference imaging and source detection), and tuning 
-parameters to optimize performance. This procedure is in development, and will be refined
-as we continue to develop the pipeline and evaluate its performance on simulated data sets. 
-In preparation for Roman launch, we will lay out specific plans and timelines to evaluate
-the pipeline and tune parameters with in-flight data. These plans will be developed based on 
-scheduled Roman observations as they become available.
+These procedures evaluate RAPID pipeline performance, guide algorithm
+down-selection (e.g., for difference imaging and source detection), and
+support parameter tuning. They remain under development as the pipeline
+evolves and is evaluated on simulated data sets. Before Roman launch, we
+will develop specific plans and timelines for evaluation and tuning with
+in-flight data, based on scheduled Roman observations as they become
+available.
 
 .. _fake_source_injection:
 
-Source Injections 
-**********************************************
-Evalution of the RAPID pipeline performance relies on the injection of synthetic point sources. 
-The currently implemented approach described below was developed for injection into OpenUniverse simulated images
-of a nominal implementation of the HLTDS.
+Source Injections
+*****************
 
-* Injections associated with detected sources/galaxies
+Evaluation relies on synthetic point-source injections. The implemented
+scheme associates injections with detected sources/galaxies and was
+developed for OpenUniverse simulated images of a nominal HLTDS
+implementation:
 
-    * Simple source detection and deblending is performed with **PhotUtils** on the science image with 
-      a detection threshold of :math:`10\sigma` above the median background level. The bulk of these detections 
-      will be galaxies in the field, but some may be stars or associated with the wings or diffraction spikes of
-      bright stars. 
+* Perform simple source detection and deblending on the science image with
+  **PhotUtils**, at a threshold of :math:`10\sigma` above the median
+  background. Most detections will be galaxies, but some may be stars or
+  features in bright stars' wings or diffraction spikes.
+* Select a random subset of detections based on the desired number of
+  injections per image, :math:`N_{\mathrm{inj}}`.
+* Offset each injection from the detected source centroid in both x and y,
+  using a uniform distribution whose half-width is the estimated semi-major
+  axis (``semimajor_sigma`` measured by **PhotUtils**) multiplied by
+  ``size_factor``.
+* Draw magnitudes uniformly between 21 and 28 AB mag and convert to image
+  counts (electrons) using the appropriate zeropoint for the image filter,
+  Roman SCA, and exposure time.
+* Compute each PSF with the **Roman I-Sim** tool
+  **romanisim.image.make_one_psf** for the filter, SCA, and detector
+  position. This uses **galsim.roman** to emulate the original OpenUniverse
+  Roman simulation PSFs; chromatic effects are currently ignored.
+* Add each injection to the science image with
+  **romanisim.image.add_objects_to_image**, using the specified location,
+  PSF, and flux, including Poisson noise.
 
-    * A random subset of the detected sources are selected for injections based on the desired number of injections 
-      to perform per image, :math:`N_{\mathrm{inj}}`.
+Additional schemes under consideration are:
 
-    * The location of each injection is randomly offset from the detected source centroid in both x and y using a 
-      uniform distribution of half-width set to the detected source's estimated semi-major axis (``semimajor_sigma``
-      measured by **PhotUtils**) multiplied by a scaling factor, ``size_factor``.
-
-    * The flux in image counts (electrons) of each injection is drawn from a uniform distrubtion of magnitdues between 
-      21 and 28 AB mag, using the appropiate zeropoint for the image filter, Roman SCA, and exposure time. 
-    
-    * A PSF for each injection is computed using the **Roman I-Sim** tool **romanisim.image.make_one_psf** for the given filter, SCA,
-      and detector position, based on the **galsim.roman** module, to emulate the PSFs used for the original OpenUniverse 
-      Roman simulations. Chromatic effects are currently ignored. 
-
-    * The injection is added to the science image with **romanisim.image.add_objects_to_image** at the specified location, 
-      with the appropriate PSF and flux and including poisson noise. 
-
-Additional schemes for source injections currently under consideration for implementation include:
-
-* Injections at random positions in the image or a pre-defined grid, independent of detected sources. This scheme would be 
-  useful to evaluate the performance of the pipeline for hostless transients, or in crowded fields (e.g., for the GBTDS and
-  associated simulations). 
-* Injections in time-series images of a given field at specified sky locations with pre-defined light curves. This could also 
-  include the injection of a stellar counterparts in the images used to generate reference mosaics to evaluate the performance 
-  of the pipeline for variable stars.
+* Random positions or a pre-defined grid, independent of detected sources,
+  to evaluate hostless transients or crowded fields (e.g., the GBTDS and
+  associated simulations).
+* Time-series injections at specified sky locations in a given field, with
+  pre-defined light curves. Stellar counterparts could also be injected
+  into images used for reference mosaics to evaluate variable stars.
 
 .. _filtering:
 
 Detection Catalog Filtering
-**********************************************************
+***************************
 
-Raw detection catalogs generated by the RAPID pipeline will contain a significant number of spurious detections arising from
-imperfect image subtraction resulting in significant residuals from static galaxies and stellar sources, noise fluctuations, 
-and detector artifacts such as unflagged hot-pixels or cosmic-ray hits. A series of filtering steps, in order of 
-increasing computational expense, are performed to clean the raw catalogs and provide metrics/features as inputs to machine-learning 
-based real-bogus (RB) classifier. This procedure adapted from that developed for the `ZTF Science Data System`_, and is under active
-development. 
+Raw RAPID detection catalogs will contain many spurious detections from
+imperfect subtraction of static galaxies and stars, noise fluctuations,
+and detector artifacts such as unflagged hot pixels or cosmic-ray hits.
+The following filters, ordered by increasing computational expense, clean
+the catalogs and supply metrics/features to a machine-learning real-bogus
+(RB) classifier. Adapted from the `ZTF Science Data System`_, this
+procedure remains under active development.
 
 .. _ZTF Science Data System: https://irsa.ipac.caltech.edu/data/ZTF/docs/ztf_explanatory_supplement.pdf
 
-1. Catalog-level filtering based on measurements performed during source detection (e.g., by **SExtractor** or **Photutils DAOStarFinder**):
- 
-    a. ``mindedge`` :math:`\gt` ``diffimedgetol``: Minimum distance from any image edge in pixels. 
-    
-    b. ``snrap3pix`` :math:`\geq` ``snrthres``: Signal-to-noise ratio (S/N) measured in a 3-pix diameter aperature at the candidate position 
-       in the difference image and corresponding uncertainty map. A initial threshold of ``snrthres`` :math:`=5` is adopted. 
+1. Catalog-level measurements from source detection (e.g., by
+   **SExtractor** or **Photutils DAOStarFinder**):
 
-    c. ``elong`` :math:`\leq` ``elongthres``: Source elongation (ratio A/B of semi-major to semi-minor axis). 
+   a. ``mindedge`` :math:`\gt` ``diffimedgetol``: Minimum distance from any
+      image edge, in pixels.
+   b. ``snrap3pix`` :math:`\geq` ``snrthres``: Signal-to-noise ratio (S/N)
+      in a 3-pix diameter aperture at the candidate position, measured from
+      the difference image and corresponding uncertainty map. The initial
+      threshold is ``snrthres`` :math:`=5`.
+   c. ``elong`` :math:`\leq` ``elongthres``: Source elongation, the ratio
+      A/B of semi-major to semi-minor axis.
+   d. (``apfluxratio`` :math:`\geq` ``apfluxratiothreslow``) and
+      (``apfluxratio`` :math:`\leq` ``apfluxratiothreshigh``): Ratio of flux
+      in a 3-pixel diameter aperture to that in a 6-pixel diameter aperture.
 
-    d. (``apfluxratio`` :math:`\geq` ``apfluxratiothreslow``) and (``apfluxratio`` :math:`\leq` ``apfluxratiothreshigh``): Ratio of flux 
-       measured in a 3-pixel diameter aperture to that measured in a 6-pixel diameter aperture. 
-    
-    .. note::
-       These filtering steps are based on measurements available in SExtractor catalogs. If **Photutils DAOStarFinder** or another detection 
-       method is employed, analagous measurements will be used. Additional metrics like ``sharpness`` and ``roundness`` estimated by DAOStarFinder 
-       could also be employed. 
+   .. note::
+      These measurements are available in SExtractor catalogs. For
+      **Photutils DAOStarFinder** or another detection method, analogous
+      measurements will be used. DAOStarFinder's ``sharpness`` and
+      ``roundness`` estimates could also be used.
 
-2. Pixel-level metrics based on a 5x5 cutout of the difference image centered on each candidate:
+2. Pixel-level metrics from a 5x5 difference-image cutout centered on each
+   candidate:
 
-    a. ``nneg`` :math:`\leq` ``nnegthres``: Number of negative-valued pixels in the cutout.
-
-    b. ``nbad`` :math:`\leq` ``nbadthres``: Number of pixels flagged as bad in the cutout.
-
-    .. note::
-       Currently "bad" pixels are only those masked as NaN in the difference image due to lack of coverage in the reference mosaic. 
-
-    c. ``sumrat`` :math:`\leq` ``sumratthres``: A 3x3 median filter is applied to the cutout, with kernel trucation at the cutout edges (i.e., 
-       unavailable or NaN pixel values are simply ignored). ``sumrat`` is defined as the ratio of the sum of pixel values in median filtered cutout
-       to the sum of their absolute values. For Gaussian-distributed noise, a value bewteen :math:`-0.25 \lt` ``sumrat`` :math:`\lt 0.25` is expected, 
-       while the value approaches 1 for real signal. 
+   a. ``nneg`` :math:`\leq` ``nnegthres``: Number of negative-valued pixels.
+   b. ``nbad`` :math:`\leq` ``nbadthres``: Number of pixels flagged as bad.
+      Currently, only pixels masked as NaN in the difference image because
+      of missing reference-mosaic coverage are considered bad.
+   c. ``sumrat`` :math:`\leq` ``sumratthres``: Apply a 3x3 median filter
+      with kernel truncation at cutout edges, ignoring unavailable or NaN
+      values. ``sumrat`` is the ratio of the sum of pixel values in the
+      median-filtered cutout to the sum of their absolute values.
+      Gaussian-distributed noise is expected to give
+      :math:`-0.25 \lt` ``sumrat`` :math:`\lt 0.25`,
+      while real signal approaches 1.
 
 3. PSF-fitting photometry quality cuts:
 
-    a. :math:`0 \lt` ``chipsf`` :math:`\lt` ``chipsfthres``: The reduced chi-squared of the PSF fit.
+   a. :math:`0 \lt` ``chipsf`` :math:`\lt` ``chipsfthres``: Reduced
+      chi-squared of the PSF fit.
+   b. :math:`|` ``magap3pix`` :math:`-` ``magpsf`` :math:`| \lt`
+      ``magdiffthres``: Difference between the appropriately
+      aperture-corrected 3-pixel diameter aperture magnitude and the
+      PSF-fit magnitude.
 
-    b. :math:`|` ``magap3pix`` :math:`-` ``magpsf`` :math:`| \lt` ``magdiffthres``: Difference between the magnitude measured in a 3-pixel 
-       diameter aperture (with appropriate aperture correction), and the PSF-fit magnitude.
-
-4. Machine-learning based real-bogus (RB) classification using all relevant features/metrics described above, along with available metadata (e.g., 
-   positional assoication with stars or galaxies in the reference image).
+4. Machine-learning real-bogus (RB) classification using all relevant
+   features/metrics above and available metadata, such as positional
+   associations with stars or galaxies in the reference image.
 
 .. _figure_of_merit:
-   
-Figure of Merit
-**********************************************
-We define a figure of merit (FOM) to evaluate the performance of the RAPID pipeline, to enable 
-down-selection of algorithms (e.g., ZOGY or SFFT for image subtraction), and to guide tuning of 
-parameters and thresholds. In broad strokes, we define the FOM as an effective limiting magnitude 
-for a specified data set composed of multiple terms. These are, in approximate order of general
-importance/weight: (1) the average magnitude corresponding to the S/N threshold that achieves an 
-accepatable false-positive rate per image, :math:`m_{\mathrm{th}}`, (2) the magnitude at which 80% of 
-injected sources are successfully recovered, :math:`m_{80}`, (3) the magnitude at which 20% of 
-injected sources are successfully recovered, :math:`m_{20}`, (4) the :math:`5\sigma` point-source 
-limiting magnitude on blank sky, :math:`m_{5\sigma}` in the difference images, and (5) the magnitude 
-at which injected fluxes are recovered with 10% precision in PSF-fitting photometry, :math:`m_{\mathrm{ph}10}`.  
 
-Each term is calculated as a weighted sum over the filters, :math:`f`, present in the test data set, 
-and the final FOM is then a weighted sum of each of these terms:
+Figure of Merit
+***************
+
+The figure of merit (FOM) evaluates pipeline performance to guide algorithm
+down-selection (e.g., ZOGY or SFFT for image subtraction) and parameter and
+threshold tuning. It is an effective limiting magnitude for a specified
+data set, combining these terms in approximate order of importance/weight:
+
+1. :math:`m_{\mathrm{th}}`: Average magnitude corresponding to the S/N
+   threshold that achieves an acceptable false-positive rate per image.
+2. :math:`m_{80}`: Magnitude at which 80% of injected sources are recovered.
+3. :math:`m_{20}`: Magnitude at which 20% of injected sources are recovered.
+4. :math:`m_{5\sigma}`: The :math:`5\sigma` point-source limiting magnitude
+   on blank sky in the difference images.
+5. :math:`m_{\mathrm{ph}10}`: Magnitude at which injected fluxes are
+   recovered with 10% precision in PSF-fitting photometry.
+
+Each term is a weighted sum over the test data set's filters, :math:`f`;
+the final FOM is a weighted sum of these terms:
 
 .. math::
    \mathrm{FOM} = \left(w_{\mathrm{th}} \frac{\sum_{f} w_{\mathrm{th},f} m_{\mathrm{th},f}}{\sum_{f} w_{\mathrm{th},f}}
@@ -135,90 +147,114 @@ and the final FOM is then a weighted sum of each of these terms:
    + w_{\mathrm{ph10}} \frac{\sum_{f} w_{\mathrm{ph10},f} m_{\mathrm{ph10},f}}{\sum_{f} w_{\mathrm{ph10},f}}\right) \\\\
    / (w_{\mathrm{th}} + w_{80} + w_{20} + w_{5\sigma} + w_{\mathrm{ph10}}).
 
-The weights, :math:`w`, can be adjusted to emphasize different aspects of the performance of the pipeline 
-or to prioritize performance in certain filters. Additionally, the calcuation of each term can 
-be further broken out by characteristics of the injected sources (e.g, transients on top of bright hosts, 
-hostless events, nuclear tranisents, or variables with stellar counterparts) and weighted accordingly. In 
-general, the RAPID pipeline needs to perform well across all Roman surveys, filters, and for a broad range
-of transients and variables. 
+The weights, :math:`w`, can emphasize different aspects of performance or
+prioritize filters. Each term can also be calculated and weighted by
+injected-source characteristics, such as transients on bright hosts,
+hostless events, nuclear transients, or variables with stellar
+counterparts. RAPID needs to perform well across all Roman surveys and
+filters, for a broad range of transients and variables.
 
 
 Evaluation Procedure
-**********************************************
-Here we describe the steps to evaluate the pipeline and calculate each term of the FOM in more detail.
+********************
 
-1. Define setup for evaluation and run pipeline:    
+1. Define the evaluation setup and run the pipeline:
 
-    a. Define data set and injection parameters. Prior to launch, the data set could be, e.g., one test runs of the pipeline
-       using OpenUniverse HLTDS simulations or a RimTimSim GBTDS set (see :ref:`testing`). Post-launch, we will define specific subsets of 
-       the survey data to use for evaluation with fake-source injection, e.g., a set fields from the HLTDS over a specific 
-       time period. The injection parameters include the number of injections per image, their magnitude distribution, and the 
-       specifications for the method used to assign their positions (i.e., regular grid, random positions, randomized offsets from 
-       detected galaxies, on top of stars, etc.).
-    
-    b. Specify any pipeline modules, steps, or settings to be comparitively tested. For example, this may be the image subtraction 
-       algorithm (ZOGY vs SFFT vs Naive), the detection method (SExtractor vs Photutils DAOStarFinder), or settings for a specific algorthm 
-       (e.g., SEXtractor detection thresholds). 
-    
-    c. Specify all axes of evalution, and their desired weights. At minimum, this includes the filters present in the data set. It may
-       also include properties of the injected sources (e.g., separation from host galaxy core, transients vs. variables).
-    
-    d. Run the pipeline on the test data set with the specified injections and settings to be tested. 
+   a. Define the data set and injection parameters. Before launch, this
+      could be a test run with OpenUniverse HLTDS simulations or a
+      RimTimSim GBTDS set (see :ref:`testing`). After launch, we will define
+      survey subsets for fake-source evaluation, such as HLTDS fields over
+      a specific period. Specify the number of injections per image, their
+      magnitude distribution, and the position-assignment method (regular
+      grid, random positions, randomized offsets from detected galaxies,
+      on top of stars, etc.).
+   b. Specify the pipeline modules, steps, or settings to compare: image
+      subtraction (ZOGY vs SFFT vs Naive), detection (SExtractor vs
+      Photutils DAOStarFinder), or algorithm settings (e.g., SEXtractor
+      detection thresholds).
+   c. Specify all evaluation axes and weights, including at least the
+      filters in the data set. Other axes may describe injected sources,
+      such as separation from the host galaxy core or transients vs.
+      variables.
+   d. Run the pipeline on the test data set with the specified injections
+      and settings.
 
-2. Following the completion of image subtraction and the generation of raw detection catalogs, the catalogs are filtered using the set of pre-defined 
-   thresholds to remove the bulk of suprious candidates, as described above in . PSF-fitting photometry is then performed for all candidates
-   passing these criteria using the relevant difference images, corresponding uncertainty maps, and the unit-normalized PSF models computed for the
-   difference images. Candidates are then filtered again based on the results of PSF-fitting. 
+2. After image subtraction and raw-catalog generation, apply the
+   pre-defined filtering thresholds described above to remove most
+   spurious candidates. Perform PSF-fitting photometry on all survivors
+   using the difference images, corresponding uncertainty maps, and
+   unit-normalized difference-image PSF models. Filter again using the
+   PSF-fitting results.
 
-3. Each surviving transient candidate is positionally cross-matched to the nearest source in the reference image. For simulated OpenUniverse data, 
-   this can be done by cross-matching to galaxies brighter than ``galmatchthres`` from the simulation truth-catalogs. For real data, we will 
-   cross-match to the reference image source catalogs generated by the pipeline, inluduing any metadata that can be used to separate stars and galaxies. 
+3. Positionally cross-match each surviving transient candidate to the
+   nearest source in the reference image. For OpenUniverse simulations,
+   this can use truth-catalog galaxies brighter than ``galmatchthres``.
+   For real data, we will use pipeline-generated reference-image source
+   catalogs, including metadata that can distinguish stars from galaxies.
 
-4. Additional vetting of candidates is performed using machine-learning (ML) based real-bogus (RB) classification using all relevant features
-   and metadata described above. 
+4. Vet candidates with machine-learning (ML) real-bogus (RB) classification
+   using all relevant features and metadata described above.
 
-5. Candidates are cross-matched to the injected source catalogs (or OpenUniverse truth catalog transients) using a matching radius 
-   of ``injmatchrad``. Candidates passing all filter criteria and matched an injected source are considered successfully recovered 
-   true positives (TPs). Candidates passing all filter criteria, but not matched to an injected source are considered false positives (FPs). 
+5. Cross-match candidates to injected-source catalogs (or OpenUniverse
+   truth catalog transients) within ``injmatchrad``. Candidates passing all
+   filter criteria and matched to an injected source are successfully
+   recovered true positives (TPs); those passing all criteria but unmatched
+   to an injected source are false positives (FPs).
 
-6. All terms of the FOM are calculated for each filter and sub-groups of injections/detetions (e.g., injections/candidates separated from the nearest 
-   galaxy from step 3 by :math:`\gt 1.5 \times` ``injmatchrad``): 
+6. Calculate all FOM terms for each filter and injection/detection
+   sub-group (e.g., injections/candidates separated from the nearest galaxy
+   from step 3 by :math:`\gt 1.5 \times` ``injmatchrad``):
 
-    a. :math:`m_{\mathrm{th}}`: FP candidates are grouped by :math:`m_{3\mathrm{pix}}` in :math:`\Delta m = 0.2` bins. The number 
-       of FP candidates at or brighter than each magnitude bin, :math:`N_{\mathrm{FP}\lt m}`, is calculated. :math:`m_{\mathrm{th}}` is computed as the 
-       magnitude where a linear interoplation of :math:`N_{\mathrm{FP}\lt m}` crosses the defined FP rate tolerance, ``fpratetol``. The S/N corresponding
-       to :math:`m_{\mathrm{th}}` is similarly computed via linear interpolation of the average S/N of FP candidates in each bin, and defines a threshold 
-       ``snrfpthres`` to ensure consistency with ``fpratetol``. 
+   a. :math:`m_{\mathrm{th}}`: Group FP candidates by :math:`m_{3\mathrm{pix}}`
+      in :math:`\Delta m = 0.2` bins. Count those at or brighter than each
+      bin, :math:`N_{\mathrm{FP}\lt m}`. Compute :math:`m_{\mathrm{th}}` by
+      linearly interpolating :math:`N_{\mathrm{FP}\lt m}` to the defined FP
+      rate tolerance, ``fpratetol``. Interpolate the mean FP-candidate S/N
+      per bin to :math:`m_{\mathrm{th}}` to obtain ``snrfpthres``, the S/N
+      threshold consistent with ``fpratetol``.
 
-    b. :math:`m_{80}` and :math:`m_{20}`: The recovery completess (fraction of injected sources in the sub-group of interest successfully recovered) 
-       is computed in :math:`\Delta m = 0.5` bins of injected magnitude for all TP candidates passing :math:`SNR \geq` ``snrfpthres``. 
-       The calculations accounts for the number of injected sources that lacked coverage in the reference image or fell within ``diffimedgetol`` 
-       of any image boundary. :math:`m_{80}` and :math:`m_{20}` are computed via linear interpolation of the completness curve at 80% and 20% completeness, 
-       respectively.
+   b. :math:`m_{80}` and :math:`m_{20}`: Calculate recovery completeness
+      (the fraction of injected sources recovered in the sub-group) in
+      :math:`\Delta m = 0.5` bins of injected magnitude, using all TPs
+      passing :math:`SNR \geq` ``snrfpthres``. Account for injections
+      lacking reference-image coverage or falling within ``diffimedgetol``
+      of any image boundary. Linearly interpolate the completeness curve
+      to obtain :math:`m_{80}` and :math:`m_{20}` at 80% and 20%
+      completeness, respectively.
 
-    c. :math:`m_{5\sigma}`: For each difference image, :math:`6\sigma`-clipped standard deviation of all pixel values is calculated as a 
-       estimate of the background noise, :math:`\sigma_{\mathrm{diffbkg}}`. This value can be compared to the sigma-clipped average of the 
-       corresponding difference uncertainty map to ensure uncertainty maps are reasonable. The :math:`5\sigma` point-source limiting flux is 
-       then calculated as :math:`5 \sqrt{N_p} \sigma_{\mathrm{diffbkg}}`, where :math:`N_p` is the number of `noise pixels`_ of the 
-       unit-normalized PSF model for the difference image, and converted to a limiting magnitude :math:`m_{5\sigma}` using with the appropriate 
-       AB magnitude zeropoint.  
+   c. :math:`m_{5\sigma}`: Estimate background noise,
+      :math:`\sigma_{\mathrm{diffbkg}}`, from the :math:`6\sigma`-clipped
+      standard deviation of all pixel values in each difference image.
+      This can be compared with the sigma-clipped average of the
+      corresponding difference uncertainty map to check that the map is
+      reasonable. Calculate the :math:`5\sigma` point-source limiting flux as
+      :math:`5 \sqrt{N_p} \sigma_{\mathrm{diffbkg}}`, where :math:`N_p` is
+      the number of `noise pixels`_ in the unit-normalized difference-image
+      PSF model. Convert to :math:`m_{5\sigma}` with the appropriate AB
+      magnitude zeropoint.
 
-    d. :math:`m_{\mathrm{ph}10}`: The fractional error between the recovered PSF-fit flux and the injected flux is calcualated for all TP candidates 
-       as :math:`(f_{\mathrm{PSF}} - f_{\mathrm{inj}})/f_{\mathrm{inj}}` and grouped in :math:`\Delta m = 0.5` bins of injected magnitude. 
-       :math:`m_{\mathrm{ph}10}` is computed via linear interpolation of the fractional errors for each bin for 10% precision. 
-       
-       .. note::
-          This does not account for systematic biases in the recovered fluxes, but is only an estimate of the statistical precision.
+   d. :math:`m_{\mathrm{ph}10}`: For all TPs, calculate the fractional error
+      between recovered PSF-fit and injected flux,
+      :math:`(f_{\mathrm{PSF}} - f_{\mathrm{inj}})/f_{\mathrm{inj}}`, and
+      group it in :math:`\Delta m = 0.5` bins of injected magnitude.
+      Linearly interpolate the fractional errors per bin to obtain
+      :math:`m_{\mathrm{ph}10}` at 10% precision.
 
-7. The final FOM is calculated using the specified weights for each term and filter/sub-group as described above. The version of the pipeline (with choices of subtraction algorithm, 
-   detection method, or specific parameter settings) that maximizes the FOM is judged to be better performing.
+      .. note::
+         This estimates statistical precision only; it does not account
+         for systematic biases in recovered fluxes.
+
+7. Calculate the final FOM with the specified weights for each term and
+   filter/sub-group. The pipeline version that maximizes the FOM, with its
+   choice of subtraction algorithm, detection method, or parameter
+   settings, is judged to perform better.
 
 .. _noise pixels: https://web.ipac.caltech.edu/staff/fmasci/home/mystats/noisepix_specs.pdf
 
 Evaluation of Pipeline Test runs
-**********************************************
+********************************
 
 .. toctree::
     :maxdepth: 2
-    
+
     openuniv_eval.rst
