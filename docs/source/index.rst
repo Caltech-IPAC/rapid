@@ -4,70 +4,62 @@
    contain the root `toctree` directive.
 
 RAPID Image-Difference Pipeline Documentation
-####################################################
-
-Welcome! This is the documentation for the RAPID Image-Difference
-Pipeline, under development at IPAC/Caltech.
-
+#############################################
 
 .. note::
-   Development of source code and documentation is currently ongoing.
+   The RAPID Image-Difference Pipeline source code and documentation are
+   under development at IPAC/Caltech.
 
-.. note::
    This Sphinx site documents the pipeline as it exists on the ``dev``
-   branch. On the ``rebuild`` branch the pipeline lives under
-   ``rapidpipe/``, and its design and operations pages are the rapid_docs
-   site instead of this one. Paths named on the pages below, such as
+   branch. On ``rebuild``, the pipeline lives under ``rapidpipe/``;
+   its design and operations pages are on the rapid_docs site instead.
+   Paths named on the pages below, such as
    ``pipeline/``, ``alerts/``, ``database/schema/`` and
    ``database/scripts/``, exist on ``dev`` only.
 
 
-Running the Latest RAPID Pipeline
-*************************************
+Getting the Source Code
+***********************
 
-A Docker image has been pre-built from a recent git-clone of the RAPID Github
-repository (8/21/26).
-This Docker image offers the convenience of having the RAPID
-pipeline already installed and ready to run.  It is publicly available from
+The source code is in the `RAPID GitHub Repository <https://github.com/Caltech-IPAC/rapid>`_.
+
+
+Running the Latest RAPID Pipeline
+*********************************
+
+A Docker image pre-built from a recent git-clone of the RAPID GitHub
+repository (8/21/26) has the pipeline installed and ready to run.
+It is publicly available at:
 
 .. code-block::
 
    public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
 
-It is currently approximately 8.6 GB in size, and requires sufficient disk space on the target machine.
-It can be used to ``docker-run`` a container and from within execute
-code for image-differencing, etc., using a ``docker-run`` command like the
-following (note that an entry point to bash is required for interactive use
-and to inhibit running the automated pipeline):
+The image is approximately 8.6 GB; the target machine needs sufficient
+disk space. Use it to ``docker-run`` a container and execute code for
+image-differencing and other tasks inside it. Interactive use requires a
+bash entry point, which also inhibits the automated pipeline. For example,
+use a ``docker-run`` command like:
 
 .. code-block::
 
    docker run -it --entrypoint bash --name my_test -v /home/ubuntu/work/test_20241206:/work public.ecr.aws/<ecr-public-alias>/rapid_science_pipeline:latest
 
 
-The Docker file used to generate this Docker image is
+The image was built using this Docker file in the RAPID git repo:
 
 .. code-block::
 
    rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline
 
-in the RAPID git repo.  The Docker image self-contains a
-RAPID git-clone in the /code directory (no volume binding to an
-external filesystem containing the RAPID git repo is necessary).  The
-Docker image also contains a
-C-code build of the RAPID software stack with the following run-time environment:
+It contains a RAPID git-clone in /code, so no volume binding to an external
+filesystem containing the RAPID git repo is needed. It also contains a
+C-code build of the RAPID software stack with this run-time environment:
 
 .. code-block::
 
    export PATH=/code/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
    export LD_LIBRARY_PATH=/code/c/lib
-
-
-
-Getting the Source Code
-*****************************
-
-Please refer to the `RAPID GitHub Repository <https://github.com/Caltech-IPAC/rapid>`_ for the source code.
 
 ..
    Separate file for installation of the pipeline and building the C code.

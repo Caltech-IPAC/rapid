@@ -4,12 +4,14 @@ RAPID Forced-Photometry Backend
 Overview
 ************************************
 
-The python script ``pipeline/forcedPhotometryForField.py``
-is the RAPID forced-photometry backend.
-For a given set of sky positions in the same sky tile (a.k.a. field),
-separate forced-photometry lightcurve files will be generated, one per sky position.
-Access to a RAPID operations PostgreSQL database is required, and the read-only
-``DBUSER=apollo`` can be used.
+The Python script ``pipeline/forcedPhotometryForField.py`` is the RAPID
+forced-photometry backend. Run it inside a RAPID-pipeline container with
+one or more sky positions in the same sky tile (a.k.a. field). It generates
+one forced-photometry lightcurve file per sky position.
+
+The backend requires access to a RAPID operations PostgreSQL database;
+the read-only ``DBUSER=apollo`` can be used. The ``Fields`` table defines
+field centers and corners for the entire sky.
 
 For Open Univ sims, use::
 
@@ -27,14 +29,8 @@ For Soc-sim images, use::
 Instructions
 ************************************
 
-The forced-photometry backend should be executed inside a RAPID-pipeline container.
-
-A set of one or more sky positions must be in same field (a.k.a sky tile) for a
-given forced-photometry backend execution.
-The PostgreSQL database table called ``Fields`` defines field centers and corners for the entire sky.
-For now, the ``reqid`` is just an arbitrary unique index.
-
-First, set up a text file with input sky positions of interest::
+Create a text file of input sky positions. For now, ``reqid`` is an
+arbitrary unique index::
 
     vi input_sky_positions.txt
 
@@ -44,7 +40,8 @@ First, set up a text file with input sky positions of interest::
     3,8.5593654,-42.272997
 
 
-Here is how to execute the forced-photometry backend inside a a RAPID-pipeline container.
+Inside the RAPID-pipeline container, configure the environment and run
+the backend:
 
 .. code-block::
 
@@ -79,7 +76,10 @@ Here is how to execute the forced-photometry backend inside a a RAPID-pipeline c
 
     tail -f forcedPhotometryForField.out
 
-The forced-photometry lightcurve files produced in the above backend-execution example are:
+Output
+************************************
+
+The example produces these forced-photometry lightcurve files:
 
 .. code-block::
 
@@ -87,6 +87,5 @@ The forced-photometry lightcurve files produced in the above backend-execution e
     rapid_req2_lc.txt
     rapid_req3_lc.txt
 
-These output files contain a table with useful columns of pertinent metadata.
-Each table row is a lightcurve data point.  The table contains
-lightcurve data points for all available Roman WFI bandpass filters.
+Each file contains a table with metadata columns and one lightcurve data
+point per row, covering all available Roman WFI bandpass filters.
