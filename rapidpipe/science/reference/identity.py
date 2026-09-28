@@ -1,3 +1,4 @@
+# ported-from: none
 """The reference-image instance's logical key and selection digest
 (products page, "Identity").
 

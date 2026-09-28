@@ -1,3 +1,4 @@
+# ported-from: pipeline/differenceImageSubs.py @ c740f3e3
 """Coverage-map masking of difference images.
 
 `dev`: ``mask_difference_image_with_resampled_reference_cov_map``

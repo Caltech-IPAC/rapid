@@ -1,3 +1,4 @@
+# ported-from: modules/utils/rapid_pipeline_subs.py, pipeline/artifactRepairSubs.py @ c740f3e3
 """NaN replacement and restoration, and extreme-artifact repair.
 
 `dev`: ``replace_nans_with_value`` and ``restore_nans``

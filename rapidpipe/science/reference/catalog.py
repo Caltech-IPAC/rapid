@@ -1,3 +1,4 @@
+# ported-from: pipeline/referenceImageSubs.py, pipeline/awsBatchSubmitJobs_runSingleReferenceImagePipeline.py @ c740f3e3
 """SExtractor on the reference mosaic and the catalog's FWHM statistics.
 
 `dev`: ``generateSExtractorReferenceImageCatalog``

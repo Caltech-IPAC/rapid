@@ -1,3 +1,4 @@
+# ported-from: pipeline/sfftCommandSubs.py, pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
 """SFFT: the command line, run as `dev` runs it.
 
 `dev`: ``build_sfft_command_args`` (``pipeline/sfftCommandSubs.py``) and

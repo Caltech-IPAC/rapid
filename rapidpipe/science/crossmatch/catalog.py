@@ -1,3 +1,4 @@
+# ported-from: pipeline/crossMatchSources.py @ c740f3e3
 """Pure helpers for `crossmatch`, ported from `dev`'s ``pipeline/crossMatchSources.py``.
 
 No database access: the stage module runs the SQL and hands rows here.

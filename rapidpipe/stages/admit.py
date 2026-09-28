@@ -1,3 +1,4 @@
+# ported-from: database/sims/db_register_socsim_files.py @ c740f3e3
 """`admit`: the first stage. Turns a delivered l2 image into a pipeline product.
 
 Per the products page ("For the l2 image"), `admit` has no upstream stage:

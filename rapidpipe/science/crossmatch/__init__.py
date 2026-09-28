@@ -1,3 +1,4 @@
+# ported-from: pipeline/crossMatchSources.py @ c740f3e3
 """The crossmatch stage's science: exposure ordering, CSV lines, the pass-2 cone.
 
 Source: `origin/dev`'s ``pipeline/crossMatchSources.py``. The port

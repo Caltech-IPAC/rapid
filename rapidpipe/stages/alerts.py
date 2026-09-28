@@ -1,3 +1,4 @@
+# ported-from: pipeline/produceAlertsForProcDate.py, alerts/produce.py, alerts/providers.py, alerts/cli.py @ c740f3e3
 """`alerts`: one difference image's alert packets, as `dev` produces them, into an outbox.
 
 Ported from `origin/dev`'s ``pipeline/produceAlertsForProcDate.py`` and the

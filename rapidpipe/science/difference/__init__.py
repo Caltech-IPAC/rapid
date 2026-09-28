@@ -1,3 +1,4 @@
+# ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py, pipeline/differenceImageSubs.py, pipeline/zogyNoiseSubs.py, pipeline/artifactRepairSubs.py, pipeline/sfftCommandSubs.py, modules/utils/rapid_pipeline_subs.py @ c740f3e3
 """The difference stage's science, one module per step, ported from `dev`.
 
 Source: `origin/dev`'s ``pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py``

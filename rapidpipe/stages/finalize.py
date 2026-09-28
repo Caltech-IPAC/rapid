@@ -1,3 +1,4 @@
+# ported-from: pipeline/awsBatchSubmitJobs_runSinglePostProcPipeline.py @ c740f3e3
 """`finalize`: a difference attempt's products republished with a stamped header.
 
 Ported from `origin/dev`'s post-processing pipeline (ppid 17,

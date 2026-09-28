@@ -1,3 +1,4 @@
+# ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
 """bkgest: local background subtraction of the science image.
 
 `dev`: the bkgest block inline in

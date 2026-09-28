@@ -1,3 +1,4 @@
+# ported-from: none
 """`register`: writes product rows from a manifest, without opening files.
 
 Per the stage contract's "Declaration": "`register` records file products

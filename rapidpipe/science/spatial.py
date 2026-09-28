@@ -1,3 +1,4 @@
+# ported-from: database/sims/db_register_socsim_files.py, database/modules/utils/overlapping_fields.py, modules/utils/rapid_pipeline_subs.py @ c740f3e3
 """Spatial derivations `register` needs to write l2-image rows.
 
 Pure functions over numpy/healpy only -- no `rapidpipe` imports outside

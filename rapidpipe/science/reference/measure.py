@@ -1,3 +1,4 @@
+# ported-from: pipeline/referenceImageSubs.py, pipeline/awsBatchSubmitJobs_runSingleReferenceImagePipeline.py @ c740f3e3
 """The reference mosaic's quality measurements, as `dev` computes them.
 
 `dev`: ``compute_cov5percent`` (``pipeline/referenceImageSubs.py``) and the

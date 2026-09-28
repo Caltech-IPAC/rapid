@@ -1,3 +1,4 @@
+# ported-from: pipeline/awsBatchSubmitJobs_runSinglePostProcPipeline.py, modules/utils/rapid_pipeline_subs.py @ c740f3e3
 """The finalize stage's science: stamping a difference image's primary header.
 
 Source: `origin/dev`'s post-processing pipeline (ppid 17,

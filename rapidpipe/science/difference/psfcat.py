@@ -1,3 +1,4 @@
+# ported-from: modules/utils/rapid_pipeline_subs.py, pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
 """The Photutils PSF-fit catalog of a difference image.
 
 `dev`: ``compute_psf_catalog`` (``modules/utils/rapid_pipeline_subs.py``)

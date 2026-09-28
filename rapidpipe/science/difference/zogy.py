@@ -1,3 +1,4 @@
+# ported-from: pipeline/zogyNoiseSubs.py, pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
 """ZOGY: its background-noise arguments and its command line.
 
 `dev`: ``pipeline/zogyNoiseSubs.py`` (``background_sigma_from_uncertainty_map``,

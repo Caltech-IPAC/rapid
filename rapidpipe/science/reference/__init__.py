@@ -1,3 +1,4 @@
+# ported-from: pipeline/referenceImageSubs.py, modules/utils/rapid_pipeline_subs.py @ 6458d3ca
 """The reference stage's science: `dev`'s reference-image pipeline (ppid 12).
 
 `dev`: ``pipeline/referenceImageSubs.py`` (``generateReferenceImage``,

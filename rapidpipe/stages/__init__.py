@@ -1,3 +1,4 @@
+# ported-from: none
 """Stage entrypoints: one module per stage, each directly runnable.
 
 Holds one module per stage name in the fixed list (``admit``, ``reference``,

@@ -1,3 +1,4 @@
+# ported-from: none
 """The stage contract as code: declaration, exit codes, and the runner.
 
 Every stage exports a :class:`StageDeclaration` and calls :func:`run_stage`

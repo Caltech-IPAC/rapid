@@ -1,3 +1,4 @@
+# ported-from: pipeline/referenceImageSubs.py, modules/utils/rapid_pipeline_subs.py @ 6458d3ca
 """Per-frame preparation of the reference inputs, as `dev` does it.
 
 `dev`: the loop over input frames in ``generateReferenceImage``

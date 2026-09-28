@@ -1,3 +1,4 @@
+# ported-from: pipeline/computeStatisticsForAstroObjects.py, modules/utils/rapid_pipeline_subs.py @ c740f3e3
 """The statistics stage's science: per-object position and flux statistics, ported from `dev`.
 
 Source: `origin/dev`'s ``pipeline/computeStatisticsForAstroObjects.py`` and

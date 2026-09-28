@@ -1,3 +1,4 @@
+# ported-from: pipeline/differenceImageSubs.py @ c740f3e3
 """Gain matching of the science and resampled reference images.
 
 `dev`: ``gainMatchScienceAndReferenceImages`` and ``SourceMatchRefSci``
