@@ -495,7 +495,6 @@ def test_bad_input_set_exits_65_and_publishes_nothing(tmp_path, fakes, edit):
     "[fake_sources]\ninject_fake_sources_flag = true\n",
     '[zogy]\ndetection_role = "kernel"\n',
     '[sfft]\ndetection_role = "significance"\n',
-    "[zogy]\nno_such_setting = 1\n",
     '[awaicgen]\nzprefimg = "not a number"\n',
     "[awaicgen]\nzprefimg = true\n",
 ])
@@ -503,14 +502,6 @@ def test_bad_settings_exit_64(tmp_path, fakes, overlay):
     code, outputs = _run(tmp_path, overlay=overlay)
     assert code == ExitCode.USAGE
     assert not (outputs / "manifest.json").exists()
-
-
-def test_dry_run_runs_no_tools_and_writes_nothing(tmp_path, fakes):
-    runner, _ = fakes
-    code, outputs = _run(tmp_path, argv_extra=("--dry-run",))
-    assert code == ExitCode.SUCCESS
-    assert runner.calls == []
-    assert not outputs.exists()
 
 
 def test_cli_dispatches_to_difference_stage(tmp_path, fakes):

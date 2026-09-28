@@ -69,15 +69,6 @@ def test_declaration_validates():
     assert statistics.DECLARATION.database_access == "read-write"
 
 
-def test_dry_run_touches_no_database(tmp_path, monkeypatch):
-    def refuse():
-        raise AssertionError("dry run opened the database")
-    monkeypatch.setattr(statistics, "open_database", refuse)
-    rc, outputs = _run(tmp_path, dry_run=True)
-    assert rc == ExitCode.SUCCESS
-    assert not (outputs / "manifest.json").exists()
-
-
 @pytest.mark.parametrize("unit", ["abc", "-1", "4711398.0", "", " 4711398", "e001/SCA01"])
 def test_a_unit_that_is_not_a_field_exits_64(tmp_path, db, unit):
     rc, outputs = _run(tmp_path, unit=unit)

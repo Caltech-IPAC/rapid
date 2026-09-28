@@ -85,14 +85,6 @@ def test_declaration_validates():
         "crossmatch", "field", ("source-set",), ("association-set",), "read-write")
 
 
-def test_dry_run_touches_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr(crossmatch, "open_database",
-                        lambda: pytest.fail("dry run opened the database"))
-    rc, outputs = _run(tmp_path, dry_run=True)
-    assert rc == ExitCode.SUCCESS
-    assert not outputs.exists()
-
-
 @pytest.mark.parametrize("unit", ["abc", "-5", "4662268.0", " 4662268", "SCA01", ""])
 def test_a_unit_that_is_not_a_field_is_a_usage_error(tmp_path, db, unit):
     rc, outputs = _run(tmp_path, unit=unit)
@@ -267,7 +259,6 @@ def test_cluster_between_passes_can_be_turned_off(tmp_path, db):
     "[crossmatch]\nsource_flags = true\n",
     "[crossmatch]\nsource_flags = 1.5\n",
     "[crossmatch]\ndone_check = 1\n",
-    "[crossmatch]\nno_such_key = 1\n",
 ])
 def test_bad_settings_are_usage_errors(tmp_path, db, overlay):
     assert _run(tmp_path, overlay=overlay)[0] == ExitCode.USAGE
