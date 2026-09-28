@@ -67,6 +67,20 @@ jobs:
       - name: smoke test -- stage admit --help
         run: docker run --rm rapid-pipeline:ci stage admit --help
 
+      # Pins the in-image stage roster and its order: a regression here
+      # means a stage was added, removed or reordered without updating
+      # this workflow (step 9 relies on this list staying accurate).
+      - name: smoke test -- stage list matches the expected roster
+        run: |
+          actual="$(docker run --rm rapid-pipeline:ci stage list | cut -f1)"
+          expected="admit reference difference finalize register load maintain crossmatch statistics prune alerts export"
+          actual_joined="$(echo "$actual" | tr '\n' ' ' | sed 's/ *$//')"
+          if [ "$actual_joined" != "$expected" ]; then
+            echo "stage list mismatch:"
+            diff <(echo "$expected" | tr ' ' '\n') <(echo "$actual_joined" | tr ' ' '\n')
+            exit 1
+          fi
+
       # build.sh archives an explicit include list; this proves the kept
       # helpers outside rapidpipe/ made it into the installed package and
       # the script/config files the stages run from /code are present.
