@@ -141,7 +141,7 @@ def toolkit() -> Toolkit:
     In-process tests monkeypatch this name instead.
     """
     factory = load_factory(toolkit_env("difference"), UsageError)
-    return factory() if factory else Toolkit()
+    return factory() if factory is not None else Toolkit()
 
 
 # ----------------------------------------------------------------------
