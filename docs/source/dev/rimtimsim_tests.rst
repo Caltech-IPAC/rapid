@@ -4,16 +4,15 @@ Testing with RimTimSim Simulated Data
 Overview
 ************************************
 
-Robby Wilson's simulated-image data, hereby referred to as RimTimSim data, are describe here.
-These simulate the Galactic Bulge Time Domain Survey (GBTDS), the same survey as the SOC
-simulation set, so these are images of dense stellar fields.  Note that RimTimSim covers a
-single detector, unlike the SOC sims, which cover all 18.
-It is a small dataset with just 263 images total (details below).
-These images have small dithers and small image-angle variations.
+Robby Wilson's RimTimSim data simulate dense stellar fields in the Galactic
+Bulge Time Domain Survey (GBTDS), the same survey as the SOC simulation set.
+RimTimSim contains 263 images from a single detector, unlike the SOC sims,
+which cover all 18. The images have small dithers and small image-angle
+variations.
 
 The tests described below are organized by processing date.
 
-The RimTimSim simulated-image dataset covers the following observation range::
+Observation range::
 
     rimtimsimdb=> select min(dateobs),max(dateobs) from l2files;
                min           |          max
@@ -21,7 +20,7 @@ The RimTimSim simulated-image dataset covers the following observation range::
      2027-02-14 06:02:26.719 | 2027-04-24 21:17:51.141
     (1 row)
 
-Only one field is covered by the RimTimSim dataset::
+The dataset covers one field::
 
     rimtimsimdb=> select distinct field from l2files;
       field
@@ -29,7 +28,7 @@ Only one field is covered by the RimTimSim dataset::
      4682737
     (1 row)
 
-Also, only one SCA and two filters are included in the RimTimSim dataset::
+It includes one SCA and two filters::
 
     rimtimsimdb=> select sca,fid,count(*) from l2files group by sca,fid order by sca,fid;
      sca | fid | count
@@ -38,7 +37,7 @@ Also, only one SCA and two filters are included in the RimTimSim dataset::
        2 |   7 |   132
     (2 rows)
 
-Look-up table all of the filter IDs versus Roman Space Telescope filter names included in the database:
+Filter IDs and Roman Space Telescope filter names in the database:
 
 .. code-block::
 
@@ -55,38 +54,41 @@ Look-up table all of the filter IDs versus Roman Space Telescope filter names in
        8 | W146
     (8 rows)
 
-A new set of rimtimsimbs was delivered on 6/22/26, which has a greater variety of injected transients.
-These have been loaded into the following RAPID operations database: rimtimsims3db.
+A new set of rimtimsimbs, delivered on 6/22/26 with a greater variety of
+injected transients, has been loaded into the RAPID operations database
+rimtimsims3db.
 
 
 5/30/2025
 ************************************
 
-The following pipeline-software improvements have been implemented:
+This test included the following pipeline-software improvements:
 
-1. Feed ZOGY computed astrometric uncertainties computed from gain-matching, instead of fixed value 0.01 pixels.
-2. Shift the gain-matched reference image that is fed to ZOGY by subpixel x and y offsets computed from gain-matching.
-3. Transpose the science-image PSF prior to feeding it to ZOGY (this required due to a feature of the RimTimSim dataset).
+* Feed ZOGY astrometric uncertainties computed from gain-matching instead of
+  the fixed value 0.01 pixels.
+* Shift the gain-matched reference image fed to ZOGY by the subpixel x and y
+  offsets computed from gain-matching.
+* Transpose the science-image PSF before feeding it to ZOGY, as required by
+  a feature of the RimTimSim dataset.
 
-Only ZOGY difference-image products were made in this test.
-NaNs were removed from the ZOGY inputs prior to ZOGY execution, and then restored in the ZOGY outputs (this is a new
-requirement due to the presence of NaNs in the RimTimSim dataset).
+Only ZOGY difference-image products were made. NaNs in the RimTimSim dataset
+introduced a new requirement: remove NaNs from ZOGY inputs before execution,
+then restore them in the outputs.
 
-Initially, only one image was processed for each of the two filters (jids 1 and 3),
-in order to make the two required reference images for the single field associated with two filters in the RimTimSim dataset.
-The reference images were made on the day before the date of this test.
-These reference images were made beforehand to avoid needlessly having redundant reference images made when
-processing the remaining images en masse in parallel.
-For the jid=1 instance, PSF-fit catalog generation took 488 seconds (nsources=27420), and reference-image generation took 426 seconds (nframes=23),
-comprising the majority of the run time.  The total run time of the jid=1 instance was 1038 seconds.
+The day before this test, one image per filter (jids 1 and 3) was processed
+to make the two reference images for the single field. This avoided redundant
+reference-image generation when processing the remaining images in parallel.
+For jid=1, PSF-fit catalog generation took 488 seconds (nsources=27420), and
+reference-image generation took 426 seconds (nframes=23). Together they
+accounted for most of the 1038-second total run time.
 
-Processing was started for a later observation time than the very beginning,
-in order to reserve some prior image frames for making reference images::
+Processing started after the earliest observations to reserve earlier frames
+for reference images::
 
     export STARTDATETIME="2027-02-27 00:00:00"
     export ENDDATETIME="2027-04-25 00:00:00"
 
-Numbers of exposure-SCA images processed for each available filter (fid = 4 and 7 only):
+Exposure-SCA images processed per available filter (fid = 4 and 7 only):
 
 .. code-block::
 
@@ -98,7 +100,7 @@ Numbers of exposure-SCA images processed for each available filter (fid = 4 and 
     (2 rows)
 
 
-Numbers of exposure-SCA images for use in constructing the reference images:
+Exposure-SCA images reserved for reference-image construction:
 
 .. code-block::
 
@@ -110,11 +112,10 @@ Numbers of exposure-SCA images for use in constructing the reference images:
     (2 rows)
 
 
-Of the 215 jobs executed on 5/30/2025 that did not have to generate a reference image on the fly (because the two
-required reference images were generated on the previous day),
-the minimum elapsed job run time was 387 seconds and the maximum 849 seconds.
+The 215 jobs executed on 5/30/2025 used the two reference images generated
+the previous day. Their elapsed run times ranged from 387 to 849 seconds.
 
-Here are metadata about the two reference images, for fid = 4 and 7:
+Reference-image metadata for fid = 4 and 7:
 
 .. code-block::
 
@@ -134,23 +135,23 @@ Here are metadata about the two reference images, for fid = 4 and 7:
       220 | 4682737 | 28823 | 1844720 |   7 |      25 | 61450.25169813307 | 61462.81866137544 |       0 | 33043712 | 0.13141742 |  0.08563688 |     1585559 | 0.10927002 | 0.115269825 | 0.01366262 | 307.28656 |    32.52147 |       0 | 0.019715047 |       2.46 |      -1.21 |     180.55 |         104036
     (2 rows)
 
-The ``cov5percent`` QA metric for these two reference images is about 32.5 percent, but
-because the entire dataset has small dithers and small image-angle variations, the footprint
-of the image difference between science and reference images is almost 100 percent.
+Both reference images have a ``cov5percent`` QA metric of about 32.5 percent.
+The difference-image footprint is nevertheless almost 100 percent because
+the entire dataset has small dithers and small image-angle variations.
 
 
 4/10/2026
 ************************************
 
-A new set of rimtimsims, consisting of 131 FITS images, covering SCA number 2,
-bandpass filter K213, and a single sky footprint/orientation (with dithers of no more
-than a few pixels) that is associated with field number 4682737.  These rimtimsims
-came already with fake-source injections, and therefore no additional fake sources
-were injected by the RAPID pipeline.
+A new set of 131 rimtimsims FITS images covers SCA number 2, bandpass filter
+K213, and a single sky footprint/orientation associated with field number
+4682737, with dithers of no more than a few pixels. The images already
+contained fake-source injections, so the RAPID pipeline injected no
+additional fake sources.
 
 SFFT was run without the ``--crossconv`` flag.
 
-Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
+Virtual Pipeline Operator (VPO) invocation:
 
 .. code-block::
 
@@ -166,8 +167,8 @@ Here are details about how the test was executed via the Virtual Pipeline Operat
 The ``STARTDATETIME`` and ``ENDDATETIME`` date/times exclude the first 10 images,
 which are reserved for reference-image generation.
 
-The following database query shows the RAPID pipelines ran normally for the portion that
-generates the file products in parallel via the AWS Batch service.
+The database query shows normal completion of parallel file-product
+generation via AWS Batch:
 
 .. code-block::
 
@@ -179,7 +180,7 @@ generates the file products in parallel via the AWS Batch service.
        17 |        0 |   121
     (2 rows)
 
-The VPO took 1.8 hours to:
+The VPO took 1.8 hours for the following stages:
 
 =================================================================  =====================
 Pipeline stage                                                      Execution time (sec)
@@ -192,15 +193,13 @@ Delete not-best Merges database records (there were none)                 2.6
 Total elapsed time to execute VPO on above stages                      6409.7
 =================================================================  =====================
 
-As shown in the table below for the longest running pipeline instance (jid = 91915),
-executing AWAICGEN for reference-image generation
-(depends on the number of input images; NFRAMES=10 for this case),
-executing SFFT, (both science image and reference-image inputs),
-and generating PhotUtils catalogs are the dominant factors
-affecting pipeline performance.
+For the longest-running pipeline instance (jid = 91915), the dominant costs
+were AWAICGEN reference-image generation, SFFT execution with both science
+and reference-image inputs, and PhotUtils catalog generation. AWAICGEN run
+time depends on the number of input images (NFRAMES=10 here).
 
-Generating a PSF-fit catalog for the positive naive-difference image took an
-anomalously long time (19.4 minutes!).
+The positive naive-difference-image PSF-fit catalog took an anomalously long
+19.4 minutes to generate.
 
 =================================================================  =====================
 Pipeline step                                                      Execution time (sec)
@@ -242,62 +241,56 @@ Uploading products at pipeline end to S3 product bucket               0.037
 Total elapsed time to run one instance of science pipeline         2510.065
 =================================================================  =====================
 
-The PSF-fit catalogs made by the Python photutils package from the ZOGY difference images,
-both positive and negative, were loaded into a Sources child PostgreSQL database table
-(i.e., tablename = sources_20260410_2).
-There were 600,695 Sources records loaded into the PostgreSQL database.
-The elapsed time to load all sources into the database was 34.2 seconds with 8 parallel processes.
+Python photutils PSF-fit catalogs from positive and negative ZOGY difference
+images were loaded into a Sources child PostgreSQL table
+(tablename = sources_20260410_2). Loading 600,695 Sources records took
+34.2 seconds with 8 parallel processes.
 
-Cross-matching the sources with astronomical objects (called AstroObjects),
-resulting in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables, for all 62 fields of the sources, was done.
-The elapsed time to cross-match all sources was 877.1 seconds with 8 parallel processes.
-This includes cross-matching across field boundaries for sources near field edges.
-A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
-There were 600,695 AstroObjects records and 601,071 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 376 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.0626% in terms of number of merges.
+Cross-matching sources with astronomical objects (AstroObjects) across all
+62 source fields took 877.1 seconds with 8 parallel processes. The match
+radius was 0.1 arcsec (a Roman WFI pixel), including matches across field
+boundaries for sources near field edges. The Merges_<field> and
+AstroObjects_<fields> PostgreSQL tables received 600,695 AstroObjects records
+and 601,071 Merges records (lightcurve data points). Cross-boundary matching
+added 376 merges, an increase of 0.0626%.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated
-after the cross-matching.  This is done as a separate process from the cross-matching.
-Any AstroObjects_<fields> record with no associated sources in the Merges_<field> database table are deleted.
-A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
-and then these tables are set to logged, clustered, and analyzed.
-The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
-For this test, all of these items within the process took 305.6 seconds with 8 parallel processes.
+A separate process after cross-matching updates lightcurve statistics in
+AstroObjects_<fields> and deletes records with no associated sources in
+Merges_<field>. It builds a new Q3C index on (meanra, meandec) for all
+AstroObjects_<fields> tables, then sets them to logged, clusters and analyzes
+them, and explicitly vacuums them at the end. This took 305.6 seconds with
+8 parallel processes.
 
 .. note::
-    Lesson learned:  Only 7 fields overlapping the rimtimsims were expected, but cross-matching
-    occurred over 62 fields.  Plotting the sky positions of PhotUtils catalog extractions revealed
-    a relatively small fraction of bogus off-image sky positions.  As a result, Python code
-    crossMatchSources.py was modified to select only those sources with ``flags = 0``.
+    Only 7 overlapping fields were expected, but cross-matching covered 62.
+    Plots of PhotUtils catalog extractions revealed a relatively small
+    fraction of bogus off-image sky positions. The Python code
+    crossMatchSources.py was therefore modified to select only sources
+    with ``flags = 0``.
 
 .. note::
-    This test failed to generate SFFT-difference-image PhotUtils catalogs because of NaNs
-    in the output SFFT difference image and associated uncertainty image.  Code changes were
-    made to ameliorate this in the 4/23/2026 test (documented below).
+    SFFT-difference-image PhotUtils catalog generation failed because of
+    NaNs in the output SFFT difference image and its uncertainty image.
+    Code changes were made to ameliorate this in the 4/23/2026 test below.
 
 
 4/23/2026
 ************************************
 
-Similar to the 4/10/2026 test, with exceptions as noted below.
+Similar to the 4/10/2026 test, with the changes below. The new rimtimsims set
+contains 131 FITS images for SCA number 2, bandpass filter K213, and a single
+sky footprint/orientation associated with field number 4682737, with dithers
+of no more than a few pixels. Fake sources were already injected, so the
+RAPID pipeline added none.
 
-A new set of rimtimsims, consisting of 131 FITS images, covering SCA number 2,
-bandpass filter K213, and a single sky footprint/orientation (with dithers of no more
-than a few pixels) that is associated with field number 4682737.  These rimtimsims
-came already with fake-source injections, and therefore no additional fake sources
-were injected by the RAPID pipeline.
+SFFT ran without ``--crossconv``. Relative to the 4/10/2026 test, its command
+used brute-force masking options ``--bsmaskvalue 20000.0 --bsmaskradius 30.0``
+instead of relying on --satvalue.
 
-SFFT was run without the ``--crossconv`` flag.  The SFFT command for rimtimsims
-was modified relative to the 4/10/2026 test to use the brute-force masking options
-``--bsmaskvalue 20000.0 --bsmaskradius 30.0`` (and not rely on the --satvalue option).
+SFFT PSF-fit catalogs used the SFFT difference-image PSF rather than the
+reference-image PSF used in the 4/10/2026 test.
 
-The PSF-fit catalogs for SFFT difference images were generated with the SFFT difference-image PSF,
-unlike in the 4/10/2026 test that used the reference-image PSF.
-
-Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
+Virtual Pipeline Operator (VPO) invocation:
 
 .. code-block::
 
@@ -313,8 +306,8 @@ Here are details about how the test was executed via the Virtual Pipeline Operat
 The ``STARTDATETIME`` and ``ENDDATETIME`` date/times exclude the first 10 images,
 which are reserved for reference-image generation.
 
-The following database query shows the RAPID pipelines ran normally for the portion that
-generates the file products in parallel via the AWS Batch service.
+The database query shows normal completion of parallel file-product
+generation via AWS Batch:
 
 .. code-block::
 
@@ -326,7 +319,7 @@ generates the file products in parallel via the AWS Batch service.
        17 |        0 |   121
     (2 rows)
 
-The VPO took 4.6 hours to:
+The VPO took 4.6 hours for the following stages:
 
 =================================================================  =====================
 Pipeline stage                                                      Execution time (sec)
@@ -339,15 +332,14 @@ Delete not-best Merges database records (there were none)                 2.6
 Total elapsed time to execute VPO on above stages                     16581.7
 =================================================================  =====================
 
-As shown in the table below for the longest running pipeline instance because of
-reference-image generation (jid = 91915), executing AWAICGEN for reference-image generation
-(depends on the number of input images; NFRAMES=10 for this case),
-executing SFFT, (both science image and reference-image inputs),
-and generating PhotUtils catalogs are the dominant factors
-affecting pipeline performance.
+Reference-image generation made jid = 91915 the longest-running pipeline
+instance. Its dominant costs were AWAICGEN reference-image generation,
+SFFT execution with both science and reference-image inputs, and PhotUtils
+catalog generation. AWAICGEN run time depends on the number of input images
+(NFRAMES=10 here).
 
-Generating a PSF-fit catalog for the positive naive-difference image took an
-anomalously long time (18.3 minutes!).
+The positive naive-difference-image PSF-fit catalog took an anomalously long
+18.3 minutes to generate.
 
 =================================================================  =====================
 Pipeline step                                                      Execution time (sec)
@@ -390,46 +382,41 @@ Total elapsed time to run one instance of science pipeline         3524.095
 =================================================================  =====================
 
 
-The PSF-fit catalogs made by the Python photutils package from the SFFT difference images
-(as opposed to ZOGY difference images for the 4/10/2026 test),
-both positive and negative, were loaded into a Sources child PostgreSQL database table
-(i.e., ``tablename = sources_20260410_2`` since there is only one SCA in the new rimtimsims).
-There were 9,597,393 Sources records loaded into the PostgreSQL database (16 times as many as the 4/10/2026 test).
-The elapsed time to load all sources into the database was 455.8 seconds with 8 parallel processes.
+Python photutils PSF-fit catalogs from positive and negative SFFT difference
+images, rather than ZOGY as in the 4/10/2026 test, were loaded into a Sources
+child PostgreSQL table (``tablename = sources_20260410_2``, since the new
+rimtimsims contain only one SCA). Loading 9,597,393 Sources records, 16 times
+as many as the 4/10/2026 test, took 455.8 seconds with 8 parallel processes.
 
-Cross-matching the sources with astronomical objects (called AstroObjects),
-resulting in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables, for all 7 fields of the sources
-(i.e., that overlapped the rimtimsims), was done.
-The elapsed time to cross-match all sources was 8604.1 seconds with 8 parallel processes.
-This includes cross-matching across field boundaries for sources near field edges.
-The cross-matching was done with ``match_radius = 0.00001528`` degrees (half a Roman WFI pixel),
-unlike the 4/10/2026 test in which a match radius of 0.1 arcsec (approximately a Roman WFI pixel) was used.
-There were 826,503 AstroObjects records and 11,779,174 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 3153 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.0268% in terms of number of merges.
+Cross-matching sources with AstroObjects across all 7 fields overlapping the
+rimtimsims took 8604.1 seconds with 8 parallel processes, including matches
+across field boundaries near field edges. The ``match_radius = 0.00001528``
+degrees (half a Roman WFI pixel) replaced the 4/10/2026 test's 0.1 arcsec
+(approximately a Roman WFI pixel). The Merges_<field> and
+AstroObjects_<fields> PostgreSQL tables received 826,503 AstroObjects records
+and 11,779,174 Merges records (lightcurve data points). Cross-boundary
+matching added 3153 merges, an increase of 0.0268%.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated
-after the cross-matching.  This is done as a separate process from the cross-matching.
-Any AstroObjects_<fields> record with no associated sources in the Merges_<field> database table are deleted.
-A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
-and then these tables are set to logged, clustered, and analyzed.
-The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
-For this test, all of these items within the process took 337.0 seconds with 8 parallel processes.
+The separate post-cross-matching process described under 4/10/2026 updated
+AstroObjects_<fields> lightcurve statistics, deleted records without sources
+in Merges_<field>, rebuilt Q3C indexes on (meanra, meandec), set all
+AstroObjects_<fields> tables to logged, clustered and analyzed them, and
+explicitly vacuumed them at the end. It took 337.0 seconds with 8 parallel
+processes.
 
 
 5/11/2026
 ************************************
 
-Similar to the 4/23/2026 test, except the more recent improvements to the SFFT code give deeper PhotUtils detections.
-Other minor differences are that ``sca_readout_noise = 8.5`` and ``saturation_level = 2500000`` was used
-(instead of ``sca_readout_noise = 11.0`` and ``saturation_level = 1100000``), which were simply mistakes.
-The products from this test should be used in lieu of those from the 4/23/2026 test.
+Similar to the 4/23/2026 test, but newer SFFT code gives deeper PhotUtils
+detections. Minor mistakes were the use of ``sca_readout_noise = 8.5`` and
+``saturation_level = 2500000`` instead of ``sca_readout_noise = 11.0`` and
+``saturation_level = 1100000``. Use these products in place of those from
+the 4/23/2026 test.
 
-The recovered lightcurve of an injected fake source with a peak of approximately 18th magnitude
-for one example has improved with 6 deeper detections (because of the upgraded SFFT code). 
-The database query for this recovered lightcurve from SFFT-difference-image PhotUtils catalogs is:
+For one injected fake source peaking at approximately 18th magnitude, the
+upgraded SFFT code recovered 6 deeper detections. Query its lightcurve from
+SFFT-difference-image PhotUtils catalogs with:
 
 .. code-block::
 
@@ -437,7 +424,7 @@ The database query for this recovered lightcurve from SFFT-difference-image Phot
     q3c_dist(ra, dec,cast(268.52236887996474 as double precision), cast(-29.256728163618668 as double precision)) * 3600.0 as dist
     from sources a, merges_4682737 b where a.sid = b.sid and aid = 24673086 order by mjdobs;
 
-A plot of the recovered lightcurve is given as follows:
+Recovered lightcurve:
 
 .. image:: lightcurve_20260511.png
 
@@ -445,8 +432,8 @@ A plot of the recovered lightcurve is given as follows:
 5/14/2026
 ************************************
 
-Similar to the 5/11/2026 test, except the aforementioned mistakes have been fixed, and two recent
-pipeline improvements have been included:
+Similar to the 5/11/2026 test, with the parameter mistakes fixed and two
+pipeline improvements:
 
 ===============   ===============================================================================================================================================================================================================================
 Date              Software modification
@@ -455,49 +442,44 @@ Date              Software modification
 5/12/2026         Moved the block of code that uploads intermediate products to just before ZOGY execution (this facilitates running ZOGY offline from S3-bucket downloaded inputs).
 ===============   ===============================================================================================================================================================================================================================
 
-Applying the gain-matching scale factor to the reference-image uncertainty map improved the ZOGY difference images.
-The products from this test should be used in lieu of those from the 5/11/2026 test.
+Scaling the reference-image uncertainty map by the gain-matching scale
+factor improved the ZOGY difference images. Use these products in place of
+those from the 5/11/2026 test.
 
-The PSF-fit catalogs made by the Python photutils package from the SFFT difference images
-(as opposed to ZOGY difference images for the 4/10/2026 test),
-both positive and negative, were loaded into a Sources child PostgreSQL database table
-(i.e., ``tablename = sources_20260410_2`` since there is only one SCA in the new rimtimsims).
-There were 6,067,135 Sources records loaded into the PostgreSQL database.
-This number is 38% lower than the 4/23/2026 test because the upgrades to the SFFT code reduced the number of false positives.
-The elapsed time to load all sources into the database was 291 seconds with 8 parallel processes.
+Python photutils PSF-fit catalogs from positive and negative SFFT difference
+images, rather than ZOGY as in the 4/10/2026 test, were loaded into a Sources
+child PostgreSQL table (``tablename = sources_20260410_2``, since the new
+rimtimsims contain only one SCA). Loading 6,067,135 Sources records took
+291 seconds with 8 parallel processes. This count is 38% lower than the
+4/23/2026 test because SFFT upgrades reduced false positives.
 
-Cross-matching the sources with astronomical objects (called AstroObjects),
-resulting in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables, for all 7 fields of the sources
-(i.e., fields overlapped by the rimtimsims), was done.
-The elapsed time to cross-match all sources was 2.12 hours with 8 parallel processes.
-This includes cross-matching across field boundaries for sources near field edges.
-The cross-matching was done with ``match_radius = 0.00001528`` degrees (half a Roman WFI pixel).
-There were 2,017,329 AstroObjects records and 8,774,607 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 2083 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.0237% in terms of number of merges.
+Cross-matching sources with AstroObjects across all 7 fields overlapping the
+rimtimsims took 2.12 hours with 8 parallel processes, including matches across
+field boundaries near field edges. The ``match_radius = 0.00001528`` degrees
+was half a Roman WFI pixel. The Merges_<field> and AstroObjects_<fields>
+PostgreSQL tables received 2,017,329 AstroObjects records and 8,774,607 Merges
+records (lightcurve data points). Cross-boundary matching added 2083 merges,
+an increase of 0.0237%.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated
-after the cross-matching.  This is done as a separate process from the cross-matching.
-Any AstroObjects_<fields> record with no associated sources in the Merges_<field> database table are deleted.
-A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
-and then these tables are set to logged, clustered, and analyzed.
-The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
-For this test, all of these items within the process took 1040 seconds with 8 parallel processes.
+The separate post-cross-matching process described under 4/10/2026 updated
+AstroObjects_<fields> lightcurve statistics, deleted records without sources
+in Merges_<field>, rebuilt Q3C indexes on (meanra, meandec), set all
+AstroObjects_<fields> tables to logged, clustered and analyzed them, and
+explicitly vacuumed them at the end. It took 1040 seconds with 8 parallel
+processes.
 
-It took 41.7 minutes to delete non-best Merges_<fields> records with 8 parallel processes,
-which also included vacuuming and analyzing all Merges_<fields> database tables.
+Deleting non-best Merges_<fields> records, including vacuuming and analyzing
+all Merges_<fields> tables, took 41.7 minutes with 8 parallel processes.
 
-It took 133.7 minutes to delete all not-best records in sources_20260325_* database tables
-with 8 parallel processes.
+Deleting all not-best records in sources_20260325_* tables took
+133.7 minutes with 8 parallel processes.
 
 
 5/19/2026
 ************************************
 
-Similar to the 5/14/2026 test, except the following
-pipeline improvement has been included, which will improve the ZOGY difference images and its downstream products:
+Similar to the 5/14/2026 test, with the following change to improve ZOGY
+difference images and downstream products:
 
 ===============   ===============================================================================================================================================================================================================================
 Date              Software modification
@@ -509,11 +491,10 @@ Date              Software modification
 8/13/2026
 ************************************
 
-Processed all images in the new set of rimtimsims delivered on 6/22/26.
-These simulated images have a greater variety of injected transients than
-earlier rimtimsim versions.  The dithering of images in this dataset is on the subpixel level.
-There are 263 images total, covering one SCA (2), one field (4682737), and two filters
-(K213 and Z087), broken down as follows::
+This test processed all images in the new rimtimsims set delivered on
+6/22/26, which has a greater variety of injected transients than earlier
+rimtimsim versions and subpixel dithers. Its 263 images cover one SCA (2),
+one field (4682737), and two filters (K213 and Z087)::
 
     rimtimsims3db=> select sca,a.fid,filter,count(*) from l2files a, filters b where a.fid = b.fid group by sca,a.fid,filter order by sca,a.fid;
      sca | fid | filter | count
@@ -522,8 +503,8 @@ There are 263 images total, covering one SCA (2), one field (4682737), and two f
        2 |   7 | Z087   |   132
     (2 rows)
 
-Included the following improvement to how the rimtimsims are prepared for RAPID pipeline input, as well as the recent
-pipeline improvements documented on the :doc:`main page for testing </dev/tests>`.
+The test included this input-preparation change and the recent pipeline
+improvements on the :doc:`main page for testing </dev/tests>`:
 
 ===============   ===============================================================================================================================================================================================================================
 Date              Software modification
@@ -531,9 +512,9 @@ Date              Software modification
 8/12/2026         Modified ``sims/src/rimtimsim/convert_rimtimsim.py`` to recompute FITS-header ``CRVAL1,2`` at ``CRPIX1,2 = 2044.5`` (exact image center).
 ===============   ===============================================================================================================================================================================================================================
 
-Database metadata for this test are stored in the RAPID-operations database ``rimtimsims3db``.
+Test metadata are stored in the RAPID-operations database ``rimtimsims3db``.
 
-Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
+Virtual Pipeline Operator (VPO) invocation:
 
 .. code-block::
 
@@ -545,9 +526,8 @@ Here are details about how the test was executed via the Virtual Pipeline Operat
 
     python3.11 /code/pipeline/virtualPipelineOperator.py 20260813 >& virtualPipelineOperator_20260813.out &
 
-The following database query shows the RAPID pipelines ran normally for the portion that
-generates the file products in parallel via the AWS Batch service (capable of processing
-thousands of images in parallel).
+The database query shows normal completion of parallel file-product
+generation via AWS Batch, which can process thousands of images in parallel:
 
 .. code-block::
 
@@ -560,10 +540,10 @@ thousands of images in parallel).
        17 |        0 |   263
     (3 rows)
 
-The above ``ppid`` values of 12, 15, and 17 (pipeline IDs) refer to the RAPID reference-image pipeline,
-the RAPID science pipeline, and the RAPID post-processing pipeline, respectively.
+The ``ppid`` values (pipeline IDs) 12, 15, and 17 identify the RAPID
+reference-image, science, and post-processing pipelines, respectively.
 
-The VPO took 3.2 hours to do the following:
+The VPO took 3.2 hours for the following stages:
 
 ====================================================================================  =====================
 Pipeline stage                                                                        Execution time (sec)
@@ -575,24 +555,20 @@ Compute statistics for AstroObjectsMeta database records                        
 Total elapsed time to execute VPO on above stages                                             11411.99
 ====================================================================================  =====================
 
-Database-loading of sources, cross-matching, and computing lightcurve statistics were
-executed via 8 parallel processes on an 8-vCPU machine.
+Source loading, cross-matching, and lightcurve statistics used 8 parallel
+processes on an 8-vCPU machine.
 
-The VPO code is still evolving, and is not quite in optimal form
-(the number in first row in the above table can be reduced significantly).
+The VPO code is still evolving and not yet optimal; the first row's execution
+time could be reduced significantly.
 
-The pipeline processing was done in parallel under AWS Batch.
+Pipeline processing ran in parallel under AWS Batch. The two RAPID
+reference-image pipeline instances took ~14 minutes for ``K213`` and
+~33 minutes for ``Z087``. Both stacked 25 input frames; reference-image
+PhotUtils catalog generation accounted for the longer ``Z087`` run time.
 
-The two instances of the RAPID reference-image pipeline took
-~14 minutes for the ``K213`` filter and
-~33 minutes to run for the ``Z087`` filter.
-Both reference-image pipeline instances stacked 25 input frames, but the longer total execution
-time for the ``Z087`` filter was in the generation of the reference-image PhotUtils catalog.
-
-The RAPID science pipelines took ~1.3 hours per instance for the ``K213`` filter and
-~30 minutes per instance for the ``Z087`` filter.
-As shown in the table below for the longest running science-pipeline instance (``jid=143944``),
-generating PhotUtils catalogs is the dominant factor affecting pipeline performance.
+RAPID science pipelines took ~1.3 hours per instance for ``K213`` and
+~30 minutes for ``Z087``. PhotUtils catalog generation dominated the
+longest-running science-pipeline instance (``jid=143944``), detailed below.
 
 =================================================================  =====================
 Pipeline step                                                      Execution time (sec)
@@ -634,7 +610,7 @@ Total elapsed time to run one instance of science pipeline              4896.480
 =================================================================  =====================
 
 
-Here are numbers related to extraction of lightcurves from PSF-fit SFFT-difference-image catalogs:
+Lightcurve extraction from PSF-fit SFFT-difference-image catalogs:
 
 =========================================================================================  =====================
 Item                                                                                        Number
