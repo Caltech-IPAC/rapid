@@ -54,10 +54,14 @@ uses. The behaviour this module implements, one line each:
   neighbour pass needs neighbouring fields' rows); a date whose run is no
   longer open completes only when every unit its plan requires is
   ``complete`` (in the run, or inherited from the runs it was seeded from).
-- (loop.md §Promotion): once every unit is complete the policy's checks are
-  run and recorded and the run is promoted (``promote_run``,
-  ``who="scheduler"``, ``check_policy`` = the spec's, else the run's, else
-  the default); a refusal is recorded on the row, not a failure of the
+- (loop.md §Promotion; decision-loop-promotion): once every unit is
+  complete the policy's checks are run and recorded as ``scheduler``
+  (``check_policy`` = the spec's, else the run's, else the default). The
+  run is promoted (``promote_run``) only when the policy itself permits
+  automatic promotion, the same gate ``run start`` uses; otherwise it
+  stays a candidate and the row records ``candidate; promotion is a
+  person's (policy <ref>)``. A refusal from a policy that does permit
+  automatic promotion is recorded the same way, not a failure of the
   date; the run is finished either way.
 - (loop.md §Records): ``loop_dates`` (migration 20260924-11) holds per date
   the run, the state, the promotion and a JSON record of what ran.
@@ -765,13 +769,19 @@ def field_pruned_set(entries: Sequence[OutputEntry], location: str, association:
 def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date, batch: int = 1
              ) -> tuple[str | None, str, str, list[dict[str, Any]]]:
     """(promotion id or None, the record's ``promotion`` text, ``promotion_gate``,
-    the checks run) (loop.md §Promotion).
+    the checks run) (loop.md §Promotion; decision-loop-promotion).
 
     Resolve the policy (the spec's, else the run's, else the default), run
     its checks over the run's candidates as ``scheduler`` through
-    ``rapidpipe.checks.runner`` (recorded, committed), then promote under it.
-    A run already promoted (a resumed date) reuses that promotion. A refusal
-    is returned, not raised."""
+    ``rapidpipe.checks.runner`` (recorded, committed either way, so a
+    person promoting later sees them). Promotion itself is not automatic:
+    ``repository.promote_run`` runs only when the policy permits automatic
+    promotion (``rapidpipe.checks.policy.policy_permits_auto_promote``, the
+    same gate ``run start``'s ``maybe_auto_promote`` uses); otherwise the
+    run stays a candidate and the text says promotion is a person's. A run
+    already promoted (a resumed date) reuses that promotion. A refusal from
+    a policy that does permit auto-promotion is returned, not raised."""
+    from rapidpipe.checks.policy import policy_permits_auto_promote
     from rapidpipe.checks.registry import CheckError
     from rapidpipe.checks.runner import (
         CheckUsageError,
@@ -799,6 +809,8 @@ def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date, batch
     checks = [{"id": c.id, "check": f"{c.check_name}@{c.version}",
                "instance": c.instance, "required": c.required, "outcome": c.outcome}
               for c in recorded]
+    if not policy_permits_auto_promote(policy):
+        return None, f"candidate; promotion is a person's (policy {policy.ref})", gate, checks
     kwargs: dict[str, Any] = {"check_policy": policy}
     try:
         promotion = repository.promote_run(
@@ -820,8 +832,9 @@ def _at(date: _dt.date, batch: int) -> str:
 
 def _finish_row(conn, spec: LoopSpec, date: _dt.date, batch: int, run_id: str,
                 record: dict[str, Any], out: Callable[[str], None]) -> int:
-    """(f)+(g): promote (or reuse the run's promotion, or record a refusal),
-    then ``finish_run`` and the row's completion in one transaction
+    """(f)+(g): promote where the policy permits it (or reuse the run's
+    promotion, or leave it a candidate, or record a refusal), then
+    ``finish_run`` and the row's completion in one transaction
     (loop.md §Records)."""
     promotion_id, promotion_text, gate, checks = _promote(conn, run_id, spec, date, batch)
     if run_state(conn, run_id) == "open":

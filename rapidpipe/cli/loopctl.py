@@ -45,7 +45,8 @@ def add_parser(subparsers: Any) -> None:
         "loop", help="Run, plan and show the scheduled processing-date loop.",
         description="The processing-date loop: one production run per date of a "
                     "loop spec (TOML, local or s3://), walked through the run's "
-                    "stages on Batch, promoted and recorded in loop_dates.")
+                    "stages on Batch, promoted when the check policy permits it, "
+                    "and recorded in loop_dates.")
     loop_parser.set_defaults(loop_group_parser=loop_parser)
     sub = loop_parser.add_subparsers(dest="loop_command")
 
@@ -57,8 +58,9 @@ def add_parser(subparsers: Any) -> None:
                     "date's production run under the spec's release, walk admit.."
                     "load per detector image, maintain, crossmatch/statistics/prune "
                     "per field (the base catalog is the previous complete date's "
-                    "association set for the field), alerts per image, promote, "
-                    "finish, and record the date. With an inbox in the spec and no "
+                    "association set for the field), alerts per image, promote when "
+                    "the check policy permits it, finish, and record the date. With "
+                    "an inbox in the spec and no "
                     "--date: resume open batches, then discover new deliveries, record "
                     "each as batched, refused, quarantined or deferred, and walk one new "
                     "batch per processing date, oldest first. Exit 0 all complete (or "
