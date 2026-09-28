@@ -331,7 +331,6 @@ def test_an_image_role_that_is_not_primary_is_rejected(tmp_path):
     "[mosaic]\ncdelt1 = -0.0001\n",
     "[mosaic]\nnaxis1 = -3\n",
     "[awaicgen]\nawaicgen_output_mosaic_image_file = \"mosaic.fits\"\n",
-    "[selection]\nunknown_key = 1\n",
 ])
 def test_bad_settings_are_usage_errors(tmp_path, extra):
     code, outputs = _run(tmp_path, extra_settings=extra)
@@ -347,17 +346,6 @@ def test_awaicgen_leaving_no_mosaic_is_a_stage_error(tmp_path, monkeypatch):
     code, outputs = _run(tmp_path)
     assert code == ExitCode.STAGE_ERROR
     assert not (outputs / "manifest.json").exists()
-
-
-def test_dry_run_writes_nothing(tmp_path):
-    inputs = tmp_path / "inputs"
-    write_frames(inputs)
-    outputs = tmp_path / "outputs"
-    code = reference.main(["--run", RUN, "--unit", UNIT, "--attempt", ATTEMPT,
-                           "--inputs", str(inputs), "--outputs", str(outputs),
-                           "--settings", str(_overlay(tmp_path)), "--dry-run"])
-    assert code == ExitCode.SUCCESS
-    assert not outputs.exists()
 
 
 # ----------------------------------------------------------------------

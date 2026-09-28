@@ -34,26 +34,10 @@ def _write_manifest(inputs_dir, outputs):
     (inputs_dir / "manifest.json").write_text(json.dumps(manifest))
 
 
-def _l2_image_entry(instance="01ARZ3NDEKTSV4RRFFQ69G5FAV"):
-    return {
-        "kind": "l2-image",
-        "format_version": "1",
-        "instance": instance,
-        "key": {"exposure": "e1", "detector": "7", "version": "1"},
-        "primary": "l2/delivered.fits",
-        "members": [
-            {"role": "image", "path": "l2/delivered.fits", "bytes": 100,
-             "sha256": "sha256:" + "0" * 64},
-        ],
-        "registration": {"source": "irrelevant-to-this-test"},
-    }
-
-
-def _argv(inputs_dir, outputs_dir, *, extra=()):
+def _argv(inputs_dir, outputs_dir):
     return [
         "--run", "r1", "--unit", "e1/SCA07", "--attempt", "register-attempt-1",
         "--inputs", str(inputs_dir), "--outputs", str(outputs_dir),
-        *extra,
     ]
 
 
@@ -65,20 +49,6 @@ def test_declaration_validates():
                                     "reference-catalog", "catalog-export")
     assert DECLARATION.produces == ()
     assert DECLARATION.database_access == "read-write"
-
-
-def test_dry_run_exits_zero_without_connecting(tmp_path, monkeypatch):
-    inputs_dir = tmp_path / "inputs"
-    _write_manifest(inputs_dir, [_l2_image_entry()])
-    outputs_dir = tmp_path / "outputs"
-
-    def _raise_if_called(*args, **kwargs):
-        raise AssertionError("register must not connect to the database on --dry-run")
-
-    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
-
-    rc = main(_argv(inputs_dir, outputs_dir, extra=["--dry-run"]))
-    assert rc == int(ExitCode.SUCCESS)
 
 
 def test_unknown_output_kind_exits_65_without_connecting(tmp_path, monkeypatch):

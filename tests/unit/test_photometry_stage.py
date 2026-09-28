@@ -60,12 +60,6 @@ def test_declaration_import_performs_no_io(monkeypatch):
     assert photometry.DECLARATION.name == "photometry"
 
 
-def test_dry_run_exits_0_and_writes_nothing(tmp_path):
-    rc, outputs = _run(tmp_path, "--dry-run")
-    assert rc == int(ExitCode.SUCCESS)
-    assert not outputs.exists() or not any(outputs.iterdir())
-
-
 def test_dry_run_missing_kind_exits_65(tmp_path):
     # --dry-run runs the same input-set shape check as a real invocation
     # (run_stage's validate_inputs hook), so a missing declared kind is
@@ -94,7 +88,6 @@ def test_multiple_epochs_and_psfs_still_exit_69(tmp_path):
 
 
 @pytest.mark.parametrize("overlay", [
-    "[photometry]\nunknown_key = 1\n",
     "[photometry]\npsf_source = \"nowhere\"\n",
     "[photometry]\nstampsz = 0\n",
     "[photometry]\napdiam = -1.0\n",

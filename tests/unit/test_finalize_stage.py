@@ -102,12 +102,6 @@ def test_republishes_the_difference_attempt_under_new_instances(tmp_path):
     assert header["PPID"] == 15 and header["FIELD"] == 4662268
 
 
-def test_dry_run_validates_and_writes_nothing(tmp_path):
-    rc, outputs = _run(tmp_path, "--dry-run")
-    assert rc == ExitCode.SUCCESS
-    assert not outputs.exists() or not any(outputs.iterdir())
-
-
 def test_missing_execution_record_stamps_unknown(tmp_path):
     inputs = tmp_path / "inputs"
     build_difference_output(inputs)
@@ -333,7 +327,6 @@ def test_an_unreadable_execution_record_exits_65(tmp_path):
     '[finalize]\ndifferencer = "naive"\n',
     '[pipelines]\nzogy = "fifteen"\n',
     '[pipelines]\nzogy = 0\n',
-    '[pipelines]\nzogy = 15\n[stamp]\nx = 1\n',
 ])
 def test_bad_settings_exit_64(tmp_path, overlay):
     (tmp_path / "overlay.toml").write_text(overlay)

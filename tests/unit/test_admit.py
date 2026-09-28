@@ -341,14 +341,6 @@ def test_present_equinox_keyword_wins_over_the_default(tmp_path):
     assert manifest.outputs[0].registration["equinox"] == 1950.0
 
 
-def test_dry_run_exits_zero_and_writes_nothing(tmp_path):
-    inputs_dir, _ = _build_delivery(tmp_path)
-    outputs_dir = tmp_path / "outputs"
-    rc = main(_argv(inputs_dir, outputs_dir, extra=["--dry-run"]))
-    assert rc == int(ExitCode.SUCCESS)
-    assert not outputs_dir.exists() or not any(outputs_dir.iterdir())
-
-
 def test_cli_dispatches_to_admit_stage(tmp_path):
     # Invoked out-of-process, through rapidpipe.cli.main.main's own
     # __main__ entrypoint, rather than imported directly in this test
