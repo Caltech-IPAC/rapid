@@ -477,7 +477,8 @@ def allocate_attempt(
         UnitTerminal;
       - if the run is finished, deleting or deleted -- RunDeletingOrDeleted;
       - if the attempt allowance (``runs.max_attempts_per_unit``,
-        "counting the first attempt and all Batch retries") is already
+        "counting the first attempt and every retry"; Batch itself never
+        retries, each retry is a fresh attempt allocated here) is already
         exhausted for this unit -- AttemptAllowanceExhausted.
 
     Locks the unit row for the duration of the check-and-allocate so two

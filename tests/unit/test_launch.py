@@ -350,6 +350,8 @@ def test_reconcile_batches_describe_jobs_at_100(monkeypatch):
 # ======================================================================
 
 def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
+                    status_reason=None, attempt_status_reason=None,
+                    container_reason=None,
                     manifest_ok=None, forget=False,
                     manifest_fetch_error=None, exec_record_fetch_error=None,
                     created_at=None, started_at=None,
@@ -431,6 +433,8 @@ def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
     if not forget:
         fake.set_status(
             "job-1", status, container_exit_code=container_exit_code,
+            status_reason=status_reason, attempt_status_reason=attempt_status_reason,
+            container_reason=container_reason,
             created_at=created_at, started_at=started_at, stopped_at=stopped_at,
             job_queue=job_queue, log_stream=log_stream)
 
@@ -558,6 +562,42 @@ def test_reconcile_failed_no_exit_code_is_killed(monkeypatch):
         monkeypatch, status="FAILED", container_exit_code=None)
     assert result.disposition == "killed"
     assert recorded["record"] == ("attempt-1", None, "killed", "job-1")
+
+
+@pytest.mark.parametrize("reasons", [
+    {"status_reason": "Host EC2 (instance i-0123) terminated."},
+    {"attempt_status_reason": "Host EC2 (instance i-0123) terminated."},
+    {"container_reason": "CannotPullContainerError: pull rate limit"},
+    {"container_reason": "CannotStartContainerError: API error (500)"},
+    {"container_reason": "DockerTimeoutError: Could not transition to started"},
+])
+def test_reconcile_failed_infrastructure_reason_is_transient(monkeypatch, reasons):
+    # Batch no longer retries (Attempts: 1); an approved infrastructure
+    # failure is recorded transient so the launcher retries it as a fresh
+    # attempt (runs page, "Attempts").
+    result, recorded = _reconcile_one(
+        monkeypatch, status="FAILED", container_exit_code=None, **reasons)
+    assert result.disposition == "transient"
+    assert recorded["record"] == ("attempt-1", None, "transient", "job-1")
+
+
+@pytest.mark.parametrize("reasons", [
+    {"status_reason": "Job attempt duration exceeded timeout"},
+    {"status_reason": "Terminated by user"},
+    {"container_reason": "OutOfMemoryError: Container killed due to memory usage"},
+])
+def test_reconcile_failed_other_reason_is_still_killed(monkeypatch, reasons):
+    result, recorded = _reconcile_one(
+        monkeypatch, status="FAILED", container_exit_code=None, **reasons)
+    assert result.disposition == "killed"
+    assert recorded["record"] == ("attempt-1", None, "killed", "job-1")
+
+
+def test_reconcile_failed_exit_code_wins_over_an_infrastructure_reason(monkeypatch):
+    result, recorded = _reconcile_one(
+        monkeypatch, status="FAILED", container_exit_code=70,
+        status_reason="Host EC2 (instance i-0123) terminated.")
+    assert result.disposition == "failed"
 
 
 def test_reconcile_missing_job_id_is_lost(monkeypatch):

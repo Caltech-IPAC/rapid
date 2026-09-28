@@ -58,6 +58,8 @@ class FakeBatch:
         self, job_id: str, status: str, *,
         status_reason: str | None = None,
         container_exit_code: int | None = None,
+        attempt_status_reason: str | None = None,
+        container_reason: str | None = None,
         created_at: int | None = None,
         started_at: int | None = None,
         stopped_at: int | None = None,
@@ -86,6 +88,15 @@ class FakeBatch:
             job["statusReason"] = status_reason
         if container_exit_code is not None:
             job["attempts"] = [{"container": {"exitCode": container_exit_code}}]
+        elif attempt_status_reason is not None or container_reason is not None:
+            # A container attempt that never exited: an EC2 host reclaimed
+            # under it, or an image pull that failed before it started.
+            attempt: dict[str, Any] = {"container": {}}
+            if attempt_status_reason is not None:
+                attempt["statusReason"] = attempt_status_reason
+            if container_reason is not None:
+                attempt["container"]["reason"] = container_reason
+            job["attempts"] = [attempt]
         elif "attempts" not in job:
             job["attempts"] = []
         if created_at is not None:
