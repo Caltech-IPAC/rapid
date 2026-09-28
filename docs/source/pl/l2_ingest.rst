@@ -107,8 +107,40 @@ moment, which is what avoids the race of two processes inserting the same
 Output FITS layout
 ************************************
 
-The output is a multi-extension FITS file, gzipped, whose S3 object name is the
-input object name with ``.asdf`` or ``.asdf.gz`` replaced by ``.fits.gz``.
+The output is a multi-extension FITS file, gzipped, filed in the output bucket
+under the observation date:
+
+.. code-block::
+
+   s3://<output bucket>/20270321/r00340_0001_wfi01_cal.fits.gz
+
+The subdirectory is ``DATE-OBS`` as ``yyyymmdd``; the filename is the input
+object name with ``.asdf`` or ``.asdf.gz`` replaced by ``.fits.gz``, and any
+directory the input sat in is dropped.  Filing by observation date keeps a
+bucket of tens of thousands of objects listable a night at a time, and makes the
+night an object is from readable from its key.
+
+.. note::
+   The subdirectory can only be settled once the file has been converted, since
+   ``DATE-OBS`` comes from the ASDF metadata and the work list is built from an
+   S3 listing long before any ASDF file is opened.  Two things follow.
+
+   The already-ingested check matches on the **filename**, not the whole object
+   name, which is what the ``L2Files`` query has always extracted
+   (``regexp_match(filename, '.+/(.+)')`` takes the last path component) -- so
+   rows written before files were filed by date still match, and nothing is
+   re-ingested across the change.
+
+   A file found in the output bucket to reuse (see `Reusing a converted file`_)
+   is likewise matched by filename, and is uploaded to the dated object name if
+   it is not already there.  One converted before this change, sitting at the top
+   of the bucket, is therefore moved into its date subdirectory rather than
+   registered where it lies -- a re-upload, not a reconversion, so still far
+   cheaper than converting it again.
+
+   A file whose ``DATE-OBS`` is missing or unreadable cannot be filed, and fails
+   like any other bad file: logged, skipped, and left on the next run's work
+   list.
 
 =========================   ====================================================================================
 HDU                         Contents

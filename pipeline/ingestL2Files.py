@@ -48,6 +48,21 @@ than converted a second time.  One that is OLDER than its ASDF file was made
 from a previous delivery of that file and is stale, so it is converted afresh.
 
 
+Output layout
+-------------
+
+The FITS files are filed in the output bucket under the observation date:
+
+    s3://<output bucket>/20270321/r00340_0001_wfi01_cal.fits.gz
+
+The subdirectory is DATE-OBS as yyyymmdd.  It can only be settled once the file
+has been converted, DATE-OBS being inside the ASDF metadata, so the work list --
+built from an S3 listing -- matches already-ingested and reusable files on the
+filename alone.  That is also what the L2Files query has always extracted from
+the registered name, so rows written before this change still match and nothing
+is re-ingested across it.
+
+
 Output FITS layout
 ------------------
 
@@ -1818,14 +1833,18 @@ def register_fits_file(dbh,roman_tessellation_db,local_fits_file,local_gzipped_f
 # Methods for the work list.
 #-------------------------------------------------------------------------------------------------------------
 
-def output_fits_object_name(input_asdf_file):
+def output_fits_basename(input_asdf_file):
 
     '''
-    Return the output S3 object name for an input ASDF object name.  Both the uncompressed
-    and the gzipped form of the input are accepted, and the output is always gzipped.
+    Return the output FITS filename, without any directory, for an input ASDF object name.
+    Both the uncompressed and the gzipped form of the input are accepted, and the output is
+    always gzipped.
+
+    Any directory the input object sits in is dropped, because the output is filed by
+    observation date instead; see output_fits_object_name.
     '''
 
-    name = input_asdf_file
+    name = os.path.basename(input_asdf_file)
 
     if name.endswith(".gz"):
         name = name[:-len(".gz")]
@@ -1834,6 +1853,43 @@ def output_fits_object_name(input_asdf_file):
         name = name[:-len(".asdf")]
 
     return name + ".fits.gz"
+
+
+def observation_date_subdirectory(fits_filename):
+
+    '''
+    Return the observation date of a converted L2 file as yyyymmdd, read from its DATE-OBS.
+
+    This is the subdirectory the file is filed under in the output bucket.  It can only be
+    known once the file exists: DATE-OBS comes from the ASDF metadata, and the work list is
+    built from an S3 listing long before any ASDF file is opened.  That is why the output
+    object name is settled in the worker rather than alongside the input name.
+    '''
+
+    header = get_fits_header(fits_filename)
+
+    if "DATE-OBS" not in header:
+        raise KeyError(f"{fits_filename} has no DATE-OBS to file it under")
+
+    dateobs = str(header["DATE-OBS"])
+
+
+    # Parsed rather than sliced, so that a DATE-OBS which is not a date fails here, where it
+    # can be reported against the file, instead of quietly filing it under a nonsense name.
+
+    return datetime.strptime(dateobs[:10],"%Y-%m-%d").strftime("%Y%m%d")
+
+
+def output_fits_object_name(observation_date,output_basename):
+
+    '''
+    Return the output S3 object name: the observation date as yyyymmdd, then the filename.
+
+    Filing by observation date keeps a bucket of tens of thousands of objects listable a night
+    at a time, and makes the night an object is from readable from its key.
+    '''
+
+    return f"{observation_date}/{output_basename}"
 
 
 def list_bucket_objects(bucket_name,prefix="",suffixes=None):
@@ -1946,16 +2002,17 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
     child process, rather than inherited from the parent, so that no two processes can end up
     sharing one connection.
 
-    `reusable_output_fits_files` is the set of output objects the main program found already
-    in the output bucket AND newer than the ASDF file they came from.  Such a file was
-    converted by an earlier run (or by convert_socsims.py, before this script replaced it)
-    but never registered, so it is downloaded and registered rather than converted again --
-    the conversion is by far the most expensive step.  An output object older than its ASDF
-    file is stale, is not in this set, and is converted afresh.
+    `reusable_output_fits_files` maps output filename to the object name it already sits at,
+    for the files the main program found in the output bucket AND newer than the ASDF file
+    they came from.  Such a file was converted by an earlier run (or by convert_socsims.py,
+    before this script replaced it) but never registered, so it is downloaded and registered
+    rather than converted again -- the conversion is by far the most expensive step.  An
+    output object older than its ASDF file is stale, is not in this mapping, and is converted
+    afresh.
     '''
 
     if reusable_output_fits_files is None:
-        reusable_output_fits_files = set()
+        reusable_output_fits_files = {}
 
     thread_start_time_benchmark = time.time()
 
@@ -2001,10 +2058,15 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
         fh.write(f"index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
         fh.flush()
 
-        s3_object_name = output_fits_object_name(input_asdf_file)
+        # The filename is settled here; the object name it goes to is not, because it is the
+        # observation date that decides the subdirectory and that is inside the file.
+
+        output_basename = output_fits_basename(input_asdf_file)
+
+        reusable_object_name = reusable_output_fits_files.get(output_basename)
 
         local_asdf_file = f"{subdir_work}/" + os.path.basename(input_asdf_file)
-        local_fits_file = f"{subdir_work}/" + os.path.basename(s3_object_name)[:-len(".gz")]
+        local_fits_file = f"{subdir_work}/" + output_basename[:-len(".gz")]
         local_gzipped_fits_file = local_fits_file + ".gz"
 
         local_files = [local_asdf_file,local_fits_file,local_fits_file + ".partial",
@@ -2019,16 +2081,17 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
         try:
 
-            if s3_object_name in reusable_output_fits_files:
+            if reusable_object_name is not None:
 
 
                 # Already converted by an earlier run, but not registered, so take the
                 # converted file back rather than paying for the conversion a second time.
 
-                fh.write(f"{s3_object_name} is already in {bucket_name_output}; "
+                fh.write(f"{reusable_object_name} is already in {bucket_name_output}; "
                          "downloading it instead of converting\n")
 
-                s3_client.download_file(bucket_name_output,s3_object_name,local_gzipped_fits_file)
+                s3_client.download_file(bucket_name_output,reusable_object_name,
+                                        local_gzipped_fits_file)
 
                 step_start_time = log_elapsed_time("download already-converted FITS file from S3 bucket",
                                                    step_start_time,input_asdf_file)
@@ -2090,7 +2153,25 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
                                                    step_start_time,input_asdf_file)
 
 
-                # Upload the gzipped file to the output S3 bucket.
+            # Where the file belongs in the output bucket, which is settled only now: the
+            # subdirectory is the observation date, and that is inside the file.
+
+            s3_object_name = output_fits_object_name(
+                                 observation_date_subdirectory(local_fits_file),
+                                 output_basename)
+
+
+            # Upload it, unless it is a reused file already sitting at exactly this object
+            # name.  A reused file at a DIFFERENT name -- one converted before this script
+            # filed them by observation date -- is uploaded to the right one, so that the
+            # bucket ends up organised the same way throughout and the row registered below
+            # points at where the file actually belongs.
+
+            if reusable_object_name == s3_object_name:
+
+                fh.write(f"{s3_object_name} is already where it belongs; not re-uploading\n")
+
+            else:
 
                 uploaded = util.upload_files_to_s3_bucket(s3_client,bucket_name_output,
                                                           [local_gzipped_fits_file],[s3_object_name])
@@ -2322,6 +2403,24 @@ if __name__ == '__main__':
     existing_output_fits_objects = list_bucket_objects(bucket_name_output,
                                                        suffixes=(".fits.gz",))
 
+
+    # Keyed by filename rather than by full object name, because the date subdirectory an
+    # object sits under cannot be worked out from the input name -- DATE-OBS is inside the
+    # ASDF file, which is not opened until the worker gets to it.  The filename is unique
+    # across the bucket, so it is enough to find an already-converted file by.  Where two
+    # objects share one -- a file converted before this script filed them by date, beside the
+    # one that replaced it -- the newer wins, which is the one worth reusing.
+
+    existing_output_by_basename = {}
+
+    for object_name,last_modified in existing_output_fits_objects.items():
+
+        basename = os.path.basename(object_name)
+
+        if basename not in existing_output_by_basename or \
+           last_modified > existing_output_by_basename[basename][1]:
+            existing_output_by_basename[basename] = (object_name,last_modified)
+
     print(f"n_existing_output_fits_objects = {len(existing_output_fits_objects)}")
 
 
@@ -2337,14 +2436,19 @@ if __name__ == '__main__':
     root_names = []
     sca_nums = []
 
-    reusable_output_fits_files = set()
+    # {output filename: the object name it is already at}, for the files a worker may take
+    # back from the output bucket instead of converting.  It carries the object name because
+    # that is where the worker has to download it from, and it may be a date subdirectory or,
+    # for a file converted before this script filed them by date, the top of the bucket.
+
+    reusable_output_fits_files = {}
 
     n_already_ingested = 0
     n_redelivered = 0
 
     for input_asdf_file in sorted(input_asdf_objects):
 
-        s3_object_name = output_fits_object_name(input_asdf_file)
+        output_basename = output_fits_basename(input_asdf_file)
 
         input_last_modified = input_asdf_objects[input_asdf_file]
 
@@ -2358,9 +2462,9 @@ if __name__ == '__main__':
         # null timestamp is no evidence of a redelivery, and guessing the other way would put
         # the whole bucket back on the work list.
 
-        if os.path.basename(s3_object_name) in ingested_l2file_times:
+        if output_basename in ingested_l2file_times:
 
-            created = ingested_l2file_times[os.path.basename(s3_object_name)]
+            created = ingested_l2file_times[output_basename]
 
             if not do_asdf_recency_check or created is None or input_last_modified <= created:
                 n_already_ingested += 1
@@ -2371,7 +2475,7 @@ if __name__ == '__main__':
 
             n_redelivered += 1
 
-        fname_fields = os.path.basename(s3_object_name).split("_")
+        fname_fields = output_basename.split("_")
 
         if len(fname_fields) < 3:
             print(f"*** Warning: Unexpected filename {input_asdf_file}; skipping...")
@@ -2384,10 +2488,10 @@ if __name__ == '__main__':
         # case where the object name is unchanged but the pixels are not -- and reusing it
         # would register the superseded data as the new version.
 
-        output_last_modified = existing_output_fits_objects.get(s3_object_name)
+        existing_output = existing_output_by_basename.get(output_basename)
 
-        if output_last_modified is not None and output_last_modified > input_last_modified:
-            reusable_output_fits_files.add(s3_object_name)
+        if existing_output is not None and existing_output[1] > input_last_modified:
+            reusable_output_fits_files[output_basename] = existing_output[0]
 
         input_asdf_files.append(input_asdf_file)
         root_names.append(fname_fields[0] + fname_fields[1])
