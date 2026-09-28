@@ -52,7 +52,8 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
     seed = work / "db-seed.json"
     seed.write_text(json.dumps(seed_from_fixture(spec), indent=2))
     state = work / "db-state.json"
-    extra_env = {database_env("statistics"): FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
+    extra_env = {database_env("statistics"): FAKE_DATABASE,
+                 SEED_ENV: str(seed), STATE_ENV: str(state)}
     return inputs, overlay, extra_env
 
 

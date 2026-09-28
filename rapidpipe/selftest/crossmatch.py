@@ -65,7 +65,8 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
         "tables": {spec["table"]: rows},
     }))
     state = work / "db-state.json"
-    extra_env = {database_env("crossmatch"): FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
+    extra_env = {database_env("crossmatch"): FAKE_DATABASE,
+                 SEED_ENV: str(seed), STATE_ENV: str(state)}
     return inputs, overlay, extra_env
 
 

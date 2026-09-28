@@ -52,7 +52,8 @@ def _write_crossmatch_manifest(inputs_dir, *, run_id, attempt_id, field, associa
 
 
 def _run_prune(conn, monkeypatch, tmp_path, run_id, inputs, *, unit_id, name="prune", overlay=""):
-    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
+    monkeypatch.setattr("rapidpipe.db.connection.connect",
+                        lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
     repo.add_unit(conn, run_id, "prune", "field", unit_id)
     attempt_id = repo.allocate_attempt(conn, run_id, "prune", unit_id)
     outputs = tmp_path / f"{name}-outputs"
