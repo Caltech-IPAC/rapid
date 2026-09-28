@@ -51,6 +51,7 @@ jobs:
         run: scripts/science-drift.sh --out science-drift.md || true
 
       - name: append report to the job summary
+        if: always()
         run: |
           if [ -s science-drift.md ]; then
             cat science-drift.md >> "$GITHUB_STEP_SUMMARY"
