@@ -15,6 +15,11 @@ failures mapped to :attr:`ExitCode.USAGE` (64) instead of argparse's 2, so
 that 2 keeps its one meaning (still running). Subparsers inherit the class
 through argparse's ``parser_class=type(self)`` default.
 
+:class:`CommandExit` is the exception a command's code raises to stop the
+command with a given exit code and a one-line message; the command-line
+tool catches it at the command boundary, prints the message to stderr and
+exits with the code.
+
 This module is stdlib-only and imports nothing from ``rapidpipe``, so any
 subpackage, science modules included, may import it.
 """
@@ -26,7 +31,7 @@ import sys
 from enum import IntEnum
 from typing import NoReturn
 
-__all__ = ["ArgumentParser", "ExitCode"]
+__all__ = ["ArgumentParser", "CommandExit", "ExitCode"]
 
 
 class ExitCode(IntEnum):
@@ -87,3 +92,11 @@ class ArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
         self.exit(int(ExitCode.USAGE), f"{self.prog}: error: {message}\n")
+
+
+class CommandExit(Exception):
+    """Stop the command with ``code``, printing ``message`` to stderr."""
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code

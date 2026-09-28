@@ -73,7 +73,7 @@ from rapidpipe.products.storage import (
 from rapidpipe.runs import binding
 from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.repository import POLICY_REFUSALS, TERMINAL_UNIT_STATES, RunModelError
-from rapidpipe.exitcodes import ExitCode
+from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.stages.contract import STAGE_NAMES
 
 #: Indirections for tests: ``start --interval`` / ``status --watch`` sleep
@@ -86,12 +86,7 @@ COMMANDS = ("start", "status", "inputs", "compare", "expire", "timings")
 _STATUS_STILL_RUNNING = ExitCode.INCOMPLETE
 
 
-class _Exit(Exception):
-    """Stop the command with ``code``, printing ``message`` to stderr."""
-
-    def __init__(self, code: int, message: str):
-        super().__init__(message)
-        self.code = code
+_Exit = CommandExit
 
 
 # ======================================================================
