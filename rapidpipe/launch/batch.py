@@ -59,7 +59,7 @@ from typing import Any, Iterable, Sequence
 
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.products.manifest import Manifest, ManifestError
-from rapidpipe.products.storage import fetch_object, join, parse_location
+from rapidpipe.products.storage import fetch_object, is_not_found, join, parse_location
 from rapidpipe.runs import inputs as run_inputs
 from rapidpipe.runs.local import disposition_for
 from rapidpipe.runs.repository import (
@@ -140,35 +140,6 @@ class ReconcileFetchFailed(LaunchError):
         self.key = key
         self.__cause__ = exc
         super().__init__(f"{type(exc).__name__}: {exc} (key={key!r})")
-
-
-#: A ClientError-shaped exception's ``response["Error"]["Code"]`` values
-#: that mean "the object is not there" -- the job wrote no manifest (or no
-#: execution record), as opposed to reconcile being unable to tell.
-#: Mirrors ``rapidpipe.stages.contract``'s ``_NOT_FOUND_ERROR_CODES``;
-#: duplicated rather than imported because this module never imports a
-#: stage module (module docstring, "the package's fixed dependency
-#: direction").
-_NOT_FOUND_ERROR_CODES = ("404", "NoSuchKey")
-
-
-def _client_error_code(exc: BaseException) -> str | None:
-    """The ``Error.Code`` of a ClientError-shaped exception, or ``None``.
-
-    Matches by shape (a ``response`` attribute holding that structure), not
-    by ``isinstance``, so a test's stand-in exception is recognised the
-    same way as a real ``botocore.exceptions.ClientError`` without this
-    module importing botocore. Mirrors
-    ``rapidpipe.stages.contract._client_error_code``.
-    """
-    response = getattr(exc, "response", None)
-    if not isinstance(response, dict):
-        return None
-    error = response.get("Error")
-    if not isinstance(error, dict):
-        return None
-    code = error.get("Code")
-    return code if isinstance(code, str) else None
 
 
 def _require_env(name: str) -> str:
@@ -512,7 +483,7 @@ def _fetch_manifest_if_valid(output_location: str, *, s3_client: Any) -> Manifes
     none.
 
     Raises :class:`ReconcileFetchFailed` if an S3 fetch failed for any
-    reason other than the object being absent (``404``/``NoSuchKey``) --
+    reason other than the object being absent (``NOT_FOUND_ERROR_CODES``) --
     e.g. AccessDenied -- since that means reconcile could not determine
     whether a manifest exists, not that it doesn't.
     """
@@ -534,7 +505,7 @@ def _fetch_manifest_if_valid(output_location: str, *, s3_client: Any) -> Manifes
         try:
             fetch_object(location, "manifest.json", dest_path, client=s3_client)
         except Exception as exc:  # noqa: BLE001 - classified below
-            if _client_error_code(exc) in _NOT_FOUND_ERROR_CODES:
+            if is_not_found(exc):
                 return None
             raise ReconcileFetchFailed(exc, key=key) from exc
         try:
@@ -572,7 +543,7 @@ def _fetch_execution_record(
         try:
             fetch_object(location, relative, dest_path, client=s3_client)
         except Exception as exc:  # noqa: BLE001 - classified below
-            if _client_error_code(exc) in _NOT_FOUND_ERROR_CODES:
+            if is_not_found(exc):
                 return {}
             raise ReconcileFetchFailed(exc, key=key) from exc
         try:

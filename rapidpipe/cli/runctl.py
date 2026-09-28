@@ -72,7 +72,7 @@ from rapidpipe.products.storage import (
 )
 from rapidpipe.runs import binding
 from rapidpipe.runs.inputs import InputsRefused
-from rapidpipe.runs.repository import POLICY_REFUSALS, RunModelError
+from rapidpipe.runs.repository import POLICY_REFUSALS, TERMINAL_UNIT_STATES, RunModelError
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.stages.contract import STAGE_NAMES
 
@@ -83,7 +83,6 @@ now: Callable[[], float] = time.monotonic
 
 COMMANDS = ("start", "status", "inputs", "compare", "expire", "timings")
 
-_TERMINAL_UNIT_STATES = ("complete", "failed", "cancelled")
 _STATUS_STILL_RUNNING = ExitCode.INCOMPLETE
 
 
@@ -1246,7 +1245,7 @@ def _status_command(args: argparse.Namespace) -> int:
                 print("\t".join("-" if v is None else str(v) for v in row))
             sys.stdout.flush()
             states = [row[2] for row in rows]
-            all_terminal = bool(rows) and all(s in _TERMINAL_UNIT_STATES for s in states)
+            all_terminal = bool(rows) and all(s in TERMINAL_UNIT_STATES for s in states)
             if all_terminal or not rows or not args.watch:
                 break
             sleep(args.interval)

@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 #: guarding the whole check-then-write sequence.
 _PROMOTION_ADVISORY_LOCK_KEY = 0x52415049445F5052  # "RAPID_PR" in ASCII, as an int
 
-_TERMINAL_UNIT_STATES = ("complete", "failed", "cancelled")
+TERMINAL_UNIT_STATES = ("complete", "failed", "cancelled")
 _TERMINAL_RUN_STATES = ("deleting", "deleted")
 #: Run states that refuse new work (a unit, an input binding, an
 #: attempt): a finished run admits nothing more, and a deleting or deleted
@@ -501,7 +501,7 @@ def allocate_attempt(
                 "does not exist")
         unit_row_id, unit_state, _ = row
 
-        if unit_state in _TERMINAL_UNIT_STATES:
+        if unit_state in TERMINAL_UNIT_STATES:
             raise UnitTerminal(
                 f"unit {unit_row_id!r} is {unit_state!r}, a terminal state; "
                 "refusing to allocate another attempt")
@@ -824,7 +824,7 @@ def select_attempt(conn: psycopg2.extensions.connection, attempt_id: str) -> Non
             raise UnitAlreadySelected(
                 f"unit {unit_row_id!r} already has selected attempt "
                 f"{selected_attempt!r}; the selection never changes")
-        if unit_state in _TERMINAL_UNIT_STATES:
+        if unit_state in TERMINAL_UNIT_STATES:
             raise UnitTerminal(
                 f"unit {unit_row_id!r} is {unit_state!r}, a terminal state; "
                 "refusing to select an attempt for it")
@@ -1971,7 +1971,7 @@ def finish_run(conn: psycopg2.extensions.connection, run_id: str) -> None:
                    count(*) FILTER (WHERE state NOT IN %s)
             FROM units WHERE run = %s
             """,
-            (_TERMINAL_UNIT_STATES, run_id),
+            (TERMINAL_UNIT_STATES, run_id),
         )
         total, unfinished = cur.fetchone()
         if total == 0:
