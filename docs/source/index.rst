@@ -89,6 +89,7 @@ RAPID Pipeline Design
    :maxdepth: 2
 
    pl/pl.rst
+   pl/l2_ingest.rst
 
 RAPID Computing Architecture
 ************************************
