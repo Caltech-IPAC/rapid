@@ -5,74 +5,66 @@ RAPID Computing Architecture
 System Architecture
 **************************
 
-Here is a high-level flowchart of the RAPID system architecture:
+RAPID runs entirely in the AWS cloud and is accessible from a laptop with
+an Internet connection. The high-level system architecture is shown below:
 
 .. image:: sysarch.png
 
-Everything is done in the AWS cloud, and is accessible via a laptop with Internet connection.
-
-The database server is a very inexpensive ``t2.micro`` AWS machine,
-which runs 24 hours a day, seven days a week.
-A more powerful multi-core, high-memory machine can be utilized to execute RAPID pipeline instances,
-which would only be activated as needed in order to save money.  This is just one way the
-RAPID pipelines could be run in parallel; the next section explains another way, which has
-been demonstrated to be a very feasible methodology indeed.
-
-Our strategy for software interactions with the SQL database is that queries are executed only during
-initial pipeline launching and final data aggregation stages, before and after pipeline instances are
-executed separately on multiple CPU cores.  This ensures scalability
-of the RAPID-pipeline computing system.
+The database server is a very inexpensive ``t2.micro`` AWS machine running
+24 hours a day, seven days a week. Pipeline instances could run in parallel
+on a more powerful multi-core, high-memory machine, activated only as needed
+to save money. The next section describes the tested alternative: parallel
+processing across multiple machines with the AWS Batch Service.
 
 
 Computing Architecture
 **************************
 
-Here is a another flowchart of the RAPID computing architecture, which details how
-parallel processing of the data is done on multiple machines, which is has proven
-to be a very viable and practical approach from our extensive testing thus far:
+The AWS Batch Service enables massively parallel data processing across
+multiple machines. Extensive testing has demonstrated that this approach
+is viable and practical:
 
 .. image:: computing_architecture.png
 
-Parallel processing on a massive scale is facilitated by the AWS Batch Service.
-
-Database interactions with a PostgreSQL database are done only during initial pipeline launching
-and final data aggregation stages, before and after pipeline instances are executed under the
-AWS Batch Service.  This ensures scalability of the RAPID-pipeline computing system.
+To ensure scalability, SQL queries and other interactions with the PostgreSQL
+database occur only during initial pipeline launching and final data
+aggregation, before and after pipeline instances execute separately on
+multiple CPU cores or under the AWS Batch Service.
 
 
 Pipeline Performance
 **************************
 
-In one of our initial large-scale tests,
-RAPID pipeline instances were launched for all OpenUniverse simulated images with ``DATE-OBS >= 2028-09-07 00:00:00``
-and ``DATE-OBS <= 2028-09-08 08:30:00``.  This is about 2000 jobs, one job per science image.  All jobs were successfully run,
-except for 80 jobs in which a reference image could not be made due to lack of prior observations for the associated field.
-The elapsed execution time for a RAPID pipeline job was measured
-from the time it was launched to the time it finished running on an AWS Batch machine, of course, after writing
-the pipeline products to the output S3 bucket.
-
-
 .. warning::
     The performance results below are obsolete, but kept for historical reasons.
     The latest performance result can be found :doc:`here </ops/bulk_run>`.
 
+An initial large-scale test launched RAPID pipeline instances for all
+OpenUniverse simulated images with ``DATE-OBS >= 2028-09-07 00:00:00``
+and ``DATE-OBS <= 2028-09-08 08:30:00``: about 2000 jobs, one per science
+image. All succeeded except 80 jobs that could not generate a reference
+image because the associated field lacked prior observations.
 
-Here is a histogram of the job execution times:
+Elapsed execution time was measured from job launch to completion on an
+AWS Batch machine, including writing the pipeline products to the output
+S3 bucket. The histogram below shows these times:
 
 .. image:: rapid_job_elapsed_vs_time_1dhist.png
 
-Here is a 2-D histogram of the job execution times versus number of input frames for the reference image that was generated:
+The 2-D histogram shows job execution time versus the number of input
+frames used to generate the reference image:
 
 .. image:: rapid_job_elapsed_vs_nframes_2dhist.png
 
-It is obvious from the figure that the execution times have a contribution that is proportional
-to the number of reference-image inputs.
+The figure shows an execution-time contribution proportional to the number
+of reference-image inputs.
 
-The products from this test run are in the following S3 bucket::
+The test products are in the following S3 bucket::
 
     aws s3 ls --recursive s3://rapid-product-files/20250304
 
-For example, here is the S3 bucket path to a SourceExtractor catalog made from the difference image for one job (jid=999)::
+For example, the SourceExtractor catalog made from the difference image
+for job jid=999 is at::
 
     s3://rapid-product-files/20250304/jid999/diffimage_masked.txt
 
