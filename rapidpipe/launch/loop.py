@@ -1041,10 +1041,13 @@ def _new_record(spec: LoopSpec, run_id: str, day: LoopDate) -> dict[str, Any]:
 
 
 def process_date(conn, spec: LoopSpec, day: LoopDate, *,
-                 interval: float, timeout: float) -> int:
+                 interval: float, timeout: float, storage: Any = None) -> int:
     """Walk one date to complete or failed; return its exit code (0 or 1);
-    :class:`_Stop` 75 on a timeout, the row left ``open``."""
-    storage = products_storage.Storage()
+    :class:`_Stop` 75 on a timeout, the row left ``open``. ``storage`` is
+    the invocation's one :class:`~rapidpipe.products.storage.Storage`
+    (made here when not given)."""
+    if storage is None:
+        storage = products_storage.Storage()
     schedule, date, batch = spec.schedule, day.processing_date, day.batch
     row = loop_row(conn, schedule, date, batch)
     if row is None:
@@ -1475,19 +1478,23 @@ def _prepare(conn, spec: LoopSpec, day: LoopDate, row: LoopRow | None,
 
 
 def _walk(conn, spec: LoopSpec, day: LoopDate, *, interval: float,
-          timeout: float) -> int:
+          timeout: float, storage: Any) -> int:
     try:
-        return process_date(conn, spec, day, interval=interval, timeout=timeout)
+        return process_date(conn, spec, day, interval=interval, timeout=timeout,
+                            storage=storage)
     except _Stop as stop:
         _out(f"timeout: {stop}")
         return stop.code
 
 
-def discover(conn, spec: LoopSpec) -> discovery.Discovery:
+def discover(conn, spec: LoopSpec, storage: Any = None) -> discovery.Discovery:
     """The inbox's new deliveries, classified (loop.md §Discovery and
-    batches); reads only."""
+    batches); reads only. ``storage`` as :func:`process_date`'s; the inbox
+    is listed through :func:`rapidpipe.products.storage.s3_client`."""
     assert spec.inbox is not None
-    return discovery.discover(conn, spec.schedule, spec.inbox, products_storage.Storage(),
+    if storage is None:
+        storage = products_storage.Storage()
+    return discovery.discover(conn, spec.schedule, spec.inbox, storage,
                               products_storage.s3_client(),
                               detector_unit_id)
 
@@ -1534,7 +1541,7 @@ def form_batches(conn, spec: LoopSpec,
 
 
 def _run_stream(conn, spec: LoopSpec, *, interval: float, timeout: float,
-                retry_failed: bool) -> int:
+                retry_failed: bool, storage: Any) -> int:
     """Under the lock (loop.md §Concurrency and recovery): resume the
     schedule's open (and reopenable or, with ``--retry-failed``, failed)
     batches in (date, batch) order; then discover, record and form the
@@ -1548,16 +1555,16 @@ def _run_stream(conn, spec: LoopSpec, *, interval: float, timeout: float,
             continue
         if prepared is not None:
             return prepared
-        code = _walk(conn, spec, day, interval=interval, timeout=timeout)
+        code = _walk(conn, spec, day, interval=interval, timeout=timeout, storage=storage)
         if code != EXIT_OK:
             return code
-    found = discover(conn, spec)
+    found = discover(conn, spec, storage)
     if not found.deliveries:
         _out(f"schedule {spec.schedule}: nothing to discover")
         return EXIT_OK
     _out(f"schedule {spec.schedule}: {spec.inbox}: {found.summary()}")
     for day in form_batches(conn, spec, found):
-        code = _walk(conn, spec, day, interval=interval, timeout=timeout)
+        code = _walk(conn, spec, day, interval=interval, timeout=timeout, storage=storage)
         if code != EXIT_OK:
             return code
     return EXIT_OK
@@ -1581,10 +1588,11 @@ def run_loop(conn, spec: LoopSpec, *, dates: Sequence[_dt.date] | None = None,
     if not try_lock(conn, spec.schedule):
         _out(f"another loop holds schedule {spec.schedule}")
         return EXIT_TIMEOUT
+    storage = products_storage.Storage()   # one per invocation, discovery and every date
     try:
         if stream:
             return _run_stream(conn, spec, interval=interval, timeout=timeout,
-                               retry_failed=retry_failed)
+                               retry_failed=retry_failed, storage=storage)
         for day in chosen:
             row = loop_row(conn, spec.schedule, day.processing_date, day.batch)
             prepared = _prepare(conn, spec, day, row, retry_failed)
@@ -1592,7 +1600,7 @@ def run_loop(conn, spec: LoopSpec, *, dates: Sequence[_dt.date] | None = None,
                 continue
             if prepared is not None:
                 return prepared
-            code = _walk(conn, spec, day, interval=interval, timeout=timeout)
+            code = _walk(conn, spec, day, interval=interval, timeout=timeout, storage=storage)
             if code != EXIT_OK:
                 return code
         return EXIT_OK
@@ -1652,7 +1660,7 @@ def plan(conn, spec: LoopSpec, *,
         if row.state == "complete":
             continue
         lines.append(_plan_entry(conn, spec, row_day(conn, spec, row), row))
-    found = discover(conn, spec)
+    found = discover(conn, spec, products_storage.Storage())
     _out(f"schedule {spec.schedule}: {spec.inbox}: {found.summary()}")
     next_of: dict[_dt.date, int] = {}
     for d in found.deliveries:
