@@ -4,13 +4,16 @@ Testing with OpenUniverse Simulated Data
 Overview
 ************************************
 
-The OpenUniverse simulated data approximate the High Latitude Time Domain Survey (HLTDS),
-and so cover sparse extragalactic fields.  This is the only HLTDS simulation set RAPID has
-processed; the RimTimSim and SOC simulation sets are both GBTDS.
+OpenUniverse simulated data approximate the High Latitude Time Domain Survey
+(HLTDS), covering sparse extragalactic fields. It is the only HLTDS simulation set RAPID has processed;
+RimTimSim and SOC both simulate GBTDS.
 
 The tests described below are organized by processing date.
 
-OpenUniverse simulated data are used, which cover the following observation range::
+Dataset coverage
+====================================
+
+The observation range is::
 
     rapidopsdb=> select min(dateobs),max(dateobs) from l2files;
                min           |          max
@@ -19,9 +22,9 @@ OpenUniverse simulated data are used, which cover the following observation rang
     (1 row)
 
 The last exposure containing injected transients has ``DATE-OBS = 2030-08-15 01:23:31.2``.
-There is a gap in the dataset for ``MJD-OBS`` from 62,728 to 63,550 days, and subsequently a later
-"post-survey" exposure set consisting of 1,155 exposures devoid of transients (starting with
-``DATE-OBS = 2032-11-14 00:30:48.096``).  Here is a breakdown by filter of the transient-free, post-survey exposures::
+The dataset has a gap in ``MJD-OBS`` from 62,728 to 63,550 days. A later
+"post-survey" set contains 1,155 transient-free exposures, starting with
+``DATE-OBS = 2032-11-14 00:30:48.096``. Their distribution by filter is::
 
     select fid,count(*)
     from exposures
@@ -40,10 +43,10 @@ There is a gap in the dataset for ``MJD-OBS`` from 62,728 to 63,550 days, and su
        7 |   165
     (7 rows)
 
-All 18 SCAs are included per exposure in the OpenUniverse simulated-image dataset.
-There are 7 filters covered by the OpenUniverse dataset (fid=8 or W146 is not included).
+Each exposure includes all 18 SCAs. The dataset covers 7 filters; fid=8
+(W146) is not included.
 
-Look-up table all of the filter IDs versus Roman Space Telescope filter names included in the database:
+Filter IDs and Roman Space Telescope filter names in the database:
 
 .. code-block::
 
@@ -61,14 +64,16 @@ Look-up table all of the filter IDs versus Roman Space Telescope filter names in
     (8 rows)
 
 
-Here is a 2-D histogram of numbers ofOpenUniverse exposure-SCA images versus sky position for the F184 filter:
+The 2-D histogram shows OpenUniverse exposure-SCA image counts by sky position
+for the F184 filter:
 
 .. image:: F184_colormap.png
 
-All filters are covered uniformly in the OpenUniverse dataset, so the above figure is indicative of any of the available filters.
+Uniform coverage across filters makes this figure representative of any available filter.
 
 
-Summary of successful tests conducted thus far:
+Successful-test summary
+====================================
 
 =========================  =============  =======================  ===================  ===================  ============================================================================================
 Test                       No. of images  No. of ref. images made  Start obs. datetime  End obs. datetime    Description
@@ -88,12 +93,15 @@ Test                       No. of images  No. of ref. images made  Start obs. da
 8/23/2025                         6,875                79          2028-08-17 00:00:00  2030-09-20 00:00:00  Similar to the 7/10/2025 test, with several exceptions (see below for details).
 =========================  =============  =======================  ===================  ===================  ============================================================================================
 
-In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.  In other words, superior
-reference images have at least 10 frames stacked somewhere in the field, although the overlap will vary, and 60% or more of the reference-image pixels
-have a coverage depth of at least 5 frames.
+Superior reference images have ``nframes >= 10`` and ``cov5percent >= 60%``:
+at least 10 frames stacked somewhere in the field, with varying overlap, and
+60% or more of the reference-image pixels covered by at least 5 frames.
 
-Here is Perl code (``elapsed.pl``) to query the operations database
-for science-pipeline performance results::
+Performance query
+====================================
+
+The Perl script ``elapsed.pl`` queries the operations database for
+science-pipeline performance results::
 
     use strict;
     my $starthourorigin;
@@ -135,13 +143,10 @@ for science-pipeline performance results::
 4/28/2025
 ************************************
 
-The following test is hereby know as the "standard test".
-The standard test processes 2,069 exposure-SCAs
-with all reference images cleared from database
-(``status=0`` for ``vbest>0``).
-Thus, the science pipeline generates new reference images on the fly.
-AWS Batch machines for science-pipeline jobs
-have 2 vCPUs and 16 GB memory.
+The "standard test" processes 2,069 exposure-SCAs with all reference images
+cleared from the database (``status=0`` for ``vbest>0``), forcing the science
+pipeline to generate reference images on the fly. AWS Batch science-pipeline
+machines have 2 vCPUs and 16 GB memory.
 
 .. code-block::
 
@@ -162,20 +167,21 @@ did not produce results, and 33 jobs had no reference images.
            33 |    80
     (3 rows)
 
-Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+Histogram of AWS Batch queue wait times for an available pipeline-job machine:
 
 .. image:: science_pipeline_queue_wait_times_20250428.png
 
 
-Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+Histogram of job execution times, measured from pipeline start to finish on
+an AWS Batch machine:
 
 .. image:: science_pipeline_execution_times_20250428.png
 
-These job elapsed times include additional time for reference-image generation, which would not be needed if reference images
-already existed for the fields covered by the input exposure-SCA images of the standard test.
+These times include reference-image generation, which would be unnecessary if
+reference images already existed for the standard test's input fields.
 
-The standard test generated 1,696 reference images total, for 4 different filters and a variety of fields.  The number of fields
-for each of the filter IDs included is listed as follows:
+The standard test generated 1,696 reference images across 4 filters and a
+variety of fields. Field counts by filter ID:
 
 .. code-block::
 
@@ -188,8 +194,8 @@ for each of the filter IDs included is listed as follows:
        4 |    30
     (4 rows)
 
-Here are all of the filter IDs versus filter names included in the entire OpenUniverse simulated dataset
-(of which a tiny subset is covered by the standard test):
+Filter IDs and names for the entire OpenUniverse simulated dataset, of which
+the standard test covers a tiny subset:
 
 .. code-block::
 
@@ -210,9 +216,9 @@ Here are all of the filter IDs versus filter names included in the entire OpenUn
 4/29/2025
 ************************************
 
-New large test on selectly chosen 5222 exposure-SCAs acquired 6 months after the data from the standard test,
-using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
-are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
+This test selected 5222 exposure-SCAs acquired 6 months after the standard-test
+data. It reused a subset of the 4/28/2025 reference images, selecting only
+fields with ``nframes >= 10`` and ``cov5percent >= 60%``.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 .. code-block::
@@ -223,9 +229,8 @@ AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
     export COV5PERCENT=60
     python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
 
-There were 115 jobs that failed due to the following AWS Batch error:
-``Timeout waiting for network interface provisioning to complete``.
-Need to reconfigure the job definition to have retry attempts.
+The AWS Batch error ``Timeout waiting for network interface provisioning to complete``
+caused 115 jobs to fail. The job definition needs retry attempts.
 
 .. code-block::
 
@@ -240,9 +245,9 @@ Need to reconfigure the job definition to have retry attempts.
 4/30/2025
 ************************************
 
-Rerun of 4/29/2025 large test on selectively chosen 5,222 exposure-SCAs acquired 6 months after the data from the standard test,
-using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
-are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
+This rerun of the 4/29/2025 test selected 5,222 exposure-SCAs acquired 6 months
+after the standard-test data. It reused a subset of the 4/28/2025 reference
+images, selecting only fields with ``nframes >= 10`` and ``cov5percent >= 60%``.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 .. code-block::
@@ -253,7 +258,8 @@ AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
     export COV5PERCENT=60
     python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
 
-After reconfiguring the AWS Batch science-pipeline job definition to attempt to run a job 3 times, if necessary, all jobs successfully ran:
+All jobs succeeded after the AWS Batch science-pipeline job definition was
+configured to allow 3 attempts per job:
 
 .. code-block::
 
@@ -263,21 +269,21 @@ After reconfiguring the AWS Batch science-pipeline job definition to attempt to 
             0 |  5222
     (1 row)
 
-Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+Histogram of AWS Batch queue wait times for an available pipeline-job machine:
 
 .. image:: science_pipeline_queue_wait_times_20250430.png
 
 
-Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+Histogram of job execution times, measured from pipeline start to finish on
+an AWS Batch machine:
 
 .. image:: science_pipeline_execution_times_20250430.png
 
-The mode of the histogram indicates the job elapsed times are approximately 3 minutes shorter than
-those from the 4/28/2025 test, which is expected since all reference images needed for this test
-are already available and none had to be generated on the fly.
+The histogram mode shows job times approximately 3 minutes shorter than in
+the 4/28/2025 test, as expected: all required reference images already existed.
 
-This test utilized a fraction of the reference images that were previously generated in the standard test.
-The numbers of reference images per filter ID that were actually used in this test are listed as follows:
+This test reused a subset of the standard-test reference images. Counts used
+per filter ID:
 
 .. code-block::
 
@@ -294,9 +300,9 @@ The numbers of reference images per filter ID that were actually used in this te
 5/5/2025
 ************************************
 
-New large test on selectively chosen 10,859 exposure-SCAs acquired many months after the data from the standard test,
-using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
-are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
+This test selected 10,859 exposure-SCAs acquired many months after the
+standard-test data. It reused a subset of the 4/28/2025 reference images,
+selecting only fields with ``nframes >= 10`` and ``cov5percent >= 60%``.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 .. code-block::
@@ -307,7 +313,7 @@ AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
     export COV5PERCENT=60
     python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
 
-Here is how the number of exposure-SCAs in this test are selected, utilizing the myriad of metadata in the RAPID operations database:
+The RAPID operations database metadata select the exposure-SCAs as follows:
 
 .. code-block::
 
@@ -329,7 +335,7 @@ Here is how the number of exposure-SCAs in this test are selected, utilizing the
     (1 row)
 
 
-All jobs for both the science pipeline and the post-processing pipeline successfully ran:
+All science-pipeline and post-processing jobs succeeded:
 
 .. code-block::
 
@@ -340,7 +346,7 @@ All jobs for both the science pipeline and the post-processing pipeline successf
        17 |        0 | 10859
     (2 rows)
 
-The expected number of difference images where generated:
+The expected number of difference images was generated:
 
 .. code-block::
 
@@ -351,21 +357,21 @@ The expected number of difference images where generated:
     (1 row)
 
 
-Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a science-pipeline job:
+Histogram of AWS Batch queue wait times for an available science-pipeline machine:
 
 .. image:: science_pipeline_queue_wait_times_20250505.png
 
 
-Here is a histogram of the science-pipeline job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+Histogram of science-pipeline execution times, measured from start to finish
+on an AWS Batch machine:
 
 .. image:: science_pipeline_execution_times_20250505.png
 
-The mode of the histogram indicates the job elapsed times are approximately 3 minutes shorter than
-those from the 4/28/2025 test, which is expected since all reference images needed for this test
-are already available and none had to be generated on the fly.
+The histogram mode shows job times approximately 3 minutes shorter than in
+the 4/28/2025 test, as expected: all required reference images already existed.
 
-Other key timing benchmarks for this test, which were done on an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance)
-with 8-core multiprocessing:
+Timing benchmarks on an 8-core job-launcher machine (``t3.2xlarge`` EC2
+instance), using 8-core multiprocessing:
 
 ===================================================================    ==========================
 Task                                                                   Elapsed time in seconds
@@ -376,8 +382,8 @@ Launch post-processing pipelines                                       5,967
 Register Jobs records for post-processing pipelines                      343
 ===================================================================    ==========================
 
-This test utilized a fraction of the reference images that were previously generated in the standard test.
-The numbers of reference images per filter ID that were actually used in this test are listed as follows:
+This test reused a subset of the standard-test reference images. Counts used
+per filter ID:
 
 .. code-block::
 
@@ -403,10 +409,9 @@ The numbers of reference images per filter ID that were actually used in this te
 5/6/2025
 ************************************
 
-Test to process 4,858 exposure-SCAs, all in the observation date/time ranges given below, making
-reference images on the fly as needed.
-The observation date/time range is relatively early in the available range of the OpenUniverse simulated images.
-This test includes filters that are not well covered by the 4/28/2025 test.
+This test processed all 4,858 exposure-SCAs in the observation range below,
+generating reference images on the fly as needed. The range is early in the
+OpenUniverse dataset and includes filters poorly covered by the 4/28/2025 test.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 .. code-block::
@@ -438,8 +443,8 @@ Reference image not available and could not be made           33
 Pipeline exit codes in the 0-31 range are considered normal, in the 32-63 range a warning, and 64 or greater an error.
 Even though SFFT might have failed, a difference image is still generated by ZOGY.
 
-This test generated 3,884 new reference images, for 5 different filters and a variety of fields.  The number of fields
-for each of the filter IDs included is listed as follows:
+The test generated 3,884 reference images across 5 filters and a variety of
+fields. Field counts by filter ID:
 
 .. code-block::
 
@@ -454,8 +459,8 @@ for each of the filter IDs included is listed as follows:
     (5 rows)
 
 
-These reference images, plus those generated by the standard test on 4/28/2025, give the following total numbers
-of reference images broken down by filter ID:
+Cumulative reference-image counts, including the 4/28/2025 standard test, by
+filter ID:
 
 .. code-block::
 
@@ -472,23 +477,25 @@ of reference images broken down by filter ID:
        7 |   808
     (7 rows)
 
-Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+Histogram of AWS Batch queue wait times for an available pipeline-job machine:
 
 .. image:: science_pipeline_queue_wait_times_20250506.png
 
-Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+Histogram of job execution times, measured from pipeline start to finish on
+an AWS Batch machine:
 
 .. image:: science_pipeline_execution_times_20250506.png
 
-Here is a 2-D histogram of the job execution times versus number of input frames in making reference images on the fly in this test:
+Job execution times versus input-frame counts for on-the-fly reference-image
+generation in this test (2-D histogram):
 
 .. image:: sci_pipe_exec_times_vs_nframes_20250506.png
 
-Here is a histogram of ``nframes`` for all reference images made in this test:
+Histogram of ``nframes`` for all reference images made in this test:
 
 .. image:: sci_pipe_nframes_20250506.png
 
-Here is a histogram of ``cov5percent`` for all reference images made in this test:
+Histogram of ``cov5percent`` for all reference images made in this test:
 
 .. image:: sci_pipe_cov5percent_20250506.png
 
@@ -496,10 +503,10 @@ Here is a histogram of ``cov5percent`` for all reference images made in this tes
 5/8/2025
 ************************************
 
-Test to process 3,020 exposure-SCAs, all in the observation date/time ranges given below, making
-reference images on the fly as needed.
-The observation date/time range is relatively early in the available range of the OpenUniverse simulated images.
-This test exercised the new Virtual Pipeline Operator (VPO) running in single-processing-date mode.
+This test processed all 3,020 exposure-SCAs in the observation range below,
+generating reference images on the fly as needed. The range is early in the
+OpenUniverse dataset. The new Virtual Pipeline Operator (VPO) ran in
+single-processing-date mode.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 .. code-block::
@@ -510,7 +517,7 @@ AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
     python3.11 /code/pipeline/virtualPipelineOperator.py 20250508 >& virtualPipelineOperator_20250508.out &
 
 
-Here is a summary of the pipeline exit codes after the test:
+Pipeline exit codes:
 
 .. code-block::
 
@@ -534,8 +541,8 @@ Reference image not available and could not be made           33
 Pipeline exit codes in the 0-31 range are considered normal, in the 32-63 range a warning, and 64 or greater an error.
 Even though SFFT might have failed, a difference image is still generated by ZOGY.
 
-This test generated 1,500 new reference images, for 4 different filters and a variety of fields.  The number of fields
-for each of the filter IDs included is listed as follows:
+The test generated 1,500 reference images across 4 filters and a variety of
+fields. Field counts by filter ID:
 
 .. code-block::
 
@@ -549,8 +556,7 @@ for each of the filter IDs included is listed as follows:
        4 |   495
     (4 rows)
 
-These reference images, plus those generated by previous tests, give the following total numbers
-of reference images broken down by filter ID:
+Cumulative reference-image counts, including previous tests, by filter ID:
 
 .. code-block::
 
@@ -571,12 +577,11 @@ of reference images broken down by filter ID:
 5/10/2025
 ************************************
 
-Test to process 13,850 exposure-SCA images, all in the observation date/time ranges given below, making
-reference images on the fly as needed.
-The observation date/time range is relatively early in the available range of the OpenUniverse simulated images.
-This test exercised, for the second time, the new Virtual Pipeline Operator (VPO) running in single-processing-date mode,
-only this test processed the largest number of images to date in a single run.  Input images from filter IDs 1-7 in approximately
-equal numbers were processed by this test.
+This test processed all 13,850 exposure-SCA images in the observation range
+below, generating reference images on the fly as needed. The range is early
+in the OpenUniverse dataset, with approximately equal image counts for filter
+IDs 1-7. This was the second test of the new Virtual Pipeline Operator (VPO)
+in single-processing-date mode and the largest single run to date.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 
@@ -588,7 +593,7 @@ AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
     python3.11 /code/pipeline/virtualPipelineOperator.py 20250510 >& virtualPipelineOperator_20250510.out &
 
 
-Here is a summary of the pipeline exit codes after the test (which are not unexpected):
+Pipeline exit codes, as expected:
 
 .. code-block::
 
@@ -613,8 +618,8 @@ Reference image not available and could not be made           33
 Pipeline exit codes in the 0-31 range are considered normal, in the 32-63 range a warning, and 64 or greater an error.
 Even though SFFT might have failed, a difference image is still generated by ZOGY.
 
-This test generated 4,876 new reference images, for all the aforementioned seven filters and a variety of fields.  The number of fields
-for each of the filter IDs included is listed as follows:
+The test generated 4,876 reference images across all seven filters and a
+variety of fields. Field counts by filter ID:
 
 .. code-block::
 
@@ -631,8 +636,7 @@ for each of the filter IDs included is listed as follows:
        7 |   831
     (7 rows)
 
-These reference images, plus those generated by previous tests, give the following total numbers
-of reference images broken down by filter ID:
+Cumulative reference-image counts, including previous tests, by filter ID:
 
 .. code-block::
 
@@ -649,8 +653,8 @@ of reference images broken down by filter ID:
        7 |  1639
     (7 rows)
 
-Other key timing benchmarks for this test, which were done on an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance)
-with 8-core multiprocessing:
+Timing benchmarks on an 8-core job-launcher machine (``t3.2xlarge`` EC2
+instance), using 8-core multiprocessing:
 
 ===================================================================    ==========================
 Task                                                                   Elapsed time in seconds
@@ -674,24 +678,18 @@ S3 product bucket, along with the other products.
 6/12/2025
 ************************************
 
-Test to process 3,545 exposure-SCAs, all in the observation date/time ranges given below,
-making reference images on the fly as needed.
-The reference images are special in that their input frames are selected from the observation window
-63,400 < MJD < 99,9999, which is later than the observation range of the test.
-The test covers only those field/filter combinations in which reference images can be made that have 6 input frames or more,
-which resulted in 79 reference images.
-The observation date/time range of the science images processed in this test is relatively early
-in the available range of the OpenUniverse simulated images, but spans more than a year.
-This test covers all seven filters included in the OpenUniverse dataset.
-A special pipeline-launch script is utilized.
+A special pipeline-launch script processed all 3,545 exposure-SCAs in the
+observation range below, generating reference images on the fly as needed.
+The science images span more than a year early in the OpenUniverse dataset
+and cover all seven filters. Reference inputs come from the later window
+63,400 < MJD < 99,9999. Only field/filter combinations with at least 6
+reference input frames qualify, yielding 79 reference images.
 
-For efficiency, the test is processed in two stages.
-In the first stage, only one representative science image per field/filter combination
-is processed to initially make the needed reference image for the other science images
-with the same field and filter.
-In the second stage, all other science images are processed (i.e., except the representative science images).
-The representative science image is the first in a time-ordered, SCA-ordered list for a given field and filter
-that is returned from a database query.
+Processing has two stages for efficiency: first, process one representative
+science image per field/filter combination to generate the reference image;
+then process all remaining science images using it. The representative is the
+first image returned by a database query ordered by time and SCA for that
+field and filter.
 
 Only ZOGY difference-image products were made in this test.
 
@@ -725,11 +723,11 @@ Only ZOGY difference-image products were made in this test.
 6/13/2025
 ************************************
 
-Test to process 2,783 exposure-SCAs, all in the observation date/time ranges given below,
-which spans the observing year after that of the 20250612 test,
-utilizing the same reference images made for the 20250612 test.
+This test processed all 2,783 exposure-SCAs in the observation range below,
+covering the observing year after the 20250612 test and reusing its reference
+images.
 
-Improvements and additional automation made to the VPO simplify the required run-time parameters, listed below.
+VPO improvements and automation simplify the required run-time parameters:
 
 .. code-block::
 
@@ -746,20 +744,16 @@ Improvements and additional automation made to the VPO simplify the required run
 6/17/2025
 ************************************
 
-Test to process 547 exposure-SCAs, all in the observation date/time ranges given below (spanning 21 days),
-making reference images on the fly as needed (in order to test the VPO's special logic
-for making reference images).
+This test processed all 547 exposure-SCAs in the 21 days below, covering the
+earliest OpenUniverse observations in all filters, which the two previous
+tests had not covered. It generated reference images on the fly as needed to
+test the VPO's special reference-image logic.
 
-The observation date/time range of the science images processed in this test covers the earliest
-range of the OpenUniverse simulated images, all filters, not covered in the two previous tests.
-
-For efficiency, the test is processed in two stages.
-In the first stage, only one representative science image per field/filter combination
-is processed to initially make the needed reference image for the other science images
-with the same field and filter.
-In the second stage, all other science images are processed (i.e., except the representative science images).
-The representative science image is the first in a time-ordered, SCA-ordered list for a given field and filter
-that is returned from a database query.
+Processing has two stages for efficiency: first, process one representative
+science image per field/filter combination to generate the reference image;
+then process all remaining science images using it. The representative is the
+first image returned by a database query ordered by time and SCA for that
+field and filter.
 
 Only ZOGY difference-image products were made in this test.
 
@@ -795,7 +789,7 @@ The resulting SFFT difference image, ``sfftdiffimage_cconv_masked.fits``, and th
 SFFT decorrelated difference image, ``sfftdiffimage_dconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
 
-Naive image-differencing was also done (simple science minus reference image), and the product is ``naive_diffimage_masked.fits``.
+Naive differencing (science minus reference image) produced ``naive_diffimage_masked.fits``.
 
 .. code-block::
 
@@ -854,8 +848,8 @@ The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fi
 SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
 
-Naive image-differencing was also done (simple science minus reference image), and the product is ``naive_diffimage_masked.fits``.
-A new capability is computing an SExtractor catalog for the naive difference image, which is called ``naive_diffimage_masked.txt``.
+Naive differencing (science minus reference image) produced ``naive_diffimage_masked.fits``.
+The new SExtractor catalog for the naive difference image is ``naive_diffimage_masked.txt``.
 
 .. code-block::
 
@@ -910,8 +904,8 @@ Uploading products at pipeline end                              0.033
 Total time to run one instance of science pipeline              593.158
 ==============================================================  =====================
 
-Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
-Here is a breakdown of the number of science images processed per filter in this test:
+The test covered 5,538 exposures, typically processing only 1-4 science images
+per exposure. Science-image counts by filter:
 
 .. code-block::
 
@@ -940,8 +934,8 @@ Similar to the 8/23/2025 test, with the following bug fixes and additions:
     * Fixed bug: x and y subpixels offsets were swapped (adversely affected inputs to ZOGY, SFFT, and naive image-differencing).
     * Added new method normalize_image to normalize science-image PSFs (required by ZOGY).
 
-The above additions cause more product files to be generated
-(namely, separate catalog files for negative difference images, with suffix "_negative" embedded in the filename).
+These additions generate separate catalogs for negative difference images,
+with the suffix "_negative" embedded in each filename.
 
 Covers 6,875 science images.  All science images in the 9/27 run had 100 fake sources injected per science image.
 This is in addition to the fake sources that are already included in the OpenUniverse simulation set.
@@ -959,8 +953,8 @@ The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fi
 SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
 
-Naive image-differencing was also done (simple science minus reference image), and the product is ``naive_diffimage_masked.fits``.
-A new capability is computing an SExtractor catalog for the naive difference image, which is called ``naive_diffimage_masked.txt``.
+Naive differencing (science minus reference image) produced ``naive_diffimage_masked.fits``.
+The new SExtractor catalog for the naive difference image is ``naive_diffimage_masked.txt``.
 
 .. code-block::
 
@@ -1023,8 +1017,8 @@ Uploading products at pipeline end                                    0.037
 Total time to run one instance of science pipeline                  666.143
 ==============================================================  =====================
 
-Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
-Here is a breakdown of the number of science images processed per filter in this test:
+The test covered 5,538 exposures, typically processing only 1-4 science images
+per exposure. Science-image counts by filter:
 
 .. code-block::
 
@@ -1041,25 +1035,23 @@ Here is a breakdown of the number of science images processed per filter in this
     (7 rows)
 
 
-The PSF-fit catalogs made by the Python photutils package from the ZOGY difference images,
-both positive and negative, were loaded into Sources child PostgreSQL database tables.
-The elapsed time to load all sources into the database was 14.7 minutes with 8 parallel processes.
-There were 13,767,979 Sources records loaded into the PostgreSQL database.
+Loading Python photutils PSF-fit catalogs from positive and negative ZOGY
+difference images into Sources child PostgreSQL tables took 14.7 minutes
+with 8 parallel processes and added 13,767,979 Sources records.
 
 Cross-matching the sources, resulting in records loaded into the Merges_<field> and
 AstroObjects_<fields> database tables, for all fields of the sources, was done.
 The elapsed time to cross-match all sources was 3.5 hours with 8 parallel processes.
 This includes cross-matching across field boundaries for sources near field edges.
 A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
-There were 3,269,268 AstroObjects records and 58,913,016 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 15,449 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.02623% in terms of number of merges.
+The PostgreSQL database received 3,269,268 AstroObjects records and
+58,913,016 Merges records (lightcurve data points). Of these, 15,449 merges
+crossed field boundaries because the match radius can extend beyond a field,
+increasing the merge count by 0.02623%.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
-cross-matching.  This is done as a separate process.
-The AstroObjects_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
-For this test, all of this took 11 minutes.
+After cross-matching, a separate process updates the lightcurve statistics
+in AstroObjects_<fields>, then explicitly vacuums and analyzes the tables.
+This took 11 minutes.
 
 
 2/27/2026
@@ -1089,8 +1081,8 @@ Date              Software modification
 2/12/2026         Modified to generate PhotUtils catalog for reference image.
 ===============   ===============================================================================================================================================================================================================================
 
-The above additions cause more product files to be generated
-(such as reference-image PhotUtils-catalog files in different formats).
+These additions generate more product files, including reference-image
+PhotUtils catalogs in different formats.
 
 Covers 6,875 science images.  All science images in this run had 100 fake sources injected per science image.
 This is in addition to the fake sources that are already included in the OpenUniverse simulation set.
@@ -1107,8 +1099,8 @@ Note that SFFT was run with the ``--crossconv`` flag, as was done for the 9/27/2
 The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fits``, and the
 SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
-Naive image-differencing is simply science minus reference image, and the product is ``naive_diffimage_masked.fits``.
-SExtractor and PhotUtils catalogs were generated for all three difference-image methods employed.
+Naive differencing (science minus reference image) produced ``naive_diffimage_masked.fits``.
+All three methods produced SExtractor and PhotUtils catalogs.
 
 .. code-block::
 
@@ -1130,11 +1122,10 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
        17 |        0 |  6875
     (2 rows)
 
-The VPO clocked 2.46 hours to run the product-file-generation pipeline test
-(not including loading Sources database tables and subsequent steps), in which
-difference-image products were generated for all 6,875 science images.
-Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
-facilitated the processing speed.
+The VPO generated difference-image products for all 6,875 science images in
+2.46 hours, excluding Sources-table loading and subsequent steps. AWS Batch
+parallelism, up to 10,000 machines with 1 machine per science image,
+facilitated this speed.
 As shown in the table below for a particular pipeline instance, executing SFFT,
 executing AWAICGEN for reference-image generation (depends on the number of input images),
 applying sub-pixel offsets to the reference image,
@@ -1182,8 +1173,8 @@ Uploading products at pipeline end to S3 product bucket               0.036
 Total time to run one instance of science pipeline                  849.093
 =================================================================  =====================
 
-Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
-Here is a breakdown of the number of science images processed per filter in this test:
+The test covered 5,538 exposures, typically processing only 1-4 science images
+per exposure. Science-image counts by filter:
 
 .. code-block::
 
@@ -1200,35 +1191,31 @@ Here is a breakdown of the number of science images processed per filter in this
     (7 rows)
 
 
-The PSF-fit catalogs made by the Python photutils package from the ZOGY difference images,
-both positive and negative, were loaded into Sources child PostgreSQL database tables.
-The elapsed time to load all sources into the database was 17.0 minutes with 8 parallel processes.
-There were 13,722,343 Sources records loaded into the PostgreSQL database.
+Loading Python photutils PSF-fit catalogs from positive and negative ZOGY
+difference images into Sources child PostgreSQL tables took 17.0 minutes
+with 8 parallel processes and added 13,722,343 Sources records.
 
-Cross-matching the sources with astronomical objects (called AstroObjects),
-resulting in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables, for all fields of the sources, was done.
-The elapsed time to cross-match all sources was 3.39 hours with 8 parallel processes.
-This includes cross-matching across field boundaries for sources near field edges.
+Cross-matching sources with astronomical objects (AstroObjects) across all
+fields of the sources populated Merges_<field> and AstroObjects_<fields>.
+This took 3.39 hours with 8 parallel processes, including matches across
+field boundaries for sources near field edges.
 A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
-There were 3,488,741 AstroObjects records and 66,449,889 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 16,307 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.02454% in terms of number of merges.
+The PostgreSQL database received 3,488,741 AstroObjects records and
+66,449,889 Merges records (lightcurve data points). Of these, 16,307 merges
+crossed field boundaries because the match radius can extend beyond a field,
+increasing the merge count by 0.02454%.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
-cross-matching.  This is done as a separate process.  Any AstroObjects_<fields> record with
-no associated sources in the Merges_<field> database table are deleted.
-A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
-and then these tables are set to logged, clustered, and analyzed.
-The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+After cross-matching, a separate process updates lightcurve statistics in
+AstroObjects_<fields> and deletes records without associated sources in
+Merges_<field>. It creates a new Q3C index on (meanra, meandec) for every
+AstroObjects_<fields> table, then sets the tables to logged, clusters and
+analyzes them, and explicitly vacuums them at the end.
 For this test, all of this took 15.44 minutes with 8 parallel processes.
 
 It took 10.4 hours to delete non-best Merges_<fields> records with 8 parallel processes,
 which also included vacuuming and analyzing all Merges_<fields> database tables.
-The likely reason this process took so long to execute is that the cross-matching step
-was executed several times during testing/debugging on the same input data, which
-created many multiple redundant records.
+The likely cause of the long run time was repeated cross-matching of the same
+input during testing/debugging, which created many redundant records.
 
 It took 33 minutes to delete all not-best records in sources_20250927_* database tables
 with 8 parallel processes.
@@ -1237,16 +1224,15 @@ with 8 parallel processes.
 3/25/2026
 ************************************
 
-Similar to the 2/27/2026 test, but with fake-source injection upgraded to inject variable
-sources with fixed sky positions.  Thus, lightcurves can be generated from extractions
-of these fake sources over time.  The fake-source injection of variables has also been
-extended to the input science images that are used to build the reference images.
+This test was similar to the 2/27/2026 test, with upgraded fake-source injection:
+variable sources have fixed sky positions, enabling lightcurves from repeated
+extractions. Variable sources are also injected into the science images used
+to build reference images.
 
-New: Most of the ZOGY difference-image products now have the prefix "zogy_" in their filenames.
+Most ZOGY difference-image products now have the filename prefix "zogy_".
 
-This test covers 6,875 science images.  All science images in this run had 100 fake sources (variables)
-injected per science image.  This is in addition to the fake sources that are already
-included in the OpenUniverse simulation set.
+Each of the 6,875 science images received 100 injected fake variable sources,
+in addition to those already in the OpenUniverse simulation set.
 
 New reference images were made (79 total).
 The reference images are special in that their input frames are selected
@@ -1286,27 +1272,25 @@ following query results:
      5364186 |     4
     (21 rows)
 
-Here is the breakdown of number of reference images per number of input frames and quality-assurance metric cov5percent:
+Reference-image counts by input-frame count and quality-assurance metric cov5percent:
 
 .. image:: num_refimages_vs_nframes_20260325.png
 
 .. image:: num_refimages_vs_cov5percent_20260325.png
 
-The quality-assurance metric cov5percent, given by the keyword COV5PERC in the FITS header
-of each RAPID reference image, is an absolute quantifier for the aggregate areal-depth coverage
-of a reference image at a reference depth of 5, corresponding to a coadd depth of at
-least 5 input images. It is computed from the reference-image coverage map.
-It is defined as a percentage of the sum of the limited coverage of all pixels in an image,
-where the limited coverage is all coverage and any coverage greater than 5 that is
-reset to 5 for scoring purposes, relative to 5 times the total number of pixels in the image.
+The quality-assurance metric cov5percent (FITS-header keyword COV5PERC)
+is an absolute measure of a RAPID reference image's aggregate areal-depth coverage
+at a reference depth of 5, corresponding to a coadd depth of at least 5 input
+images. From the reference-image coverage map, it sums pixel coverage capped
+at 5 and expresses the result as a percentage of 5 times the total pixel count.
 
 ZOGY image-difference products were generated, as well as SFFT and naive difference-image products.
 Note that SFFT was run with the ``--crossconv`` flag, as was done for the 2/27/26 test.
 The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fits``, and the
 SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
-Naive image-differencing is simply science minus reference image, and the product is ``naive_diffimage_masked.fits``.
-SExtractor and PhotUtils catalogs were generated for all three difference-image methods employed.
+Naive differencing (science minus reference image) produced ``naive_diffimage_masked.fits``.
+All three methods produced SExtractor and PhotUtils catalogs.
 
 .. code-block::
 
@@ -1329,26 +1313,24 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
     (2 rows)
 
 
-The following 2-D histogram shows job elapsed time versus job start time for parallel-processing
-of RAPID science pipelines under AWS Batch with up to 10,000 machines permitted in the job queue.
-The group of bins in the upper left corresponds to the 79 pipeline instances that generated all
-of the reference images needed for the test.
-Since fake-variable-source injection is now done in the reference-image
-inputs, the run times are significantly higher relative to previous tests.  The group of bins in
-the middle corresponds to pipeline instances for the rest of the science images that will have
-precomputed reference images (from the first group of 79 pipeline instances ran earlier).
-The group of bins in the lower right corresponds to instances of the post-processing pipeline,
-the purpose of which is to finalize the pipeline products, performing tasks such as
-updating FITS headers, and computing file checksums.  Post-processing pipelines also run
-in parallel under AWS Batch.
+This 2-D histogram plots elapsed time against start time for RAPID science
+pipelines running in parallel under AWS Batch, with up to 10,000 machines
+permitted in the job queue:
+
+* Upper left: the 79 instances that generated all required reference images.
+  Injecting fake variable sources into reference inputs made these runs
+  significantly longer than in previous tests.
+* Middle: the remaining science-image instances, reusing reference images
+  from the first 79 instances.
+* Lower right: post-processing instances, also parallel under AWS Batch.
+  These finalize products, including FITS-header updates and file checksums.
 
 .. image:: elapsed_vs_started_20260325.png
 
-The VPO clocked 2.8 hours to run the product-file-generation pipeline test
-(not including loading Sources database tables and subsequent steps), in which
-difference-image products were generated for all 6,875 science images.
-Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
-facilitated the processing speed.  The average AWS-Batch queue wait time was 141 s (stddev=13.7 s);
+The VPO generated difference-image products for all 6,875 science images in
+2.8 hours, excluding Sources-table loading and subsequent steps. AWS Batch
+parallelism, up to 10,000 machines with 1 machine per science image,
+facilitated this speed.  The average AWS-Batch queue wait time was 141 s (stddev=13.7 s);
 queue wait times vary from day to day, and can range from minutes to hours depending
 on machine availability.
 
@@ -1400,8 +1382,8 @@ Uploading products at pipeline end to S3 product bucket                   0.036
 Total time to run one instance of science pipeline                     2208.632
 =================================================================  =====================
 
-Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
-Here is a breakdown of the number of science images processed per filter in this test:
+The test covered 5,538 exposures, typically processing only 1-4 science images
+per exposure. Science-image counts by filter:
 
 .. code-block::
 
@@ -1417,35 +1399,31 @@ Here is a breakdown of the number of science images processed per filter in this
        3 |   770
     (7 rows)
 
-The PSF-fit catalogs made by the Python photutils package from the ZOGY difference images,
-both positive and negative, were loaded into Sources child PostgreSQL database tables.
-The elapsed time to load all sources into the database was 16.9 minutes with 8 parallel processes.
-There were 14,327,713 Sources records loaded into the PostgreSQL database.
+Loading Python photutils PSF-fit catalogs from positive and negative ZOGY
+difference images into Sources child PostgreSQL tables took 16.9 minutes
+with 8 parallel processes and added 14,327,713 Sources records.
 
-Cross-matching the sources with astronomical objects (called AstroObjects),
-resulting in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables, for all 262 fields of the sources, was done.
-The elapsed time to cross-match all sources was 3.392 hours with 8 parallel processes.
-This includes cross-matching across field boundaries for sources near field edges.
+Cross-matching sources with astronomical objects (AstroObjects) across all
+262 fields of the sources populated Merges_<field> and AstroObjects_<fields>.
+This took 3.392 hours with 8 parallel processes, including matches across
+field boundaries for sources near field edges.
 A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
-There were 3,623,747 AstroObjects records and 69,111,195 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 17,760 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.02570% in terms of number of merges.
+The PostgreSQL database received 3,623,747 AstroObjects records and
+69,111,195 Merges records (lightcurve data points). Of these, 17,760 merges
+crossed field boundaries because the match radius can extend beyond a field,
+increasing the merge count by 0.02570%.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
-cross-matching.  This is done as a separate process.  Any AstroObjects_<fields> record with
-no associated sources in the Merges_<field> database table are deleted.
-A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
-and then these tables are set to logged, clustered, and analyzed.
-The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+After cross-matching, a separate process updates lightcurve statistics in
+AstroObjects_<fields> and deletes records without associated sources in
+Merges_<field>. It creates a new Q3C index on (meanra, meandec) for every
+AstroObjects_<fields> table, then sets the tables to logged, clusters and
+analyzes them, and explicitly vacuums them at the end.
 For this test, all of this took 30.34 minutes with 8 parallel processes.
 
 It took 2.40 hours to delete non-best Merges_<fields> records with 8 parallel processes,
 which also included vacuuming and analyzing all Merges_<fields> database tables.
-The likely reason this process took so long to execute is that the cross-matching step
-was executed several times during testing/debugging on the same input data, which
-created many multiple redundant records.
+The likely cause of the long run time was repeated cross-matching of the same
+input during testing/debugging, which created many redundant records.
 
 It took 28.50 minutes to delete all not-best records in sources_20260227_* database tables
 with 8 parallel processes.
@@ -1454,10 +1432,11 @@ with 8 parallel processes.
 5/13/2026
 ************************************
 
-Similar to the 3/25/2026 test, but with substantial pipeline improvements as listed in the table below.
-In this test, the PSF-fit catalogs loaded into the database are from SFFT difference images,
-instead of ZOGY difference images as in the 3/25/2026 test.  Other noteworthy pipeline improvements are
-all the upgrades to ``crossMatchSources.py`` and the reduction of the match radius to 0.00001528 degrees (half a Roman WFI pixel).
+This test was similar to the 3/25/2026 test, with the improvements below. Database
+loading used SFFT-difference-image PSF-fit catalogs instead of ZOGY catalogs,
+unlike the 3/25/2026 test. Other major changes were upgrades to
+``crossMatchSources.py`` and a reduced match radius of 0.00001528 degrees
+(half a Roman WFI pixel).
 
 ===============   ===============================================================================================================================================================================================================================
 Date              Software modification
@@ -1486,14 +1465,12 @@ Date              Software modification
 ===============   ===============================================================================================================================================================================================================================
 
 
-Like the 3/25/2026 test, the injected variable fake sources have fixed sky positions, and
-the fake-source injection of variables has been
-extended to the input science images that are used to build the reference images.
-Thus, lightcurves can be generated from extractions of these fake sources over time.
+As in the 3/25/2026 test, fake variable sources have fixed sky positions
+and are injected into science images used to build reference images as well.
+Repeated extractions can therefore produce lightcurves.
 
-This test covers 6,875 science images.  All science images in this run had 100 fake sources (variables)
-injected per science image.  This is in addition to the fake sources that are already
-included in the OpenUniverse simulation set.
+Each of the 6,875 science images received 100 injected fake variable sources,
+in addition to those already in the OpenUniverse simulation set.
 
 New reference images were made (79 total).  More details about the reference images are given
 in the 3/25/2026 description above.
@@ -1503,8 +1480,8 @@ Note that SFFT was run with the ``--crossconv`` flag, as was done for the 3/25/2
 The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fits``, and the
 SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
-Naive image-differencing is simply science minus reference image, and the product is ``naive_diffimage_masked.fits``.
-SExtractor and PhotUtils catalogs were generated for all three difference-image methods employed.
+Naive differencing (science minus reference image) produced ``naive_diffimage_masked.fits``.
+All three methods produced SExtractor and PhotUtils catalogs.
 
 .. code-block::
 
@@ -1527,15 +1504,14 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
     (2 rows)
 
 
-The VPO clocked 2.48 hours to run the product-file-generation pipeline test
-(not including loading Sources database tables and subsequent steps), in which
-difference-image products were generated for all 6,875 science images.
-Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
-facilitated the processing speed.  A detailed breakdown of the pipeline steps can be found
+The VPO generated difference-image products for all 6,875 science images in
+2.48 hours, excluding Sources-table loading and subsequent steps. AWS Batch
+parallelism, up to 10,000 machines with 1 machine per science image,
+facilitated this speed.  A detailed breakdown of the pipeline steps can be found
 above in the description of the 3/25/2026 test.
 
-Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
-Here is a breakdown of the number of science images processed per filter in this test:
+The test covered 5,538 exposures, typically processing only 1-4 science images
+per exposure. Science-image counts by filter:
 
 .. code-block::
 
@@ -1557,23 +1533,21 @@ both positive and negative, were loaded into Sources child PostgreSQL database t
 The elapsed time to load all sources into the database was 17.9 minutes with 8 parallel processes.
 There were 14,239,446 Sources records loaded into the PostgreSQL database.
 
-Cross-matching the sources with astronomical objects (called AstroObjects),
-resulting in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables, for all 196 fields of the sources, was done.
-The elapsed time to cross-match all sources was 4.084 hours with 8 parallel processes.
-This includes cross-matching across field boundaries for sources near field edges.
+Cross-matching sources with astronomical objects (AstroObjects) across all
+196 fields of the sources populated Merges_<field> and AstroObjects_<fields>.
+This took 4.084 hours with 8 parallel processes, including matches across
+field boundaries for sources near field edges.
 A match radius of 0.055 arcseconds was used (half a Roman WFI pixel).
-There were 6,277,546 AstroObjects records and 39,396,561 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 9,945 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.02524% in terms of number of merges.
+The PostgreSQL database received 6,277,546 AstroObjects records and
+39,396,561 Merges records (lightcurve data points). Of these, 9,945 merges
+crossed field boundaries because the match radius can extend beyond a field,
+increasing the merge count by 0.02524%.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
-cross-matching.  This is done as a separate process.  Any AstroObjects_<fields> record with
-no associated sources in the Merges_<field> database table are deleted.
-A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
-and then these tables are set to logged, clustered, and analyzed.
-The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+After cross-matching, a separate process updates lightcurve statistics in
+AstroObjects_<fields> and deletes records without associated sources in
+Merges_<field>. It creates a new Q3C index on (meanra, meandec) for every
+AstroObjects_<fields> table, then sets the tables to logged, clusters and
+analyzes them, and explicitly vacuums them at the end.
 For this test, all of this took 20.99 minutes with 8 parallel processes.
 
 It took 1.26 hours to delete non-best Merges_<fields> records with 8 parallel processes,
@@ -1586,8 +1560,8 @@ with 8 parallel processes.
 5/20/2026
 ************************************
 
-Similar to the 5/13/2026 test, except the following
-pipeline improvement has been included, which will improve the ZOGY difference images and its downstream products:
+This test was similar to the 5/13/2026 test, with the change below to improve ZOGY
+difference images and downstream products:
 
 ===============   ===============================================================================================================================================================================================================================
 Date              Software modification
@@ -1595,14 +1569,12 @@ Date              Software modification
 5/19/2026         Modified to feed ZOGY scaled std_ref_img by scalefacref (gain-matching correction).
 ===============   ===============================================================================================================================================================================================================================
 
-Like the 5/13/2026 test, the injected variable fake sources have fixed sky positions, and
-the fake-source injection of variables has been
-extended to the input science images that are used to build the reference images.
-Thus, lightcurves can be generated from extractions of these fake sources over time.
+As in the 5/13/2026 test, fake variable sources have fixed sky positions
+and are injected into science images used to build reference images as well.
+Repeated extractions can therefore produce lightcurves.
 
-This test covers 6,875 science images.  All science images in this run had 100 fake sources (variables)
-injected per science image.  This is in addition to the fake sources that are already
-included in the OpenUniverse simulation set.
+Each of the 6,875 science images received 100 injected fake variable sources,
+in addition to those already in the OpenUniverse simulation set.
 
 New reference images were made (79 total).  More details about the reference images are given
 in the 3/25/2026 description above.
@@ -1612,8 +1584,8 @@ Note that SFFT was run with the ``--crossconv`` flag, as was done for the 5/13/2
 The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fits``, and the
 SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
-Naive image-differencing is simply science minus reference image, and the product is ``naive_diffimage_masked.fits``.
-SExtractor and PhotUtils catalogs were generated for all three difference-image methods employed.
+Naive differencing (science minus reference image) produced ``naive_diffimage_masked.fits``.
+All three methods produced SExtractor and PhotUtils catalogs.
 
 .. code-block::
 
@@ -1636,15 +1608,14 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
     (2 rows)
 
 
-The VPO clocked 2.47 hours to run the product-file-generation pipeline test
-(not including loading Sources database tables and subsequent steps), in which
-difference-image products were generated for all 6,875 science images.
-Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
-facilitated the processing speed.  A detailed breakdown of the pipeline steps can be found
+The VPO generated difference-image products for all 6,875 science images in
+2.47 hours, excluding Sources-table loading and subsequent steps. AWS Batch
+parallelism, up to 10,000 machines with 1 machine per science image,
+facilitated this speed.  A detailed breakdown of the pipeline steps can be found
 above in the description of the 3/25/2026 test.
 
-Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
-Here is a breakdown of the number of science images processed per filter in this test:
+The test covered 5,538 exposures, typically processing only 1-4 science images
+per exposure. Science-image counts by filter:
 
 .. code-block::
 
@@ -1660,31 +1631,28 @@ Here is a breakdown of the number of science images processed per filter in this
        3 |   770
     (7 rows)
 
-The PSF-fit catalogs made by the Python photutils package from the SFFT difference images,
-both positive and negative, were loaded into Sources child PostgreSQL database tables.
-The elapsed time to load all sources into the database was 17.6 minutes with 8 parallel processes.
-There were 14,239,540 Sources records loaded into the PostgreSQL database.
+Loading Python photutils PSF-fit catalogs from positive and negative SFFT
+difference images into Sources child PostgreSQL tables took 17.6 minutes
+with 8 parallel processes and added 14,239,540 Sources records.
 
-Cross-matching the sources with astronomical objects (called AstroObjects),
-resulting in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables, for all 196 fields of the sources, was done.
-The elapsed time to cross-match all sources was 1.47 hours with 8 parallel processes.
-This includes cross-matching across field boundaries for sources near field edges.
+Cross-matching sources with astronomical objects (AstroObjects) across all
+196 fields of the sources populated Merges_<field> and AstroObjects_<fields>.
+This took 1.47 hours with 8 parallel processes, including matches across
+field boundaries for sources near field edges.
 A match radius of 0.055 arcseconds was used (half a Roman WFI pixel).
-There were 5,216,999 AstroObjects records and 15,970,855 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 3,350 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.02098% in terms of number of merges.
+The PostgreSQL database received 5,216,999 AstroObjects records and
+15,970,855 Merges records (lightcurve data points). Of these, 3,350 merges
+crossed field boundaries because the match radius can extend beyond a field,
+increasing the merge count by 0.02098%.
 
-Prior to this test, all AstroObjects_<field> and Merges_<field> table were dropped.
-Differences in numbers of AstroObjects and Merges records between this test and the 5/13/2026 test
-are attributed to insufficient database clean-up (i.e., redundancies owing to multiple tests, not necessarily documented).
-Additional development effort to address this issue is needed here.
+All AstroObjects_<field> and Merges_<field> tables were dropped before this
+test. Differences in AstroObjects and Merges counts from the 5/13/2026 test
+are attributed to insufficient database cleanup: redundant records from
+multiple, not necessarily documented tests. This needs further development.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
-cross-matching.  This is done as a separate process.  Any AstroObjects_<fields> record with
-no associated sources in the Merges_<field> database table are deleted.
-A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
-and then these tables are set to logged, clustered, and analyzed.
-The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+After cross-matching, a separate process updates lightcurve statistics in
+AstroObjects_<fields> and deletes records without associated sources in
+Merges_<field>. It creates a new Q3C index on (meanra, meandec) for every
+AstroObjects_<fields> table, then sets the tables to logged, clusters and
+analyzes them, and explicitly vacuums them at the end.
 For this test, all of this took 15.46 minutes with 8 parallel processes.
