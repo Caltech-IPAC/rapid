@@ -13,6 +13,14 @@ Pipeline, under development at IPAC/Caltech.
 .. note::
    Development of source code and documentation is currently ongoing.
 
+.. note::
+   This Sphinx site documents the pipeline as it exists on the ``dev``
+   branch. On the ``rebuild`` branch the pipeline lives under
+   ``rapidpipe/``, and its design and operations pages are the rapid_docs
+   site instead of this one. Paths named on the pages below, such as
+   ``pipeline/``, ``alerts/``, ``database/schema/`` and
+   ``database/scripts/``, exist on ``dev`` only.
+
 
 Running the Latest RAPID Pipeline
 *************************************

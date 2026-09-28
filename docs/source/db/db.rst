@@ -10,24 +10,14 @@ has been installed as a plug-in for fast queries on sky position.
 .. note::
     The database design described below is evolving and subject to change.
 
-The database was built from source code and deployed on the
-build machine using the following script:
-
-.. code-block::
-
-   /source-code/location/rapid/database/scripts/buildDatabase.sh
-
-The database-schema files are located under the following path in the RAPID
-git repository:
-
-.. code-block::
-
-   /source-code/location/rapid/database/schema
-
-It includes SQL files to define datatabase tables, stored functions,
-roles, grants, table spaces, and some basic database-table content.  It also
-includes SQL files to drop tables and stored functions as a
-convenience (which are not generally needed).
+.. note::
+   This page describes the database design as built on the ``dev``
+   branch. On the ``rebuild`` branch, the schema is versioned SQL under
+   ``database/migrations/`` in the RAPID git repository, applied in
+   filename order by ``database/apply-migrations.sh``; see
+   ``database/README.md`` for the rules and how to run the applier
+   locally. ``dev``'s ``database/scripts/buildDatabase.sh`` and
+   ``database/schema/`` are not carried on ``rebuild``.
 
 Schema
 ************************************
