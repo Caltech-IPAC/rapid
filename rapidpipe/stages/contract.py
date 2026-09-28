@@ -32,7 +32,6 @@ import logging
 import os
 import pstats
 import shutil
-import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -60,6 +59,7 @@ from rapidpipe.products.storage import (
     publish_dir,
     upload_object,
 )
+from rapidpipe.revision import git_revision
 from rapidpipe.stages.settings import SettingsError, canonical_hash, resolve_settings
 
 #: Environment variable that turns on per-invocation cProfile of ``body``
@@ -361,34 +361,6 @@ def _work_root() -> Path:
     return Path(configured) if configured else Path(tempfile.gettempdir())
 
 
-def _source_revision() -> str | None:
-    """``git rev-parse HEAD`` in the current working directory, falling
-    back to the ``RAPID_SOURCE_REVISION`` environment variable, or
-    ``None`` if neither yields one.
-
-    A developer's working copy has a real git repository, so git wins
-    when it succeeds. A Batch container does not: it has no ``.git`` to
-    query, but its image bakes the built SHA into ``RAPID_SOURCE_REVISION``
-    (``containers/rapid-pipeline/Containerfile``, set by ``build.sh`` from
-    the commit it built). git failing covers every way that can happen --
-    git not installed, cwd not a repository, or any other non-zero exit --
-    at which point the environment variable is the next best source of
-    provenance, and only if that is unset too does the execution record
-    omit it, per the contract's "source revision, working-copy changes if
-    any, image digest when applicable".
-    """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return os.environ.get("RAPID_SOURCE_REVISION")
-    if result.returncode != 0:
-        return os.environ.get("RAPID_SOURCE_REVISION")
-    revision = result.stdout.strip()
-    return revision or os.environ.get("RAPID_SOURCE_REVISION")
-
-
 def _release_identity() -> str | None:
     """``RAPIDPIPE_RELEASE``, else ``RAPID_RELEASE_IDENTITY``, else
     ``None``; the placeholder ``unreleased`` is ``None`` too."""
@@ -409,7 +381,15 @@ def _write_execution_record(
 
     Holds the resolved settings hash, the source revision (``git rev-parse
     HEAD`` in the current working directory, else ``RAPID_SOURCE_REVISION``,
-    else ``None`` -- see :func:`_source_revision`), and the image digest
+    else ``None`` -- a developer's working copy has a real git repository,
+    so git wins when it succeeds; a Batch container does not, it has no
+    ``.git`` to query, but its image bakes the built SHA into
+    ``RAPID_SOURCE_REVISION`` (``containers/rapid-pipeline/Containerfile``,
+    set by ``build.sh`` from the commit it built); git failing covers every
+    way that can happen -- git not installed, cwd not a repository, or any
+    other non-zero exit -- at which point the environment variable is the
+    next best source of provenance, and only if that is unset too does the
+    execution record omit it), and the image digest
     from ``RAPIDPIPE_IMAGE_DIGEST`` if set, else the deployed job
     definition's ``RAPID_IMAGE_DIGEST`` (``rapid_systems`` ``rapid-batch.yaml``
     ``RapidRebuildJobDefinition``) if that is set, else ``None``; and the
@@ -442,7 +422,7 @@ def _write_execution_record(
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "settings_hash": settings_hash,
-        "source_revision": _source_revision(),
+        "source_revision": git_revision() or os.environ.get("RAPID_SOURCE_REVISION"),
         "image_digest": (
             os.environ.get("RAPIDPIPE_IMAGE_DIGEST")
             or os.environ.get("RAPID_IMAGE_DIGEST")

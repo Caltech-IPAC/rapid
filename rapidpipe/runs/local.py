@@ -27,6 +27,7 @@ from typing import Any, Mapping
 
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.products.manifest import Manifest, ManifestError
+from rapidpipe.revision import git_revision
 from rapidpipe.runs import inputs as run_inputs
 from rapidpipe.runs.repository import (
     add_unit,
@@ -103,32 +104,6 @@ def _read_execution_record(output_location: Path, attempt_id: str) -> dict[str, 
         return json.loads(record_path.read_text())
     except (json.JSONDecodeError, OSError):
         return {}
-
-
-def _source_revision_or_unknown() -> str:
-    """``git rev-parse HEAD`` in the current working directory, else the
-    literal ``"unknown"``.
-
-    Used only to fill ``execution_records.source_revision`` (NOT NULL) for
-    an attempt whose stage never reached ``run_stage``'s own
-    ``exec/<attempt>.json`` write -- a usage or input-rejected failure
-    raises before that point (``rapidpipe.stages.contract.run_stage``), so
-    there is no stage-written execution record to read at all for that
-    attempt. A stage that DID write one already has a real source
-    revision in it (``rapidpipe.stages.contract._source_revision``, the
-    same git lookup), so this fallback only ever fires for a record this
-    module itself has to construct from nothing.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    if result.returncode != 0:
-        return "unknown"
-    revision = result.stdout.strip()
-    return revision or "unknown"
 
 
 def _run_schema_version(conn, run_id: str) -> str | None:
@@ -267,7 +242,7 @@ def run_stage_locally(
     if execution_record.get("schema_version") is None:
         execution_record["schema_version"] = _run_schema_version(conn, run_id)
     if execution_record.get("source_revision") is None:
-        execution_record["source_revision"] = _source_revision_or_unknown()
+        execution_record["source_revision"] = git_revision() or "unknown"
     if execution_record.get("settings_hash") is None:
         execution_record["settings_hash"] = "unknown"
     # record_attempt_result and, when it succeeded, select_attempt run in

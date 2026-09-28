@@ -64,7 +64,6 @@ import importlib
 import json
 import logging
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -86,6 +85,7 @@ from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_i
 from rapidpipe.products.storage import fetch_object, parse_location
 from rapidpipe.cli import checkctl, loopctl, runctl, stagectl
 from rapidpipe.release import __main__ as release_cli
+from rapidpipe.revision import git_revision
 from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
@@ -234,9 +234,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Comma-separated list of selected stage names. Required, except "
              "with --only-failed, which takes them from the seed.")
     create_parser.add_argument("--owner", default=None)
-    create_parser.add_argument("--lane", default=None, help="Default local.")
-    create_parser.add_argument("--profile", default=None, help="Default local.")
-    create_parser.add_argument("--db-target", default=None)
     create_parser.add_argument("--max-attempts", type=int, default=None, help="Default 1.")
     create_parser.add_argument("--settings-overlay-ref", default=None)
     create_parser.add_argument("--input-selection-ref", default=None)
@@ -480,23 +477,6 @@ def _run_selftest_command(args: argparse.Namespace) -> int:
         output_location=args.output_location, python=args.python)
 
 
-def _source_revision_or_unknown() -> str:
-    """``git rev-parse HEAD`` in the current working directory, else the
-    literal ``"unknown"`` (brief: "else the literal unknown"; distinct from
-    the stage contract's execution record, which uses ``None`` for the same
-    failure -- this is a run-creation field, not an execution record)."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    if result.returncode != 0:
-        return "unknown"
-    revision = result.stdout.strip()
-    return revision or "unknown"
-
-
 def _last_applied_schema_version(cur) -> str | None:
     """The filename of the most recently applied migration.
 
@@ -554,7 +534,7 @@ def create_run_record(
             raise ReleaseNotComplete(f"release {release} is {state}, not complete; refusing")
         _, code_revision, image_digest = release_row
     else:
-        code_revision = _source_revision_or_unknown()
+        code_revision = git_revision() or "unknown"
         image_digest = os.environ.get("RAPIDPIPE_IMAGE_DIGEST")
 
     return create_run(
@@ -608,8 +588,8 @@ def _run_create_command(args: argparse.Namespace) -> int:
         try:
             run_id = create_run_record(
                 conn, kind=args.kind, owner=owner, purpose=args.purpose, stages=stages,
-                release=args.release, lane=args.lane or "local",
-                profile=args.profile or "local", db_target=args.db_target,
+                release=args.release, lane="local",
+                profile="local", db_target=None,
                 max_attempts=1 if args.max_attempts is None else args.max_attempts,
                 settings_overlay_ref=args.settings_overlay_ref,
                 input_selection_ref=args.input_selection_ref,
@@ -635,8 +615,7 @@ def _run_create_command(args: argparse.Namespace) -> int:
 #: ``run create`` options ``--only-failed`` refuses: the re-run copies each
 #: from the seed (runs page, "Rules").
 _ONLY_FAILED_COPIED_OPTIONS = (
-    ("--stages", "stages"), ("--release", "release"), ("--lane", "lane"),
-    ("--profile", "profile"), ("--db-target", "db_target"),
+    ("--stages", "stages"), ("--release", "release"),
     ("--max-attempts", "max_attempts"),
     ("--settings-overlay-ref", "settings_overlay_ref"),
     ("--input-selection-ref", "input_selection_ref"),

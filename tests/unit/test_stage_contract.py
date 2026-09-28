@@ -658,67 +658,48 @@ def test_dry_run_with_missing_s3_settings_overlay_exits_usage_error(
 # RAPID_IMAGE_DIGEST)
 # ======================================================================
 
-def test_source_revision_uses_git_when_available(monkeypatch):
+def test_write_execution_record_source_revision_uses_git_when_available(monkeypatch, tmp_path):
     import rapidpipe.stages.contract as contract_module
 
-    class _FakeCompletedProcess:
-        returncode = 0
-        stdout = "abc123\n"
-
-    monkeypatch.setattr(
-        contract_module.subprocess, "run",
-        lambda *a, **k: _FakeCompletedProcess())
+    monkeypatch.setattr(contract_module, "git_revision", lambda: "abc123")
     monkeypatch.setenv("RAPID_SOURCE_REVISION", "should-not-be-used")
 
-    assert contract_module._source_revision() == "abc123"
+    outputs_dir = tmp_path / "outputs"
+    relative = contract_module._write_execution_record(outputs_dir, "a1", "hash1")
+    record = json.loads((outputs_dir / relative).read_text())
+    assert record["source_revision"] == "abc123"
 
 
-def test_source_revision_falls_back_to_env_when_git_fails(monkeypatch):
+def test_write_execution_record_source_revision_falls_back_to_env_when_git_yields_none(
+        monkeypatch, tmp_path):
     import rapidpipe.stages.contract as contract_module
 
-    class _FakeCompletedProcess:
-        returncode = 128
-        stdout = ""
-
-    monkeypatch.setattr(
-        contract_module.subprocess, "run",
-        lambda *a, **k: _FakeCompletedProcess())
+    monkeypatch.setattr(contract_module, "git_revision", lambda: None)
     monkeypatch.setenv("RAPID_SOURCE_REVISION", "baked-sha-456")
 
-    assert contract_module._source_revision() == "baked-sha-456"
+    outputs_dir = tmp_path / "outputs"
+    relative = contract_module._write_execution_record(outputs_dir, "a1", "hash1")
+    record = json.loads((outputs_dir / relative).read_text())
+    assert record["source_revision"] == "baked-sha-456"
 
 
-def test_source_revision_falls_back_to_env_when_git_not_installed(monkeypatch):
+def test_write_execution_record_source_revision_none_when_git_and_env_unset(
+        monkeypatch, tmp_path):
     import rapidpipe.stages.contract as contract_module
 
-    def _raise(*a, **k):
-        raise FileNotFoundError("git not found")
-
-    monkeypatch.setattr(contract_module.subprocess, "run", _raise)
-    monkeypatch.setenv("RAPID_SOURCE_REVISION", "baked-sha-789")
-
-    assert contract_module._source_revision() == "baked-sha-789"
-
-
-def test_source_revision_none_when_git_fails_and_env_unset(monkeypatch):
-    import rapidpipe.stages.contract as contract_module
-
-    class _FakeCompletedProcess:
-        returncode = 128
-        stdout = ""
-
-    monkeypatch.setattr(
-        contract_module.subprocess, "run",
-        lambda *a, **k: _FakeCompletedProcess())
+    monkeypatch.setattr(contract_module, "git_revision", lambda: None)
     monkeypatch.delenv("RAPID_SOURCE_REVISION", raising=False)
 
-    assert contract_module._source_revision() is None
+    outputs_dir = tmp_path / "outputs"
+    relative = contract_module._write_execution_record(outputs_dir, "a1", "hash1")
+    record = json.loads((outputs_dir / relative).read_text())
+    assert record["source_revision"] is None
 
 
 def test_write_execution_record_prefers_rapidpipe_image_digest(monkeypatch, tmp_path):
     import rapidpipe.stages.contract as contract_module
 
-    monkeypatch.setattr(contract_module, "_source_revision", lambda: "rev1")
+    monkeypatch.setattr(contract_module, "git_revision", lambda: "rev1")
     monkeypatch.setenv("RAPIDPIPE_IMAGE_DIGEST", "sha256:developer")
     monkeypatch.setenv("RAPID_IMAGE_DIGEST", "sha256:deployed")
 
@@ -731,7 +712,7 @@ def test_write_execution_record_prefers_rapidpipe_image_digest(monkeypatch, tmp_
 def test_write_execution_record_falls_back_to_rapid_image_digest(monkeypatch, tmp_path):
     import rapidpipe.stages.contract as contract_module
 
-    monkeypatch.setattr(contract_module, "_source_revision", lambda: "rev1")
+    monkeypatch.setattr(contract_module, "git_revision", lambda: "rev1")
     monkeypatch.delenv("RAPIDPIPE_IMAGE_DIGEST", raising=False)
     monkeypatch.setenv("RAPID_IMAGE_DIGEST", "sha256:deployed")
 
@@ -744,7 +725,7 @@ def test_write_execution_record_falls_back_to_rapid_image_digest(monkeypatch, tm
 def test_write_execution_record_digest_none_when_both_unset(monkeypatch, tmp_path):
     import rapidpipe.stages.contract as contract_module
 
-    monkeypatch.setattr(contract_module, "_source_revision", lambda: "rev1")
+    monkeypatch.setattr(contract_module, "git_revision", lambda: "rev1")
     monkeypatch.delenv("RAPIDPIPE_IMAGE_DIGEST", raising=False)
     monkeypatch.delenv("RAPID_IMAGE_DIGEST", raising=False)
 

@@ -107,7 +107,7 @@ def test_run_stage_locally_output_location_layout(tmp_path, monkeypatch):
     monkeypatch.setattr(local_module, "record_attempt_result", _fake_record_attempt_result)
     monkeypatch.setattr(local_module, "select_attempt", _fake_select_attempt)
     monkeypatch.setattr(local_module, "_run_schema_version", lambda conn, run_id: "1")
-    monkeypatch.setattr(local_module, "_source_revision_or_unknown", lambda: "abc123")
+    monkeypatch.setattr(local_module, "git_revision", lambda: "abc123")
     monkeypatch.setattr(local_module.subprocess, "run", _fake_run)
     # Manifest.read/validate would reject an empty outputs list for a
     # stage that declares produces=(); admit's own manifest never has
@@ -161,7 +161,7 @@ def test_run_stage_locally_env_none_value_removes_an_inherited_key(tmp_path, mon
     monkeypatch.setattr(local_module, "record_attempt_result", lambda *a, **k: None)
     monkeypatch.setattr(local_module, "select_attempt", lambda *a, **k: None)
     monkeypatch.setattr(local_module, "_run_schema_version", lambda conn, run_id: "1")
-    monkeypatch.setattr(local_module, "_source_revision_or_unknown", lambda: "abc123")
+    monkeypatch.setattr(local_module, "git_revision", lambda: "abc123")
     monkeypatch.setattr(
         local_module, "_read_manifest_if_valid", lambda output_location: object())
 
@@ -238,7 +238,7 @@ def test_run_stage_locally_fills_none_valued_execution_record_fields(tmp_path, m
     monkeypatch.setattr(local_module, "record_attempt_result", _fake_record_attempt_result)
     monkeypatch.setattr(local_module, "select_attempt", lambda conn, attempt_id: None)
     monkeypatch.setattr(local_module, "_run_schema_version", lambda conn, run_id: "2")
-    monkeypatch.setattr(local_module, "_source_revision_or_unknown", lambda: "abc123")
+    monkeypatch.setattr(local_module, "git_revision", lambda: "abc123")
     monkeypatch.setattr(local_module.subprocess, "run", _fake_run)
     monkeypatch.setattr(
         local_module, "_read_manifest_if_valid",
