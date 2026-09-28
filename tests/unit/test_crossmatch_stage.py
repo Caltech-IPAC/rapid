@@ -14,6 +14,7 @@ import json
 
 import pytest
 
+from rapidpipe.seams import database_env
 import rapidpipe.stages.crossmatch as crossmatch
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.science.crossmatch.catalog import new_object_id
@@ -283,7 +284,7 @@ def test_a_connection_failure_is_temporary(tmp_path, monkeypatch):
 
 
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(crossmatch.DATABASE_ENV, "rapidpipe.selftest.support.fakecrossmatchdb:no_such_factory")
+    monkeypatch.setenv(database_env("crossmatch"), "rapidpipe.selftest.support.fakecrossmatchdb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE
 
 

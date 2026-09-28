@@ -82,8 +82,6 @@ from __future__ import annotations
 import contextlib
 import csv
 import hashlib
-import importlib
-import os
 import re
 import sys
 import tempfile
@@ -102,6 +100,7 @@ from rapidpipe.products.catalogexport import (
     validate_catalog_export_entry,
 )
 from rapidpipe.products.manifest import Manifest, OutputEntry, member_for_file
+from rapidpipe.seams import database_env, load_factory
 from rapidpipe.stages.contract import (
     InputRejected,
     StageContext,
@@ -169,11 +168,6 @@ def parse_unit_id(unit_id: str) -> int:
 # ----------------------------------------------------------------------
 
 
-def connect(*args, **kwargs):
-    """Module-level indirection to ``rapidpipe.db.connection.connect``, for tests."""
-    return _connection_module.connect(*args, **kwargs)
-
-
 class PostgresExportDatabase:
     """The stage's database reads on one connection, in one read-only transaction."""
 
@@ -199,15 +193,9 @@ class PostgresExportDatabase:
                                          flags_zero_only=flags_zero_only)
 
 
-#: Names a ``module:factory`` returning a context manager that yields an
-#: object with :class:`PostgresExportDatabase`'s methods, used instead of
-#: PostgreSQL. Unset in every deployment; the stage fixture sets it.
-DATABASE_ENV = "RAPIDPIPE_EXPORT_DATABASE"
-
-
 @contextlib.contextmanager
 def _postgres() -> Iterator[PostgresExportDatabase]:
-    with connect() as conn:
+    with _connection_module.connect() as conn:
         try:
             yield PostgresExportDatabase(conn)
         except BaseException:
@@ -217,15 +205,8 @@ def _postgres() -> Iterator[PostgresExportDatabase]:
 
 def open_database():
     """PostgreSQL, unless ``RAPIDPIPE_EXPORT_DATABASE`` names another; tests monkeypatch this."""
-    override = os.environ.get(DATABASE_ENV)
-    if not override:
-        return _postgres()
-    module_name, _, factory_name = override.partition(":")
-    try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError) as exc:
-        raise UsageError(f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
-    return factory()
+    factory = load_factory(database_env("export"), UsageError)
+    return factory() if factory else _postgres()
 
 
 # ----------------------------------------------------------------------

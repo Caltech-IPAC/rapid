@@ -42,8 +42,6 @@ This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 from __future__ import annotations
 
 import contextlib
-import importlib
-import os
 import re
 import sys
 from typing import Any, Iterator
@@ -51,6 +49,7 @@ from typing import Any, Iterator
 from rapidpipe.db import connection as _connection_module
 from rapidpipe.db import sources as _sources
 from rapidpipe.db.connection import ConnectionUnavailable
+from rapidpipe.seams import database_env, load_factory
 from rapidpipe.stages.contract import (
     InputRejected,
     StageContext,
@@ -97,11 +96,6 @@ def _parse_unit_id(unit_id: str) -> tuple[str, int]:
 # ----------------------------------------------------------------------
 
 
-def connect(*args, **kwargs):
-    """Module-level indirection to ``rapidpipe.db.connection.connect``, for tests."""
-    return _connection_module.connect(*args, **kwargs)
-
-
 class PostgresMaintainDatabase:
     """The stage's database operations on one connection, in one transaction."""
 
@@ -120,17 +114,9 @@ class PostgresMaintainDatabase:
         self.conn.commit()
 
 
-#: Names a ``module:factory`` returning a context manager that yields an
-#: object with :class:`PostgresMaintainDatabase`'s methods, used instead of
-#: PostgreSQL. Unset in every deployment; the stage fixture
-#: (``make stage-maintain``) sets it, since a subprocess cannot be
-#: monkeypatched.
-DATABASE_ENV = "RAPIDPIPE_MAINTAIN_DATABASE"
-
-
 @contextlib.contextmanager
 def _postgres() -> Iterator[PostgresMaintainDatabase]:
-    with connect() as conn:
+    with _connection_module.connect() as conn:
         try:
             yield PostgresMaintainDatabase(conn)
         except BaseException:
@@ -140,15 +126,8 @@ def _postgres() -> Iterator[PostgresMaintainDatabase]:
 
 def open_database():
     """PostgreSQL, unless ``RAPIDPIPE_MAINTAIN_DATABASE`` names another; tests monkeypatch this."""
-    override = os.environ.get(DATABASE_ENV)
-    if not override:
-        return _postgres()
-    module_name, _, factory_name = override.partition(":")
-    try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError) as exc:
-        raise UsageError(f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
-    return factory()
+    factory = load_factory(database_env("maintain"), UsageError)
+    return factory() if factory else _postgres()
 
 
 # ----------------------------------------------------------------------

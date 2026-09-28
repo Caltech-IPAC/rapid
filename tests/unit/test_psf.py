@@ -55,7 +55,7 @@ def test_register_refuses_a_bad_psf_block_before_connecting(tmp_path, monkeypatc
         "inputs": {"manifest": "m", "products": {}, "result_sets": []},
         "outputs": [psf_entry(registration={"md5": MD5})],
     }))
-    monkeypatch.setattr(register_module, "connect",
+    monkeypatch.setattr("rapidpipe.db.connection.connect",
                         lambda *a, **k: pytest.fail("connected before validating"))
     rc = register_module.main(["--run", "r1", "--unit", "e1/SCA07", "--attempt", "r-a1",
                                "--inputs", str(inputs), "--outputs", str(tmp_path / "out")])

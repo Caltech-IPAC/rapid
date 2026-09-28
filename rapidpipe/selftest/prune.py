@@ -16,6 +16,7 @@ from typing import Any
 
 from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
+from rapidpipe.seams import database_env
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture, fixture_dir
 from rapidpipe.selftest.support.fakeprunedb import (
     ASSOCIATION_INSTANCE,
@@ -26,7 +27,6 @@ from rapidpipe.selftest.support.fakeprunedb import (
 )
 
 FAKE_DATABASE = "rapidpipe.selftest.support.fakeprunedb:fake_database"
-DATABASE_ENV = "RAPIDPIPE_PRUNE_DATABASE"
 
 
 def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Path, dict[str, str]]:
@@ -48,7 +48,7 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
         "merges": spec["merges"],
     }))
     state = work / "db-state.json"
-    extra_env = {DATABASE_ENV: FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
+    extra_env = {database_env("prune"): FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
     return inputs, overlay, extra_env
 
 

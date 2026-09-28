@@ -37,7 +37,13 @@ from astropy.wcs import WCS
 
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.l2image import L2ImageRegistration
-from rapidpipe.products.manifest import Manifest, Member, OutputEntry, member_for_file
+from rapidpipe.products.manifest import (
+    Manifest,
+    Member,
+    OutputEntry,
+    member_for_file,
+    sha256_of_file,
+)
 from rapidpipe.stages.contract import (
     InputRejected,
     StageContext,
@@ -102,17 +108,6 @@ DECLARATION = StageDeclaration(
 )
 
 
-def _sha256_of_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        while True:
-            chunk = fh.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _md5_of_file(path: Path) -> str:
     digest = hashlib.md5()
     with path.open("rb") as fh:
@@ -167,7 +162,7 @@ def _verify_member_bytes(inputs_dir: Path, member: Member) -> Path:
             f"delivered member {member.path!r}: manifest declares "
             f"{member.bytes} bytes, file is {actual_bytes} bytes")
     expected_sha256 = member.sha256.removeprefix("sha256:")
-    actual_sha256 = _sha256_of_file(path)
+    actual_sha256 = sha256_of_file(path)
     if actual_sha256 != expected_sha256:
         raise InputRejected(
             f"delivered member {member.path!r}: SHA-256 mismatch "

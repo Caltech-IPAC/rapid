@@ -84,7 +84,7 @@ def _association_set(conn, run_id, *, source_sets, base=None, pairs=()):
 
 def _run_statistics(conn, monkeypatch, tmp_path, run_id, association, *, name="statistics",
                     base=None, source_sets=(), overlay=""):
-    monkeypatch.setattr(statistics, "connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
     repo.add_unit(conn, run_id, "statistics", "field", str(FIELD))
     attempt_id = repo.allocate_attempt(conn, run_id, "statistics", str(FIELD))
     inputs = tmp_path / f"{name}-inputs"

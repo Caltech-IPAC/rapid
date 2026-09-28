@@ -25,6 +25,7 @@ import healpy as hp
 from database.modules.utils.roman_tessellation_db import RomanTessellationClosedForm
 from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
+from rapidpipe.seams import database_env
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture, fixture_dir
 from rapidpipe.selftest.support.fakeloaddb import (
     DIFFERENCE_INSTANCE,
@@ -37,7 +38,6 @@ from rapidpipe.selftest.support.fakeloaddb import (
 )
 
 FAKE_DATABASE = "rapidpipe.selftest.support.fakeloaddb:fake_database"
-DATABASE_ENV = "RAPIDPIPE_LOAD_DATABASE"
 
 
 def _catalogs(spec: dict[str, Any]) -> dict[str, tuple[list[dict], list[dict]]]:
@@ -57,7 +57,7 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
     seed.write_text(json.dumps({"differences": {
         DIFFERENCE_INSTANCE: expected["inputs"]["difference_row"]}}))
     state = work / "db-state.json"
-    extra_env = {DATABASE_ENV: FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
+    extra_env = {database_env("load"): FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
     return inputs, overlay, extra_env
 
 

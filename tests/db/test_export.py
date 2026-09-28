@@ -77,7 +77,7 @@ def test_unknown_columns_are_refused_before_any_sql(conn):
 
 def test_stage_main_exports_the_named_set(conn, tmp_path, monkeypatch):
     run_id, source_set, rows = _loaded_source_set(conn, tmp_path, monkeypatch)
-    monkeypatch.setattr(export, "connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
     if importlib.util.find_spec("hats_import") is None:
         def _stand_in(csv_paths, hats, output_path, tmp_dir):
             lines = [p.read_text().splitlines() for p in csv_paths]
@@ -108,7 +108,7 @@ def test_stage_main_exports_the_named_set(conn, tmp_path, monkeypatch):
 
 
 def test_stage_main_refuses_an_unregistered_set(conn, tmp_path, monkeypatch):
-    monkeypatch.setattr(export, "connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
     inputs = tmp_path / "inputs"
     build_export_input_set(inputs, result_sets=["01J8Y6QZ3M00000000000NOPE0"])
     rc = export.main(["--run", "01J8Y6QZ3M00000000000XRUN0", "--unit", "4711398",

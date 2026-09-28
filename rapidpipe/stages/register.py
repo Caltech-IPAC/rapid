@@ -121,17 +121,6 @@ DECLARATION = StageDeclaration(
 )
 
 
-def connect(*args, **kwargs):
-    """Module-level indirection to ``rapidpipe.db.connection.connect``.
-
-    A thin wrapper, not a re-export, so tests can monkeypatch
-    ``rapidpipe.stages.register.connect`` without reaching into
-    ``rapidpipe.db.connection`` and affecting other callers (design
-    brief: "a module-level name `connect` so tests can monkeypatch it").
-    """
-    return _connection_module.connect(*args, **kwargs)
-
-
 def _reject_unknown_kinds(entries) -> None:
     for entry in entries:
         if entry.kind not in _KNOWN_KINDS:
@@ -171,7 +160,7 @@ def _body(context: StageContext) -> StageResult:
     products_read: dict[str, str] = {}
 
     try:
-        with connect() as conn:
+        with _connection_module.connect() as conn:
             try:
                 with conn.cursor():
                     pass  # establish the connection is usable before writing.

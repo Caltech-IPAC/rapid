@@ -30,12 +30,12 @@ from astropy.utils.exceptions import AstropyUserWarning
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.science.reference import header as stamp
 from rapidpipe.science.reference.identity import selection_digest
+from rapidpipe.seams import toolkit_env
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture, fixture_dir
 from rapidpipe.selftest.support.fakedifftools import cdf_dir
 from rapidpipe.selftest.support.fakereftools import RTID, UNIT_FILTER
 
 FAKE_TOOLKIT = "rapidpipe.selftest.support.fakereftools:fake_toolkit"
-TOOLKIT_ENV = "RAPIDPIPE_REFERENCE_TOOLKIT"
 UNIT_ID = f"{RTID}/{UNIT_FILTER}"
 
 
@@ -183,7 +183,7 @@ FIXTURE = StageFixture(
     module="rapidpipe.stages.reference",
     unit_kind="field",
     unit_id=UNIT_ID,
-    fake_toolkit_env={TOOLKIT_ENV: FAKE_TOOLKIT},
+    fake_toolkit_env={toolkit_env("reference"): FAKE_TOOLKIT},
     prepare=_prepare,
     check=_check,
 )

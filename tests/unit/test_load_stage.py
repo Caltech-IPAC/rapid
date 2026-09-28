@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from rapidpipe.seams import database_env
 import rapidpipe.stages.load as load
 from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
@@ -276,5 +277,5 @@ def test_dry_run_touches_nothing(tmp_path, monkeypatch):
 
 
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(load.DATABASE_ENV, "tests.unit.fakeloaddb:no_such_factory")
+    monkeypatch.setenv(database_env("load"), "tests.unit.fakeloaddb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE

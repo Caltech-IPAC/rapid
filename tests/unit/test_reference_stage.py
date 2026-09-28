@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from astropy.io import fits
 
+from rapidpipe.seams import toolkit_env
 import rapidpipe.stages.reference as reference
 from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
@@ -33,7 +34,7 @@ UNIT = f"{RTID}/W146"
 
 @pytest.fixture(autouse=True)
 def fakes(monkeypatch, tmp_path):
-    monkeypatch.setenv(reference.TOOLKIT_ENV,
+    monkeypatch.setenv(toolkit_env("reference"),
                        "rapidpipe.selftest.support.fakereftools:fake_toolkit")
     monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
 
@@ -366,7 +367,7 @@ def test_dry_run_writes_nothing(tmp_path):
 
 
 def test_packaged_fixture_passes_with_fake_tools(tmp_path, monkeypatch):
-    monkeypatch.delenv(reference.TOOLKIT_ENV)
+    monkeypatch.delenv(toolkit_env("reference"))
     assert run_selftest(stage="reference", real_tools=False, work_dir=str(tmp_path / "fx"),
                         output_location=None) == 0
 

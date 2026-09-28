@@ -55,8 +55,6 @@ This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 from __future__ import annotations
 
 import contextlib
-import importlib
-import os
 import re
 import sys
 import tempfile
@@ -70,6 +68,7 @@ from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.manifest import Manifest, OutputEntry
 from rapidpipe.runs.repository import register_manifest
 from rapidpipe.science.statistics import lightcurve
+from rapidpipe.seams import database_env, load_factory
 from rapidpipe.stages.contract import (
     InputRejected,
     StageContext,
@@ -122,11 +121,6 @@ def parse_unit_id(unit_id: str) -> int:
 # ----------------------------------------------------------------------
 # The database, replaceable in tests
 # ----------------------------------------------------------------------
-
-
-def connect(*args, **kwargs):
-    """Module-level indirection to ``rapidpipe.db.connection.connect``, for tests."""
-    return _connection_module.connect(*args, **kwargs)
 
 
 class PostgresStatisticsDatabase:
@@ -240,17 +234,9 @@ class PostgresStatisticsDatabase:
         self.conn.commit()
 
 
-#: Names a ``module:factory`` returning a context manager that yields an
-#: object with :class:`PostgresStatisticsDatabase`'s methods, used instead of
-#: PostgreSQL. Unset in every deployment; the stage fixture
-#: (``make stage-statistics``) sets it, since a subprocess cannot be
-#: monkeypatched.
-DATABASE_ENV = "RAPIDPIPE_STATISTICS_DATABASE"
-
-
 @contextlib.contextmanager
 def _postgres() -> Iterator[PostgresStatisticsDatabase]:
-    with connect() as conn:
+    with _connection_module.connect() as conn:
         try:
             yield PostgresStatisticsDatabase(conn)
         except BaseException:
@@ -260,15 +246,8 @@ def _postgres() -> Iterator[PostgresStatisticsDatabase]:
 
 def open_database():
     """PostgreSQL, unless ``RAPIDPIPE_STATISTICS_DATABASE`` names another; tests monkeypatch this."""
-    override = os.environ.get(DATABASE_ENV)
-    if not override:
-        return _postgres()
-    module_name, _, factory_name = override.partition(":")
-    try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError) as exc:
-        raise UsageError(f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
-    return factory()
+    factory = load_factory(database_env("statistics"), UsageError)
+    return factory() if factory else _postgres()
 
 
 # ----------------------------------------------------------------------

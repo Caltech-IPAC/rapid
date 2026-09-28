@@ -13,6 +13,7 @@ import json
 
 import pytest
 
+from rapidpipe.seams import database_env
 import rapidpipe.stages.statistics as statistics
 from rapidpipe.db.connection import ConnectionUnavailable
 from rapidpipe.products.manifest import Manifest
@@ -241,6 +242,6 @@ def test_an_unreachable_database_exits_75(tmp_path, monkeypatch):
 
 
 def test_a_bad_database_override_exits_64(tmp_path, monkeypatch):
-    monkeypatch.setenv(statistics.DATABASE_ENV, "no.such.module:factory")
+    monkeypatch.setenv(database_env("statistics"), "no.such.module:factory")
     rc, _ = _run(tmp_path)
     assert rc == ExitCode.USAGE
