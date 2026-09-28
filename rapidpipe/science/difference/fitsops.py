@@ -1,3 +1,4 @@
+# ported-from: modules/utils/rapid_pipeline_subs.py @ c740f3e3
 """FITS image utilities several difference steps share.
 
 `dev`: ``scale_image_data`` (``modules/utils/rapid_pipeline_subs.py``),

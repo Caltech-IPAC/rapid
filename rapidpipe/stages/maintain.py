@@ -1,3 +1,4 @@
+# ported-from: pipeline/loadPSFCatIntoDBSourcesTable.py @ c740f3e3
 """`maintain`: CLUSTER and ANALYZE one `sources` child table, once per date and detector.
 
 `dev` runs its CLUSTER and ANALYZE once per processing date, after every

@@ -1,3 +1,4 @@
+# ported-from: pipeline/referenceImageSubs.py, modules/utils/rapid_pipeline_subs.py @ 6458d3ca
 """The reference image's header stamp.
 
 `dev`: ``addKeywordsToReferenceImageHeader`` (``pipeline/referenceImageSubs.py``),

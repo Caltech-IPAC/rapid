@@ -1,3 +1,4 @@
+# ported-from: modules/utils/rapid_pipeline_subs.py, pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
 """SExtractor: the command line, the catalogs the stage makes, parsing.
 
 `dev`: ``build_sextractor_command_line_args``,

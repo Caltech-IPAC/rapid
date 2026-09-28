@@ -1,3 +1,4 @@
+# ported-from: alerts/schema/00/04 @ a5cfe62b
 """The alerts stage's science: `dev`'s alert assembly as pure functions.
 
 Source: `origin/dev`'s ``alerts/`` package (``param_registry.py``,

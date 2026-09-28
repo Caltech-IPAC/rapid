@@ -1,3 +1,4 @@
+# ported-from: alerts/param_registry.py @ a5cfe62b
 """The alert schema's parameter registry, ported verbatim from `dev`.
 
 Source: `origin/dev`'s ``alerts/param_registry.py`` (Emily Everetts, 07/2026),

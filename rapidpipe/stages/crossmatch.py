@@ -1,3 +1,4 @@
+# ported-from: pipeline/crossMatchSources.py @ c740f3e3
 """`crossmatch`: associate one field's sources with AstroObjects, as `dev` does, in two passes.
 
 Ported from `origin/dev`'s ``pipeline/crossMatchSources.py``, one field's

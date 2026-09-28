@@ -1,3 +1,4 @@
+# ported-from: pipeline/awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py, modules/utils/rapid_pipeline_subs.py @ c740f3e3
 """awaicgen: the mosaic geometry and the command line, as `dev` builds them.
 
 `dev`: the launcher fills awaicgen's mosaic size, centre and rotation

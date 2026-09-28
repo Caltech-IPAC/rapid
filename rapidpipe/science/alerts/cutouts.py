@@ -1,3 +1,4 @@
+# ported-from: alerts/providers.py @ c740f3e3
 """Cutout stamps, ported from `dev`'s ``alerts/providers.py`` onto ``astropy.io.fits``.
 
 `dev`'s ``extract_stamp`` (providers.py L497-565) and ``load_fits_image``

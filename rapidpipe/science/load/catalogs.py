@@ -1,3 +1,4 @@
+# ported-from: pipeline/loadPSFCatIntoDBSourcesTable.py @ c740f3e3
 """`dev`'s catalog join and source-row derivations (loadPSFCatIntoDBSourcesTable.py).
 
 `dev` reads, for one job, the Photutils PSF-fit catalog and its finder

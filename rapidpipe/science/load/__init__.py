@@ -1,3 +1,4 @@
+# ported-from: pipeline/loadPSFCatIntoDBSourcesTable.py @ c740f3e3
 """The load stage's science: catalog join and per-source derivations, ported from `dev`.
 
 Source: `origin/dev`'s ``pipeline/loadPSFCatIntoDBSourcesTable.py``. The

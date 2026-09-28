@@ -1,3 +1,4 @@
+# ported-from: pipeline/differenceImageSubs.py @ c740f3e3
 """Reformat the delivered science image and model its uncertainty.
 
 `dev`: ``reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model``

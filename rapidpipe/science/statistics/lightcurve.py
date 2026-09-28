@@ -1,3 +1,4 @@
+# ported-from: pipeline/computeStatisticsForAstroObjects.py, modules/utils/rapid_pipeline_subs.py @ c740f3e3
 """`dev`'s per-object light-curve statistics (computeStatisticsForAstroObjects.py).
 
 For each object (``aid``) of a field, `dev` gathers the RA, Dec and

@@ -1,3 +1,4 @@
+# ported-from: pipeline/pruneNotBestMerges.py @ c740f3e3
 """`prune`: a `pruned-set` result set, its base association set minus not-best pairs.
 
 Ported from `dev`'s ``pipeline/pruneNotBestMerges.py``, one field's worth of

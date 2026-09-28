@@ -1,3 +1,4 @@
+# ported-from: none
 """`photometry`: a declared stub for forced photometry over a field.
 
 Not ported in this build (photometry page): the

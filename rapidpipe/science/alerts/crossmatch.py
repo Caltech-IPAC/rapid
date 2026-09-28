@@ -1,3 +1,4 @@
+# ported-from: alerts/providers.py @ 3c79337b
 """The alert's cross-matches, ported from `dev`'s ``alerts/providers.py``.
 
 Copied from `origin/dev` unchanged: the solar-system association against

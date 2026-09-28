@@ -1,3 +1,4 @@
+# ported-from: pipeline/loadPSFCatIntoDBSourcesTable.py @ c740f3e3
 """`load`: a difference image's Photutils catalogs into `sources`, as `dev` loads them.
 
 Ported from `origin/dev`'s ``pipeline/loadPSFCatIntoDBSourcesTable.py``, one

@@ -1,3 +1,4 @@
+# ported-from: none
 """Stage settings: TOML load, recursive merge, canonical hash.
 
 Per the stage contract's "Settings" section: each stage ships default

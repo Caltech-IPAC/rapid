@@ -1,3 +1,4 @@
+# ported-from: cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini @ 6458d3ca
 # Default settings for the `reference` stage.
 #
 # Every value below is the `dev` default the ported step reads, taken from

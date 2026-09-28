@@ -1,3 +1,4 @@
+# ported-from: pipeline/awsBatchSubmitJobs_runSingleReferenceImagePipeline.py, pipeline/referenceImageSubs.py, pipeline/awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py @ 6458d3ca
 """`reference`: a field's reference image coadded from its selected frames, as `dev` does it.
 
 Ported from `origin/dev`'s reference-image pipeline (ppid 12):

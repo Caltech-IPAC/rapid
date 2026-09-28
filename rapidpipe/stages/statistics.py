@@ -1,3 +1,4 @@
+# ported-from: pipeline/computeStatisticsForAstroObjects.py @ c740f3e3
 """`statistics`: per-object position and flux statistics for one field's association set.
 
 Ported from `origin/dev`'s ``pipeline/computeStatisticsForAstroObjects.py``,

@@ -1,3 +1,4 @@
+# ported-from: none
 """Algorithms the stages call: differencing, coaddition, photometry.
 
 Holds pure functions and wrappers around the C tools that implement the

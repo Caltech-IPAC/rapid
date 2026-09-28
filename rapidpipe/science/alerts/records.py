@@ -1,3 +1,4 @@
+# ported-from: alerts/providers.py @ c740f3e3
 """The alert's normalized records, ported from `dev`'s ``alerts/providers.py``.
 
 `dev`'s provider translates database rows into these dataclasses and the

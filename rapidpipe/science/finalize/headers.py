@@ -1,3 +1,4 @@
+# ported-from: pipeline/awsBatchSubmitJobs_runSinglePostProcPipeline.py, modules/utils/rapid_pipeline_subs.py @ c740f3e3
 """The finalized difference image's primary-header stamp.
 
 `dev`'s post-processing pipeline (ppid 17) rewrites the difference image

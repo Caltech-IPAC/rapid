@@ -1,3 +1,4 @@
+# ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
 """`difference`: an l2 image minus its reference, ZOGY first, as `dev` does it.
 
 Ported from `origin/dev`'s ``pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py``

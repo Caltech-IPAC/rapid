@@ -1,3 +1,4 @@
+# ported-from: pipeline/generateSourceHATSCatalog.py @ c740f3e3
 """`export`: a field's sources, from named source sets, as one HATS catalog.
 
 Ported from `origin/dev`'s ``pipeline/generateSourceHATSCatalog.py``
