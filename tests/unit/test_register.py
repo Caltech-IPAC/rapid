@@ -88,7 +88,7 @@ def _difference_manifest(tmp_path, monkeypatch):
     """Run the difference stage with fake tools; return its outputs dir."""
     import rapidpipe.stages.difference as difference
 
-    from .fakedifftools import (
+    from rapidpipe.selftest.support.fakedifftools import (
         CDF_DIR, FakePsfCatalog, FakeToolRunner, build_input_set, fake_sip_to_pv)
 
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(

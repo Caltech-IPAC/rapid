@@ -30,7 +30,7 @@ copy of its own, so there is nothing here to fall out of sync with it.
 ### Inputs
 
 Not committed as files: `run_fixture.py` writes them with
-`tests/unit/fakeloaddb.build_load_input_set` from the packaged
+`rapidpipe.selftest.support.fakeloaddb.build_load_input_set` from the packaged
 `expected.json`'s parameters (`inputs.catalogs`). They are a difference
 attempt's output location as `load` reads it:
 
@@ -56,7 +56,7 @@ attempt's output location as `load` reads it:
 
 ### Database seed
 
-The fake database (`tests/unit/fakeloaddb.FakeLoadDatabase`, selected by
+The fake database (`rapidpipe.selftest.support.fakeloaddb.FakeLoadDatabase`, selected by
 `RAPIDPIPE_LOAD_DATABASE`) is seeded with the difference instance's
 `diffimages`/`l2files` values (`inputs.difference_row`: pid 4242, expid
 1234, SCA 7, fid 3, MJD 61273.125, observed 2026-08-21), and writes what the

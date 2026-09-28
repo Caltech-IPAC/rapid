@@ -19,8 +19,7 @@
 Packaged under ``rapidpipe.selftest.support`` (not ``tests/``, which the
 pipeline image excludes at build time -- ``containers/rapid-pipeline/
 build.sh``) so ``rapidpipe selftest --stage load`` can import it inside
-the image. ``tests/unit/fakeloaddb.py`` re-exports this module for the
-test suite.
+the image; the test suite imports it from here too.
 """
 
 from __future__ import annotations

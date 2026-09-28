@@ -411,7 +411,7 @@ def test_rapidpipe_selftest_stage_finalize_passes(tmp_path, real_tools):
 
 def test_finalizes_a_real_difference_stage_manifest(tmp_path, monkeypatch):
     import rapidpipe.stages.difference as difference
-    from tests.unit.fakedifftools import (
+    from rapidpipe.selftest.support.fakedifftools import (
         CDF_DIR,
         FakePsfCatalog,
         FakeToolRunner,

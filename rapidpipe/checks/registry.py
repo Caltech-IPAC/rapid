@@ -14,7 +14,7 @@ open ``psycopg2`` connection, the product instance id and the params the
 check policy gives it, and returns a :class:`CheckResult`; it reads, never
 writes. Recording the result (one ``checks`` row per run, including a
 row with outcome ``failed`` when the function raises) is
-:func:`rapidpipe.checks.runner.run_check`'s job, not the function's.
+:func:`rapidpipe.runs.checking.run_check`'s job, not the function's.
 
 Versions are strings. A changed threshold is a policy change (a new policy
 version); a changed measurement or rule is a new check version, registered

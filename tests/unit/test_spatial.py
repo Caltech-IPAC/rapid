@@ -205,36 +205,25 @@ def test_field_corners_in_range_and_matches_closed_form():
 
 
 # ======================================================================
-# overlapping_fields: ported vs. legacy, on one fixed WCS.
+# overlapping_fields: the port against frozen legacy values, on one fixed WCS.
 # ======================================================================
 #
-# database.modules.utils.overlapping_fields imports
-# modules.utils.rapid_pipeline_subs, which imports boto3 and scipy at
-# module scope -- neither is a dependency of this package (requirements.txt)
-# and CI's plain unit-test job does not install them, so this test skips
-# cleanly there rather than failing; it runs wherever both happen to be
-# installed (e.g. a developer's fuller environment) to guard the two
-# copies of the geometry never drifting apart. The importorskip calls are
-# inside the test function, not at module scope, so a missing boto3/scipy
-# skips only this one test rather than the whole module (an
-# importorskip at module scope aborts collection of every test below it).
+# _LEGACY_OVERLAPPING_FIELDS is what dev's
+# database.modules.utils.overlapping_fields.overlapping_fields (with
+# modules.utils.rapid_pipeline_subs), pinned at dev c740f3e3, returned for
+# this WCS. The legacy module is not in this tree; drift in dev's copy is
+# watched by spatial.py's `# ported-from:` line and scripts/science-drift.sh.
+
+_LEGACY_OVERLAPPING_FIELDS = [4658171, 4658172, 4658173, 4662267, 4662268, 4662269]
 
 
-def test_overlapping_fields_port_agrees_with_legacy():
-    pytest.importorskip("boto3")
-    pytest.importorskip("scipy")
-    from database.modules.utils.overlapping_fields import (
-        overlapping_fields as legacy_overlapping_fields,
-    )
-
+def test_overlapping_fields_port_matches_frozen_legacy_values():
     crval1, crval2 = 269.45, -28.77
     crpix1, crpix2 = 2044.0, 2044.0
     cd11, cd12 = -3.0556e-5, 0.0
     cd21, cd22 = 0.0, 3.0556e-5
     naxis1, naxis2 = 4088, 4088
 
-    expected = legacy_overlapping_fields(
-        crval1, crval2, crpix1, crpix2, cd11, cd12, cd21, cd22, naxis1, naxis2)
     actual = spatial.overlapping_fields(
         crval1, crval2, crpix1, crpix2, cd11, cd12, cd21, cd22, naxis1, naxis2)
-    assert actual == expected
+    assert actual == _LEGACY_OVERLAPPING_FIELDS

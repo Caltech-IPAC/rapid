@@ -16,9 +16,9 @@ import json
 import psycopg2
 import pytest
 
-from rapidpipe.checks import builtin, runner
+from rapidpipe.checks import builtin
 from rapidpipe.cli import main as cli
-from rapidpipe.runs import repository, slots
+from rapidpipe.runs import checking, repository, slots
 
 # ======================================================================
 # An in-memory product_instances for promote (substring-matched SQL)
@@ -488,10 +488,10 @@ def test_run_policy_checks_fills_before_loading_candidates(monkeypatch):
     order = []
     monkeypatch.setattr(repository, "fill_identity_safely",
                         lambda cur, context: order.append(("fill", context)))
-    monkeypatch.setattr(runner, "run_candidates",
+    monkeypatch.setattr(checking, "run_candidates",
                         lambda conn, run_id: order.append(("candidates", run_id)) or [])
-    policy = runner.load_policy("rebuild-trial@1")
-    assert runner.run_policy_checks(_Conn(_Db([])), "R", policy) == []
+    policy = checking.load_policy("rebuild-trial@1")
+    assert checking.run_policy_checks(_Conn(_Db([])), "R", policy) == []
     assert order == [("fill", "checking run R"), ("candidates", "R")]
 
 

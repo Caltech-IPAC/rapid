@@ -18,7 +18,7 @@ Column sources, where they are not the manifest itself:
   "Standard reference-image pipeline"); ``hp6``/``hp9`` from the block's
   ``ra_center``/``dec_center`` exactly as `dev` derives them
   (``hp.ang2pix`` NESTED at NSIDE 64 and 512,
-  ``rapidpipe.science.spatial.healpix_indexes``); ``filename`` the
+  ``rapidpipe.products.spatial.healpix_indexes``); ``filename`` the
   primary member resolved against the output location; ``checksum`` the
   block's ``md5``. ``addRefImage`` allocates ``version`` -- the next
   number for (``field``, ``fid``, ``ppid``) across the table, legacy rows
@@ -65,7 +65,7 @@ Departures from `dev`, each deliberate:
   existing row, ``created`` included; different is an error.
 
 This module imports ``rapidpipe.db``, ``rapidpipe.products`` and
-``rapidpipe.science.spatial`` only, matching ``rapidpipe.db``'s package
+``rapidpipe.products.spatial`` only, matching ``rapidpipe.db``'s package
 contract (no ``rapidpipe.runs``, no stage module).
 """
 
@@ -81,7 +81,7 @@ from rapidpipe.products.refimage import (
     validate_reference_catalog_entry,
     validate_reference_image_entry,
 )
-from rapidpipe.science.spatial import healpix_indexes
+from rapidpipe.products.spatial import healpix_indexes
 
 #: Reference recipe to `pipelines` row: `awaicgen` is `dev`'s ppid 12,
 #: "Standard reference-image pipeline" (rapidOpsPipelinesInserts.sql),

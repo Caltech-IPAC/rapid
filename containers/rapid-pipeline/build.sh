@@ -21,23 +21,29 @@
 # as it stands, matching build.sh's own uncommitted-scratch-run allowance
 # elsewhere in this project.
 #
-# Filtering: this script builds an archive of the requested commit into a
-# temporary src/ build context, excluding the same paths the equivalent
-# rapid_systems recipe already excluded and for the same reasons
-# (measured there against a prior smdc HEAD; not re-measured here):
-#   docs/    -- Sphinx source for the separately-built documentation site,
-#               not runtime code.
-#   c/       -- vendored upstream C source and from-source build scripts,
-#               fully replaced at runtime by the base image's rapid-*
-#               C-tool RPMs (rapid_systems/containers/rapid-base).
-#   docker/  -- this repository's own legacy/alternate Dockerfiles,
-#               superseded by this recipe; not used at runtime.
-#   .github/ -- CI configuration, not runtime code.
-#   tests/   -- the test suite, not shipped in the runtime image.
-#
-# Kept: rapidpipe/, pipeline/, modules/, database/, alerts/, aws/, cdf/,
-# sims/, scripts/, soc/, top-level packaging and license files -- the
-# application code itself.
+# Filtering: this script archives the requested commit into a temporary
+# src/ build context, which the Containerfile copies to /code. The archive
+# is an explicit include list (INCLUDE_PATHS below), not an exclude list,
+# so a new top-level directory stays out of the image until named here:
+#   rapidpipe/               -- the package itself.
+#   cdf/                     -- SExtractor/SWarp configuration files the
+#                               stages read at /code/cdf (settings
+#                               `cfg_path`).
+#   modules/zogy, modules/sfft
+#                            -- py_zogy.py and sfft_rapid*.py, run as
+#                               scripts from /code/modules/... (settings
+#                               `zogy_code`, `sfft_code`).
+#   modules/sip_tpv          -- imported by science/difference/resample.py.
+#   database/modules/utils/roman_tessellation{,_db}.py
+#                            -- imported by science/spatial.py and
+#                               science/load/catalogs.py.
+#   pyproject.toml, requirements.txt, LICENSE, README.md
+#                            -- what `pip install --no-deps /code` reads.
+# Left out, among others: docs/, c/ (replaced at runtime by the base
+# image's rapid-* C-tool RPMs, rapid_systems/containers/rapid-base),
+# tests/, scripts/, .github/, and database/migrations with
+# apply-migrations.sh (the release migrate hook reads those from the
+# tagged git tree, not from the image).
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -136,16 +142,24 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-echo "build.sh: archiving ${source_sha:0:7} (excluding docs/, c/, docker/, .github/, tests/) ..." >&2
+INCLUDE_PATHS=(
+  rapidpipe
+  cdf
+  modules/zogy
+  modules/sfft
+  modules/sip_tpv
+  database/modules/utils/roman_tessellation.py
+  database/modules/utils/roman_tessellation_db.py
+  pyproject.toml
+  requirements.txt
+  LICENSE
+  README.md
+)
+
+echo "build.sh: archiving ${source_sha:0:7} (${#INCLUDE_PATHS[@]} included paths) ..." >&2
 rm -rf "$src_dir"
 mkdir -p "$src_dir"
-git -C "$repo_root" archive "$source_sha" -- \
-    . \
-    ':(exclude)docs' \
-    ':(exclude)c' \
-    ':(exclude)docker' \
-    ':(exclude).github' \
-    ':(exclude)tests' \
+git -C "$repo_root" archive "$source_sha" -- "${INCLUDE_PATHS[@]}" \
   | tar -x -C "$src_dir"
 
 if [ -n "$engine" ]; then

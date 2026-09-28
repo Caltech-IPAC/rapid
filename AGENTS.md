@@ -48,27 +48,50 @@ README.md has the detail.
   when the branch itself carries a merge commit). CI green is the
   merge gate; never merge a red PR.
 
+## Repository layout
+
+| Path | Holds |
+|---|---|
+| `rapidpipe/` | The pipeline package (map below). |
+| `database/` | `migrations/` and `apply-migrations.sh` (the schema), and `modules/utils/roman_tessellation{,_db}.py` (closed-form sky tessellation, imported by `rapidpipe.science`). |
+| `modules/` | Helpers the stages use from `dev`: `sip_tpv/` (imported by `science/difference/resample.py`), `zogy/` and `sfft/` (scripts the difference stage runs from `/code/modules/...`). |
+| `cdf/` | SExtractor/SWarp configuration files the stages read at `/code/cdf`. |
+| `c/` | Vendored C tool source; the image takes the tools from the base image's RPMs instead. |
+| `containers/` | The pipeline image recipe (`rapid-pipeline/build.sh`, `Containerfile`). |
+| `tests/` | `unit/`, `db/`, `cli/` and `fixtures/<stage>/`. |
+| `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list. |
+| `docs/` | The Sphinx source of the readthedocs site. |
+
+`dev`'s `pipeline/`, `alerts/`, `aws/`, `soc/`, `sims/`, `docker/`,
+`modules/{coadd,fake_src,solarsystem,utils}` and most of `database/` and
+`scripts/` are not carried on `rebuild`; `dev` keeps them, and
+`scripts/science-drift.sh` watches the paths the rebuild ported from.
+
 ## The `rapidpipe` package map
 
 The distribution is `rapid-pipeline`; the import package is `rapidpipe`
-(`pyproject.toml`). Dependency direction is fixed and enforced by
-convention, not by a lint rule: `rapidpipe.products` defines
-identifiers and manifest types with no import of `runs`, `db` or
-stages; `rapidpipe.db` provides persistence with no import of `runs` or
-stages; `rapidpipe.runs` composes products and persistence; stage
-modules never import other stage modules, `launch`, or `cli`;
-`rapidpipe.science` never imports stages, `launch` or `cli`.
+(`pyproject.toml`). Dependency direction is a fixed layer order,
+enforced by `tests/unit/test_dependency_direction.py` over every
+subpackage and top-level module, lazy and relative imports included: a
+unit imports only units strictly below it. The order is the leaf modules
+(`exitcodes`, `log`, `revision`, `seams`: no `rapidpipe` import) <
+`products` < `db` and `science` (which do not import each other) <
+`checks` < `runs` < `stages` < `launch` < `selftest` < `cli`. `release`
+imports only the leaves and `db`, and only `cli` imports it. Stage
+modules never import other stage modules. A failure names the offending
+edge and file:line; a new edge that goes up the order is a design
+question for the stage-contract page, not a test to relax.
 
 | Subpackage | Holds |
 |---|---|
-| `stages/` | One module per stage (`admit`, `reference`, `difference`, `finalize`, `register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `photometry`, `export`), plus the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (`photometry` only in this build; `export` was ported for real in step 8), 70 unclassified error, 75 retryable transient failure. |
+| `stages/` | One module per stage (`admit`, `reference`, `difference`, `finalize`, `register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export`), plus the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (reserved: no stage in this build returns it), 70 unclassified error, 75 retryable transient failure. |
 | `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `finalize`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
-| `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), and per-kind modules (`l2image`, `refimage`, `diffimage`, `psf`, `alertcontainer`, `catalogexport`). |
+| `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), per-kind modules (`l2image`, `refimage`, `diffimage`, `psf`, `alertcontainer`, `catalogexport`), and `spatial` (the pure HEALPix and tessellation derivations `db` needs; `science.spatial` re-exports them). |
 | `db/` | Persistence: `connection.py`, per-table modules (`l2files`, `refimages`, `diffimages`, `sources`, `objects`, `psfs`, `alerts`, `ids`), and the migrations applier (`database/apply-migrations.sh`, not itself under `rapidpipe/`). |
-| `runs/` | `repository.py` (runs, units, attempts, instances, promotion by slot: each instance's `slot` and `identity` are derived from its `logical_key` in SQL by `product_identity_fill()`, migration `20260926-02-product-slots.sql`, never in Python), `slots.py` (promotion selectors and the frozen plans of `run promote-plan`), `local.py` (subprocess execution of one attempt), `cleanup.py` (deletion guard and blocking-reference checks), `inputs.py` (binding a unit's inputs from its input-set manifest), `binding.py` (`bind_input_set`, the one path by which both composers admit, bind and write an input set). |
+| `runs/` | `repository.py` (runs, units, attempts, instances, promotion by slot: each instance's `slot` and `identity` are derived from its `logical_key` in SQL by `product_identity_fill()`, migration `20260926-02-product-slots.sql`, never in Python), `slots.py` (promotion selectors and the frozen plans of `run promote-plan`), `local.py` (subprocess execution of one attempt), `cleanup.py` (deletion guard and blocking-reference checks), `inputs.py` (binding a unit's inputs from its input-set manifest), `binding.py` (`bind_input_set`, the one path by which both composers admit, bind and write an input set), `checking.py` (running and recording candidate checks, automatic promotion). |
 | `launch/` | `batch.py` (turning a run into Batch jobs, reading results back), `loop.py` (the processing-date loop) and `discovery.py` (the loop's inbox discovery and delivery classification). |
 | `release/` | `core.py` (`cut`/`show`/`list`/`verify`), `hooks.py` (the account-specific hook contract), `__main__.py`. |
-| `checks/` | `registry.py`, `builtin.py`, `policy.py`, `runner.py`, and the shipped policy under `policies/<name>@<version>.toml` (`rebuild-trial@1`; `rebuild-strict@1` is a test fixture in `tests/fixtures/checks/`). |
+| `checks/` | `registry.py`, `builtin.py`, `policy.py`, and the shipped policy under `policies/<name>@<version>.toml` (`rebuild-trial@1`; `rebuild-strict@1` is a test fixture in `tests/fixtures/checks/`). |
 | `cli/` | The `rapidpipe` command-line tool: `main.py` dispatches to `runctl.py` (`run ...`), `stagectl.py` (`stage ...`), `checkctl.py` (`check ...`), `loopctl.py` (`loop ...`); `release` dispatches into `rapidpipe.release`. |
 | `selftest/` | `runner.py` plus per-stage modules and `support/` fakes; drives `make stage-<name>` and `rapidpipe selftest --stage <name> [--real-tools]`. `fixtures/` ships each stage's packaged expected output. |
 | `exitcodes.py` | A bare top-level module, not a subpackage: `ExitCode`, the one exit-code vocabulary, and `ArgumentParser` (parse failures exit 64). Stdlib-only, so every subpackage, `science` included, may import it. |
@@ -111,7 +134,7 @@ a `tests/db` test, not only a mocked `tests/unit` one.
 | `tests/unit` | `unit-tests.yml` | No database; `rapidpipe.db`/`rapidpipe.runs` import `psycopg2` but tests mock it. Run locally: `python -m pytest tests/unit -q` in any interpreter that has `pip install -r requirements.txt pytest`; requirements.txt is the one dependency authority (pyproject.toml reads it, the CI workflows install from it). No per-checkout venv is needed or assumed. |
 | `tests/db` | `db-migrations.yml` | Real PostgreSQL 18 + Q3C service container, migrations applied first. Needs a live PostgreSQL; there is none on the laptop, so this suite is CI-only for a laptop-based agent. |
 | `tests/cli` | `cli-behaviour.yml` | Real PostgreSQL 18 + Q3C, Batch and S3 faked (`tests/unit/fakebatch.py`, `fakes3.py`). Black-box: argv in, exit code/stdout/stderr/database state out. CI-only, same reason. |
-| n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version` and `stage admit --help`. Proves the build recipe only, not the production science environment. |
+| n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version`, `stage admit --help`, the imports of the kept helpers outside `rapidpipe/` and the presence of the `/code` script and config files. Proves the build recipe only, not the production science environment. |
 | n/a | `public-safety.yml` | `scripts/check-public-safety.sh`, see above. |
 
 Stage fixtures under `tests/fixtures/<name>/` back both `make
@@ -179,6 +202,7 @@ not invent a new code or a second list.
 ## Ported-from headers
 
 Every module under `rapidpipe/science` and `rapidpipe/stages`, plus
+`rapidpipe/products/spatial.py`,
 `rapidpipe/settings/difference.toml` and `reference.toml`, carries a
 line 1 comment `# ported-from: <dev path>[, <dev path>...] @ <8-hex dev
 commit>`, or `# ported-from: none` for rebuild-only code.

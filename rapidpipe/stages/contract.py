@@ -85,7 +85,6 @@ STAGE_NAMES = (
     "statistics",
     "prune",
     "alerts",
-    "photometry",
     "export",
 )
 
@@ -105,6 +104,8 @@ STAGE_EXIT_CODES: tuple[ExitCode, ...] = (
     ExitCode.SUCCESS,
     ExitCode.USAGE,
     ExitCode.INPUT_REJECTED,
+    # 69 is reserved: no stage in this build declares it, but it stays in
+    # the contract's exit-code table (a stage not yet ported would use it).
     ExitCode.NOT_IMPLEMENTED,
     ExitCode.STAGE_ERROR,
     ExitCode.TRANSIENT_FAILURE,
@@ -127,20 +128,6 @@ class InputRejected(StageContractError):
     """A declared input is absent, corrupt or incompatible. Maps to 65."""
 
     exit_code = ExitCode.INPUT_REJECTED
-
-
-class NotImplementedInBuild(StageContractError):
-    """The stage is declared but its science is not ported in this build.
-
-    Raised only after argument, settings and input-manifest validation
-    all pass -- a stub stage still rejects a bad invocation the same way
-    a real one would (64/65), and only refuses the work itself once the
-    request is otherwise valid. Maps to 69; ``run_stage`` writes no
-    manifest when this (or any) exception is raised, per the contract's
-    "If ``body`` raises, no manifest is written."
-    """
-
-    exit_code = ExitCode.NOT_IMPLEMENTED
 
 
 class StageError(StageContractError):

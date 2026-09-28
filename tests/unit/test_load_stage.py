@@ -17,7 +17,7 @@ import rapidpipe.stages.load as load
 from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.stages.contract import ExitCode
-from tests.unit.fakeloaddb import (
+from rapidpipe.selftest.support.fakeloaddb import (
     DIFFERENCE_INSTANCE,
     FakeLoadDatabase,
     build_load_input_set,
@@ -263,5 +263,5 @@ def test_a_row_count_mismatch_is_a_stage_error(tmp_path, db, monkeypatch):
 
 
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(database_env("load"), "tests.unit.fakeloaddb:no_such_factory")
+    monkeypatch.setenv(database_env("load"), "rapidpipe.selftest.support.fakeloaddb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE

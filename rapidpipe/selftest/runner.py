@@ -8,10 +8,9 @@ with fresh run and attempt ids (the same invocation Batch uses), and
 check its exit code, manifest and products against ``expected.json``'s
 values. This module holds that shape once, as :class:`FixtureRunner`, and
 :mod:`rapidpipe.selftest.difference` / :mod:`rapidpipe.selftest.load`
-supply each stage's own prepare/check details. A stub stage's fixture
-(:mod:`rapidpipe.selftest.photometry`)
-declares ``expected.json``'s ``exit_code`` as 69 instead of 0: ``check``
-is never called (there is no manifest to check against), and
+supply each stage's own prepare/check details. A fixture whose
+``expected.json`` declares a non-zero ``exit_code`` (none does today)
+never reaches ``check`` (there is no manifest to check against):
 :func:`run_fixture` instead asserts that no manifest was published.
 
 The fixture *data* (``expected.json``, ``settings.toml``) is packaged
@@ -61,11 +60,9 @@ from rapidpipe.selftest.support.fakereadguarddb import FACTORY as READGUARD_FAKE
 SELFTEST_ENV = "RAPIDPIPE_SELFTEST"
 
 #: The stages a fixture exists for today (stage contract, "Local
-#: execution"; ``tests/fixtures/<stage>/``). ``photometry`` is a
-#: declared stub (photometry page): its fixture
-#: asserts exit 69 and no published manifest, not a completed run.
+#: execution"; ``tests/fixtures/<stage>/``).
 STAGE_NAMES = ("reference", "difference", "finalize", "load", "maintain", "crossmatch", "alerts",
-               "statistics", "prune", "photometry", "export")
+               "statistics", "prune", "export")
 
 FIXTURES_ROOT = Path(__file__).resolve().parent / "fixtures"
 
@@ -299,10 +296,9 @@ def run_fixture(fx: StageFixture, *, tools: str, python: str, repo_root: Path,
             context = CheckContext(inputs=inputs, outputs=outputs_path, work_dir=work_dir, tools=tools)
             fx.check(checks, manifest, expected, context)
     elif exit_code == spec.get("exit_code"):
-        # A fixture whose expected outcome is itself non-zero (a declared
-        # stub stage's fixed contract exit code, stage contract: "If body
-        # raises, no manifest is written") -- there is no manifest to run
-        # fx.check against, so this is the whole check.
+        # A fixture whose expected outcome is itself non-zero (stage
+        # contract: "If body raises, no manifest is written") -- there is
+        # no manifest to run fx.check against, so this is the whole check.
         manifest_path = outputs_path / "manifest.json"
         checks.check(not manifest_path.exists(),
                      f"no manifest published (exit {exit_code}, as expected)")

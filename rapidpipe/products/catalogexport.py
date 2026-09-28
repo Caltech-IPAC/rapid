@@ -8,8 +8,8 @@ metadata"), then corrected (``export.py`` keyed a multi-source-set export
 by ``source_sets[0]`` alone, so [A,B] and [A,C] shared a key and [B,A]
 differed from [A,B]):
 
-- key: ``field`` (the unit), ``export_type`` (``"sources"`` today; the
-  light-curve catalog is the next port), ``selection`` (the full 64-hex
+- key: ``field`` (the unit), ``export_type`` (``"sources"``; the
+  light-curve catalog is not ported), ``selection`` (the full 64-hex
   SHA-256 digest over the sorted, distinct ``source_sets`` instance ids,
   newline-joined -- :func:`selection_digest`, mirroring the reference-image
   selection digest's sorted-newline-joined-ids rule,

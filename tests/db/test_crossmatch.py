@@ -28,7 +28,7 @@ from rapidpipe.runs import repository as repo
 from rapidpipe.science.crossmatch.catalog import new_object_id
 from rapidpipe.science.spatial import field_neighbours, tessellation_field
 from rapidpipe.stages.contract import ExitCode
-from tests.unit.fakeloaddb import finder_row, main_row, write_photutils_catalogs
+from rapidpipe.selftest.support.fakeloaddb import finder_row, main_row, write_photutils_catalogs
 
 from .test_load import _run_load
 from .attempt_helpers import set_disposition

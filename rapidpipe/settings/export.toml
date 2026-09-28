@@ -16,7 +16,7 @@
 [export]
 # What this attempt exports. Only "sources" (dev's
 # generateSourceHATSCatalog.py) is built; "light-curves" (dev's
-# generateLightCurveHATSCatalog.py) is the next port and exits 64 here.
+# generateLightCurveHATSCatalog.py) is not ported and exits 64 here.
 catalog_type = "sources"
 
 # Export only flags = 0 sources. dev exports every row (no flags filter

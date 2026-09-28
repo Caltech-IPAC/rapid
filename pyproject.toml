@@ -26,11 +26,13 @@ rapidpipe = "rapidpipe.cli.main:main"
 
 [tool.setuptools]
 # Explicit package list, not auto-discovery: this tree also has docs, c,
-# cdf, sims, soc and docker directories that are not importable packages,
-# and setuptools' flat-layout auto-discovery refuses to guess among them.
-packages.find = {include = [
-    "pipeline*", "modules*", "database*", "alerts*", "aws*", "rapidpipe*",
-]}
+# cdf, containers and scripts directories that are not importable
+# packages, and setuptools' flat-layout auto-discovery refuses to guess
+# among them. modules* and database* are namespace directories (no
+# __init__.py) holding the two helpers rapidpipe imports:
+# modules.sip_tpv (science/difference/resample.py) and
+# database.modules.utils.roman_tessellation_db (science/spatial.py).
+packages.find = {include = ["rapidpipe*", "modules*", "database*"]}
 
 [tool.setuptools.package-data]
 # rapidpipe/settings/ holds non-Python stage-defaults data (admit.toml and

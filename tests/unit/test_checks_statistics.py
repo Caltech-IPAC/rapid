@@ -7,7 +7,7 @@ import pytest
 
 from rapidpipe.checks.builtin import difference_image_statistics
 from rapidpipe.checks.policy import load_policy
-from rapidpipe.checks.runner import RecordedCheck
+from rapidpipe.runs.checking import RecordedCheck
 
 
 class _Cursor:
