@@ -151,6 +151,15 @@ def test_selected_stages_and_positions_match_the_stage_names():
         "maintain", "crossmatch", "statistics", "prune", "alerts"]
 
 
+def test_selected_stage_positions_are_derived_by_name_and_unchanged():
+    # IMAGE_CHAIN and the single-position constants are derived from
+    # SELECTED_STAGES by name, not hand-numbered; this pins their
+    # values against SELECTED_STAGES's current order.
+    assert loop.IMAGE_CHAIN == list(range(0, 6))
+    assert (loop.MAINTAIN, loop.CROSSMATCH, loop.STATISTICS, loop.PRUNE, loop.ALERTS) == (
+        6, 7, 8, 9, 10)
+
+
 @pytest.mark.parametrize("stage", sorted(loop.UNIT_KINDS))
 def test_unit_kinds_match_the_stage_declarations(stage):
     declaration = importlib.import_module(f"rapidpipe.stages.{stage}").DECLARATION

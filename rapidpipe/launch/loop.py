@@ -143,8 +143,12 @@ from rapidpipe.runs.inputs import InputsRefused
 SELECTED_STAGES = (
     "admit", "register", "difference", "finalize", "register", "load",
     "maintain", "crossmatch", "statistics", "prune", "alerts")
-IMAGE_CHAIN = list(range(0, 6))
-MAINTAIN, CROSSMATCH, STATISTICS, PRUNE, ALERTS = 6, 7, 8, 9, 10
+IMAGE_CHAIN = list(range(0, SELECTED_STAGES.index("load") + 1))
+MAINTAIN = SELECTED_STAGES.index("maintain")
+CROSSMATCH = SELECTED_STAGES.index("crossmatch")
+STATISTICS = SELECTED_STAGES.index("statistics")
+PRUNE = SELECTED_STAGES.index("prune")
+ALERTS = SELECTED_STAGES.index("alerts")
 
 #: The unit kinds of the stages whose input sets this module composes
 #: (each stage's ``DECLARATION.unit``; a unit test checks they agree).

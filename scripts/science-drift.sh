@@ -35,6 +35,12 @@
 # "no change": SCIENCE_DRIFT_FORCE_FAIL=<dev path> is a testing-only
 # hook (never set in CI) that substitutes an all-zero revision for that
 # one path's pin, forcing a real git failure to exercise this path.
+# SCIENCE_DRIFT_FORCE_PAIRS_FAIL=<dev path> is the same, but only for
+# the second, per-commit git log a group's report runs (the one that
+# feeds "Dev commits not in the rebuild"), leaving the first (the
+# displayed "no change" / commit list) on the real pin -- it proves the
+# second call's own failure is never swallowed while the first
+# succeeds.
 #
 # bash 3.2 compatible (macOS ships bash 3.2 as /bin/bash; this also runs
 # under the newer bash on the GitHub Actions Ubuntu runner): no
@@ -185,11 +191,15 @@ cut -f2,3 "$triples_file" | sort -u > "$groups_file"
 
 emit_group_report() {
   local target="$1" path="$2" pin="$3" suffix="$4" detail="$5" tag="$6"
-  local log_pin="$pin"
+  local log_pin="$pin" pairs_pin="$pin"
   local log_out log_rc pairs pairs_rc
 
   if [ "${SCIENCE_DRIFT_FORCE_FAIL:-}" = "$path" ]; then
     log_pin="0000000000000000000000000000000000000000"
+    pairs_pin="$log_pin"
+  fi
+  if [ "${SCIENCE_DRIFT_FORCE_PAIRS_FAIL:-}" = "$path" ]; then
+    pairs_pin="0000000000000000000000000000000000000000"
   fi
 
   {
@@ -214,9 +224,13 @@ emit_group_report() {
     return 0
   fi
 
-  pairs="$(git log --abbrev=8 --date=short --pretty=format:'%h	%ad	%s' "$log_pin..$ref_sha" -- "$path" 2>/dev/null)"
+  pairs="$(git log --abbrev=8 --date=short --pretty=format:'%h	%ad	%s' "$pairs_pin..$ref_sha" -- "$path" 2>/dev/null)"
   pairs_rc=$?
-  if [ "$pairs_rc" -ne 0 ] || [ -z "${pairs:-}" ]; then
+  if [ "$pairs_rc" -ne 0 ]; then
+    echo "history read failed: $path @ $pin" >> "$errors_file"
+    return 0
+  fi
+  if [ -z "${pairs:-}" ]; then
     return 0
   fi
   printf '%s\n' "$pairs" |
@@ -283,18 +297,27 @@ if [ -f "$watch_path" ]; then
     reason="$(printf '%s' "$reason" | sed -e 's/^ *//' -e 's/ *$//')"
     [ -z "${entry:-}" ] && continue
 
+    # Validate the whole entry before splitting it: exactly one " @ "
+    # (checked by how much shorter the entry gets once every occurrence
+    # is stripped, since a bash 3.2 shell has no grep -o to count
+    # matches portably), then the path side has no "@" and no
+    # whitespace of its own, then the pin is 8 hex. Splitting first and
+    # validating the pieces after would let "a/b.py @ x @ deadbeef"
+    # through: the greedy `%%`/`##` split still lands on a path and an
+    # 8-hex pin, silently dropping the "x" in between.
     malformed=0
-    case "$entry" in
-      *' @ '*)
-        wpath="${entry%% @ *}"
-        wpin="${entry##* @ }"
-        ;;
-      *)
-        malformed=1
-        ;;
-    esac
+    stripped="${entry// @ /}"
+    removed_len=$(( ${#entry} - ${#stripped} ))
+    if [ "$removed_len" -ne 3 ]; then
+      malformed=1
+    else
+      wpath="${entry%% @ *}"
+      wpin="${entry##* @ }"
+    fi
     if [ "$malformed" = "0" ]; then
       if [ -z "${wpath:-}" ] || [ -z "${wpin:-}" ]; then
+        malformed=1
+      elif printf '%s' "$wpath" | grep -Eq '[[:space:]@]'; then
         malformed=1
       elif ! printf '%s' "$wpin" | grep -Eq '^[0-9a-f]{8}$'; then
         malformed=1
