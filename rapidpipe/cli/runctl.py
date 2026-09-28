@@ -62,7 +62,13 @@ from rapidpipe.launch.batch import (
     ReleaseDefinitionRefused,
 )
 from rapidpipe.products.manifest import Manifest, ManifestError, Member, OutputEntry, Unit
-from rapidpipe.products.storage import Location, LocationError, join, parse_location
+from rapidpipe.products.storage import (
+    Location,
+    LocationError,
+    is_not_found,
+    join,
+    parse_location,
+)
 from rapidpipe.runs import binding
 from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.repository import RunModelError
@@ -443,12 +449,6 @@ def _s3_key(location: Location, relative: str) -> str:
     return f"{location.prefix}/{relative}" if location.prefix else relative
 
 
-def _is_not_found(exc: BaseException) -> bool:
-    response = getattr(exc, "response", None)
-    code = (response or {}).get("Error", {}).get("Code") if isinstance(response, dict) else None
-    return code in ("404", "NoSuchKey", "NotFound")
-
-
 class _Storage:
     """Copy, size and existence checks across local and S3 locations.
 
@@ -474,7 +474,7 @@ class _Storage:
         try:
             self.s3.head_object(Bucket=location.bucket, Key=_s3_key(location, relative))
         except Exception as exc:  # noqa: BLE001 - ClientError-shaped
-            if _is_not_found(exc):
+            if is_not_found(exc):
                 return False
             raise
         return True
@@ -513,7 +513,7 @@ class _Storage:
                     self.s3.download_file(
                         location.bucket, _s3_key(location, "manifest.json"), str(path))
                 except Exception as exc:  # noqa: BLE001 - ClientError-shaped
-                    if _is_not_found(exc):
+                    if is_not_found(exc):
                         raise FileNotFoundError(path) from exc
                     raise
                 return Manifest.read(path)

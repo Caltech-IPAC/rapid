@@ -234,3 +234,58 @@ def upload_object(local_path: Path, location: Location, relative: str, *,
     s3 = client if client is not None else s3_client()
     key = _key(location, relative)
     s3.upload_file(str(local_path), location.bucket, key)
+
+
+# ----------------------------------------------------------------------
+# Storage error classification
+# ----------------------------------------------------------------------
+
+#: Recognised as network-shaped: a fetch or publish is retryable when the
+#: exception's class name ends with one of these, checked by name (suffix,
+#: not exact match, so a test's stand-in class such as
+#: ``FakeEndpointConnectionError`` is recognised the same way as
+#: ``botocore.exceptions.EndpointConnectionError``) rather than by
+#: ``isinstance``, since this module never imports botocore.
+TRANSIENT_EXCEPTION_NAMES = (
+    "EndpointConnectionError",
+    "ConnectionError",
+    "ConnectTimeoutError",
+    "ReadTimeoutError",
+    "ThrottlingException",
+    "RequestTimeout",
+    "RequestTimeoutException",
+)
+
+#: A ClientError-shaped exception's ``response["Error"]["Code"]`` values
+#: that mean "the object is not there": ``404`` from ``head_object``,
+#: ``NoSuchKey`` from ``get_object``, ``NotFound`` from some resources.
+NOT_FOUND_ERROR_CODES = ("404", "NoSuchKey", "NotFound")
+
+
+def client_error_code(exc: BaseException) -> str | None:
+    """The ``Error.Code`` of a ClientError-shaped exception, or ``None``.
+
+    Matches by shape (a ``response`` attribute holding that structure), not
+    by ``isinstance``, so a test's stand-in exception is recognised the
+    same way as a real ``botocore.exceptions.ClientError`` without this
+    module importing botocore.
+    """
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return None
+    error = response.get("Error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("Code")
+    return code if isinstance(code, str) else None
+
+
+def is_not_found(exc: BaseException) -> bool:
+    """Whether ``exc`` is a ClientError-shaped "the object is not there"."""
+    return client_error_code(exc) in NOT_FOUND_ERROR_CODES
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Whether ``exc``'s class name is network-shaped (:data:`TRANSIENT_EXCEPTION_NAMES`)."""
+    class_name = type(exc).__name__
+    return any(class_name.endswith(name) for name in TRANSIENT_EXCEPTION_NAMES)

@@ -52,6 +52,8 @@ from rapidpipe.products.storage import (
     Location,
     LocationError,
     fetch_object,
+    is_not_found,
+    is_transient,
     join,
     parse_location,
     publish_dir,
@@ -285,48 +287,6 @@ def _is_s3(location: str) -> bool:
     return location.startswith("s3://")
 
 
-#: Recognised as network-shaped: a fetch or publish is retryable (maps to
-#: TransientFailure) when the exception's class name ends with one of
-#: these, checked by name (suffix, not exact match, so a test's stand-in
-#: class such as ``FakeEndpointConnectionError`` is recognised the same
-#: way as ``botocore.exceptions.EndpointConnectionError``) rather than by
-#: ``isinstance``, since this module never imports botocore.
-_TRANSIENT_EXCEPTION_NAMES = (
-    "EndpointConnectionError",
-    "ConnectionError",
-    "ConnectTimeoutError",
-    "ReadTimeoutError",
-    "ThrottlingException",
-    "RequestTimeout",
-    "RequestTimeoutException",
-)
-
-
-#: A ClientError-shaped exception's ``response["Error"]["Code"]`` values
-#: that mean "the object is not there" -- a missing input manifest, mapped
-#: to InputRejected rather than the generic StageError other client errors
-#: get.
-_NOT_FOUND_ERROR_CODES = ("404", "NoSuchKey")
-
-
-def _client_error_code(exc: BaseException) -> str | None:
-    """The ``Error.Code`` of a ClientError-shaped exception, or ``None``.
-
-    Matches by shape (a ``response`` attribute holding that structure), not
-    by ``isinstance``, so a test's stand-in exception is recognised the
-    same way as a real ``botocore.exceptions.ClientError`` without this
-    module importing botocore.
-    """
-    response = getattr(exc, "response", None)
-    if not isinstance(response, dict):
-        return None
-    error = response.get("Error")
-    if not isinstance(error, dict):
-        return None
-    code = error.get("Code")
-    return code if isinstance(code, str) else None
-
-
 def _map_storage_error(exc: BaseException) -> StageContractError:
     """Map an S3 fetch/publish failure to the contract's exit codes.
 
@@ -340,12 +300,9 @@ def _map_storage_error(exc: BaseException) -> StageContractError:
     if isinstance(exc, ImportError):
         return StageError(f"boto3 is required for an S3 location: {exc}")
 
-    code = _client_error_code(exc)
-    if code in _NOT_FOUND_ERROR_CODES:
+    if is_not_found(exc):
         return InputRejected(str(exc))
-
-    class_name = type(exc).__name__
-    if any(class_name.endswith(name) for name in _TRANSIENT_EXCEPTION_NAMES):
+    if is_transient(exc):
         return TransientFailure(str(exc))
     return StageError(str(exc))
 
