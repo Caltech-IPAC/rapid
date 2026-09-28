@@ -5,6 +5,7 @@
 # of the science settings .ini have drifted from dev's current copy.
 #
 # Every module under rapidpipe/science and rapidpipe/stages, plus
+# rapidpipe/products/spatial.py (the register derivations db uses),
 # rapidpipe/settings/difference.toml and reference.toml, carries a
 # "# ported-from: ..." header (line 1) naming the dev path(s) it was
 # copied from and the dev commit it was pinned at, or "# ported-from:
@@ -131,6 +132,7 @@ header_re='^# ported-from: (none|[A-Za-z0-9_./-]+(, [A-Za-z0-9_./-]+)* @ [0-9a-f
 all_files="$tmpdir/all_files.txt"
 {
   find rapidpipe/science rapidpipe/stages -name '*.py' 2>/dev/null
+  [ -f rapidpipe/products/spatial.py ] && echo rapidpipe/products/spatial.py
   [ -f rapidpipe/settings/difference.toml ] && echo rapidpipe/settings/difference.toml
   [ -f rapidpipe/settings/reference.toml ] && echo rapidpipe/settings/reference.toml
 } | sort > "$all_files"

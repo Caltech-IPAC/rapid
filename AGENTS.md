@@ -51,13 +51,17 @@ README.md has the detail.
 ## The `rapidpipe` package map
 
 The distribution is `rapid-pipeline`; the import package is `rapidpipe`
-(`pyproject.toml`). Dependency direction is fixed and enforced by
-convention, not by a lint rule: `rapidpipe.products` defines
-identifiers and manifest types with no import of `runs`, `db` or
-stages; `rapidpipe.db` provides persistence with no import of `runs` or
-stages; `rapidpipe.runs` composes products and persistence; stage
-modules never import other stage modules, `launch`, or `cli`;
-`rapidpipe.science` never imports stages, `launch` or `cli`.
+(`pyproject.toml`). Dependency direction is a fixed layer order,
+enforced by `tests/unit/test_dependency_direction.py` over every
+subpackage and top-level module, lazy and relative imports included: a
+unit imports only units strictly below it. The order is the leaf modules
+(`exitcodes`, `log`, `revision`, `seams`: no `rapidpipe` import) <
+`products` < `db` and `science` (which do not import each other) <
+`checks` < `runs` < `stages` < `launch` < `selftest` < `cli`. `release`
+imports only the leaves and `db`, and only `cli` imports it. Stage
+modules never import other stage modules. A failure names the offending
+edge and file:line; a new edge that goes up the order is a design
+question for the stage-contract page, not a test to relax.
 
 | Subpackage | Holds |
 |---|---|
@@ -179,6 +183,7 @@ not invent a new code or a second list.
 ## Ported-from headers
 
 Every module under `rapidpipe/science` and `rapidpipe/stages`, plus
+`rapidpipe/products/spatial.py`,
 `rapidpipe/settings/difference.toml` and `reference.toml`, carries a
 line 1 comment `# ported-from: <dev path>[, <dev path>...] @ <8-hex dev
 commit>`, or `# ported-from: none` for rebuild-only code.
