@@ -1,6 +1,6 @@
 """Tests for rapidpipe.stages.difference, run end to end with fake tools.
 
-Every external tool is replaced by tests/unit/fakedifftools.py's fakes
+Every external tool is replaced by rapidpipe/selftest/support/fakedifftools.py's fakes
 (``Toolkit`` is monkeypatched), so these tests exercise the stage's own
 logic -- input validation, `dev`'s step order and command lines, the
 catalog-outcome mask, the SFFT and naive branches, and the manifest it
@@ -23,7 +23,7 @@ from rapidpipe.products.diffimage import validate_difference_entry, validate_sou
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.stages.contract import ExitCode
 
-from .fakedifftools import (
+from rapidpipe.selftest.support.fakedifftools import (
     CDF_DIR,
     L2_INSTANCE,
     REF_INSTANCE,

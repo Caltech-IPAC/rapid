@@ -31,7 +31,7 @@ nothing here to fall out of sync with it.
 ### Inputs
 
 Not committed as files: `run_fixture.py` writes them with
-`tests/unit/fakedifftools.build_input_set` from the packaged
+`rapidpipe.selftest.support.fakedifftools.build_input_set` from the packaged
 `expected.json`'s parameters (`inputs`), deterministically (a fixed
 random seed). They are minimal and synthetic:
 
@@ -54,7 +54,7 @@ local runner (`rapidpipe run local`) in `tests/db/test_difference_run_local.py`.
 
 ## Expected products and tolerances
 
-With the fake tools (`tests/unit/fakedifftools.py`) the stage's own logic
+With the fake tools (`rapidpipe/selftest/support/fakedifftools.py`) the stage's own logic
 runs for real -- reformat, gain matching, masking, NaN handling, the
 catalog blocks, the manifest -- while SExtractor, SWarp, bkgest, ZOGY,
 SFFT, photutils and the SIP-to-PV converter are replaced by stand-ins

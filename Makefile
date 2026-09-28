@@ -8,7 +8,7 @@
 
 PYTHON ?= python3
 
-# fake: every external tool replaced by tests/unit/fakedifftools.py's
+# fake: every external tool replaced by rapidpipe/selftest/support/fakedifftools.py's
 # stand-ins; runs anywhere. real: SExtractor, SWarp, bkgest, ZOGY, SFFT,
 # photutils and the SIP-to-PV converter for real -- the pipeline image.
 DIFFERENCE_TOOLS ?= fake
@@ -18,7 +18,7 @@ stage-difference:
 	$(PYTHON) tests/fixtures/difference/run_fixture.py --tools $(DIFFERENCE_TOOLS)
 
 # The load stage's fixture: a difference attempt's catalogs into sources,
-# against the fake database (tests/unit/fakeloaddb.py); runs anywhere. The
+# against the fake database (rapidpipe/selftest/support/fakeloaddb.py); runs anywhere. The
 # PostgreSQL path is tests/db/test_load.py.
 .PHONY: stage-load
 stage-load:
@@ -32,7 +32,7 @@ stage-finalize:
 	$(PYTHON) tests/fixtures/finalize/run_fixture.py
 
 # The maintain stage's fixture: CLUSTER/ANALYZE of a sources child table,
-# against the fake database (tests/unit/fakemaintaindb.py); runs anywhere.
+# against the fake database (rapidpipe/selftest/support/fakemaintaindb.py); runs anywhere.
 # The PostgreSQL path is tests/db/test_maintain.py.
 .PHONY: stage-maintain
 stage-maintain:
@@ -64,7 +64,7 @@ stage-statistics:
 	$(PYTHON) tests/fixtures/statistics/run_fixture.py
 
 # The prune stage's fixture: the not-best merge exclusion into a pruned-set,
-# against the fake database (tests/unit/fakeprunedb.py); runs anywhere. The
+# against the fake database (rapidpipe/selftest/support/fakeprunedb.py); runs anywhere. The
 # PostgreSQL path is tests/db/test_prune.py.
 .PHONY: stage-prune
 stage-prune:
@@ -80,13 +80,6 @@ REFERENCE_TOOLS ?= fake
 .PHONY: stage-reference
 stage-reference:
 	$(PYTHON) tests/fixtures/reference/run_fixture.py --tools $(REFERENCE_TOOLS)
-
-# The photometry stage's fixture: a declared stub (supervisor step 8,
-# 2026-09-24, ruling R9) -- a structurally valid input-set manifest still
-# exits 69 and publishes no manifest; no tools, no database, runs anywhere.
-.PHONY: stage-photometry
-stage-photometry:
-	$(PYTHON) tests/fixtures/photometry/run_fixture.py
 
 # The export stage's fixture (supervisor step 8, 2026-09-24, ruling R12):
 # a fake database of ~200 sources in named source sets, and hats-import run

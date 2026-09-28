@@ -17,7 +17,7 @@ from rapidpipe.seams import toolkit_env
 import rapidpipe.stages.difference as difference
 from rapidpipe.stages.contract import UsageError
 
-from .fakedifftools import FakeToolRunner
+from rapidpipe.selftest.support.fakedifftools import FakeToolRunner
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "difference" / "run_fixture.py"
 
@@ -46,12 +46,12 @@ def test_toolkit_defaults_to_the_real_tools(monkeypatch):
 
 
 def test_toolkit_environment_hook_selects_the_fakes(monkeypatch):
-    monkeypatch.setenv(toolkit_env("difference"), "tests.unit.fakedifftools:fake_toolkit")
+    monkeypatch.setenv(toolkit_env("difference"), "rapidpipe.selftest.support.fakedifftools:fake_toolkit")
     # By name: under importlib import mode the hook imports its own copy.
     assert type(difference.toolkit().runner).__name__ == FakeToolRunner.__name__
 
 
 def test_toolkit_environment_hook_refuses_a_bad_name(monkeypatch):
-    monkeypatch.setenv(toolkit_env("difference"), "tests.unit.fakedifftools:no_such_factory")
+    monkeypatch.setenv(toolkit_env("difference"), "rapidpipe.selftest.support.fakedifftools:no_such_factory")
     with pytest.raises(UsageError):
         difference.toolkit()

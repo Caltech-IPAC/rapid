@@ -278,7 +278,7 @@ def _fixture_result(tmp_path, *, exit_code, failures):
     for label in failures:
         checks.check(False, label)
     return FixtureResult(
-        stage="photometry", tools="fake", exit_code=exit_code, checks=checks,
+        stage="export", tools="fake", exit_code=exit_code, checks=checks,
         work_dir=tmp_path, output_location=str(tmp_path / "outputs"),
         output_is_local=True)
 
@@ -286,13 +286,13 @@ def _fixture_result(tmp_path, *, exit_code, failures):
 def test_selftest_a_stage_exiting_0_when_69_was_expected_is_a_failure(tmp_path, capsys):
     result = _fixture_result(
         tmp_path, exit_code=0, failures=["exit code: expected 69, got 0"])
-    assert _report("photometry", result) == int(ExitCode.FAILURE)
+    assert _report("export", result) == int(ExitCode.FAILURE)
 
 
 def test_selftest_an_unexpected_nonzero_stage_exit_propagates(tmp_path, capsys):
     result = _fixture_result(
         tmp_path, exit_code=70, failures=["exit code: expected 0, got 70"])
-    assert _report("photometry", result) == int(ExitCode.STAGE_ERROR)
+    assert _report("export", result) == int(ExitCode.STAGE_ERROR)
 
 
 @pytest.mark.parametrize("failures, expected", [
@@ -301,7 +301,7 @@ def test_selftest_an_unexpected_nonzero_stage_exit_propagates(tmp_path, capsys):
 ])
 def test_selftest_pass_and_fixture_mismatch(tmp_path, capsys, failures, expected):
     result = _fixture_result(tmp_path, exit_code=0, failures=failures)
-    assert _report("photometry", result) == int(expected)
+    assert _report("export", result) == int(expected)
 
 
 def test_selftest_an_existing_work_dir_is_a_usage_error(monkeypatch, tmp_path, capsys):
@@ -311,6 +311,6 @@ def test_selftest_an_existing_work_dir_is_a_usage_error(monkeypatch, tmp_path, c
         raise FileExistsError(f"{tmp_path} already exists")
 
     monkeypatch.setattr(selftest, "run_fixture", exists)
-    rc = selftest.run(stage="photometry", real_tools=False, work_dir=str(tmp_path),
+    rc = selftest.run(stage="export", real_tools=False, work_dir=str(tmp_path),
                       output_location=None)
     assert rc == int(ExitCode.USAGE)

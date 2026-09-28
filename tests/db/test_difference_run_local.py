@@ -17,7 +17,7 @@ from pathlib import Path
 from rapidpipe.products.diffimage import validate_difference_entry
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.runs.local import run_stage_locally
-from tests.unit.fakedifftools import CDF_DIR, build_input_set
+from rapidpipe.selftest.support.fakedifftools import CDF_DIR, build_input_set
 
 from .test_repository import _make_run
 
@@ -43,7 +43,7 @@ def test_difference_runs_locally_and_is_selected(conn, tmp_path):
         inputs=str(inputs),
         outputs_root=str(tmp_path / "outputs"),
         settings=str(settings),
-        env={"RAPIDPIPE_DIFFERENCE_TOOLKIT": "tests.unit.fakedifftools:fake_toolkit",
+        env={"RAPIDPIPE_DIFFERENCE_TOOLKIT": "rapidpipe.selftest.support.fakedifftools:fake_toolkit",
              "PYTHONPATH": str(REPO_ROOT)},
     )
 
