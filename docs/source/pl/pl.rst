@@ -3,42 +3,47 @@ RAPID Pipeline Design
 
 Introduction
 ************************************
-Below describes the current design of the RAPID pipeline and its rationale.
 
-The pipeline will interact with the RAPID operations database, most likely in a
-loosely coupled way, in order to keep the design flexible and control the number
-of simultaneous connections.
+This page describes the current RAPID pipeline design and its rationale.
 
 .. note::
-    The pipeline design described below is evolving and subject to change.
+    The pipeline design is evolving and subject to change.
+
+The pipeline will interact with the RAPID operations database, most likely
+through loose coupling to keep the design flexible and control simultaneous
+connections.
 
 
 Computer Languages
 ************************************
 
-The RAPID pipeline is written in Python, with some bash scripts, and system calls to OS commands and C executable binaries.
-A few Perl scripts are used to prepare ad-hoc data for database ingestion, etc.
+The RAPID pipeline uses Python, some bash scripts, and system calls to OS
+commands and C executable binaries. A few Perl scripts prepare ad-hoc data
+for database ingestion and other tasks.
+
+The pipeline is coded in Python and C and runs inside the RAPID-pipeline
+docker container, with all required software preinstalled.
 
 
 Sky Tiles
 ************************************
 
-
 .. warning::
-    This section explains the Roman tessellation scheme using large sky tiles, for illustration purposes only
-    (large tiles are easier to list and plot).
-    Much smaller tiles will be adopted for the RAPID pipeline, as discussed below in the section entitled Reference Images.
+    The large Roman-tessellation sky tiles shown here are for illustration
+    only, because they are easier to list and plot. RAPID will adopt much
+    smaller tiles, as discussed in Reference Images below.
 
-Please refer to the `SkyMap GitHub Repository <https://github.com/darioflute/skymap>`_ for the Roman-tessellation source code.
-In one implementation of this gridding scheme (for illustrative purposes here), the parameter setting NSIDE=10
-yields a sky that is divided into 2402 relatively large tiles, which are, in general,
-approximately square and with similar area.
-The tiles are basically aligned in rows within declination bins, with the most right-ascension
-bins at the equator and progressively fewer as
-the poles are approached (see table below).  There is one circular tile capping each pole.
-For NSIDE=10, the tile size near the equator is approximately 3.8 degrees in declination height
-and 4.5 degrees in right-ascension width.
+The `SkyMap GitHub Repository <https://github.com/darioflute/skymap>`_
+contains the Roman-tessellation source code. The illustrative setting
+NSIDE=10 divides the sky into 2402 relatively large tiles, generally
+approximately square and of similar area. Tiles form rows within
+declination bins, with the most right-ascension bins at the equator and
+progressively fewer toward the poles. One circular tile caps each pole.
 
+For NSIDE=10, tiles near the equator are approximately 3.8 degrees high in
+declination and 4.5 degrees wide in right ascension. These are much larger
+than the Roman WFI focal plane, roughly 0.5 degrees by 1.2 degrees with gaps.
+RAPID needs tiles suitable for Roman SCA images.
 
 Table: Number of right-ascension bins per declination bin for NSIDE=10.
 
@@ -88,93 +93,107 @@ center_dec   count      dec-bin num
 90.0         1          41
 ==========   =====      ===========
 
-These sky tiles are much larger than the Roman WFI focal plane (which is roughly 0.5 degrees by 1.2 degrees with gaps).
-
-Here is a 3-D plot of the Roman tessellation for NSIDE=10:
+The Roman tessellation for NSIDE=10 in a 3-D plot:
 
 .. image:: Roman_Tessel_NSIDE10_2402.png
-
-As will be seen below, it will be necessary to adopt
-a tile size that is suitable for Roman SCA images.
 
 
 Reference Images
 ************************************
 
-Reference images are needed for image differencing.  The maximum-tolerable number of pixels in a reference image
-constrains the footprint of a reference image on the sky.
-The reference images will be constructed for sky tiles given by the Roman tessellation scheme.
+Reference images are needed for image differencing. They will be built for
+Roman-tessellation sky tiles, with their sky footprints constrained by the
+maximum tolerable number of pixels.
 
-For the RAPID project, the Roman-tessellation parameter setting NSIDE=512 will be used,
-and this will give tile sizes somewhat smaller than that of a Roman SCA image.
-This results in 6,291,458 tiles covering the entire sky.
-The tile size near the equator, for example, is 0.08789 degrees wide in ra and 0.0746 degrees high in dec.
-This is roughly between 66% and 75% of the
-width of an SCA, which is approximately 0.12 degrees.  The tile sizes vary over the sky; for example, the height of a dec bin ranges
-from approximately 0.075 degrees to 0.1 degrees, and similarly for the widths of ra bins.  There are 2049 dec bins total, and 4096 ra
+
+Tile Geometry and Indexing
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+RAPID will use NSIDE=512, giving 6,291,458 tiles over the entire sky,
+somewhat smaller than a Roman SCA image. Near the equator, a tile is
+0.08789 degrees wide in ra and 0.0746 degrees high in dec, roughly between
+66% and 75% of the approximately 0.12-degree SCA width. Tile sizes vary
+across the sky: dec-bin heights range from approximately 0.075 degrees to
+0.1 degrees, as do ra-bin widths. There are 2049 dec bins, with 4096 ra
 bins per dec bin near the equator.
 
-The sky tiles of the Roman tessellation are indexed starting with one, and these indexes,
-associated with different sky positions, such as the center of a reference image,
-are stored in the field column of various tables in the RAPID operations database.
-The maximum value of the field or sky-tile index is 6,291,458.
+Tile indexes start at one and have a maximum value of 6,291,458. Indexes
+associated with sky positions, such as reference-image centers, are stored
+in the field column of various RAPID operations database tables.
 
-For comparison, here are the sky footprints of a simulated Roman SCA image (Roman_TDS_simple_model_F184_11474_2_lite.fits),
-Skymap tiles for NSIDE=512, and Healpix pixels for level=9:
+The following comparison shows the sky footprints of a simulated Roman SCA
+image (Roman_TDS_simple_model_F184_11474_2_lite.fits), Skymap tiles for
+NSIDE=512, and Healpix pixels for level=9. The SCA image center falls within
+the central skymap tile.
 
 .. image:: RomanSCAFrame_vs_SkymapNSIDE512_and_Healpix9.png
 
-As can be seen in this example, the sky position of the center of the SCA image falls within the central skymap tile.
 
-The reference images will be constructed to have sufficient buffer regions outside of the sky tile to which they are associated,
-since a single Roman SCA image may overlap multiple tiles.
-The buffer regions will account for arbitrary placement of individual frames relative to tile-center sky positions, and
-also for arbitrary pointing roll angles.
-Nominally the pixel scale for the reference images
-will be the same as individual frames, but the size of reference images will be larger, having ~6Kx6K pixels instead of ~4Kx4K pixels.
+Image Size and Orientation
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+A single Roman SCA image may overlap multiple tiles. Reference images will
+therefore extend beyond their associated tiles, with buffers for arbitrary
+frame placement relative to tile centers and arbitrary pointing roll
+angles. Nominally, reference images will have the same pixel scale as
+individual frames but be larger: ~6Kx6K rather than ~4Kx4K pixels.
 
-Here is the sky footprint of the proposed 6Kx6K-pixel reference image, shown in cyan, for the example given above:
+The proposed 6Kx6K-pixel reference image is shown in cyan for the example
+above:
 
 .. image:: ReferenceImage.png
 
-It is possible for the science image, represented in green, to be incompletely covered by the proposed reference image, especially
-for cases where the science-image center is far from the tile center and rotated by some odd multiple of 45 degrees.  This
-could be remedied by making the reference image bigger (which is done below),
-but at a cost of more reference-image pixels to store and process.
+The science image, shown in green, may not be fully covered, especially
+when its center is far from the tile center and it is rotated by an odd
+multiple of 45 degrees. Enlarging the reference image, as done below,
+can remedy this at the cost of more pixels to store and process.
 
-Reference images will be constructed for different filters.  For a given filter, images from
-different SCAs will be stacked to make reference images.
+All reference images will be north up, with no rotation.
 
-All reference images will have no rotation and north up.
 
-There ideally should be some minimum observation-time interval between a science image and reference image, so that
-transients are actually detectable.
+Input Selection
+^^^^^^^^^^^^^^^
 
-The logic for picking L2 science images as inputs for reference-image generation is located at two places in the RAPID code base:
+Reference images will be constructed for different filters by stacking
+images from different SCAs within each filter. Ideally, a minimum
+observation-time interval should separate science and reference images
+so that transients are detectable.
 
-#. Python script ``pipeline/launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py`` queries the RAPID operations database
-   for field/filter combinations that have the minimum number of L2 science images for reference-image generations and processing
-   at least one L2 science image through the RAPID Pipeline that is different from the reference-image inputs (currently the
-   RAPID pipeline has the optional step of reference-image generation, based on whether or not a reference image already exists,
-   before image-differencing a given L2 science image).
+Two locations in the RAPID code base select L2 science images for
+reference-image generation:
 
-#. Method ``get_overlapping_l2files`` in ``database/modules/utils/rapid_db.py`` queries the RAPID operations database
-   for all L2 science images that overlap the sky tile associated with the input science image and its filter
-   that were acquired before the input science image.
+#. Python script ``pipeline/launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py``
+   queries the RAPID operations database for field/filter combinations
+   with the minimum number of L2 science images needed to generate a
+   reference image and process at least one L2 science image that is not
+   among the reference inputs.
+   Currently, before differencing a given L2 science image, the RAPID
+   pipeline optionally generates a reference image depending on whether
+   one already exists.
 
-Both of these code locations have special logic to handle reference-image-generation strategies with various complexities for different
-simulated datasets, i.e., Open-Universe sims, rimtimsims, and SOC sims.
+#. Method ``get_overlapping_l2files`` in
+   ``database/modules/utils/rapid_db.py`` queries the RAPID operations
+   database for all L2 science images in the input science image's filter
+   that overlap its associated sky tile and were acquired before it.
 
-The following are a 7Kx7K-pixel reference image and its associated coverage map, resulting from the coaddition of 50 input images.
-These were generated by ``awaicgen``, which is a C-code module from the WISE mission that was modified to be generic coadder.
+Both locations have special logic for reference-image-generation strategies
+of varying complexity across Open-Universe sims, rimtimsims, and SOC sims.
+
+
+Coaddition Examples
+^^^^^^^^^^^^^^^^^^^
+
+The following 7Kx7K-pixel reference image and coverage map coadd 50 input
+images. They were generated by ``awaicgen``, a WISE-mission C-code module
+modified to be a generic coadder.
 
 .. image:: awaicgen_output_mosaic_image_50.png
 
 .. image:: awaicgen_output_mosaic_cov_map_50.png
 
-Also below are a 7Kx7K-pixel reference image and its associated coverage map, resulting from the coaddition of 100 input images, made by ``awaicgen``.
-(The image-display stretches are different for cases with 50 inputs versus 100 inputs.)
+The next 7Kx7K-pixel reference image and coverage map coadd 100 input images,
+also using ``awaicgen``. The display stretches differ between the 50-input
+and 100-input examples.
 
 .. image:: awaicgen_output_mosaic_image_100.png
 
@@ -184,49 +203,51 @@ Also below are a 7Kx7K-pixel reference image and its associated coverage map, re
 Image Differencing
 ************************************
 
+RAPID will use an implementation of ZOGY for image differencing. ZOGY
+requires gain-matched inputs resampled to the same grid in pixel scale,
+position, and orientation. The science image can have any sky rotation;
+the reference image is north up (zero degrees rotation on the sky) and
+centered on the closest predefined field, associated with the relevant
+Roman tessellation index.
 
-An implementation of the ZOGY algorithm will be used for image differencing in the RAPID pipeline.  ZOGY requires
-the input images to be gain-matched and resampled to the same grid frame of reference in terms of pixel scale,
-position, and orientation.  The input science image can be arbitrarily rotated on the sky, whereas the
-input reference image is constructed to be north up (zero degrees rotation on the sky), and centered on
-the closest predefined field (associated with the relevant Roman tessellation index).
-Image resampling is therefore necessary.
-``SWarp`` can be used to resample the reference image into the distorted grid of the science image.
-In cases where the reference image consists of too few coadded inputs for undersampling to be resolved, it may be
-necessary to instead use ``awaicgen`` to resample the science image into the undistorted grid of the reference image
-(``awaicgen`` does not produce coadds mapped into distorted grids).
+Resampling is therefore necessary. ``SWarp`` can resample the reference
+image into the science image's distorted grid. If too few coadded inputs
+leave the reference image undersampled, ``awaicgen`` may instead need to
+resample the science image into the reference image's undistorted grid.
+``awaicgen`` does not produce coadds mapped into distorted grids.
 
 
 Point Spread Functions (PSFs)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-PSFs are required by the ZOGY algorithm.  In fact, it requires both the PSF of input science image
-and the PSF of the reference image.
+ZOGY requires both the science-image PSF and the reference-image PSF.
 
-Reference images are averages of arbitrarily rotated input images from different SCAs for the same filter.
-Therefore, the reference-image PSF should be axially symmetric, the average of all 18 SCAs in a given filter, and
-PSF values should depend only on the radius from the PSF center.  The reference-image PSF should be renormalized.
-This approach sidesteps the inherent trickiness of determining whether a PSF should be flipped before applying.
-(Is the WCS of the reference image configured to view the image from inside or outside the celestial sphere?
-What about the PSF?  It is difficult to know whether you got it correct, since the smeared data are so featureless).
-Averaging over all pixels at the same radial distance from the reference-image PSF center is robust and a reliable
-compromise to a solution in which only one science-image PSF and only one referenced-image is provided to the
-ZOGY software for image differencing.  If the science image and reference image are segmented, then appropriately
-different PSFs can be supplied as inputs, but this will require more computing and will complicate the RAPID pipeline,
-so it will be deferred until later (if ever implemented at all).
+Reference images average arbitrarily rotated inputs from different SCAs
+within the same filter. The reference-image PSF should therefore be an
+axially symmetric average of all 18 SCAs in that filter, with values
+depending only on radius from the PSF center. It should be renormalized.
 
-Depending on the survey strategies, the utilization averaged, symmetric PSFs may not work well in some cases.
-Especially for the Galactic Bulge, where campaigns will be composed of many sequenced images with only small
-dithers at the same orientation.  The simplest possible alternative to the aforementioned general PSF approach
-is to average the PSFs using the same set of rotations and SCAs used by the reference image.  This will be
-considered as a possible upgrade to the RAPID pipeline, if resources allow.
+Radial averaging avoids the difficulty of deciding whether to flip a PSF:
+does the reference-image WCS view the celestial sphere from inside or
+outside, and what about the PSF? The smeared data are too featureless to
+make correctness easy to judge. Averaging all pixels at the same radius
+from the reference-image PSF center is a robust, reliable compromise when
+ZOGY receives only one science-image PSF and only one reference image.
+
+Segmenting the science and reference images would allow different,
+appropriate PSFs for each segment, but would require more computing and
+complicate RAPID. This is deferred until later, if implemented at all.
+
+Averaged, symmetric PSFs may not suit every survey strategy, especially
+Galactic Bulge campaigns with many sequenced images at the same orientation
+and only small dithers. The simplest alternative is to average PSFs using
+the same rotations and SCAs as the reference image. This remains a possible
+RAPID upgrade if resources allow.
 
 
 Science Pipeline Flowchart
 **************************
 
-Here is a flowchart of the RAPID science pipeline:
+The RAPID science pipeline flowchart:
 
 .. image:: science_pipeline_flowchart.png
-
-The pipeline is coded in Python and C, and runs inside the RAPID-pipeline docker container, in which all required software is preinstalled.
