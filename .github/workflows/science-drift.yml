@@ -2,7 +2,10 @@
 # pull request to `rebuild`, plus on demand. This never fails the build
 # (`continue-on-error: true` on the job, `|| true` on the script step,
 # and the script itself always exits 0): it is a report, not a gate.
-# The report is written to the job summary and uploaded as an artifact.
+# The report is written to the job summary and uploaded as an artifact;
+# if the script step still left science-drift.md missing or empty, the
+# summary gets a one-line placeholder instead of silently carrying
+# nothing.
 #
 # No schedule trigger: GitHub only runs a workflow's `schedule` trigger
 # from the repository's default branch, which is `main` here (never
@@ -48,7 +51,13 @@ jobs:
         run: scripts/science-drift.sh --out science-drift.md || true
 
       - name: append report to the job summary
-        run: cat science-drift.md >> "$GITHUB_STEP_SUMMARY" || true
+        run: |
+          if [ -s science-drift.md ]; then
+            cat science-drift.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Science drift report was not produced; see the job log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+        shell: bash
 
       - name: upload the report
         if: always()
