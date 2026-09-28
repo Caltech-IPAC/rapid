@@ -45,6 +45,7 @@ from astropy.io import fits
 from rapidpipe.db.ids import is_valid_ulid, new_ulid
 from rapidpipe.products.manifest import Manifest, hash_file
 from rapidpipe.science.alerts.assemble import load_schema
+from rapidpipe.seams import database_env
 from rapidpipe.selftest.runner import (
     CheckContext,
     Checks,
@@ -70,7 +71,6 @@ from rapidpipe.selftest.support.fakealertsdb import (
 
 MODULE = "rapidpipe.stages.alerts"
 FAKE_DATABASE = "rapidpipe.selftest.support.fakealertsdb:fake_database"
-DATABASE_ENV = "RAPIDPIPE_ALERTS_DATABASE"
 ASSOCIATION_SET_2 = "01J8Y6QZ3M00000000000ASSC2"
 STATISTICS_SET_2 = "01J8Y6QZ3M00000000000STAT2"
 UNNAMED_ASSOCIATION_SET = "01J8Y6QZ3M00000000000ASSC9"
@@ -180,7 +180,7 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
 
 
 def _env(work: Path) -> dict[str, str]:
-    return {DATABASE_ENV: FAKE_DATABASE, SEED_ENV: str(work / "db-seed.json"),
+    return {database_env("alerts"): FAKE_DATABASE, SEED_ENV: str(work / "db-seed.json"),
             STATE_ENV: str(work / "db-state.json")}
 
 

@@ -78,7 +78,6 @@ def test_declaration():
                                            "association-set", "statistics-set", "pruned-set")
     assert alerts.DECLARATION.produces == ("alert-container", "alert-set")
     assert alerts.DECLARATION.database_access == "read-write"
-    assert alerts.DECLARATION.resource_defaults == {"vcpus": 1, "memory_mib": 8192}
 
 
 def test_success_writes_container_outbox_and_both_outputs(tmp_path, monkeypatch, prepared):
@@ -124,7 +123,6 @@ def test_kafka_on_exits_64(tmp_path, monkeypatch, prepared, capsys):
 
 
 @pytest.mark.parametrize("overlay", [
-    "[alerts]\nunknown_key = 1\n",
     "[alerts]\ndiff_flavor = \"naive\"\n",
     "[alerts]\nstamp_half_width = 0\n",
     "[archive]\ncodec = \"snappy\"\n",
@@ -276,13 +274,6 @@ def test_rerun_that_cannot_reproduce_the_registered_bytes_exits_70(tmp_path, mon
         member["sha256"] = "sha256:" + "f" * 64
     rc, _, _ = _run(tmp_path, monkeypatch, inputs, seed, db=db)
     assert rc == int(ExitCode.STAGE_ERROR)
-
-
-def test_dry_run_writes_nothing(tmp_path, monkeypatch, prepared):
-    inputs, _, seed = prepared
-    rc, outputs, db = _run(tmp_path, monkeypatch, inputs, seed, extra=("--dry-run",))
-    assert rc == 0
-    assert not (outputs / "manifest.json").exists() and db.commits == 0
 
 
 def test_alert_container_validation_refuses_a_missing_summary():

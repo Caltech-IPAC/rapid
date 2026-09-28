@@ -397,6 +397,11 @@ def hash_file(path: str | Path) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
+def sha256_of_file(path: str | Path) -> str:
+    """The SHA-256 hex digest of the file at ``path``, without the ``sha256:`` prefix."""
+    return hash_file(path)[1]
+
+
 def member_for_file(role: str, path: str | Path, *, relative_to: str | Path) -> Member:
     """Build a :class:`Member` for a local file, computing its size and hash.
 

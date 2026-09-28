@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from astropy.io import fits
 
+from rapidpipe.seams import toolkit_env
 import rapidpipe.stages.reference as reference
 from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
@@ -33,7 +34,7 @@ UNIT = f"{RTID}/W146"
 
 @pytest.fixture(autouse=True)
 def fakes(monkeypatch, tmp_path):
-    monkeypatch.setenv(reference.TOOLKIT_ENV,
+    monkeypatch.setenv(toolkit_env("reference"),
                        "rapidpipe.selftest.support.fakereftools:fake_toolkit")
     monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
 
@@ -104,7 +105,6 @@ def test_declaration():
     assert (d.name, d.unit, d.database_access) == ("reference", "field", "none")
     assert d.consumes == ("l2-image",)
     assert d.produces == ("reference-image", "reference-catalog")
-    assert d.resource_defaults == {"vcpus": 4, "memory_mib": 32768}
     assert Path(d.settings_schema_path).name == "reference.toml"
 
 
@@ -331,7 +331,6 @@ def test_an_image_role_that_is_not_primary_is_rejected(tmp_path):
     "[mosaic]\ncdelt1 = -0.0001\n",
     "[mosaic]\nnaxis1 = -3\n",
     "[awaicgen]\nawaicgen_output_mosaic_image_file = \"mosaic.fits\"\n",
-    "[selection]\nunknown_key = 1\n",
 ])
 def test_bad_settings_are_usage_errors(tmp_path, extra):
     code, outputs = _run(tmp_path, extra_settings=extra)
@@ -349,24 +348,13 @@ def test_awaicgen_leaving_no_mosaic_is_a_stage_error(tmp_path, monkeypatch):
     assert not (outputs / "manifest.json").exists()
 
 
-def test_dry_run_writes_nothing(tmp_path):
-    inputs = tmp_path / "inputs"
-    write_frames(inputs)
-    outputs = tmp_path / "outputs"
-    code = reference.main(["--run", RUN, "--unit", UNIT, "--attempt", ATTEMPT,
-                           "--inputs", str(inputs), "--outputs", str(outputs),
-                           "--settings", str(_overlay(tmp_path)), "--dry-run"])
-    assert code == ExitCode.SUCCESS
-    assert not outputs.exists()
-
-
 # ----------------------------------------------------------------------
 # The packaged fixture
 # ----------------------------------------------------------------------
 
 
 def test_packaged_fixture_passes_with_fake_tools(tmp_path, monkeypatch):
-    monkeypatch.delenv(reference.TOOLKIT_ENV)
+    monkeypatch.delenv(toolkit_env("reference"))
     assert run_selftest(stage="reference", real_tools=False, work_dir=str(tmp_path / "fx"),
                         output_location=None) == 0
 

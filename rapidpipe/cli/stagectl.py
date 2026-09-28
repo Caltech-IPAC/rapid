@@ -116,26 +116,17 @@ def _format(value: Any) -> str:
 def declaration_lines(declaration: Any) -> list[str]:
     """``key: value`` lines for a :class:`~rapidpipe.stages.contract.StageDeclaration`.
 
-    Nested dicts (``argument_schema``, ``resource_defaults``) are flattened
-    to ``outer.inner: value``; tuples are comma-separated; exit codes print
-    as ``<number> <NAME>``.
+    Tuples are comma-separated; exit codes print as ``<number> <NAME>``.
     """
-    lines = [
+    return [
         f"name: {declaration.name}",
         f"unit: {declaration.unit}",
-    ]
-    for key, value in sorted(declaration.argument_schema.items()):
-        lines.append(f"arguments.{key}: {_format(value)}")
-    lines += [
         f"inputs: {_format(declaration.consumes)}",
         f"outputs: {_format(declaration.produces)}",
         f"settings: {_format(declaration.settings_schema_path)}",
         f"database_access: {declaration.database_access}",
+        f"exit_codes: {_format(tuple(declaration.supported_exit_codes))}",
     ]
-    for key, value in sorted(declaration.resource_defaults.items()):
-        lines.append(f"resources.{key}: {_format(value)}")
-    lines.append(f"exit_codes: {_format(tuple(declaration.supported_exit_codes))}")
-    return lines
 
 
 def _list_command() -> int:

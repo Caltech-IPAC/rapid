@@ -91,18 +91,6 @@ def test_declaration_validates():
     assert prune.DECLARATION.produces == ("pruned-set",)
 
 
-def test_dry_run_validates_without_writing(tmp_path, db):
-    inputs = tmp_path / "inputs"
-    build_prune_input_set(inputs, field=FIELD)
-    argv = ["--run", RUN, "--unit", str(FIELD), "--attempt", ATTEMPT,
-            "--inputs", str(inputs), "--outputs", str(tmp_path / "outputs"), "--dry-run"]
-    rc = prune.main(argv)
-    assert rc == ExitCode.SUCCESS
-    assert not (tmp_path / "outputs" / "manifest.json").exists()
-    assert db.commits == 0
-    assert db.prunedmerges == []
-
-
 @pytest.mark.parametrize("bad_unit", ["", "-1", "1.5", "abc", " 1", "+1", "007x"])
 def test_a_malformed_unit_id_exits_64(tmp_path, db, bad_unit):
     inputs = tmp_path / "inputs"

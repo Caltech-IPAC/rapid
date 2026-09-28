@@ -28,6 +28,7 @@ import numpy as np
 from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.science.statistics.lightcurve import compute_radec_statistics
+from rapidpipe.seams import database_env
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture, fixture_dir
 from rapidpipe.selftest.support.fakestatisticsdb import (
     SEED_ENV,
@@ -38,7 +39,6 @@ from rapidpipe.selftest.support.fakestatisticsdb import (
 )
 
 FAKE_DATABASE = "rapidpipe.selftest.support.fakestatisticsdb:fake_database"
-DATABASE_ENV = "RAPIDPIPE_STATISTICS_DATABASE"
 
 
 def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Path, dict[str, str]]:
@@ -52,7 +52,8 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
     seed = work / "db-seed.json"
     seed.write_text(json.dumps(seed_from_fixture(spec), indent=2))
     state = work / "db-state.json"
-    extra_env = {DATABASE_ENV: FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
+    extra_env = {database_env("statistics"): FAKE_DATABASE,
+                 SEED_ENV: str(seed), STATE_ENV: str(state)}
     return inputs, overlay, extra_env
 
 

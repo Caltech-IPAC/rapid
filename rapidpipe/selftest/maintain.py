@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from rapidpipe.products.manifest import Manifest
+from rapidpipe.seams import database_env
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture
 from rapidpipe.selftest.support.fakemaintaindb import (
     SEED_ENV,
@@ -27,7 +28,6 @@ from rapidpipe.selftest.support.fakemaintaindb import (
 )
 
 FAKE_DATABASE = "rapidpipe.selftest.support.fakemaintaindb:fake_database"
-DATABASE_ENV = "RAPIDPIPE_MAINTAIN_DATABASE"
 
 
 def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Path, dict[str, str]]:
@@ -39,7 +39,8 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
     seed = work / "db-seed.json"
     seed.write_text(json.dumps({"existing_tables": spec["existing_tables"]}))
     state = work / "db-state.json"
-    extra_env = {DATABASE_ENV: FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
+    extra_env = {database_env("maintain"): FAKE_DATABASE,
+                 SEED_ENV: str(seed), STATE_ENV: str(state)}
     return inputs, overlay, extra_env
 
 

@@ -40,6 +40,13 @@ stage produced the manifest it reads (stage contract, "The manifest":
 "whether it shares a Batch job with a transform changes nothing about
 attempt identity, completion or retry safety").
 
+Unit. A register unit id is always ``<producing stage>/<producing unit
+id>`` (:func:`rapidpipe.products.manifest.register_unit_id`), derived from
+the manifest's own ``stage`` and ``unit.id``: a register unit is
+identified by what it registers, so its invocation never chooses it;
+``rapidpipe run local`` and ``run submit`` derive and pass it, refusing
+an explicit ``--unit`` for register.
+
 This module may import ``rapidpipe.products``, ``rapidpipe.db`` and
 ``rapidpipe.runs``; never another stage, ``rapidpipe.launch`` or
 ``rapidpipe.cli`` (stage contract, dependency direction; see
@@ -93,43 +100,13 @@ _REGISTRATION_ORDER = {"reference-image": 0}
 DECLARATION = StageDeclaration(
     name="register",
     unit="detector-image",
-    argument_schema={
-        "description": (
-            "rapidpipe stage register --run <run-id> --unit <unit-id> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds the "
-            "producing attempt's completion manifest (admit's, naming "
-            "l2-image and psf entries, or difference's, naming difference-image "
-            "and source-catalog entries, or alerts's, naming alert-container "
-            "and alert-set entries, or reference's, naming reference-image "
-            "and reference-catalog entries, or export's, naming a catalog-export entry). <unit-id> is always "
-            "<producing stage>/<producing unit id> (rapidpipe.products."
-            "manifest.register_unit_id), derived from that same manifest's "
-            "own `stage` and `unit.id` -- a register unit is identified by "
-            "what it registers, so this stage's own invocation never "
-            "chooses it; `rapidpipe run local`/`run submit` derive and "
-            "pass it, refusing an explicit --unit for register."
-        ),
-    },
     settings_schema_path=None,
     consumes=("l2-image", "psf", "difference-image", "source-catalog",
               "alert-container", "alert-set", "reference-image",
               "reference-catalog", "catalog-export"),
     produces=(),
     database_access="read-write",
-    resource_defaults={"vcpus": 1, "memory_mib": 1024},
 )
-
-
-def connect(*args, **kwargs):
-    """Module-level indirection to ``rapidpipe.db.connection.connect``.
-
-    A thin wrapper, not a re-export, so tests can monkeypatch
-    ``rapidpipe.stages.register.connect`` without reaching into
-    ``rapidpipe.db.connection`` and affecting other callers (design
-    brief: "a module-level name `connect` so tests can monkeypatch it").
-    """
-    return _connection_module.connect(*args, **kwargs)
 
 
 def _reject_unknown_kinds(entries) -> None:
@@ -171,7 +148,7 @@ def _body(context: StageContext) -> StageResult:
     products_read: dict[str, str] = {}
 
     try:
-        with connect() as conn:
+        with _connection_module.connect() as conn:
             try:
                 with conn.cursor():
                     pass  # establish the connection is usable before writing.

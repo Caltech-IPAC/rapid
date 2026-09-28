@@ -97,7 +97,8 @@ def _loaded_source_set(conn, tmp_path, monkeypatch):
 
 def _run_crossmatch(conn, monkeypatch, tmp_path, run_id, inputs, *, name="crossmatch",
                     overlay=None, unit_id=str(FIELD)):
-    monkeypatch.setattr(crossmatch, "connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
+    monkeypatch.setattr("rapidpipe.db.connection.connect",
+                        lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
     repo.add_unit(conn, run_id, "crossmatch", "field", unit_id)
     attempt_id = repo.allocate_attempt(conn, run_id, "crossmatch", unit_id)
     outputs = tmp_path / f"{name}-outputs"

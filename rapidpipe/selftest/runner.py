@@ -53,11 +53,8 @@ from typing import Any, Callable
 from rapidpipe.db.ids import is_valid_ulid, new_ulid
 from rapidpipe.products.manifest import Manifest, hash_file
 from rapidpipe.products.storage import parse_location, publish_dir
+from rapidpipe.seams import database_env
 from rapidpipe.selftest.support.fakereadguarddb import FACTORY as READGUARD_FAKE_DATABASE
-
-#: ``rapidpipe.runs.readguard.DATABASE_ENV``, spelled here so the runner
-#: needs no import of the guard itself.
-READGUARD_DATABASE_ENV = "RAPIDPIPE_READGUARD_DATABASE"
 
 #: ``rapidpipe.runs.readguard.SELFTEST_ENV``: marks a fixture subprocess
 #: as a selftest run, the only place the guard honours the fake above.
@@ -227,7 +224,7 @@ def run_stage_subprocess(python: str, module: str, inputs: Path, outputs_locatio
     # place of a database, as every other database here is a fake
     # (stage contract, "Invocation").
     # The guard honours the fake only in a run marked as a selftest.
-    env[READGUARD_DATABASE_ENV] = READGUARD_FAKE_DATABASE
+    env[database_env("readguard")] = READGUARD_FAKE_DATABASE
     env[SELFTEST_ENV] = "1"
     env.update(extra_env)
     argv = [python, "-m", module,

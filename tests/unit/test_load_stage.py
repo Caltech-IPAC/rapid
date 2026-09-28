@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from rapidpipe.seams import database_env
 import rapidpipe.stages.load as load
 from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
@@ -200,10 +201,6 @@ def test_an_unknown_differencer_is_a_usage_error(tmp_path, db):
     assert _run(tmp_path, overlay='[load]\ndifferencer = "naive"\n')[0] == ExitCode.USAGE
 
 
-def test_an_unknown_settings_key_is_a_usage_error(tmp_path, db):
-    assert _run(tmp_path, overlay="[load]\njobprocdate = 1\n")[0] == ExitCode.USAGE
-
-
 def test_an_unregistered_difference_instance_exits_65(tmp_path, db):
     db.differences = {}
     rc, outputs = _run(tmp_path)
@@ -265,16 +262,6 @@ def test_a_row_count_mismatch_is_a_stage_error(tmp_path, db, monkeypatch):
     assert not (outputs / "manifest.json").exists()
 
 
-def test_dry_run_touches_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr(load, "open_database", lambda: pytest.fail("dry run opened the database"))
-    inputs = tmp_path / "inputs"
-    build_load_input_set(inputs, {"positive": POSITIVE, "negative": NEGATIVE})
-    rc = load.main(["--run", RUN, "--unit", "u", "--attempt", ATTEMPT, "--inputs", str(inputs),
-                    "--outputs", str(tmp_path / "out"), "--dry-run"])
-    assert rc == ExitCode.SUCCESS
-    assert not (tmp_path / "out").exists()
-
-
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(load.DATABASE_ENV, "tests.unit.fakeloaddb:no_such_factory")
+    monkeypatch.setenv(database_env("load"), "tests.unit.fakeloaddb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE

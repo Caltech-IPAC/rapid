@@ -20,7 +20,7 @@ class FakeClientError(Exception):
 
     Carries a ``response`` dict shaped like the real exception's
     (``{"Error": {"Code": ...}}``), which is what
-    ``rapidpipe.stages.contract._client_error_code`` matches on -- by
+    ``rapidpipe.products.storage.client_error_code`` matches on -- by
     shape, not by ``isinstance`` against botocore -- so this stand-in is
     recognised identically to the real thing.
     """
@@ -33,8 +33,9 @@ class FakeClientError(Exception):
 class FakeEndpointConnectionError(Exception):
     """Stands in for ``botocore.exceptions.EndpointConnectionError``.
 
-    Named exactly that so ``_TRANSIENT_EXCEPTION_NAMES`` (matched by class
-    name, not ``isinstance``) recognises it as network-shaped.
+    Named exactly that so ``rapidpipe.products.storage.TRANSIENT_EXCEPTION_NAMES``
+    (matched by class name, not ``isinstance``) recognises it as
+    network-shaped.
     """
 
 

@@ -332,7 +332,7 @@ def test_the_seam_outside_a_selftest_exits_64_from_run_stage(tmp_path, monkeypat
 # ----------------------------------------------------------------------
 
 DECLARATION = StageDeclaration(
-    name="difference", unit="detector-image", argument_schema={},
+    name="difference", unit="detector-image",
     settings_schema_path=None, consumes=(), produces=(), database_access="none")
 
 

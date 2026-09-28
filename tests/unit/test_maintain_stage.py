@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from rapidpipe.seams import database_env
 import rapidpipe.stages.maintain as maintain
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.stages.contract import ExitCode
@@ -136,29 +137,7 @@ def test_a_connection_failure_is_temporary(tmp_path, monkeypatch):
     assert _run(tmp_path)[0] == ExitCode.TRANSIENT_FAILURE
 
 
-def test_dry_run_touches_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr(maintain, "open_database",
-                        lambda: pytest.fail("dry run opened the database"))
-    inputs = tmp_path / "inputs"
-    build_maintain_input_set(inputs, table=TABLE, instance=SOURCE_SET)
-    rc = maintain.main(["--run", RUN, "--unit", "20260821/SCA07", "--attempt", ATTEMPT,
-                        "--inputs", str(inputs), "--outputs", str(tmp_path / "out"),
-                        "--dry-run"])
-    assert rc == ExitCode.SUCCESS
-    assert not (tmp_path / "out").exists()
-
-
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(maintain.DATABASE_ENV, "tests.unit.fakemaintaindb:no_such_factory")
+    monkeypatch.setenv(database_env("maintain"), "tests.unit.fakemaintaindb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE
 
-
-def test_an_unknown_settings_overlay_key_is_a_usage_error(tmp_path, db):
-    inputs = tmp_path / "inputs"
-    build_maintain_input_set(inputs, table=TABLE, instance=SOURCE_SET)
-    overlay = tmp_path / "overlay.toml"
-    overlay.write_text("[maintain]\nsomething = 1\n")
-    rc = maintain.main(["--run", RUN, "--unit", "20260821/SCA07", "--attempt", ATTEMPT,
-                        "--inputs", str(inputs), "--outputs", str(tmp_path / "out"),
-                        "--settings", str(overlay)])
-    assert rc == ExitCode.USAGE

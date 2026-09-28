@@ -25,6 +25,7 @@ from rapidpipe.db.ids import is_valid_ulid
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.science.crossmatch.catalog import new_object_id
 from rapidpipe.science.spatial import field_neighbours, tessellation_field
+from rapidpipe.seams import database_env
 from rapidpipe.selftest.runner import CheckContext, Checks, StageFixture, fixture_dir
 from rapidpipe.selftest.support.fakecrossmatchdb import (
     SEED_ENV,
@@ -35,7 +36,6 @@ from rapidpipe.selftest.support.fakecrossmatchdb import (
 )
 
 FAKE_DATABASE = "rapidpipe.selftest.support.fakecrossmatchdb:fake_database"
-DATABASE_ENV = "RAPIDPIPE_CROSSMATCH_DATABASE"
 
 
 def _source_rows(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -65,7 +65,8 @@ def _prepare(work: Path, expected: dict[str, Any], fake: bool) -> tuple[Path, Pa
         "tables": {spec["table"]: rows},
     }))
     state = work / "db-state.json"
-    extra_env = {DATABASE_ENV: FAKE_DATABASE, SEED_ENV: str(seed), STATE_ENV: str(state)}
+    extra_env = {database_env("crossmatch"): FAKE_DATABASE,
+                 SEED_ENV: str(seed), STATE_ENV: str(state)}
     return inputs, overlay, extra_env
 
 

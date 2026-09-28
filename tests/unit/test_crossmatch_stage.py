@@ -14,6 +14,7 @@ import json
 
 import pytest
 
+from rapidpipe.seams import database_env
 import rapidpipe.stages.crossmatch as crossmatch
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.science.crossmatch.catalog import new_object_id
@@ -82,14 +83,6 @@ def test_declaration_validates():
     d = crossmatch.DECLARATION
     assert (d.name, d.unit, d.consumes, d.produces, d.database_access) == (
         "crossmatch", "field", ("source-set",), ("association-set",), "read-write")
-
-
-def test_dry_run_touches_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr(crossmatch, "open_database",
-                        lambda: pytest.fail("dry run opened the database"))
-    rc, outputs = _run(tmp_path, dry_run=True)
-    assert rc == ExitCode.SUCCESS
-    assert not outputs.exists()
 
 
 @pytest.mark.parametrize("unit", ["abc", "-5", "4662268.0", " 4662268", "SCA01", ""])
@@ -266,7 +259,6 @@ def test_cluster_between_passes_can_be_turned_off(tmp_path, db):
     "[crossmatch]\nsource_flags = true\n",
     "[crossmatch]\nsource_flags = 1.5\n",
     "[crossmatch]\ndone_check = 1\n",
-    "[crossmatch]\nno_such_key = 1\n",
 ])
 def test_bad_settings_are_usage_errors(tmp_path, db, overlay):
     assert _run(tmp_path, overlay=overlay)[0] == ExitCode.USAGE
@@ -283,7 +275,8 @@ def test_a_connection_failure_is_temporary(tmp_path, monkeypatch):
 
 
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(crossmatch.DATABASE_ENV, "rapidpipe.selftest.support.fakecrossmatchdb:no_such_factory")
+    monkeypatch.setenv(database_env("crossmatch"),
+                       "rapidpipe.selftest.support.fakecrossmatchdb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE
 
 

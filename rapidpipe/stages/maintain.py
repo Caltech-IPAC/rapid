@@ -34,6 +34,9 @@ clusters and analyzes rows other stages wrote. ``result_sets_read``
 names every source-set instance the input manifest listed, so the run
 records which loads this maintenance pass covered.
 
+Settings. None: the stage declares no settings file, so a ``--settings``
+overlay is valid only if it is empty.
+
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli``.
@@ -42,8 +45,6 @@ This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 from __future__ import annotations
 
 import contextlib
-import importlib
-import os
 import re
 import sys
 from typing import Any, Iterator
@@ -51,6 +52,7 @@ from typing import Any, Iterator
 from rapidpipe.db import connection as _connection_module
 from rapidpipe.db import sources as _sources
 from rapidpipe.db.connection import ConnectionUnavailable
+from rapidpipe.seams import database_env, load_factory
 from rapidpipe.stages.contract import (
     InputRejected,
     StageContext,
@@ -64,19 +66,10 @@ from rapidpipe.stages.contract import (
 DECLARATION = StageDeclaration(
     name="maintain",
     unit="detector-date",
-    argument_schema={
-        "description": (
-            "rapidpipe stage maintain --run <run-id> --unit <yyyymmdd>/SCA<nn> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> [--dry-run]. "
-            "--inputs holds a manifest of one or more source-set entries for "
-            "the unit's sources child table; no --settings overlay is accepted."
-        ),
-    },
     settings_schema_path=None,
     consumes=("source-set",),
     produces=(),
     database_access="read-write",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 #: The unit id's shape (maintain page): the observation date and two-digit SCA
@@ -97,11 +90,6 @@ def _parse_unit_id(unit_id: str) -> tuple[str, int]:
 # ----------------------------------------------------------------------
 
 
-def connect(*args, **kwargs):
-    """Module-level indirection to ``rapidpipe.db.connection.connect``, for tests."""
-    return _connection_module.connect(*args, **kwargs)
-
-
 class PostgresMaintainDatabase:
     """The stage's database operations on one connection, in one transaction."""
 
@@ -120,17 +108,9 @@ class PostgresMaintainDatabase:
         self.conn.commit()
 
 
-#: Names a ``module:factory`` returning a context manager that yields an
-#: object with :class:`PostgresMaintainDatabase`'s methods, used instead of
-#: PostgreSQL. Unset in every deployment; the stage fixture
-#: (``make stage-maintain``) sets it, since a subprocess cannot be
-#: monkeypatched.
-DATABASE_ENV = "RAPIDPIPE_MAINTAIN_DATABASE"
-
-
 @contextlib.contextmanager
 def _postgres() -> Iterator[PostgresMaintainDatabase]:
-    with connect() as conn:
+    with _connection_module.connect() as conn:
         try:
             yield PostgresMaintainDatabase(conn)
         except BaseException:
@@ -140,15 +120,8 @@ def _postgres() -> Iterator[PostgresMaintainDatabase]:
 
 def open_database():
     """PostgreSQL, unless ``RAPIDPIPE_MAINTAIN_DATABASE`` names another; tests monkeypatch this."""
-    override = os.environ.get(DATABASE_ENV)
-    if not override:
-        return _postgres()
-    module_name, _, factory_name = override.partition(":")
-    try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError) as exc:
-        raise UsageError(f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
-    return factory()
+    factory = load_factory(database_env("maintain"), UsageError)
+    return factory() if factory else _postgres()
 
 
 # ----------------------------------------------------------------------

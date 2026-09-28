@@ -133,7 +133,6 @@ def test_default_settings_are_devs():
 
 
 @pytest.mark.parametrize("overlay", [
-    "[export]\nunknown_key = 1\n",
     "[export]\ncatalog_type = \"objects\"\n",
     "[export]\ncatalog_type = \"light-curves\"\n",
     "[export]\nflags_zero_only = 1\n",

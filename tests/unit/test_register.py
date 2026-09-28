@@ -34,26 +34,10 @@ def _write_manifest(inputs_dir, outputs):
     (inputs_dir / "manifest.json").write_text(json.dumps(manifest))
 
 
-def _l2_image_entry(instance="01ARZ3NDEKTSV4RRFFQ69G5FAV"):
-    return {
-        "kind": "l2-image",
-        "format_version": "1",
-        "instance": instance,
-        "key": {"exposure": "e1", "detector": "7", "version": "1"},
-        "primary": "l2/delivered.fits",
-        "members": [
-            {"role": "image", "path": "l2/delivered.fits", "bytes": 100,
-             "sha256": "sha256:" + "0" * 64},
-        ],
-        "registration": {"source": "irrelevant-to-this-test"},
-    }
-
-
-def _argv(inputs_dir, outputs_dir, *, extra=()):
+def _argv(inputs_dir, outputs_dir):
     return [
         "--run", "r1", "--unit", "e1/SCA07", "--attempt", "register-attempt-1",
         "--inputs", str(inputs_dir), "--outputs", str(outputs_dir),
-        *extra,
     ]
 
 
@@ -65,20 +49,6 @@ def test_declaration_validates():
                                     "reference-catalog", "catalog-export")
     assert DECLARATION.produces == ()
     assert DECLARATION.database_access == "read-write"
-
-
-def test_dry_run_exits_zero_without_connecting(tmp_path, monkeypatch):
-    inputs_dir = tmp_path / "inputs"
-    _write_manifest(inputs_dir, [_l2_image_entry()])
-    outputs_dir = tmp_path / "outputs"
-
-    def _raise_if_called(*args, **kwargs):
-        raise AssertionError("register must not connect to the database on --dry-run")
-
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
-
-    rc = main(_argv(inputs_dir, outputs_dir, extra=["--dry-run"]))
-    assert rc == int(ExitCode.SUCCESS)
 
 
 def test_unknown_output_kind_exits_65_without_connecting(tmp_path, monkeypatch):
@@ -103,7 +73,7 @@ def test_unknown_output_kind_exits_65_without_connecting(tmp_path, monkeypatch):
         raise AssertionError(
             "register must reject an unknown output kind before connecting")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
 
     rc = main(_argv(inputs_dir, outputs_dir))
     assert rc == int(ExitCode.INPUT_REJECTED)
@@ -161,7 +131,7 @@ def test_difference_manifest_registers_each_difference_image(tmp_path, monkeypat
     diff_outputs = _difference_manifest(tmp_path, monkeypatch)
     conn = _FakeConn()
     calls = {"manifest": [], "difference": []}
-    monkeypatch.setattr(register_module, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: conn)
     monkeypatch.setattr(register_module, "register_manifest",
                         lambda c, m, registering_attempt_id: calls["manifest"].append(m))
     monkeypatch.setattr(register_module, "register_difference_image",
@@ -203,7 +173,7 @@ def test_bad_difference_manifest_exits_65_without_connecting(tmp_path, monkeypat
     def _raise_if_called(*args, **kwargs):
         raise AssertionError("register must refuse a malformed manifest before connecting")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
     assert main(_argv(diff_outputs, tmp_path / "register-outputs")) == int(ExitCode.INPUT_REJECTED)
 
 
@@ -222,7 +192,7 @@ def test_reference_manifest_registers_the_image_before_its_catalog(tmp_path, mon
     _write_manifest(inputs_dir, _reference_outputs())
     conn = _FakeConn()
     order = []
-    monkeypatch.setattr(register_module, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: conn)
     monkeypatch.setattr(register_module, "register_manifest", lambda *a, **k: None)
     monkeypatch.setattr(register_module, "register_reference_image",
                         lambda c, **kw: order.append(("image", kw)))
@@ -253,7 +223,7 @@ def test_bad_reference_manifest_exits_65_without_connecting(tmp_path, monkeypatc
     def _raise_if_called(*args, **kwargs):
         raise AssertionError("register must refuse a malformed manifest before connecting")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
     assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.INPUT_REJECTED)
 
 
@@ -289,7 +259,7 @@ def test_catalog_export_registers_the_instance_row_only(tmp_path, monkeypatch):
     _write_manifest(inputs_dir, [_catalog_export_entry()])
     conn = _FakeConn()
     registered = []
-    monkeypatch.setattr(register_module, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: conn)
     monkeypatch.setattr(register_module, "register_manifest",
                         lambda c, manifest, **kw: registered.append(manifest))
     assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.SUCCESS)
@@ -306,5 +276,5 @@ def test_bad_catalog_export_exits_65_without_connecting(tmp_path, monkeypatch):
     def _raise_if_called(*args, **kwargs):
         raise AssertionError("register must refuse a malformed manifest before connecting")
 
-    monkeypatch.setattr(register_module, "connect", _raise_if_called)
+    monkeypatch.setattr("rapidpipe.db.connection.connect", _raise_if_called)
     assert main(_argv(inputs_dir, tmp_path / "outputs")) == int(ExitCode.INPUT_REJECTED)

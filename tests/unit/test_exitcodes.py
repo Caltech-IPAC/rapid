@@ -55,7 +55,7 @@ def test_stage_exit_codes_are_exactly_the_six():
 
 def _declaration(codes):
     return StageDeclaration(
-        name="admit", unit="exposure", argument_schema={}, settings_schema_path=None,
+        name="admit", unit="exposure", settings_schema_path=None,
         consumes=(), produces=("exposure",), database_access="none",
         supported_exit_codes=codes)
 
@@ -68,7 +68,7 @@ def test_a_declaration_with_a_command_line_only_code_is_rejected(code):
 
 def test_the_default_declaration_and_the_full_subset_validate():
     StageDeclaration(
-        name="admit", unit="exposure", argument_schema={}, settings_schema_path=None,
+        name="admit", unit="exposure", settings_schema_path=None,
         consumes=(), produces=("exposure",), database_access="none").validate()
     _declaration(STAGE_EXIT_CODES).validate()
 

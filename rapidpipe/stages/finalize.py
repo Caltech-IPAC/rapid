@@ -61,7 +61,13 @@ from rapidpipe.products.diffimage import (
     validate_difference_entry,
     validate_source_catalog_entry,
 )
-from rapidpipe.products.manifest import Manifest, Member, OutputEntry, member_for_file
+from rapidpipe.products.manifest import (
+    Manifest,
+    Member,
+    OutputEntry,
+    member_for_file,
+    sha256_of_file,
+)
 from rapidpipe.science.finalize import headers
 from rapidpipe.science.spatial import tessellation_field
 from rapidpipe.stages.contract import (
@@ -78,21 +84,10 @@ _SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings" / "finalize
 DECLARATION = StageDeclaration(
     name="finalize",
     unit="detector-image",
-    argument_schema={
-        "description": (
-            "rapidpipe stage finalize --run <run-id> --unit <unit-id> "
-            "--attempt <attempt-id> --inputs <dir-or-s3-prefix> "
-            "--outputs <dir-or-s3-prefix> [--settings <toml>] [--dry-run]. "
-            "--inputs is a difference attempt's output location: its "
-            "manifest.json (one difference-image entry and its source-catalog "
-            "entries), member files and execution record."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("difference-image", "source-catalog"),
     produces=("difference-image", "source-catalog"),
     database_access="none",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 #: The output revision of a finalized instance (products page: the
@@ -118,14 +113,6 @@ def _check_settings(settings: dict[str, Any]) -> None:
             raise UsageError(f"[pipelines] {name} must be a positive integer, got {value!r}")
 
 
-def _sha256_of_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _md5_of_file(path: Path) -> str:
     digest = hashlib.md5()
     with path.open("rb") as fh:
@@ -142,7 +129,7 @@ def _verified_member_path(inputs_dir: Path, member: Member) -> Path:
         raise InputRejected(
             f"input member {member.path!r}: manifest declares {member.bytes} bytes, "
             f"file is {path.stat().st_size} bytes")
-    if _sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
+    if sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
         raise InputRejected(f"input member {member.path!r}: SHA-256 mismatch")
     return path
 

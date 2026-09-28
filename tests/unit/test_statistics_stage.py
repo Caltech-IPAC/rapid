@@ -13,6 +13,7 @@ import json
 
 import pytest
 
+from rapidpipe.seams import database_env
 import rapidpipe.stages.statistics as statistics
 from rapidpipe.db.connection import ConnectionUnavailable
 from rapidpipe.products.manifest import Manifest
@@ -66,15 +67,6 @@ def test_declaration_validates():
     assert statistics.DECLARATION.consumes == ("association-set",)
     assert statistics.DECLARATION.produces == ("statistics-set",)
     assert statistics.DECLARATION.database_access == "read-write"
-
-
-def test_dry_run_touches_no_database(tmp_path, monkeypatch):
-    def refuse():
-        raise AssertionError("dry run opened the database")
-    monkeypatch.setattr(statistics, "open_database", refuse)
-    rc, outputs = _run(tmp_path, dry_run=True)
-    assert rc == ExitCode.SUCCESS
-    assert not (outputs / "manifest.json").exists()
 
 
 @pytest.mark.parametrize("unit", ["abc", "-1", "4711398.0", "", " 4711398", "e001/SCA01"])
@@ -241,6 +233,6 @@ def test_an_unreachable_database_exits_75(tmp_path, monkeypatch):
 
 
 def test_a_bad_database_override_exits_64(tmp_path, monkeypatch):
-    monkeypatch.setenv(statistics.DATABASE_ENV, "no.such.module:factory")
+    monkeypatch.setenv(database_env("statistics"), "no.such.module:factory")
     rc, _ = _run(tmp_path)
     assert rc == ExitCode.USAGE

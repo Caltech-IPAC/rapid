@@ -143,7 +143,8 @@ def _input_set(tmp_path, diff_outputs, result_sets):
 
 
 def _run_alerts(conn, monkeypatch, tmp_path, run_id, inputs, *, attempt_id=None):
-    monkeypatch.setattr(alerts, "connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
+    monkeypatch.setattr("rapidpipe.db.connection.connect",
+                        lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
     if attempt_id is None:
         _make_unit(conn, run_id, stage="alerts", unit_id=ALERTS_UNIT)
         attempt_id = repo.allocate_attempt(conn, run_id, "alerts", ALERTS_UNIT)

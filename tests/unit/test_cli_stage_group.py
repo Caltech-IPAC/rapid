@@ -103,7 +103,6 @@ def test_stage_describe_admit(capsys):
     assert "unit: detector-image" in lines
     assert "outputs: l2-image" in lines
     assert "inputs: (none)" in lines
-    assert any(line.startswith("arguments.description: rapidpipe stage admit") for line in lines)
     assert any(line.startswith("exit_codes: 0 SUCCESS, 64 USAGE") for line in lines)
     assert any(line.startswith("database_access: ") for line in lines)
 

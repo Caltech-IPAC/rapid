@@ -33,7 +33,6 @@ from .fakes3 import FakeClientError, FakeEndpointConnectionError, FakeS3
 DECLARATION = StageDeclaration(
     name="admit",
     unit="exposure",
-    argument_schema={},
     settings_schema_path=None,
     consumes=(),
     produces=("exposure",),
@@ -153,9 +152,14 @@ def test_products_read_and_result_sets_read_reach_the_manifest(inputs_dir, tmp_p
 
 
 def test_dry_run_publishes_nothing_and_exits_zero(inputs_dir, tmp_path):
+    # The body is where every stage opens its database and runs its tools,
+    # so a dry run that never calls it touches neither.
+    def body(context):
+        raise AssertionError("--dry-run called the stage body")
+
     outputs_dir = tmp_path / "outputs"
     rc = run_stage(
-        DECLARATION, _success_body,
+        DECLARATION, body,
         _argv(inputs_dir, outputs_dir, extra=["--dry-run"]))
     assert rc == int(ExitCode.SUCCESS)
     assert not (outputs_dir / "manifest.json").exists()
@@ -238,7 +242,6 @@ def test_stage_declaration_rejects_unknown_name():
         StageDeclaration(
             name="not-a-real-stage",
             unit="exposure",
-            argument_schema={},
             settings_schema_path=None,
             consumes=(),
             produces=(),
@@ -251,7 +254,6 @@ def test_stage_declaration_rejects_unknown_unit():
         StageDeclaration(
             name="admit",
             unit="not-a-real-unit",
-            argument_schema={},
             settings_schema_path=None,
             consumes=(),
             produces=(),
@@ -264,7 +266,6 @@ def test_stage_declaration_rejects_unknown_database_access():
         StageDeclaration(
             name="admit",
             unit="exposure",
-            argument_schema={},
             settings_schema_path=None,
             consumes=(),
             produces=(),
@@ -496,7 +497,6 @@ def declaration_with_settings(tmp_path):
     return StageDeclaration(
         name="admit",
         unit="exposure",
-        argument_schema={},
         settings_schema_path=str(schema_path),
         consumes=(),
         produces=("exposure",),
