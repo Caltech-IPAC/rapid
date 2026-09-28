@@ -206,6 +206,11 @@ def _run_kind(conn, run_id: str) -> str:
     return row[0]
 
 
+def run_kind(conn, run_id: str) -> str:
+    """The ``runs.kind`` of ``run_id``; :class:`RunNotFound` if there is none."""
+    return _run_kind(conn, run_id)
+
+
 def _release_job_definition(conn, run_id: str) -> tuple[str, str] | None:
     """``(release tag, "name:revision")`` for a run created from a release,
     or ``None`` for a run with no release.
@@ -867,6 +872,12 @@ def reconcile(
 DEFAULT_JOBLESS_AFTER_SECONDS = 600
 
 
+def default_jobless_after_seconds() -> int:
+    """The age :func:`resolve_jobless` applies when given none
+    (:data:`DEFAULT_JOBLESS_AFTER_SECONDS`)."""
+    return DEFAULT_JOBLESS_AFTER_SECONDS
+
+
 def _jobs_named(batch: Any, job_queue: str, job_name: str) -> list[str]:
     """Every job id on ``job_queue`` whose name is ``job_name``, in any
     status: with a ``filters`` argument ``ListJobs`` ignores ``jobStatus``
@@ -888,7 +899,7 @@ def _jobs_named(batch: Any, job_queue: str, job_name: str) -> list[str]:
 
 
 def resolve_jobless(
-    conn, *, run_id: str, older_than_seconds: float, client: Any = None,
+    conn, *, run_id: str, older_than_seconds: float | None = None, client: Any = None,
 ) -> list[Reconciled]:
     """Resolve ``run_id``'s job-less attempts (loop.md §Concurrency and
     recovery).
@@ -913,10 +924,14 @@ def resolve_jobless(
       while attempts remain and otherwise ``failed`` -- ``NOJOB``;
     - none, and younger: left for a later call, not reported.
 
+    ``older_than_seconds`` ``None`` is :data:`DEFAULT_JOBLESS_AFTER_SECONDS`.
+
     Before any write the row is re-read ``FOR UPDATE`` and skipped if a job
     id or a disposition arrived meanwhile. One commit per attempt, as
     :func:`reconcile` does.
     """
+    if older_than_seconds is None:
+        older_than_seconds = DEFAULT_JOBLESS_AFTER_SECONDS
     if older_than_seconds < 0:
         raise ValueError(f"older_than_seconds must be >= 0, got {older_than_seconds!r}")
     with conn.cursor() as cur:

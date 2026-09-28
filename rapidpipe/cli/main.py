@@ -360,7 +360,7 @@ def _build_parser() -> argparse.ArgumentParser:
     reconcile_parser.add_argument(
         "--older-than", type=float, default=None, dest="older_than", metavar="SECONDS",
         help="With --resolve-jobless: the minimum age of a job-less attempt "
-             f"(default {launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS}).")
+             f"(default {launch_batch.default_jobless_after_seconds()}).")
 
     cancel_parser = run_subparsers.add_parser(
         "cancel", help="Terminate an attempt's Batch job.",
@@ -795,7 +795,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
         # carries (local.py's subprocess otherwise inherits it), not only
         # via an explicit --profile this command would refuse outright.
         try:
-            kind = launch_batch._run_kind(conn, args.run_id)
+            kind = launch_batch.run_kind(conn, args.run_id)
         except RunModelError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run local: {exc}\n")
@@ -982,9 +982,7 @@ def _run_reconcile_command(args: argparse.Namespace) -> int:
     if older_than is not None and not resolve_jobless:
         sys.stderr.write("rapidpipe run reconcile: --older-than needs --resolve-jobless\n")
         return int(ExitCode.USAGE)
-    if older_than is None:
-        older_than = launch_batch.DEFAULT_JOBLESS_AFTER_SECONDS
-    if older_than < 0:
+    if older_than is not None and older_than < 0:
         sys.stderr.write("rapidpipe run reconcile: --older-than must be >= 0\n")
         return int(ExitCode.USAGE)
     try:
