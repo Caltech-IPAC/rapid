@@ -4,43 +4,66 @@ RAPID Pipeline Products
 Overview
 ***********
 
-The products processed on any given date (``<yyyymmdd>`` Pacific Time) will be located in
-the RAPID-product S3 bucket with the processing date as a prefix::
+Products are stored in the RAPID-product S3 bucket under their processing
+date (``<yyyymmdd>`` Pacific Time)::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
-For example, this command covers all jobs under processing date ``20260513``::
+List all jobs for processing date ``20260513``::
 
     aws s3 ls --recursive s3://rapid-product-files/20260513
 
-Here are the available products for just one job (``jid=90828``) under that processing date::
+Each job differences one science image. List the products for ``jid=90828``
+on that date::
 
     aws s3 ls --recursive s3://rapid-product-files/20260513/jid90828
 
-Note that there is one science image differenced per job.
-
-The associated product config output file is::
+The associated product config output file is parsed for metadata loaded into
+the RAPID operations database after processing::
 
     aws s3 ls  --recursive s3://rapid-product-files/20260513/product_config_jid90828.ini
 
-This is parsed for metadata to load into the RAPID operations database after the processing.
+Public Access
+***************
 
-The input and intermediate files for debugging and final products are listed in the table below.
-The input filenames are unique.
-The product filenames are canonical and predictable: they are the same from
-one science-image case to the next in different directories.
+To download a product, construct its URL using the filename, which must be
+known in advance. For example::
+
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260520/jid90828/awaicgen_output_mosaic_cov_map.fits
+
+A full product listing is generated on demand with ``aws s3 ls``, not
+committed to this repository. Redirect the command's output to recreate the
+per-date listing previously distributed as a static download::
+
+    aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd> > rapid-product-files_<yyyymmdd>.txt
+
+A simple Python script can parse the listing to generate ``wget`` or
+``curl`` download commands.
+
+Pipeline logs are also public, with one log file per processed science
+image. The log-file URL template corresponding to the example above is::
+
+    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260513/rapid_pipeline_job_20260513_jid90828_log.txt
+
+
+Product Files
+*************
+
+The table lists input files, intermediate files for debugging, and final
+products. Input filenames are unique. Product filenames are canonical and
+predictable, repeating across science-image cases in different directories.
 
 .. warning::
-    Not all products listed below may be available for a given processing date.
-    It depends on the particular test associated with that date.
-    Also, some products were newly added later.
+    Availability depends on the test associated with each processing date;
+    some products were added later. Not every date has all listed products.
 
-There are difference-image products from three different methods: ZOGY, SFFT with cross-convolution,
-and naive (simple science image minus reference image).
+Difference-image products use three methods: ZOGY, SFFT with
+cross-convolution, and naive (simple science image minus reference image).
 
 .. note::
-   Product filenames that do not include the suffix "_negative" are for positive difference images ("science image minus reference image").
-   Product filenames that include the suffix "_negative" are for negative difference images ("reference image minus science image").
+   Filenames without the suffix "_negative" identify positive difference
+   images ("science image minus reference image"). Those with "_negative"
+   identify negative difference images ("reference image minus science image").
 
 
 ==============================================================  =======================================================================================================================
@@ -94,37 +117,12 @@ naive_masked_psfcat_residual.fits                               PhotUtils residu
 ==============================================================  =======================================================================================================================
 
 
-Public Access
-***************
-
-To download a RAPID pipeline product, the
-user must construct a URL, knowing the filename in advance, like the following::
-
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260520/jid90828/awaicgen_output_mosaic_cov_map.fits
-
-A full listing of product files is not committed to this repository; it is
-produced on demand from the bucket with the ``aws s3 ls`` command shown
-above. Redirect that command's output to a file to get the same per-date
-listing that was previously distributed as a static download, for example::
-
-    aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd> > rapid-product-files_<yyyymmdd>.txt
-
-A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
-
-The pipeline log files are also publicly accessible.  There is a log file for each science image processed.
-Here is a template for the log-file URL that corresponds to the above example::
-
-    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260513/rapid_pipeline_job_20260513_jid90828_log.txt
-
-
 Example Reference-Image FITS Header
 ******************************************
 
-This section lists an example reference-image FITS header to expose the user to the
-various useful metadata contained therein.  The keywords near the end of the listing
-include operations database IDs written to the FITS header by the RAPID post-processing pipeline.
-
-Note that all reference images are scaled to have a fixed MAGZP of 17.0 mag.
+The example header below shows reference-image metadata, including
+operations database IDs written near the end by the RAPID post-processing
+pipeline. All reference images are scaled to a fixed MAGZP of 17.0 mag.
 
 .. code-block::
 
@@ -210,8 +208,8 @@ JDEND             Observation JD of latest input image used [days]
 MAGZP             Zero point of reference image [mag]
 ================  ==================================================================================
 
-Here is an image-view of the above-mentioned reference image.  Note the areas of uneven coverage,
-including two blue patches representing NaNs (pixels storing not a number).
+The reference image above has uneven coverage, including two blue patches
+representing NaNs (pixels storing not a number):
 
 .. image:: s3_rapid-product-files_20250404_jid999_awaicgen_output_mosaic_image.png
 
@@ -219,24 +217,21 @@ including two blue patches representing NaNs (pixels storing not a number).
 Analysis of Reference Images
 ************************************
 
-The number of input frames that went into computing a reference image
-is an important attribute of a reference image.  This is listed in the
-reference-image FITS header, given by FITS keyword ``NFRAMES``, along
-with the filenames of the particular input images used (``INFIL###``).
-
-Here is a histogram of the number of input frames for our current set of 1696 reference images:
+The input-frame count is an important reference-image attribute, recorded
+in the FITS header as ``NFRAMES`` alongside the input filenames
+(``INFIL###``). This histogram shows the counts for the current set of
+1696 reference images:
 
 .. image:: rapid_refimmeta_nframes_1dhist.png
 
-The quality-assurance metric ``cov5percent``, given by FITS keyword ``COV5PERC``,
-is an absolute quantifier for the aggregate areal-depth coverage of a reference image at a
-reference depth of 5, corresponding to a coadd depth of at least 5 input images.
-It is computed from the reference-image coverage map.
-It is defined as a percentage of the sum of the limited coverage of all pixels in an image,
-where the limited coverage is all coverage and any coverage greater than 5 that is reset to 5
-for scoring purposes, relative to 5 times the total number of pixels in the image.
+The quality-assurance metric ``cov5percent`` (FITS keyword ``COV5PERC``)
+quantifies absolute aggregate areal-depth coverage at a reference depth of
+5, corresponding to a coadd depth of at least 5 input images. Computed from
+the reference-image coverage map, it is the sum of all pixel coverages,
+with values greater than 5 reset to 5 for scoring, expressed as a
+percentage of 5 times the total number of pixels.
 
-Here is a histogram of cov5percent for our current set of 1696 reference images:
+This histogram shows cov5percent for the current set of 1696 reference images:
 
 .. image:: rapid_refimmeta_cov5percent_1dhist.png
 
@@ -246,119 +241,119 @@ Alerts
 
 .. warning::
 
-   **The RAPID alert schema are under initial development**
+   **The RAPID alert schema is under initial development**
 
-   The records, parameter names, types, and semantics documented below are a
-   work in progress and may change -- including in backward-incompatible
-   ways -- without notice. Many parameters are currently stubs that are
-   always serialized as null. Do not build production consumers against
-   this schema yet.
+   Records, parameter names, types, and semantics may change without
+   notice, including backward-incompatible changes. Many parameters are
+   stubs always serialized as null. Do not build production consumers
+   against this schema yet.
 
 Summary
 ==================================
 
-RAPID produces alerts for source detections on difference images. Each alert
-is a single Apache Avro packet, assembled and serialized by the ``alerts``
-package, and consists of the following records:
+Each RAPID alert reports a source detection on a difference image in a
+single Apache Avro packet, assembled and serialized by the ``alerts``
+package from these records:
 
-- ``alert`` -- the top-level record: provenance, the triggering source
+- ``alert``: the top-level record: provenance, the triggering source
   detection, object history, and image cutouts.
-- ``diaSource`` -- the triggering source detection on a difference image,
+- ``diaSource``: the triggering source detection on a difference image,
   including astrometry, PSF-fit photometry, and fit-quality parameters.
-- ``diaForcedSource`` -- forced photometry at the object position
-- ``diaObject`` -- the associated astronomical object, aggregated from all
+- ``diaForcedSource``: forced photometry at the object position
+- ``diaObject``: the associated astronomical object, aggregated from all
   of its constituent detections.
-- ``ssMatch`` -- an associated solar system source: will contain MPC designation,
+- ``ssMatch``: an associated solar system source: will contain MPC designation,
   info about the position, and the predicted V-band magnitude.
 
 Current State of the Alert Schema
 ==================================
 
-The schema is currently produced end-to-end for sources detected on
-difference images. (see the tables in :ref:`alert-packet-contents`
-for per-parameter implementation status)
+Alerts are currently produced end-to-end for sources detected on difference
+images. See :ref:`alert-packet-contents` for per-parameter implementation
+status.
 
 ``alert``
+---------
 
-- The alert schema currently contains schema version information, the
-  triggering source detection, previous source detections, persistent
-  object metadata, including aggregate photometry, and cutouts at the
-  source position of the difference, science, and reference images.
-- Cutouts are currently 129x129 pixels (~14"), but we may increase the
-  size if memory constraints allow.
+The alert schema currently contains schema version information, the
+triggering and previous source detections, persistent object metadata
+including aggregate photometry, and difference, science, and reference
+image cutouts at the source position. Cutouts are currently 129x129 pixels
+(~14"); their size may increase if memory constraints allow.
 
-- Before releasing version 1.0, we plan to include:
+Planned before version 1.0:
 
-  - Forced photometry history (see ``diaForcedSource``)
-  - solar-system cross-matching
-  - cross-matching to the reference image SExtractor catalog
-  - cross-matches to other surveys (NED, Gaia).
+- Forced photometry history (see ``diaForcedSource``)
+- solar-system cross-matching
+- cross-matching to the reference image SExtractor catalog
+- cross-matches to other surveys (NED, Gaia).
 
 ``diaSource``
+-------------
 
-- The source schema currently contain:
+The source schema currently contains:
 
-  - A source ID from our pipeline
-  - Exposure metadata (MJD, exposure ID, SCA, exposure time, band, ...)
-  - The associated object ID
-  - Source centroid position and uncertainties
-  - PSF Photometry on the difference, science, and reference images
-    (at the difference image source centroid)
-  - PSF Fit quality parameters
+- A source ID from our pipeline and the associated object ID
+- Exposure metadata (MJD, exposure ID, SCA, exposure time, band, ...)
+- Source centroid position and uncertainties
+- PSF Photometry on the difference, science, and reference images at the
+  difference image source centroid
+- PSF Fit quality parameters
 
-- We plan to include:
+Planned additions:
 
-  - Reference image ID, including co-add information
-  - Aperture photometry
-  - Shape measurements from SExtractor (currently migrating from
-    photutils)
-  - Flags, including whether the source is a likely solar-system
-    object
+- Reference image ID, including co-add information
+- Aperture photometry
+- Shape measurements from SExtractor (currently migrating from photutils)
+- Flags, including whether the source is a likely solar-system object
 
 ``diaForcedSource``
+-------------------
 
-- The Forced Photometry schema is currently a stub, but will be
-  populated in version 1.0
-- We are benchmarking Forced Photometry routines to determine the best
-  algorithm. If we can successfully optimize this, we will be able to
-  deliver FP at alert time, but if not, data will be stored using the
-  first detected object position as the FP anchor.
+The Forced Photometry schema is a stub to be populated in version 1.0.
+Forced Photometry routines are being benchmarked to select the best
+algorithm. Successful optimization would allow FP delivery at alert time;
+otherwise, data will be stored using the first detected object position as
+the FP anchor.
 
-- Each Forced Source object will contain:
+Each Forced Source object will contain:
 
-  - The forced photometry ID and object ID
-  - MJD, Exposure ID,  SCA number, and band
-  - Measurement position
-  - PSF photometry on difference and science image
+- The forced photometry ID and object ID
+- MJD, Exposure ID, SCA number, and band
+- Measurement position
+- PSF photometry on difference and science image
 
 ``diaObject``
+-------------
 
-- The object schema is half-populated so far, and is awaiting the
-  implementation of automatic photometry aggregation in the database.
-- The object schema currently contains:
+The object schema is half-populated, awaiting automatic photometry
+aggregation in the database. It currently contains:
 
-  - Object ID
-  - Position and position uncertainty (standard deviation on detected
-    positions)
+- Object ID
+- Position and position uncertainty (standard deviation on detected
+  positions)
 
-- We plan to include:
+Planned additions:
 
-  - Coverage history
-  - Aggregate photometric statistics on each band (mean, min, max, slopes,
-    and number of measurements)
+- Coverage history
+- Aggregate photometric statistics on each band (mean, min, max, slopes,
+  and number of measurements)
 
 ``ssMatch``
+-----------
 
-- Awaits solar-system processing (KONA per-visit output). Will contain
-  the MPC designation, the predicted position of the object at the
-  triggering epoch, and the predicted V-band magnitude.
+This record awaits solar-system processing (KONA per-visit output). It
+will contain the MPC designation, the predicted object position at the
+triggering epoch, and the predicted V-band magnitude.
 
-Other cross-matches:
+Other cross-matches
+-------------------
 
-- We plan to design a cross-match schema for both internal references
-  and other surveys, to be included in the top-level alert schema. Our
-  current plan is to include the top 3 closest matches for each catalog,
-  potentially taking into account the half-light radius for extended sources.
+A cross-match schema is planned for internal references and other surveys
+in the top-level alert schema. The current plan is to include the top 3
+closest matches for each catalog, potentially accounting for the half-light
+radius of extended sources.
+
 
 Sample Alert Packet
 ==================================
@@ -367,14 +362,14 @@ Sample Alert Packet
 
    **This sample file is for exploratory purposes only.**
 
-   Production-level avro files will be schema-less and will require
-   versioning with Confluent schema in order to use. This file's schema
-   may become out of date from the current alert code.
+   Production-level avro files will be schema-less and require versioning
+   with Confluent schema. This file's schema may become out of date relative
+   to the current alert code.
 
 :download:`sample_alert.avro <sample_alert.avro>` (schema version ``00.02``).
 
-This is a standard Avro object container file with the schema embedded, so
-it can be read without any RAPID code, e.g.::
+The standard Avro object container file embeds its schema and can be read
+without RAPID code::
 
     import fastavro
     with open("sample_alert.avro", "rb") as f:
