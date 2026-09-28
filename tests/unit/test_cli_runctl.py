@@ -24,6 +24,7 @@ from rapidpipe.products.manifest import (
     member_for_file,
 )
 from rapidpipe.runs import cleanup, inputs, repository
+from rapidpipe.runs import create as runs_create
 from tests.unit.fakes3 import FakeClientError, FakeS3
 
 
@@ -1134,7 +1135,7 @@ def test_create_seed_is_passed_through(monkeypatch, fake_conn, capsys):
         return "NEWRUN"
 
     monkeypatch.setattr(repository, "create_run", _create_run)
-    monkeypatch.setattr(cli, "git_revision", lambda: "rev")
+    monkeypatch.setattr(runs_create, "git_revision", lambda: "rev")
     rc = cli.main(["run", "create", "--kind", "scratch", "--purpose", "p", "--stages", "admit",
                    "--seed", "OLDRUN"])
     assert rc == 0
@@ -1150,7 +1151,7 @@ def test_create_fills_lane_profile_and_target_with_the_defaults(monkeypatch, fak
         return "NEWRUN"
 
     monkeypatch.setattr(repository, "create_run", _create_run)
-    monkeypatch.setattr(cli, "git_revision", lambda: "rev")
+    monkeypatch.setattr(runs_create, "git_revision", lambda: "rev")
     monkeypatch.setenv("PGDATABASE", "somedb")
     assert cli.main(["run", "create", "--kind", "scratch", "--purpose", "p",
                      "--stages", "admit"]) == 0
@@ -1171,7 +1172,7 @@ def test_create_unknown_seed_exits_64(monkeypatch, fake_conn, capsys):
         raise repository.RunNotFound(f"seed_run {kwargs['seed_run']!r} does not exist")
 
     monkeypatch.setattr(repository, "create_run", _create_run)
-    monkeypatch.setattr(cli, "git_revision", lambda: "rev")
+    monkeypatch.setattr(runs_create, "git_revision", lambda: "rev")
     assert cli.main(["run", "create", "--kind", "scratch", "--purpose", "p", "--stages",
                      "admit", "--seed", "NOPE"]) == 64
     assert "seed_run 'NOPE' does not exist" in capsys.readouterr().err
