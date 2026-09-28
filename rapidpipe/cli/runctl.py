@@ -45,10 +45,8 @@ import dataclasses
 import getpass
 import json
 import shlex
-import shutil
 import statistics
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -66,7 +64,7 @@ from rapidpipe.products.manifest import Manifest, ManifestError, Member, OutputE
 from rapidpipe.products.storage import (
     Location,
     LocationError,
-    is_not_found,
+    Storage,
     join,
     parse_location,
 )
@@ -87,6 +85,7 @@ _STATUS_STILL_RUNNING = ExitCode.INCOMPLETE
 
 
 _Exit = CommandExit
+_Storage = Storage
 
 
 # ======================================================================
@@ -442,100 +441,6 @@ def _reconcile(conn, run_id: str) -> list[Any]:
 
 
 # ======================================================================
-# Storage helpers (local directories and s3:// prefixes alike)
-# ======================================================================
-
-def _s3_key(location: Location, relative: str) -> str:
-    return f"{location.prefix}/{relative}" if location.prefix else relative
-
-
-class _Storage:
-    """Copy, size and existence checks across local and S3 locations.
-
-    The S3 client is made on first use only (``rapidpipe.products.storage
-    .s3_client``, which tests monkeypatch), so a purely local composition
-    never imports boto3.
-    """
-
-    def __init__(self, client: Any = None):
-        self._client = client
-
-    @property
-    def s3(self) -> Any:
-        if self._client is None:
-            from rapidpipe.products import storage
-
-            self._client = storage.s3_client()
-        return self._client
-
-    def exists(self, location: Location, relative: str) -> bool:
-        if not location.is_s3():
-            return (location.path / relative).exists()
-        try:
-            self.s3.head_object(Bucket=location.bucket, Key=_s3_key(location, relative))
-        except Exception as exc:  # noqa: BLE001 - ClientError-shaped
-            if is_not_found(exc):
-                return False
-            raise
-        return True
-
-    def size(self, location: Location, relative: str) -> int:
-        if not location.is_s3():
-            return (location.path / relative).stat().st_size
-        head = self.s3.head_object(Bucket=location.bucket, Key=_s3_key(location, relative))
-        return int(head["ContentLength"])
-
-    def copy(self, src: Location, src_rel: str, dst: Location, dst_rel: str) -> None:
-        if src.is_s3() and dst.is_s3():
-            # Server-side; copy_object handles objects up to 5 GB.
-            self.s3.copy_object(
-                Bucket=dst.bucket, Key=_s3_key(dst, dst_rel),
-                CopySource={"Bucket": src.bucket, "Key": _s3_key(src, src_rel)})
-        elif src.is_s3():
-            target = dst.path / dst_rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            self.s3.download_file(src.bucket, _s3_key(src, src_rel), str(target))
-        elif dst.is_s3():
-            self.s3.upload_file(str(src.path / src_rel), dst.bucket, _s3_key(dst, dst_rel))
-        else:
-            target = dst.path / dst_rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src.path / src_rel, target)
-
-    def read_manifest(self, location_text: str) -> Manifest:
-        location = parse_location(location_text)
-        try:
-            if not location.is_s3():
-                return Manifest.read(location.path / "manifest.json")
-            with tempfile.TemporaryDirectory(prefix="rapidpipe-run-inputs-") as tmp:
-                path = Path(tmp) / "manifest.json"
-                try:
-                    self.s3.download_file(
-                        location.bucket, _s3_key(location, "manifest.json"), str(path))
-                except Exception as exc:  # noqa: BLE001 - ClientError-shaped
-                    if is_not_found(exc):
-                        raise FileNotFoundError(path) from exc
-                    raise
-                return Manifest.read(path)
-        except FileNotFoundError as exc:
-            raise _Exit(int(ExitCode.USAGE),
-                        f"no manifest.json at {location_text}") from exc
-        except (ValueError, TypeError, KeyError) as exc:
-            raise _Exit(int(ExitCode.USAGE),
-                        f"{location_text}/manifest.json: invalid manifest: {exc}") from exc
-
-    def write_manifest(self, manifest: Manifest, location: Location) -> None:
-        if not location.is_s3():
-            location.path.mkdir(parents=True, exist_ok=True)
-            manifest.write(location.path / "manifest.json")
-            return
-        with tempfile.TemporaryDirectory(prefix="rapidpipe-run-inputs-") as tmp:
-            path = Path(tmp) / "manifest.json"
-            manifest.write(path)
-            self.s3.upload_file(str(path), location.bucket, _s3_key(location, "manifest.json"))
-
-
-# ======================================================================
 # run inputs
 # ======================================================================
 
@@ -612,7 +517,7 @@ def compose_inputs(
     dest: str | None = None,
     kind: str = "l2-image",
     reuse_existing: bool = False,
-    storage: _Storage | None = None,
+    storage: Storage | None = None,
     producer_run: str | None = None,
 ) -> str:
     """Compose ``stage``'s input set for ``unit_id``; return its location.
@@ -641,7 +546,7 @@ def compose_inputs(
     """
     if stage == "register":
         raise _Exit(int(ExitCode.USAGE), _REGISTER_TEMPLATE_REFUSAL)
-    storage = storage or _Storage()
+    storage = storage or Storage()
     _require_run(conn, run_id)
     dest_text = dest or default_inputs_dest(run_id, stage, unit_id)
     _require_under_inputs_root(dest_text, run_id)

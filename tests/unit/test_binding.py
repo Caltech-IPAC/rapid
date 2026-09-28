@@ -203,7 +203,7 @@ def test_no_composer_admits_binds_or_writes_around_the_primitive():
     write an input set only through ``binding.bind_input_set``. A direct
     ``add_unit`` (admission), ``bind_unit_inputs``/``bind_registered_inputs``
     call, a private registered-instance lookup, or a manifest write outside
-    ``_Storage`` reintroduces a second path with its own order.
+    ``Storage`` reintroduces a second path with its own order.
 
     ``add_unit(`` is forbidden in the whole of both modules: neither has a
     legitimate caller (``run submit``/``run local`` admission lives in
@@ -222,16 +222,19 @@ def test_no_composer_admits_binds_or_writes_around_the_primitive():
         assert _calls_named(tree, "add_unit") == []
         assert len(_calls_named(_function(tree, function), "bind_input_set")) >= at_least
 
-    # write_manifest: in runctl only _Storage's own definition; in loop never
-    # called (its LoopTools docstring names the interface, so calls are
-    # found through the syntax tree, not the text).
-    runctl_tree = ast.parse(runctl_text)
-    storage_cls = next(n for n in runctl_tree.body
-                       if isinstance(n, ast.ClassDef) and n.name == "_Storage")
+    # write_manifest: defined only by products.storage.Storage, whose own
+    # definition holds every write_manifest( line of that module; the
+    # composers never write a manifest themselves (loop.py's calls are
+    # found through the syntax tree, since its docstrings name the method).
+    storage_text = (REPO / "rapidpipe/products/storage.py").read_text()
+    storage_tree = ast.parse(storage_text)
+    storage_cls = next(n for n in storage_tree.body
+                       if isinstance(n, ast.ClassDef) and n.name == "Storage")
     inside = range(storage_cls.lineno, storage_cls.end_lineno + 1)
-    lines = [i for i, line in enumerate(runctl_text.splitlines(), 1)
+    lines = [i for i, line in enumerate(storage_text.splitlines(), 1)
              if "write_manifest(" in line]
     assert lines and all(i in inside for i in lines)
+    assert "write_manifest(" not in runctl_text
     assert _calls_named(ast.parse(loop_text), "write_manifest") == []
 
 
