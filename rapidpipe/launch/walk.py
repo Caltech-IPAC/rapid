@@ -49,6 +49,7 @@ from rapidpipe.products.storage import (
     join,
     parse_location,
 )
+from rapidpipe.products import units as product_units
 from rapidpipe.runs import binding
 from rapidpipe.stages.contract import STAGE_NAMES
 
@@ -331,7 +332,7 @@ def compose_inputs(
     unit is read: a seeded run's production seed when the producer was
     inherited from it (``run start``).
     """
-    if stage == "register":
+    if product_units.takes_producer_unit(stage):
         raise CommandExit(int(ExitCode.USAGE), _REGISTER_TEMPLATE_REFUSAL)
     storage = storage or Storage()
     require_run(conn, run_id)
@@ -468,12 +469,12 @@ class _StartWalk:
         self.inputs_unprefixed, self.inputs_keyed = _split_keyed(args.inputs, "--inputs")
         self.settings_unprefixed, self.settings_keyed = _split_keyed(args.settings, "--settings")
         _, self.templates = _split_keyed(args.template, "--template", allow_unprefixed=False)
-        if "register" in self.templates:
+        if product_units.REGISTER in self.templates:
             raise CommandExit(int(ExitCode.USAGE), _REGISTER_TEMPLATE_REFUSAL)
 
     def _producer(self, selected: list[str], position: int) -> str | None:
         for stage in reversed(selected[:position]):
-            if stage != "register":
+            if not product_units.takes_producer_unit(stage):
                 return stage
         return None
 
@@ -507,14 +508,15 @@ class _StartWalk:
         list does not end with this run's does it fall back to any
         producing stage's."""
         unit_id = self.args.unit_id
-        if selected[position] != "register":
+        if not product_units.takes_producer_unit(selected[position]):
             return [unit_id]
         producer = self._producer(selected, position)
         if producer is None:
             producer = self._seed_producer(selected, position, any_seed_kind=True)
         if producer is not None:
-            return [f"{producer}/{unit_id}"]
-        return [f"{stage}/{unit_id}" for stage in STAGE_NAMES if stage != "register"]
+            return [product_units.register_unit_id(producer, unit_id)]
+        return [product_units.register_unit_id(stage, unit_id) for stage in STAGE_NAMES
+                if not product_units.takes_producer_unit(stage)]
 
     def _inherited(self, selected: list[str], position: int, first: int) -> bool:
         """Whether a seeded run inherits this position's result from its seed
@@ -546,9 +548,9 @@ class _StartWalk:
         one for the unit here: its unit id is the seed's, copied as is, so
         it is not derived from the inputs' manifest (runs page, "Rules").
         ``None`` when there is no such unit; more than one is a usage error."""
-        if self._explicit_inputs("register", position, first) is not None:
+        if self._explicit_inputs(product_units.REGISTER, position, first) is not None:
             return None
-        units = _units_at(self.conn, self.args.run_id, "register",
+        units = _units_at(self.conn, self.args.run_id, product_units.REGISTER,
                           self._candidate_unit_ids(selected, position), seeded_only=True)
         if not units:
             return None
@@ -715,7 +717,7 @@ class _StartWalk:
             settings_location: str | None = None
             settings_resolved = False
             seeded_register = (self._seeded_register(selected, position, first)
-                               if stage == "register" else None)
+                               if product_units.takes_producer_unit(stage) else None)
             if seeded_register is not None:
                 # The seeded unit's id is the seed's, not derived (runs page,
                 # "Rules").
@@ -726,7 +728,7 @@ class _StartWalk:
                     settings_location = explicit_settings
                 if inputs_location is None:
                     inputs_location = self._inputs_for(selected, position, first, unit_id)
-            elif stage == "register":
+            elif product_units.takes_producer_unit(stage):
                 inputs_location = self._inputs_for(selected, position, first)
                 unit_id = resolve_register_unit_id(
                     unit_id_arg=None, inputs_location_arg=inputs_location)

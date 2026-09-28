@@ -76,6 +76,7 @@ from rapidpipe.products.refimage import (
     validate_reference_catalog_entry,
     validate_reference_image_entry,
 )
+from rapidpipe.products.units import REGISTER
 from rapidpipe.runs.repository import register_manifest
 from rapidpipe.stages.contract import (
     InputRejected,
@@ -99,7 +100,7 @@ _KNOWN_KINDS = ("l2-image", "psf", "difference-image", "source-catalog",
 _REGISTRATION_ORDER = {"reference-image": 0}
 
 DECLARATION = StageDeclaration(
-    name="register",
+    name=REGISTER,
     unit="detector-image",
     settings_schema_path=None,
     consumes=("l2-image", "psf", "difference-image", "source-catalog",
