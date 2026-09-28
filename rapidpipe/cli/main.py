@@ -90,6 +90,7 @@ from rapidpipe.runs.repository import RunModelError
 from rapidpipe.selftest import run as run_selftest
 from rapidpipe.selftest.runner import STAGE_NAMES as SELFTEST_STAGE_NAMES
 from rapidpipe.exitcodes import ArgumentParser, ExitCode
+from rapidpipe.products.units import takes_producer_unit
 from rapidpipe.stages.contract import STAGE_NAMES
 
 #: Recognised as network-shaped, the same rule
@@ -764,7 +765,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
         sys.stderr.write(f"rapidpipe run local: {module_name} has no DECLARATION\n")
         return int(ExitCode.USAGE)
 
-    if args.stage == "register":
+    if takes_producer_unit(args.stage):
         try:
             unit_id = launch_walk.resolve_register_unit_id(
                 unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
@@ -877,7 +878,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
     # connection is attempted, matching the plain-stage --unit-required
     # check below (unless the location is --inputs-from-stage, which
     # itself needs a connection to resolve).
-    if args.stage == "register":
+    if takes_producer_unit(args.stage):
         if args.inputs_from_stage is None:
             try:
                 unit_id = launch_walk.resolve_register_unit_id(
@@ -908,7 +909,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
 
     with cm as conn:
         try:
-            if args.stage == "register" and args.inputs_from_stage is not None:
+            if takes_producer_unit(args.stage) and args.inputs_from_stage is not None:
                 inputs_location = launch_batch.resolve_inputs_from_stage(
                     conn, run_id=args.run_id, unit_id=args.unit_id,
                     upstream_stage=args.inputs_from_stage)

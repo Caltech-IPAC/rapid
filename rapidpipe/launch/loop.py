@@ -140,6 +140,7 @@ from rapidpipe.launch import walk as launch_walk
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
 from rapidpipe.products import storage as products_storage
 from rapidpipe.products.storage import is_not_found, join, parse_location
+from rapidpipe.products.units import register_unit_id, takes_producer_unit
 from rapidpipe.runs import binding, repository
 from rapidpipe.runs import create as runs_create
 from rapidpipe.runs.inputs import InputsRefused
@@ -897,7 +898,8 @@ def _output(conn, view: RunView, stage: str, unit_id: str) -> str:
 
 
 def _producer_position(position: int) -> int:
-    return next(p for p in reversed(range(position)) if SELECTED_STAGES[p] != "register")
+    return next(p for p in reversed(range(position))
+                if not takes_producer_unit(SELECTED_STAGES[p]))
 
 
 def image_units(unit: str) -> list[tuple[int, str, str]]:
@@ -906,9 +908,9 @@ def image_units(unit: str) -> list[tuple[int, str, str]]:
     units = []
     for position in IMAGE_CHAIN:
         stage = SELECTED_STAGES[position]
-        if stage == "register":
-            units.append((position, stage,
-                          f"{SELECTED_STAGES[_producer_position(position)]}/{unit}"))
+        if takes_producer_unit(stage):
+            producer = SELECTED_STAGES[_producer_position(position)]
+            units.append((position, stage, register_unit_id(producer, unit)))
         else:
             units.append((position, stage, unit))
     return units

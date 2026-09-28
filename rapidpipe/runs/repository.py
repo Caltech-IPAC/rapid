@@ -47,6 +47,7 @@ from rapidpipe.checks.policy import (
 )
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.storage import join, parse_location
+from rapidpipe.products import units as product_units
 from rapidpipe.runs.slots import (
     PlanEntry,
     Selector,
@@ -2180,7 +2181,7 @@ def _stage_producer(stages: Sequence[str], position: int) -> str | None:
     output a ``register`` at ``position`` reads (its unit id is
     ``<producer>/<unit>``, ``rapidpipe.products.manifest.register_unit_id``)."""
     for stage in reversed(list(stages[:position])):
-        if stage != "register":
+        if not product_units.takes_producer_unit(stage):
             return stage
     return None
 
@@ -2192,10 +2193,11 @@ def _unit_position(stages: Sequence[str], stage: str, unit_id: str) -> int | Non
     placed by its producing stage (the ``<producer>/`` prefix of its unit
     id); any other stage by its first occurrence.
     """
-    if stage == "register":
+    if product_units.takes_producer_unit(stage):
         producer = unit_id.split("/", 1)[0]
         for position, name in enumerate(stages):
-            if name == "register" and _stage_producer(stages, position) == producer:
+            if (product_units.takes_producer_unit(name)
+                    and _stage_producer(stages, position) == producer):
                 return position
         return None
     return list(stages).index(stage) if stage in stages else None
@@ -2245,7 +2247,8 @@ _SEED_COPIED_COLUMNS = (
 def _nominal_unit_id(stage: str, unit_id: str) -> str:
     """The unit id a ``run start --unit`` names: a register unit's id
     without its ``<producer>/`` prefix, any other unit's id as is."""
-    return unit_id.split("/", 1)[1] if stage == "register" and "/" in unit_id else unit_id
+    return (product_units.nominal_unit_id(unit_id)
+            if product_units.takes_producer_unit(stage) else unit_id)
 
 
 def failed_rerun_plan(
@@ -2325,7 +2328,8 @@ def failed_rerun_plan(
     uncarried: list[str] = []
     for _, (_, stage, _, unit_id) in sorted(placed, key=lambda item: item[0]):
         nominal = _nominal_unit_id(stage, unit_id)
-        carried = None if first == "register" else first_units.get(nominal)
+        carried = (None if product_units.takes_producer_unit(first)
+                   else first_units.get(nominal))
         if carried is None:
             if nominal not in uncarried:
                 uncarried.append(nominal)
