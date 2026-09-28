@@ -5,14 +5,14 @@ RAPID Archive Deliveries
 Introduction
 ************************************
 
-RAPID (Roman Alerts Promptly from Image Differencing) delivers prompt time-domain products and services for the Nancy Grace Roman Space Telescope. The core products are:
+RAPID (Roman Alerts Promptly from Image Differencing) delivers prompt time-domain products and services for the Nancy Grace Roman Space Telescope:
 
 * **Difference images** of every new WFI SCA image against a deep reference image
 * **Public alert stream** of transient and variable candidates extracted from the difference images
 * **Light curves** (source-matched photometry) for every candidate observed more than once
 * **Forced photometry** at any observed sky location on request
 
-The goal is to issue alerts within one hour of receiving L2 data from the SOC. Processing is continuous; time-critical products (alerts, difference images) are served directly by RAPID, while accumulated products are rolled up into monthly batch deliveries to the MAST archive.
+RAPID processes data continuously, aiming to issue alerts within one hour of receiving L2 data from the SOC. It serves time-critical alerts and difference images directly and delivers accumulated products to the MAST archive in monthly batches.
 
 .. image:: flow.png
 
@@ -22,7 +22,7 @@ Full pipeline documentation is available at `RAPID on ReadTheDocs <https://calte
 Assumptions and Open Items
 ************************************
 
-The volume and cost estimates in this document rely on the following assumptions. Items marked *(TBD)* are open and may change the estimates materially.
+Volume and cost estimates use the assumptions below. Items marked *(TBD)* remain open and may materially change the estimates.
 
 * GRISM and PRISM (spectroscopic) exposures are excluded; RAPID processes imaging modes only
 * Observation plan based on the provisional Roman scheduled observations; detailed mission plan is TBD
@@ -33,7 +33,7 @@ The volume and cost estimates in this document rely on the following assumptions
 * Product sizes measured from the 2026-02-27 pipeline test run (OpenUniverse simulated data)
 * Image products converted from FITS to ASDF for MAST delivery; sizes may change slightly *(TBD: conversion pipeline)*
 * AWS costs use public on-demand list pricing (us-east-1, March 2026); actual costs depend on negotiated rates
-* Cost-optimization strategies have not yet been evaluated in detail; the AWS cost estimates below are based on simple extrapolations and should be treated as an initial planning guide rather than an optimized operations budget
+* AWS cost estimates are simple extrapolations for initial planning, not an optimized operations budget; cost-optimization strategies have not been evaluated in detail
 * Three full reprocessings at 6 months, 2 years, and end of mission with 6-month overlap periods *(TBD: reprocessing frequency and scope)*
 * Galactic plane survey strategy and its impact on alert rates *(TBD)*
 * RISE differencing of stacked images *(TBD)*
@@ -46,11 +46,11 @@ The volume and cost estimates in this document rely on the following assumptions
 Processing Architecture
 ************************************
 
-RAPID processes each of the 18 WFI SCA images from every exposure as an independent pipeline job. This per-SCA granularity enables massive parallelism under AWS Batch and defines the fundamental unit of data production: every volume estimate in this document scales with the number of SCA images processed. RAPID is currently developing under its own AWS account (us-west-2) but will transfer to NASA SMDC in us-east-1 for operations, co-located with the MAST archive infrastructure.
+RAPID processes each of an exposure's 18 WFI SCA images as an independent pipeline job. This enables massive parallelism under AWS Batch; all volume estimates scale with the number of SCA images processed. Development currently uses RAPID's own AWS account (us-west-2). Operations will transfer to NASA SMDC in us-east-1, co-located with the MAST archive infrastructure.
 
-For a detailed description of the pipeline design, see :doc:`/pl/pl`. The :doc:`/sysarch/comp_arch` page describes the computing architecture, and :doc:`/ops/bulk_run` documents the step-by-step pipeline execution with performance benchmarks.
+See :doc:`/pl/pl` for pipeline design, :doc:`/sysarch/comp_arch` for computing architecture, and :doc:`/ops/bulk_run` for step-by-step execution and performance benchmarks.
 
-The pipeline produces products at several stages, each on a different timescale:
+Products emerge at different stages and timescales:
 
 1. **Reference images** are built once sufficient coverage exists at a sky location for a given filter (see `Reference Images`_).
 2. **Difference images** and candidate catalogs are produced for each new SCA image, provided a reference exists (see `Difference Images`_).
@@ -64,7 +64,7 @@ The pipeline produces products at several stages, each on a different timescale:
 Observation Model
 ************************************
 
-Volume estimates in this document are based on the provisional Roman scheduled observations (``consolidated_roman_scheduled_observations.csv``), which cover four Core Community Surveys (CCS) over a five-year nominal mission. The current schedule spans imaging observations from **2026-12-29** through **2031-12-09**; for delivery and cost modeling, these are grouped into **60 mission-month bins** anchored on the first observation. RAPID does not process spectroscopic (GRISM/PRISM) exposures, so those exposures are excluded from all counts below.
+The provisional Roman schedule (``consolidated_roman_scheduled_observations.csv``) covers four Core Community Surveys (CCS) over a five-year nominal mission. Imaging observations span **2026-12-29** through **2031-12-09**. Delivery and cost models group them into **60 mission-month bins** anchored on the first observation. All counts below exclude spectroscopic (GRISM/PRISM) exposures, which RAPID does not process.
 
 .. list-table:: Mission Summary by CCS (imaging only, 2027--2031)
    :header-rows: 1
@@ -95,7 +95,7 @@ Volume estimates in this document are based on the provisional Roman scheduled o
      - **9.78 M**
      -
 
-Detailed calculations, monthly breakdowns, plots, and an Excel workbook are generated by ``rapid_model.py`` in the project repository.
+The project repository's ``rapid_model.py`` generates detailed calculations, monthly breakdowns, plots, and an Excel workbook.
 
 
 Data Products
@@ -104,9 +104,9 @@ Data Products
 Product Sizes
 =============
 
-Product sizes are measured from the 2026-02-27 pipeline test run using OpenUniverse simulated data. The pipeline currently generates products with three differencing methods (ZOGY, SFFT, Naive) in both positive and negative directions. For archive delivery to MAST, only **ZOGY positive** products are planned; SFFT and Naive products are retained internally for algorithm evaluation.
+Product sizes come from the 2026-02-27 pipeline test run with OpenUniverse simulated data. The pipeline generates positive and negative products using ZOGY, SFFT, and Naive differencing. Only **ZOGY positive** products are planned for MAST; SFFT and Naive products remain internal for algorithm evaluation.
 
-This reduces the per-SCA archive footprint from 816 MB (all methods, both directions) to **204 MB** (ZOGY positive only). The per-SCA archive volume is dominated by three 67 MB FITS images (difference image, uncertainty map, and SCORR image), which together account for 99% of the footprint. Catalogs and PSFs are negligible by comparison.
+This reduces the per-SCA archive footprint from 816 MB (all methods, both directions) to **204 MB** (ZOGY positive only). Three 67 MB FITS images (difference image, uncertainty map, and SCORR image) account for 99% of that footprint; catalogs and PSFs are negligible by comparison.
 
 Product Inventory
 =================
@@ -308,63 +308,63 @@ Product Inventory
      -
      -
 
-All products are delivered monthly (60 mission-month deliveries over the 5-year mission model). Reference products are data releases (DR); difference-image products are prompt. Alerts stream live via Kafka and are archived to MAST monthly.
+All products are delivered monthly: 60 mission-month deliveries over the 5-year mission model. Reference products are data releases (DR); difference-image products are prompt. Alerts stream live via Kafka and are archived to MAST monthly.
 
-A complete listing of all pipeline output files (including intermediate and debug products) is in :doc:`/prod/products`.
+See :doc:`/prod/products` for all pipeline output files, including intermediate and debug products.
 
 
 Reference Images
 ************************************
 
-Reference images (templates, stacks) are coadds of all prior observations at a given sky location and filter. They are produced by ``awaicgen``, a C-based image coadder derived from the WISE mission, and they serve as the baseline against which incoming images are differenced.
+Reference images (templates, stacks) coadd all prior observations at a sky location and filter to provide the baseline for differencing incoming images. They are produced by ``awaicgen``, a C-based image coadder derived from the WISE mission.
 
 Key properties:
 
 * **7000 x 7000 pixels** with buffer regions beyond the sky-tile boundary to ensure complete overlap with arbitrarily oriented science images
 * Pixel scale matching individual WFI frames (0.11 arcsec/pixel), north-up orientation
 * Fixed photometric zero point (MAGZP = 17.0 mag)
-* Defined per **sky tile and filter** (Roman tessellation NSIDE=512, giving 6.3 million tiles), not per SCA --- images from any SCA or exposure that overlaps the tile contribute to the stack
+* Defined per **sky tile and filter** (Roman tessellation NSIDE=512, giving 6.3 million tiles), not per SCA: images from any SCA or exposure that overlaps the tile contribute to the stack
 * Quality assessed via the ``cov5percent`` metric and other measures stored in the :doc:`operations database </db/db>`
 
 Each reference image is accompanied by a coverage map, an uncertainty image, a PSF model, a SExtractor source catalog, and PSF-fit source and finder catalogs.
 
-For details of the tiling scheme and reference-image construction, see :doc:`/pl/pl`. For quality analysis of current reference images, see :doc:`/prod/products`.
+See :doc:`/pl/pl` for tiling and reference-image construction, and :doc:`/prod/products` for quality analysis of current reference images.
 
 
 Difference Images
 ************************************
 
-Each incoming SCA image is differenced against the best available reference image for its sky tile and filter. One pipeline job processes one SCA image; each 18-SCA exposure therefore generates up to 18 independent jobs.
+Each incoming SCA image is differenced against the best available reference for its sky tile and filter. One job processes one SCA image, giving up to 18 independent jobs per 18-SCA exposure.
 
 The pipeline currently evaluates three differencing methods:
 
-* **ZOGY** --- the primary method, producing a difference image, SCORR (signal-to-noise) image, uncertainty map, and PSF model.
-* **SFFT** --- cross-convolution subtraction, producing decorrelated and cross-convolved images.
-* **Naive** --- simple pixel-by-pixel subtraction as a diagnostic baseline.
+* **ZOGY**: the primary method, producing a difference image, SCORR (signal-to-noise) image, uncertainty map, and PSF model.
+* **SFFT**: cross-convolution subtraction, producing decorrelated and cross-convolved images.
+* **Naive**: simple pixel-by-pixel subtraction as a diagnostic baseline.
 
-For each method, SExtractor and PhotUtils PSF-fit catalogs are generated from both positive and negative difference images. Gain matching and sub-pixel alignment of the reference image are performed before differencing.
+Gain matching and sub-pixel alignment of the reference image precede differencing. Each method generates SExtractor and PhotUtils PSF-fit catalogs from both positive and negative difference images.
 
 .. note::
-   For archive delivery to MAST, only **ZOGY positive** difference-image products are planned. SFFT and Naive outputs are used internally for algorithm comparison and are excluded from the volume estimates in this document.
+   MAST delivery is planned for only **ZOGY positive** difference-image products. Volume estimates exclude the internal SFFT and Naive algorithm-comparison outputs.
 
-For details on the differencing algorithms and PSF handling, see :doc:`/pl/pl`. A complete listing of all difference-image products is in :doc:`/prod/products`.
+See :doc:`/pl/pl` for differencing algorithms and PSF handling, and :doc:`/prod/products` for all difference-image products.
 
 
 Alerts
 ************************************
 
-RAPID will follow community standards for transient alerts, packaging each event as an Apache AVRO record and publishing it via Apache Kafka. The alert stream may be split into multiple Kafka *topics* based on survey, candidate type, or other criteria.
+Following community standards for transient alerts, RAPID will package each event as an Apache AVRO record and publish it via Apache Kafka. The stream may use multiple Kafka *topics* by survey, candidate type, or other criteria.
 
-Kafka is a high-throughput messaging system optimized for streaming (hot) data. Alerts will expire from Kafka after a retention window; for long-term preservation, AVRO packets are collected into monthly tarballs and delivered to MAST.
+Kafka is a high-throughput messaging system optimized for streaming (hot) data. Alerts expire after a retention window; monthly AVRO tarballs delivered to MAST provide long-term preservation.
 
 Candidate Filtering
 ====================
 
 Before alert generation, spurious detections are removed through a multi-stage filtering pipeline adapted from ZTF:
 
-1. **Catalog-level cuts** --- edge distance, signal-to-noise ratio, source elongation, aperture flux ratios
-2. **Pixel-level metrics** --- negative-pixel count, bad-pixel count, median-filter sum ratio on a 5x5 cutout
-3. **PSF-fit quality cuts** --- reduced chi-squared of the PSF fit, aperture-vs-PSF magnitude consistency
+1. **Catalog-level cuts**: edge distance, signal-to-noise ratio, source elongation, aperture flux ratios
+2. **Pixel-level metrics**: negative-pixel count, bad-pixel count, median-filter sum ratio on a 5x5 cutout
+3. **PSF-fit quality cuts**: reduced chi-squared of the PSF fit, aperture-vs-PSF magnitude consistency
 4. **Machine-learning real/bogus classifier** using all features above plus reference-image metadata
 
 Full details are in :doc:`/analyses/pipeline_evaluation_metrics/pipeline_evaluation_metrics`.
@@ -377,7 +377,7 @@ Alert rates depend strongly on source density:
 * **Galactic surveys** (GBTDS, GPS): 2,000 candidates per SCA image
 * **Extragalactic surveys** (HLTDS, HLWAS): 500 candidates per SCA image
 
-Over the five-year mission this yields an estimated **12.5 billion alerts** totaling **0.75 PB** at 60 KB per AVRO packet. The assumed packet size is consistent with the Rubin/LSST alert design, where uncompressed packets are up to 82 KB and gzip-compressed packets average 65 KB (`DMTN-102 <https://dmtn-102.lsst.io/>`_). The final RAPID alert schema is TBD and may differ in cutout stamp and history content. The GBTDS alone accounts for 74% of all alerts, driven by the high source density in the Galactic Bulge. Alert rates are strongly seasonal, following the bulge visibility windows.
+These rates yield an estimated **12.5 billion alerts** over the five-year mission, totaling **0.75 PB** at 60 KB per AVRO packet. This packet size is consistent with the Rubin/LSST alert design: up to 82 KB uncompressed and an average of 65 KB gzip-compressed (`DMTN-102 <https://dmtn-102.lsst.io/>`_). The final RAPID schema is TBD; cutout stamp and history content may differ. High source density in the Galactic Bulge makes GBTDS responsible for 74% of all alerts. Rates are strongly seasonal, following bulge visibility windows.
 
 .. image:: alerts_by_ccs.png
 
@@ -391,25 +391,20 @@ Over the five-year mission this yields an estimated **12.5 billion alerts** tota
 Light Curves
 ************************************
 
-RAPID builds light curves by cross-matching candidates from successive observations. The matching engine uses the Q3C spatial-indexing library in PostgreSQL with a match radius of 0.055 arcsec (half a Roman WFI pixel). Three database tables underpin the light-curve system:
+RAPID builds light curves by cross-matching candidates across successive observations using PostgreSQL's Q3C spatial-indexing library. The match radius is 0.055 arcsec (half a Roman WFI pixel). Three database tables support this:
 
-* **Sources** --- individual detections from difference-image catalogs, partitioned by processing date and SCA
-* **AstroObjects** --- unique astronomical objects, partitioned by Roman-tessellation sky tile
-* **Merges** --- associations linking Sources to AstroObjects
+* **Sources**: individual detections from difference-image catalogs, partitioned by processing date and SCA
+* **AstroObjects**: unique astronomical objects, partitioned by Roman-tessellation sky tile
+* **Merges**: associations linking Sources to AstroObjects
 
-In the 2026-07-22 large-scale test (7,272 SCA SOC-sim images),
-~250 million sources were loaded into
-Sources_<yyyymmdd>_<sca> child database tables in 1.3 hours with 8 parallel processes
-(regardless of ``flags`` value).
-Source cross-matching took 35 minutes with 8 parallel processes
-for ~198 million sources (with ``flags = 0``).  The test covered 360 different fields.
-There were ~90 million AstroObjects records and 211,394,526 Merges records loaded
-into the PostgreSQL database.
-Of those merges (a.k.a. lightcurve data points), 33,223 merges
-resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.0157% in terms of number of merges.
+The 2026-07-22 large-scale test covered 7,272 SCA SOC-sim images across 360 different fields:
 
-Light-curve data are stored in the PostgreSQL operations database and periodically exported to Apache Parquet for delivery to MAST. HATS partitioning for compatibility with LINCC is under evaluation.
+* ~250 million sources, regardless of ``flags`` value, loaded into Sources_<yyyymmdd>_<sca> child database tables in 1.3 hours with 8 parallel processes
+* ~198 million sources with ``flags = 0`` cross-matched in 35 minutes with 8 parallel processes
+* ~90 million AstroObjects records and 211,394,526 Merges records loaded into PostgreSQL
+* 33,223 merges (a.k.a. lightcurve data points) from cross-matching across field boundaries, increasing the merge count by 0.0157%; the match radius can extend across a field boundary
+
+Light curves are stored in the PostgreSQL operations database and periodically exported to Apache Parquet for MAST. HATS partitioning for LINCC compatibility is under evaluation.
 
 See the Source Matching section of :doc:`/db/db` for details of the schema and partitioning strategy.
 
@@ -430,7 +425,7 @@ Based on ZTF experience, the service will require:
 Delivery Schedule
 ************************************
 
-RAPID will deliver products to MAST on a **monthly** schedule throughout the nominal mission. Products are retained for a short validation window before each batch delivery. A regular monthly cadence keeps the process routine and predictable for both RAPID and MAST operations.
+RAPID will deliver products to MAST **monthly** throughout the nominal mission, after a short validation window. This cadence keeps delivery routine and predictable for both RAPID and MAST operations.
 
 Each monthly delivery will include:
 
@@ -440,7 +435,7 @@ Each monthly delivery will include:
 * Archived alert packets (AVRO tarballs covering the preceding month)
 * Forced-photometry results
 
-Based on the provisional mission schedule, the estimated average monthly delivery is approximately **33 TB** of difference-image products, plus reference-image updates and alert-archive tarballs. The total mission archive volume is estimated to be **2.8 PB**:
+The provisional schedule gives an average monthly delivery of approximately **33 TB** of difference-image products, plus reference-image updates and alert-archive tarballs. The estimated **2.8 PB** mission archive comprises:
 
 * 2.0 PB of difference-image products
 * 0.75 PB of archived alert packets
@@ -460,11 +455,11 @@ Reprocessing
 
 RAPID plans three full reprocessings during the mission:
 
-* **6 months** --- incorporate improved calibrations and pipeline tuning from early operations
-* **2 years** --- leverage accumulated reference images and refined algorithms at mid-mission
-* **End of mission (5 years)** --- produce the definitive archive with final calibrations
+* **6 months**: incorporate improved calibrations and pipeline tuning from early operations
+* **2 years**: use accumulated reference images and refined algorithms at mid-mission
+* **End of mission (5 years)**: produce the definitive archive with final calibrations
 
-Each reprocessing regenerates all products from the beginning of the mission. During a **6-month overlap period**, both old and new product versions coexist in MAST to allow validation and a smooth transition for archive users. After the overlap, the old versions are deleted.
+Each reprocessing regenerates all products from the mission's beginning. Old and new versions coexist in MAST for a **6-month overlap period**, allowing validation and a smooth transition for archive users. Old versions are then deleted.
 
 The overlap effectively doubles the storage requirement at each reprocessing event:
 
@@ -480,7 +475,7 @@ Products are versioned in the :doc:`operations database </db/db>` with a ``vbest
 Estimated AWS Costs
 ************************************
 
-The following cost estimates are based on public AWS on-demand pricing for the us-east-1 region (March 2026). All figures use list prices and simple first-order operating assumptions; they are intended as a planning guide, not as an optimized cost model. A discount variable (``AWS_DISCOUNT``) is available in ``rapid_model.py`` for modeling negotiated or reserved-instance rates.
+Cost estimates use public AWS on-demand list prices for us-east-1 (March 2026) and simple first-order operating assumptions. They are a planning guide, not an optimized cost model. In ``rapid_model.py``, ``AWS_DISCOUNT`` models negotiated or reserved-instance rates.
 
 .. list-table:: AWS Cost Components
    :header-rows: 1
@@ -521,9 +516,9 @@ The following cost estimates are based on public AWS on-demand pricing for the u
    * - Average per year
      - $587 K
 
-S3 storage dominates (74% of total cost) and grows steadily as the archive accumulates. Compute costs are relatively modest for routine processing but spike during the three reprocessing events, particularly the end-of-mission reprocessing which re-runs all 9.8 M SCA images. Total 5-year cost is estimated at $2.9 M at list price; the separate 5.6 PB end-of-mission overlap peak occurs after the 60 modeled mission months. Kafka/MSK is a minor fixed cost.
+S3 storage accounts for 74% of total cost and grows steadily with the archive. Routine compute costs are relatively modest but spike during the three reprocessings, especially the final re-run of all 9.8 M SCA images. The $2.9 M list-price total covers 5 years; the separate 5.6 PB end-of-mission overlap peak falls after the 60 modeled mission months. Kafka/MSK is a minor fixed cost.
 
-These estimates exclude data-transfer (egress) costs, database hosting (RDS/EC2 for PostgreSQL), and any operational overhead. Cost-reduction options such as negotiated pricing, reserved instances, Spot usage for Batch, storage-tiering choices, delivery-format tuning, and refinements to reprocessing scope have not yet been analyzed in detail and could reduce the extrapolated costs significantly.
+Estimates exclude data-transfer (egress) costs, database hosting (RDS/EC2 for PostgreSQL), and operational overhead. Negotiated pricing, reserved instances, Spot usage for Batch, storage tiering, delivery-format tuning, and refined reprocessing scope could significantly reduce costs; none has been analyzed in detail.
 
 .. image:: aws_costs.png
 
@@ -531,7 +526,7 @@ These estimates exclude data-transfer (egress) costs, database hosting (RDS/EC2 
 Test Data Access
 ************************************
 
-RAPID pipeline products from testing with OpenUniverse and RimTimSim simulated data are publicly available. See :doc:`/dev/tests` and :doc:`/prod/products` for full details.
+Test products from OpenUniverse and RimTimSim simulated data are public; see :doc:`/dev/tests` and :doc:`/prod/products`.
 
 The latest large-scale test run (processing date 2026-02-27) is accessible at:
 
@@ -539,4 +534,4 @@ The latest large-scale test run (processing date 2026-02-27) is accessible at:
 * **Logs:** ``https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260227/``
 * **File listing:** available from the `products page <https://caltech-ipac-rapid.readthedocs.io/en/latest/prod/products.html>`_
 
-Earlier test runs are available at the same bucket prefixes with their respective processing dates. See :doc:`/dev/tests` for a chronological listing of all test runs and associated pipeline improvements.
+Earlier runs use the same bucket prefixes with their processing dates. See :doc:`/dev/tests` for a chronology of all runs and associated pipeline improvements.
