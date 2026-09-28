@@ -36,24 +36,11 @@ from typing import Any, Iterable
 
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.products.manifest import Manifest, ManifestError
-from rapidpipe.products.storage import LocationError, fetch_object, join, parse_location
+from rapidpipe.products.storage import (
+    LocationError, fetch_object, is_transient, join, parse_location)
 from rapidpipe.runs.repository import ProducerDeletingOrDeleted, bind_unit_inputs
 
 logger = logging.getLogger(__name__)
-
-#: Class-name suffixes of network-shaped storage failures, matched by
-#: name (not ``isinstance``) so a test stand-in and the real botocore
-#: class are treated alike. Mirrors ``rapidpipe.stages.contract``'s list;
-#: duplicated because ``rapidpipe.runs`` never imports a stage module.
-_TRANSIENT_EXCEPTION_NAMES = (
-    "EndpointConnectionError",
-    "ConnectionError",
-    "ConnectTimeoutError",
-    "ReadTimeoutError",
-    "ThrottlingException",
-    "RequestTimeout",
-    "RequestTimeoutException",
-)
 
 #: The stage contract's INPUT_REJECTED exit code, which the CLI returns
 #: for :class:`InputsRefused`.
@@ -66,11 +53,6 @@ class InputsRefused(Exception):
     exits 65 (:data:`INPUTS_REFUSED_EXIT`)."""
 
     exit_code = INPUTS_REFUSED_EXIT
-
-
-def _is_transient(exc: BaseException) -> bool:
-    name = type(exc).__name__
-    return any(name.endswith(suffix) for suffix in _TRANSIENT_EXCEPTION_NAMES)
 
 
 def read_input_manifest(inputs_location: str, *, s3_client: Any = None) -> Manifest:
@@ -90,7 +72,7 @@ def read_input_manifest(inputs_location: str, *, s3_client: Any = None) -> Manif
             path = fetch_object(location, "manifest.json", Path(tmp) / "manifest.json",
                                 client=s3_client)
         except Exception as exc:  # noqa: BLE001 - classified below
-            if _is_transient(exc):
+            if is_transient(exc):
                 raise
             raise InputsRefused(
                 f"input manifest {join(location, 'manifest.json')} could not be read "

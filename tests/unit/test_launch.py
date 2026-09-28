@@ -407,8 +407,7 @@ def _reconcile_one(monkeypatch, *, status, container_exit_code=None,
         # Mirrors _fetch_manifest_if_valid/_fetch_execution_record's own
         # classification: a "not found" code means "no such object", any
         # other error is a ReconcileFetchFailed reconcile cannot resolve.
-        code = launch_batch._client_error_code(exc)
-        if code in launch_batch._NOT_FOUND_ERROR_CODES:
+        if launch_batch.is_not_found(exc):
             return None
         raise launch_batch.ReconcileFetchFailed(exc, key=key) from exc
 
@@ -491,7 +490,7 @@ def test_reconcile_succeeded_without_manifest_is_failed(monkeypatch):
 
 class _FakeAccessDenied(Exception):
     """Stands in for a botocore ClientError-shaped AccessDenied: not a
-    "not found" code, so _client_error_code must not classify it as
+    "not found" code, so is_not_found must not classify it as
     "the object is absent"."""
 
     def __init__(self):
