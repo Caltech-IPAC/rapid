@@ -255,7 +255,7 @@ def _build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument(
         "--auto-promote", action="store_true", dest="auto_promote",
         help="Promote automatically at the end of run start when every check "
-             "passes. Refused unless the run's policy is lead-approved and "
+             "passes. Refused (exit 1) unless the run's policy is team-approved and "
              "permits it; no shipped policy does.")
     create_parser.add_argument(
         "--only-failed", action="store_true", dest="only_failed",
@@ -373,7 +373,7 @@ def _build_parser() -> argparse.ArgumentParser:
     promote_parser.add_argument(
         "--plan", default=None, metavar="FILE",
         help="A frozen plan from 'run promote-plan': promote only if the run's changes, "
-             "read under the promotion lock, still equal it slot for slot; else exit 64 "
+             "read under the promotion lock, still equal it slot for slot; else exit 1 "
              "(stale plan), writing nothing.")
 
     plan_parser = run_subparsers.add_parser(
@@ -381,7 +381,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print what 'run promote' would change, one entry per slot, as JSON.",
         description="Print what 'run promote' would change now, as a JSON list of "
                     "{kind, slot, before, after} sorted by kind then slot, writing "
-                    "nothing. Exit 64 when the run has nothing to promote or is refused.")
+                    "nothing. Exit 1 when the run has nothing to promote or is refused.")
     plan_parser.add_argument("run_id")
     plan_parser.add_argument(
         "--kinds", default=None,
@@ -601,9 +601,13 @@ def _run_create_command(args: argparse.Namespace) -> int:
             sys.stderr.write(f"rapidpipe run create: {exc}\n")
             return int(ExitCode.USAGE)
         except RunModelError as exc:
+            from rapidpipe.runs.repository import POLICY_REFUSALS
+
             conn.rollback()
             sys.stderr.write(f"rapidpipe run create: {exc}\n")
-            return int(ExitCode.USAGE)
+            # A policy refusal exits 1, anything else 64 (tool.md §Exit codes).
+            return int(ExitCode.FAILURE if isinstance(exc, POLICY_REFUSALS)
+                       else ExitCode.USAGE)
         except BaseException:
             conn.rollback()
             raise
@@ -853,14 +857,13 @@ def _run_show_command(args: argparse.Namespace) -> int:
                 for promotion_id, who, happened_at, reason, changes in promotions:
                     print(f"  {promotion_id}\t{who}\t{happened_at}\t{reason}\t{changes}")
 
-            # The acceptance state of each candidate and current instance
-            # (checks page, "Acceptance"): the lines `check show`
-            # prints, from the same function.
-            from rapidpipe.runs.eligibility import run_acceptance_states
+            # The state of each candidate and current instance
+            # (products.md §Reading across runs).
+            from rapidpipe.runs.eligibility import run_instance_states
 
-            states = run_acceptance_states(cur, args.run_id)
+            states = run_instance_states(cur, args.run_id)
             if states:
-                print("acceptance:")
+                print("state:")
                 for state in states:
                     print(f"  {state.line()}")
 
@@ -1191,9 +1194,13 @@ def _run_model_command(
     """Shared shape of the run-model subcommands: connect, call
     ``action(conn)``, commit, print; a refusal (any
     :class:`~rapidpipe.runs.repository.RunModelError`) rolls back, prints
-    the exception message and exits 64; an AWS-shaped error (``run
+    the exception message and exits 1 for a policy refusal
+    (``POLICY_REFUSALS``: a promotion refused, a stale plan), 64 for any
+    other (tool.md §Exit codes); an AWS-shaped error (``run
     delete``'s S3 calls) exits 75, retryable -- ``delete`` resumes a
     ``deleting`` run."""
+    from rapidpipe.runs.repository import POLICY_REFUSALS
+
     try:
         cm = connect(application_name=f"rapidpipe-run-{name}")
     except ConnectionConfigError as exc:
@@ -1210,7 +1217,8 @@ def _run_model_command(
         except RunModelError as exc:
             conn.rollback()
             sys.stderr.write(f"rapidpipe run {name}: {exc}\n")
-            return int(ExitCode.USAGE)
+            return int(ExitCode.FAILURE if isinstance(exc, POLICY_REFUSALS)
+                       else ExitCode.USAGE)
         except Exception as exc:  # noqa: BLE001 - AWS/botocore-shaped errors
             conn.rollback()
             if _is_batch_error(exc):
@@ -1252,7 +1260,7 @@ def _run_promote_command(args: argparse.Namespace) -> int:
         # A frozen plan (runs page, "Rules"): a non-empty
         # JSON list of {kind, slot, before, after}; anything else, JSON null
         # included, exits 64 before any connection (tool page, "Exit
-        # codes"). A stale one exits 64 from promote_run under the lock.
+        # codes"). A stale one exits 1 from promote_run under the lock.
         from rapidpipe.runs.slots import plan_by_slot
 
         try:

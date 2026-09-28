@@ -64,16 +64,45 @@ def test_run_promote_defaults_who_to_the_current_user(monkeypatch, fake_conn):
     assert seen["who"] == "someone"
 
 
-def test_run_promote_refusal_exits_64_with_the_message(monkeypatch, fake_conn, capsys):
+def test_run_promote_policy_refusal_exits_1_with_the_message(monkeypatch, fake_conn, capsys):
+    # A policy refusal is a negative outcome, exit 1 (tool.md §Exit codes).
     def _refuse(*_a, **_k):
         raise repository.PromotionRefused("scratch never leaves scratch")
 
     monkeypatch.setattr(repository, "promote_run", _refuse)
     rc = cli.main(["run", "promote", "RUN01", "--reason", "r"])
-    assert rc == 64
+    assert rc == 1
     assert "scratch never leaves scratch" in capsys.readouterr().err
     assert fake_conn.rolled_back == 1
     assert fake_conn.committed == 0
+
+
+@pytest.mark.parametrize("argv, target, exc", [
+    (["run", "promote", "RUN01", "--reason", "r"], "promote_run",
+     repository.RunNotFound("run 'RUN01' does not exist")),
+    (["run", "promote-plan", "RUN01"], "promotion_plan",
+     repository.RunNotFound("run 'RUN01' does not exist")),
+    (["run", "rollback", "P9", "--reason", "r"], "rollback_promotion",
+     repository.RequestInvalid("promotion 'P9' does not exist")),
+])
+def test_promotion_commands_exit_64_for_every_other_refusal(
+        monkeypatch, fake_conn, capsys, argv, target, exc):
+    def _raise(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(repository, target, _raise)
+    assert cli.main(argv) == 64
+    assert "does not exist" in capsys.readouterr().err
+    assert fake_conn.committed == 0
+
+
+def test_run_rollback_policy_refusal_exits_1(monkeypatch, fake_conn, capsys):
+    def _refuse(*_a, **_k):
+        raise repository.PromotionRefused("recorded before slot identity; not reversible")
+
+    monkeypatch.setattr(repository, "rollback_promotion", _refuse)
+    assert cli.main(["run", "rollback", "P1", "--reason", "r"]) == 1
+    assert "not reversible" in capsys.readouterr().err
 
 
 def test_run_rollback_prints_the_reversing_promotion_id(monkeypatch, fake_conn, capsys):

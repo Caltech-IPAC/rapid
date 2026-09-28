@@ -7,7 +7,7 @@ is loaded by its reference ``name@version``::
     name = "rebuild-trial"
     version = "1"
     description = "..."
-    approval = "trial"            # none | trial | lead
+    approval = "trial"            # none | trial | team
     approved_by = "..."           # who approved it; required unless approval = "none"
     auto_promote = false
 
@@ -26,8 +26,8 @@ policy's reference and the ``checks`` row ids it relied on (checks page,
 "The promotion gate").
 
 Approval: a policy with ``approval = "none"`` admits no promotion;
-``trial`` or ``lead`` admits manual promotion; automatic promotion needs
-``approval = "lead"``, ``approved_by`` set and ``auto_promote = true``
+``trial`` or ``team`` admits manual promotion; automatic promotion needs
+``approval = "team"``, ``approved_by`` set and ``auto_promote = true``
 (:func:`policy_permits_auto_promote`). No shipped policy permits it.
 """
 
@@ -47,7 +47,7 @@ from rapidpipe.checks.registry import CheckError, UnknownCheck, check_ref, get_c
 #: policies").
 DEFAULT_POLICY = "rebuild-trial@1"
 
-APPROVALS = ("none", "trial", "lead")
+APPROVALS = ("none", "trial", "team")
 
 #: Test seam: policies not shipped in the package, keyed ``name@version``,
 #: consulted after the shipped files. Only tests put anything here (a
@@ -104,16 +104,16 @@ class Policy:
 
 
 def policy_permits_promotion(policy: Policy) -> bool:
-    """True when the policy is approved (trial or lead, with ``approved_by``
+    """True when the policy is approved (trial or team, with ``approved_by``
     recorded) and so may admit a manual promotion (checks page, "Check
     policies")."""
-    return policy.approval in ("trial", "lead") and bool(policy.approved_by)
+    return policy.approval in ("trial", "team") and bool(policy.approved_by)
 
 
 def policy_permits_auto_promote(policy: Policy) -> bool:
-    """True only for a lead-approved policy with ``auto_promote = true``
+    """True only for a team-approved policy with ``auto_promote = true``
     (checks page, "Automatic promotion"). No shipped policy satisfies this."""
-    return policy.approval == "lead" and bool(policy.approved_by) and policy.auto_promote
+    return policy.approval == "team" and bool(policy.approved_by) and policy.auto_promote
 
 
 def _policy_files() -> dict[str, Any]:

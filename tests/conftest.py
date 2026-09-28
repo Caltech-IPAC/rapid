@@ -57,3 +57,18 @@ def _stub_stage_read_guard(request, monkeypatch):
 
     monkeypatch.setattr(readguard, "assert_inputs_readable",
                         lambda manifest, run_id, *, connect=None: None)
+
+
+@pytest.fixture()
+def strict_policy(monkeypatch):
+    """Install ``rebuild-strict@1``, a test fixture policy whose bounds the
+    control run cannot meet, from tests/fixtures/checks (never shipped in
+    the package), so ``load_policy("rebuild-strict@1")`` finds it."""
+    from pathlib import Path
+
+    from rapidpipe.checks import policy as policy_mod
+
+    path = Path(__file__).resolve().parent / "fixtures" / "checks" / "rebuild-strict@1.toml"
+    policy = policy_mod.load_policy_file(path)
+    monkeypatch.setitem(policy_mod._FIXTURE_POLICIES, policy.ref, policy)
+    return policy

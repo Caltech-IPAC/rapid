@@ -44,6 +44,9 @@ from .test_run_lifecycle import _kv, _seed_manifest
 
 TRIAL_STAGE_NAME = "difference-image-statistics@1"
 
+#: rebuild-strict@1 is a test fixture policy (tests/fixtures/checks), not shipped.
+pytestmark = pytest.mark.usefixtures("strict_policy")
+
 
 @pytest.fixture(autouse=True)
 def _science_row_cleanup(db):
@@ -62,9 +65,6 @@ def _science_row_cleanup(db):
     if not db.run_ids:
         return
     with db.cursor() as cur:
-        cur.execute(
-            "DELETE FROM acceptances WHERE instance IN "
-            "(SELECT id FROM product_instances WHERE run = ANY(%s))", (db.run_ids,))
         cur.execute(
             "DELETE FROM checks WHERE instance IN "
             "(SELECT id FROM product_instances WHERE run = ANY(%s))", (db.run_ids,))
@@ -122,14 +122,14 @@ def _promotions_count(db, run_id):
 # check list
 # ======================================================================
 
-def test_check_list_prints_registered_checks_and_both_shipped_policies(cli):
+def test_check_list_prints_registered_checks_and_the_shipped_policy(cli):
     result = cli("check", "list")
     assert result.rc == 0, result.err
     out = result.out
     assert "check=difference-image-statistics@1 kind=difference-image" in out
     assert "check=catalog-counts-vs-reference@1 kind=source-set" in out
     assert f"policy={TRIAL} approval=trial" in out
-    assert f"policy={STRICT} approval=trial" in out
+    assert f"policy={STRICT}" not in out       # a test fixture, never shipped
     assert "difference-image-statistics@1(required)" in out
     assert "catalog-counts-vs-reference@1(advisory)" in out
 
@@ -213,7 +213,7 @@ def test_run_promote_check_policy_refuses_then_succeeds_unpoisoned_by_a_later_st
 
     before = _promotions_count(db, run_id)
     refused = cli("run", "promote", run_id, "--reason", "strict", "--check-policy", STRICT)
-    assert refused.rc == 64
+    assert refused.rc == 1                   # a policy refusal (tool.md §Exit codes)
     assert "required check difference-image-statistics@1" in refused.err
     assert f"instance {diff}" in refused.err
     assert refused.err.rstrip().endswith("; refusing")
@@ -271,7 +271,7 @@ def test_run_promote_refuses_a_missing_required_result(cli, db):
     db.track_run(run_id)
     diff = _diff_candidate(db.connection, run_id)
     result = cli("run", "promote", run_id, "--reason", "no checks yet")
-    assert result.rc == 64
+    assert result.rc == 1
     assert "has no result" in result.err
     assert f"instance {diff}" in result.err
     assert _promotions_count(db, run_id) == 0
@@ -279,7 +279,7 @@ def test_run_promote_refuses_a_missing_required_result(cli, db):
 
 # ======================================================================
 # run create --auto-promote: refused under a policy that does not permit
-# it; permitted under a lead-approved fixture policy; run start then
+# it; permitted under a team-approved fixture policy; run start then
 # calls maybe_auto_promote and promotes.
 # ======================================================================
 
@@ -288,8 +288,8 @@ def test_run_create_auto_promote_refused_then_permitted_and_run_start_promotes(
     refused = cli(
         "run", "create", "--kind", "production", "--purpose", "auto-promote refusal",
         "--stages", "admit", "--check-policy", TRIAL, "--auto-promote")
-    assert refused.rc == 64
-    assert "does not permit automatic promotion; lead approval pending" in refused.err
+    assert refused.rc == 1
+    assert "does not permit automatic promotion; team approval pending" in refused.err
 
     fixture = load_policy_file(FIXTURES / "auto-trial@1.toml")
     monkeypatch.setitem(policy_mod._FIXTURE_POLICIES, "auto-trial@1", fixture)
@@ -391,56 +391,31 @@ def test_check_help_walk(cli):
         ["check", "list", "--help"],
         ["check", "run", "--help"],
         ["check", "show", "--help"],
-        ["check", "accept", "--help"],
     ):
         result = cli(*argv)
         assert result.rc == 0, (argv, result.err)
 
 
 # ======================================================================
-# check accept and the acceptance lines
+# check show prints results only; run show prints each instance's state
 # ======================================================================
 
-def test_check_accept_records_one_row_and_check_show_prints_the_state(cli, db):
+def test_check_show_prints_results_and_run_show_the_instance_states(cli, db):
     run_id = _make_run(db.connection, kind="production")
     db.track_run(run_id)
     diff = _diff_candidate(db.connection, run_id, stats={"nsexcatsources": 10})
 
-    pending = cli("check", "accept", run_id, "--instance", diff, "--reason", "why")
-    assert pending.rc == 64
-    assert "is pending" in pending.err and "run the checks first" in pending.err
-
     assert cli("check", "run", run_id).rc == 1
     shown = cli("check", "show", run_id)
     assert shown.rc == 0, shown.err
-    assert shown.out.splitlines()[-1] == (
-        f"acceptance instance={diff} kind=difference-image state=rejected "
-        f"check=difference-image-statistics@1 outcome=failed policy={TRIAL}")
+    lines = shown.out.splitlines()
+    assert lines and all(line.startswith("id=") for line in lines)
 
-    empty = cli("check", "accept", run_id, "--instance", diff, "--reason", "")
-    assert empty.rc == 64 and "--reason must not be empty" in empty.err
+    assert cli("check", "accept", run_id, "--instance", diff, "--reason", "r").rc == 64
 
-    accepted = cli("check", "accept", run_id, "--instance", diff, "--reason", "known low count",
-                   "--who", "lead")
-    assert accepted.rc == 0, accepted.err
-    assert accepted.out.startswith(f"accepted instance={diff} kind=difference-image acceptance=")
-    assert accepted.out.rstrip().endswith(f"policy={TRIAL} checks=1")
-    with db.cursor() as cur:
-        cur.execute("SELECT id, who, reason, policy_ref FROM acceptances WHERE instance = %s",
-                    (diff,))
-        (acceptance_id, who, reason, policy_ref), = cur.fetchall()
-    assert (who, reason, policy_ref) == ("lead", "known low count", TRIAL)
-
-    again = cli("check", "accept", run_id, "--instance", diff, "--reason", "twice")
-    assert again.rc == 64 and "already accepted" in again.err
-
-    shown = cli("check", "show", run_id, "--instance", diff)
-    assert shown.out.splitlines()[-1] == (
-        f"acceptance instance={diff} kind=difference-image state=accepted "
-        f"acceptance={acceptance_id} policy={TRIAL}")
     run_show = cli("run", "show", run_id)
     assert run_show.rc == 0, run_show.err
     lines = run_show.out.splitlines()
-    assert lines[lines.index("acceptance:") + 1] == (
-        f"  acceptance instance={diff} kind=difference-image state=accepted "
-        f"acceptance={acceptance_id} policy={TRIAL}")
+    assert "acceptance:" not in lines
+    assert lines[lines.index("state:") + 1] == (
+        f"  instance={diff} kind=difference-image state=candidate custody=candidate")

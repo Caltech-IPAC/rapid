@@ -1152,3 +1152,25 @@ def test_create_unknown_seed_exits_64(monkeypatch, fake_conn, capsys):
                      "admit", "--seed", "NOPE"]) == 64
     assert "seed_run 'NOPE' does not exist" in capsys.readouterr().err
     assert fake_conn.rolled_back == 1
+
+
+# ======================================================================
+# _with_connection: a policy refusal exits 1, any other refusal 64
+# (tool.md §Exit codes)
+# ======================================================================
+
+@pytest.mark.parametrize("exc, code", [
+    (repository.PromotionRefused("refused"), ExitCode.FAILURE),
+    (repository.StalePlan("stale plan"), ExitCode.FAILURE),
+    (repository.CheckPolicyRefused("team approval pending"), ExitCode.FAILURE),
+    (repository.RunNotFound("run 'R' does not exist"), ExitCode.USAGE),
+    (repository.RequestInvalid("the plan is empty"), ExitCode.USAGE),
+])
+def test_with_connection_maps_policy_refusals_to_1_and_other_refusals_to_64(
+        fake_conn, capsys, exc, code):
+    def body(_conn):
+        raise exc
+
+    assert runctl._with_connection("start", body) == int(code)
+    assert fake_conn.rolled_back == 1
+    assert capsys.readouterr().err == f"rapidpipe run start: {exc}\n"

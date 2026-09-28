@@ -167,7 +167,7 @@ def _build_seed_with_failed_difference(cli, db, fake_batch, fake_s3, batch_env, 
 
 
 def test_only_failed_creates_a_re_run_with_the_copied_configuration_and_seeded_units(
-        cli, db, fake_batch, fake_s3, batch_env, monkeypatch):
+        cli, db, fake_batch, fake_s3, batch_env, monkeypatch, strict_policy):
     seed = _build_seed_with_failed_difference(cli, db, fake_batch, fake_s3, batch_env, monkeypatch)
 
     created = cli("run", "create", "--seed", seed, "--only-failed")

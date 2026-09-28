@@ -303,7 +303,7 @@ def maybe_auto_promote(conn, run_id: str, *, who: str = "auto-promote") -> AutoP
     if not policy_permits_auto_promote(policy):
         return AutoPromoteOutcome(
             "refused", f"auto-promote refused: policy {policy.ref} does not permit "
-                       "automatic promotion; lead approval pending")
+                       "automatic promotion; team approval pending")
     with conn.cursor() as cur:
         cur.execute(
             "SELECT count(*), count(*) FILTER (WHERE state <> 'complete') "

@@ -550,7 +550,7 @@ def _trial_policy():
     class Policy:
         ref = "rebuild-trial@1"
         approval = "trial"
-        approved_by = "lead-1"
+        approved_by = "team-1"
         auto_promote = False
 
     return Policy()
@@ -561,8 +561,8 @@ def _permitting_policy():
     dataclass directly, no policy file: no shipped policy permits this)."""
     from rapidpipe.checks.policy import Policy
 
-    return Policy(name="rebuild-permitting", version="1", approval="lead",
-                 approved_by="lead-1", auto_promote=True, checks=())
+    return Policy(name="rebuild-permitting", version="1", approval="team",
+                 approved_by="team-1", auto_promote=True, checks=())
 
 
 def _gate(monkeypatch, *, promote, recorded=("passed",), policy=None):

@@ -62,7 +62,7 @@ def test_check_list_names_checks_and_policies(capsys):
     out = capsys.readouterr().out.splitlines()
     assert [line.split()[0] for line in out] == [
         "check=catalog-counts-vs-reference@1", "check=difference-image-statistics@1",
-        "policy=rebuild-strict@1", "policy=rebuild-trial@1"]
+        "policy=rebuild-trial@1"]
     assert ("policy=rebuild-trial@1 approval=trial approved_by=rusholme "
             "auto_promote=false checks=difference-image-statistics@1(required),"
             "catalog-counts-vs-reference@1(advisory)") in out
@@ -109,14 +109,17 @@ def test_check_run_and_show_refuse_an_unknown_run(fake_conn, capsys):
     assert "rapidpipe check show: run R does not exist" in capsys.readouterr().err
 
 
-def test_run_create_auto_promote_refused_exit_64(fake_conn, capsys):
+def test_run_create_auto_promote_refused_exit_1_unknown_policy_64(
+        fake_conn, capsys, strict_policy):
+    # A policy refusal exits 1; an unknown policy is a usage error, 64
+    # (tool.md §Exit codes).
     argv = ["run", "create", "--kind", "production", "--purpose", "p", "--stages", "admit",
             "--auto-promote"]
-    assert cli.main(argv) == 64
+    assert cli.main(argv) == 1
     assert capsys.readouterr().err == (
         "rapidpipe run create: policy rebuild-trial@1 does not permit automatic "
-        "promotion; lead approval pending\n")
-    assert cli.main(argv + ["--check-policy", "rebuild-strict@1"]) == 64
+        "promotion; team approval pending\n")
+    assert cli.main(argv + ["--check-policy", "rebuild-strict@1"]) == 1
     assert "policy rebuild-strict@1 does not permit" in capsys.readouterr().err
     assert cli.main(argv[:-1] + ["--check-policy", "nosuch@1"]) == 64
     assert "check policy 'nosuch@1' does not exist" in capsys.readouterr().err

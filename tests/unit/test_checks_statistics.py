@@ -54,7 +54,7 @@ def _params(policy):
     return load_policy(policy).find_check("difference-image-statistics@1").params
 
 
-def test_control_like_values_pass_trial_and_fail_strict():
+def test_control_like_values_pass_trial_and_fail_strict(strict_policy):
     passed = difference_image_statistics(_Conn([_row()]), "I", _params("rebuild-trial@1"))
     assert passed.outcome == "passed" and passed.detail["failing"] == []
     assert passed.detail["measurements"]["sextractor_pos_neg_ratio"] == pytest.approx(21749 / 55451)
