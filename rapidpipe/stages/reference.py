@@ -131,8 +131,6 @@ DECLARATION = StageDeclaration(
     consumes=("l2-image",),
     produces=("reference-image", "reference-catalog"),
     database_access="none",
-    # A 7000x7000 float32 coadd of <= 25 4088x4088 frames: the difference
-    # stage's 4 vCPUs, twice its memory for awaicgen's cell grid.
 )
 
 #: `dev`'s cattype for the SExtractor reference catalog (refimcatalogs).
@@ -161,7 +159,7 @@ class Toolkit:
 def toolkit() -> Toolkit:
     """The real tools, unless ``RAPIDPIPE_REFERENCE_TOOLKIT`` names others."""
     factory = load_factory(toolkit_env("reference"), UsageError)
-    return factory() if factory else Toolkit()
+    return factory() if factory is not None else Toolkit()
 
 
 # ----------------------------------------------------------------------

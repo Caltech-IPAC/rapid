@@ -36,13 +36,17 @@ def toolkit_env(stage: str) -> str:
 def load_factory(env_name: str, error: type[Exception]) -> Callable | None:
     """The callable ``$env_name`` names as ``module:factory``, or ``None`` when unset or empty.
 
-    A value that does not resolve raises ``error``.
+    A value that does not resolve (no module name, a module that cannot be
+    found, no such attribute) raises ``error``; any other failure while
+    importing the module propagates unchanged.
     """
     value = os.environ.get(env_name)
     if not value:
         return None
     module_name, _, factory_name = value.partition(":")
+    if not module_name:
+        raise error(f"{env_name}={value!r} does not name a factory: no module name")
     try:
         return getattr(importlib.import_module(module_name), factory_name)
-    except (ImportError, AttributeError, ValueError) as exc:
+    except (ImportError, AttributeError) as exc:
         raise error(f"{env_name}={value!r} does not name a factory: {exc}") from exc

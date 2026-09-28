@@ -112,7 +112,11 @@ def _selftest_registry(override: str):
         raise ReadGuardNotConfigured(
             f"{DATABASE_ENV}={override!r} does not name a factory under "
             f"{SELFTEST_SUPPORT.rstrip('.')}")
-    factory = load_factory(DATABASE_ENV, ReadGuardNotConfigured)
+    try:
+        factory = load_factory(DATABASE_ENV, ReadGuardNotConfigured)
+    except ValueError as exc:
+        raise ReadGuardNotConfigured(
+            f"{DATABASE_ENV}={override!r} does not name a factory: {exc}") from exc
     logger.warning(SELFTEST_WARNING)
     return factory()
 

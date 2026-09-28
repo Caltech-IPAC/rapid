@@ -159,7 +159,7 @@ def _postgres() -> Iterator[PostgresLoadDatabase]:
 def open_database():
     """PostgreSQL, unless ``RAPIDPIPE_LOAD_DATABASE`` names another; tests monkeypatch this."""
     factory = load_factory(database_env("load"), UsageError)
-    return factory() if factory else _postgres()
+    return factory() if factory is not None else _postgres()
 
 
 # ----------------------------------------------------------------------

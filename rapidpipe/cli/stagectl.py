@@ -84,7 +84,7 @@ def add_parsers(top_level: Any) -> argparse.ArgumentParser:
 
     describe_parser = subparsers.add_parser(
         "describe", help="Print one stage's declaration.",
-        description="Print a stage's DECLARATION (unit kind, arguments, "
+        description="Print a stage's DECLARATION (unit kind, "
                     "inputs, outputs, settings, database access, exit codes) "
                     "as key: value lines.")
     describe_parser.add_argument("name", choices=STAGE_NAMES, help="Stage name.")

@@ -163,6 +163,7 @@ def test_dry_run_publishes_nothing_and_exits_zero(inputs_dir, tmp_path):
         _argv(inputs_dir, outputs_dir, extra=["--dry-run"]))
     assert rc == int(ExitCode.SUCCESS)
     assert not (outputs_dir / "manifest.json").exists()
+    assert not outputs_dir.exists() or not any(outputs_dir.iterdir())
 
 
 @pytest.mark.parametrize("exception_cls, expected_code", [
