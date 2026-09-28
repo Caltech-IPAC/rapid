@@ -15,6 +15,7 @@ import pytest
 
 from rapidpipe.cli import runctl
 from rapidpipe.launch import loop
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.products.manifest import Inputs, Manifest, OutputEntry, Unit
 from rapidpipe.products.storage import parse_location
 from rapidpipe.runs import binding, inputs, repository
@@ -93,7 +94,7 @@ def test_compose_inputs_makes_one_call_to_the_primitive(
     writes: list[tuple] = []
     monkeypatch.setattr(runctl._Storage, "write_manifest",
                         lambda self, *a, **k: writes.append(a))
-    assert runctl.compose_inputs(
+    assert launch_walk.compose_inputs(
         fake_conn, run_id="R", stage="difference", unit_id="U", from_stage="admit",
         template=str(compose_env["template"]), dest=dest, reuse_existing=reuse) == dest
     assert len(calls) == 1
@@ -211,12 +212,13 @@ def test_no_composer_admits_binds_or_writes_around_the_primitive():
     The primitive must be called inside ``compose_inputs`` and at least
     three times (maintain, crossmatch, alerts) inside ``process_date``."""
     runctl_text = (REPO / "rapidpipe/cli/runctl.py").read_text()
+    walk_text = (REPO / "rapidpipe/launch/walk.py").read_text()
     loop_text = (REPO / "rapidpipe/launch/loop.py").read_text()
-    for text in (runctl_text, loop_text):
+    for text in (runctl_text, walk_text, loop_text):
         for forbidden in ("bind_unit_inputs", "bind_registered_inputs",
                           "_registered_instances", "_registered(", "add_unit("):
             assert forbidden not in text
-    for text, function, at_least in ((runctl_text, "compose_inputs", 1),
+    for text, function, at_least in ((walk_text, "compose_inputs", 1),
                                      (loop_text, "process_date", 3)):
         tree = ast.parse(text)
         assert _calls_named(tree, "add_unit") == []
@@ -235,6 +237,7 @@ def test_no_composer_admits_binds_or_writes_around_the_primitive():
              if "write_manifest(" in line]
     assert lines and all(i in inside for i in lines)
     assert "write_manifest(" not in runctl_text
+    assert "write_manifest(" not in walk_text
     assert _calls_named(ast.parse(loop_text), "write_manifest") == []
 
 

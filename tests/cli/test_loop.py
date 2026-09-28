@@ -3,7 +3,7 @@ two-date spec: argv in, exit code / stdout and database state out, against
 the CI PostgreSQL with Batch and S3 faked.
 
 The loop waits for each attempt through ``run start``'s walk, which polls
-``rapidpipe.cli.runctl._reconcile``. As in ``test_run_start.py``, that
+``rapidpipe.launch.walk._reconcile``. As in ``test_run_start.py``, that
 seam is wrapped: before the real reconcile runs, every unresolved attempt
 of the run gets a SUCCEEDED job and a manifest shaped like its stage's
 (``_FakeStages``): admit an ``l2-image`` bundle, finalize a
@@ -34,7 +34,7 @@ import random
 
 import pytest
 
-from rapidpipe.cli import runctl
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.runs import repository
 
@@ -146,7 +146,7 @@ class _FakeStages:
         return []
 
     def install(self, monkeypatch):
-        original = runctl._reconcile
+        original = launch_walk._reconcile
 
         def wrapper(conn, run_id):
             with self.db.cursor() as cur:
@@ -184,8 +184,8 @@ class _FakeStages:
                 raise KeyboardInterrupt("interrupted")
             return result
 
-        monkeypatch.setattr(runctl, "_reconcile", wrapper)
-        monkeypatch.setattr(runctl, "sleep", lambda s: None)
+        monkeypatch.setattr(launch_walk, "_reconcile", wrapper)
+        monkeypatch.setattr(launch_walk, "sleep", lambda s: None)
 
 
 @pytest.fixture()

@@ -1,12 +1,13 @@
-"""The SQL ``rapidpipe.cli.runctl`` reads (``_run_row``, ``_unit_row``,
-``_status_rows``, ``_compare_units``, ``_compare_instances``,
-``_registered_instances``) against a real PostgreSQL with the migrations
+"""The SQL ``rapidpipe.launch.walk`` (``_run_row``, ``_unit_row``) and
+``rapidpipe.cli.runctl`` (``_status_rows``, ``_compare_units``, ``_compare_instances``,
+``_registered_instances``) read, against a real PostgreSQL with the migrations
 applied. The unit tests replace these functions; this checks the queries
 themselves. Skips cleanly if PGHOST is unset (see conftest.py)."""
 
 from __future__ import annotations
 
 from rapidpipe.cli import runctl
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.runs import inputs
 from rapidpipe.runs import repository as repo
@@ -25,18 +26,18 @@ from .test_repository import (
 def test_run_row_and_unit_row(conn):
     run_id = _make_run(conn, kind="scratch", selected_stages=["admit", "register", "difference"],
                        settings_overlay_ref="s3://settings/overlay.toml")
-    row = runctl._run_row(conn, run_id)
-    assert row == runctl.RunRow("scratch", ["admit", "register", "difference"], "open",
+    row = launch_walk._run_row(conn, run_id)
+    assert row == launch_walk.RunRow("scratch", ["admit", "register", "difference"], "open",
                                 "s3://settings/overlay.toml")
-    assert runctl._run_row(conn, new_ulid()) is None
+    assert launch_walk._run_row(conn, new_ulid()) is None
 
     stage, unit_id = _make_unit(conn, run_id)
-    assert runctl._unit_row(conn, run_id, stage, unit_id) == runctl.UnitRow(
+    assert launch_walk._unit_row(conn, run_id, stage, unit_id) == launch_walk.UnitRow(
         "pending", None, None, None, None, None)
-    assert runctl._unit_row(conn, run_id, stage, "no-such-unit") is None
+    assert launch_walk._unit_row(conn, run_id, stage, "no-such-unit") is None
 
     first = repo.allocate_attempt(conn, run_id, stage, unit_id, outputs_root="s3://b/p")
-    row = runctl._unit_row(conn, run_id, stage, unit_id)
+    row = launch_walk._unit_row(conn, run_id, stage, unit_id)
     assert (row.state, row.last_attempt, row.last_disposition) == ("running", first, None)
     assert row.last_output == f"s3://b/p/runs/{run_id}/{stage}/{unit_id}/{first}"
 

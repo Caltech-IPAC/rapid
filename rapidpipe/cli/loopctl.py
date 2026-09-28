@@ -29,6 +29,7 @@ from typing import Any
 
 from rapidpipe.cli import runctl
 from rapidpipe.launch import loop as launch_loop
+from rapidpipe.launch import walk as launch_walk
 from rapidpipe.exitcodes import ExitCode
 
 
@@ -104,8 +105,8 @@ def add_parser(subparsers: Any) -> None:
 def _tools() -> launch_loop.LoopTools:
     main = runctl._main_module()
     return launch_loop.LoopTools(
-        walk=runctl.walk_unit, create_run=main.create_run_record,
-        storage=runctl._Storage(), inputs_root=runctl.inputs_root,
+        walk=launch_walk.walk_unit, create_run=main.create_run_record,
+        storage=runctl._Storage(), inputs_root=launch_walk.inputs_root,
         create_seeded_run=lambda conn, seed: main.create_only_failed_run(conn, seed)[0])
 
 

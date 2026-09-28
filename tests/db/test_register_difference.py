@@ -142,7 +142,7 @@ def _register_difference(conn, monkeypatch, outputs, run_id, tmp_path, name="reg
     (``register_unit_id``: "a register unit is identified by what
     it registers" -- <producing stage>/<producing unit id>), the same
     derivation the CLI now performs at submission time
-    (rapidpipe.cli.main._resolve_register_unit_id) rather than a
+    (rapidpipe.launch.walk.resolve_register_unit_id) rather than a
     hand-keyed name. Two calls against the *same* ``outputs`` manifest
     (e.g. replay tests) therefore collide on the same unit id by design --
     a distinct ``name`` no longer buys a distinct unit for the same

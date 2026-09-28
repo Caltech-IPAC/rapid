@@ -64,8 +64,6 @@ import importlib
 import json
 import logging
 import sys
-import tempfile
-from pathlib import Path
 from typing import Any, Sequence
 
 from rapidpipe import __version__
@@ -80,8 +78,7 @@ from rapidpipe.launch.batch import (
     ReleaseDefinitionRefused,
 )
 from rapidpipe.launch import batch as launch_batch
-from rapidpipe.products.manifest import Manifest, ManifestError, register_unit_id
-from rapidpipe.products.storage import fetch_object, parse_location
+from rapidpipe.launch.walk import RegisterUnitIdError, resolve_register_unit_id
 from rapidpipe.cli import checkctl, loopctl, runctl, stagectl
 from rapidpipe.release import __main__ as release_cli
 from rapidpipe.runs.create import (
@@ -126,56 +123,6 @@ def _is_batch_error(exc: BaseException) -> bool:
 #: ``rapidpipe.db.connection`` and affecting other callers -- the same
 #: pattern ``rapidpipe.stages.register`` uses for the same reason.
 connect = _default_connect
-
-
-class RegisterUnitIdError(ValueError):
-    """The register unit id could not be derived from its input manifest."""
-
-
-def _read_manifest_at(location_arg: str) -> Manifest:
-    """Read ``manifest.json`` from a local directory or S3 prefix.
-
-    Same fetch used by a stage's own ``--dry-run`` path
-    (``rapidpipe.stages.contract._read_input_manifest_from``, one object,
-    not the whole prefix): a local location is read directly; an S3
-    location is fetched to a throwaway temp file first, since
-    :meth:`~rapidpipe.products.manifest.Manifest.read` only takes a local
-    path.
-    """
-    location = parse_location(location_arg)
-    if not location.is_s3():
-        manifest_path = Path(location_arg) / "manifest.json"
-    else:
-        with tempfile.TemporaryDirectory(prefix="rapidpipe-register-unit-") as tmp:
-            manifest_path = fetch_object(
-                location, "manifest.json", Path(tmp) / "manifest.json")
-            return _load_manifest(manifest_path)
-    return _load_manifest(manifest_path)
-
-
-def _load_manifest(manifest_path: Path) -> Manifest:
-    try:
-        return Manifest.read(manifest_path)
-    except FileNotFoundError as exc:
-        raise RegisterUnitIdError(f"input manifest not found: {manifest_path}") from exc
-    except (json.JSONDecodeError, ManifestError) as exc:
-        raise RegisterUnitIdError(f"{manifest_path}: invalid manifest: {exc}") from exc
-
-
-def _resolve_register_unit_id(*, unit_id_arg: str | None, inputs_location_arg: str) -> str:
-    """The ``--unit`` value to use for a `register` invocation.
-
-    register's unit id is always derived from the manifest it reads
-    (register_unit_id: "a register unit is identified by what it
-    registers"), never chosen by the caller, so an explicit ``--unit`` for
-    register is refused rather than silently overridden.
-    """
-    if unit_id_arg is not None:
-        raise RegisterUnitIdError(
-            "--unit is not accepted for register: its unit id is always "
-            "derived from the manifest it reads")
-    manifest = _read_manifest_at(inputs_location_arg)
-    return register_unit_id(manifest)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -753,7 +700,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
 
     if args.stage == "register":
         try:
-            unit_id = _resolve_register_unit_id(
+            unit_id = resolve_register_unit_id(
                 unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
         except RegisterUnitIdError as exc:
             sys.stderr.write(f"rapidpipe run local: {exc}\n")
@@ -867,7 +814,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
     if args.stage == "register":
         if args.inputs_from_stage is None:
             try:
-                unit_id = _resolve_register_unit_id(
+                unit_id = resolve_register_unit_id(
                     unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
             except RegisterUnitIdError as exc:
                 sys.stderr.write(f"rapidpipe run submit: {exc}\n")
@@ -899,7 +846,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
                 inputs_location = launch_batch.resolve_inputs_from_stage(
                     conn, run_id=args.run_id, unit_id=args.unit_id,
                     upstream_stage=args.inputs_from_stage)
-                unit_id = _resolve_register_unit_id(
+                unit_id = resolve_register_unit_id(
                     unit_id_arg=None, inputs_location_arg=inputs_location)
             elif args.inputs_from_stage is not None:
                 inputs_location = launch_batch.resolve_inputs_from_stage(

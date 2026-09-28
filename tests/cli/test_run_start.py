@@ -7,7 +7,7 @@ module reuses).
 ``run start`` waits for an attempt by polling ``reconcile`` in a loop
 this suite does not otherwise control. Rather than driving FakeBatch
 from a side thread, :func:`_auto_complete_reconcile` monkeypatches
-``rapidpipe.cli.runctl._reconcile`` to give any attempt of the run that
+``rapidpipe.launch.walk._reconcile`` to give any attempt of the run that
 is still unresolved (and not explicitly excluded) a SUCCEEDED status and
 a valid manifest at its own output location just before the real
 reconcile runs -- standing in for Batch finishing the job between polls,
@@ -16,14 +16,14 @@ so a wait loop resolves on its first poll instead of spinning.
 
 from __future__ import annotations
 
-from rapidpipe.cli import runctl
+from rapidpipe.launch import walk as launch_walk
 
 from .conftest import FAKE_BUCKET
 from .test_run_lifecycle import _create_run, _kv, _seed_manifest
 
 
 def _auto_complete_reconcile(monkeypatch, db, fake_batch, fake_s3, *, skip_jobs=frozenset()):
-    original = runctl._reconcile
+    original = launch_walk._reconcile
 
     def wrapper(conn, run_id):
         with db.cursor() as cur:
@@ -42,7 +42,7 @@ def _auto_complete_reconcile(monkeypatch, db, fake_batch, fake_s3, *, skip_jobs=
                             unit_id=unit_id, attempt_id=attempt_id)
         return original(conn, run_id)
 
-    monkeypatch.setattr(runctl, "_reconcile", wrapper)
+    monkeypatch.setattr(launch_walk, "_reconcile", wrapper)
 
 
 # ======================================================================
@@ -84,7 +84,7 @@ def test_start_continues_after_no_wait_through_register_to_completion(
     _seed_manifest(fake_s3, output_location, run_id=run_id, stage="admit",
                     unit_id="U", attempt_id=attempt_id)
 
-    monkeypatch.setattr(runctl, "sleep", lambda s: None)
+    monkeypatch.setattr(launch_walk, "sleep", lambda s: None)
     _auto_complete_reconcile(monkeypatch, db, fake_batch, fake_s3)
 
     result = cli("run", "start", run_id, "--unit", "U")
@@ -138,7 +138,7 @@ def test_start_a_transient_exit_returns_to_ready_and_resubmits(
     job_id_1 = _kv(first.out, "job")
     fake_batch.set_status(job_id_1, "FAILED", container_exit_code=75)
 
-    monkeypatch.setattr(runctl, "sleep", lambda s: None)
+    monkeypatch.setattr(launch_walk, "sleep", lambda s: None)
     _auto_complete_reconcile(monkeypatch, db, fake_batch, fake_s3, skip_jobs=frozenset({job_id_1}))
 
     result = cli("run", "start", run_id, "--unit", "U", "--inputs", "s3://d")
@@ -170,8 +170,8 @@ def test_start_timeout_exits_75_with_a_continue_command(
     # A fake clock only sleep() advances, matching real now()/sleep()
     # semantics (test_cli_runctl.py's own World fixture does the same).
     clock = {"t": 0.0}
-    monkeypatch.setattr(runctl, "now", lambda: clock["t"])
-    monkeypatch.setattr(runctl, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+    monkeypatch.setattr(launch_walk, "now", lambda: clock["t"])
+    monkeypatch.setattr(launch_walk, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
 
     result = cli("run", "start", run_id, "--unit", "U", "--interval", "30", "--timeout", "60")
     assert result.rc == 75
