@@ -24,7 +24,7 @@ from rapidpipe.products.manifest import Manifest, register_unit_id
 from rapidpipe.runs import repository as repo
 from rapidpipe.science.spatial import healpix_indexes
 from rapidpipe.stages.contract import ExitCode
-from tests.unit.fakedifftools import (
+from rapidpipe.selftest.support.fakedifftools import (
     CDF_DIR,
     FakePsfCatalog,
     FakeToolRunner,

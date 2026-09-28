@@ -2,7 +2,7 @@
 
 Each test checks a step against `dev`'s behaviour on small synthetic
 images: the same formula, the same command line, the same file
-conventions. External tools are faked (tests/unit/fakedifftools.py);
+conventions. External tools are faked (rapidpipe/selftest/support/fakedifftools.py);
 photutils is exercised for real where it is installed.
 """
 
@@ -33,7 +33,7 @@ from rapidpipe.science.difference import (
 )
 from rapidpipe.science.difference.fitsops import scale_image_data
 
-from .fakedifftools import CDF_DIR, FakeToolRunner, fake_sip_to_pv, wcs_header
+from rapidpipe.selftest.support.fakedifftools import CDF_DIR, FakeToolRunner, fake_sip_to_pv, wcs_header
 
 
 def _write(path: Path, data, header=None) -> Path:
@@ -527,7 +527,7 @@ def test_photutils_catalog_on_a_synthetic_difference_image(tmp_path):
     pytest.importorskip("pyarrow")
     from rapidpipe.science.difference import psfcat
 
-    from .fakedifftools import _gaussian
+    from rapidpipe.selftest.support.fakedifftools import _gaussian
 
     rng = np.random.default_rng(11)
     n = 64
@@ -564,7 +564,7 @@ def test_photutils_catalog_none_when_no_sources_pass_filtering(tmp_path):
     pytest.importorskip("photutils")
     from rapidpipe.science.difference import psfcat
 
-    from .fakedifftools import _gaussian
+    from rapidpipe.selftest.support.fakedifftools import _gaussian
 
     rng = np.random.default_rng(3)
     n = 64

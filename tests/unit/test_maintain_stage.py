@@ -16,7 +16,7 @@ from rapidpipe.seams import database_env
 import rapidpipe.stages.maintain as maintain
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.stages.contract import ExitCode
-from tests.unit.fakemaintaindb import (
+from rapidpipe.selftest.support.fakemaintaindb import (
     FakeMaintainDatabase,
     build_maintain_input_set,
 )
@@ -138,6 +138,6 @@ def test_a_connection_failure_is_temporary(tmp_path, monkeypatch):
 
 
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(database_env("maintain"), "tests.unit.fakemaintaindb:no_such_factory")
+    monkeypatch.setenv(database_env("maintain"), "rapidpipe.selftest.support.fakemaintaindb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE
 

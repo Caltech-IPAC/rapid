@@ -60,9 +60,10 @@ class ExitCode(IntEnum):
     storage was reached. Caller's action: fail, no retry."""
 
     NOT_IMPLEMENTED = 69
-    """Declared, not implemented in this build: the stage has a real
-    declaration and validates its arguments, settings and input manifest
-    like any other stage, but its science has not been ported yet
+    """Reserved; no stage in this build returns it. Declared, not
+    implemented in this build: a stage with a real declaration that
+    validates its arguments, settings and input manifest like any other
+    stage, but whose science has not been ported yet
     (sysexits' EX_UNAVAILABLE; chosen over 64, which would misreport a
     correct invocation as a usage error, and 70, which calls for
     investigation of something unexpected, when the absence is deliberate

@@ -16,7 +16,7 @@ import pytest
 import rapidpipe.stages.prune as prune
 from rapidpipe.products.manifest import Manifest
 from rapidpipe.stages.contract import ExitCode
-from tests.unit.fakeprunedb import (
+from rapidpipe.selftest.support.fakeprunedb import (
     ASSOCIATION_INSTANCE,
     FIELD,
     SOURCE_SET_INSTANCE,

@@ -13,9 +13,8 @@ them with ``hats_import`` -- ``ImportArguments`` (``ra_column``,
 ``pipeline_with_client`` on a local dask ``Client(n_workers=...)``. The
 parameters are ``settings/export.toml``'s, each naming the dev one.
 
-`dev`'s light-curve catalog (``pipeline/generateLightCurveHATSCatalog.py``,
-AstroObjects/Merges/Sources joined into one light curve per object) is the
-next port: ``[export] catalog_type = "light-curves"`` exits 64.
+`dev`'s light-curve catalog (``pipeline/generateLightCurveHATSCatalog.py``)
+is not ported: ``[export] catalog_type = "light-curves"`` exits 64.
 
 Departures from dev, each deliberate:
 
@@ -125,7 +124,7 @@ ASSOCIATION_SET = "association-set"
 RESULT_SET_KINDS = (SOURCE_SET, ASSOCIATION_SET)
 
 CATALOG_TYPES = ("sources",)
-#: Designed in, not built: dev's generateLightCurveHATSCatalog.py, the next port.
+#: Not built: dev's generateLightCurveHATSCatalog.py, refused with 64.
 DESIGNED_IN_CATALOG_TYPES = ("light-curves",)
 HATS_CATALOG_TYPES = ("object", "source")
 
@@ -218,8 +217,8 @@ def _check_settings(settings: dict) -> None:
     catalog_type = export.get("catalog_type")
     if catalog_type in DESIGNED_IN_CATALOG_TYPES:
         raise UsageError(
-            f"[export] catalog_type {catalog_type!r} is designed in and not built: the "
-            f"light-curve catalog (dev's generateLightCurveHATSCatalog.py) is the next port")
+            f"[export] catalog_type {catalog_type!r} is not built: the light-curve "
+            f"catalog (dev's generateLightCurveHATSCatalog.py) is not ported")
     if catalog_type not in CATALOG_TYPES:
         raise UsageError(
             f"[export] catalog_type must be one of {list(CATALOG_TYPES)}, got {catalog_type!r}")

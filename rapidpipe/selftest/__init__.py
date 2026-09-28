@@ -2,13 +2,11 @@
 
 The stage fixtures become runnable inside the
 pipeline image on AWS Batch through the fixed entrypoint (``python -m
-rapidpipe.cli.main``), as ``rapidpipe selftest --stage difference|finalize|load|maintain|crossmatch|alerts|statistics|prune|photometry|export
+rapidpipe.cli.main``), as ``rapidpipe selftest --stage difference|finalize|load|maintain|crossmatch|alerts|statistics|prune|export
 [--real-tools] [--work-dir DIR] [--output-location s3://... or path]``.
 The fixture gate then runs as a submitted Batch job whose execution
 record is the evidence -- no separate test harness needs installing
-inside the image. ``photometry`` is a declared stub
-(photometry page): its fixture asserts exit 69
-and no published manifest, the same either side of ``--real-tools``.
+inside the image.
 ``export`` (export page) runs hats-import for real either side of it,
 against a fake database.
 
@@ -63,8 +61,6 @@ def _fixture_module(stage: str):
         from rapidpipe.selftest import statistics as module
     elif stage == "prune":
         from rapidpipe.selftest import prune as module
-    elif stage == "photometry":
-        from rapidpipe.selftest import photometry as module
     elif stage == "export":
         from rapidpipe.selftest import export as module
     else:
