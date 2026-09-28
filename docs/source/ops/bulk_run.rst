@@ -4,59 +4,54 @@ RAPID Pipeline Execution
 Overview
 ************************************
 
-There are many steps to running the RAPID pipeline.
-It is crucial to follow the listed order below, and do not omit
-any steps, as a given step relies on all previous steps.
-
-Here are the steps:
+Run all four steps in order; each depends on the preceding steps:
 
 1. Run science pipelines (``ppid = 15``).
 
 2. Register pipeline metadata in operations database.
 
 3. Run post-processing pipelines (``ppid = 17``).
-   Relies on updated operations database from step 2.
+   These rely on the operations database updated in step 2.
 
 4. Register additional pipeline metadata in operations database.
 
-All steps are executed within the environment of a Docker container
-that is running on an EC2 instance with access to the operations database.
-Any scripts to automate the execution of pipelines must
-necessarily involve the ``docker run`` command.
+Execute all steps in a Docker container on an EC2 instance with access to
+the operations database. Automation scripts must use ``docker run``.
 
-Launch scripts are used to run pipelines.
-These query the operations database and launch pipeline-instance jobs under AWS Batch.
-Individual AWS Batch jobs do not themselves interact with the operations database.
+Launch scripts query the operations database and submit pipeline-instance
+jobs to AWS Batch. Individual AWS Batch jobs do not interact with the
+operations database.
 
 
 Instructions
 ********************************************
 
-The following shows commands to launch instances of the RAPID science pipeline as AWS Batch jobs
-for a given range of observation dates.  It is assumed that all AWS Batch jobs will finish under
-the same processing date.  In the example below, it is assumed the processing date is April 4, 2025 (``20250404``).
+This example launches RAPID science pipelines as AWS Batch jobs for an
+observation-datetime range. It assumes processing on April 4, 2025
+(``20250404``), with all AWS Batch jobs finishing under that processing
+date. Observation dates are distinct from the processing date.
 
-The to-be-run-under-AWS-Batch Docker container rapid_science_pipeline:latest
-self-contains a
-RAPID git-clone in the /code directory, so no volume binding to an
-external filesystem containing the RAPID git repo is necessary.
-The container name is arbitrary, and is set to "russ-test-jobsubmit" in the example below.
-Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
-(and do not put ``bash`` at the end of the command).
+The Docker container rapid_science_pipeline:latest used under AWS Batch
+contains a RAPID git clone in /code; no volume binding to an external RAPID
+git repository is needed. The container name is arbitrary; this example
+uses "russ-test-jobsubmit". Override the image's ENTRYPOINT with
+``--entrypoint bash``; do not append ``bash`` to the command.
+
+Log into the EC2 instance and perform Steps 1 through 4 as root
+(``sudo su``). Steps 2 through 4 run inside a container with the same
+environment as Step 1.
+
+After launching jobs in Steps 1 and 3, manually monitor the AWS Batch
+console until all jobs complete, then proceed to registration in Steps 2
+and 4, respectively. Monitoring will be automated at a later stage of
+development.
 
 
 Step 1
 =============
 
-Assume we process the data on April 4, 2025 (``20250404``).  This is the processing date.
-
-Log into EC2 instance and, from root account (``sudo su``), perform Steps 1 through 4.
-
-Launch AWS Batch jobs for the RAPID science pipeline.
-
-The data to be processed are specified by the observation datetime range.
-The environment variables STARTDATETIME and ENDDATETIME refer to the
-start and end observation datetimes (an observation date is distinctly different from a processing date).
+Launch RAPID science-pipeline jobs. STARTDATETIME and ENDDATETIME specify
+the start and end observation datetimes of the data to process.
 
 .. code-block::
 
@@ -91,9 +86,6 @@ start and end observation datetimes (an observation date is distinctly different
 
    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.out &
 
-Manually monitor the AWS Batch console to verify all jobs ran to completion.
-This will be automated at some later stage of development.
-
 RAPID products are organized in an S3 bucket according to the :doc:`processing date </prod/products>`.
 The same processing date is a required input parameter in Step 2.
 
@@ -101,11 +93,9 @@ The same processing date is a required input parameter in Step 2.
 Step 2
 ============
 
-To be executed only after all AWS Batch jobs in Step 1 have completed.
-
-For this step, the data to be processed are specified simply by the processing date
-as an argument on the command line of the Python script ``registerCompletedJobsInDB.py``.
-This is executed inside a container with the same environment as defined for Step 1.
+Register science-pipeline metadata. The processing date selects the data
+and is passed as a command-line argument to the Python script
+``registerCompletedJobsInDB.py``.
 
 .. code-block::
 
@@ -117,11 +107,8 @@ This is executed inside a container with the same environment as defined for Ste
 Step 3
 ============
 
-Launch AWS Batch jobs for the RAPID post-processing pipeline.
-
-For this step, the data to be post-processed are specified simply by the processing date
-via the environment variable JOBPROCDATE (different from observation date).
-This is executed inside a container with the same environment as defined for Step 1.
+Launch RAPID post-processing-pipeline jobs under AWS Batch. JOBPROCDATE
+selects the data by processing date, not observation date.
 
 .. code-block::
 
@@ -131,18 +118,13 @@ This is executed inside a container with the same environment as defined for Ste
 
    python3.11 /code/pipeline/awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py >& awsBatchSubmitJobs_launchPostProcPipelinesForProcDate_20250404.out &
 
-Manually monitor the AWS Batch console to verify all jobs ran to completion.
-This will be automated at some later stage of development.
-
 
 Step 4
 ============
 
-To be executed only after all AWS Batch jobs in Step 3 have completed.
-
-For this step, the data to be processed are specified simply by the processing date
-as an argument on the command line of the Python script ``registerCompletedJobsInDBAfterPostProc.py``.
-This is executed inside a container with the same environment as defined for Step 1.
+Register post-processing metadata. The processing date selects the data
+and is passed as a command-line argument to the Python script
+``registerCompletedJobsInDBAfterPostProc.py``.
 
 .. code-block::
 
@@ -154,37 +136,40 @@ This is executed inside a container with the same environment as defined for Ste
 Performance
 ********************************************
 
-The AWS Batch jobs are configured to each require a machine with 4 vCPUs, 16 GB of memory, and 20 GB of disk space.
-AWS Batch for the RAPID pipeline is configured to have up to 1000 jobs running in parallel,
-and this can be easily increased as needed; however, the number of parallel jobs is contingent
-upon the AWS Batch machine availability, which can vary with load from competing AWS customers external to the RAPID project.
+Each AWS Batch job requires a machine with 4 vCPUs, 16 GB of memory, and
+20 GB of disk space. RAPID's AWS Batch configuration allows up to 1000
+parallel jobs, a limit that can easily be increased. Actual concurrency
+depends on machine availability, which varies with competing demand from
+AWS customers outside the RAPID project.
 
-The addition of SFFT image differencing to the science pipeline raised the machine memory requirement from 8 GB to 16 GB,
-and also increased the pipeline execution time by about 3 minutes.
+Adding SFFT image differencing raised the science pipeline's memory
+requirement from 8 GB to 16 GB and its execution time by about 3 minutes.
 
 Step 1
 ============
 
-On an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance), it takes 1183 seconds
-to launch 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
+Launching 2069 RAPID-science-pipeline jobs takes 1183 seconds with 8-core
+multiprocessing on an 8-core job-launcher machine (``t3.2xlarge`` EC2
+instance).
 
-The 2069 RAPID-science-pipeline jobs take 480 seconds on average to run in parallel under AWS Batch, once
-the job has actually started on the AWS Batch machine.  There can, however, be significant time spent waiting
-in the AWS Batch queue, as illustrated by the histogram below.  Also, the pipeline itself running on an AWS Batch machine
-takes longer than the reported elapsed times last month because now the pipeline computes difference images and catalogs
-for both ZOGY and SFFT.
-There were 80 failed pipelines because there were no prior observations for which to generate reference images.
+The 2069 jobs run in parallel under AWS Batch and average 480 seconds each
+once started, excluding potentially significant queue waits. Execution
+takes longer than the elapsed times reported last month because the
+pipeline now computes difference images and catalogs for both ZOGY and
+SFFT. There were 80 failed pipelines because no prior observations were
+available to generate reference images.
 
-Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+Histogram of AWS Batch queue wait times for an available machine:
 
 .. image:: queue_wait_times.png
 
-In theory, an AWS Batch machine with 4 vCPUs and 16 GB of memory is a scarcer resource than those with
-only one vCPU and 8 GB of memory that were being used in pipeline testing last month.
-That, along with potential competition from AWS customers external to the RAPID project, may explain
-the relatively longer wait times in the AWS Batch queue for available machines.
+In theory, machines with 4 vCPUs and 16 GB of memory are scarcer than the
+machines with one vCPU and 8 GB used in pipeline testing last month. This,
+along with possible competing demand from AWS customers outside RAPID, may
+explain the longer queue waits.
 
-Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+Histogram of job execution times, measured from pipeline start to finish
+on an AWS Batch machine:
 
 .. image:: pipeline_execution_times.png
 
@@ -192,28 +177,27 @@ Here is a histogram of the job execution times, measured from pipeline start to 
 Step 2
 ============
 
-On an 8-core job-launcher machine, it takes 415 seconds
-to register database records for 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
+Registering database records for 2069 RAPID-science-pipeline jobs takes
+415 seconds with 8-core multiprocessing on an 8-core job-launcher machine.
 
 Records are inserted and/or updated in the Jobs, DiffImages, DiffImMeta, RefImages, RefImCatalogs,
 RefImMeta, and RefImImages database tables.
 
-For development, the RAPID operations database is deployed on a ``t2.micro`` EC2 machine,
-which has only one virtual core (1 vCPU).
+The development RAPID operations database runs on a ``t2.micro`` EC2
+machine with one virtual core (1 vCPU).
 
 Step 3
 ============
 
-On an 8-core job-launcher machine, it takes 1051 seconds
-to launch 1989 RAPID-post-processing-pipeline jobs with 8-core multiprocessing.
+Launching 1989 RAPID-post-processing-pipeline jobs takes 1051 seconds with
+8-core multiprocessing on an 8-core job-launcher machine.
 
 The 1989 RAPID-post-processing-pipeline jobs take less than 60 seconds to run in parallel under AWS Batch.
 
 Step 4
 ============
 
-It takes 476 seconds to register database records for 1989 RAPID-post-processing-pipeline jobs running as a single process.
+Registering database records for 1989 RAPID-post-processing-pipeline jobs
+takes 476 seconds as a single process.
 
 Records are updated in the Jobs, DiffImages, and RefImages database tables.
-
-
