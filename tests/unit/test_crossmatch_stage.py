@@ -275,7 +275,8 @@ def test_a_connection_failure_is_temporary(tmp_path, monkeypatch):
 
 
 def test_the_database_env_names_a_factory(tmp_path, monkeypatch):
-    monkeypatch.setenv(database_env("crossmatch"), "rapidpipe.selftest.support.fakecrossmatchdb:no_such_factory")
+    monkeypatch.setenv(database_env("crossmatch"),
+                       "rapidpipe.selftest.support.fakecrossmatchdb:no_such_factory")
     assert _run(tmp_path)[0] == ExitCode.USAGE
 
 

@@ -26,7 +26,8 @@ from .test_register_l2 import _NoCloseNoCommitConnProxy
 
 
 def _run_maintain(conn, monkeypatch, tmp_path, run_id, inputs, *, unit_id, name="maintain"):
-    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
+    monkeypatch.setattr("rapidpipe.db.connection.connect",
+                        lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
     repo.add_unit(conn, run_id, "maintain", "detector-date", unit_id)
     attempt_id = repo.allocate_attempt(conn, run_id, "maintain", unit_id)
     outputs = tmp_path / f"{name}-outputs"

@@ -81,7 +81,8 @@ def _registered_difference(conn, tmp_path, monkeypatch):
 
 
 def _run_load(conn, monkeypatch, tmp_path, run_id, inputs, *, name="load", overlay=""):
-    monkeypatch.setattr("rapidpipe.db.connection.connect", lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
+    monkeypatch.setattr("rapidpipe.db.connection.connect",
+                        lambda *a, **k: _NoCloseNoCommitConnProxy(conn))
     unit_id = f"{name}-unit"
     _make_unit(conn, run_id, stage="load", unit_id=unit_id)
     attempt_id = repo.allocate_attempt(conn, run_id, "load", unit_id)
