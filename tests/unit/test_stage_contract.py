@@ -33,7 +33,6 @@ from .fakes3 import FakeClientError, FakeEndpointConnectionError, FakeS3
 DECLARATION = StageDeclaration(
     name="admit",
     unit="exposure",
-    argument_schema={},
     settings_schema_path=None,
     consumes=(),
     produces=("exposure",),
@@ -238,7 +237,6 @@ def test_stage_declaration_rejects_unknown_name():
         StageDeclaration(
             name="not-a-real-stage",
             unit="exposure",
-            argument_schema={},
             settings_schema_path=None,
             consumes=(),
             produces=(),
@@ -251,7 +249,6 @@ def test_stage_declaration_rejects_unknown_unit():
         StageDeclaration(
             name="admit",
             unit="not-a-real-unit",
-            argument_schema={},
             settings_schema_path=None,
             consumes=(),
             produces=(),
@@ -264,7 +261,6 @@ def test_stage_declaration_rejects_unknown_database_access():
         StageDeclaration(
             name="admit",
             unit="exposure",
-            argument_schema={},
             settings_schema_path=None,
             consumes=(),
             produces=(),
@@ -496,7 +492,6 @@ def declaration_with_settings(tmp_path):
     return StageDeclaration(
         name="admit",
         unit="exposure",
-        argument_schema={},
         settings_schema_path=str(schema_path),
         consumes=(),
         produces=("exposure",),

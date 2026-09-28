@@ -92,20 +92,10 @@ EXTRA_ROWS_AND_COLUMNS = 1
 DECLARATION = StageDeclaration(
     name="load",
     unit="detector-image",
-    argument_schema={
-        "description": (
-            "rapidpipe stage load --run <run-id> --unit <unit-id> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds the difference "
-            "attempt's completion manifest and files; its difference-image "
-            "instance must already be registered."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("difference-image", "source-catalog"),
     produces=("source-set",),
     database_access="read-write",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 

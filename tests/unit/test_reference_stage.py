@@ -105,7 +105,6 @@ def test_declaration():
     assert (d.name, d.unit, d.database_access) == ("reference", "field", "none")
     assert d.consumes == ("l2-image",)
     assert d.produces == ("reference-image", "reference-catalog")
-    assert d.resource_defaults == {"vcpus": 4, "memory_mib": 32768}
     assert Path(d.settings_schema_path).name == "reference.toml"
 
 

@@ -84,21 +84,10 @@ _SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings" / "finalize
 DECLARATION = StageDeclaration(
     name="finalize",
     unit="detector-image",
-    argument_schema={
-        "description": (
-            "rapidpipe stage finalize --run <run-id> --unit <unit-id> "
-            "--attempt <attempt-id> --inputs <dir-or-s3-prefix> "
-            "--outputs <dir-or-s3-prefix> [--settings <toml>] [--dry-run]. "
-            "--inputs is a difference attempt's output location: its "
-            "manifest.json (one difference-image entry and its source-catalog "
-            "entries), member files and execution record."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("difference-image", "source-catalog"),
     produces=("difference-image", "source-catalog"),
     database_access="none",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 #: The output revision of a finalized instance (products page: the

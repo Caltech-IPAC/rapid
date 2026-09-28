@@ -70,7 +70,6 @@ def test_declaration():
     d = finalize.DECLARATION
     assert (d.name, d.unit, d.database_access) == ("finalize", "detector-image", "none")
     assert d.consumes == ("difference-image", "source-catalog") == d.produces
-    assert d.resource_defaults == {"vcpus": 1, "memory_mib": 4096}
 
 
 def test_republishes_the_difference_attempt_under_new_instances(tmp_path):

@@ -126,23 +126,12 @@ _SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings" / "referenc
 DECLARATION = StageDeclaration(
     name="reference",
     unit="field",
-    argument_schema={
-        "description": (
-            "rapidpipe stage reference --run <run-id> --unit <rtid>/<filter> "
-            "--attempt <attempt-id> --inputs <dir-or-s3-prefix> "
-            "--outputs <dir-or-s3-prefix> [--settings <toml>] [--dry-run]. "
-            "--inputs holds an input-set manifest.json (unit kind field) listing "
-            "the l2-image entries to coadd, one filter, in selection order, with "
-            "their member files."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("l2-image",),
     produces=("reference-image", "reference-catalog"),
     database_access="none",
     # A 7000x7000 float32 coadd of <= 25 4088x4088 frames: the difference
     # stage's 4 vCPUs, twice its memory for awaicgen's cell grid.
-    resource_defaults={"vcpus": 4, "memory_mib": 32768},
 )
 
 #: `dev`'s cattype for the SExtractor reference catalog (refimcatalogs).

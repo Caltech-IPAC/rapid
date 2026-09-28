@@ -111,20 +111,10 @@ CONE_NEIGHBOURS = 8
 DECLARATION = StageDeclaration(
     name="crossmatch",
     unit="field",
-    argument_schema={
-        "description": (
-            "rapidpipe stage crossmatch --run <run-id> --unit <rtid> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds a manifest of one "
-            "or more complete source-set entries and at most one association-set "
-            "entry (the field's base catalog); the unit is the field's decimal rtid."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("source-set",),
     produces=("association-set",),
     database_access="read-write",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 # ----------------------------------------------------------------------

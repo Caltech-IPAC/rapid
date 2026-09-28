@@ -134,22 +134,10 @@ MAX_HEALPIX_ORDER = 11
 DECLARATION = StageDeclaration(
     name="export",
     unit="field",
-    argument_schema={
-        "description": (
-            "rapidpipe stage export --run <run-id> --unit <rtid> "
-            "--attempt <attempt-id> --inputs <dir> --outputs <dir> "
-            "[--settings <toml>] [--dry-run]. --inputs holds an input-set "
-            "manifest (stage input-set) naming, in inputs.result_sets, one "
-            "or more source-set instances and optionally association-set "
-            "instances (recorded, unused). Writes one catalog-export: a HATS "
-            "catalog of the named source sets' sources rows."
-        ),
-    },
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=RESULT_SET_KINDS,
     produces=(CATALOG_EXPORT_KIND,),
     database_access="read",
-    resource_defaults={"vcpus": 1, "memory_mib": 4096},
 )
 
 _UNIT_ID_RE = re.compile(r"[0-9]+")

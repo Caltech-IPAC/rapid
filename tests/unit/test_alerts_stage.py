@@ -78,7 +78,6 @@ def test_declaration():
                                            "association-set", "statistics-set", "pruned-set")
     assert alerts.DECLARATION.produces == ("alert-container", "alert-set")
     assert alerts.DECLARATION.database_access == "read-write"
-    assert alerts.DECLARATION.resource_defaults == {"vcpus": 1, "memory_mib": 8192}
 
 
 def test_success_writes_container_outbox_and_both_outputs(tmp_path, monkeypatch, prepared):
