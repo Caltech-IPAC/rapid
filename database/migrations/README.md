@@ -32,14 +32,14 @@ together by CI (`.github/workflows/db-migrations.yml`).
   merged ahead of it in the meantime, since the applier records each
   file's sha256 and a number can only change before merge, never after.
 - **`20260921-01-baseline.sql` is the floor**: the team's schema as of the
-  rebuild, taken from `database/schema/`. Every later migration assumes it
+  rebuild, taken from `dev`'s `database/schema/` (not carried on this
+  branch). Every later migration assumes it
   applied. See its own header for what was stripped and why (nothing
   account-specific may be committed to this public repo).
 - **A schema change and its code change are one pull request.** CI applies
   the full stream to a fresh PostgreSQL and runs the test suite against it.
-- `database/scripts/buildDatabase.sh` and `database/schema/*.sql` are
-  superseded by this directory but not deleted by the pull request that
-  introduces it.
+- `dev`'s `database/scripts/buildDatabase.sh` and `database/schema/*.sql`
+  are superseded by this directory and are not carried on this branch.
 
 ## Running the applier locally
 
