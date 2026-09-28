@@ -7,7 +7,7 @@ unexpected codes"), and the runs page's "Attempts" (``lost`` means the
 scheduler lost the job) over ``rapidpipe.runs.repository``.
 
 This module composes ``rapidpipe.runs.repository``, ``rapidpipe.products``
-and ``rapidpipe.db``; it never imports a stage module or ``rapidpipe.cli``
+and ``rapidpipe.db``; it never imports a stage module or the command-line tool
 (the package's fixed dependency direction, ``rapid_docs``'
 stage-contract.md, "The package"). ``boto3`` is never imported at module
 level: :func:`batch_client` is the one indirection point a test
@@ -104,7 +104,7 @@ class ReleaseDefinitionRefused(LaunchError):
 class ProfileNotAllowed(LaunchError):
     """``profile=True`` was refused for a production run.
 
-    Profiling is scratch-only (``--profile``, ``rapidpipe.cli.main``): a
+    Profiling is scratch-only (``--profile`` on ``run submit`` or ``run start``): a
     profile file is written into the attempt's own outputs prefix, which
     for a production run is the products bucket, not a scratch location.
     Permanent, not retryable; the CLI maps it to exit 64.

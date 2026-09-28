@@ -2,7 +2,7 @@
 
 :func:`bind_input_set` is the only path by which a composed input set is
 admitted, bound and written. Its callers are the two composers:
-``rapidpipe.cli.runctl.compose_inputs`` (``run inputs``, ``run start``)
+``rapidpipe.launch.walk.compose_inputs`` (``run inputs``, ``run start``)
 and ``rapidpipe.launch.loop.process_date``'s maintain, crossmatch and
 alerts sites. What it guarantees, in this fixed order:
 

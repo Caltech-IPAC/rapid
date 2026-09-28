@@ -6,6 +6,6 @@ and running and recording candidate checks (``checking.py``). This
 subpackage composes ``rapidpipe.products``, ``rapidpipe.db`` and
 ``rapidpipe.checks``; it may import those, ``rapidpipe.science`` and the
 leaf modules, but no stage module, ``rapidpipe.launch``,
-``rapidpipe.selftest`` or ``rapidpipe.cli``
+``rapidpipe.selftest`` or the command-line tool
 (``tests/unit/test_dependency_direction.py``).
 """
