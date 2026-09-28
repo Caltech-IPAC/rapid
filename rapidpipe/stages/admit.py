@@ -95,7 +95,7 @@ DECLARATION = StageDeclaration(
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=(),
     produces=("l2-image",),
-    database_access="none",
+    database_access="custody",
 )
 
 

@@ -102,7 +102,7 @@ def _rewrite_frame(inputs: Path, manifest: dict, index: int, **cards) -> None:
 def test_declaration():
     d = reference.DECLARATION
     d.validate()
-    assert (d.name, d.unit, d.database_access) == ("reference", "field", "none")
+    assert (d.name, d.unit, d.database_access) == ("reference", "field", "custody")
     assert d.consumes == ("l2-image",)
     assert d.produces == ("reference-image", "reference-catalog")
     assert Path(d.settings_schema_path).name == "reference.toml"

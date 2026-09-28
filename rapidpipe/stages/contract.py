@@ -91,8 +91,13 @@ STAGE_NAMES = (
 #: The five units of work a stage may declare (stage contract, "Declaration").
 UNIT_KINDS = ("exposure", "detector-image", "field", "processing-date", "detector-date")
 
-#: The three database access levels a stage may declare.
-DB_ACCESS_LEVELS = ("none", "read", "read-write")
+#: The four database access levels a stage may declare (stage contract,
+#: "Declaration"). ``none`` never connects: ``run_stage`` skips the read
+#: guard for it. ``custody`` connects only for the read guard, to judge the
+#: custody of the instances its input manifest names, and reads or writes
+#: nothing else; the transform stages declare it. ``read`` and
+#: ``read-write`` also pass through the guard.
+DB_ACCESS_LEVELS = ("none", "custody", "read", "read-write")
 
 
 #: The stage contract's permitted subset of :class:`ExitCode` (the
@@ -474,7 +479,9 @@ def run_stage(
     no path skips it. A refused instance exits 65; with instances named,
     the guard needs the database: no database configured exits 64, and a
     database that cannot be reached exits 75, dry run or not. A manifest
-    naming no instance makes no connection.
+    naming no instance makes no connection. A declaration of
+    ``database_access="none"`` skips the guard and never connects, so it
+    stays true; every shipped stage declares ``custody`` or more.
 
     Also (additive, no manifest member): mirrors every log line to
     ``<outputs>/log/<stage>.log`` (skipped under ``--dry-run``, which
@@ -634,7 +641,8 @@ def run_stage(
 
             input_manifest = _read_input_manifest_from(inputs_dir, args.inputs)
 
-            _assert_inputs_readable(input_manifest, args.run_id)
+            if declaration.database_access != "none":
+                _assert_inputs_readable(input_manifest, args.run_id)
 
             if inputs_location.is_s3() and not args.dry_run:
                 # Only the objects the guarded manifest names, one by one:

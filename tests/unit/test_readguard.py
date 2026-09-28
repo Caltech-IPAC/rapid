@@ -8,6 +8,7 @@ database-backed proof on all three invocation paths is
 from __future__ import annotations
 
 import contextlib
+import importlib
 from pathlib import Path
 
 import psycopg2
@@ -333,7 +334,7 @@ def test_the_seam_outside_a_selftest_exits_64_from_run_stage(tmp_path, monkeypat
 
 DECLARATION = StageDeclaration(
     name="difference", unit="detector-image",
-    settings_schema_path=None, consumes=(), produces=(), database_access="none")
+    settings_schema_path=None, consumes=(), produces=(), database_access="custody")
 
 
 def _write_inputs(directory: Path, manifest: Manifest) -> Path:
@@ -489,3 +490,53 @@ def test_on_s3_a_member_missing_from_the_prefix_is_rejected_with_65(tmp_path, mo
     rc = run_stage(DECLARATION, lambda context: StageResult(outputs=()),
                    _argv("s3://bucket/in", tmp_path / "out"))
     assert rc == 65
+
+
+# ----------------------------------------------------------------------
+# The declaration agrees with the behaviour (stage contract, "Declaration")
+# ----------------------------------------------------------------------
+
+def test_a_stage_declaring_none_never_calls_the_guard(tmp_path, monkeypatch):
+    def _guard(manifest, run_id, *, connect=None):
+        raise AssertionError("a stage declaring database_access='none' must not connect")
+
+    monkeypatch.setattr(readguard, "assert_inputs_readable", _guard)
+    monkeypatch.delenv(readguard.DATABASE_ENV, raising=False)
+    declaration = StageDeclaration(
+        name="difference", unit="detector-image", settings_schema_path=None,
+        consumes=(), produces=(), database_access="none")
+    inputs = _write_inputs(tmp_path / "in", _manifest(_entry("F")))
+    rc = run_stage(declaration, lambda context: StageResult(outputs=()),
+                   _argv(inputs, tmp_path / "out"))
+    assert rc == 0
+
+
+@pytest.mark.parametrize("level", ["custody", "read", "read-write"])
+def test_every_level_but_none_passes_through_the_guard(tmp_path, monkeypatch, level):
+    seen = []
+    monkeypatch.setattr(readguard, "assert_inputs_readable",
+                        lambda manifest, run_id, *, connect=None: seen.append(run_id))
+    declaration = StageDeclaration(
+        name="difference", unit="detector-image", settings_schema_path=None,
+        consumes=(), produces=(), database_access=level)
+    inputs = _write_inputs(tmp_path / "in", _manifest(_entry("F")))
+    rc = run_stage(declaration, lambda context: StageResult(outputs=()),
+                   _argv(inputs, tmp_path / "out"))
+    assert rc == 0
+    assert seen == [RUN]
+
+
+@pytest.mark.parametrize("name", ["admit", "reference", "difference", "finalize"])
+def test_the_transform_stages_declare_custody(name):
+    module = importlib.import_module(f"rapidpipe.stages.{name}")
+    assert module.DECLARATION.database_access == "custody"
+
+
+def test_no_shipped_stage_skips_the_guard():
+    """Every shipped stage reads an input manifest, so none may declare
+    ``none``: that level skips the custody check."""
+    from rapidpipe.stages.contract import STAGE_NAMES
+
+    for name in STAGE_NAMES:
+        module = importlib.import_module(f"rapidpipe.stages.{name}")
+        assert module.DECLARATION.database_access != "none", name
