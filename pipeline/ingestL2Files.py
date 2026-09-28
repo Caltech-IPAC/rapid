@@ -57,10 +57,10 @@ The FITS files are filed in the output bucket under the observation date:
 
 The subdirectory is DATE-OBS as yyyymmdd.  It can only be settled once the file
 has been converted, DATE-OBS being inside the ASDF metadata, so the work list --
-built from an S3 listing -- matches already-ingested and reusable files on the
-filename alone.  That is also what the L2Files query has always extracted from
-the registered name, so rows written before this change still match and nothing
-is re-ingested across it.
+built from an S3 listing, before any ASDF file is opened -- matches
+already-ingested files on the filename alone.  That is also what the L2Files
+query extracts from the registered name, so a row written when the bucket was
+flat still matches a file now filed by date.
 
 
 Output FITS layout
@@ -1993,7 +1993,7 @@ def get_ingested_l2file_times(dbh):
 #-------------------------------------------------------------------------------------------------------------
 
 
-def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None):
+def run_single_core_job(asdf_files,index_thread):
 
     '''
     Convert and register the share of the work list belonging to one process.
@@ -2002,17 +2002,7 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
     child process, rather than inherited from the parent, so that no two processes can end up
     sharing one connection.
 
-    `reusable_output_fits_files` maps output filename to the object name it already sits at,
-    for the files the main program found in the output bucket AND newer than the ASDF file
-    they came from.  Such a file was converted by an earlier run (or by convert_socsims.py,
-    before this script replaced it) but never registered, so it is downloaded and registered
-    rather than converted again -- the conversion is by far the most expensive step.  An
-    output object older than its ASDF file is stale, is not in this mapping, and is converted
-    afresh.
     '''
-
-    if reusable_output_fits_files is None:
-        reusable_output_fits_files = {}
 
     thread_start_time_benchmark = time.time()
 
@@ -2063,8 +2053,6 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
         output_basename = output_fits_basename(input_asdf_file)
 
-        reusable_object_name = reusable_output_fits_files.get(output_basename)
-
         local_asdf_file = f"{subdir_work}/" + os.path.basename(input_asdf_file)
         local_fits_file = f"{subdir_work}/" + output_basename[:-len(".gz")]
         local_gzipped_fits_file = local_fits_file + ".gz"
@@ -2081,76 +2069,52 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
 
         try:
 
-            if reusable_object_name is not None:
+
+            # Download the ASDF file from the input S3 bucket.
+
+            s3_client.download_file(bucket_name_input,input_asdf_file,local_asdf_file)
+
+            step_start_time = log_elapsed_time("download ASDF file from S3 bucket",
+                                               step_start_time,input_asdf_file)
 
 
-                # Already converted by an earlier run, but not registered, so take the
-                # converted file back rather than paying for the conversion a second time.
+            # Gunzip it, if it is gzipped.  roman_datamodels reads only uncompressed ASDF.
 
-                fh.write(f"{reusable_object_name} is already in {bucket_name_output}; "
-                         "downloading it instead of converting\n")
+            if local_asdf_file.endswith(".gz"):
 
-                s3_client.download_file(bucket_name_output,reusable_object_name,
-                                        local_gzipped_fits_file)
+                gunzipped_asdf_file = local_asdf_file[:-len(".gz")]
 
-                step_start_time = log_elapsed_time("download already-converted FITS file from S3 bucket",
-                                                   step_start_time,input_asdf_file)
-
-                with gzip.open(local_gzipped_fits_file,'rb') as fh_in:
-                    with open(local_fits_file,'wb') as fh_out:
+                with gzip.open(local_asdf_file,'rb') as fh_in:
+                    with open(gunzipped_asdf_file,'wb') as fh_out:
                         shutil.copyfileobj(fh_in,fh_out)
 
-                step_start_time = log_elapsed_time("gunzip already-converted FITS file",
+                local_files.append(gunzipped_asdf_file)
+
+                step_start_time = log_elapsed_time("gunzip ASDF file",
                                                    step_start_time,input_asdf_file)
 
             else:
 
-
-                # Download the ASDF file from the input S3 bucket.
-
-                s3_client.download_file(bucket_name_input,input_asdf_file,local_asdf_file)
-
-                step_start_time = log_elapsed_time("download ASDF file from S3 bucket",
-                                                   step_start_time,input_asdf_file)
+                gunzipped_asdf_file = local_asdf_file
 
 
-                # Gunzip it, if it is gzipped.  roman_datamodels reads only uncompressed ASDF.
+            # Convert from ASDF format to multi-extension FITS format.
 
-                if local_asdf_file.endswith(".gz"):
+            converted = asdf_to_fits(gunzipped_asdf_file,local_fits_file)
 
-                    gunzipped_asdf_file = local_asdf_file[:-len(".gz")]
+            step_start_time = log_elapsed_time("convert ASDF file to FITS file",
+                                               step_start_time,input_asdf_file)
 
-                    with gzip.open(local_asdf_file,'rb') as fh_in:
-                        with open(gunzipped_asdf_file,'wb') as fh_out:
-                            shutil.copyfileobj(fh_in,fh_out)
-
-                    local_files.append(gunzipped_asdf_file)
-
-                    step_start_time = log_elapsed_time("gunzip ASDF file",
-                                                       step_start_time,input_asdf_file)
-
-                else:
-
-                    gunzipped_asdf_file = local_asdf_file
+            if not converted:
+                raise RuntimeError(f"Could not convert {input_asdf_file}")
 
 
-                # Convert from ASDF format to multi-extension FITS format.
+            # Gzip the output FITS file, keeping the uncompressed one for the registration.
 
-                converted = asdf_to_fits(gunzipped_asdf_file,local_fits_file)
+            gzip_file(local_fits_file,local_gzipped_fits_file)
 
-                step_start_time = log_elapsed_time("convert ASDF file to FITS file",
-                                                   step_start_time,input_asdf_file)
-
-                if not converted:
-                    raise RuntimeError(f"Could not convert {input_asdf_file}")
-
-
-                # Gzip the output FITS file, keeping the uncompressed one for the registration.
-
-                gzip_file(local_fits_file,local_gzipped_fits_file)
-
-                step_start_time = log_elapsed_time("gzip FITS file",
-                                                   step_start_time,input_asdf_file)
+            step_start_time = log_elapsed_time("gzip FITS file",
+                                               step_start_time,input_asdf_file)
 
 
             # Where the file belongs in the output bucket, which is settled only now: the
@@ -2161,26 +2125,16 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
                                  output_basename)
 
 
-            # Upload it, unless it is a reused file already sitting at exactly this object
-            # name.  A reused file at a DIFFERENT name -- one converted before this script
-            # filed them by observation date -- is uploaded to the right one, so that the
-            # bucket ends up organised the same way throughout and the row registered below
-            # points at where the file actually belongs.
+            # Upload the gzipped file to the output S3 bucket.
 
-            if reusable_object_name == s3_object_name:
+            uploaded = util.upload_files_to_s3_bucket(s3_client,bucket_name_output,
+                                                      [local_gzipped_fits_file],[s3_object_name])
 
-                fh.write(f"{s3_object_name} is already where it belongs; not re-uploading\n")
+            step_start_time = log_elapsed_time("upload FITS file to S3 bucket",
+                                               step_start_time,input_asdf_file)
 
-            else:
-
-                uploaded = util.upload_files_to_s3_bucket(s3_client,bucket_name_output,
-                                                          [local_gzipped_fits_file],[s3_object_name])
-
-                step_start_time = log_elapsed_time("upload FITS file to S3 bucket",
-                                                   step_start_time,input_asdf_file)
-
-                if not uploaded:
-                    raise RuntimeError(f"Could not upload {s3_object_name} to {bucket_name_output}")
+            if not uploaded:
+                raise RuntimeError(f"Could not upload {s3_object_name} to {bucket_name_output}")
 
 
             # Register the FITS file in the database.  This comes last, so that the row in
@@ -2258,7 +2212,7 @@ def run_single_core_job(asdf_files,index_thread,reusable_output_fits_files=None)
     return index_thread,n_ingested,n_failed
 
 
-def execute_parallel_processes(asdf_files_list,num_cores=None,reusable_output_fits_files=None):
+def execute_parallel_processes(asdf_files_list,num_cores=None):
 
     '''
     Run the work list across num_cores processes, and return (exit code, files ingested, files
@@ -2284,7 +2238,7 @@ def execute_parallel_processes(asdf_files_list,num_cores=None,reusable_output_fi
 
         # Submit all tasks to the executor and store the futures in a list.
 
-        futures = [executor.submit(run_single_core_job,asdf_files_list,thread_index,reusable_output_fits_files)
+        futures = [executor.submit(run_single_core_job,asdf_files_list,thread_index)
                    for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress.
@@ -2395,35 +2349,6 @@ if __name__ == '__main__':
     dbh.close()
 
 
-    # The FITS files already in the output bucket.  These never decide whether a file still
-    # has to be ingested -- the database, above, decides that -- but a file that is in the
-    # bucket and not in the database was converted by an earlier run that did not get as far
-    # as registering it, and can be downloaded rather than converted again.
-
-    existing_output_fits_objects = list_bucket_objects(bucket_name_output,
-                                                       suffixes=(".fits.gz",))
-
-
-    # Keyed by filename rather than by full object name, because the date subdirectory an
-    # object sits under cannot be worked out from the input name -- DATE-OBS is inside the
-    # ASDF file, which is not opened until the worker gets to it.  The filename is unique
-    # across the bucket, so it is enough to find an already-converted file by.  Where two
-    # objects share one -- a file converted before this script filed them by date, beside the
-    # one that replaced it -- the newer wins, which is the one worth reusing.
-
-    existing_output_by_basename = {}
-
-    for object_name,last_modified in existing_output_fits_objects.items():
-
-        basename = os.path.basename(object_name)
-
-        if basename not in existing_output_by_basename or \
-           last_modified > existing_output_by_basename[basename][1]:
-            existing_output_by_basename[basename] = (object_name,last_modified)
-
-    print(f"n_existing_output_fits_objects = {len(existing_output_fits_objects)}")
-
-
     # Parse the ASDF files in the input S3 bucket, and keep the ones not yet ingested.
 
     input_asdf_objects = list_bucket_objects(bucket_name_input,
@@ -2435,13 +2360,6 @@ if __name__ == '__main__':
     input_asdf_files = []
     root_names = []
     sca_nums = []
-
-    # {output filename: the object name it is already at}, for the files a worker may take
-    # back from the output bucket instead of converting.  It carries the object name because
-    # that is where the worker has to download it from, and it may be a date subdirectory or,
-    # for a file converted before this script filed them by date, the top of the bucket.
-
-    reusable_output_fits_files = {}
 
     n_already_ingested = 0
     n_redelivered = 0
@@ -2482,17 +2400,6 @@ if __name__ == '__main__':
             continue
 
 
-        # A converted FITS file in the output bucket may be reused only if it is newer than
-        # the ASDF file it came from.  An older one was made from a PREVIOUS delivery of that
-        # ASDF file -- the redelivery that put this file back on the work list is exactly the
-        # case where the object name is unchanged but the pixels are not -- and reusing it
-        # would register the superseded data as the new version.
-
-        existing_output = existing_output_by_basename.get(output_basename)
-
-        if existing_output is not None and existing_output[1] > input_last_modified:
-            reusable_output_fits_files[output_basename] = existing_output[0]
-
         input_asdf_files.append(input_asdf_file)
         root_names.append(fname_fields[0] + fname_fields[1])
         sca_nums.append(fname_fields[2])
@@ -2503,7 +2410,6 @@ if __name__ == '__main__':
 
     print(f"n_already_ingested = {n_already_ingested}")
     print(f"n_redelivered = {n_redelivered}")
-    print(f"n_reusable_output_fits_files = {len(reusable_output_fits_files)}")
     print(f"Total number of L2 files to ingest = {len(input_asdf_files)}")
 
     if len(input_asdf_files) == 0:
@@ -2532,8 +2438,7 @@ if __name__ == '__main__':
     if num_cores > 1:
 
         exit_code,n_ingested,n_failed = execute_parallel_processes(sorted_input_asdf_files,
-                                                                   num_cores,
-                                                                   reusable_output_fits_files)
+                                                                   num_cores)
 
     else:
 
@@ -2550,8 +2455,7 @@ if __name__ == '__main__':
         try:
 
             index_thread,n_ingested,n_failed = run_single_core_job(sorted_input_asdf_files,
-                                                                   thread_index,
-                                                                   reusable_output_fits_files)
+                                                                   thread_index)
 
             print(f"Finish normally for index_thread = {index_thread}: "
                   f"n_ingested = {n_ingested}, n_failed = {n_failed}")
