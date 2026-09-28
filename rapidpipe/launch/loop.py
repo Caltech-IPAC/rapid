@@ -773,7 +773,7 @@ def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date, batch
 
     Resolve the policy (the spec's, else the run's, else the default), run
     its checks over the run's candidates as ``scheduler`` through
-    ``rapidpipe.checks.runner`` (recorded, committed either way, so a
+    ``rapidpipe.runs.checking`` (recorded, committed either way, so a
     person promoting later sees them). Promotion itself is not automatic:
     ``repository.promote_run`` runs only when the policy permits automatic
     promotion (``rapidpipe.checks.policy.policy_permits_auto_promote``, the
@@ -783,7 +783,7 @@ def _promote(conn, run_id: str, spec: LoopSpec, processing_date: _dt.date, batch
     a policy that does permit auto-promotion is returned, not raised."""
     from rapidpipe.checks.policy import policy_permits_auto_promote
     from rapidpipe.checks.registry import CheckError
-    from rapidpipe.checks.runner import (
+    from rapidpipe.runs.checking import (
         CheckUsageError,
         resolve_run_policy,
         run_policy_checks,

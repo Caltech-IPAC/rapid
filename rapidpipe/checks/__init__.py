@@ -6,10 +6,12 @@
   ``difference-image-statistics@1`` and ``catalog-counts-vs-reference@1``.
 - :mod:`rapidpipe.checks.policy` -- versioned TOML policies shipped in
   ``policies/`` (``rebuild-trial@1``).
-- :mod:`rapidpipe.checks.runner` -- running and recording checks, and
-  automatic promotion (designed in, off).
 
-The promotion gate itself is in :func:`rapidpipe.runs.repository.promote`.
+Running and recording checks, and automatic promotion (designed in,
+off), are in :mod:`rapidpipe.runs.checking`, above this package: checks
+never import ``rapidpipe.runs``
+(``tests/unit/test_dependency_direction.py``). The promotion gate itself
+is in :func:`rapidpipe.runs.repository.promote`.
 """
 
 from rapidpipe.checks.policy import (

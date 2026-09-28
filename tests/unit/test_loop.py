@@ -566,7 +566,7 @@ def _permitting_policy():
 
 
 def _gate(monkeypatch, *, promote, recorded=("passed",), policy=None):
-    from rapidpipe.checks import runner
+    from rapidpipe.runs import checking
 
     seen = {}
     resolved = policy if policy is not None else _trial_policy()
@@ -579,8 +579,8 @@ def _gate(monkeypatch, *, promote, recorded=("passed",), policy=None):
         seen["who"] = who
         return [_Recorded(o) for o in recorded]
 
-    monkeypatch.setattr(runner, "resolve_run_policy", resolve)
-    monkeypatch.setattr(runner, "run_policy_checks", run_checks)
+    monkeypatch.setattr(checking, "resolve_run_policy", resolve)
+    monkeypatch.setattr(checking, "run_policy_checks", run_checks)
     monkeypatch.setattr(repository, "promote_run", promote)
     monkeypatch.setattr(loop, "run_promotion", lambda conn, run: None)
     return seen, resolved
