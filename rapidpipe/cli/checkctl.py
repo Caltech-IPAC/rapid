@@ -1,6 +1,5 @@
-"""``rapidpipe check list|run|show|accept``: candidate checks (checks page,
-"The check commands"; ``accept`` and the acceptance lines, checks page,
-"Acceptance").
+"""``rapidpipe check list|run|show``: candidate checks (checks.md §The
+check commands).
 
 - ``list`` -- the registered checks and the shipped check policies (no
   database);
@@ -15,15 +14,7 @@
   the policy (checks page, "The promotion gate"). Exit 0 when every result passed,
   1 when any failed, 64 on a usage error;
 - ``show <run> [--instance I]`` -- the recorded results, newest first, each
-  line prefixed ``id=<check row id> at=<happened_at>``; then one line per
-  candidate or current instance of the run (or the one instance):
-  ``acceptance instance=<id> kind=<kind> state=<state> <detail>``, the
-  state from :mod:`rapidpipe.runs.eligibility`;
-- ``accept <run> --instance I --reason TEXT [--who W]`` -- record that a
-  person accepts a candidate whose required check failed (state
-  ``rejected``), so a product built from it may be promoted; one
-  ``acceptances`` row, no custody change. Exit 64 unless the instance is a
-  product of the run in state ``rejected`` and the reason is not empty.
+  line prefixed ``id=<check row id> at=<happened_at>``.
 
 A result line is ``instance=<id> kind=<kind> key=<compact json>
 check=<name>@<v> required=<true|false> outcome=<passed|failed> <summary>``.
@@ -87,21 +78,6 @@ def add_parser(subparsers: Any) -> None:
     show_parser.add_argument(
         "--instance", default=None, metavar="INSTANCE_ID",
         help="Show only this instance's results.")
-
-    accept_parser = check_subparsers.add_parser(
-        "accept", help="Record a person's acceptance of a candidate whose required check failed.",
-        description="Record that a person accepts a candidate of the run whose required "
-                    "check failed (state rejected), with a reason, so a product built "
-                    "from it may be promoted. Changes no custody; there is no revocation "
-                    "(replace the product instead).")
-    accept_parser.add_argument("run_id")
-    accept_parser.add_argument(
-        "--instance", required=True, metavar="INSTANCE_ID",
-        help="The rejected candidate instance of the run to accept.")
-    accept_parser.add_argument(
-        "--reason", required=True, help="Why it is accepted (recorded; must not be empty).")
-    accept_parser.add_argument(
-        "--who", default=None, help="Who accepts it (default: the current user).")
 
 
 def _usage(message: str) -> int:
@@ -208,77 +184,13 @@ def _show_command(args: argparse.Namespace) -> int:
 
     def body(conn) -> int:
         _require_run(conn, args.run_id)
-        from rapidpipe.runs.eligibility import run_acceptance_states
-
         rows = recorded_checks(conn, args.run_id, instance=args.instance)
         for row in rows:
             at = row.happened_at.isoformat() if row.happened_at else "-"
             print(f"id={row.id} at={at} {row.line()}")
-        with conn.cursor() as cur:
-            for state in run_acceptance_states(cur, args.run_id, instance=args.instance):
-                print(state.line())
         return int(ExitCode.SUCCESS)
 
     return _with_connection("show", body)
-
-
-#: What ``check accept`` says for each state it refuses (checks page, "Acceptance").
-_NOT_ACCEPTABLE = {
-    "pending": "its required checks have not all run; run the checks first "
-               "(`rapidpipe check run`)",
-    "accepted": "it is already accepted",
-    "current": "it is current, so already accepted",
-    "superseded": "it was current before, so already accepted",
-    "unselected": "it was not produced by its unit's selected attempt; it is not acceptable",
-    "scratch": "it is scratch; it is not acceptable",
-    "incomplete": "it is an incomplete result set; it is not acceptable",
-    "deleted": "it is deleted; it is not acceptable",
-}
-
-
-def _accept_command(args: argparse.Namespace) -> int:
-    from rapidpipe.db.ids import new_ulid
-    from rapidpipe.runs.eligibility import acceptance_state
-
-    reason = (args.reason or "").strip()
-    if not reason:
-        return _usage("accept: --reason must not be empty")
-    who = args.who or getpass.getuser()
-
-    def body(conn) -> int:
-        _require_run(conn, args.run_id)
-        with conn.cursor() as cur:
-            try:
-                state = acceptance_state(cur, args.instance)
-            except LookupError:
-                state = None
-            if state is None or state.run != args.run_id:
-                conn.rollback()
-                return _usage(f"accept: instance {args.instance} is not a product of run "
-                              f"{args.run_id}")
-            if state.state != "rejected":
-                conn.rollback()
-                return _usage(
-                    f"accept: instance {args.instance} ({state.kind}) is {state.state}: "
-                    f"{_NOT_ACCEPTABLE.get(state.state, 'it is not acceptable')}")
-            acceptance_id = new_ulid()
-            detail = {"failed": [{"check": c.ref, "outcome": c.outcome,
-                                  "summary": c.summary or ""} for c in state.failed]}
-            cur.execute(
-                """
-                INSERT INTO acceptances (id, instance, who, reason, policy_ref, check_ids,
-                                         detail)
-                VALUES (%s, %s, %s, %s, %s, %s::rapid_ulid[], %s)
-                """,
-                (acceptance_id, state.instance, who, reason, state.policy_ref,
-                 state.check_ids, json.dumps(detail)))
-        conn.commit()
-        print(f"accepted instance={state.instance} kind={state.kind} "
-              f"acceptance={acceptance_id} policy={state.policy_ref} "
-              f"checks={len(state.check_ids)}")
-        return int(ExitCode.SUCCESS)
-
-    return _with_connection("accept", body)
 
 
 def dispatch(args: argparse.Namespace) -> int:
@@ -288,8 +200,6 @@ def dispatch(args: argparse.Namespace) -> int:
         return _run_command(args)
     if args.check_command == "show":
         return _show_command(args)
-    if args.check_command == "accept":
-        return _accept_command(args)
     args.check_group_parser.print_help(sys.stderr)
-    sys.stderr.write("rapidpipe check: a subcommand is required: list, run, show, accept\n")
+    sys.stderr.write("rapidpipe check: a subcommand is required: list, run, show\n")
     return int(ExitCode.USAGE)

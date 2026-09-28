@@ -146,7 +146,15 @@ class DependencyRefused(ManifestConflict):
 
 
 class PromotionRefused(RunModelError):
-    """A promotion request failed validation; the whole request is refused."""
+    """A promotion request failed validation; the whole request is refused.
+    A policy refusal: the CLI exits 1 (tool.md §Exit codes)."""
+
+
+class RequestInvalid(RunModelError):
+    """A request is malformed or names what does not exist: an unknown
+    promotion, check policy or instance, a malformed plan or selector, a
+    slot named twice. The caller's mistake, not a policy's answer: the CLI
+    exits 64 (tool.md §Exit codes)."""
 
 
 #: ``promote_run``'s default ``plan``: no plan was supplied. Distinct from
@@ -157,13 +165,17 @@ NO_PLAN: Any = object()
 class StalePlan(PromotionRefused):
     """A frozen promotion plan no longer matches the run's changes read
     under the promotion lock (runs.md §Rules): nothing is written,
-    and the CLI exits 64 as for any refusal."""
+    and the CLI exits 1 as for any policy refusal."""
 
 
 class CheckPolicyRefused(RunModelError):
-    """A check policy is unknown, or does not permit what was asked of it
-    (automatic promotion at run creation; checks.md §Automatic
-    promotion)."""
+    """A check policy does not permit what was asked of it (automatic
+    promotion at run creation; checks.md §Automatic promotion). A policy
+    refusal: the CLI exits 1 (tool.md §Exit codes)."""
+
+
+#: The refusals the CLI exits 1 for rather than 64 (tool.md §Exit codes).
+POLICY_REFUSALS: tuple[type[RunModelError], ...] = (PromotionRefused, CheckPolicyRefused)
 
 
 class DeletionRefused(RunModelError):
@@ -250,7 +262,8 @@ def create_run(
     is refused (:class:`CheckPolicyRefused`) unless the run's policy --
     the named one or the default -- permits automatic promotion
     (:func:`policy_permits_auto_promote`; checks.md §Automatic
-    promotion). No shipped policy does.
+    promotion). No shipped policy does. An unknown policy is
+    :class:`RequestInvalid`.
     """
     if kind not in ("scratch", "production"):
         raise ValueError(f"kind must be 'scratch' or 'production', got {kind!r}")
@@ -259,11 +272,11 @@ def create_run(
         try:
             policy = load_policy(policy_ref)
         except PolicyError as exc:
-            raise CheckPolicyRefused(str(exc)) from None
+            raise RequestInvalid(str(exc)) from None
         if auto_promote and not policy_permits_auto_promote(policy):
             raise CheckPolicyRefused(
                 f"policy {policy.ref} does not permit automatic promotion; "
-                "lead approval pending")
+                "team approval pending")
 
     run_id = new_ulid()
     with conn.cursor() as cur:
@@ -1173,24 +1186,15 @@ def fill_identity_safely(cur, context: str) -> list[tuple[str, int, int, int]]:
     return report
 
 
-def parse_selector(
-    kind: str, selector: Any, *, recorded_inverse: bool = False,
-) -> tuple[str, dict[str, Any]]:
-    """``("slot", slot)`` or ``("logical_key", key)`` from one change's
-    selector (runs.md §Rules); refuses
-    (:class:`PromotionRefused`) anything else, an empty slot, and a
-    logical_key selector unless ``recorded_inverse``."""
+def parse_selector(kind: str, selector: Any) -> dict[str, Any]:
+    """The slot of one change's selector ``{"slot": {...}}`` (runs.md
+    §Rules); anything else, or an empty slot, is :class:`RequestInvalid`."""
     try:
-        by, value = selector_parts(selector)
+        _by, value = selector_parts(selector)
     except ValueError as exc:
-        raise PromotionRefused(
+        raise RequestInvalid(
             f"kind={kind!r}: {exc}; refusing the whole promotion") from None
-    if by == "logical_key" and not recorded_inverse:
-        raise PromotionRefused(
-            f"kind={kind!r}: a logical_key selector is accepted only when rolling back a "
-            "change recorded without a slot; promotion replaces by slot; refusing the "
-            "whole promotion")
-    return by, value
+    return value
 
 
 # ======================================================================
@@ -1206,117 +1210,69 @@ def promote(
     request_context: dict[str, Any] | None = None,
     *,
     allow_unreleased: bool = False,
-    _check_release: bool = True,
-    _recorded_inverse: bool = False,
+    _rollback_of: str | None = None,
 ) -> str:
-    """Apply a promotion under one advisory lock; return the promotion id.
+    """Under one lock, make an eligible candidate current for its kind and
+    slot, demote the previous one, and record both.
 
-    ``changes`` is a list of ``(kind, selector, expected_before_instance_or_None,
-    after_instance_or_None)`` tuples (runs page, "Promotion"). A selector
-    is ``{"slot": {...}}``: promotion replaces by slot, at most one
-    instance being current per (kind, slot) (runs.md §Rules).
-    ``{"logical_key": {...}}`` is accepted only with
-    ``_recorded_inverse``, i.e. from :func:`rollback_promotion` reversing
-    a change recorded without a slot; any other caller passing it,
-    or anything else as a selector, is refused. Takes
-    ``pg_advisory_xact_lock`` on one fixed key, then:
+    ``changes`` is a list of ``(kind, {"slot": {...}}, expected_before or
+    None, after or None)``; ``after`` None unselects the slot. The whole
+    request is refused, before anything is written, when:
 
-      1. Checks every expected before-instance (including expected
-         absence, i.e. ``None``) against the actual current instance
-         the selector selects; refuses the WHOLE request on any mismatch
-         (:class:`PromotionRefused`). Also refuses a change whose
-         after-instance equals its before-instance (nothing to change,
-         including ``None`` to ``None``) and a request naming the same
-         (kind, selector) twice -- the runs page records exactly one
-         before and after per affected slot.
-      2. Validates each non-``None`` after-instance is a candidate from a
-         selected attempt whose slot (or, for a logical_key selector,
-         logical key) equals the selector, with every provenance
-         dependency, followed through the whole chain, current or
-         accepted (checks.md §The promotion gate: each ancestor's state,
-         :mod:`rapidpipe.runs.eligibility`, must be ``current``,
-         ``superseded`` or ``accepted``; with ``_recorded_inverse`` the
-         walk is skipped and only the direct dependencies must be
-         complete, retained and in project custody, as before). A ``None``
-         after-instance is an unselect: there is nothing to validate.
-         A slot change is refused when another instance with the after
-         instance's kind and logical key is current outside the slot (its
-         own slot unresolved or withheld). An ``association-set`` change
-         with both a before and an after instance is refused unless the
-         before is an ancestor of the after along ``logical_key.base``
-         (the chain switch is not implemented, and ordinary slot
-         replacement does not stand in for it); ``_recorded_inverse``
-         skips this rule only. Then the released-image rule
-         (runs page, "Promotion eligibility": "a recorded image digest
-         identifying a released artifact"): each after-instance's
-         producing attempt's ``execution_records.image_digest`` must equal
-         the ``image_digest`` of a ``releases`` row in state ``complete``
-         -- that row being the one named by ``execution_records.release``
-         when that is set. Refused naming the attempt and its digest,
-         unless ``allow_unreleased``, which admits them and records
-         ``{"allow_unreleased": true, "attempts": [<the unreleased
-         attempts>]}`` in ``request_context`` (the recorded exception).
-         Then, when ``check_policy`` is given, the check-policy gate
-         (checks.md §The promotion gate): the policy must be approved
-         (:func:`policy_permits_promotion`); for each after-instance and
-         each policy check of its kind, the latest ``checks`` row for that
-         check name and version whose recorded ``detail.params`` equal the
-         policy's params (by ``happened_at`` desc, ``id`` desc, read FOR
-         SHARE under the lock) must have outcome ``passed`` when the policy
-         marks the check required; a failed or missing required result
-         refuses the whole promotion. Advisory rows never refuse. A kind
-         the policy names no check for passes trivially. The promotions
-         row records ``check_policy_version`` (the policy's
-         ``name@version``) and ``check_result_ids`` (every row relied on,
-         required and advisory). With ``check_policy`` ``None`` (only
-         :func:`rollback_promotion` and direct callers) neither is
-         checked nor recorded.
-      3. Sets the before rows to candidate and the after rows to
-         current, maintains ``dev``'s ``vbest`` for kinds that have one
-         (``vbest = 0`` on the before-instance's row, ``vbest = 1`` on the
-         after-instance's row, found through the kind's table's
-         ``instance`` column; see ``_VBEST_TABLES``), and records the
-         promotion and its promotion_changes: kind, the after instance's
-         logical key (else the before's), the slot (NULL for a
-         logical_key selector), before and after (an unselect records
-         ``after_instance`` NULL). ``request_context`` is stored on the
-         promotions row (``{}`` when ``None``); :func:`rollback_promotion`
-         records ``{"rollback_of": <promotion id>}`` there.
+    - a selector is not a non-empty slot, a (kind, slot) repeats, or a
+      change's after equals its before (:class:`RequestInvalid`);
+    - the instance current in a slot is not the expected before;
+    - an after instance is missing, of another kind or slot, without
+      identity, not retained, an incomplete result set, not a candidate,
+      or not from its unit's selected attempt;
+    - an ancestor of an after instance, through the whole dependency chain,
+      is neither current, superseded, nor an after instance of this same
+      request (runs.md §Rules);
+    - another instance of the after instance's logical key is current
+      outside the slot;
+    - an ``association-set``'s before is not an ancestor of its after
+      along ``logical_key.base`` (the chain switch is not implemented);
+    - an after instance's producing attempt ran no complete release's
+      image, unless ``allow_unreleased`` (recorded in
+      ``request_context``; releases.md §Promotion eligibility);
+    - ``check_policy`` is given and is not approved, or a required check
+      of an after instance's kind has no passing latest row
+      (checks.md §The promotion gate).
 
-    Reversal is :func:`rollback_promotion`, which calls this function with
-    the inverse mapping: the previous after-instance as the new
-    expected-before, and the previous before-instance (possibly ``None``)
-    as the new after-instance for each recorded selector.
+    ``_rollback_of`` is :func:`rollback_promotion` reversing that
+    promotion: it is recorded as ``request_context.rollback_of``, and the
+    ancestor walk, the association-set rule and the released-image rule
+    are skipped (they passed once); each after instance's direct
+    dependencies must still be complete, retained and in project custody.
     """
     changes = list(changes)
+    if _rollback_of is not None:
+        request_context = {**(request_context or {}), "rollback_of": _rollback_of}
     with conn.cursor() as cur:
         cur.execute(
             "SELECT pg_advisory_xact_lock(%s)", (_PROMOTION_ADVISORY_LOCK_KEY,))
 
-        parsed: list[tuple[str, str, dict[str, Any], str, str | None, str | None]] = []
-        seen: set[tuple[str, str, str]] = set()
+        parsed: list[tuple[str, dict[str, Any], str, str | None, str | None]] = []
+        seen: set[tuple[str, str]] = set()
         for kind, selector, expected_before, after_instance in changes:
-            by, value = parse_selector(kind, selector, recorded_inverse=_recorded_inverse)
-            where = f"kind={kind!r} {by}={canonical_json(value)}"
-            if (kind, by, canonical_json(value)) in seen:
-                raise PromotionRefused(
+            slot = parse_selector(kind, selector)
+            where = f"kind={kind!r} slot={canonical_json(slot)}"
+            if (kind, canonical_json(slot)) in seen:
+                raise RequestInvalid(
                     f"{where} appears more than once in one promotion; refusing the "
                     "whole promotion")
-            seen.add((kind, by, canonical_json(value)))
+            seen.add((kind, canonical_json(slot)))
             if after_instance == expected_before:
-                raise PromotionRefused(
+                raise RequestInvalid(
                     f"{where}: the after instance {after_instance!r} is the same as the "
                     "before instance; refusing the whole promotion")
-            parsed.append((kind, by, value, where, expected_before, after_instance))
+            parsed.append((kind, slot, where, expected_before, after_instance))
 
-        # Step 1: check every expected before against the actual current
-        # selection. Refuse the whole request on any mismatch. ``by`` is
-        # "slot" or "logical_key" (parse_selector), never caller text.
-        for kind, by, value, where, expected_before, _after in parsed:
+        for kind, slot, where, expected_before, _after in parsed:
             cur.execute(
-                f"SELECT id FROM product_instances "
-                f"WHERE kind = %s AND {by} = %s AND custody = 'current'",
-                (kind, json.dumps(value)),
+                "SELECT id FROM product_instances "
+                "WHERE kind = %s AND slot = %s AND custody = 'current'",
+                (kind, json.dumps(slot)),
             )
             row = cur.fetchone()
             actual_before = row[0] if row else None
@@ -1326,24 +1282,24 @@ def promote(
                     f"{expected_before!r}, but it is {actual_before!r}; refusing the "
                     "whole promotion")
 
-        # Step 2: validate every after-instance is eligible. An unselect
-        # (after None) has nothing to validate.
-        for kind, by, value, where, expected_before, after_instance in parsed:
+        request_afters = frozenset(
+            after for _kind, _slot, _where, _before, after in parsed if after is not None)
+        for kind, slot, where, expected_before, after_instance in parsed:
             if after_instance is None:
                 continue
-            _validate_promotion_eligibility(cur, kind, by, value, after_instance,
-                                            walk_ancestors=not _recorded_inverse)
-            if by == "slot":
-                _refuse_current_outside_slot(cur, where, expected_before, after_instance)
+            _validate_promotion_eligibility(
+                cur, kind, slot, after_instance,
+                request_afters=None if _rollback_of is not None else request_afters)
+            _refuse_current_outside_slot(cur, where, expected_before, after_instance)
             if (kind == "association-set" and expected_before is not None
-                    and not _recorded_inverse):
+                    and _rollback_of is None):
                 _refuse_unless_ancestor(cur, where, expected_before, after_instance)
 
-        # Step 2b: the released-image rule, last so the older, more
-        # specific refusals above keep their messages.
-        if _check_release:
+        # The released-image rule, after the refusals above so theirs are
+        # the messages a request failing several rules gets.
+        if _rollback_of is None:
             unreleased = []
-            for _kind, _by, _value, _where, _before, after_instance in parsed:
+            for _kind, _slot, _where, _before, after_instance in parsed:
                 if after_instance is not None:
                     problem = _unreleased_attempt(cur, after_instance)
                     if problem is not None:
@@ -1362,19 +1318,15 @@ def promote(
                     "attempts": sorted({attempt for attempt, _d, _r in unreleased}),
                 }
 
-        # Step 2c: the check-policy gate.
         check_policy_version: str | None = None
         check_result_ids: list[str] = []
         if check_policy is not None:
             check_policy_version = check_policy.ref
             check_result_ids = _validate_check_policy(
                 cur, check_policy,
-                [(kind, after) for kind, _by, _value, _where, _before, after in parsed
+                [(kind, after) for kind, _slot, _where, _before, after in parsed
                  if after is not None])
 
-        # Step 3: apply. Before rows (if any) go back to candidate; after
-        # rows become current; vbest follows. Record the promotion and
-        # its changes.
         promotion_id = new_ulid()
         cur.execute(
             """
@@ -1386,14 +1338,11 @@ def promote(
              check_result_ids, json.dumps(request_context or {})),
         )
 
-        for kind, by, value, _where, expected_before, after_instance in parsed:
-            if by == "slot":
-                cur.execute(
-                    "SELECT logical_key FROM product_instances WHERE id = %s",
-                    (after_instance if after_instance is not None else expected_before,))
-                recorded_key, recorded_slot = cur.fetchone()[0], value
-            else:
-                recorded_key, recorded_slot = value, None
+        for kind, slot, _where, expected_before, after_instance in parsed:
+            cur.execute(
+                "SELECT logical_key FROM product_instances WHERE id = %s",
+                (after_instance if after_instance is not None else expected_before,))
+            recorded_key = cur.fetchone()[0]
             if expected_before is not None:
                 cur.execute(
                     "UPDATE product_instances SET custody = 'candidate' WHERE id = %s",
@@ -1412,8 +1361,7 @@ def promote(
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (new_ulid(), promotion_id, kind, json.dumps(recorded_key),
-                 None if recorded_slot is None else json.dumps(recorded_slot),
-                 expected_before, after_instance),
+                 json.dumps(slot), expected_before, after_instance),
             )
 
     return promotion_id
@@ -1479,10 +1427,9 @@ def _validate_check_policy(
     column (which records what the check ran as). Only a row whose
     ``detail.params`` equal the policy's params for that check qualifies,
     and of those the latest (``happened_at`` desc, ``id`` desc) decides:
-    the outcome depends on the bounds, so a run checked under
-    ``rebuild-strict@1`` after ``rebuild-trial@1`` must not poison a
-    trial promotion, and a pass under looser ``--param`` bounds must not
-    admit one.
+    the outcome depends on the bounds, so a run checked under a stricter
+    policy after ``rebuild-trial@1`` must not poison a trial promotion,
+    and a pass under looser ``--param`` bounds must not admit one.
 
     Runs inside the promotion transaction with the advisory lock held; the
     rows relied on are read FOR SHARE so they cannot change under the
@@ -1594,18 +1541,16 @@ def _unreleased_attempt(cur, after_instance: str) -> tuple[str, str | None, str 
 
 
 def _validate_promotion_eligibility(
-    cur, kind: str, by: str, value: dict[str, Any], after_instance: str,
-    *, walk_ancestors: bool = True,
+    cur, kind: str, slot: dict[str, Any], after_instance: str,
+    *, request_afters: frozenset[str] | None,
 ) -> None:
     # The released-image rule (releases.md §Promotion eligibility) and
     # the check-policy gate (checks.md §The promotion gate) are checked
-    # by promote() itself, after this. ``by`` is "slot" or
-    # "logical_key": the after instance's own slot (or, for a legacy
-    # selector, its logical key) must equal the selector (loop.md
-    # §Promotion).
+    # by promote() itself, after this. The after instance's own slot must
+    # equal the selector (loop.md §Promotion).
     cur.execute(
         """
-        SELECT pi.custody, pi.kind, pi.slot, pi.logical_key, pi.deletion_state,
+        SELECT pi.custody, pi.kind, pi.slot, pi.deletion_state,
                rs.instance IS NOT NULL, rs.complete, pi.identity
         FROM product_instances pi
         LEFT JOIN result_sets rs ON rs.instance = pi.id
@@ -1615,20 +1560,18 @@ def _validate_promotion_eligibility(
     )
     row = cur.fetchone()
     if row is None:
-        raise PromotionRefused(
+        raise RequestInvalid(
             f"after instance {after_instance!r} for kind={kind!r} does not exist")
-    (custody, actual_kind, actual_slot, actual_key, deletion_state, is_result_set,
+    (custody, actual_kind, actual_slot, deletion_state, is_result_set,
      complete, identity) = row
-    actual = actual_slot if by == "slot" else actual_key
-    if actual_kind != kind or actual != value:
-        shown = "none (unresolved)" if actual is None else canonical_json(actual)
+    if actual_kind != kind or actual_slot != slot:
+        shown = "none (unresolved)" if actual_slot is None else canonical_json(actual_slot)
         raise PromotionRefused(
             f"after instance {after_instance!r} is kind={actual_kind!r} "
-            f"{by}={shown}, not the requested kind={kind!r} "
-            f"{by}={canonical_json(value)}; refusing")
+            f"slot={shown}, not the requested kind={kind!r} "
+            f"slot={canonical_json(slot)}; refusing")
     if identity is None:
-        # An unresolved identity is never promotable (runs.md
-        # §Identifiers), whatever the selector.
+        # An unresolved identity is never promotable (runs.md §Identifiers).
         raise PromotionRefused(
             f"after instance {after_instance!r} of kind={kind!r} has no identity (its "
             "identity could not be derived from its logical key); refusing")
@@ -1665,54 +1608,44 @@ def _validate_promotion_eligibility(
             f"after instance {after_instance!r} was not produced by its "
             "unit's selected attempt; refusing")
 
-    if walk_ancestors:
-        _refuse_unaccepted_ancestor(cur, after_instance)
-    else:
+    if request_afters is None:
         _refuse_unfit_direct_dependency(cur, after_instance)
+    else:
+        _refuse_unpromoted_ancestor(cur, after_instance, request_afters)
 
 
-def _refuse_unaccepted_ancestor(cur, after_instance: str) -> None:
-    """Promotion follows every dependency through the whole chain
-    (checks.md §The promotion gate).
-
-    Every ancestor of ``after_instance`` along ``dependencies``, to the
-    roots (a recursive walk, cycle-guarded, no depth cap), must have the
-    acceptance state ``current``, ``superseded`` or ``accepted``
-    (:mod:`rapidpipe.runs.eligibility`): a current or superseded
-    ancestor passes and the walk continues through it, so a rejected
-    grandparent behind a current parent still refuses. An ancestor that is
-    itself an after instance of the same promotion is judged the same way,
-    under its own run's policy. The refusal names the after instance,
-    the ancestor, its kind, its state and what decided it; it is raised in
-    step 2 of :func:`promote`, before anything is written.
-    """
-    from rapidpipe.checks.registry import CheckError
+def _refuse_unpromoted_ancestor(
+    cur, after_instance: str, request_afters: frozenset[str],
+) -> None:
+    """Every ancestor of ``after_instance`` along ``dependencies``, to the
+    roots (a recursive walk, cycle-guarded, no depth cap), must be
+    ``current`` or ``superseded``, or itself an after instance of the same
+    request (runs.md §Rules). The walk continues past a current ancestor,
+    so a candidate grandparent behind a current parent still refuses. A
+    same-request ancestor passes here and is validated as an after
+    instance in its own right. The refusal names the after instance, the
+    ancestor, its kind and its state."""
     from rapidpipe.runs import eligibility
 
-    found = eligibility.ancestors(cur, after_instance)
-    try:
-        states = eligibility.acceptance_states(cur, found, for_share=True)
-    except CheckError as exc:
-        raise PromotionRefused(
-            f"after instance {after_instance!r}: an ancestor's check policy cannot be "
-            f"resolved ({exc}); refusing") from None
+    found = [a for a in eligibility.ancestors(cur, after_instance)
+             if a not in request_afters]
+    states = eligibility.instance_states(cur, found)
     for ancestor in found:
         state = states.get(ancestor)
         if state is None or state.state in eligibility.PROMOTABLE_ANCESTOR_STATES:
             continue
-        hint = ("; accept it with `check accept` or replace it"
-                if state.state == "rejected" else "")
+        hint = ("; promote it first or in the same request"
+                if state.state == "candidate" else "")
         raise PromotionRefused(
             f"after instance {after_instance!r} depends on {ancestor!r} "
             f"({state.kind}, {state.why()}{hint}); refusing")
 
 
 def _refuse_unfit_direct_dependency(cur, after_instance: str) -> None:
-    """The direct-dependency rule a rollback keeps (checks.md §The
-    promotion gate): a rollback restores a selection an earlier promotion
-    admitted, so the ancestor walk is skipped, but each direct dependency
-    must still be complete, retained and in project custody, as before
-    this step."""
+    """The direct-dependency rule a rollback keeps (runs.md §Rules): a
+    rollback restores a selection an earlier promotion admitted, so the
+    ancestor walk is skipped, but each direct dependency must still be
+    complete, retained and in project custody."""
     cur.execute(
         """
         SELECT d.producer_instance, pi.custody, pi.deletion_state,
@@ -1870,9 +1803,9 @@ def _refuse_stale_plan(
     try:
         planned = plan_by_slot(plan)
     except ValueError as exc:
-        raise PromotionRefused(f"the plan is malformed: {exc}; refusing") from None
+        raise RequestInvalid(f"the plan is malformed: {exc}; refusing") from None
     if not planned:
-        raise PromotionRefused("the plan is empty: a plan names at least one slot; refusing")
+        raise RequestInvalid("the plan is empty: a plan names at least one slot; refusing")
     actual = plan_by_slot(plan_entries(changes))
     for key in sorted(set(planned) | set(actual)):
         if planned.get(key) != actual.get(key):
@@ -1941,7 +1874,7 @@ def promote_run(
             try:
                 check_policy = load_policy(check_policy or run_policy_ref or DEFAULT_POLICY)
             except PolicyError as exc:
-                raise PromotionRefused(f"{exc}; refusing") from None
+                raise RequestInvalid(f"{exc}; refusing") from None
 
         fill_identity_safely(cur, f"promoting run {run_id}")
         changes = _run_slot_changes(cur, run_id, kinds)
@@ -1967,38 +1900,28 @@ def rollback_promotion(
 ) -> str:
     """Reverse one promotion; return the new (reversing) promotion id.
 
-    Reads the promotion's ``promotion_changes`` and applies the inverse
-    mapping through :func:`promote`: for each recorded change, the
-    expected-before is the recorded after-instance and the new
-    after-instance is the recorded before-instance, which may be ``None``
-    (the slot goes back to having no current instance). Each change is
-    selected by its recorded slot, or by its recorded logical key when the
-    slot is NULL (a promotion recorded before migration 20260926-02 whose
-    instances stayed unresolved).
-    ``promote`` refuses the whole reversal if any recorded after-selection
-    is no longer current -- a later promotion changed that slot, and the
-    runs page reverses a promotion only against the selection it made. The
-    new promotions row records ``request_context = {"rollback_of":
-    promotion_id}``.
+    Applies the inverse of every recorded change through :func:`promote`,
+    by its recorded slot: the recorded after instance is the expected
+    before and the recorded before instance (possibly ``None``) the new
+    after (runs.md §Rules). ``promote`` refuses the whole reversal if a
+    recorded after instance is no longer current in its slot. A recorded
+    change with no slot was recorded before slot identity and is not
+    reversible; an unknown promotion id is :class:`RequestInvalid`.
 
-    Rollback skips check-policy revalidation (checks.md §Check policies):
-    no ``check_policy`` is passed, so the row records none. As before it
-    also skips the released-image rule (releases.md §Promotion
-    eligibility), and, being the recorded inverse, the association-set
-    ancestor rule (runs.md §Rules). Every other validation
-    in :func:`promote` still runs: the expected-before check, and each
-    restored instance's eligibility (candidate from a selected attempt,
-    retained, complete if a result set, dependencies in project custody,
-    retained and complete, its slot or logical key equal to the recorded
-    one).
+    The reversal records ``request_context.rollback_of`` and no check
+    policy, and skips what the original promotion already passed: the
+    check-policy gate, the released-image rule, the ancestor walk and the
+    association-set rule (``promote``'s ``_rollback_of``). Every other
+    validation in :func:`promote` still runs, direct dependencies in
+    project custody, retained and complete included.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM promotions WHERE id = %s", (promotion_id,))
         if cur.fetchone() is None:
-            raise PromotionRefused(f"promotion {promotion_id!r} does not exist")
+            raise RequestInvalid(f"promotion {promotion_id!r} does not exist")
         cur.execute(
             """
-            SELECT kind, logical_key, slot, before_instance, after_instance
+            SELECT kind, slot, before_instance, after_instance
             FROM promotion_changes WHERE promotion = %s ORDER BY id
             """,
             (promotion_id,),
@@ -2007,19 +1930,16 @@ def rollback_promotion(
     if not recorded:
         raise PromotionRefused(
             f"promotion {promotion_id!r} recorded no changes; nothing to roll back")
+    for kind, slot, _before, after_instance in recorded:
+        if slot is None:
+            raise PromotionRefused(
+                f"promotion {promotion_id!r}: its change of kind={kind!r} to "
+                f"{after_instance!r} was recorded before slot identity; not reversible; "
+                "refusing")
 
-    inverse = [
-        (kind,
-         {"slot": slot} if slot is not None else {"logical_key": logical_key},
-         after_instance, before_instance)
-        for kind, logical_key, slot, before_instance, after_instance in recorded
-    ]
-    return promote(
-        conn, who, reason, inverse,
-        request_context={"rollback_of": promotion_id},
-        _check_release=False,
-        _recorded_inverse=True,
-    )
+    inverse = [(kind, {"slot": slot}, after_instance, before_instance)
+               for kind, slot, before_instance, after_instance in recorded]
+    return promote(conn, who, reason, inverse, _rollback_of=promotion_id)
 
 
 # ======================================================================

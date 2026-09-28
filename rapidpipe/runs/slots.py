@@ -8,9 +8,7 @@ derived by the database from the provenance key (``logical_key``), in
 Python. This module holds only the plain-data shapes the repository and
 the CLI exchange:
 
-- a *selector*, one change's target: ``{"slot": {...}}``, or, for the
-  recorded inverse of a change made before the migration,
-  ``{"logical_key": {...}}``;
+- a *selector*, one change's target: ``{"slot": {...}}``;
 - a *plan entry*, one slot a promotion would change:
   ``{"kind", "slot", "before", "after"}``, the JSON ``rapidpipe run
   promote-plan`` prints and ``rapidpipe run promote --plan`` reads.
@@ -21,13 +19,13 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, Sequence
 
-#: ``{"slot": {...}}`` or ``{"logical_key": {...}}``.
+#: ``{"slot": {...}}``.
 Selector = dict[str, dict[str, Any]]
 
 #: ``{"kind": str, "slot": dict, "before": str | None, "after": str}``.
 PlanEntry = dict[str, Any]
 
-SELECTOR_KINDS = ("slot", "logical_key")
+SELECTOR_KINDS = ("slot",)
 
 
 def canonical_json(value: Any) -> str:
@@ -38,16 +36,13 @@ def canonical_json(value: Any) -> str:
 
 def selector_parts(selector: Any) -> tuple[str, dict[str, Any]]:
     """``(by, value)`` of a selector; ``ValueError`` when it is not a
-    one-key mapping ``{"slot": <non-empty object>}`` or
-    ``{"logical_key": <object>}``."""
+    one-key mapping ``{"slot": <non-empty object>}``."""
     if not isinstance(selector, dict) or len(selector) != 1:
-        raise ValueError(f"selector {selector!r} is not {{'slot': {{...}}}} or "
-                         "{'logical_key': {...}}")
+        raise ValueError(f"selector {selector!r} is not {{'slot': {{...}}}}")
     ((by, value),) = selector.items()
     if by not in SELECTOR_KINDS or not isinstance(value, dict):
-        raise ValueError(f"selector {selector!r} is not {{'slot': {{...}}}} or "
-                         "{'logical_key': {...}}")
-    if by == "slot" and not value:
+        raise ValueError(f"selector {selector!r} is not {{'slot': {{...}}}}")
+    if not value:
         raise ValueError("an empty slot selects nothing")
     return by, value
 

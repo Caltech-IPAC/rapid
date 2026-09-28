@@ -1,10 +1,10 @@
 # Test fixture only, never shipped in the package:
-# rebuild-trial@1's checks with approval "lead" and auto_promote = true.
+# rebuild-trial@1's checks with approval "team" and auto_promote = true.
 name = "auto-trial"
 version = "1"
 description = "Test fixture."
-approval = "lead"
-approved_by = "rusholme-lead-fixture"
+approval = "team"
+approved_by = "rapid-team-fixture"
 auto_promote = true
 
 [[checks]]

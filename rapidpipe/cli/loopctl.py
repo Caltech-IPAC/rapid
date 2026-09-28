@@ -14,10 +14,10 @@ with new deliveries; ``loop show`` prints the batches and every classified
 delivery, ``loop plan`` a dry classification.
 
 Exit codes: 0 every processed date complete (or nothing to discover); 1 a date failed (later dates
-not started); 64 a usage error or refusal (a malformed spec, a release that
-is not complete, any ``RunModelError``); 75 a timeout, a transient error, or
-another loop holding the schedule's advisory lock (rerun the same command to
-resume the open date).
+not started) or a policy refusal; 64 a usage error or refusal (a malformed
+spec, a release that is not complete, any other ``RunModelError``); 75 a
+timeout, a transient error, or another loop holding the schedule's advisory
+lock (rerun the same command to resume the open date).
 """
 
 from __future__ import annotations

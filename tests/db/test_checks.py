@@ -38,6 +38,9 @@ from rapidpipe.runs import repository as repo
 
 from .test_repository import _make_run, _make_unit, _register_simple_instance, pin_test_slot
 
+#: rebuild-strict@1 is a test fixture policy (tests/fixtures/checks), not shipped.
+pytestmark = pytest.mark.usefixtures("strict_policy")
+
 TRIAL = "rebuild-trial@1"
 STRICT = "rebuild-strict@1"
 
@@ -543,7 +546,7 @@ def test_an_unapproved_policy_admits_no_promotion(conn, monkeypatch):
                       lambda: repo.promote_run(conn, run_id, "t", "go",
                                                check_policy="unapproved@1"),
                       match="check policy unapproved@1 is not approved; refusing")
-    _savepoint_raises(conn, repo.PromotionRefused,
+    _savepoint_raises(conn, repo.RequestInvalid,
                       lambda: repo.promote_run(conn, run_id, "t", "go",
                                                check_policy="nosuch@1"),
                       match="does not exist")
@@ -595,8 +598,8 @@ def test_create_run_refuses_auto_promote_and_unknown_policies(conn):
     for ref in (None, TRIAL, STRICT):
         _savepoint_raises(conn, repo.CheckPolicyRefused,
                           lambda: _make_run(conn, auto_promote=True, check_policy_ref=ref),
-                          match="does not permit automatic promotion; lead approval pending")
-    _savepoint_raises(conn, repo.CheckPolicyRefused,
+                          match="does not permit automatic promotion; team approval pending")
+    _savepoint_raises(conn, repo.RequestInvalid,
                       lambda: _make_run(conn, check_policy_ref="nosuch@1"),
                       match="does not exist")
     run_id = _make_run(conn, check_policy_ref=STRICT)
@@ -729,7 +732,7 @@ def test_run_promote_check_policy_flag_reaches_the_gate(conn, cli_conn, capsys):
     _diff_candidate(conn, run_id)
     run_policy_checks(conn, run_id, load_policy(STRICT))
     assert cli_conn.main(["run", "promote", run_id, "--reason", "r",
-                          "--check-policy", STRICT]) == 64
+                          "--check-policy", STRICT]) == 1
     err = capsys.readouterr().err
     assert err.startswith(f"rapidpipe run promote: check policy {STRICT}: required check "
                           "difference-image-statistics@1 on instance ")
@@ -738,10 +741,10 @@ def test_run_promote_check_policy_flag_reaches_the_gate(conn, cli_conn, capsys):
 
 def test_run_create_check_policy_and_auto_promote(conn, cli_conn, capsys):
     base = ["run", "create", "--kind", "production", "--purpose", "p", "--stages", "admit"]
-    assert cli_conn.main(base + ["--auto-promote"]) == 64
+    assert cli_conn.main(base + ["--auto-promote"]) == 1
     assert capsys.readouterr().err == (
         f"rapidpipe run create: policy {TRIAL} does not permit automatic promotion; "
-        "lead approval pending\n")
+        "team approval pending\n")
     assert cli_conn.main(base + ["--check-policy", "nosuch@1"]) == 64
     capsys.readouterr()
     assert cli_conn.main(base + ["--check-policy", STRICT]) == 0

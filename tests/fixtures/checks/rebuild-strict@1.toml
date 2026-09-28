@@ -1,7 +1,6 @@
-# Check policy rebuild-strict@1 (checks page, "Check policies").
-# The same checks as rebuild-trial@1 with bounds the control run cannot
-# meet: it exists to demonstrate and test the promotion gate's refusal.
-# Immutable once landed: a change is a new version (a new file).
+# Test fixture only, never shipped in the package: check policy
+# rebuild-strict@1, the same checks as rebuild-trial@1 with bounds the
+# control run cannot meet, to test the promotion gate's refusal.
 name = "rebuild-strict"
 version = "1"
 description = "Strict demonstration policy: bounds the control run cannot meet, so promotion under it is refused."

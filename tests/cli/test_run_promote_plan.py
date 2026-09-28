@@ -89,7 +89,7 @@ def test_promote_with_plan_succeeds_when_nothing_moved(
     assert recorded_slot == by_slot(_key)["slot"]
 
 
-def test_promote_with_stale_plan_exits_64_and_writes_nothing(
+def test_promote_with_stale_plan_exits_1_and_writes_nothing(
         cli, db, fake_batch, fake_s3, batch_env, tmp_path):
     key = {"k": new_ulid()}
     run_id = _create_run(cli, db, kind="production")
@@ -119,7 +119,7 @@ def test_promote_with_stale_plan_exits_64_and_writes_nothing(
     stale = cli(
         "run", "promote", run_id, "--reason", "apply stale plan",
         "--allow-unreleased", "--plan", plan_path)
-    assert stale.rc == 64
+    assert stale.rc == 1                     # a policy refusal (tool.md §Exit codes)
     assert "stale plan" in stale.err
 
     with db.cursor() as cur:
@@ -134,10 +134,10 @@ def test_promote_plan_unknown_run_exits_64(cli, db):
     assert result.rc == 64
 
 
-def test_promote_plan_nothing_to_promote_exits_64(cli, db):
+def test_promote_plan_nothing_to_promote_exits_1(cli, db):
     run_id = _create_run(cli, db, kind="production")
     result = cli("run", "promote-plan", run_id)
-    assert result.rc == 64
+    assert result.rc == 1
     assert "nothing to promote" in result.err
 
 

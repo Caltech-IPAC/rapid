@@ -327,7 +327,7 @@ def test_run_finish_refuses_while_a_unit_is_open_then_succeeds(
 def test_run_promote_refuses_a_scratch_run(cli, db):
     run_id = _create_run(cli, db, kind="scratch")
     result = cli("run", "promote", run_id, "--reason", "no")
-    assert result.rc == 64
+    assert result.rc == 1                    # a policy refusal (tool.md §Exit codes)
     assert "scratch never leaves scratch" in result.err
 
 

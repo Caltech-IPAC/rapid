@@ -169,9 +169,9 @@ def test_promote_refuses_after_equal_to_before(conn):
     key = {"k": new_ulid()}
     instance, _ = _candidate(conn, run_id, key=key)
     repo.promote(conn, "brusholme", "select", [(TEST_KIND, by_slot(key), None, instance)], allow_unreleased=True)
-    with pytest.raises(repo.PromotionRefused):
+    with pytest.raises(repo.RequestInvalid):
         repo.promote(conn, "brusholme", "again", [(TEST_KIND, by_slot(key), instance, instance)], allow_unreleased=True)
-    with pytest.raises(repo.PromotionRefused):
+    with pytest.raises(repo.RequestInvalid):
         repo.promote(conn, "brusholme", "nothing", [(TEST_KIND, by_slot({"k": new_ulid()}), None, None)], allow_unreleased=True)
 
 
@@ -337,7 +337,7 @@ def test_rollback_promotion_refused_after_a_later_promotion_changed_the_key(conn
 
 
 def test_rollback_promotion_refuses_an_unknown_promotion(conn):
-    with pytest.raises(repo.PromotionRefused):
+    with pytest.raises(repo.RequestInvalid):
         repo.rollback_promotion(conn, new_ulid(), "brusholme", "nope")
 
 

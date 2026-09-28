@@ -30,11 +30,12 @@ unit tests can
 monkeypatch them; ``sleep`` and ``now`` are module-level indirections for
 the same reason.
 
-Exit codes, as for the rest of ``rapidpipe run``: 0 success; 64 a usage
-error or a refusal (any ``RunModelError``); 75 transient (an AWS-shaped
-error, the database unavailable, or ``start``'s ``--timeout``); 1 a unit
-failed. ``status`` also exits 2 (still running, ``ExitCode.INCOMPLETE``)
-when something is still running.
+Exit codes, as for the rest of ``rapidpipe run`` (tool.md §Exit codes):
+0 success; 64 a usage error or a refusal (any other ``RunModelError``);
+75 transient (an AWS-shaped error, the database unavailable, or
+``start``'s ``--timeout``); 1 a unit failed, or a policy refusal
+(``POLICY_REFUSALS``). ``status`` also exits 2 (still running,
+``ExitCode.INCOMPLETE``) when something is still running.
 """
 
 from __future__ import annotations
@@ -71,7 +72,7 @@ from rapidpipe.products.storage import (
 )
 from rapidpipe.runs import binding
 from rapidpipe.runs.inputs import InputsRefused
-from rapidpipe.runs.repository import RunModelError
+from rapidpipe.runs.repository import POLICY_REFUSALS, RunModelError
 from rapidpipe.exitcodes import ExitCode
 from rapidpipe.stages.contract import STAGE_NAMES
 
@@ -293,7 +294,8 @@ def _with_connection(command: str, body: Callable[[Any], int], *,
 
     ``body`` commits what it wants kept; anything raised rolls back.
     ``prog`` prefixes the messages (``rapidpipe loop`` shares this);
-    ``usage_errors`` are further exception types that exit 64.
+    ``usage_errors`` are further exception types that exit 64; a policy
+    refusal exits 1 (tool.md §Exit codes).
     """
     try:
         cm = _connect(command)
@@ -313,6 +315,10 @@ def _with_connection(command: str, body: Callable[[Any], int], *,
             conn.rollback()
             sys.stderr.write(f"{prog} {command}: {exc}\n")
             return int(ExitCode.INPUT_REJECTED)
+        except POLICY_REFUSALS as exc:
+            conn.rollback()
+            sys.stderr.write(f"{prog} {command}: {exc}\n")
+            return int(ExitCode.FAILURE)
         except (RunModelError, DependencyIncomplete, MissingEnvironmentVariable,
                 main.RegisterUnitIdError, LocationError, ManifestError, *usage_errors) as exc:
             conn.rollback()
