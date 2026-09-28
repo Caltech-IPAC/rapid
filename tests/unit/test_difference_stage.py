@@ -517,5 +517,5 @@ def test_cli_dispatches_to_difference_stage(tmp_path, fakes):
 def test_declaration():
     d = difference.DECLARATION
     d.validate()
-    assert d.database_access == "none"
+    assert d.database_access == "custody"
     assert d.produces == ("difference-image", "source-catalog")

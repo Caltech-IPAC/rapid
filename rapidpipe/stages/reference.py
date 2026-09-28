@@ -35,8 +35,9 @@ N must be at least ``[selection] min_frames``, and at most
 ``[selection] max_frames`` are coadded, in manifest order; frames past
 that are named in the execution record's notes. Any other entry kind, a
 missing or corrupt member, or an unreadable frame is an input rejection
-(65). The stage reads no database and does not check overlap with the
-field: selection is the launcher's.
+(65). The stage reads the database only for the read guard's custody
+check (``database_access="custody"``) and does not check overlap with
+the field: selection is the launcher's.
 
 Outputs (products page, "File products" and "Registration metadata"). One
 ``reference-image`` entry: primary member ``image``
@@ -130,7 +131,7 @@ DECLARATION = StageDeclaration(
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("l2-image",),
     produces=("reference-image", "reference-catalog"),
-    database_access="none",
+    database_access="custody",
 )
 
 #: `dev`'s cattype for the SExtractor reference catalog (refimcatalogs).

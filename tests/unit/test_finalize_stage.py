@@ -68,7 +68,7 @@ def _rehash(inputs: Path, manifest: dict, relative: str) -> None:
 def test_declaration():
     finalize.DECLARATION.validate()
     d = finalize.DECLARATION
-    assert (d.name, d.unit, d.database_access) == ("finalize", "detector-image", "none")
+    assert (d.name, d.unit, d.database_access) == ("finalize", "detector-image", "custody")
     assert d.consumes == ("difference-image", "source-catalog") == d.produces
 
 

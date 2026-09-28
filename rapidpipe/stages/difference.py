@@ -111,7 +111,7 @@ DECLARATION = StageDeclaration(
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("l2-image", "reference-image", "reference-catalog", "psf"),
     produces=("difference-image", "source-catalog"),
-    database_access="none",
+    database_access="custody",
 )
 
 
