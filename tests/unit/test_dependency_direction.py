@@ -114,26 +114,73 @@ def import_from_base(node: ast.ImportFrom, module: list[str], is_package: bool) 
     return ".".join(base)
 
 
-def _dynamic_import(node: ast.Call) -> str | None:
-    """The module an ``importlib.import_module`` call names by a constant
-    string, or the complete dotted components of an f-string's constant
-    prefix (``f"rapidpipe.stages.{name}"`` names ``rapidpipe.stages``)."""
+def _import_aliases(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
+    """Every name the file binds to the ``importlib`` module, and every name
+    it binds to ``importlib.import_module`` itself (the literal spellings
+    always count, an aliasing import adds to the set)."""
+    importlib_names = {"importlib"}
+    import_module_names = {"import_module"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "importlib":
+                    importlib_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            for alias in node.names:
+                if alias.name == "import_module":
+                    import_module_names.add(alias.asname or alias.name)
+    return frozenset(importlib_names), frozenset(import_module_names)
+
+
+def _resolve_relative_import_module(name: str, package: str) -> str | None:
+    """The absolute dotted name ``importlib.import_module(name, package)``
+    loads, for a ``name`` that starts with one or more dots, following
+    ``importlib``'s own relative-name resolution."""
+    level = len(name) - len(name.lstrip("."))
+    rest = name[level:]
+    bits = package.rsplit(".", level - 1)
+    if len(bits) < level:
+        return None
+    return f"{bits[0]}.{rest}" if rest else bits[0]
+
+
+def _dynamic_import(node: ast.Call, importlib_names: frozenset[str],
+                     import_module_names: frozenset[str]) -> str | None:
+    """The module an ``importlib.import_module`` call names (recognising
+    every name the file binds to ``importlib`` or to ``import_module``
+    itself, not only those literal spellings), by a constant string, the
+    complete dotted components of an f-string's constant prefix
+    (``f"rapidpipe.stages.{name}"`` names ``rapidpipe.stages``), or a
+    constant relative name resolved against a constant ``package``
+    argument (``import_module("..cli.main", "rapidpipe.products")``)."""
     func = node.func
     if not ((isinstance(func, ast.Attribute) and func.attr == "import_module"
-             and isinstance(func.value, ast.Name) and func.value.id == "importlib")
-            or (isinstance(func, ast.Name) and func.id == "import_module")):
+             and isinstance(func.value, ast.Name) and func.value.id in importlib_names)
+            or (isinstance(func, ast.Name) and func.id in import_module_names)):
         return None
     if not node.args:
         return None
     arg = node.args[0]
     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-        return arg.value
-    if (isinstance(arg, ast.JoinedStr) and arg.values
+        name = arg.value
+    elif (isinstance(arg, ast.JoinedStr) and arg.values
             and isinstance(arg.values[0], ast.Constant)):
         prefix = arg.values[0].value
         complete = prefix.split(".")[:-1]
         return ".".join(complete) or None
-    return None
+    else:
+        return None
+    if not name.startswith("."):
+        return name
+    package = None
+    if len(node.args) > 1 and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str):
+        package = node.args[1].value
+    else:
+        for kw in node.keywords:
+            if (kw.arg == "package" and isinstance(kw.value, ast.Constant)
+                    and isinstance(kw.value.value, str)):
+                package = kw.value.value
+    return _resolve_relative_import_module(name, package) if package else None
 
 
 def imported_modules(source: str, module: list[str], is_package: bool
@@ -143,6 +190,7 @@ def imported_modules(source: str, module: list[str], is_package: bool
     import name`` yields ``X.name`` as well as ``X``, so a submodule
     imported by name is seen."""
     tree = ast.parse(source)
+    importlib_names, import_module_names = _import_aliases(tree)
     out: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -151,7 +199,8 @@ def imported_modules(source: str, module: list[str], is_package: bool
             dotted = import_from_base(node, module, is_package)
             out.append((dotted, node.lineno))
             out.extend((f"{dotted}.{alias.name}", node.lineno) for alias in node.names)
-        elif isinstance(node, ast.Call) and (dotted := _dynamic_import(node)):
+        elif (isinstance(node, ast.Call)
+              and (dotted := _dynamic_import(node, importlib_names, import_module_names))):
             out.append((dotted, node.lineno))
     return out
 
@@ -272,6 +321,21 @@ def test_scanner_sees_import_module_with_a_constant_string():
     assert _targets(source, "rapidpipe.products.x") == {"cli"}
     source = "from importlib import import_module\nimport_module('rapidpipe.runs')\n"
     assert _targets(source, "rapidpipe.products.x") == {"runs"}
+
+
+def test_scanner_sees_import_module_through_an_aliased_name():
+    source = "import importlib as il\nil.import_module('rapidpipe.cli.main')\n"
+    assert _targets(source, "rapidpipe.products.x") == {"cli"}
+    source = "from importlib import import_module as im\nim('rapidpipe.runs')\n"
+    assert _targets(source, "rapidpipe.products.x") == {"runs"}
+
+
+def test_scanner_resolves_a_relative_import_module_call():
+    source = "import importlib\nimportlib.import_module('..cli.main', 'rapidpipe.products')\n"
+    assert _targets(source, "rapidpipe.products.x") == {"cli"}
+    source = ("import importlib\n"
+              "importlib.import_module('..cli.main', package='rapidpipe.products')\n")
+    assert _targets(source, "rapidpipe.products.x") == {"cli"}
 
 
 def test_scanner_sees_import_module_with_an_f_string_unit_prefix():
