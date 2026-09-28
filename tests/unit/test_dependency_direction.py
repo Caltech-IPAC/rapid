@@ -12,12 +12,15 @@ sit in layers, and a unit may import only units strictly below its own
 ``db`` and ``science`` share a layer and may not import each other.
 ``release`` sits beside the stack: it may import only the leaves and
 ``db``, and only ``cli`` imports it. :data:`ALLOWED` is that rule as one
-table.
+table. ``rapidpipe/__init__.py`` belongs to no unit but is scanned too,
+against :data:`PACKAGE_INIT_ALLOWED`.
 
 Every import counts: module-level and function-level (lazy) alike,
 absolute and relative (``from ..runs import x`` is resolved against the
-importing module's package), and ``from rapidpipe import runs`` names
-the unit ``runs``. Third-party and standard-library imports are
+importing module's package), ``from rapidpipe import runs`` names
+the unit ``runs``, and ``importlib.import_module`` called with a constant
+string, or an f-string whose constant prefix is ``rapidpipe.<unit>.``,
+imports that unit. Third-party and standard-library imports are
 irrelevant here.
 """
 
@@ -54,6 +57,15 @@ ALLOWED: dict[str, frozenset[str]] = {
     "release": LEAVES | {"db"},
 }
 
+#: The source name edges from ``rapidpipe/__init__.py`` carry, and what it
+#: may import: nothing, so ``import rapidpipe`` loads no unit.
+PACKAGE_INIT = "rapidpipe"
+PACKAGE_INIT_ALLOWED: frozenset[str] = frozenset()
+
+
+def allowed_for(source: str) -> frozenset[str]:
+    return PACKAGE_INIT_ALLOWED if source == PACKAGE_INIT else ALLOWED[source]
+
 
 @dataclass(frozen=True)
 class Edge:
@@ -88,6 +100,42 @@ def _module_parts(path: Path, package_root: Path) -> tuple[list[str], bool]:
     return parts, False
 
 
+def import_from_base(node: ast.ImportFrom, module: list[str], is_package: bool) -> str:
+    """The absolute dotted module a ``from ... import`` statement in
+    ``module`` names, a relative one resolved against its package."""
+    if not node.level:
+        return node.module or ""
+    package = module if is_package else module[:-1]
+    base = package[: len(package) - (node.level - 1)]
+    if node.level - 1 > len(package):
+        base = []
+    if node.module:
+        base = base + node.module.split(".")
+    return ".".join(base)
+
+
+def _dynamic_import(node: ast.Call) -> str | None:
+    """The module an ``importlib.import_module`` call names by a constant
+    string, or the complete dotted components of an f-string's constant
+    prefix (``f"rapidpipe.stages.{name}"`` names ``rapidpipe.stages``)."""
+    func = node.func
+    if not ((isinstance(func, ast.Attribute) and func.attr == "import_module"
+             and isinstance(func.value, ast.Name) and func.value.id == "importlib")
+            or (isinstance(func, ast.Name) and func.id == "import_module")):
+        return None
+    if not node.args:
+        return None
+    arg = node.args[0]
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        return arg.value
+    if (isinstance(arg, ast.JoinedStr) and arg.values
+            and isinstance(arg.values[0], ast.Constant)):
+        prefix = arg.values[0].value
+        complete = prefix.split(".")[:-1]
+        return ".".join(complete) or None
+    return None
+
+
 def imported_modules(source: str, module: list[str], is_package: bool
                      ) -> list[tuple[str, int]]:
     """``(absolute dotted name, line)`` for every import in ``source``,
@@ -95,23 +143,16 @@ def imported_modules(source: str, module: list[str], is_package: bool
     import name`` yields ``X.name`` as well as ``X``, so a submodule
     imported by name is seen."""
     tree = ast.parse(source)
-    package = module if is_package else module[:-1]
     out: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             out.extend((alias.name, node.lineno) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                base = package[: len(package) - (node.level - 1)]
-                if node.level - 1 > len(package):
-                    base = []
-                if node.module:
-                    base = base + node.module.split(".")
-            else:
-                base = node.module.split(".")
-            dotted = ".".join(base)
+            dotted = import_from_base(node, module, is_package)
             out.append((dotted, node.lineno))
             out.extend((f"{dotted}.{alias.name}", node.lineno) for alias in node.names)
+        elif isinstance(node, ast.Call) and (dotted := _dynamic_import(node)):
+            out.append((dotted, node.lineno))
     return out
 
 
@@ -128,9 +169,7 @@ def scan(package_root: Path) -> list[Edge]:
     edges = []
     for path in sorted(package_root.rglob("*.py")):
         module, is_package = _module_parts(path, package_root)
-        if len(module) < 2:
-            continue  # rapidpipe/__init__.py belongs to no unit
-        source_unit = module[1]
+        source_unit = module[1] if len(module) > 1 else PACKAGE_INIT
         where_path = path.relative_to(package_root.parent)
         seen = set()
         for dotted, line in imported_modules(path.read_text(), module, is_package):
@@ -166,10 +205,10 @@ def test_the_table_is_the_layer_order():
 
 
 def test_every_import_goes_down_the_layer_order(edges):
-    violations = [e for e in edges if e.target not in ALLOWED[e.source]]
+    violations = [e for e in edges if e.target not in allowed_for(e.source)]
     assert not violations, "\n".join(
         f"{e.where}: rapidpipe.{e.source} imports rapidpipe.{e.target}, which "
-        f"the layer order forbids (allowed: {sorted(ALLOWED[e.source])})"
+        f"the layer order forbids (allowed: {sorted(allowed_for(e.source))})"
         for e in violations)
 
 
@@ -226,6 +265,39 @@ def test_scanner_maps_from_rapidpipe_import_to_the_named_unit():
 def test_scanner_sees_lazy_and_plain_imports():
     source = "import rapidpipe.db.connection\n\ndef f():\n    from rapidpipe.runs import x\n"
     assert _targets(source, "rapidpipe.checks.x") == {"db", "runs"}
+
+
+def test_scanner_sees_import_module_with_a_constant_string():
+    source = "import importlib\nimportlib.import_module('rapidpipe.cli.main')\n"
+    assert _targets(source, "rapidpipe.products.x") == {"cli"}
+    source = "from importlib import import_module\nimport_module('rapidpipe.runs')\n"
+    assert _targets(source, "rapidpipe.products.x") == {"runs"}
+
+
+def test_scanner_sees_import_module_with_an_f_string_unit_prefix():
+    source = "import importlib\ndef f(n):\n    importlib.import_module(f'rapidpipe.stages.{n}')\n"
+    assert _targets(source, "rapidpipe.cli.x") == {"stages"}
+    source = "import importlib\nimportlib.import_module(f'rapidpipe.{n}.x')\n"
+    assert _targets(source, "rapidpipe.cli.x") == set()
+
+
+def test_scanner_ignores_import_module_of_a_non_constant():
+    source = "import importlib, os\nimportlib.import_module(os.environ['M'])\n"
+    assert _targets(source, "rapidpipe.seams") == set()
+
+
+def test_package_init_may_import_no_unit(tmp_path):
+    root = tmp_path / "rapidpipe"
+    (root / "sub").mkdir(parents=True)
+    (root / "__init__.py").write_text("from . import sub\nfrom .leaf import g\n")
+    (root / "leaf.py").write_text("")
+    (root / "sub" / "__init__.py").write_text("")
+    found = {(e.source, e.target, e.where) for e in scan(root)}
+    assert found == {
+        (PACKAGE_INIT, "sub", "rapidpipe/__init__.py:1"),
+        (PACKAGE_INIT, "leaf", "rapidpipe/__init__.py:2"),
+    }
+    assert all(e.target not in allowed_for(e.source) for e in scan(root))
 
 
 def test_scanner_discovers_top_level_modules_as_units(tmp_path):

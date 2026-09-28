@@ -330,7 +330,7 @@ def _recording_process(monkeypatch, db, *, result=0, finish=True, during=None):
     """Replace ``process_date``: record the batch, then complete its row."""
     calls = []
 
-    def process(conn, spec, day, *, interval, timeout):
+    def process(conn, spec, day, *, interval, timeout, storage=None):
         calls.append({"date": day.processing_date, "batch": day.batch,
                       "deliveries": day.deliveries,
                       "units": [i.unit for i in day.detector_images],
@@ -719,6 +719,38 @@ def test_open_batches_resume_before_discovery_in_date_and_batch_order(monkeypatc
     assert calls[0]["units"] == ["c/SCA01"]
     assert t.created == [] and storage.reads == []
     assert t.lines[-1] == "schedule ops4-stream: nothing to discover"
+
+
+def test_one_storage_serves_resumed_batches_discovery_and_new_batches(monkeypatch):
+    db, s3, storage = _DB(), _S3(), _Inbox()
+    db.seed_row(D1, 1, "RUN0", "open")
+    db.seed_delivery(_loc(D1, "a-sca01"), D1, "a-sca01", "1", SHA_A, "batched", batch=1)
+    s3.add(_key(D1, "a-sca01"))
+    _stage(s3, storage, D2, "b-sca01", _delivery("b"))
+    _Tools(monkeypatch, s3, storage)
+    made, seen = [], []
+
+    def one_storage():
+        made.append(storage)
+        return storage
+
+    monkeypatch.setattr(products_storage, "Storage", one_storage)
+    real_discover = discovery.discover
+
+    def recording_discover(conn, schedule, inbox, st, client, unit_id):
+        seen.append(("discover", st))
+        return real_discover(conn, schedule, inbox, st, client, unit_id)
+
+    monkeypatch.setattr(discovery, "discover", recording_discover)
+    calls = _recording_process(monkeypatch, db)
+    real_process = loop.process_date
+    monkeypatch.setattr(loop, "process_date", lambda conn, spec, day, *, storage, **kw: (
+        seen.append(("date", storage)) or real_process(conn, spec, day, storage=storage, **kw)))
+    _no_resume_state(monkeypatch)
+    assert loop.run_loop(db, _spec()) == 0
+    assert [(c["date"], c["batch"]) for c in calls] == [(D1, 1), (D2, 1)]
+    assert made == [storage]
+    assert seen == [("date", storage), ("discover", storage), ("date", storage)]
 
 
 def test_a_date_filter_on_an_inbox_spec_runs_only_listed_dates(monkeypatch):

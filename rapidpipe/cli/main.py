@@ -78,14 +78,12 @@ from rapidpipe.launch.batch import (
     ReleaseDefinitionRefused,
 )
 from rapidpipe.launch import batch as launch_batch
-from rapidpipe.launch.walk import RegisterUnitIdError, resolve_register_unit_id
+from rapidpipe.launch import walk as launch_walk
+from rapidpipe.launch.walk import RegisterUnitIdError
 from rapidpipe.cli import checkctl, loopctl, runctl, stagectl
 from rapidpipe.release import __main__ as release_cli
-from rapidpipe.runs.create import (
-    ReleaseNotComplete,
-    create_only_failed_run,
-    create_run_record,
-)
+from rapidpipe.runs import create as runs_create
+from rapidpipe.runs.create import ReleaseNotComplete
 from rapidpipe.runs.inputs import InputsRefused
 from rapidpipe.runs.local import run_stage_locally
 from rapidpipe.runs.repository import RunModelError
@@ -523,7 +521,7 @@ def _run_create_command(args: argparse.Namespace) -> int:
 
     with cm as conn:
         try:
-            run_id = create_run_record(
+            run_id = runs_create.create_run_record(
                 conn, kind=args.kind, owner=owner, purpose=args.purpose, stages=stages,
                 release=args.release, lane="local",
                 profile="local", db_target=None,
@@ -596,7 +594,7 @@ def _run_create_only_failed_command(args: argparse.Namespace) -> int:
 
     with cm as conn:
         try:
-            run_id, plan, unit_ids = create_only_failed_run(
+            run_id, plan, unit_ids = runs_create.create_only_failed_run(
                 conn, args.seed, owner=args.owner, purpose=args.purpose, kind=args.kind)
             conn.commit()
         except RunModelError as exc:
@@ -769,7 +767,7 @@ def _run_local_command(args: argparse.Namespace) -> int:
 
     if takes_producer_unit(args.stage):
         try:
-            unit_id = resolve_register_unit_id(
+            unit_id = launch_walk.resolve_register_unit_id(
                 unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
         except RegisterUnitIdError as exc:
             sys.stderr.write(f"rapidpipe run local: {exc}\n")
@@ -883,7 +881,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
     if takes_producer_unit(args.stage):
         if args.inputs_from_stage is None:
             try:
-                unit_id = resolve_register_unit_id(
+                unit_id = launch_walk.resolve_register_unit_id(
                     unit_id_arg=args.unit_id, inputs_location_arg=args.inputs)
             except RegisterUnitIdError as exc:
                 sys.stderr.write(f"rapidpipe run submit: {exc}\n")
@@ -915,7 +913,7 @@ def _run_submit_command(args: argparse.Namespace) -> int:
                 inputs_location = launch_batch.resolve_inputs_from_stage(
                     conn, run_id=args.run_id, unit_id=args.unit_id,
                     upstream_stage=args.inputs_from_stage)
-                unit_id = resolve_register_unit_id(
+                unit_id = launch_walk.resolve_register_unit_id(
                     unit_id_arg=None, inputs_location_arg=inputs_location)
             elif args.inputs_from_stage is not None:
                 inputs_location = launch_batch.resolve_inputs_from_stage(

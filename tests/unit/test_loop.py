@@ -422,7 +422,7 @@ def _loop_world(monkeypatch, rows, results):
     calls = []
     monkeypatch.setattr(loop, "loop_row", lambda conn, s, d, b: rows.get(str(d)))
 
-    def process(conn, spec, day, *, interval, timeout):
+    def process(conn, spec, day, *, interval, timeout, storage=None):
         calls.append(str(day.processing_date))
         result = results[str(day.processing_date)]
         if isinstance(result, Exception):
@@ -441,6 +441,16 @@ def test_run_loop_exits_0_when_every_date_completes(monkeypatch):
     spec, calls = _loop_world(monkeypatch, {}, {"2027-10-01": 0, "2027-10-02": 0})
     assert loop.run_loop(object(), spec) == 0
     assert calls == ["2027-10-01", "2027-10-02"]
+
+
+def test_run_loop_makes_one_storage_for_every_date(monkeypatch):
+    spec, calls = _loop_world(monkeypatch, {}, {"2027-10-01": 0, "2027-10-02": 0})
+    made, seen = [], []
+    monkeypatch.setattr(products_storage, "Storage", lambda: made.append(object()) or made[-1])
+    monkeypatch.setattr(loop, "process_date", lambda conn, spec, day, *, storage, **kw: (
+        seen.append(storage) or 0))
+    assert loop.run_loop(object(), spec) == 0
+    assert len(made) == 1 and seen == [made[0], made[0]]
 
 
 def test_run_loop_skips_complete_and_resumes_open(monkeypatch):
