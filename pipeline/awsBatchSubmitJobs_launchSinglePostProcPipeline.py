@@ -308,7 +308,7 @@ if __name__ == '__main__':
 
     # Insert or update record in Jobs database table and return job ID.
 
-    jid_postproc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid)
+    jid_postproc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid,proc_req)
 
     if dbh.exit_code >= 64:
         dbh.close()

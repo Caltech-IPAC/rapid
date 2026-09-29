@@ -47,24 +47,6 @@ if proc_date is None:
     exit(64)
 
 
-# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
-# record that the VPO creates, and it subdivides the processing date in the S3
-# buckets, so that two processing requests for the same processing date do not
-# overwrite each other's files.
-
-proc_req = os.getenv('PROCREQ')
-
-if proc_req is None:
-
-    print("*** Error: Env. var. PROCREQ not set; quitting...")
-    exit(64)
-
-
-# S3 key prefix that this processing request files all of its objects under.
-
-proc_subdir = util.get_proc_subdir(proc_date,proc_req)
-
-
 # Inputs are observation start and end datetimes of exposures to be processed.
 # E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
 
@@ -288,7 +270,7 @@ if __name__ == '__main__':
 
     for rid in rid_list:
 
-        query = f"SELECT jid FROM jobs " +\
+        query = f"SELECT jid,reqid FROM jobs " +\
             f"WHERE rid = {rid} AND ppid = 15;"
 
         sql_queries = []
@@ -300,8 +282,24 @@ if __name__ == '__main__':
         if n_records > 1:
             print(f"More than one record returned when querying for jid from jobs table (n_records={n_records}); quitting...")
 
+        if n_records == 0:
+            print(f"*** Warning: No Jobs record for rid={rid} and ppid=15; skipping...")
+            continue
+
         for record in records:
             jid = record[0]
+            reqid = record[1]
+
+
+        # The reqid of the processing request that ran the job gives the S3 subdirectory
+        # of its products.  Jobs that ran before the processing request subdivided the
+        # processing date have reqid = NULL, and their products are directly under the
+        # processing date.
+
+        if reqid is None:
+            proc_subdir = proc_date
+        else:
+            proc_subdir = util.get_proc_subdir(proc_date,reqid)
 
         s3_url = f"s3://rapid-product-files/{proc_subdir}/jid{jid}"
 

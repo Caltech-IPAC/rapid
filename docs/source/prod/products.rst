@@ -20,6 +20,11 @@ the same processing date from overwriting each other's files::
 
     aws s3 ls --recursive s3://rapid-product-files/20260513/req412
 
+Each job records its processing request in the ``reqid`` column of the ``Jobs`` database
+table, so the products of a job can always be located from its database record.  Jobs that
+ran before the processing date was subdivided have ``reqid`` set to NULL, and their products
+are directly under the processing date, without a ``req<reqid>`` level.
+
 Here are the available products for just one job (``jid=90828``) under that processing request::
 
     aws s3 ls --recursive s3://rapid-product-files/20260513/req412/jid90828

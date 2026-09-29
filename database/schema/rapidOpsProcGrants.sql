@@ -278,7 +278,8 @@ grant EXECUTE on FUNCTION startJob (
     sca_            smallint,
     rid_            integer,
     machine_        smallint,
-    slurm_          integer
+    slurm_          integer,
+    reqid_          integer
 ) to rapidporole;
 
 

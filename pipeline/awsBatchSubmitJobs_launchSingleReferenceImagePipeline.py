@@ -646,7 +646,7 @@ if __name__ == '__main__':
     sca = 'null'
     expid = 'null'
 
-    jid = dbh.start_job(ppid_refimage,fid,expid,field,sca,rid)
+    jid = dbh.start_job(ppid_refimage,fid,expid,field,sca,rid,proc_req)
 
     print(f"jid = {jid}")
 

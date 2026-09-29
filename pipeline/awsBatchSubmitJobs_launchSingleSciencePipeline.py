@@ -649,7 +649,7 @@ if __name__ == '__main__':
 
         # Insert or update record in Jobs database table and return job ID.
 
-        jid = dbh.start_job(ppid,fid,expid,field,sca,rid)
+        jid = dbh.start_job(ppid,fid,expid,field,sca,rid,proc_req)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
@@ -782,7 +782,7 @@ if __name__ == '__main__':
 
         # Insert or update record in Jobs database table and return job ID.
 
-        jid = dbh.start_job(ppid,fid,expid,field,sca,rid)
+        jid = dbh.start_job(ppid,fid,expid,field,sca,rid,proc_req)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
