@@ -88,7 +88,7 @@ sindex jd expid pid sca fid filter field rfid infobitssci infobitsref zpmagsci z
 
 
 def test_count_lc_rows(tmp_path):
-    path = tmp_path / "rapid_req777_lc.txt"
+    path = tmp_path / "rapid_fpreq777_lc.txt"
     path.write_text(LC_FILE)
     assert count_lc_rows(path) == (3, 2)   # sentinel row is not "valid"
 

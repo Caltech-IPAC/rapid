@@ -138,7 +138,7 @@ one JSONL output:
   per-chip "varying source histories" distribution.
 - **measure** (`--run`; pipeline container + AWS + DB): actually executes
   `pipeline/forcedPhotometryForField.py` for batches of surveyed
-  positions (request CSVs written with `reqid = aid`) at several batch
+  positions (request CSVs written with `fpreqid = aid`) at several batch
   sizes, recording wall time, the backend's own phase timings, staged
   bytes, and lightcurve row counts. Because the FP backend works per
   *field*, batch-size variation separates the fixed per-job staging cost
