@@ -171,11 +171,15 @@ def live_provider(db_conn):
     provider.close()
 
 
-# Pinned round-trip source (Emily, Aug 2026): a well-populated detection
-# (28-source object, near the ecliptic) kept fixed so runs are
-# deterministic and comparable. If reprocessing ever drops it, this
-# fixture fails loudly -- pick a new sid and update the pin.
-ROUNDTRIP_SID = 2240034736
+# Pinned round-trip source, kept fixed so runs are deterministic and
+# comparable. If reprocessing ever drops it, this fixture fails loudly --
+# pick a new sid and update the pin.
+#   Aug 2026 (Emily): 2240034736, a 28-source object near the ecliptic;
+#     gone from sources by 2026-09-29 (reprocessing).
+#   2026-09-29: 6091788102 (sources_20271007_9, pid 352735, field 4666327,
+#     flags 0, SNR ~3400), a 71-source object with a registered reference
+#     catalog for its chip and all three cutout products present in S3.
+ROUNDTRIP_SID = 6091788102
 
 
 @pytest.fixture(scope="module")
