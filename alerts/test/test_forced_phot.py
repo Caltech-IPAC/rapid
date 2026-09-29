@@ -7,15 +7,25 @@ the two radius constants against synthetic rolled footprints.
 """
 
 import math
+import os
 
 import numpy as np
 import pytest
 
-from alerts.forced_phot import (CONE_RADIUS_DEG, SCA_HALF_DIAGONAL_DEG,
-                                SCI_BASENAME, Measurement, Position,
-                                PrevImage, contains_positions,
-                                diff_psf_basename, find_prev_images,
-                                q3c_search, sci_psf_basename)
+import fitsio
+
+from wcs_eval import separation_mas, tpv_pixel_to_sky
+
+from alerts.forced_phot import (CONE_RADIUS_DEG, FLAG_NONFINITE,
+                                SCA_HALF_DIAGONAL_DEG, SCI_BASENAME,
+                                STAMP_MARGIN_PX, ChipImage, Measurement,
+                                Position, PrevImage, assemble_history,
+                                contains_positions, diff_psf_basename,
+                                error_array, find_prev_images,
+                                forced_photometry, load_psf, open_image,
+                                project_positions, psfphot, q3c_search,
+                                read_positions_csv, run_prev_images,
+                                sci_psf_basename, write_measurements_csv)
 
 # l2filemeta corners of a real chip (ra1,dec1 .. ra4,dec4, perimeter order)
 # and its center (== CRVAL). Sides ~0.125 deg, rolled ~30 deg.
@@ -279,6 +289,330 @@ def test_find_prev_images_with_no_positions_or_no_candidates():
     q = RecordingQuery([db_row(1, 10, REAL_CORNERS)])
     assert find_prev_images(q, [], REAL_RA0, REAL_DEC0) == []
     assert find_prev_images(RecordingQuery([]), [Position(1, REAL_RA0, REAL_DEC0)], REAL_RA0, REAL_DEC0) == []
+
+
+# ---------------------------------------------------------------------------
+# photometry: open_image and the stopgap error_array
+# ---------------------------------------------------------------------------
+
+def test_open_image_reads_pixels_header_and_wcs(job_dir, tpv_header, chip_image):
+    img = open_image(str(job_dir / SCI_BASENAME))
+    assert isinstance(img, ChipImage)
+    assert img.shape == chip_image.shape
+    assert np.allclose(img.data, chip_image + 100_000.0)
+    assert img.header["CTYPE1"] == "RA---TPV"
+    assert img.error is None and not img.mask.any()
+    # the WCS is the header's, distortion included: astropy agrees with the
+    # suite's own TPV evaluator (the PV1_0/PV2_0 terms shift CRPIX off CRVAL
+    # by a few mas, so CRVAL itself is not the reference)
+    for px, py in ((150.5, 150.5), (1.0, 1.0), (301.0, 1.0), (301.0, 301.0), (1.0, 301.0), (77.3, 212.9)):
+        ra, dec = img.wcs.all_pix2world([[px, py]], 1)[0]
+        ra_ref, dec_ref = tpv_pixel_to_sky(tpv_header, px, py)
+        assert separation_mas(ra, dec, ra_ref, dec_ref) < 1.0
+
+
+def test_open_image_with_uncertainty_file(job_dir, tpv_header, chip_image):
+    unc = np.full(chip_image.shape, 2.5, dtype=np.float32)
+    unc[10, 10] = 0.0                          # non-positive error -> unusable pixel
+    unc[20, 20] = np.nan
+    fitsio.write(str(job_dir / "unc.fits"), unc, header=dict(tpv_header), clobber=True)
+    img = open_image(str(job_dir / SCI_BASENAME), uncert_path=str(job_dir / "unc.fits"))
+    assert img.error is not None and img.error[0, 0] == 2.5
+    assert img.mask[10, 10] and img.mask[20, 20] and img.mask.sum() == 2
+    fitsio.write(str(job_dir / "bad.fits"), unc[:100, :100], header=dict(tpv_header), clobber=True)
+    with pytest.raises(ValueError):
+        open_image(str(job_dir / SCI_BASENAME), uncert_path=str(job_dir / "bad.fits"))
+
+
+def test_open_image_masks_nonfinite_pixels(job_dir, tpv_header, chip_image):
+    data = chip_image.copy(); data[5, 5] = np.nan; data[6, 6] = np.inf
+    fitsio.write(str(job_dir / "holes.fits"), data, header=dict(tpv_header), clobber=True)
+    img = open_image(str(job_dir / "holes.fits"))
+    assert img.mask[5, 5] and img.mask[6, 6] and img.mask.sum() == 2
+
+
+def noisy_field(sigma=3.0, size=512, seed=0):
+    rng = np.random.default_rng(seed)
+    rows, cols = np.mgrid[0:size, 0:size]
+    background = 100.0 + 0.05 * rows                      # a gradient, as in the bulge
+    return background + rng.normal(0.0, sigma, (size, size)), background
+
+
+def test_error_array_diff_recovers_the_noise_level():
+    data, _ = noisy_field()
+    err = error_array(data, "diff")
+    assert err.dtype == np.float32 and err.shape == data.shape
+    assert np.isfinite(err).all()
+    assert abs(np.median(err) - 3.0) / 3.0 < 0.1
+
+
+def test_error_array_science_adds_poisson_term_under_sources():
+    data, background = noisy_field()
+    data[200:210, 200:210] += 5000.0                       # a bright, flat source
+    rms_only = error_array(data, "science")                # gain None: warns, no Poisson term
+    with_gain = error_array(data, "science", gain=2.0)
+    assert abs(np.median(rms_only[100:150, 100:150]) - 3.0) < 0.5
+    # away from sources the Poisson term only adds the (clipped) noise
+    # itself: a small, positive shift of the typical error
+    empty_shift = np.median(with_gain[100:150, 100:150]) - np.median(rms_only[100:150, 100:150])
+    assert 0.0 <= empty_shift < 0.5
+    # sqrt(rms^2 + 5000/2) ~ 50.1 under the source
+    assert abs(np.median(with_gain[202:208, 202:208]) - math.sqrt(9.0 + 2500.0)) < 2.0
+
+
+def test_error_array_masks_and_rejects_bad_product():
+    data, _ = noisy_field()
+    data[50, 50] = np.nan
+    mask = np.zeros(data.shape, bool); mask[60, 60] = True
+    err = error_array(data, "diff", mask=mask)
+    assert np.isnan(err[50, 50]) and np.isnan(err[60, 60])
+    assert np.isfinite(err[70, 70])
+    with pytest.raises(ValueError):
+        error_array(data, "ref")
+
+
+# ---------------------------------------------------------------------------
+# photometry: projection, PSF, fitting, and the parent on a synthetic chip
+# ---------------------------------------------------------------------------
+
+PSF_FWHM_PX = 2.5
+NOISE_SIGMA = 1.0
+
+
+def gaussian_psf_image(size=25, fwhm=PSF_FWHM_PX):
+    yy, xx = np.mgrid[0:size, 0:size]; c = size // 2; s = fwhm / 2.355
+    psf = np.exp(-((xx - c) ** 2 + (yy - c) ** 2) / (2 * s * s))
+    return (psf / psf.sum()).astype(np.float64)
+
+
+@pytest.fixture()
+def synthetic_chip(tmp_path, tpv_header):
+    """A 301x301 chip with the suite's TPV WCS, Gaussian sources of known
+    flux at known 1-based pixel positions, a NaN hole, and its PSF file.
+    Returns (image_path, psf_path, sources) with sources = [(x, y, flux)]."""
+    from astropy.table import QTable
+    from photutils.datasets import make_model_image
+    from photutils.psf import ImagePSF
+
+    sources = [(60.0, 80.0, 2000.0), (150.5, 150.5, 500.0), (230.2, 40.7, 8000.0), (100.0, 250.0, 300.0)]
+    psf_img = gaussian_psf_image()
+    model = ImagePSF(psf_img, flux=1.0, x_0=0.0, y_0=0.0)
+    params = QTable({"x_0": [s[0] - 1 for s in sources], "y_0": [s[1] - 1 for s in sources],
+                     "flux": [s[2] for s in sources]})
+    data = make_model_image((301, 301), model, params, model_shape=(25, 25))
+    data += np.random.default_rng(3).normal(0.0, NOISE_SIGMA, data.shape)
+    data[190:210, 190:210] = np.nan                                   # a masked hole
+    image_path = tmp_path / "diff.fits"; psf_path = tmp_path / "psf.fits"
+    fitsio.write(str(image_path), data.astype(np.float32), header=dict(tpv_header), clobber=True)
+    fitsio.write(str(psf_path), (psf_img * 37.0).astype(np.float32), clobber=True)   # un-normalized on purpose
+    return str(image_path), str(psf_path), sources
+
+
+def sky_positions(wcs, pixels, first_id=1):
+    """Position records for 1-based pixel coordinates, via the image WCS."""
+    ra, dec = wcs.all_pix2world([p[0] for p in pixels], [p[1] for p in pixels], 1)
+    return [Position(first_id + i, float(r), float(d)) for i, (r, d) in enumerate(zip(ra, dec))]
+
+
+def test_project_positions_round_trips_and_applies_margin(synthetic_chip):
+    image_path, _, _ = synthetic_chip
+    img = open_image(image_path)
+    # margin 12 on a 301-px axis: usable range is [13, 289]; probe one
+    # pixel inside and outside it (the iterative inverse is good to ~1e-4
+    # px, so exactly-on-the-line cases are not meaningful)
+    pixels = [(60.0, 80.0), (150.5, 150.5), (12.0, 150.0), (150.0, 290.0), (14.0, 14.0), (288.0, 288.0)]
+    positions = sky_positions(img.wcs, pixels)
+    x, y, on = project_positions(img.wcs, img.shape, positions)
+    assert np.allclose(x, [p[0] for p in pixels], atol=1e-3)
+    assert np.allclose(y, [p[1] for p in pixels], atol=1e-3)
+    assert on.tolist() == [True, True, False, False, True, True]
+    assert STAMP_MARGIN_PX == 12
+    x, y, on = project_positions(img.wcs, img.shape, [])
+    assert x.size == 0 and on.size == 0
+
+
+def test_load_psf_normalizes_and_fixes_position(synthetic_chip):
+    _, psf_path, _ = synthetic_chip
+    psf = load_psf(psf_path)
+    assert psf.x_0.fixed and psf.y_0.fixed and not psf.flux.fixed
+    assert abs(float(psf.data.sum()) - 1.0) < 1e-6
+
+
+def test_psfphot_recovers_fluxes_and_flags_masked_position(synthetic_chip):
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path); psf = load_psf(psf_path)
+    error = np.full(img.shape, NOISE_SIGMA, dtype=np.float32)
+    x = np.array([s[0] for s in sources] + [200.0]); y = np.array([s[1] for s in sources] + [200.0])
+    flux, fluxerr, flags = psfphot(img.data, error, img.mask, psf, x, y)
+    truth = np.array([s[2] for s in sources])
+    assert np.allclose(flux[:4], truth, rtol=0.03)
+    assert (flags[:4] == 0).all() and np.all(fluxerr[:4] > 0)
+    # the position in the NaN hole: NaN flux, flagged with our bit as well as photutils'
+    assert math.isnan(flux[4]) and flags[4] & FLAG_NONFINITE and flags[4] != FLAG_NONFINITE
+    assert psfphot(img.data, error, img.mask, psf, [], [])[0].size == 0
+
+
+def test_forced_photometry_parent_end_to_end(synthetic_chip):
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    pixels = [(s[0], s[1]) for s in sources] + [(200.0, 200.0), (3.0, 3.0)]   # + hole + off-chip
+    positions = sky_positions(img.wcs, pixels, first_id=501)
+    rows = forced_photometry(image_path, psf_path, positions, rid=77, product="diff")
+    # off-chip position 506 has no row; the hole (505) has a flagged row
+    assert [r.pos_id for r in rows] == [501, 502, 503, 504, 505]
+    assert all(r.rid == 77 for r in rows)
+    for r, (x, y, f) in zip(rows[:4], sources):
+        assert abs(r.x - x) < 1e-3 and abs(r.y - y) < 1e-3
+        assert abs(r.flux - f) / f < 0.03 and r.flags == 0
+        # error came from error_array on noise sigma 1: a few counts for a 7x7 PSF fit
+        assert 0.5 < r.fluxerr < 10.0
+    assert math.isnan(rows[4].flux) and rows[4].flags & FLAG_NONFINITE
+    # nothing on the chip -> no rows, no PSF needed
+    far = [Position(9, REAL_RA0, REAL_DEC0)]
+    assert forced_photometry(image_path, "/nonexistent/psf.fits", far, rid=77, product="diff") == []
+
+
+# ---------------------------------------------------------------------------
+# driver: run_prev_images, assemble_history, CSV helpers
+# ---------------------------------------------------------------------------
+
+class CopyingStage:
+    """Stage stub: 'url' is a local file; copy it to a staging dir under its
+    basename (as AlertDataProvider._stage does) and record every call."""
+
+    def __init__(self, staging_dir):
+        self.dir = staging_dir; self.calls = []
+
+    def __call__(self, url):
+        import shutil
+        self.calls.append(url)
+        if not os.path.exists(url):
+            raise FileNotFoundError(url)
+        local = os.path.join(self.dir, os.path.basename(url))
+        shutil.copy(url, local)
+        return local
+
+
+def prev_image(rid, mjdobs, image_path, psf_path, corners=REAL_CORNERS, position_index=(), sci_psf=None):
+    return PrevImage(rid=rid, pid=rid * 10, diff_filename=image_path, sci_filename=image_path,
+                     diff_psf=psf_path, sci_psf=sci_psf or psf_path, l2_filename="l2.fits.gz", mjdobs=mjdobs,
+                     fid=8, band="W146", expid=1, sca=7, corners=corners,
+                     position_index=np.array(position_index, dtype=int))
+
+
+def test_run_prev_images_measures_products_stamps_rows_and_cleans_up(synthetic_chip, tmp_path):
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    positions = sky_positions(img.wcs, [(s[0], s[1]) for s in sources], first_id=1)
+    staging = tmp_path / "staging"; staging.mkdir(); stage = CopyingStage(str(staging))
+    # as in production, the science PSF has its own basename
+    import shutil
+    sci_psf = str(tmp_path / "WFI_SCA07_F146_PSF_DET_DIST_normalized.fits"); shutil.copy(psf_path, sci_psf)
+    # epoch 2 holds only the first two positions (a partial overlap)
+    images = [prev_image(11, 61680.1, image_path, psf_path, position_index=[0, 1, 2, 3], sci_psf=sci_psf),
+              prev_image(12, 61680.2, image_path, psf_path, position_index=[0, 1], sci_psf=sci_psf)]
+    out = list(run_prev_images(images, positions, stage))
+    assert [(i.rid, p, len(rows)) for i, p, rows in out] == \
+        [(11, "diff", 4), (11, "science", 4), (12, "diff", 2), (12, "science", 2)]
+    for image, product, rows in out:
+        for r in rows:
+            assert r.product == product and r.mjdobs == image.mjdobs and r.rid == image.rid
+            assert r.flags == 0 and abs(r.flux - sources[r.pos_id - 1][2]) / sources[r.pos_id - 1][2] < 0.03
+    # every staged copy was deleted except the cached science PSF
+    assert sorted(os.listdir(staging)) == [os.path.basename(sci_psf)]
+    # the science PSF was staged once for the run; the diff PSF once per epoch
+    assert stage.calls.count(sci_psf) == 1 and stage.calls.count(psf_path) == 2
+    # the science-image fits are noisier than the diff ones only via the
+    # Poisson term; with no GAIN in the header the two products agree
+    diff_rows = {r.pos_id: r for r in out[0][2]}; sci_rows = {r.pos_id: r for r in out[1][2]}
+    assert all(diff_rows[k].flux == sci_rows[k].flux for k in diff_rows)
+
+
+def test_run_prev_images_keeps_a_cached_psf_that_shares_a_staged_basename(synthetic_chip, tmp_path):
+    # both PSFs staged under the same basename (the stager keys by basename):
+    # deleting the diff PSF after epoch 1 must not remove the cached science
+    # PSF, and epoch 2's science fit must still succeed
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    positions = sky_positions(img.wcs, [(sources[0][0], sources[0][1])])
+    staging = tmp_path / "staging"; staging.mkdir(); stage = CopyingStage(str(staging))
+    images = [prev_image(11, 61680.1, image_path, psf_path, position_index=[0]),
+              prev_image(12, 61680.2, image_path, psf_path, position_index=[0])]
+    out = list(run_prev_images(images, positions, stage, strict=True))
+    assert [(i.rid, p) for i, p, _ in out] == [(11, "diff"), (11, "science"), (12, "diff"), (12, "science")]
+    assert all(rows[0].flags == 0 for _, _, rows in out)
+
+
+def test_run_prev_images_skips_images_without_positions_and_selects_products(synthetic_chip, tmp_path):
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    positions = sky_positions(img.wcs, [(s[0], s[1]) for s in sources])
+    staging = tmp_path / "staging"; staging.mkdir(); stage = CopyingStage(str(staging))
+    images = [prev_image(11, 61680.1, image_path, psf_path, position_index=[]),
+              prev_image(12, 61680.2, image_path, psf_path, position_index=[3])]
+    out = list(run_prev_images(images, positions, stage, products=("diff",)))
+    assert [(i.rid, p, [r.pos_id for r in rows]) for i, p, rows in out] == [(12, "diff", [4])]
+
+
+def test_run_prev_images_failure_is_skipped_or_raised(synthetic_chip, tmp_path, caplog):
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    positions = sky_positions(img.wcs, [(sources[0][0], sources[0][1])])
+    staging = tmp_path / "staging"; staging.mkdir(); stage = CopyingStage(str(staging))
+    images = [prev_image(11, 61680.1, "/nonexistent/diff.fits", psf_path, position_index=[0]),
+              prev_image(12, 61680.2, image_path, psf_path, position_index=[0])]
+    with caplog.at_level("WARNING"):
+        out = list(run_prev_images(images, positions, stage, products=("diff",)))
+    assert [i.rid for i, _, _ in out] == [12]
+    assert "rid=11" in caplog.text and "1 image-product measurements failed" in caplog.text
+    with pytest.raises(FileNotFoundError):
+        list(run_prev_images(images, positions, stage, products=("diff",), strict=True))
+
+
+def test_run_prev_images_uses_uncertainty_hook(synthetic_chip, tmp_path, tpv_header, chip_image):
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    positions = sky_positions(img.wcs, [(sources[0][0], sources[0][1])])
+    unc_path = str(tmp_path / "unc.fits")
+    fitsio.write(unc_path, np.full(img.shape, 4.0, dtype=np.float32), header=dict(tpv_header), clobber=True)
+    stage = CopyingStage(str(tmp_path / "s")); os.mkdir(tmp_path / "s")
+    images = [prev_image(11, 61680.1, image_path, psf_path, position_index=[0])]
+    hook = lambda image, product: unc_path if product == "diff" else None
+    with_unc = list(run_prev_images(images, positions, stage, products=("diff",), uncert_url=hook))
+    without = list(run_prev_images(images, positions, stage, products=("diff",)))
+    assert unc_path in stage.calls
+    # a 4x larger per-pixel error than the estimate (~1) -> ~4x larger flux error
+    ratio = with_unc[0][2][0].fluxerr / without[0][2][0].fluxerr
+    assert 3.0 < ratio < 5.0
+
+
+def test_assemble_history_groups_and_orders():
+    rows = [Measurement(1, 12, 0, 0, 1.0, 0.1, product="science", mjdobs=2.0),
+            Measurement(2, 11, 0, 0, 5.0, 0.1, product="diff", mjdobs=1.0),
+            Measurement(1, 11, 0, 0, 2.0, 0.1, product="diff", mjdobs=1.0),
+            Measurement(1, 12, 0, 0, 3.0, 0.1, product="diff", mjdobs=2.0),
+            Measurement(1, 11, 0, 0, 4.0, 0.1, product="science", mjdobs=1.0)]
+    history = assemble_history(rows)
+    assert sorted(history) == [1, 2]
+    assert [(r.mjdobs, r.product) for r in history[1]] == \
+        [(1.0, "diff"), (1.0, "science"), (2.0, "diff"), (2.0, "science")]
+    assert history[2][0].flux == 5.0
+    assert assemble_history([]) == {}
+
+
+def test_csv_round_trip(tmp_path):
+    pos_csv = tmp_path / "pos.csv"
+    pos_csv.write_text("pos_id,ra,dec\n7,266.6,-28.9\n8,266.7,-28.8\n")
+    positions = read_positions_csv(str(pos_csv))
+    assert positions == [Position(7, 266.6, -28.9), Position(8, 266.7, -28.8)]
+    rows = [Measurement(7, 11, 10.5, 20.5, 123.0, 4.5, flags=0, product="diff", mjdobs=61680.1),
+            Measurement(7, 11, 10.5, 20.5, math.nan, math.nan, flags=FLAG_NONFINITE, product="science", mjdobs=61680.1)]
+    out_csv = tmp_path / "rows.csv"
+    write_measurements_csv(str(out_csv), rows)
+    lines = out_csv.read_text().splitlines()
+    assert lines[0] == "pos_id,rid,product,mjdobs,x,y,flux,fluxerr,flags"
+    assert lines[1] == "7,11,diff,61680.1,10.5,20.5,123.0,4.5,0"
+    assert lines[2].startswith("7,11,science,61680.1,10.5,20.5,nan,nan,")
 
 
 # ---------------------------------------------------------------------------

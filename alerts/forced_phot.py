@@ -28,6 +28,7 @@ Layout (top to bottom, each section depends only on the ones above it)::
                  forced_photometry()       -- parent: one image, N positions
     driver       run_prev_images()         -- stage, measure, yield, discard
                  assemble_history()        -- rows -> per-position lists
+    entry point  main()                    -- one chip by hand: --pid, --positions CSV
 
 Search (data flow)::
 
@@ -66,18 +67,24 @@ STAMP_MARGIN_PX : int
     A position closer than this to a chip edge is treated as off the image.
 """
 
-# TODO (2026-09-29): verify the deployed database has the Q3C index the
-# schema declares on diffimages (q3c_ang2ipix(ra0, dec0)); q3c_search relies
-# on it. The deployed database was found (2026-09-23) to lack every index
-# declared on l2filemeta, including its Q3C index, so this one may be
-# missing too. Without it the cone is a sequential scan of diffimages:
-# tolerable at 30k rows, not at survey scale. Check with
+# Index note (2026-09-29): q3c_search relies on the Q3C index the schema
+# declares on diffimages (q3c_ang2ipix(ra0, dec0)). Verified present as
+# diffimages_radec_idxx in the deployed database (socsimsemily1) and used by
+# the planner (bitmap index scans). Re-check after any schema rebuild --
+# the deployed database was found (2026-09-23) to lack every index declared
+# on l2filemeta -- with
 #   select indexdef from pg_indexes where tablename = 'diffimages';
 
 import logging
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
+from astropy.io import fits
+from astropy.stats import SigmaClip
+from astropy.wcs import WCS
+from photutils.background import (Background2D, MADStdBackgroundRMS,
+                                  MedianBackground)
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +151,9 @@ class Measurement:
     A position that does not fall on an image gets no Measurement for it;
     a position that does but whose fit fails gets one with NaN flux and a
     non-zero ``flags``. ``x``, ``y`` are the 1-based pixel coordinates the
-    fit was made at.
+    fit was made at. ``product`` says which image of the epoch was measured
+    (``"diff"`` -> psfFlux, ``"science"`` -> scienceFlux); ``mjdobs`` is
+    stamped by the driver from the epoch.
     """
     pos_id: int
     rid: int
@@ -153,6 +162,8 @@ class Measurement:
     flux: float
     fluxerr: float
     flags: int = 0
+    product: str = "diff"
+    mjdobs: float = float("nan")
 
 
 # ---------------------------------------------------------------------------
@@ -415,3 +426,510 @@ def find_prev_images(query, positions, ra0, dec0, **search_kwargs):
                 len(kept), len(candidates), len(positions), n_pairs,
                 n_pairs / len(kept) if kept else 0.0)
     return kept
+
+
+# ---------------------------------------------------------------------------
+# Photometry
+# ---------------------------------------------------------------------------
+
+#: Box size (pixels) for the background / rms map in error_array().
+ERROR_BOX_PX = 64
+
+
+@dataclass
+class ChipImage:
+    """One staged image, opened: pixels, header, WCS, and (optionally) its
+    per-pixel uncertainty.
+
+    ``mask`` is True where a pixel cannot be used (non-finite data, or
+    non-finite / non-positive uncertainty when one was supplied). ``error``
+    is None when no uncertainty file was given; see :func:`error_array`.
+    """
+    path: str
+    data: np.ndarray
+    header: fits.Header
+    wcs: WCS
+    mask: np.ndarray
+    error: np.ndarray | None = None
+
+    @property
+    def shape(self):
+        return self.data.shape
+
+
+def _first_image_hdu(path):
+    """(data, header) of the first HDU with 2-D pixel data. Primary for the
+    pipeline products; Roman L2 cal files keep pixels in a SCI extension."""
+    with fits.open(path, memmap=False) as hdus:
+        for hdu in hdus:
+            if hdu.data is not None and hdu.data.ndim == 2:
+                return np.asarray(hdu.data, dtype=np.float64), hdu.header.copy()
+    raise ValueError(f"no 2-D image HDU in {path}")
+
+
+def open_image(path, uncert_path=None):
+    """Open a staged image for photometry.
+
+    Parameters
+    ----------
+    path : str
+        Local FITS file (difference or science image).
+    uncert_path : str, optional
+        Local FITS file holding the matching per-pixel uncertainty, same
+        shape. When omitted ``error`` is None and the caller falls back on
+        :func:`error_array`. This is the seam for the pipeline's own
+        uncertainty products once they exist: pass the file, nothing else
+        changes.
+
+    Returns
+    -------
+    ChipImage
+    """
+    data, header = _first_image_hdu(path)
+    mask = ~np.isfinite(data)
+    error = None
+    if uncert_path is not None:
+        error, _ = _first_image_hdu(uncert_path)
+        if error.shape != data.shape:
+            raise ValueError(f"uncertainty {uncert_path} has shape {error.shape}, "
+                             f"image {path} has {data.shape}")
+        mask |= ~np.isfinite(error) | (error <= 0.0)
+    wcs = WCS(header)
+    logger.debug("open_image: %s %s, %d masked px, error %s",
+                 path, data.shape, int(mask.sum()), "file" if error is not None else "none")
+    return ChipImage(path=str(path), data=data, header=header, wcs=wcs, mask=mask, error=error)
+
+
+def error_array(data, product, gain=None, mask=None, box_size=ERROR_BOX_PX):
+    """Stopgap per-pixel uncertainty for an image without one.
+
+    Replace by reading the pipeline's uncertainty product once that exists
+    (``open_image(..., uncert_path=...)``); nothing else depends on how the
+    error was obtained.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        Image pixels.
+    product : {"diff", "science"}
+        ``"diff"``: the local background rms alone. The subtraction noise
+        from both inputs is already in the residuals; what is missed is the
+        extra Poisson noise under bright stars.
+        ``"science"``: background rms plus the Poisson term of the
+        background-subtracted signal, which needs ``gain``.
+    gain : float, optional
+        Electrons per data unit, for the Poisson term. When None for a
+        science image the term is skipped and a warning logged.
+    mask : numpy.ndarray of bool, optional
+        Pixels to leave out of the background estimate (non-finite pixels
+        are always left out). Masked pixels get NaN error.
+    box_size : int
+        Side of the boxes the background and rms are estimated in.
+
+    Returns
+    -------
+    numpy.ndarray of float32, same shape as ``data``
+        Positive error per pixel, NaN where masked.
+
+    Notes
+    -----
+    Background and rms come from a sigma-clipped median and MAD per box
+    (robust in crowded fields), median-filtered over 3x3 boxes and
+    interpolated back to the pixel grid, i.e. photutils ``Background2D``.
+    """
+    if product not in ("diff", "science"):
+        raise ValueError(f"product must be 'diff' or 'science', got {product!r}")
+    data = np.asarray(data, dtype=np.float64)
+    bad = ~np.isfinite(data)
+    if mask is not None:
+        bad |= np.asarray(mask, dtype=bool)
+    bkg = Background2D(data, box_size, mask=bad, filter_size=(3, 3),
+                       sigma_clip=SigmaClip(sigma=3.0, maxiters=10),
+                       bkg_estimator=MedianBackground(),
+                       bkg_rms_estimator=MADStdBackgroundRMS())
+    variance = bkg.background_rms.astype(np.float64) ** 2
+    if product == "science":
+        if gain is None:
+            logger.warning("error_array: science image without gain; Poisson term skipped")
+        else:
+            variance += np.clip(data - bkg.background, 0.0, None) / float(gain)
+    error = np.sqrt(variance).astype(np.float32)
+    error[bad] = np.nan
+    return error
+
+
+#: Measurement.flags bit set by this module (photutils' own flag bits are
+#: below 1 << 8): the fit returned a non-finite flux or uncertainty.
+FLAG_NONFINITE = 1 << 8
+
+
+def project_positions(wcs, shape, positions, margin=STAMP_MARGIN_PX):
+    """Sky positions to 1-based pixel coordinates, and which are usable.
+
+    Parameters
+    ----------
+    wcs : astropy.wcs.WCS
+    shape : tuple of int
+        Image shape ``(ny, nx)``.
+    positions : sequence of Position
+    margin : int
+        A position within ``margin`` pixels of any edge is off-chip: its
+        fit region would run off the image.
+
+    Returns
+    -------
+    x, y : numpy.ndarray of float
+        1-based pixel coordinates (FITS convention), distortion included.
+    on_chip : numpy.ndarray of bool
+        Finite and inside ``[1 + margin, n - margin]`` on both axes.
+
+    Notes
+    -----
+    The inverse of a distorted WCS is iterative; positions far outside
+    the chip may not converge and come back non-finite, which counts as
+    off-chip. Positions reaching here have passed the footprint test, so
+    that is rare and only ever at the edges.
+    """
+    ra = np.array([p.ra for p in positions], dtype=float)
+    dec = np.array([p.dec for p in positions], dtype=float)
+    if len(ra) == 0:
+        empty = np.zeros(0, dtype=float)
+        return empty, empty.copy(), np.zeros(0, dtype=bool)
+    x, y = wcs.all_world2pix(ra, dec, 1, quiet=True)
+    x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
+    ny, nx = shape
+    on_chip = (np.isfinite(x) & np.isfinite(y)
+               & (x >= 1 + margin) & (x <= nx - margin)
+               & (y >= 1 + margin) & (y <= ny - margin))
+    return x, y, on_chip
+
+
+def load_psf(path, oversampling=1):
+    """The photutils PSF model for forced fitting: an ImagePSF built from
+    a PSF image, normalized to unit sum, with its position fixed so only
+    the flux is fit.
+
+    Parameters
+    ----------
+    path : str
+        Local FITS file holding the PSF image (the job-directory PSF
+        products are detector-sampled, so ``oversampling`` is 1).
+    """
+    from photutils.psf import ImagePSF
+
+    psf_data, _ = _first_image_hdu(path)
+    total = float(np.nansum(psf_data))
+    if not np.isfinite(total) or total <= 0.0:
+        raise ValueError(f"PSF {path} has non-positive total {total}")
+    psf = ImagePSF(np.nan_to_num(psf_data) / total, flux=1.0, x_0=0.0, y_0=0.0,
+                   oversampling=oversampling)
+    psf.x_0.fixed = True
+    psf.y_0.fixed = True
+    return psf
+
+
+def psfphot(data, error, mask, psf, x, y, fit_shape=FIT_SHAPE):
+    """Forced PSF fluxes at fixed pixel positions: one vectorized
+    PSFPhotometry call over every position.
+
+    Parameters
+    ----------
+    data, error, mask : numpy.ndarray
+        Image, its per-pixel uncertainty, and the unusable-pixel mask.
+    psf : ImagePSF
+        From :func:`load_psf`, positions fixed.
+    x, y : array_like
+        1-based pixel positions to fit.
+    fit_shape : tuple of int
+        Fit region around each position.
+
+    Returns
+    -------
+    flux, fluxerr : numpy.ndarray of float
+        In the order of ``x``; NaN where the fit failed.
+    flags : numpy.ndarray of int
+        photutils' flags for the fit, plus ``FLAG_NONFINITE`` when the
+        flux or its error is not finite.
+    """
+    from astropy.table import QTable
+    from photutils.psf import PSFPhotometry
+
+    x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
+    if len(x) == 0:
+        empty = np.zeros(0, dtype=float)
+        return empty, empty.copy(), np.zeros(0, dtype=int)
+    # photutils works in 0-based array coordinates
+    init = QTable({"x_init": x - 1.0, "y_init": y - 1.0})
+    phot = PSFPhotometry(psf_model=psf, fit_shape=fit_shape,
+                         aperture_radius=max(fit_shape) / 2.0 + 0.5)
+    table = phot(data, error=error, mask=mask, init_params=init)
+    flux = np.asarray(table["flux_fit"], dtype=float)
+    fluxerr = np.asarray(table["flux_err"], dtype=float)
+    flags = np.asarray(table["flags"], dtype=int)
+    bad = ~np.isfinite(flux) | ~np.isfinite(fluxerr)
+    flags[bad] |= FLAG_NONFINITE
+    return flux, fluxerr, flags
+
+
+def forced_photometry(image_path, psf_path, positions, rid, product, uncert_path=None,
+                      gain=None, fit_shape=FIT_SHAPE, margin=STAMP_MARGIN_PX):
+    """Forced PSF photometry of one staged image at a set of sky positions.
+
+    Parameters
+    ----------
+    image_path, psf_path : str
+        Local FITS files: the image and its PSF.
+    positions : sequence of Position
+        Sky positions to measure; only those landing on the chip get a row.
+    rid : int
+        Identifier stamped on every row (the image's ``rid``).
+    product : {"diff", "science"}
+        Passed to :func:`error_array` when no uncertainty file is given.
+    uncert_path : str, optional
+        Per-pixel uncertainty file; see :func:`open_image`.
+    gain : float, optional
+        For the science-image Poisson term when the error is estimated.
+        Defaults to the header's ``GAIN`` when present.
+    fit_shape, margin
+        See :func:`psfphot` and :func:`project_positions`.
+
+    Returns
+    -------
+    list of Measurement
+        One per position that lands on the chip, in input order. A
+        position off the chip has no row; a position on the chip whose
+        fit fails has a row with NaN flux and non-zero flags.
+    """
+    positions = list(positions)
+    image = open_image(image_path, uncert_path=uncert_path)
+    error = image.error
+    if error is None:
+        if gain is None:
+            gain = image.header.get("GAIN")
+        error = error_array(image.data, product, gain=gain, mask=image.mask)
+    x, y, on_chip = project_positions(image.wcs, image.shape, positions, margin=margin)
+    idx = np.flatnonzero(on_chip)
+    if len(idx) == 0:
+        logger.info("forced_photometry: rid=%s none of %d positions on %s", rid, len(positions), image_path)
+        return []
+    psf = load_psf(psf_path)
+    flux, fluxerr, flags = psfphot(image.data, error, image.mask, psf, x[idx], y[idx], fit_shape=fit_shape)
+    rows = [Measurement(pos_id=positions[i].pos_id, rid=int(rid), x=float(x[i]), y=float(y[i]),
+                        flux=float(f), fluxerr=float(e), flags=int(g))
+            for i, f, e, g in zip(idx, flux, fluxerr, flags)]
+    logger.info("forced_photometry: rid=%s %d of %d positions on chip, %d flagged",
+                rid, len(rows), len(positions), int((flags != 0).sum()))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+
+#: Which image of each epoch to measure, and where its file and PSF are on
+#: the PrevImage record.
+IMAGE_PRODUCTS = {
+    "diff": ("diff_filename", "diff_psf"),
+    "science": ("sci_filename", "sci_psf"),
+}
+
+
+def run_prev_images(images, positions, stage, products=("diff", "science"), uncert_url=None,
+                    gain=None, fit_shape=FIT_SHAPE, margin=STAMP_MARGIN_PX, strict=False,
+                    delete_staged=True):
+    """Measure every position on every previous image, one file at a time.
+
+    A generator: for each image and each product it stages the image (and
+    its PSF), runs :func:`forced_photometry` on the positions that image
+    holds, yields the rows, and deletes the staged copy before moving on,
+    so memory and disk hold one image at a time.
+
+    Parameters
+    ----------
+    images : sequence of PrevImage
+        From :func:`find_prev_images`, ``position_index`` filled.
+    positions : sequence of Position
+        The list ``position_index`` indexes into.
+    stage : callable
+        ``stage(url) -> local path``; a plain path comes back unchanged
+        (e.g. ``AlertDataProvider._stage``). Must raise on failure.
+    products : sequence of {"diff", "science"}
+        Which image of each epoch to measure.
+    uncert_url : callable, optional
+        ``uncert_url(image, product) -> url or None`` naming the per-pixel
+        uncertainty product to stage alongside; None means estimate it
+        (see :func:`error_array`). The hook for the pipeline's uncertainty
+        images once they are trusted.
+    gain, fit_shape, margin
+        Passed to :func:`forced_photometry`.
+    strict : bool
+        False (default): a failure on one image-product is logged and
+        skipped, the run continues. True: it propagates.
+    delete_staged : bool
+        Remove staged copies after use (never the science PSF, which is
+        cached for the run, and never a file the caller passed as a plain
+        path).
+
+    Yields
+    ------
+    (PrevImage, str, list of Measurement)
+        The image, the product measured, and its rows (possibly empty),
+        with ``product`` and ``mjdobs`` stamped on every row.
+
+    Notes
+    -----
+    Every epoch's job directory holds a copy of the same science PSF for
+    its (band, SCA), under the same basename, so that file is staged once
+    per basename and reused. The difference PSF also repeats its basename
+    but is matched to its own epoch, so it is staged every time.
+    """
+    positions = list(positions)
+    sci_psf_cache: dict[str, str] = {}
+    n_failed = 0
+    for image in images:
+        subset = [positions[i] for i in np.asarray(image.position_index, dtype=int)]
+        if not subset:
+            continue
+        for product in products:
+            file_attr, psf_attr = IMAGE_PRODUCTS[product]
+            url, psf_url = getattr(image, file_attr), getattr(image, psf_attr)
+            staged = []
+            try:
+                local = stage(url); staged.append((url, local))
+                if product == "science":
+                    key = psf_url.rsplit("/", 1)[-1]
+                    if key not in sci_psf_cache or not os.path.exists(sci_psf_cache[key]):
+                        sci_psf_cache[key] = stage(psf_url)
+                    psf_local = sci_psf_cache[key]
+                else:
+                    psf_local = stage(psf_url); staged.append((psf_url, psf_local))
+                unc_local = None
+                unc = uncert_url(image, product) if uncert_url is not None else None
+                if unc is not None:
+                    unc_local = stage(unc); staged.append((unc, unc_local))
+                rows = forced_photometry(local, psf_local, subset, rid=image.rid, product=product,
+                                         uncert_path=unc_local, gain=gain,
+                                         fit_shape=fit_shape, margin=margin)
+                for row in rows:
+                    row.product = product
+                    row.mjdobs = image.mjdobs
+            except Exception:
+                n_failed += 1
+                if strict:
+                    raise
+                logger.exception("run_prev_images: rid=%s pid=%s product=%s failed; skipping",
+                                 image.rid, image.pid, product)
+                rows = None
+            finally:
+                if delete_staged:
+                    # stagers key local files by basename, so a staged copy
+                    # can share its path with a cached PSF: never delete those
+                    keep = set(sci_psf_cache.values())
+                    for src, path in staged:
+                        if path != src and path is not None and path not in keep and os.path.exists(path):
+                            os.remove(path)
+            if rows is not None:
+                yield image, product, rows
+    if n_failed:
+        logger.warning("run_prev_images: %d image-product measurements failed and were skipped", n_failed)
+
+
+def assemble_history(rows):
+    """Group measurements by position, in time order.
+
+    Parameters
+    ----------
+    rows : iterable of Measurement
+
+    Returns
+    -------
+    dict
+        ``pos_id -> list of Measurement`` sorted by ``mjdobs`` then
+        ``product``, so an epoch's difference and science measurements sit
+        together. Positions with no rows are absent.
+    """
+    history: dict[int, list[Measurement]] = {}
+    for row in rows:
+        history.setdefault(row.pos_id, []).append(row)
+    for rows_for_pos in history.values():
+        rows_for_pos.sort(key=lambda r: (r.mjdobs, r.product))
+    return history
+
+
+# ---------------------------------------------------------------------------
+# Entry point: one chip by hand
+# ---------------------------------------------------------------------------
+
+MEASUREMENT_FIELDS = ("pos_id", "rid", "product", "mjdobs", "x", "y", "flux", "fluxerr", "flags")
+
+
+def read_positions_csv(path):
+    """Positions from a CSV with columns ``pos_id, ra, dec`` (header row)."""
+    import csv
+
+    with open(path, newline="") as fh:
+        return [Position(int(r["pos_id"]), float(r["ra"]), float(r["dec"]))
+                for r in csv.DictReader(fh)]
+
+
+def write_measurements_csv(path, rows):
+    """Measurements to a CSV with MEASUREMENT_FIELDS as columns."""
+    import csv
+
+    with open(path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(MEASUREMENT_FIELDS)
+        for r in rows:
+            writer.writerow([getattr(r, f) for f in MEASUREMENT_FIELDS])
+
+
+def main(argv=None):
+    """Forced photometry for one chip: ``--pid`` names the alerting
+    difference image, ``--positions`` the CSV of positions to measure.
+
+    Uses the live database (DB* environment variables, as RAPIDDB does)
+    and S3 through the alert provider's staging. Writes one CSV row per
+    measurement.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument("--pid", type=int, required=True, help="diffimages.pid of the alerting chip")
+    parser.add_argument("--positions", required=True, help="CSV with pos_id, ra, dec")
+    parser.add_argument("--out", required=True, help="output CSV of measurements")
+    parser.add_argument("--window-days", type=float, default=30.0,
+                        help="look back this many days before the chip's mjdobs (default 30)")
+    parser.add_argument("--products", default="diff,science", help="comma-separated: diff, science")
+    parser.add_argument("--same-band", action="store_true", help="restrict to the chip's filter")
+    parser.add_argument("--strict", action="store_true", help="stop at the first failed image")
+    args = parser.parse_args(argv)
+
+    from database.modules.utils.rapid_db import RAPIDDB
+    from alerts.providers import AlertDataProvider
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    db = RAPIDDB()
+    if db.conn is None:
+        raise SystemExit("could not connect to the database (exit_code %s)" % db.exit_code)
+    provider = AlertDataProvider(db)
+    (chip,) = provider._query("""
+        SELECT d.ra0, d.dec0, d.fid, d.ppid, l.mjdobs
+        FROM diffimages d JOIN l2files l ON l.rid = d.rid WHERE d.pid = %s""", (args.pid,))
+    positions = read_positions_csv(args.positions)
+    images = find_prev_images(provider._query, positions, chip["ra0"], chip["dec0"],
+                              fid=chip["fid"] if args.same_band else None, ppid=chip["ppid"],
+                              mjd_lo=chip["mjdobs"] - args.window_days, mjd_hi=chip["mjdobs"] + 1e-6)
+    all_rows = []
+    for _, _, rows in run_prev_images(images, positions, provider._stage,
+                                      products=tuple(p.strip() for p in args.products.split(",")),
+                                      strict=args.strict):
+        all_rows.extend(rows)
+    write_measurements_csv(args.out, all_rows)
+    history = assemble_history(all_rows)
+    logger.info("main: pid=%d, %d positions, %d images, %d measurements for %d positions -> %s",
+                args.pid, len(positions), len(images), len(all_rows), len(history), args.out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
