@@ -390,6 +390,19 @@ def get_datetime_of_last_file_written_to_bucket(path):
     return local_time,last_file
 
 
+def get_proc_subdir(proc_date,proc_req):
+
+    '''
+    S3 key prefix under which all files of a single processing request are filed:
+    "<proc_date>/req<reqid>".  The req<reqid> level keeps two processing requests
+    for the same processing date from overwriting each other's files.  The reqid
+    is the primary key of the ProcReqs database record that the VPO creates, and
+    it reaches the pipeline codes through the PROCREQ environment variable.
+    '''
+
+    return proc_date + "/req" + str(proc_req)
+
+
 def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names):
 
     '''
@@ -1971,12 +1984,12 @@ def addHistoryLinesToFITSHeader(fits_filename,
 # Touch done file locally.  Upload done file to S3 bucket.
 ##################################################################################################
 
-def write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client):
+def write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_subdir,jid,s3_client):
 
     touch_cmd = ['touch', done_filename]
     exitcode_from_touch = execute_command(touch_cmd)
 
-    s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
+    s3_object_name_done_filename = proc_subdir + "/jid" + str(jid) + "/" + done_filename
     filenames = [done_filename]
     objectnames = [s3_object_name_done_filename]
     upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)

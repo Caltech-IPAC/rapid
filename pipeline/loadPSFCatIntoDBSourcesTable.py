@@ -72,6 +72,24 @@ if proc_date is None:
     exit(64)
 
 
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates, and it subdivides the processing date in the S3
+# buckets, so that two processing requests for the same processing date do not
+# overwrite each other's files.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+
+# S3 key prefix that this processing request files all of its objects under.
+
+proc_subdir = util.get_proc_subdir(proc_date,proc_req)
+
+
 # Set DONTCHECKDONEFILE to skip existence-checking of the source_dbload_jid<jid>.done S3 bucket file.
 
 skip_done_check = os.getenv('DONTCHECKDONEFILE')
@@ -427,7 +445,7 @@ def run_single_core_job(jids,meta_list,index_thread):
             # This is done by attempting to download the done file.  Regardless the sub
             # always returns the filename and subdirs by parsing the s3_full_name.
 
-            s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload"  + "_jid" +  str(jid)  + ".done"
+            s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/source_dbload"  + "_jid" +  str(jid)  + ".done"
             done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
             if do_done_check and downloaded_from_bucket:
@@ -456,11 +474,11 @@ def run_single_core_job(jids,meta_list,index_thread):
 
             output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
-            s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
+            s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
 
             output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
-            s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
+            s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
 
 
             # isdiffpos = "false"
@@ -470,11 +488,11 @@ def run_single_core_job(jids,meta_list,index_thread):
 
             output_psfcat_filename_negative_for_jid = output_psfcat_filename_negative_to_use.replace(".txt",f"_jid{jid}.txt")
 
-            s3_full_name_psfcat_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_negative_to_use
+            s3_full_name_psfcat_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" +  output_psfcat_filename_negative_to_use
 
             output_psfcat_finder_filename_negative_for_jid = output_psfcat_finder_filename_negative_to_use.replace(".txt",f"_jid{jid}.txt")
 
-            s3_full_name_psfcat_finder_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_negative_to_use
+            s3_full_name_psfcat_finder_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_negative_to_use
 
 
             # Perform parallel S3-bucket downloads:
@@ -598,7 +616,7 @@ def run_single_core_job(jids,meta_list,index_thread):
 
             # Touch done file.  Upload done file to S3 bucket.
 
-            util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
+            util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_subdir,jid,s3_client)
 
             fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
 

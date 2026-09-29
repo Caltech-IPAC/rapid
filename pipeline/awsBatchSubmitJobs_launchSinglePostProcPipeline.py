@@ -59,6 +59,24 @@ if proc_date is None:
     exit(64)
 
 
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates, and it subdivides the processing date in the S3
+# buckets, so that two processing requests for the same processing date do not
+# overwrite each other's files.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+
+# S3 key prefix that this processing request files all of its objects under.
+
+proc_subdir = util.get_proc_subdir(proc_date,proc_req)
+
+
 # RAPID_JOB_ID of pipeline job.  In this case, it is the jid under which the science pipeline already ran.
 
 jid = os.getenv('RAPID_JOB_ID')
@@ -181,6 +199,10 @@ def submit_job_to_aws_batch(proc_date,
                     'value': proc_date
                 },
                 {
+                    'name': 'PROCREQ',
+                    'value': proc_req
+                },
+                {
                     'name': 'RAPID_JOB_ID',
                     'value': str(jid)
                 },
@@ -286,7 +308,7 @@ if __name__ == '__main__':
 
     # Insert or update record in Jobs database table and return job ID.
 
-    jid_postproc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid)
+    jid_postproc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid,proc_req)
 
     if dbh.exit_code >= 64:
         dbh.close()
@@ -298,7 +320,7 @@ if __name__ == '__main__':
     job_config_ini_file_filename = postproc_job_config_filename_base + str(jid) + ".ini"
     job_config_ini_file = rapid_work + "/" + job_config_ini_file_filename
     job_info_s3_bucket = job_info_s3_bucket_base
-    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
+    job_config_ini_file_s3_bucket_object_name = proc_subdir + "/" + job_config_ini_file_filename
 
     print("job_config_ini_file_filename =",job_config_ini_file_filename)
     print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucket_object_name)

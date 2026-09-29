@@ -17,7 +17,7 @@ fp_run, summary):
   measure (--run; needs the full RAPID pipeline container + AWS + DB)
       Actually executes pipeline/forcedPhotometryForField.py for batches
       of surveyed object positions (request CSVs written with
-      reqid = aid), at several batch sizes. Batch-size variation
+      fpreqid = aid), at several batch sizes. Batch-size variation
       separates the fixed per-field cost (staging every overlapping
       epoch from S3) from the marginal per-position cost -- the two
       numbers that decide the architecture:
@@ -303,7 +303,7 @@ def parse_elapsed_phases(stdout_text):
 
 
 def count_lc_rows(path):
-    """(rows, valid_rows) of one rapid_req<reqid>_lc.txt: data lines
+    """(rows, valid_rows) of one rapid_fpreq<fpreqid>_lc.txt: data lines
     after the column-name line, and those whose psfflux is not the
     no-measurement sentinel."""
     columns = None
@@ -332,7 +332,7 @@ def directory_bytes(path):
 
 
 def run_forced_phot(field, picks, workdir, timeout, log):
-    """Execute one FP backend job for `picks` (reqid := aid -- the
+    """Execute one FP backend job for `picks` (fpreqid := aid -- the
     convention proposed for alert integration) and record an fp_run.
     The scratch directory is kept for inspection."""
     scratch = tempfile.mkdtemp(prefix=f"fp_field{field}_n{len(picks)}_",
@@ -340,7 +340,7 @@ def run_forced_phot(field, picks, workdir, timeout, log):
     csv_path = os.path.join(scratch, "input_sky_positions.txt")
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["reqid", "ra", "dec"])
+        writer.writerow(["fpreqid", "ra", "dec"])
         for position in picks:
             writer.writerow([position["aid"], position["ra"],
                              position["dec"]])
@@ -372,7 +372,7 @@ def run_forced_phot(field, picks, workdir, timeout, log):
                 if diffimglist.is_file() else None)
     lightcurves = {}
     for position in picks:
-        lc_path = Path(scratch) / f"rapid_req{position['aid']}_lc.txt"
+        lc_path = Path(scratch) / f"rapid_fpreq{position['aid']}_lc.txt"
         if lc_path.is_file():
             rows, valid = count_lc_rows(lc_path)
             lightcurves[str(position["aid"])] = {"rows": rows,

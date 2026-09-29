@@ -32,13 +32,14 @@ The forced-photometry backend should be executed inside a RAPID-pipeline contain
 A set of one or more sky positions must be in same field (a.k.a sky tile) for a
 given forced-photometry backend execution.
 The PostgreSQL database table called ``Fields`` defines field centers and corners for the entire sky.
-For now, the ``reqid`` is just an arbitrary unique index.
+For now, the ``fpreqid`` (forced-photometry request ID) is just an arbitrary
+unique index.  It is unrelated to the ``reqid`` of the ``ProcReqs`` database table.
 
 First, set up a text file with input sky positions of interest::
 
     vi input_sky_positions.txt
 
-    reqid,ra,dec
+    fpreqid,ra,dec
     1,8.573549,-42.316955
     2,8.592243,-42.298079
     3,8.5593654,-42.272997
@@ -83,9 +84,9 @@ The forced-photometry lightcurve files produced in the above backend-execution e
 
 .. code-block::
 
-    rapid_req1_lc.txt
-    rapid_req2_lc.txt
-    rapid_req3_lc.txt
+    rapid_fpreq1_lc.txt
+    rapid_fpreq2_lc.txt
+    rapid_fpreq3_lc.txt
 
 These output files contain a table with useful columns of pertinent metadata.
 Each table row is a lightcurve data point.  The table contains

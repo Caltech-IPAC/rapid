@@ -270,7 +270,7 @@ if __name__ == '__main__':
 
     for rid in rid_list:
 
-        query = f"SELECT jid FROM jobs " +\
+        query = f"SELECT jid,reqid FROM jobs " +\
             f"WHERE rid = {rid} AND ppid = 15;"
 
         sql_queries = []
@@ -282,10 +282,26 @@ if __name__ == '__main__':
         if n_records > 1:
             print(f"More than one record returned when querying for jid from jobs table (n_records={n_records}); quitting...")
 
+        if n_records == 0:
+            print(f"*** Warning: No Jobs record for rid={rid} and ppid=15; skipping...")
+            continue
+
         for record in records:
             jid = record[0]
+            reqid = record[1]
 
-        s3_url = f"s3://rapid-product-files/{proc_date}/jid{jid}"
+
+        # The reqid of the processing request that ran the job gives the S3 subdirectory
+        # of its products.  Jobs that ran before the processing request subdivided the
+        # processing date have reqid = NULL, and their products are directly under the
+        # processing date.
+
+        if reqid is None:
+            proc_subdir = proc_date
+        else:
+            proc_subdir = util.get_proc_subdir(proc_date,reqid)
+
+        s3_url = f"s3://rapid-product-files/{proc_subdir}/jid{jid}"
 
         print(f"=====>s3_url = {s3_url}")
 

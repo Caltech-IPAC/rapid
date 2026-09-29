@@ -214,7 +214,7 @@ def compute_diffimage_uncertainty(sca_gain,
 def gainMatchScienceAndReferenceImages(s3_client,
                                        product_s3_bucket,
                                        jid,
-                                       job_proc_date,
+                                       proc_subdir,
                                        filename_sci_image,
                                        filename_sci_uncert,
                                        filename_scigainmatchsexcat_catalog,
@@ -370,10 +370,10 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     if upload_intermediate_products:
 
-        scigainmatchsexcat_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+        scigainmatchsexcat_catalog_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" +\
                                                            filename_scigainmatchsexcat_catalog
 
-        refgainmatchsexcat_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+        refgainmatchsexcat_catalog_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" +\
                                                            filename_refgainmatchsexcat_catalog
 
 

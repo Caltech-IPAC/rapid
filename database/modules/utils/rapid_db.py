@@ -1510,7 +1510,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def start_job(self,ppid,fid,expid,field,sca,rid,machine='null',slurm='null'):
+    def start_job(self,ppid,fid,expid,field,sca,rid,reqid,machine='null',slurm='null'):
 
         '''
         Insert or update record in Jobs database table.  Return job ID.
@@ -1530,7 +1530,8 @@ class RAPIDDB:
             "cast(TEMPLATE_SCA as smallint)," +\
             "cast(TEMPLATE_RID as integer), " +\
             "cast(TEMPLATE_MACHINE as smallint), " +\
-            "cast(TEMPLATE_SLURM as integer)) as jid;"
+            "cast(TEMPLATE_SLURM as integer), " +\
+            "cast(TEMPLATE_REQID as integer)) as jid;"
 
 
         # Query database.
@@ -1541,6 +1542,7 @@ class RAPIDDB:
         print('----> field = {}'.format(field))
         print('----> sca = {}'.format(sca))
         print('----> rid = {}'.format(rid))
+        print('----> reqid = {}'.format(reqid))
 
         ppid_str = str(ppid)
         fid_str = str(fid)
@@ -1548,6 +1550,7 @@ class RAPIDDB:
         field_str = str(field)
         sca_str = str(sca)
         rid_str = str(rid)
+        reqid_str = str(reqid)
 
         rep = {"TEMPLATE_PPID": ppid_str,
                "TEMPLATE_FID": fid_str,
@@ -1558,6 +1561,7 @@ class RAPIDDB:
         rep["TEMPLATE_RID"] = rid_str
         rep["TEMPLATE_MACHINE"] = str(machine)
         rep["TEMPLATE_SLURM"] = str(slurm)
+        rep["TEMPLATE_REQID"] = reqid_str
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))

@@ -1271,7 +1271,8 @@ create function startJob (
     sca_            smallint,
     rid_            integer,
     machine_        smallint,
-    slurm_          integer
+    slurm_          integer,
+    reqid_          integer
 )
     returns integer as $$
 
@@ -1317,6 +1318,7 @@ create function startJob (
                  rid,
                  machine,
                  slurm,
+                 reqid,
                  launched)
                 values
                 (ppid_,
@@ -1327,6 +1329,7 @@ create function startJob (
                  rid_,
                  machine_,
                  slurm_,
+                 reqid_,
                  now())
                 returning jid into strict jid_;
                 exception
@@ -1343,6 +1346,7 @@ create function startJob (
             update Jobs
             set machine = machine_,
                 slurm = slurm_,
+                reqid = reqid_,
                 launched = now(),
                 started = null,
                 ended = null,

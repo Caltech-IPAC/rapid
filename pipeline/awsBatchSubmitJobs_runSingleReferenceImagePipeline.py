@@ -77,6 +77,24 @@ if job_proc_date is None:
     exit(64)
 
 
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates, and it subdivides the processing date in the S3
+# buckets, so that two processing requests for the same processing date do not
+# overwrite each other's files.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+
+# S3 key prefix that this processing request files all of its objects under.
+
+proc_subdir = util.get_proc_subdir(job_proc_date,proc_req)
+
+
 # RAPID_JOB_ID of pipeline job.
 
 jid = os.getenv('RAPID_JOB_ID')
@@ -140,6 +158,7 @@ if input_images_csv_file_s3_bucket_object_name is None:
 # Print out basic information for log file.
 
 print("job_proc_date =",job_proc_date)
+print("proc_req =",proc_req)
 print("jid =",jid)
 print("job_info_s3_bucket =",job_info_s3_bucket)
 print("job_config_ini_file_filename =",job_config_ini_file_filename)
@@ -316,7 +335,7 @@ if __name__ == '__main__':
                                                                              input_images_csv_file_s3_bucket_object_name,
                                                                              input_images_csv_filename,
                                                                              jid,
-                                                                             job_proc_date,
+                                                                             proc_subdir,
                                                                              awaicgen_dict,
                                                                              max_n_images_to_coadd,
                                                                              sca_gain,
@@ -381,7 +400,7 @@ if __name__ == '__main__':
         refimgsexcat_return_list = rfis.generateSExtractorReferenceImageCatalog(s3_client,
                                                                                 product_s3_bucket,
                                                                                 jid,
-                                                                                job_proc_date,
+                                                                                proc_subdir,
                                                                                 awaicgen_output_mosaic_image_file,
                                                                                 awaicgen_output_mosaic_uncert_image_file,
                                                                                 sextractor_refimage_dict,
@@ -397,7 +416,7 @@ if __name__ == '__main__':
         refimgpsfcat_return_list = rfis.generatePhotUtilsReferenceImageCatalog(s3_client,
                                                                                product_s3_bucket,
                                                                                jid,
-                                                                               job_proc_date,
+                                                                               proc_subdir,
                                                                                awaicgen_output_mosaic_image_file,
                                                                                awaicgen_output_mosaic_uncert_image_file,
                                                                                filename_refimage_psf,
@@ -498,7 +517,7 @@ if __name__ == '__main__':
     # Populate config-file dictionary for products.
 
     product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
-    product_config_ini_file_s3_bucket_object_name = job_proc_date + "/" + product_config_ini_filename
+    product_config_ini_file_s3_bucket_object_name = proc_subdir + "/" + product_config_ini_filename
 
     product_config = configparser.ConfigParser()
 
@@ -509,6 +528,7 @@ if __name__ == '__main__':
     product_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
     product_config['JOB_PARAMS']['jid'] = str(jid)
     product_config['JOB_PARAMS']['job_proc_date'] = job_proc_date
+    product_config['JOB_PARAMS']['proc_req'] = proc_req
     product_config['JOB_PARAMS']['verbose'] = str(verbose)
     product_config['JOB_PARAMS']['job_started'] = str(proc_pt_datetime_started)
 

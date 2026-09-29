@@ -23,7 +23,7 @@ def generateReferenceImage(s3_client,
                            input_images_csv_file_s3_bucket_object_name,
                            input_images_csv_filename,
                            jid,
-                           job_proc_date,
+                           proc_subdir,
                            awaicgen_dict,
                            max_n_images_to_coadd,
                            sca_gain,
@@ -317,7 +317,7 @@ def generateReferenceImage(s3_client,
     # It is needed to populate the PostgreSQL RefImImages database table.
 
     input_images_used_csv_file = "input_images_used_for_refimage_jid"+ str(jid) + ".csv"
-    input_images_used_csv_file_s3_bucket_object_name = job_proc_date + "/" + input_images_used_csv_file
+    input_images_used_csv_file_s3_bucket_object_name = proc_subdir + "/" + input_images_used_csv_file
 
     f = open(input_images_used_csv_file, "w")
     for csv_record in csv_records:
@@ -390,7 +390,7 @@ def generateReferenceImage(s3_client,
 
         for fname in files_to_upload:
 
-            s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/refiminputs/" + fname
+            s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/refiminputs/" + fname
 
             uploaded_to_bucket = True
 
@@ -416,11 +416,11 @@ def generateReferenceImage(s3_client,
     awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
     awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
     awaicgen_output_mosaic_uncert_image_file = awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
-    awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+    awaicgen_output_mosaic_image_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" +\
         awaicgen_dict["awaicgen_output_mosaic_image_file"]
-    awaicgen_output_mosaic_cov_map_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+    awaicgen_output_mosaic_cov_map_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" +\
         awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
-    awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+    awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" +\
         awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
 
 
@@ -509,7 +509,7 @@ def generateReferenceImage(s3_client,
 def generateSExtractorReferenceImageCatalog(s3_client,
                                             product_s3_bucket,
                                             jid,
-                                            job_proc_date,
+                                            proc_subdir,
                                             filename_refimage_image,
                                             filename_refimage_uncert,
                                             sextractor_refimage_dict,
@@ -537,7 +537,7 @@ def generateSExtractorReferenceImageCatalog(s3_client,
 
     # Upload reference-image catalog to S3 product bucket.
 
-    refimage_sextractor_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_catalog
+    refimage_sextractor_catalog_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" + filename_refimage_catalog
 
     if upload_to_s3_bucket:
 
@@ -700,7 +700,7 @@ def compute_cov5percent(reference_cov_map_filename):
 def generatePhotUtilsReferenceImageCatalog(s3_client,
                                            product_s3_bucket,
                                            jid,
-                                           job_proc_date,
+                                           proc_subdir,
                                            filename_refimage_image,
                                            filename_refimage_uncert,
                                            filename_refimage_psf,
@@ -835,7 +835,7 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
         # Upload reference-image photometry catalog to S3 product bucket.
 
-        refimage_photutils_photometry_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
+        refimage_photutils_photometry_catalog_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename
 
         if upload_to_s3_bucket:
 
@@ -862,7 +862,7 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
         # Upload reference-image finder catalog to S3 product bucket.
 
-        refimage_photutils_finder_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
+        refimage_photutils_finder_catalog_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
 
         if upload_to_s3_bucket:
 
@@ -891,7 +891,7 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
         if output_psfcat_parquet_filename is not None:
 
-            refimage_photutils_parquet_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
+            refimage_photutils_parquet_catalog_s3_bucket_object_name = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
 
             if upload_to_s3_bucket:
 

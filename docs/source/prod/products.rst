@@ -9,19 +9,31 @@ the RAPID-product S3 bucket with the processing date as a prefix::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
-For example, this command covers all jobs under processing date ``20260513``::
+For example, this command covers all processing requests under processing date ``20260513``::
 
     aws s3 ls --recursive s3://rapid-product-files/20260513
 
-Here are the available products for just one job (``jid=90828``) under that processing date::
+Under the processing date is one subdirectory per processing request, named ``req<reqid>``,
+where ``<reqid>`` is the primary key of the ``ProcReqs`` record that the virtual pipeline
+operator (VPO) creates when it starts the request.  This keeps two processing requests for
+the same processing date from overwriting each other's files::
 
-    aws s3 ls --recursive s3://rapid-product-files/20260513/jid90828
+    aws s3 ls --recursive s3://rapid-product-files/20260513/req412
+
+Each job records its processing request in the ``reqid`` column of the ``Jobs`` database
+table, so the products of a job can always be located from its database record.  Jobs that
+ran before the processing date was subdivided have ``reqid`` set to NULL, and their products
+are directly under the processing date, without a ``req<reqid>`` level.
+
+Here are the available products for just one job (``jid=90828``) under that processing request::
+
+    aws s3 ls --recursive s3://rapid-product-files/20260513/req412/jid90828
 
 Note that there is one science image differenced per job.
 
 The associated product config output file is::
 
-    aws s3 ls  --recursive s3://rapid-product-files/20260513/product_config_jid90828.ini
+    aws s3 ls  --recursive s3://rapid-product-files/20260513/req412/product_config_jid90828.ini
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
@@ -100,7 +112,7 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260520/jid90828/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260520/req412/jid90828/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the latest product files from the ``Open Universe sims``, download the following text file:
 
@@ -119,7 +131,7 @@ A simple Python script can be written to parse the listing and generate ``wget``
 The pipeline log files are also publicly accessible.  There is a log file for each science image processed.
 Here is a template for the log-file URL that corresponds to the above example::
 
-    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260513/rapid_pipeline_job_20260513_jid90828_log.txt
+    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260513/req412/rapid_pipeline_job_20260513_jid90828_log.txt
 
 
 Example Reference-Image FITS Header

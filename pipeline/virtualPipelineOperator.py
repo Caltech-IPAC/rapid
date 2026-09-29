@@ -461,6 +461,15 @@ if __name__ == '__main__':
             exit(exitcode_from_dbh)
 
 
+        # Load environment variable PROCREQ to specify the processing request.  All codes
+        # launched from here file their S3 objects under "<proc_date>/req<reqid>", so that
+        # two processing requests for the same processing date keep separate files.
+
+        os.environ['PROCREQ'] = str(reqid)
+
+        print("reqid =",reqid)
+
+
         # Launch reference-image pipelines.
 
         fname_out = "launch_reference_image_pipelines_code" + "_" + proc_date + ".out"

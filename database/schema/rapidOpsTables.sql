@@ -694,6 +694,7 @@ CREATE TABLE jobs (
     status smallint DEFAULT 0,
     slurm integer,
     awsbatchjobid varchar(64),
+    reqid integer,                                 -- ProcReqs record of the processing request that ran the job
     CONSTRAINT jobs_status_check CHECK (((status >= -1) AND (status <= 1)))
 );
 
@@ -723,6 +724,7 @@ CREATE INDEX jobs_status_idx ON jobs (status);
 CREATE INDEX jobs_exitcode_idx ON jobs (exitcode);
 CREATE INDEX jobs_machine_idx ON jobs (machine);
 CREATE INDEX jobs_started_idx ON jobs (started);
+CREATE INDEX jobs_reqid_idx ON jobs (reqid);
 
 
 -----------------------------

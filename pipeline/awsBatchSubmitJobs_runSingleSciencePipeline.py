@@ -91,6 +91,24 @@ if job_proc_date is None:
     exit(64)
 
 
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates, and it subdivides the processing date in the S3
+# buckets, so that two processing requests for the same processing date do not
+# overwrite each other's files.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+
+# S3 key prefix that this processing request files all of its objects under.
+
+proc_subdir = util.get_proc_subdir(job_proc_date,proc_req)
+
+
 # RAPID_JOB_ID of pipeline job.
 
 jid = os.getenv('RAPID_JOB_ID')
@@ -154,6 +172,7 @@ if input_images_csv_file_s3_bucket_object_name is None:
 # Print out basic information for log file.
 
 print("job_proc_date =",job_proc_date)
+print("proc_req =",proc_req)
 print("jid =",jid)
 print("job_info_s3_bucket =",job_info_s3_bucket)
 print("job_config_ini_file_filename =",job_config_ini_file_filename)
@@ -347,7 +366,7 @@ if __name__ == '__main__':
 
     # Upload science image to product S3 bucket.
 
-    s3_object_name_science_image = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename_gz
+    s3_object_name_science_image = proc_subdir + "/jid" + str(jid) + "/" + science_image_filename_gz
 
     if upload_to_s3_bucket:
 
@@ -451,7 +470,7 @@ if __name__ == '__main__':
                                                                              input_images_csv_file_s3_bucket_object_name,
                                                                              input_images_csv_filename,
                                                                              jid,
-                                                                             job_proc_date,
+                                                                             proc_subdir,
                                                                              awaicgen_dict,
                                                                              max_n_images_to_coadd,
                                                                              sca_gain,
@@ -524,7 +543,7 @@ if __name__ == '__main__':
         refimgsexcat_return_list = rfis.generateSExtractorReferenceImageCatalog(s3_client,
                                                                                 product_s3_bucket,
                                                                                 jid,
-                                                                                job_proc_date,
+                                                                                proc_subdir,
                                                                                 awaicgen_output_mosaic_image_file,
                                                                                 awaicgen_output_mosaic_uncert_image_file,
                                                                                 sextractor_refimage_dict,
@@ -547,7 +566,7 @@ if __name__ == '__main__':
         refimgpsfcat_return_list = rfis.generatePhotUtilsReferenceImageCatalog(s3_client,
                                                                                product_s3_bucket,
                                                                                jid,
-                                                                               job_proc_date,
+                                                                               proc_subdir,
                                                                                awaicgen_output_mosaic_image_file,
                                                                                awaicgen_output_mosaic_uncert_image_file,
                                                                                filename_refimage_psf,
@@ -658,7 +677,7 @@ if __name__ == '__main__':
     # Populate config-file dictionary for products.
 
     product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
-    product_config_ini_file_s3_bucket_object_name = job_proc_date + "/" + product_config_ini_filename
+    product_config_ini_file_s3_bucket_object_name = proc_subdir + "/" + product_config_ini_filename
 
     product_config = configparser.ConfigParser()
 
@@ -669,6 +688,7 @@ if __name__ == '__main__':
     product_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
     product_config['JOB_PARAMS']['jid'] = str(jid)
     product_config['JOB_PARAMS']['job_proc_date'] = job_proc_date
+    product_config['JOB_PARAMS']['proc_req'] = proc_req
     product_config['JOB_PARAMS']['verbose'] = str(verbose)
     product_config['JOB_PARAMS']['job_started'] = str(proc_pt_datetime_started)
 
@@ -906,8 +926,8 @@ if __name__ == '__main__':
         # (The image with fake sources is uploaded downstream in the pipeline.)
 
         product_s3_bucket = product_s3_bucket_base
-        s3_object_name_science_image_filename = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename
-        s3_object_name_injection_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_injection_catalog
+        s3_object_name_science_image_filename = proc_subdir + "/jid" + str(jid) + "/" + science_image_filename
+        s3_object_name_injection_catalog = proc_subdir + "/jid" + str(jid) + "/" + filename_injection_catalog
 
         filenames = [science_image_filename,
                      filename_injection_catalog]
@@ -1095,7 +1115,7 @@ if __name__ == '__main__':
     scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin = dfis.gainMatchScienceAndReferenceImages(s3_client,
                                                                                                  product_s3_bucket,
                                                                                                  jid,
-                                                                                                 job_proc_date,
+                                                                                                 proc_subdir,
                                                                                                  filename_bkg_subbed_science_image,
                                                                                                  reformatted_science_uncert_image_filename,
                                                                                                  filename_scigainmatchsexcat_catalog,
@@ -1208,13 +1228,13 @@ if __name__ == '__main__':
     # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
 
     product_s3_bucket = product_s3_bucket_base
-    s3_object_name_reformatted_science_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_image_filename
-    s3_object_name_reformatted_science_uncert_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_uncert_image_filename
-    s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
-    s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
-    s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
-    s3_object_name_output_resampled_reference_cov_map = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_cov_map
-    s3_object_name_output_resampled_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
+    s3_object_name_reformatted_science_image_filename = proc_subdir + "/jid" + str(jid) + "/" + reformatted_science_image_filename
+    s3_object_name_reformatted_science_uncert_image_filename = proc_subdir + "/jid" + str(jid) + "/" + reformatted_science_uncert_image_filename
+    s3_object_name_sci_fits_file_with_pv = proc_subdir + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
+    s3_object_name_ref_fits_file_with_pv = proc_subdir + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
+    s3_object_name_output_resampled_reference_image = proc_subdir + "/jid" + str(jid) + "/" + output_resampled_reference_image
+    s3_object_name_output_resampled_reference_cov_map = proc_subdir + "/jid" + str(jid) + "/" + output_resampled_reference_cov_map
+    s3_object_name_output_resampled_reference_uncert_image = proc_subdir + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
 
     filenames = [reformatted_science_image_filename,
                  reformatted_science_uncert_image_filename,
@@ -1761,31 +1781,31 @@ if __name__ == '__main__':
     # Upload intermediate and final FITS files to product S3 bucket.
 
     product_s3_bucket = product_s3_bucket_base
-    s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_masked
-    s3_object_name_diffimage_unc_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_unc_masked
-    s3_object_name_diffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog
-    s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf
-    s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked
-    s3_object_name_bkg_subbed_science_image = job_proc_date + "/jid" + str(jid) + "/" + filename_bkg_subbed_science_image
-    s3_object_name_output_resampled_gainmatched_reference_image = job_proc_date + "/jid" + str(jid) + "/" + \
+    s3_object_name_diffimage = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_masked
+    s3_object_name_diffimage_unc_masked = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_unc_masked
+    s3_object_name_diffimage_catalog = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog
+    s3_object_name_diffpsf = proc_subdir + "/jid" + str(jid) + "/" + filename_diffpsf
+    s3_object_name_scorrimage = proc_subdir + "/jid" + str(jid) + "/" + filename_scorrimage_masked
+    s3_object_name_bkg_subbed_science_image = proc_subdir + "/jid" + str(jid) + "/" + filename_bkg_subbed_science_image
+    s3_object_name_output_resampled_gainmatched_reference_image = proc_subdir + "/jid" + str(jid) + "/" + \
                                                                   output_resampled_gainmatched_reference_image
-    s3_object_name_output_resampled_gainmatched_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + \
+    s3_object_name_output_resampled_gainmatched_reference_uncert_image = proc_subdir + "/jid" + str(jid) + "/" + \
                                                                   output_resampled_gainmatched_reference_uncert_image
-    s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
-    s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
-    s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
+    s3_object_name_output_psfcat_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename
+    s3_object_name_output_psfcat_finder_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
+    s3_object_name_output_psfcat_residual_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
 
-    s3_object_name_diffimage_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_masked_negative
-    s3_object_name_diffimage_catalog_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog_negative
-    s3_object_name_scorrimage_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked_negative
-    s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
-    s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
-    s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
-    s3_object_name_sciimage_psf_normalized = job_proc_date + "/jid" + str(jid) + "/" + filename_sciimage_psf_normalized
-    s3_object_name_refimage_psf = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_psf
+    s3_object_name_diffimage_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_masked_negative
+    s3_object_name_diffimage_catalog_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog_negative
+    s3_object_name_scorrimage_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_scorrimage_masked_negative
+    s3_object_name_output_psfcat_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
+    s3_object_name_output_psfcat_finder_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
+    s3_object_name_output_psfcat_residual_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
+    s3_object_name_sciimage_psf_normalized = proc_subdir + "/jid" + str(jid) + "/" + filename_sciimage_psf_normalized
+    s3_object_name_refimage_psf = proc_subdir + "/jid" + str(jid) + "/" + filename_refimage_psf
 
-    s3_object_name_output_psfcat_parquet_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
-    s3_object_name_output_psfcat_parquet_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename_negative
+    s3_object_name_output_psfcat_parquet_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
+    s3_object_name_output_psfcat_parquet_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename_negative
 
 
     filenames = [filename_diffimage_masked,
@@ -2045,13 +2065,13 @@ if __name__ == '__main__':
             # Upload SFFT-product FITS files to product S3 bucket.
 
             product_s3_bucket = product_s3_bucket_base
-            s3_object_name_sfftdiffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage
-            s3_object_name_sfftsoln = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftsoln
-            s3_object_name_cconvdiff = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff
-            s3_object_name_sfftdiffimage_unc_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc_masked
-            s3_object_name_sfftdiffimage_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_negative
-            s3_object_name_cconvdiff_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff_negative
-            s3_object_name_sfftdiffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffpsf
+            s3_object_name_sfftdiffimage = proc_subdir + "/jid" + str(jid) + "/" + filename_sfftdiffimage
+            s3_object_name_sfftsoln = proc_subdir + "/jid" + str(jid) + "/" + filename_sfftsoln
+            s3_object_name_cconvdiff = proc_subdir + "/jid" + str(jid) + "/" + filename_cconvdiff
+            s3_object_name_sfftdiffimage_unc_masked = proc_subdir + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc_masked
+            s3_object_name_sfftdiffimage_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_sfftdiffimage_negative
+            s3_object_name_cconvdiff_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_cconvdiff_negative
+            s3_object_name_sfftdiffpsf = proc_subdir + "/jid" + str(jid) + "/" + filename_sfftdiffpsf
 
             filenames = [filename_sfftdiffimage,
                          filename_sfftsoln,
@@ -2191,8 +2211,8 @@ if __name__ == '__main__':
             # Upload SFFT-product FITS files to product S3 bucket.
 
             product_s3_bucket = product_s3_bucket_base
-            s3_object_name_sfftdiffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
-            s3_object_name_sfftdiffimage_catalog_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog_negative
+            s3_object_name_sfftdiffimage_catalog = proc_subdir + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
+            s3_object_name_sfftdiffimage_catalog_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog_negative
 
             filenames = [filename_sfftdiffimage_sextractor_catalog,
                          filename_sfftdiffimage_sextractor_catalog_negative]
@@ -2464,16 +2484,16 @@ if __name__ == '__main__':
             # Upload SFFT-product FITS files to product S3 bucket.
 
             product_s3_bucket = product_s3_bucket_base
-            s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
-            s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
-            s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
-            s3_object_name_refimage_psf = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_psf
-            s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
-            s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
-            s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
+            s3_object_name_output_psfcat_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename
+            s3_object_name_output_psfcat_finder_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
+            s3_object_name_output_psfcat_residual_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
+            s3_object_name_refimage_psf = proc_subdir + "/jid" + str(jid) + "/" + filename_refimage_psf
+            s3_object_name_output_psfcat_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
+            s3_object_name_output_psfcat_finder_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
+            s3_object_name_output_psfcat_residual_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
 
-            s3_object_name_output_psfcat_parquet_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
-            s3_object_name_output_psfcat_parquet_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename_negative
+            s3_object_name_output_psfcat_parquet_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
+            s3_object_name_output_psfcat_parquet_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename_negative
 
             filenames = [output_psfcat_filename,
                          output_psfcat_finder_filename,
@@ -2580,8 +2600,8 @@ if __name__ == '__main__':
         # Upload naive-diffimage-product FITS file to product S3 bucket.
 
         product_s3_bucket = product_s3_bucket_base
-        s3_object_name_naive_diffimage_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_masked
-        s3_object_name_naive_diffimage_masked_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_masked_negative
+        s3_object_name_naive_diffimage_masked = proc_subdir + "/jid" + str(jid) + "/" + filename_naive_diffimage_masked
+        s3_object_name_naive_diffimage_masked_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_naive_diffimage_masked_negative
 
         filenames = [filename_naive_diffimage_masked,
                      filename_naive_diffimage_masked_negative]
@@ -2688,9 +2708,9 @@ if __name__ == '__main__':
         # Upload additional naive-diffimage-product FITS files to product S3 bucket.
 
         product_s3_bucket = product_s3_bucket_base
-        s3_object_name_naive_diffimage_unc_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_unc_masked
-        s3_object_name_naive_diffimage_sextractor_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_sextractor_catalog
-        s3_object_name_naive_diffimage_sextractor_catalog_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_sextractor_catalog_negative
+        s3_object_name_naive_diffimage_unc_masked = proc_subdir + "/jid" + str(jid) + "/" + filename_naive_diffimage_unc_masked
+        s3_object_name_naive_diffimage_sextractor_catalog = proc_subdir + "/jid" + str(jid) + "/" + filename_naive_diffimage_sextractor_catalog
+        s3_object_name_naive_diffimage_sextractor_catalog_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_naive_diffimage_sextractor_catalog_negative
 
         filenames = [filename_naive_diffimage_unc_masked,
                      filename_naive_diffimage_sextractor_catalog,
@@ -2934,12 +2954,12 @@ if __name__ == '__main__':
         # Upload naive PSF-fit catalogs for naive difference images to product S3 bucket.
 
         product_s3_bucket = product_s3_bucket_base
-        s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
-        s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
-        s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
-        s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
-        s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
-        s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
+        s3_object_name_output_psfcat_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename
+        s3_object_name_output_psfcat_finder_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
+        s3_object_name_output_psfcat_residual_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
+        s3_object_name_output_psfcat_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
+        s3_object_name_output_psfcat_finder_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
+        s3_object_name_output_psfcat_residual_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
 
         filenames = [output_psfcat_filename,
                      output_psfcat_finder_filename,

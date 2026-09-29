@@ -62,6 +62,24 @@ if proc_date is None:
     exit(64)
 
 
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates, and it subdivides the processing date in the S3
+# buckets, so that two processing requests for the same processing date do not
+# overwrite each other's files.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+
+# S3 key prefix that this processing request files all of its objects under.
+
+proc_subdir = util.get_proc_subdir(proc_date,proc_req)
+
+
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
@@ -301,6 +319,10 @@ def submit_job_to_aws_batch(proc_date,
                 {
                     'name': 'JOBPROCDATE',
                     'value': proc_date
+                },
+                {
+                    'name': 'PROCREQ',
+                    'value': proc_req
                 },
                 {
                     'name': 'RAPID_JOB_ID',
@@ -624,7 +646,7 @@ if __name__ == '__main__':
     sca = 'null'
     expid = 'null'
 
-    jid = dbh.start_job(ppid_refimage,fid,expid,field,sca,rid)
+    jid = dbh.start_job(ppid_refimage,fid,expid,field,sca,rid,proc_req)
 
     print(f"jid = {jid}")
 
@@ -640,7 +662,7 @@ if __name__ == '__main__':
     infobits_refimage = None
     input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
     input_images_csv_file = rapid_work + "/" + input_images_csv_filename
-    input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
+    input_images_csv_file_s3_bucket_object_name = proc_subdir + "/" + input_images_csv_filename
 
     f = open(input_images_csv_file, "w")
     for csv_record in csv_records:
@@ -653,7 +675,7 @@ if __name__ == '__main__':
     job_config_ini_file_filename = job_config_filename_base + str(jid) + ".ini"
     job_config_ini_file = rapid_work + "/" + job_config_ini_file_filename
     job_info_s3_bucket = job_info_s3_bucket_base
-    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
+    job_config_ini_file_s3_bucket_object_name = proc_subdir + "/" + job_config_ini_file_filename
 
     job_config = configparser.ConfigParser()
 

@@ -50,6 +50,13 @@ Step 1
 
 Assume we process the data on April 4, 2025 (``20250404``).  This is the processing date.
 
+These steps run the pipeline codes by hand rather than through the virtual pipeline operator
+(VPO), so there is no ``ProcReqs`` database record created for you.  Pick the ``reqid`` of the
+processing request yourself and export it as ``PROCREQ`` (see Step 1); every step below files
+its S3 objects under ``<processing date>/req<reqid>/``, and every code quits with exit code 64
+if ``PROCREQ`` is not set.  Use the same value for all four steps, otherwise Step 2 and Step 4
+will not find the files that Step 1 and Step 3 wrote.
+
 Log into EC2 instance and, from root account (``sudo su``), perform Steps 1 through 4.
 
 Launch AWS Batch jobs for the RAPID science pipeline.
@@ -83,6 +90,7 @@ start and end observation datetimes (an observation date is distinctly different
    export PYTHONPATH=/code
    export PYTHONUNBUFFERED=1
    export ROMANTESSELLATIONDBNAME=/work/roman_tessellation_nside512.db
+   export PROCREQ=412
 
    cd /work
 
