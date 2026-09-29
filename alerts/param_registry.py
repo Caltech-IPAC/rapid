@@ -406,6 +406,14 @@ DIA_FORCED_SOURCE_PARAMS = (
                         STUB, _FP),
     Param("scienceFluxErr",    ["null", "float"], "Uncertainty in scienceFlux (stub) [nJy]",
                         STUB, _FP),
+    # TODO (2026-09-29): decide where the forced-position reference flux lives.
+    # Not here for now. It is one number per object per band (per reference
+    # version), so the natural home is the diaObject record; the case for
+    # repeating it in every diaForcedSource is that consumers of forced
+    # photometry want difference, science and reference flux side by side
+    # (Rubin instead carries templateFlux on DiaSource, measured at the
+    # DiaObject position). Either way it must be measured at the frozen
+    # forced-photometry position, not the detection position.
 
     # --- Time ---
     Param("midpointMjd",    "double",          "Effective mid-observation time (UTC scale) [MJD]",
