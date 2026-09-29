@@ -14,8 +14,8 @@ science-pipeline job (ppid=15) that ended on that date, the best difference imag
 is looked up and every alertable source on it goes into one Avro object-container
 archive, which is uploaded beside the job's other products:
 
-    s3://<product_s3_bucket_base>/<proc_date>/jid<N>/alerts_jid<N>.avro
-    s3://<product_s3_bucket_base>/<proc_date>/jid<N>/alerts_jid<N>_summary.json
+    s3://<product_s3_bucket_base>/<proc_date>/req<reqid>/jid<N>/alerts_jid<N>.avro
+    s3://<product_s3_bucket_base>/<proc_date>/req<reqid>/jid<N>/alerts_jid<N>_summary.json
 
 The summary JSON holds the production statistics for the chip (alerts.produce.BatchStats:
 alert count, bytes, history depth, cross-match states, cutouts present) and lists every
@@ -54,6 +54,7 @@ from dateutil import tz
 import boto3
 
 import database.modules.utils.rapid_db as db
+import modules.utils.rapid_pipeline_subs as util
 from alerts.cli import make_provider
 from alerts.ned_reader import DEFAULT_NED_SOURCE
 from alerts.produce import BatchStats, batch_produce, open_alert_archive
@@ -194,7 +195,7 @@ def limit_chips(chips, max_chips):
 # Per-chip production.
 #-------------------------------------------------------------------------------------------------------------
 
-def chip_product_names(proc_date, chip, settings):
+def chip_product_names(chip, settings):
 
     '''
     Local filenames and S3 object prefix of one chip's alert archive and summary.
@@ -204,7 +205,7 @@ def chip_product_names(proc_date, chip, settings):
 
     return {'archive_filename': base + ".avro",
             'summary_filename': base + "_summary.json",
-            's3_prefix': f"{proc_date}/jid{chip['jid']}/"}
+            's3_prefix': f"{settings['proc_subdir']}/jid{chip['jid']}/"}
 
 
 def produce_chip(provider, chip, settings, proc_date, work_dir):
@@ -214,7 +215,7 @@ def produce_chip(provider, chip, settings, proc_date, work_dir):
     A partially written archive is removed if production raises.
     '''
 
-    names = chip_product_names(proc_date, chip, settings)
+    names = chip_product_names(chip, settings)
     archive_path = os.path.join(work_dir, names['archive_filename'])
 
     stats = BatchStats(pid=chip['pid'])
@@ -309,12 +310,13 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
             for chip in my_chips:
 
                 chip_start_time = time.time()
-                names = chip_product_names(proc_date, chip, settings)
+                names = chip_product_names(chip, settings)
                 summary_path = os.path.join(work_dir, names['summary_filename'])
 
                 log.info("Chip start: jid=%s, pid=%s", chip['jid'], chip['pid'])
 
-                summary = {'swname': swname, 'swvers': swvers, 'proc_date': proc_date, **chip}
+                summary = {'swname': swname, 'swvers': swvers, 'proc_date': proc_date,
+                           'proc_req': settings['proc_req'], **chip}
 
                 try:
 
@@ -463,6 +465,21 @@ def main():
     print("proc_date =", proc_date)
 
 
+    # PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+    # record that the VPO creates, and it subdivides the processing date in the S3
+    # buckets, so that two processing requests for the same processing date do not
+    # overwrite each other's files.
+
+    proc_req = os.getenv('PROCREQ')
+
+    if proc_req is None:
+
+        print("*** Error: Env. var. PROCREQ not set; quitting...")
+        return EXIT_FATAL
+
+    print("proc_req =", proc_req)
+
+
     # Other required environment variables.
 
     rapid_sw = os.getenv('RAPID_SW')
@@ -497,6 +514,9 @@ def main():
     except (NotImplementedError, KeyError, ValueError) as e:
         print(f"*** Error reading [ALERTS] settings from {config_input_filename}: {e}; quitting...")
         return EXIT_FATAL
+
+    settings['proc_req'] = proc_req
+    settings['proc_subdir'] = util.get_proc_subdir(proc_date, proc_req)
 
     for key, value in settings.items():
         print(f"{key} = {value}")
@@ -613,6 +633,7 @@ def main():
     run_summary = {'swname': swname,
                    'swvers': swvers,
                    'proc_date': proc_date,
+                   'proc_req': proc_req,
                    'started': proc_pt_datetime_started,
                    'settings': settings,
                    **aggregate,

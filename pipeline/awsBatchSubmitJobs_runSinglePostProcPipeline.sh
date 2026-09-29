@@ -31,6 +31,12 @@ echo "AWS Batch job to run single RAPID post-processing pipeline."
 logfile="rapid_postproc_job_${JOBPROCDATE}_jid${RAPID_JOB_ID}_log.txt"
 echo "logfile = $logfile"
 
+# S3 subdirectory of the processing request, so that two processing requests for
+# the same processing date do not overwrite each other's log files.
+
+logdir="${JOBPROCDATE}/req${PROCREQ}"
+echo "logdir = $logdir"
+
 echo "Executing /usr/bin/python3.11 /code/pipeline/awsBatchSubmitJobs_runSinglePostProcPipeline.py >& $logfile"
 /usr/bin/python3.11 /code/pipeline/awsBatchSubmitJobs_runSinglePostProcPipeline.py >& $logfile
 
@@ -62,8 +68,8 @@ else
 fi
 
 
-echo "Executing aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile"
-aws s3 cp --quiet "$logfile" s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile
+echo "Executing aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${logdir}/$logfile"
+aws s3 cp --quiet "$logfile" s3://rapid-pipeline-logs/${logdir}/$logfile
 
 awss3cpexitcode=$?
 echo "awss3cpexitcode=$awss3cpexitcode"
@@ -73,7 +79,7 @@ then
 
     echo
     echo ##################################################################
-    echo "Successfully copied log file to s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile"
+    echo "Successfully copied log file to s3://rapid-pipeline-logs/${logdir}/$logfile"
     echo ##################################################################
     echo
 
@@ -82,7 +88,7 @@ else
 
     echo
     echo ##################################################################
-    echo "*** Error: Failed copying log file to s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile"
+    echo "*** Error: Failed copying log file to s3://rapid-pipeline-logs/${logdir}/$logfile"
     echo ##################################################################
     echo
 

@@ -47,6 +47,24 @@ if proc_date is None:
     exit(64)
 
 
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates, and it subdivides the processing date in the S3
+# buckets, so that two processing requests for the same processing date do not
+# overwrite each other's files.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+
+# S3 key prefix that this processing request files all of its objects under.
+
+proc_subdir = util.get_proc_subdir(proc_date,proc_req)
+
+
 # Inputs are observation start and end datetimes of exposures to be processed.
 # E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
 
@@ -285,7 +303,7 @@ if __name__ == '__main__':
         for record in records:
             jid = record[0]
 
-        s3_url = f"s3://rapid-product-files/{proc_date}/jid{jid}"
+        s3_url = f"s3://rapid-product-files/{proc_subdir}/jid{jid}"
 
         print(f"=====>s3_url = {s3_url}")
 

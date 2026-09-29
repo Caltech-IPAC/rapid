@@ -81,6 +81,26 @@ datearg = (sys.argv)[1]
 print("datearg =",datearg)
 
 
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates, and it subdivides the processing date in the S3
+# buckets, so that two processing requests for the same processing date do not
+# overwrite each other's files.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+print("proc_req =",proc_req)
+
+
+# S3 key prefix that this processing request files all of its objects under.
+
+proc_subdir = util.get_proc_subdir(datearg,proc_req)
+
+
 # Read environment variables.
 
 rapid_sw = os.getenv('RAPID_SW')
@@ -201,7 +221,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         # always returns the filename and subdirs by parsing the s3_full_name.
 
         s3_full_name_science_pipeline_done_file = \
-            "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + \
+            "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" + \
             job_config_filename_base +  str(jid)  + ".done"
         science_pipeline_done_filename,subdirs_done,downloaded_from_bucket = \
             util.download_file_from_s3_bucket(s3_client,
@@ -217,7 +237,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         # always returns the filename and subdirs by parsing the s3_full_name.
 
         s3_full_name_done_file = \
-            "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + \
+            "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" + \
             postproc_job_config_filename_base +  str(jid)  + ".done"
         done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
@@ -228,7 +248,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         # Download log file from S3 bucket.
 
-        s3_bucket_object_name = datearg + '/' + log_fname
+        s3_bucket_object_name = proc_subdir + '/' + log_fname
 
         fh.write("Downloading s3://{}/{} into {}...\n".format(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname))
 
@@ -241,7 +261,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         job_config_ini_filename = postproc_job_config_filename_base + str(jid) + ".ini"
 
-        s3_bucket_object_name = datearg + '/' + job_config_ini_filename
+        s3_bucket_object_name = proc_subdir + '/' + job_config_ini_filename
 
         fh.write("Downloading s3://{}/{} into {}...\n".format(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename))
 
@@ -287,7 +307,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         product_config_ini_filename = postproc_product_config_filename_base + str(jid) + ".ini"
 
-        s3_bucket_object_name = datearg + '/' + product_config_ini_filename
+        s3_bucket_object_name = proc_subdir + '/' + product_config_ini_filename
 
         fh.write("Try downloading s3://{}/{} into {}...\n".format(product_s3_bucket_base,
                                                              s3_bucket_object_name,
@@ -416,7 +436,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         # Touch done file.  Upload done file to S3 bucket.
 
-        util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
+        util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_subdir,jid,s3_client)
 
 
         #####################################################################
