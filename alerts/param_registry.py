@@ -608,9 +608,7 @@ NED_MATCH_PARAMS = (
                                                "East of North [deg]",
                         IMPLEMENTED, _NED_SRC),
     Param("type",          ["null", "string"], "NED preferred object type (G, GPair, QSO, ...); null when NED "
-                                               "has not classified the entry. The host-candidate selection "
-                                               "applied at match time is providers.select_host_candidates, "
-                                               "recorded here so consumers can re-cut",
+                                               "has not classified the entry.",
                         IMPLEMENTED, _NED_SRC, attr="ptype"),
     Param("z",             ["null", "float"],  "NED preferred redshift; null when NED has none. Frame is as "
                                                "published (assumed heliocentric, not CMB-corrected -- NED does "
