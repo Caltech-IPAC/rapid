@@ -87,7 +87,17 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         scvx=in_tree["roman"]["meta"]["ephemeris"]["velocity_x"]/kete.constants.AU_KM*3600*24.
         scvy=in_tree["roman"]["meta"]["ephemeris"]["velocity_y"]/kete.constants.AU_KM*3600*24.
         scvz=in_tree["roman"]["meta"]["ephemeris"]["velocity_z"]/kete.constants.AU_KM*3600*24.
-    
+
+        #The observer MUST be placed at exposure.mid_time (image_time above),
+        #the instant the asteroid states are propagated to: evaluating at any
+        #other time moves the predicted positions by the objects' own motion
+        #(~0.3 arcsec per 30 s for the main belt, arcsec for NEOs).
+        eph_time=kete.Time.from_mjd(in_tree["roman"]["meta"]["ephemeris"]["time"],scaling="utc")
+        dt_days=image_time.jd-eph_time.jd
+        scx+=scvx*dt_days
+        scy+=scvy*dt_days
+        scz+=scvz*dt_days
+
         headerframe=in_tree["roman"]["meta"]["ephemeris"]["ephemeris_reference_frame"]
         if headerframe=="Ecliptic":
             frame=kete.Frames.Ecliptic
@@ -96,12 +106,22 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
             
         pos = kete.Vector([scx, scy, scz], frame=frame)
         vel = kete.Vector([scvx, scvy, scvz], frame=frame)
-        sc_state = kete.State("Roman-earth", image_time, pos, vel)
-        earth = kete.spice.get_state("Earth", image_time.jd).as_equatorial
-        
-        obs_pos=earth.pos+sc_state.pos        
-        obs_vel=earth.vel+sc_state.vel
-        obs_loc=kete.State("Roman-helio",image_time,obs_pos,obs_vel)
+        #meta.ephemeris is barycentric per the RAD schema (spatial_x/y/z:
+        #"barycentric coordinate of the Roman observatory", velocities "in a
+        #barycentric system"). kete FOVs want a heliocentric observer, so build
+        #the state on the solar system barycenter (NAIF 0) and re-center it on
+        #the Sun (NAIF 10). The previous code treated the vector as Earth-relative
+        #and added Earth's heliocentric state, which put the observer ~1 AU off.
+        #Verified on the 2026-08-07 SOC sim: re-centered vector lands ~1e3 km from
+        #Earth's heliocentric position (alerts/test/test_roman_ephemeris.py).
+        #TODO (2026-09-29): other simulations may not follow the RAD schema here.
+        #A sim that writes a geocentric (Earth- or L2-relative) or heliocentric
+        #vector, or leaves the block empty, would place the observer up to 1 AU
+        #from the truth and silently produce wrong predictions (offsets of
+        #degrees for main-belt objects). Check meta.ephemeris against Earth's
+        #barycentric position before trusting KONA output on a sim.
+        sc_state = kete.State("Roman",image_time,pos,vel,center_id=0)
+        obs_loc = sc_state.change_center(10)
     
         #Center the cone on this SCA's WCS reference point, not the V1 boresight:
         #the WFI is off-axis, so V1 sits ~0.5 deg from the array center and up to
