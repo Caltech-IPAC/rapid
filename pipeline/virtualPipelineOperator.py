@@ -21,7 +21,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.2"
+swvers = "1.3"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -33,6 +33,7 @@ register_science_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJ
 launch_postproc_pipelines_code = '/code/pipeline/awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py'
 register_postproc_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDBAfterPostProc.py'
 load_psfcat_into_db_sources_code = '/code/pipeline/loadPSFCatIntoDBSourcesTable.py'
+load_secat_into_db_xsources_code = '/code/pipeline/loadSECatIntoDBSourcesTable.py'
 crossmatch_sources_code = '/code/pipeline/crossMatchSources.py'
 compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForAstroObjects.py'
 prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
@@ -700,6 +701,30 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("VPO Elapsed time in seconds after loading Sources database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Launch script to load the SExtractor catalogs for both the positive and
+        # negative difference images into the database xsources tables.
+        #
+        # Environment variable JOBPROCDATE to specify processing date is required.
+
+        fname_out = "load_secat_into_db_xsources_code" + "_" + proc_date + ".out"
+        load_secat_into_db_xsources_cmd = [python_cmd,
+                                           load_secat_into_db_xsources_code]
+
+        exitcode_from_load_secat_into_db_xsources_cmd = util.execute_command(load_secat_into_db_xsources_cmd,fname_out)
+
+        if exitcode_from_load_secat_into_db_xsources_cmd >= 64:
+            print(f"*** Error: {load_secat_into_db_xsources_cmd} returned exit code = {exitcode_from_load_secat_into_db_xsources_cmd}; quitting...")
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after loading XSources database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
