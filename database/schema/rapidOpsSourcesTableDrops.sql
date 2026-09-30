@@ -56,3 +56,10 @@ DROP TABLE xmerges;
 -------------------
 
 DROP TABLE xastroobjects;
+
+
+-------------------
+-- XAstroObjectsMeta table
+-------------------
+
+DROP TABLE xastroobjectsmeta;

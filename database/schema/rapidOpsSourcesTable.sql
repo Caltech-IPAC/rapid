@@ -472,3 +472,33 @@ ALTER TABLE ONLY xastroobjects ADD CONSTRAINT xastroobjects_pkey PRIMARY KEY (xa
 -- REVOKE ALL ON TABLE xastroobjects_1 FROM rapidporole;
 -- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xastroobjects_1 TO rapidporole;
 ------------------------------------------------------------
+
+
+-----------------------------
+-- TABLE: XAstroObjectsMeta
+--
+-- Prototype table for the xastroobjectsmeta_<field> like-tables that
+-- computeStatisticsForXAstroObjects.py creates, populates and indexes.
+-- The SExtractor-catalog counterpart of astroobjectsmeta.
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE xastroobjectsmeta (
+    xaid bigint NOT NULL,
+    meanra double precision NOT NULL,           -- Mean RA
+    stdevra real NOT NULL,                      -- Standard deviation of RA
+    meandec double precision NOT NULL,          -- Mean Dec
+    stdevdec real NOT NULL,                     -- Standard deviation of Dec
+    meanflux real NOT NULL,                     -- Mean aperture flux (fluxap)
+    stdevflux real NOT NULL,                    -- Standard deviation of aperture flux
+    nsources smallint NOT NULL                  -- Total number of xsources (all filters)
+);
+
+ALTER TABLE xastroobjectsmeta OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY xastroobjectsmeta ADD CONSTRAINT xastroobjectsmeta_pkey PRIMARY KEY (xaid);
+
+CREATE INDEX xastroobjectsmeta_nsources_idx ON xastroobjectsmeta (nsources);

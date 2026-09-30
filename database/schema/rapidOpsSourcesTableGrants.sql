@@ -174,3 +174,23 @@ GRANT ALL ON TABLE xastroobjects TO GROUP rapidadminrole;
 
 REVOKE ALL ON TABLE xastroobjects FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xastroobjects TO rapidporole;
+
+
+-------------------
+-- XAstroObjectsMeta table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE xastroobjectsmeta FROM rapidreadrole;
+GRANT SELECT ON TABLE xastroobjectsmeta TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE xastroobjectsmeta FROM rapidadminrole;
+GRANT ALL ON TABLE xastroobjectsmeta TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE xastroobjectsmeta FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xastroobjectsmeta TO rapidporole;
