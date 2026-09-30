@@ -42,3 +42,17 @@ DROP TABLE merges;
 
 DROP TABLE xsources;
 DROP SEQUENCE xsources_xsid_seq;
+
+
+-------------------
+-- XMerges table
+-------------------
+
+DROP TABLE xmerges;
+
+
+-------------------
+-- XAstroObjects table
+-------------------
+
+DROP TABLE xastroobjects;

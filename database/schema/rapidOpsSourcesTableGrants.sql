@@ -134,3 +134,43 @@ GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xsources 
 
 REVOKE ALL ON SEQUENCE xsources_xsid_seq FROM rapidporole;
 GRANT USAGE ON SEQUENCE xsources_xsid_seq TO rapidporole;
+
+
+-------------------
+-- XMerges table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE xmerges FROM rapidreadrole;
+GRANT SELECT ON TABLE xmerges TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE xmerges FROM rapidadminrole;
+GRANT ALL ON TABLE xmerges TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE xmerges FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xmerges TO rapidporole;
+
+
+-------------------
+-- XAstroObjects table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE xastroobjects FROM rapidreadrole;
+GRANT SELECT ON TABLE xastroobjects TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE xastroobjects FROM rapidadminrole;
+GRANT ALL ON TABLE xastroobjects TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE xastroobjects FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xastroobjects TO rapidporole;
