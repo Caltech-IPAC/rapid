@@ -1,6 +1,18 @@
 RAPID Virtual Pipeline Operator
 ####################################################
 
+.. important::
+   The VPO is a work in progress and is not yet fully automated, though it is not far from
+   it.  What it already does, it does end to end: given a processing date, it runs a whole
+   processing request through all eighteen stages without further intervention.  What is
+   still missing is the automation around that.  The VPO must be started by hand for each
+   processing date, and the mode in which it would pick up the current date and keep running
+   on its own still contains test scaffolding (see the note at the end of this page).
+   Selecting the observation datetime range is still a manual decision, and failed pipelines
+   are not yet identified and rerun automatically.
+
+   Expect the details on this page to change as that work lands.
+
 Overview
 ************************************
 
