@@ -5,5 +5,5 @@
 -- such as processing start and end times in the Jobs database table.
 -----------------------------
 
-ALTER DATABASE rapidopsdb SET timezone TO 'America/Los_Angeles';
+ALTER DATABASE commissioning SET timezone TO 'America/Los_Angeles';
 
