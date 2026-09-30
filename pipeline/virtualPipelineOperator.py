@@ -21,7 +21,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.3"
+swvers = "1.4"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -35,6 +35,7 @@ register_postproc_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompleted
 load_psfcat_into_db_sources_code = '/code/pipeline/loadPSFCatIntoDBSourcesTable.py'
 load_secat_into_db_xsources_code = '/code/pipeline/loadSECatIntoDBSourcesTable.py'
 crossmatch_sources_code = '/code/pipeline/crossMatchSources.py'
+crossmatch_xsources_code = '/code/pipeline/crossMatchXSources.py'
 compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForAstroObjects.py'
 prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
 produce_alerts_code = '/code/pipeline/produceAlertsForProcDate.py'
@@ -748,6 +749,29 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("VPO Elapsed time in seconds after crossmatching Sources and AstroObjects database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Launch script to crossmatch xsources and xastroobjects database tables.
+        #
+        # Environment variable JOBPROCDATE to specify processing date is required.
+
+        fname_out = "crossmatch_xsources_code" + "_" + proc_date + ".out"
+        crossmatch_xsources_cmd = [python_cmd,
+                                   crossmatch_xsources_code]
+
+        exitcode_from_crossmatch_xsources_cmd = util.execute_command(crossmatch_xsources_cmd,fname_out)
+
+        if exitcode_from_crossmatch_xsources_cmd >= 64:
+            print(f"*** Error: {crossmatch_xsources_cmd} returned exit code = {exitcode_from_crossmatch_xsources_cmd}; quitting...")
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after crossmatching XSources and XAstroObjects database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
