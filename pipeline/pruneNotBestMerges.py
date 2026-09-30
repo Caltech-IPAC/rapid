@@ -100,7 +100,12 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 # Open database connections for parallel access.
 # os.cpu_count() returns None when the number of cores cannot be determined.
 
-num_cores = os.cpu_count() or 1
+num_cores = os.getenv('NUM_CORES')
+
+if num_cores is None:
+    num_cores = os.cpu_count() or 1
+else:
+    num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
 
