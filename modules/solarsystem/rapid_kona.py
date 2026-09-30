@@ -17,8 +17,9 @@ import asdf
 #IAU HG model default slope parameter, used when the orbit table has no G
 DEFAULT_G_PARAM = 0.15
 
-#kete 3.x removed kete.cache.Cached_Directory; the download cache (SPICE
-#kernels + orbit catalog) location is now passed to kona() as cache_dir
+#the download cache (SPICE kernels + orbit catalog) location is passed to
+#kona() as cache_dir and applied via the KETE_CACHE_DIR env var, which kete
+#reads on each cache access (verified on kete 1.1.0; default ~/.kete)
 
 
 def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cache_dir=None):
@@ -28,7 +29,7 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         logger=init_log()
 
     if cache_dir is not None:
-        #point kete's download cache at cache_dir for this process; kete 3.x
+        #point kete's download cache at cache_dir for this process; kete
         #reads KETE_CACHE_DIR on each cache access (default ~/.kete)
         os.makedirs(cache_dir,exist_ok=True)
         os.environ["KETE_CACHE_DIR"]=cache_dir
@@ -42,8 +43,8 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         logger.info("Fetching orbits from MPC")
         orbits = kete.horizons.fetch_known_orbit_data()
         #comet_orbits = kete.mpc.fetch_known_comet_orbit_data()
-        #table_to_states moved from kete.mpc to kete.conversion in kete 3.x
-        mpc_states = kete.conversion.table_to_states(orbits)# + kete.conversion.table_to_states(comet_orbits) 
+        #on kete 1.x table_to_states lives in kete.mpc (3.x moved it to kete.conversion)
+        mpc_states = kete.mpc.table_to_states(orbits)# + kete.mpc.table_to_states(comet_orbits)
 
     #H/G photometric parameters by designation, for predicted V magnitudes.
     #The orbit table is disk-cached by kete, so this is cheap after the first
@@ -86,7 +87,17 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         scvx=in_tree["roman"]["meta"]["ephemeris"]["velocity_x"]/kete.constants.AU_KM*3600*24.
         scvy=in_tree["roman"]["meta"]["ephemeris"]["velocity_y"]/kete.constants.AU_KM*3600*24.
         scvz=in_tree["roman"]["meta"]["ephemeris"]["velocity_z"]/kete.constants.AU_KM*3600*24.
-    
+
+        #The observer MUST be placed at exposure.mid_time (image_time above),
+        #the instant the asteroid states are propagated to: evaluating at any
+        #other time moves the predicted positions by the objects' own motion
+        #(~0.3 arcsec per 30 s for the main belt, arcsec for NEOs).
+        eph_time=kete.Time.from_mjd(in_tree["roman"]["meta"]["ephemeris"]["time"],scaling="utc")
+        dt_days=image_time.jd-eph_time.jd
+        scx+=scvx*dt_days
+        scy+=scvy*dt_days
+        scz+=scvz*dt_days
+
         headerframe=in_tree["roman"]["meta"]["ephemeris"]["ephemeris_reference_frame"]
         if headerframe=="Ecliptic":
             frame=kete.Frames.Ecliptic
@@ -95,18 +106,32 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
             
         pos = kete.Vector([scx, scy, scz], frame=frame)
         vel = kete.Vector([scvx, scvy, scvz], frame=frame)
-        sc_state = kete.State("Roman-earth", image_time, pos, vel)
-        earth = kete.spice.get_state("Earth", image_time.jd).as_equatorial
-        
-        obs_pos=earth.pos+sc_state.pos        
-        obs_vel=earth.vel+sc_state.vel
-        obs_loc=kete.State("Roman-helio",image_time,obs_pos,obs_vel)
+        #meta.ephemeris is barycentric per the RAD schema (spatial_x/y/z:
+        #"barycentric coordinate of the Roman observatory", velocities "in a
+        #barycentric system"). kete FOVs want a heliocentric observer, so build
+        #the state on the solar system barycenter (NAIF 0) and re-center it on
+        #the Sun (NAIF 10). The previous code treated the vector as Earth-relative
+        #and added Earth's heliocentric state, which put the observer ~1 AU off.
+        #Verified on the 2026-08-07 SOC sim: re-centered vector lands ~1e3 km from
+        #Earth's heliocentric position (alerts/test/test_roman_ephemeris.py).
+        #TODO (2026-09-29): other simulations may not follow the RAD schema here.
+        #A sim that writes a geocentric (Earth- or L2-relative) or heliocentric
+        #vector, or leaves the block empty, would place the observer up to 1 AU
+        #from the truth and silently produce wrong predictions (offsets of
+        #degrees for main-belt objects). Check meta.ephemeris against Earth's
+        #barycentric position before trusting KONA output on a sim.
+        sc_state = kete.State("Roman",image_time,pos,vel,center_id=0)
+        obs_loc = sc_state.change_center(10)
     
-        ra0=in_tree["roman"]["meta"]["pointng"]["ra_v1"] #deg
-        dec0=in_tree["roman"]["meta"]["pointng"]["dec_v1"] #deg
+        #Center the cone on this SCA's WCS reference point, not the V1 boresight:
+        #the WFI is off-axis, so V1 sits ~0.5 deg from the array center and up to
+        #~0.75 deg from an edge SCA, outside the original 0.5 deg cone. One SCA is
+        #~0.125 deg across; 0.15 deg from center covers it with margin.
+        ra0=in_tree["roman"]["meta"]["wcsinfo"]["ra_ref"] #deg
+        dec0=in_tree["roman"]["meta"]["wcsinfo"]["dec_ref"] #deg
         pointing_vec=kete.Vector.from_ra_dec(ra0, dec0)
-        
-        fov = kete.fov.ConeFOV(pointing_vec,0.5,obs_loc)
+
+        fov = kete.fov.ConeFOV(pointing_vec,0.15,obs_loc)
         fovs.append(fov)
         
     curr_states  = kete.propagate_n_body(mpc_states_local, image_time.jd)
@@ -144,17 +169,23 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
 
         #^*^
         #Now add the list of found objects with RA/Dec/Vmag to the ASDF metadata
-        in_tree["roman"]["meta"]["rapid"]["sso_kona"]=obj_in_fov
-        in_tree.write_to(input_file)
+        #2026-09-29: disabled for now. The alert pipeline reads the returned
+        #results (alerts/cli.py --kona-file JSON), nothing reads sso_kona back,
+        #the SOC sim L2 files have no meta.rapid block, and write_to() rewrites
+        #the input L2 in place (dropping gwcs/roman tags when those packages
+        #are not installed).
+        #in_tree["roman"]["meta"]["rapid"]["sso_kona"]=obj_in_fov
+        #in_tree.write_to(input_file)
         results[input_file]=obj_in_fov
 
     return results
 
 
-def read_sso_kona(input_file):
-    #Read back the {desig: (ra, dec, vmag)} results written by kona()
-    with asdf.open(input_file) as in_tree:
-        return dict(in_tree["roman"]["meta"]["rapid"].get("sso_kona") or {})
+#2026-09-29: disabled with the ASDF write in kona() above; use kona()'s return value
+#def read_sso_kona(input_file):
+#    #Read back the {desig: (ra, dec, vmag)} results written by kona()
+#    with asdf.open(input_file) as in_tree:
+#        return dict(in_tree["roman"]["meta"]["rapid"].get("sso_kona") or {})
 
 
 def init_log(logfile=None):

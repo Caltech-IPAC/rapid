@@ -374,3 +374,131 @@ CREATE INDEX xsources_flags_idx ON xsources (flags);
 CREATE INDEX xsources_mjdobs_idx ON xsources (mjdobs);
 
 ALTER TABLE xsources SET UNLOGGED;
+
+
+----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
+-- Prototype xmerges and xastroobjects tables for creating like-tables, one for each sky tile (a.k.a field).
+-- These are the SExtractor-catalog counterparts of the merges and astroobjects prototype tables,
+-- and they associate XSources records (rather than Sources records) with astronomical objects.
+-- Like-tables are NOT inherited from the prototype table
+-- (and therefore terminology like "parent" and/or "child" is avoided for these tables).
+-- No records are directly inserted into the prototype tables.
+--
+-- As with merges and astroobjects, cross-matching does not partition on isdiffpos: an
+-- XAstroObjects record corresponds to a sky position, and its XMerges records may reference
+-- both positive and negative XSources detections.
+
+-----------------------------
+-- TABLE: XMerges
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE xmerges (
+    xaid bigint NOT NULL,
+    xsid bigint NOT NULL
+);
+
+ALTER TABLE xmerges OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+CREATE INDEX xmerges_xaid_idx ON xmerges USING btree (xaid);
+CREATE INDEX xmerges_xsid_idx ON xmerges USING btree (xsid);
+
+
+-----------------------------
+-- TABLE: XAstroObjects
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE xastroobjects (
+    xaid bigint NOT NULL,
+    ra0 double precision NOT NULL,              -- RA corresponding to initial sky position
+    dec0 double precision NOT NULL,             -- Dec corresponding to initial sky position
+    flux0 real NOT NULL                         -- Aperture flux (fluxap) of initial sky position
+);
+
+ALTER TABLE xastroobjects OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY xastroobjects ADD CONSTRAINT xastroobjects_pkey PRIMARY KEY (xaid);
+
+
+------------------------------------------------------------
+-- A python script (crossMatchXSources.py) will create tables like the xmerges and
+-- xastroobjects prototype tables, which is not the same thing as inheriting the
+-- respective prototype table.
+-- Like-table names will be xmerges_<field> and xastroobjects_<field>.
+-- Thus the partitioning scheme for xmerges and xastroobjects is by sky position.
+
+-- Below are all the steps executed by the Python script for each new respective like-table:
+
+-- SET default_tablespace = pipeline_data_01;
+-- CREATE TABLE xmerges_1 (LIKE xmerges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+-- CREATE TABLE xastroobjects_1 (LIKE xastroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+
+-- SET default_tablespace = pipeline_indx_01;
+-- CREATE INDEX xmerges_1_xaid_idx ON xmerges_1 USING btree (xaid);
+-- CREATE INDEX xmerges_1_xsid_idx ON xmerges_1 USING btree (xsid);
+
+-- The following is not automatically created for the xastroobjects like-table just
+-- because xaid is a primary key in the xastroobjects prototype table.
+-- CREATE INDEX xastroobjects_1_xaid_idx ON xastroobjects_1 (xaid);
+
+-- CREATE INDEX xastroobjects_1_radec_idx ON xastroobjects_1 (q3c_ang2ipix(ra0, dec0));
+-- CLUSTER xastroobjects_1_radec_idx ON xastroobjects_1;
+-- ANALYZE xastroobjects_1;
+
+-- Grants for rapidreadrole
+-- REVOKE ALL ON TABLE xmerges_1 FROM rapidreadrole;
+-- GRANT SELECT ON TABLE xmerges_1 TO GROUP rapidreadrole;
+-- REVOKE ALL ON TABLE xastroobjects_1 FROM rapidreadrole;
+-- GRANT SELECT ON TABLE xastroobjects_1 TO GROUP rapidreadrole;
+
+-- Grants for rapidadminrole
+-- REVOKE ALL ON TABLE xmerges_1 FROM rapidadminrole;
+-- GRANT ALL ON TABLE xmerges_1 TO GROUP rapidadminrole;
+-- REVOKE ALL ON TABLE xastroobjects_1 FROM rapidadminrole;
+-- GRANT ALL ON TABLE xastroobjects_1 TO GROUP rapidadminrole;
+
+-- Grants for rapidporole
+-- REVOKE ALL ON TABLE xmerges_1 FROM rapidporole;
+-- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xmerges_1 TO rapidporole;
+-- REVOKE ALL ON TABLE xastroobjects_1 FROM rapidporole;
+-- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE xastroobjects_1 TO rapidporole;
+------------------------------------------------------------
+
+
+-----------------------------
+-- TABLE: XAstroObjectsMeta
+--
+-- Prototype table for the xastroobjectsmeta_<field> like-tables that
+-- computeStatisticsForXAstroObjects.py creates, populates and indexes.
+-- The SExtractor-catalog counterpart of astroobjectsmeta.
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE xastroobjectsmeta (
+    xaid bigint NOT NULL,
+    meanra double precision NOT NULL,           -- Mean RA
+    stdevra real NOT NULL,                      -- Standard deviation of RA
+    meandec double precision NOT NULL,          -- Mean Dec
+    stdevdec real NOT NULL,                     -- Standard deviation of Dec
+    meanflux real NOT NULL,                     -- Mean aperture flux (fluxap)
+    stdevflux real NOT NULL,                    -- Standard deviation of aperture flux
+    nsources smallint NOT NULL                  -- Total number of xsources (all filters)
+);
+
+ALTER TABLE xastroobjectsmeta OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY xastroobjectsmeta ADD CONSTRAINT xastroobjectsmeta_pkey PRIMARY KEY (xaid);
+
+CREATE INDEX xastroobjectsmeta_nsources_idx ON xastroobjectsmeta (nsources);

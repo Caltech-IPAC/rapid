@@ -746,8 +746,8 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Assume astroobjects_<field> and merges_<field> database tables are created in tandem,
-    # so we only need to test for the existence of the former table.
+    # Test for the existence of each sources_<obs_date>_<sca> child table, so that the
+    # ones that are missing can be created below.
 
     already_made_dict = {}
 

@@ -734,14 +734,15 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Look up for the given processing date the Sources child table names
+    # Look up for the given processing date the XSources child table names
     # that need to be loaded (some or all of such tables may need to be created).
 
     xsources_tables_to_load_tuples_list,_,jid_list,meta_list = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
+                                                                   table_prefix="xsources")
 
     if len(xsources_tables_to_load_tuples_list) == 0:
-        print(f"*** Error: No Sources child tables to be loaded;  quitting...")
+        print(f"*** Error: No XSources child tables to be loaded;  quitting...")
         dbh.close()
         exit(7)
 
@@ -754,8 +755,8 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Assume astroobjects_<field> and merges_<field> database tables are created in tandem,
-    # so we only need to test for the existence of the former table.
+    # Test for the existence of each xsources_<obs_date>_<sca> child table, so that the
+    # ones that are missing can be created below.
 
     already_made_dict = {}
 

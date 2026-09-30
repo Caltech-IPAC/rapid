@@ -46,6 +46,11 @@ def pytest_addoption(parser):
         "--require-live", action="store_true", default=False,
         help=("fail instead of skip when the alerts live DB/S3 integration "
               "tests cannot run"))
+    parser.addoption(
+        "--roman-asdf", action="append", default=None, metavar="SRC",
+        help=("Roman L2 ASDF file(s) for test_roman_ephemeris.py: a local "
+              "path or s3://bucket/key, optionally .gz; repeatable. Default: "
+              "the pinned SOC sim file behind test_live_db.ROUNDTRIP_SID"))
 
 # per-product DC offsets added to chip_image, so a stamp's values identify
 # its source file (see job_dir)

@@ -3,10 +3,17 @@
 # (docs/source/prod/sample_alert.avro; see the "Sample Alert Packet"
 # subsection of docs/source/prod/products.rst).
 #
-# Usage: ./docs/update_sample_alert.sh [SID]
+# Usage: ./docs/update_sample_alert.sh [SID] [alerts.cli options...]
+#
+# Extra arguments are passed through to alerts.cli, e.g.
+#   ./docs/update_sample_alert.sh 6091788102 --kona-file kona_84776.json --no-ned --no-lvs
+# (a GBTDS bulge source: solar-system association on, extragalactic
+# cross-matches off).
 #
 # Sources rapid_setup.env for the DB environment, produces one alert for
-# SID (default: 2240034736), overwrites the committed sample, and verifies
+# SID (default: 6091788102, the round-trip source pinned in
+# alerts/test/test_live_db.py; RA 266.2376, Dec -28.8971, field 4666327),
+# overwrites the committed sample, and verifies
 # that the embedded schema matches the current registry-generated .avsc.
 # The docs filename reference is stable (sample_alert.avro), but the schema
 # version in the "Sample Alert Packet" prose of products.rst is written by
@@ -19,13 +26,22 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-/opt/miniconda3/envs/astroconda/bin/python}"
-SID="${1:-2240034736}"
+SID="${1:-6091788102}"
 SAMPLE="$REPO_ROOT/docs/source/prod/sample_alert.avro"
 
 cd "$REPO_ROOT"
 source rapid_setup.env
 
-"$PYTHON" -m alerts.cli "$SID" --save "$SAMPLE"
+# Keep the previous sample as sample_alert_old<N>.avro (next free N) so
+# packets from older schema versions stay available for comparison.
+if [ -f "$SAMPLE" ]; then
+    n=1
+    while [ -e "${SAMPLE%.avro}_old${n}.avro" ]; do n=$((n + 1)); done
+    mv "$SAMPLE" "${SAMPLE%.avro}_old${n}.avro"
+    echo "previous sample kept as ${SAMPLE%.avro}_old${n}.avro"
+fi
+
+"$PYTHON" -m alerts.cli "$SID" --save "$SAMPLE" "${@:2}"
 
 # Fail loudly if the sample disagrees with the current .avsc (e.g. the
 # registry was edited but gen_schema.py was not re-run before this script).
