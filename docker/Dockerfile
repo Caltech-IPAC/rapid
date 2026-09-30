@@ -35,6 +35,7 @@ RUN echo "export PATH=/shared/anaconda3/bin:/shared/perl/bin:$PATH" >> /root/.ba
 # Install python asdf package.
 
 RUN /shared/anaconda3/bin/pip install asdf
+RUN /shared/anaconda3/bin/pip install git+https://github.com/snbianco/astroquery.git@2026.2
 
 # Install gsl library.
 
