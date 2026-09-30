@@ -5,7 +5,7 @@ from astropy.time import Time
 from astroquery.mast import MastMissions
 import asdf
 """
-Download files from MAST given a program id ()
+Download files from MAST given a program id and other optional parameters
 """
 
 p = argparse.ArgumentParser(
@@ -103,7 +103,7 @@ for filename in filtered_products['filename']:
     if dryrun is True:
         print(filename)
     else:
-        af = missions.read_product(filename)
+        af = missions.read_product(filename, lazy_load=False, memmap=False)
         if ingest_bucket=='local':
             af.write_to(filename)
         else:
