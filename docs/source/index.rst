@@ -105,6 +105,7 @@ RAPID Pipeline Execution
 .. toctree::
    :maxdepth: 2
 
+   ops/vpo.rst
    ops/bulk_run.rst
 
 RAPID Pipeline Products
