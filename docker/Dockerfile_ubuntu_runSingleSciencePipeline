@@ -85,7 +85,6 @@ RUN python3.11 -m pip install --upgrade pytest
 RUN python3.11 -m pip install --upgrade psutil
 RUN python3.11 -m pip install --upgrade fsspec
 RUN python3.11 -m pip install --upgrade s3fs
-RUN python3.11 -m pip install --upgrade roman_datamodels
 RUN python3.11 -m pip install git+https://github.com/snbianco/astroquery.git@2026.2
 
 # Set up separate Python 3.11 venv under root directory for sfft.

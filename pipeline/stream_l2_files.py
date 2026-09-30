@@ -3,7 +3,7 @@ import os
 import fsspec
 from astropy.time import Time
 from astroquery.mast import MastMissions
-import roman_datamodels as rdm
+import asdf
 """
 Download files from MAST given a program id ()
 """
