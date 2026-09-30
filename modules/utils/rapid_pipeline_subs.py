@@ -2827,7 +2827,19 @@ def index_to_radec(idx):
 # sources in those tables.
 ########################################
 
-def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
+def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources"):
+
+
+    '''
+    Look up, for the given processing date, the <table_prefix>_<obs_date>_<sca> child table
+    names to cross-match, and the distinct fields those tables cover.
+
+    table_prefix is "sources" for the photutils PSF-fit catalogs (the default, which preserves
+    the original behavior of this method) and "xsources" for the SExtractor catalogs.  The job
+    and L2-file metadata that yields the (obs_date,sca) pairs is the same either way; only the
+    child-table existence check and the distinct-field query depend on the prefix.
+    '''
+
 
 
     # Query database for all normal RAPID science-pipeline Jobs records
@@ -2942,7 +2954,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
         dateobs = meta_dict["dateobs"]
         obs_date = str(dateobs).split()[0].replace("-","")
 
-        sources_tablename = f"sources_{obs_date}_{sca}"
+        sources_tablename = f"{table_prefix}_{obs_date}_{sca}"
 
         sql_queries = []
         sql_queries.append(f"SELECT to_regclass('public.{sources_tablename}') IS NOT NULL;")
@@ -2991,7 +3003,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid):
 
         if table_crossmatch_obs_date_sca_dict[table_crossmatch_key] == 1:
 
-            sources_tablename = f"sources_{obs_date}_{sca}"
+            sources_tablename = f"{table_prefix}_{obs_date}_{sca}"
 
             sql_queries = []
             sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")

@@ -21,7 +21,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.3"
+swvers = "1.6"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -35,8 +35,11 @@ register_postproc_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompleted
 load_psfcat_into_db_sources_code = '/code/pipeline/loadPSFCatIntoDBSourcesTable.py'
 load_secat_into_db_xsources_code = '/code/pipeline/loadSECatIntoDBSourcesTable.py'
 crossmatch_sources_code = '/code/pipeline/crossMatchSources.py'
+crossmatch_xsources_code = '/code/pipeline/crossMatchXSources.py'
 compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForAstroObjects.py'
+compute_statistics_for_xastroobjects_code = '/code/pipeline/computeStatisticsForXAstroObjects.py'
 prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
+prune_notbest_xmerges_code = '/code/pipeline/pruneNotBestXMerges.py'
 produce_alerts_code = '/code/pipeline/produceAlertsForProcDate.py'
 launch_reference_image_pipelines_code = '/code/pipeline/launchBunchOfReferenceImagePipelines.py'
 # Python script /code/pipeline/parallelRegisterCompletedJobsInDB.py is dual purposed to
@@ -752,6 +755,29 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
+        # Launch script to crossmatch xsources and xastroobjects database tables.
+        #
+        # Environment variable JOBPROCDATE to specify processing date is required.
+
+        fname_out = "crossmatch_xsources_code" + "_" + proc_date + ".out"
+        crossmatch_xsources_cmd = [python_cmd,
+                                   crossmatch_xsources_code]
+
+        exitcode_from_crossmatch_xsources_cmd = util.execute_command(crossmatch_xsources_cmd,fname_out)
+
+        if exitcode_from_crossmatch_xsources_cmd >= 64:
+            print(f"*** Error: {crossmatch_xsources_cmd} returned exit code = {exitcode_from_crossmatch_xsources_cmd}; quitting...")
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after crossmatching XSources and XAstroObjects database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Launch script to compute statistics for astroobjects database tables.
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
@@ -775,6 +801,29 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
+        # Launch script to compute statistics for xastroobjects database tables.
+        #
+        # Environment variable JOBPROCDATE to specify processing date is required.
+
+        fname_out = "compute_statistics_for_xastroobjects_code" + "_" + proc_date + ".out"
+        compute_statistics_for_xastroobjects_cmd = [python_cmd,
+                                                    compute_statistics_for_xastroobjects_code]
+
+        exitcode_from_compute_statistics_for_xastroobjects_cmd = util.execute_command(compute_statistics_for_xastroobjects_cmd,fname_out)
+
+        if exitcode_from_compute_statistics_for_xastroobjects_cmd >= 64:
+            print(f"*** Error: {compute_statistics_for_xastroobjects_cmd} returned exit code = {exitcode_from_compute_statistics_for_xastroobjects_cmd}; quitting...")
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after computing statistics for XAstroObjects database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Launch script to delete not-best Merges database records.
 
         fname_out = "prune_notbest_merges_code" + "_" + proc_date + ".out"
@@ -792,6 +841,27 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("VPO Elapsed time in seconds after deleting not-best Merges database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Launch script to delete not-best XMerges database records.
+
+        fname_out = "prune_notbest_xmerges_code" + "_" + proc_date + ".out"
+        prune_notbest_xmerges_cmd = [python_cmd,
+                                     prune_notbest_xmerges_code]
+
+        exitcode_from_prune_notbest_xmerges_cmd = util.execute_command(prune_notbest_xmerges_cmd,fname_out)
+
+        if exitcode_from_prune_notbest_xmerges_cmd >= 64:
+            print(f"*** Error: {prune_notbest_xmerges_cmd} returned exit code = {exitcode_from_prune_notbest_xmerges_cmd}; quitting...")
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after deleting not-best XMerges database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
