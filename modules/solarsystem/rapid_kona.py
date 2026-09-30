@@ -103,11 +103,15 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
         obs_vel=earth.vel+sc_state.vel
         obs_loc=kete.State("Roman-helio",image_time,obs_pos,obs_vel)
     
-        ra0=in_tree["roman"]["meta"]["pointng"]["ra_v1"] #deg
-        dec0=in_tree["roman"]["meta"]["pointng"]["dec_v1"] #deg
+        #Center the cone on this SCA's WCS reference point, not the V1 boresight:
+        #the WFI is off-axis, so V1 sits ~0.5 deg from the array center and up to
+        #~0.75 deg from an edge SCA, outside the original 0.5 deg cone. One SCA is
+        #~0.125 deg across; 0.15 deg from center covers it with margin.
+        ra0=in_tree["roman"]["meta"]["wcsinfo"]["ra_ref"] #deg
+        dec0=in_tree["roman"]["meta"]["wcsinfo"]["dec_ref"] #deg
         pointing_vec=kete.Vector.from_ra_dec(ra0, dec0)
-        
-        fov = kete.fov.ConeFOV(pointing_vec,0.5,obs_loc)
+
+        fov = kete.fov.ConeFOV(pointing_vec,0.15,obs_loc)
         fovs.append(fov)
         
     curr_states  = kete.propagate_n_body(mpc_states_local, image_time.jd)
@@ -145,17 +149,23 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cac
 
         #^*^
         #Now add the list of found objects with RA/Dec/Vmag to the ASDF metadata
-        in_tree["roman"]["meta"]["rapid"]["sso_kona"]=obj_in_fov
-        in_tree.write_to(input_file)
+        #2026-09-29: disabled for now. The alert pipeline reads the returned
+        #results (alerts/cli.py --kona-file JSON), nothing reads sso_kona back,
+        #the SOC sim L2 files have no meta.rapid block, and write_to() rewrites
+        #the input L2 in place (dropping gwcs/roman tags when those packages
+        #are not installed).
+        #in_tree["roman"]["meta"]["rapid"]["sso_kona"]=obj_in_fov
+        #in_tree.write_to(input_file)
         results[input_file]=obj_in_fov
 
     return results
 
 
-def read_sso_kona(input_file):
-    #Read back the {desig: (ra, dec, vmag)} results written by kona()
-    with asdf.open(input_file) as in_tree:
-        return dict(in_tree["roman"]["meta"]["rapid"].get("sso_kona") or {})
+#2026-09-29: disabled with the ASDF write in kona() above; use kona()'s return value
+#def read_sso_kona(input_file):
+#    #Read back the {desig: (ra, dec, vmag)} results written by kona()
+#    with asdf.open(input_file) as in_tree:
+#        return dict(in_tree["roman"]["meta"]["rapid"].get("sso_kona") or {})
 
 
 def init_log(logfile=None):
