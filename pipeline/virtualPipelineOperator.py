@@ -21,7 +21,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.5"
+swvers = "1.6"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -39,6 +39,7 @@ crossmatch_xsources_code = '/code/pipeline/crossMatchXSources.py'
 compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForAstroObjects.py'
 compute_statistics_for_xastroobjects_code = '/code/pipeline/computeStatisticsForXAstroObjects.py'
 prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
+prune_notbest_xmerges_code = '/code/pipeline/pruneNotBestXMerges.py'
 produce_alerts_code = '/code/pipeline/produceAlertsForProcDate.py'
 launch_reference_image_pipelines_code = '/code/pipeline/launchBunchOfReferenceImagePipelines.py'
 # Python script /code/pipeline/parallelRegisterCompletedJobsInDB.py is dual purposed to
@@ -840,6 +841,27 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("VPO Elapsed time in seconds after deleting not-best Merges database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Launch script to delete not-best XMerges database records.
+
+        fname_out = "prune_notbest_xmerges_code" + "_" + proc_date + ".out"
+        prune_notbest_xmerges_cmd = [python_cmd,
+                                     prune_notbest_xmerges_code]
+
+        exitcode_from_prune_notbest_xmerges_cmd = util.execute_command(prune_notbest_xmerges_cmd,fname_out)
+
+        if exitcode_from_prune_notbest_xmerges_cmd >= 64:
+            print(f"*** Error: {prune_notbest_xmerges_cmd} returned exit code = {exitcode_from_prune_notbest_xmerges_cmd}; quitting...")
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after deleting not-best XMerges database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
