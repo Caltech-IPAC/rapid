@@ -1,8 +1,9 @@
 """
 RAPID Data Analysis
 
-Methods for characterizing RAPID images, currently the computation of the point-source
-limiting magnitude of a Roman WFI L2 image stored as a FITS file.
+Methods for characterizing RAPID images: the computation of the point-source limiting
+magnitude of a Roman WFI L2 image stored as a FITS file, and the ZTF "sumrat" metric of
+sources in a difference image.
 
 Data units
 ----------
@@ -751,3 +752,198 @@ def compute_limiting_magnitude_for_l2_image(input_img_filename,
     limmag["poissonratio"] = poisson_ratio
 
     return limmag
+
+
+#####################################################################################################
+# Median-filter a small image stamp with a square box, the way PDL's med2d does it with
+# Boundary => 'Truncate' and a kernel of ones, which is how the ZTF pipeline (imgdiffextract.pl)
+# smooths the stamp it computes sumrat from.
+#
+# Truncate means that kernel positions falling outside the stamp are skipped rather than padded,
+# so an edge pixel is the median of the 6 in-stamp neighbors and a corner pixel of 4.  Bad (NaN)
+# pixels are skipped likewise.  With an even number of values, med2d returns the lower of the two
+# middle ones (element (count-1)/2 of the sorted list) rather than their mean, which is reproduced
+# by default so that the results agree with ZTF.  That choice is not neutral: the edge pixels of a
+# small stamp mostly have even counts (16 of the 25 pixels of a 5x5 stamp), so their filtered
+# values are biased low, and for pure Gaussian noise this pulls the mean sumrat of a 5x5 stamp
+# from about 0 down to about -0.32.  lower_median = False takes the mean of the two middle values
+# instead, which removes the bias.  A pixel whose neighborhood holds no finite values comes out NaN.
+#####################################################################################################
+
+def median_filter_truncate(stamp,filter_size = 3,lower_median = True):
+
+    """
+    Method median_filter_truncate
+
+    Inputs:
+    stamp                   Two-dimensional array of pixel values, in any units.
+    filter_size             Side length of the square median-filter box [pixels]; must be odd.
+    lower_median            If True (as in PDL's med2d), an even number of values yields the lower
+                            of the two middle values; if False, their mean.
+
+    Returns:
+    filtered                Median-filtered stamp, of the same shape and units as stamp.
+    """
+
+    if filter_size <= 0 or filter_size % 2 == 0:
+        raise ValueError(f"Method median_filter_truncate: filter_size = {filter_size} "
+                         "must be a positive odd integer")
+
+    stamp = np.array(stamp, dtype=np.float64)
+
+    h = filter_size // 2
+    ny,nx = stamp.shape
+
+
+    # Pad with NaN, which stands in for the skipped out-of-stamp positions, and stack the
+    # filter_size^2 shifted copies of the stamp along a new leading axis.
+
+    padded = np.full((ny + 2 * h, nx + 2 * h), np.nan)
+    padded[h:h + ny, h:h + nx] = stamp
+
+    neighbors = np.array([padded[dy:dy + ny, dx:dx + nx]
+                          for dy in range(filter_size)
+                          for dx in range(filter_size)])
+
+
+    # np.sort puts NaN last, so the finite values of each neighborhood come first in ascending
+    # order and the two middle ones are at indices (count-1)//2 and count//2 among them, which
+    # coincide when count is odd.
+
+    neighbors = np.sort(neighbors, axis=0)
+    count = np.sum(np.isfinite(neighbors), axis=0)
+
+    index_lo = np.maximum(count - 1, 0) // 2
+    filtered = np.take_along_axis(neighbors, index_lo[np.newaxis, :, :], axis=0)[0]
+
+    if not lower_median:
+        index_hi = np.minimum(count // 2, filter_size * filter_size - 1)
+        filtered_hi = np.take_along_axis(neighbors, index_hi[np.newaxis, :, :], axis=0)[0]
+        filtered = 0.5 * (filtered + filtered_hi)
+
+    filtered[count == 0] = np.nan
+
+    return filtered
+
+
+#####################################################################################################
+# Compute the "sumrat" metric of a difference-image source, as the ZTF pipeline does
+# (psffitsimple in imgdiffextract.pl):
+#
+#     sumrat = sum(p) / sum(|p|)
+#
+# over the pixels p of a small (5x5 in ZTF) stamp centered on the source, after the stamp has
+# been median-filtered with a 3x3 box to suppress outliers that would otherwise dominate the
+# sums.  For pure Gaussian noise in an unfiltered 5x5 stamp, sumrat is 0 +/- 0.22 (1 sigma);
+# the median filtering correlates the pixels, which widens that to about +/- 0.5, and the
+# lower-median edge handling of ZTF (see median_filter_truncate) shifts the mean to about -0.32.
+# A real positive source drives sumrat toward 1.  The dipole ("yin-yang")
+# residuals of misregistration or a PSF mismatch have positive and negative lobes that cancel,
+# giving a value near 0.  ZTF requires sumrat > 0.4 for a candidate.
+#
+# The metric is dimensionless, so the units of the difference image do not matter.  It does
+# depend on the sign of the image: a source must be positive in it.  Pass negate = True to
+# measure sources that are negative in the difference image (ZTF's isdiffpos = 0).
+#####################################################################################################
+
+def compute_sumrat_for_diff_image(input_diff_filename,
+                                  xy_positions,
+                                  *,
+                                  coord_base,
+                                  stamp_size = 5,
+                                  filter_size = 3,
+                                  negate = False,
+                                  lower_median = True,
+                                  hdu_index = None,
+                                  fill_value = np.nan):
+
+    """
+    Method compute_sumrat_for_diff_image
+
+    Inputs:
+    input_diff_filename     FITS file containing the difference image.
+    xy_positions            Sequence of (x, y) source positions [pixels], with x along NAXIS1
+                            (the column) and y along NAXIS2 (the row), such as source centroids.
+    coord_base              Pixel-coordinate convention of xy_positions, which must be given:
+                            0 for zero-based coordinates (numpy, photutils), in which the center
+                            of the first pixel is (0, 0), or 1 for one-based coordinates (FITS,
+                            SExtractor, ds9), in which it is (1, 1).
+    stamp_size              Side length of the square stamp sumrat is computed over [pixels];
+                            must be odd.  ZTF uses 5 (its negbadlinsz parameter).
+    filter_size             Side length of the median-filter box applied to the stamp
+                            [pixels]; must be odd.  ZTF uses 3.  Set to 1 to skip the filtering.
+    negate                  If True, negate the image before computing sumrat, so that sources
+                            that are negative in the difference image are measured.
+    lower_median            Passed to median_filter_truncate.  True reproduces ZTF; False
+                            removes the negative bias that ZTF's choice puts into sumrat.
+    hdu_index               HDU index of the image data.  If None, the first HDU holding
+                            two-dimensional image data is used.
+    fill_value              Value returned for a position whose stamp does not fall entirely
+                            within the image, or whose filtered stamp has no usable pixels
+                            (ZTF writes -999 in these cases).
+
+    Returns:
+    sumrat_list             List of sumrat values (dimensionless), one per input position, in
+                            the order of xy_positions.
+
+    Notes:
+    The stamp is centered on the pixel nearest to each position, which is pixel
+    floor(x + 0.5) for zero-based x and floor(x + 0.5) - 1 (as a zero-based index) for one-based x,
+    matching ZTF.  ZTF additionally skips sources within 3 pixels of the image edge, because its
+    PSF-fit stamp (7x7) must fit inside the image; here only the sumrat stamp has to.  NaN pixels are treated as bad and are skipped by both the median filter and
+    the sums, as PDL's bad values are in ZTF.
+    """
+
+    if coord_base not in (0, 1):
+        raise ValueError(f"Method compute_sumrat_for_diff_image: coord_base = {coord_base} "
+                         "must be 0 (zero-based) or 1 (one-based)")
+
+    if stamp_size <= 0 or stamp_size % 2 == 0:
+        raise ValueError(f"Method compute_sumrat_for_diff_image: stamp_size = {stamp_size} "
+                         "must be a positive odd integer")
+
+    with fits.open(input_diff_filename) as hdul:
+
+        if hdu_index is None:
+            hdu_index = get_image_hdu_index(hdul)
+
+        data = np.array(hdul[hdu_index].data, dtype=np.float64)
+
+    if negate:
+        data = -data
+
+    ny,nx = data.shape
+    h = stamp_size // 2
+
+    sumrat_list = []
+
+    for x,y in xy_positions:
+
+
+        # Zero-based index of the pixel nearest to the position.
+
+        xind = int(math.floor(float(x) + 0.5)) - coord_base
+        yind = int(math.floor(float(y) + 0.5)) - coord_base
+
+        if xind < h or xind > nx - h - 1 or yind < h or yind > ny - h - 1:
+            sumrat_list.append(fill_value)
+            continue
+
+        stamp = data[yind - h:yind + h + 1, xind - h:xind + h + 1]
+
+        if filter_size > 1:
+            stamp = median_filter_truncate(stamp,
+                                           filter_size = filter_size,
+                                           lower_median = lower_median)
+
+        good = np.isfinite(stamp)
+
+        stamp_sum = np.sum(stamp[good])
+        stamp_sum_abs = np.sum(np.abs(stamp[good]))
+
+        if np.any(good) and stamp_sum_abs > 0.0:
+            sumrat_list.append(float(stamp_sum / stamp_sum_abs))
+        else:
+            sumrat_list.append(fill_value)
+
+    return sumrat_list
