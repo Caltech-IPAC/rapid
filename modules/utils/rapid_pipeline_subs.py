@@ -15,6 +15,8 @@ import boto3
 from botocore.exceptions import ClientError
 from scipy.ndimage import zoom
 
+import modules.utils.rapid_data_analysis as rda
+
 plot_flag = False
 
 debug = True
@@ -3035,3 +3037,343 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     # Return source_tables_to_crossmatch_list and fields_list.
 
     return source_tables_to_crossmatch_list,fields_list,jid_list,meta_list
+
+
+#####################################################################################################
+# Add new columns, such as the ZTF "sumrat" metric, to the difference-image catalogs.
+#
+# compute_new_cols_sxtractor and compute_new_cols_photutils are the umbrella methods to be called
+# from the science pipeline, one for each catalog flavor.  Each reads the source positions from the
+# catalog, has compute_new_catalog_columns compute every requested column from the difference
+# image, and then rewrites the catalog with the new columns appended, in the format it came in.
+#
+# The catalog and the difference image must belong together: the catalog of a negative difference
+# image is paired with the negative difference image (e.g., diffimage_masked_negative.fits), in
+# which its sources are positive.
+#
+# To add a new column: write the method that computes it in modules/utils/rapid_data_analysis.py,
+# add a branch for it in compute_new_catalog_columns, and list its name in the new_cols parameter
+# of the [NEW_CATALOG_COLS] section of cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini.
+#
+# The existing lines of a catalog are rewritten unchanged, with the new values appended, so that
+# readers of the original columns are unaffected.  This holds for parse_ascii_text_sextractor_catalog
+# as well, which locates columns through the SExtractor parameters file, since the new columns come
+# after all of the columns listed there.
+#####################################################################################################
+
+# Column names and descriptions, for the header of a SExtractor ASCII_HEAD catalog.  PhotUtils
+# catalogs get the names in lower case.
+
+new_catalog_col_descriptions = {
+    "sumrat": "Ratio sum(p)/sum(|p|) of median-filtered stamp on source",
+}
+
+
+#-------------------------------------------------------------------
+# Compute the requested new catalog columns for a list of source positions.
+
+def compute_new_catalog_columns(diff_image_filename,
+                                x_list,
+                                y_list,
+                                coord_base,
+                                new_cols_dict,
+                                sumrat_dict):
+
+    """
+    Method compute_new_catalog_columns
+
+    Inputs:
+    diff_image_filename     FITS file containing the difference image the sources were found in.
+    x_list, y_list          Source positions [pixels], with x along NAXIS1 and y along NAXIS2.
+    coord_base              0 if the positions are zero-based (PhotUtils), 1 if one-based
+                            (SExtractor).
+    new_cols_dict           [NEW_CATALOG_COLS] section of the config file, as a dictionary of
+                            strings.  Its new_cols entry is the comma-separated list of the
+                            columns to compute.
+    sumrat_dict             [SUMRAT] section of the config file, as a dictionary of strings.
+
+    Returns:
+    new_cols                Dictionary, in the order of new_cols_dict["new_cols"], mapping each
+                            lower-case column name to its list of values, one per position.
+    new_cols_format         Dictionary mapping each column name to its Python format spec.
+    """
+
+    col_names = [c.strip().lower() for c in new_cols_dict["new_cols"].split(",") if c.strip()]
+
+    xy_positions = list(zip(x_list,y_list))
+
+    new_cols = {}
+    new_cols_format = {}
+
+    for col_name in col_names:
+
+        if col_name == "sumrat":
+
+            new_cols[col_name] = rda.compute_sumrat_for_diff_image(
+                diff_image_filename,
+                xy_positions,
+                coord_base = coord_base,
+                stamp_size = int(sumrat_dict["stamp_size"]),
+                filter_size = int(sumrat_dict["filter_size"]),
+                lower_median = sumrat_dict["lower_median"].strip().lower() == "true",
+                fill_value = float(sumrat_dict["fill_value"]))
+
+            new_cols_format[col_name] = sumrat_dict["col_format"]
+
+        else:
+            raise ValueError(f"Method compute_new_catalog_columns: unknown new catalog column "
+                             f"{col_name}")
+
+    return new_cols,new_cols_format
+
+
+#-------------------------------------------------------------------
+# Rewrite a text catalog through a temporary file, so that a failure partway through cannot
+# leave a truncated catalog behind.
+
+def write_lines_to_text_file(lines,output_filename):
+
+    tmp_filename = output_filename + ".tmp"
+
+    with open(tmp_filename, "w") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+    os.replace(tmp_filename,output_filename)
+
+
+#-------------------------------------------------------------------
+# Compute new columns for a SExtractor ASCII_HEAD catalog and append them to it.
+
+def compute_new_cols_sxtractor(diff_image_filename,
+                                catalog_filename,
+                                new_cols_dict,
+                                sumrat_dict,
+                                output_catalog_filename = None):
+
+    """
+    Method compute_new_cols_sxtractor
+
+    Inputs:
+    diff_image_filename     FITS file containing the difference image that SExtractor measured
+                            the catalog sources on (its input image, not its detection image).
+    catalog_filename        SExtractor catalog of CATALOG_TYPE = ASCII_HEAD.
+    new_cols_dict           [NEW_CATALOG_COLS] section of the config file, as a dictionary of
+                            strings, giving the columns to add and the position columns to use
+                            (sextractor_x_col and sextractor_y_col, e.g. XWIN_IMAGE and
+                            YWIN_IMAGE, which are one-based).
+    sumrat_dict             [SUMRAT] section of the config file, as a dictionary of strings.
+    output_catalog_filename Catalog file to write.  If None, catalog_filename is rewritten in place.
+
+    Returns:
+    new_cols                Dictionary mapping each new lower-case column name to its list of
+                            values, in catalog-row order.
+
+    The new columns are appended after the last column of every row, and a header line in the
+    SExtractor style ("#  116 SUMRAT  description") is added for each, numbered on from the
+    last existing column.  The column names are written in upper case, as SExtractor's are.
+    """
+
+    print("compute_new_cols_sxtractor: diff_image_filename =",diff_image_filename)
+    print("compute_new_cols_sxtractor: catalog_filename =",catalog_filename)
+
+    with open(catalog_filename, "r") as f:
+        lines = [line.rstrip("\r\n") for line in f]
+
+    header_lines = []
+    data_lines = []
+
+    for line in lines:
+        if line.startswith("#"):
+            if data_lines:
+                raise ValueError(f"Method compute_new_cols_sxtractor: comment line after the "
+                                 f"start of the data in {catalog_filename}")
+            header_lines.append(line)
+        elif line.strip():
+            data_lines.append(line)
+
+
+    # One-based column numbers of the parameters, from header lines like
+    # "#   3 XWIN_IMAGE   Windowed position estimate along x   [pixel]".  A vector parameter,
+    # such as MAG_APER, has one header line, giving the number of its first element.
+
+    col_numbers = {}
+
+    for line in header_lines:
+        fields = line[1:].split()
+        if len(fields) >= 2 and fields[0].isdigit():
+            col_numbers[fields[1].upper()] = int(fields[0])
+
+    if not col_numbers:
+        raise ValueError(f"Method compute_new_cols_sxtractor: no ASCII_HEAD column header found "
+                         f"in {catalog_filename}")
+
+    x_col = new_cols_dict["sextractor_x_col"].strip().upper()
+    y_col = new_cols_dict["sextractor_y_col"].strip().upper()
+
+    for col in (x_col,y_col):
+        if col not in col_numbers:
+            raise ValueError(f"Method compute_new_cols_sxtractor: position column {col} not "
+                             f"found in {catalog_filename}")
+
+    x_list = []
+    y_list = []
+    ncols = None
+
+    for line in data_lines:
+
+        fields = line.split()
+
+        if ncols is None:
+            ncols = len(fields)
+        elif len(fields) != ncols:
+            raise ValueError(f"Method compute_new_cols_sxtractor: rows of {catalog_filename} "
+                             f"have different numbers of columns ({ncols} and {len(fields)})")
+
+        x_list.append(float(fields[col_numbers[x_col] - 1]))
+        y_list.append(float(fields[col_numbers[y_col] - 1]))
+
+
+    # With no rows, the last header line gives the number of the last column, which is the
+    # column count unless that column is a vector; it then only numbers the new header lines.
+
+    if ncols is None:
+        ncols = max(col_numbers.values())
+
+    new_cols,new_cols_format = compute_new_catalog_columns(diff_image_filename,
+                                                           x_list,
+                                                           y_list,
+                                                           1,
+                                                           new_cols_dict,
+                                                           sumrat_dict)
+
+    for col_name in new_cols:
+        if col_name.upper() in col_numbers:
+            raise ValueError(f"Method compute_new_cols_sxtractor: column {col_name.upper()} is "
+                             f"already in {catalog_filename}")
+
+    for i,col_name in enumerate(new_cols):
+        description = new_catalog_col_descriptions.get(col_name,"")
+        header_lines.append(f"#{ncols + 1 + i:4d} {col_name.upper():<22s} {description}")
+
+    for j in range(len(data_lines)):
+        for col_name,values in new_cols.items():
+            data_lines[j] += " " + format(values[j],new_cols_format[col_name]).rjust(12)
+
+    if output_catalog_filename is None:
+        output_catalog_filename = catalog_filename
+
+    write_lines_to_text_file(header_lines + data_lines,output_catalog_filename)
+
+    print(f"compute_new_cols_sxtractor: added columns {list(new_cols)} for {len(data_lines)} "
+          f"sources to {output_catalog_filename}")
+
+    return new_cols
+
+
+#-------------------------------------------------------------------
+# Compute new columns for a PhotUtils PSF-fit catalog and append them to it.
+
+def compute_new_cols_photutils(diff_image_filename,
+                               catalog_filename,
+                               new_cols_dict,
+                               sumrat_dict,
+                               output_catalog_filename = None):
+
+    """
+    Method compute_new_cols_photutils
+
+    Inputs:
+    diff_image_filename     FITS file containing the difference image that the PSF fitting was
+                            done on.
+    catalog_filename        PhotUtils PSF-fit catalog, as written by astropy ascii.write in its
+                            default basic format: one line of column names followed by one
+                            space-separated line per source (e.g., zogy_diffimage_masked_psfcat.txt).
+    new_cols_dict           [NEW_CATALOG_COLS] section of the config file, as a dictionary of
+                            strings, giving the columns to add and the position columns to use
+                            (photutils_x_col and photutils_y_col, e.g. x_fit and y_fit, which
+                            are zero-based).
+    sumrat_dict             [SUMRAT] section of the config file, as a dictionary of strings.
+    output_catalog_filename Catalog file to write.  If None, catalog_filename is rewritten in place.
+
+    Returns:
+    new_cols                Dictionary mapping each new lower-case column name to its list of
+                            values, in catalog-row order.
+
+    The new columns are appended to the column-name line and to every row, so that the catalog
+    still reads with astropy (format='ascii'), as loadPSFCatIntoDBSourcesTable.py reads it.
+    """
+
+    from astropy.io import ascii
+
+    print("compute_new_cols_photutils: diff_image_filename =",diff_image_filename)
+    print("compute_new_cols_photutils: catalog_filename =",catalog_filename)
+
+    with open(catalog_filename, "r") as f:
+        lines = [line.rstrip("\r\n") for line in f]
+
+
+    # Comment lines ("#"), which ascii.write puts out only for table metadata, are kept at the
+    # top as they are.  The first other line holds the column names.
+
+    comment_lines = []
+    other_lines = []
+
+    for line in lines:
+        if line.startswith("#") and not other_lines:
+            comment_lines.append(line)
+        elif line.strip():
+            other_lines.append(line)
+
+    if not other_lines:
+        raise ValueError(f"Method compute_new_cols_photutils: no column-name line found in "
+                         f"{catalog_filename}")
+
+    names_line = other_lines[0]
+    data_lines = other_lines[1:]
+
+    table = ascii.read(catalog_filename, format="basic", guess=False)
+
+    if len(table) != len(data_lines):
+        raise ValueError(f"Method compute_new_cols_photutils: {catalog_filename} has "
+                         f"{len(data_lines)} data lines but {len(table)} table rows")
+
+    x_col = new_cols_dict["photutils_x_col"].strip()
+    y_col = new_cols_dict["photutils_y_col"].strip()
+
+    for col in (x_col,y_col):
+        if col not in table.colnames:
+            raise ValueError(f"Method compute_new_cols_photutils: position column {col} not "
+                             f"found in {catalog_filename}")
+
+    x_list = [float(v) for v in np.ma.filled(np.ma.asarray(table[x_col], dtype=float), np.nan)]
+    y_list = [float(v) for v in np.ma.filled(np.ma.asarray(table[y_col], dtype=float), np.nan)]
+
+    new_cols,new_cols_format = compute_new_catalog_columns(diff_image_filename,
+                                                           x_list,
+                                                           y_list,
+                                                           0,
+                                                           new_cols_dict,
+                                                           sumrat_dict)
+
+    for col_name in new_cols:
+        if col_name in table.colnames:
+            raise ValueError(f"Method compute_new_cols_photutils: column {col_name} is already "
+                             f"in {catalog_filename}")
+
+    for col_name in new_cols:
+        names_line += " " + col_name
+
+    for j in range(len(data_lines)):
+        for col_name,values in new_cols.items():
+            data_lines[j] += " " + format(values[j],new_cols_format[col_name])
+
+    if output_catalog_filename is None:
+        output_catalog_filename = catalog_filename
+
+    write_lines_to_text_file(comment_lines + [names_line] + data_lines,output_catalog_filename)
+
+    print(f"compute_new_cols_photutils: added columns {list(new_cols)} for {len(data_lines)} "
+          f"sources to {output_catalog_filename}")
+
+    return new_cols
