@@ -881,8 +881,9 @@ def compute_sumrat_for_diff_image(input_diff_filename,
                             ZTF exactly.
     hdu_index               HDU index of the image data.  If None, the first HDU holding
                             two-dimensional image data is used.
-    fill_value              Value returned for a position whose stamp does not fall entirely
-                            within the image, or whose filtered stamp has no usable pixels
+    fill_value              Value returned for a position that is not finite, whose stamp does
+                            not fall entirely within the image, or whose filtered stamp has no
+                            usable pixels
                             (ZTF writes -999 in these cases).
 
     Returns:
@@ -921,6 +922,10 @@ def compute_sumrat_for_diff_image(input_diff_filename,
     sumrat_list = []
 
     for x,y in xy_positions:
+
+        if not (np.isfinite(float(x)) and np.isfinite(float(y))):
+            sumrat_list.append(fill_value)
+            continue
 
 
         # Zero-based index of the pixel nearest to the position.
