@@ -301,7 +301,7 @@ if __name__ == '__main__':
         else:
             proc_subdir = util.get_proc_subdir(proc_date,reqid)
 
-        s3_url = f"s3://rapid-product-files/{proc_subdir}/jid{jid}"
+        s3_url = f"s3://rapid-commissioning-product-files/{proc_subdir}/jid{jid}"
 
         print(f"=====>s3_url = {s3_url}")
 

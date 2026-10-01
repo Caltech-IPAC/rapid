@@ -3,9 +3,9 @@ import boto3
 import re
 
 s3_client = boto3.client('s3')
-product_s3_bucket = "rapid-product-files"
+product_s3_bucket = "rapid-commissioning-product-files"
 
-product_listing = "/Users/laher/Folks/rapid/rapid-product-files_20250927.txt"
+product_listing = "/Users/laher/Folks/rapid/rapid-commissioning-product-files_20250927.txt"
 
 filename_diffimage_sextractor_catalog = "diffimage_masked.txt"
 

@@ -28,7 +28,7 @@ PROC_DATE = "20260916"
 def _config(**alerts_overrides):
     cfg = configparser.ConfigParser()
     cfg["JOB_PARAMS"] = {"upload_to_s3_bucket": "False",
-                         "product_s3_bucket_base": "rapid-product-files"}
+                         "product_s3_bucket_base": "rapid-commissioning-product-files"}
     cfg["SCI_IMAGE"] = {"ppid": "15"}
     cfg["ALERTS"] = {"diff_flavor": "sfft", "refcat_match": "True",
                      "ned_match": "False", "kona_file": "",

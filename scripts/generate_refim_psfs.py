@@ -217,7 +217,7 @@ if __name__ == '__main__':
 
         # Upload output FITS file to canonical S3 bucket for pipeline usage.
 
-        product_s3_bucket = 'rapid-pipeline-files'
+        product_s3_bucket = 'rapid-commissioning-pipeline-files'
         s3_object_name = "refimage_psfs" + "/" + fname_output
         filenames = [fname_output]
         objectnames = [s3_object_name]

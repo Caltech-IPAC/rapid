@@ -68,8 +68,8 @@ else
 fi
 
 
-echo "Executing aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${logdir}/$logfile"
-aws s3 cp --quiet "$logfile" s3://rapid-pipeline-logs/${logdir}/$logfile
+echo "Executing aws s3 cp --quiet $logfile s3://rapid-commissioning-pipeline-logs/${logdir}/$logfile"
+aws s3 cp --quiet "$logfile" s3://rapid-commissioning-pipeline-logs/${logdir}/$logfile
 
 awss3cpexitcode=$?
 echo "awss3cpexitcode=$awss3cpexitcode"
@@ -79,7 +79,7 @@ then
 
     echo
     echo ##################################################################
-    echo "Successfully copied log file to s3://rapid-pipeline-logs/${logdir}/$logfile"
+    echo "Successfully copied log file to s3://rapid-commissioning-pipeline-logs/${logdir}/$logfile"
     echo ##################################################################
     echo
 
@@ -88,7 +88,7 @@ else
 
     echo
     echo ##################################################################
-    echo "*** Error: Failed copying log file to s3://rapid-pipeline-logs/${logdir}/$logfile"
+    echo "*** Error: Failed copying log file to s3://rapid-commissioning-pipeline-logs/${logdir}/$logfile"
     echo ##################################################################
     echo
 
