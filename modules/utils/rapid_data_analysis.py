@@ -762,15 +762,16 @@ def compute_limiting_magnitude_for_l2_image(input_img_filename,
 # Truncate means that kernel positions falling outside the stamp are skipped rather than padded,
 # so an edge pixel is the median of the 6 in-stamp neighbors and a corner pixel of 4.  Bad (NaN)
 # pixels are skipped likewise.  With an even number of values, med2d returns the lower of the two
-# middle ones (element (count-1)/2 of the sorted list) rather than their mean, which is reproduced
-# by default so that the results agree with ZTF.  That choice is not neutral: the edge pixels of a
-# small stamp mostly have even counts (16 of the 25 pixels of a 5x5 stamp), so their filtered
-# values are biased low, and for pure Gaussian noise this pulls the mean sumrat of a 5x5 stamp
-# from about 0 down to about -0.32.  lower_median = False takes the mean of the two middle values
-# instead, which removes the bias.  A pixel whose neighborhood holds no finite values comes out NaN.
+# middle ones (element (count-1)/2 of the sorted list) rather than their mean.  That choice is not
+# neutral: the edge pixels of a small stamp mostly have even counts (16 of the 25 pixels of a 5x5
+# stamp), so their filtered values are biased low, and for pure Gaussian noise this pulls the mean
+# sumrat of a 5x5 stamp from about 0 down to about -0.32.  By default (lower_median = False) the
+# mean of the two middle values is taken instead, which removes the bias; lower_median = True
+# reproduces med2d, and hence ZTF, exactly.  A pixel whose neighborhood holds no finite values
+# comes out NaN.
 #####################################################################################################
 
-def median_filter_truncate(stamp,filter_size = 3,lower_median = True):
+def median_filter_truncate(stamp,filter_size = 3,lower_median = False):
 
     """
     Method median_filter_truncate
@@ -835,8 +836,9 @@ def median_filter_truncate(stamp,filter_size = 3,lower_median = True):
 # over the pixels p of a small (5x5 in ZTF) stamp centered on the source, after the stamp has
 # been median-filtered with a 3x3 box to suppress outliers that would otherwise dominate the
 # sums.  For pure Gaussian noise in an unfiltered 5x5 stamp, sumrat is 0 +/- 0.22 (1 sigma);
-# the median filtering correlates the pixels, which widens that to about +/- 0.5, and the
-# lower-median edge handling of ZTF (see median_filter_truncate) shifts the mean to about -0.32.
+# the median filtering correlates the pixels, which widens that to about +/- 0.5.  The
+# lower-median edge handling of ZTF (lower_median = True; see median_filter_truncate) would
+# also shift the mean to about -0.32, so it is not the default here.
 # A real positive source drives sumrat toward 1.  The dipole ("yin-yang")
 # residuals of misregistration or a PSF mismatch have positive and negative lobes that cancel,
 # giving a value near 0.  ZTF requires sumrat > 0.4 for a candidate.
@@ -853,7 +855,7 @@ def compute_sumrat_for_diff_image(input_diff_filename,
                                   stamp_size = 5,
                                   filter_size = 3,
                                   negate = False,
-                                  lower_median = True,
+                                  lower_median = False,
                                   hdu_index = None,
                                   fill_value = np.nan):
 
@@ -874,8 +876,9 @@ def compute_sumrat_for_diff_image(input_diff_filename,
                             [pixels]; must be odd.  ZTF uses 3.  Set to 1 to skip the filtering.
     negate                  If True, negate the image before computing sumrat, so that sources
                             that are negative in the difference image are measured.
-    lower_median            Passed to median_filter_truncate.  True reproduces ZTF; False
-                            removes the negative bias that ZTF's choice puts into sumrat.
+    lower_median            Passed to median_filter_truncate.  False (the default) removes the
+                            negative bias that ZTF's choice puts into sumrat; True reproduces
+                            ZTF exactly.
     hdu_index               HDU index of the image data.  If None, the first HDU holding
                             two-dimensional image data is used.
     fill_value              Value returned for a position whose stamp does not fall entirely
