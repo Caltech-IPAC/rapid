@@ -2382,9 +2382,13 @@ if __name__ == '__main__':
                             print(f"*** Warning: Could not add new columns to {output_psfcat_filename} ({e}); continuing...")
 
 
-                    # Join photometry and finder objects and output parquet file.
+                    # Join photometry and finder objects and output parquet file.  The photometry
+                    # catalog is read back from the text file, so that the parquet file has the same
+                    # columns, including the new ones such as sumrat, and the same values.
 
-                    joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+                    phot_from_txt = QTable.read(output_psfcat_filename, format='ascii', fast_reader=True)
+
+                    joined_table_inner = join(phot_from_txt, psfphot.finder_results, keys='id', join_type='inner')
 
                     nrows = len(joined_table_inner)
                     print(f"nrows in PSF-fit catalog = {nrows}\n")
@@ -2519,9 +2523,13 @@ if __name__ == '__main__':
                             print(f"*** Warning: Could not add new columns to {output_psfcat_filename_negative} ({e}); continuing...")
 
 
-                    # Join photometry and finder objects and output parquet file.
+                    # Join photometry and finder objects and output parquet file.  The photometry
+                    # catalog is read back from the text file, so that the parquet file has the same
+                    # columns, including the new ones such as sumrat, and the same values.
 
-                    joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+                    phot_from_txt = QTable.read(output_psfcat_filename_negative, format='ascii', fast_reader=True)
+
+                    joined_table_inner = join(phot_from_txt, psfphot.finder_results, keys='id', join_type='inner')
 
                     nrows = len(joined_table_inner)
                     print(f"nrows in PSF-fit catalog = {nrows}\n")
