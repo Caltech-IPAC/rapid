@@ -14,6 +14,7 @@ import pytest
 
 import fitsio
 
+from conftest import NOISE_SIGMA, sky_positions  # noqa: F401 (synthetic_chip is a fixture)
 from wcs_eval import separation_mas, tpv_pixel_to_sky
 
 from alerts.forced_phot import (CONE_RADIUS_DEG, FLAG_NONFINITE,
@@ -25,7 +26,9 @@ from alerts.forced_phot import (CONE_RADIUS_DEG, FLAG_NONFINITE,
                                 forced_photometry, load_psf, open_image,
                                 project_positions, psfphot, q3c_search,
                                 read_positions_csv, run_prev_images,
-                                sci_psf_basename, write_measurements_csv)
+                                sci_psf_basename, write_measurements_csv,
+                                FORCED_TABLE_DTYPE, forced_measurement_id,
+                                read_table, write_table)
 
 # l2filemeta corners of a real chip (ra1,dec1 .. ra4,dec4, perimeter order)
 # and its center (== CRVAL). Sides ~0.125 deg, rolled ~30 deg.
@@ -375,44 +378,8 @@ def test_error_array_masks_and_rejects_bad_product():
 # photometry: projection, PSF, fitting, and the parent on a synthetic chip
 # ---------------------------------------------------------------------------
 
-PSF_FWHM_PX = 2.5
-NOISE_SIGMA = 1.0
-
-
-def gaussian_psf_image(size=25, fwhm=PSF_FWHM_PX):
-    yy, xx = np.mgrid[0:size, 0:size]; c = size // 2; s = fwhm / 2.355
-    psf = np.exp(-((xx - c) ** 2 + (yy - c) ** 2) / (2 * s * s))
-    return (psf / psf.sum()).astype(np.float64)
-
-
-@pytest.fixture()
-def synthetic_chip(tmp_path, tpv_header):
-    """A 301x301 chip with the suite's TPV WCS, Gaussian sources of known
-    flux at known 1-based pixel positions, a NaN hole, and its PSF file.
-    Returns (image_path, psf_path, sources) with sources = [(x, y, flux)]."""
-    from astropy.table import QTable
-    from photutils.datasets import make_model_image
-    from photutils.psf import ImagePSF
-
-    sources = [(60.0, 80.0, 2000.0), (150.5, 150.5, 500.0), (230.2, 40.7, 8000.0), (100.0, 250.0, 300.0)]
-    psf_img = gaussian_psf_image()
-    model = ImagePSF(psf_img, flux=1.0, x_0=0.0, y_0=0.0)
-    params = QTable({"x_0": [s[0] - 1 for s in sources], "y_0": [s[1] - 1 for s in sources],
-                     "flux": [s[2] for s in sources]})
-    data = make_model_image((301, 301), model, params, model_shape=(25, 25))
-    data += np.random.default_rng(3).normal(0.0, NOISE_SIGMA, data.shape)
-    data[190:210, 190:210] = np.nan                                   # a masked hole
-    image_path = tmp_path / "diff.fits"; psf_path = tmp_path / "psf.fits"
-    fitsio.write(str(image_path), data.astype(np.float32), header=dict(tpv_header), clobber=True)
-    fitsio.write(str(psf_path), (psf_img * 37.0).astype(np.float32), clobber=True)   # un-normalized on purpose
-    return str(image_path), str(psf_path), sources
-
-
-def sky_positions(wcs, pixels, first_id=1):
-    """Position records for 1-based pixel coordinates, via the image WCS."""
-    ra, dec = wcs.all_pix2world([p[0] for p in pixels], [p[1] for p in pixels], 1)
-    return [Position(first_id + i, float(r), float(d)) for i, (r, d) in enumerate(zip(ra, dec))]
-
+# synthetic_chip, sky_positions and NOISE_SIGMA come from conftest (shared
+# with the provider tests)
 
 def test_project_positions_round_trips_and_applies_margin(synthetic_chip):
     image_path, _, _ = synthetic_chip
@@ -613,6 +580,40 @@ def test_csv_round_trip(tmp_path):
     assert lines[0] == "pos_id,rid,product,mjdobs,x,y,flux,fluxerr,flags"
     assert lines[1] == "7,11,diff,61680.1,10.5,20.5,123.0,4.5,0"
     assert lines[2].startswith("7,11,science,61680.1,10.5,20.5,nan,nan,")
+
+
+# ---------------------------------------------------------------------------
+# per-chip table: id and parquet round trip
+# ---------------------------------------------------------------------------
+
+def test_forced_measurement_id_is_deterministic_and_position_sensitive():
+    a = forced_measurement_id(11, 777, 266.668271, -28.865889)
+    assert a == forced_measurement_id(11, 777, 266.668271, -28.865889)
+    assert 0 < a < 2**63
+    assert a != forced_measurement_id(12, 777, 266.668271, -28.865889)   # another epoch
+    assert a != forced_measurement_id(11, 778, 266.668271, -28.865889)   # another object
+    # a re-run at a moved position (~0.7 mas) is a new measurement
+    assert a != forced_measurement_id(11, 777, 266.668271 + 2e-7, -28.865889)
+    # ...but jitter below the 1e-7 deg (0.36 mas) rounding grain is not
+    assert a == forced_measurement_id(11, 777, 266.668271 + 1e-9, -28.865889)
+
+
+def test_table_parquet_round_trip(tmp_path):
+    table = np.zeros(3, dtype=FORCED_TABLE_DTYPE)
+    table["forced_id"] = [5, 6, 7]; table["aid"] = [777, 777, 778]; table["rid"] = [11, 12, 11]
+    table["band"] = ["W146", "W146", "Z087"]; table["mjdobs"] = [60500.5, 60499.0, 60500.5]
+    table["psf_flux"] = [1.5, np.nan, -2.0]; table["science_flux"] = [100.0, 101.0, np.nan]
+    table["flags"] = [0, 1 << 16, 0]; table["x"] = [10.5, 11.5, 12.5]
+    path = tmp_path / "sub" / "dir" / "forced_phot_pid99.parquet"     # parents created
+    write_table(table, str(path))
+    back = read_table(str(path))
+    assert back.dtype == FORCED_TABLE_DTYPE and len(back) == 3
+    for name in FORCED_TABLE_DTYPE.names:
+        if table.dtype[name].kind == "f":
+            assert np.array_equal(back[name], table[name], equal_nan=True)
+        else:
+            assert np.array_equal(back[name], table[name])
+    assert read_table(str(tmp_path / "missing.parquet")) is None
 
 
 # ---------------------------------------------------------------------------

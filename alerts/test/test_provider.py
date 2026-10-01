@@ -33,7 +33,8 @@ import pytest
 from alerts.produce import (CUTOUT_FIELDS, MATCH_FIELDS, BatchStats,
                             batch_produce, load_schema, open_alert_archive,
                             produce_alert)
-from alerts.providers import (ALERTABLE_FLAGS, AlertDataProvider,
+from alerts.providers import (ALERTABLE_FLAGS, MAX_SOURCES_PER_CHIP,
+                              AlertDataProvider,
                               AssociationError, CutoutStagingError,
                               FlaggedSourceError)
 
@@ -567,3 +568,174 @@ def test_batch_and_single_paths_produce_identical_bytes(make_provider,
                 == _bytes_without_time_processed(batch_by_sid[row["sid"]],
                                                  schema)), \
             f"batch and single alerts differ for sid={row['sid']}"
+
+
+# ---------------------------------------------------------------------------
+# max_sources: the TEMPORARY per-chip S/N cap (providers.MAX_SOURCES_PER_CHIP)
+# ---------------------------------------------------------------------------
+
+def test_max_sources_keeps_highest_snr_in_sid_order(chip_data, caplog):
+    # the fake chip's three detections share one S/N, so give them distinct
+    # fluxes here: 9002 brightest, then 9003, then 9001
+    for row, flux in zip(sorted(chip_data.sources, key=lambda r: r["sid"]),
+                         (100.0, 900.0, 500.0)):
+        row["fluxfit"] = flux
+    with AlertDataProvider(FakeDB(chip_data), max_sources=2) as provider:
+        with caplog.at_level("INFO"):
+            kept = [s.sid for s in provider.iter_sources(CHIP_PID)]
+    assert kept == [9002, 9003]                     # top two, still in sid order
+    assert "keeping the 2 highest-S/N of 3" in caplog.text
+    assert "TEMPORARY" in caplog.text
+
+
+def test_max_sources_zero_disables_the_cap(chip_data):
+    with AlertDataProvider(FakeDB(chip_data), max_sources=0) as provider:
+        assert len(list(provider.iter_sources(CHIP_PID))) == len(chip_data.sources)
+    with AlertDataProvider(FakeDB(chip_data)) as provider:
+        assert provider.max_sources == MAX_SOURCES_PER_CHIP
+        assert len(list(provider.iter_sources(CHIP_PID))) == len(chip_data.sources)
+
+
+# ---------------------------------------------------------------------------
+# forced photometry: one run per chip (injected search over local files),
+# one lookup per object, parquet store, degrade-to-null
+# ---------------------------------------------------------------------------
+
+import numpy as np
+
+from alerts.forced_phot import PrevImage, forced_measurement_id
+from alerts.produce import assemble_alert
+from conftest import CHIP_MJDOBS, CHIP_PPID
+
+
+class FakeSearch:
+    """Stand-in for forced_phot.find_prev_images: records its call and
+    returns three epochs of the synthetic chip (its own, one day earlier,
+    fifty days earlier), every position on each."""
+
+    def __init__(self, synthetic_chip, tmp_path, fail=False):
+        import shutil
+        image_path, psf_path, _ = synthetic_chip
+        self.sci_psf = str(tmp_path / "WFI_SCA07_F146_PSF_DET_DIST_normalized.fits")
+        shutil.copy(psf_path, self.sci_psf)
+        self.image_path, self.psf_path = image_path, psf_path
+        self.calls = []; self.fail = fail
+
+    def __call__(self, query, positions, ra0, dec0, **kw):
+        self.calls.append(kw)
+        if self.fail:
+            raise RuntimeError("no database")
+        idx = np.arange(len(positions))
+        return [PrevImage(rid=rid, pid=rid * 10, diff_filename=self.image_path,
+                          sci_filename=self.image_path, diff_psf=self.psf_path,
+                          sci_psf=self.sci_psf, l2_filename="l2.fits.gz", mjdobs=mjd,
+                          fid=8, band="W146", expid=1, sca=7, corners=(0,) * 8,
+                          position_index=idx)
+                for rid, mjd in ((13, CHIP_MJDOBS - 50.0), (12, CHIP_MJDOBS - 1.0), (11, CHIP_MJDOBS))]
+
+
+def forced_provider(chip_data, search, **kw):
+    return AlertDataProvider(FakeDB(chip_data), forced_search=search, **kw)
+
+
+@pytest.fixture()
+def objects_on_chip(chip_data, tpv_header):
+    """Move the fake chip's three objects onto the synthetic chip, at its
+    first three injected sources (same TPV WCS), so forced fits there
+    recover known fluxes. Returns {aid: injected flux}."""
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from conftest import SYNTHETIC_SOURCES
+    header = fits.Header(); [header.set(k, v) for k, v in tpv_header.items()]
+    wcs = WCS(header)
+    fluxes = {}
+    for aid, (x, y, flux) in zip(sorted(chip_data.objects), SYNTHETIC_SOURCES):
+        ra, dec = wcs.all_pix2world([[x, y]], 1)[0]
+        chip_data.objects[aid]["ra0"], chip_data.objects[aid]["dec0"] = float(ra), float(dec)
+        fluxes[aid] = flux
+    return fluxes
+
+
+def test_forced_photometry_reaches_the_alert(chip_data, synthetic_chip, tmp_path, objects_on_chip):
+    search = FakeSearch(synthetic_chip, tmp_path)
+    store = tmp_path / "store"
+    with forced_provider(chip_data, search, forced_store=str(store)) as provider:
+        provider.forced_prefix = "20260916/req77/jid5/"
+        sources = list(provider.iter_sources(CHIP_PID))
+        # the search got the chip's geometry and no window
+        (kw,) = search.calls
+        assert kw["ppid"] == CHIP_PPID and kw["mjd_lo"] is None
+        assert abs(kw["mjd_hi"] - CHIP_MJDOBS) < 1e-5
+        source = sources[0]
+        obj = provider.get_object_for_source(source)
+        forced = provider.get_forced_photometry(source, obj)
+        # one record per epoch, oldest first, both products filled
+        assert [f.mjdobs for f in forced] == [CHIP_MJDOBS - 50.0, CHIP_MJDOBS - 1.0, CHIP_MJDOBS]
+        for f in forced:
+            assert f.aid == obj.aid and f.band == "W146" and f.expid == 1 and f.sca == 7
+            assert (f.ra, f.dec) == (obj.ra0, obj.dec0)
+            assert f.flux is not None and f.science_flux is not None and f.flags == 0
+            assert f.flux == f.science_flux          # same file served both products
+            # the fit at the object's position recovers the injected flux
+            assert abs(f.flux - objects_on_chip[obj.aid]) / objects_on_chip[obj.aid] < 0.05
+            assert f.forced_id == forced_measurement_id(f.expid and {CHIP_MJDOBS - 50.0: 13,
+                                                                     CHIP_MJDOBS - 1.0: 12,
+                                                                     CHIP_MJDOBS: 11}[f.mjdobs],
+                                                        obj.aid, obj.ra0, obj.dec0)
+        # the parquet landed under the stage-style prefix
+        assert (store / "20260916" / "req77" / "jid5" / f"forced_phot_pid{CHIP_PID}.parquet").exists()
+        # and the alert carries the records
+        alert = assemble_alert(provider, source.sid)
+        assert len(alert["prvDiaForcedSources"]) == 3
+        rec = alert["prvDiaForcedSources"][-1]
+        assert rec["diaObjectId"] == obj.aid and rec["psfFlux"] is not None
+        assert rec["scienceFlux"] is not None and rec["midpointMjd"] == CHIP_MJDOBS
+
+
+def test_forced_photometry_window_limits_search_and_lookup(chip_data, synthetic_chip, tmp_path, objects_on_chip):
+    search = FakeSearch(synthetic_chip, tmp_path)
+    with forced_provider(chip_data, search, forced_window_days=2.0) as provider:
+        sources = list(provider.iter_sources(CHIP_PID))
+        assert abs(search.calls[0]["mjd_lo"] - (CHIP_MJDOBS - 2.0)) < 1e-9
+        source = sources[0]
+        forced = provider.get_forced_photometry(source, provider.get_object_for_source(source))
+        # the stub returned the 50-day-old epoch anyway; the lookup drops it
+        assert [f.mjdobs for f in forced] == [CHIP_MJDOBS - 1.0, CHIP_MJDOBS]
+
+
+def test_forced_photometry_rereads_the_parquet_instead_of_recomputing(chip_data, synthetic_chip, tmp_path, objects_on_chip):
+    store = str(tmp_path / "store")
+    first = FakeSearch(synthetic_chip, tmp_path)
+    with forced_provider(chip_data, first, forced_store=store) as provider:
+        sources = list(provider.iter_sources(CHIP_PID))
+        src = sources[0]; obj = provider.get_object_for_source(src)
+        before = provider.get_forced_photometry(src, obj)
+    second = FakeSearch(synthetic_chip, tmp_path, fail=True)       # would raise if consulted
+    with forced_provider(chip_data, second, forced_store=store) as provider:
+        sources = list(provider.iter_sources(CHIP_PID))
+        src = sources[0]; obj = provider.get_object_for_source(src)
+        after = provider.get_forced_photometry(src, obj)
+    assert second.calls == []
+    assert [(f.forced_id, f.flux, f.science_flux, f.flags) for f in after] == \
+        [(f.forced_id, f.flux, f.science_flux, f.flags) for f in before]
+
+
+def test_forced_photometry_failure_degrades_to_null(chip_data, synthetic_chip, tmp_path, caplog):
+    search = FakeSearch(synthetic_chip, tmp_path, fail=True)
+    with forced_provider(chip_data, search) as provider:
+        with caplog.at_level("ERROR"):
+            sources = list(provider.iter_sources(CHIP_PID))
+        assert len(sources) == len(chip_data.sources)             # the chip still runs
+        source = sources[0]
+        assert provider.get_forced_photometry(source, provider.get_object_for_source(source)) == []
+        assert "forced photometry failed" in caplog.text
+        assert assemble_alert(provider, source.sid)["prvDiaForcedSources"] is None
+
+
+def test_forced_photometry_can_be_switched_off(chip_data, synthetic_chip, tmp_path):
+    search = FakeSearch(synthetic_chip, tmp_path)
+    with forced_provider(chip_data, search, forced_phot=False) as provider:
+        sources = list(provider.iter_sources(CHIP_PID))
+        assert search.calls == []
+        source = sources[0]
+        assert provider.get_forced_photometry(source, provider.get_object_for_source(source)) == []

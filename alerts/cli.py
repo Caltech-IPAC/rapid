@@ -24,7 +24,8 @@ from pathlib import Path
 if __package__:
     from .ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader, LvsReader
     from .produce import batch_produce, open_alert_archive, produce_alert
-    from .providers import AlertDataProvider
+    from .providers import (FORCED_WINDOW_DAYS, MAX_SOURCES_PER_CHIP,
+                            AlertDataProvider)
 else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
@@ -32,7 +33,8 @@ else:
     from alerts.ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader, LvsReader
     from alerts.produce import (batch_produce, open_alert_archive,
                                       produce_alert)
-    from alerts.providers import AlertDataProvider
+    from alerts.providers import (FORCED_WINDOW_DAYS, MAX_SOURCES_PER_CHIP,
+                                  AlertDataProvider)
 
 from database.modules.utils.rapid_db import RAPIDDB
 
@@ -123,7 +125,11 @@ def make_provider(diff_flavor: str = "sfft",
                   refcat: bool = True,
                   ned: bool = True,
                   ned_source: str | None = DEFAULT_NED_SOURCE,
-                  lvs: bool = True) -> AlertDataProvider:
+                  lvs: bool = True,
+                  max_sources: int = MAX_SOURCES_PER_CHIP,
+                  forced_phot: bool = True,
+                  forced_window_days: float | None = FORCED_WINDOW_DAYS,
+                  forced_store: str | None = None) -> AlertDataProvider:
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
 
@@ -131,6 +137,22 @@ def make_provider(diff_flavor: str = "sfft",
     ----------
     diff_flavor : {"sfft", "zogy"}, optional
         Which differencing algorithm's image feeds ``cutoutDifference``.
+    max_sources : int, optional
+        Per chip, alert only on this many detections, the highest by
+        signal-to-noise (TEMPORARY stand-in for a real-bogus cut, see
+        providers.MAX_SOURCES_PER_CHIP). 0 disables the cap.
+    forced_phot : bool, optional
+        Run forced photometry per chip at the objects' positions over the
+        previous images (alerts.forced_phot); on by default. When off,
+        prvDiaForcedSources stays null.
+    forced_window_days : float or None, optional
+        Look-back window of that run; None (default) measures every
+        previous image. A per-deployment choice (30 days is the natural
+        first value); GBTDS is expected to need a short one.
+    forced_store : str or None, optional
+        Where the per-chip parquet results are kept and re-read from:
+        ``s3://bucket/prefix`` or a local directory. None keeps them in
+        memory only.
     kona_file : str or pathlib.Path, optional
         Nightly KONA predictions JSON (see load_kona_predictions). While
         None -- the default until KONA runs operationally -- solar-system
@@ -190,7 +212,10 @@ def make_provider(diff_flavor: str = "sfft",
             "group allows it)")
     return AlertDataProvider(db, diff_flavor=diff_flavor,
                              kona_lookup=kona_lookup, refcat=refcat,
-                             ned_reader=ned_reader, lvs_reader=lvs_reader)
+                             ned_reader=ned_reader, lvs_reader=lvs_reader,
+                             max_sources=max_sources, forced_phot=forced_phot,
+                             forced_window_days=forced_window_days,
+                             forced_store=forced_store)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -259,6 +284,22 @@ def main(argv: list[str] | None = None) -> int:
                         help="skip the NED-LVS cross-match (lvsMatches stays "
                              "null); on by default, reading lvs/nedlvs.parquet "
                              "under --ned-source")
+    parser.add_argument("--max-sources", type=int, default=MAX_SOURCES_PER_CHIP,
+                        metavar="N",
+                        help="per chip, alert only on the N highest-S/N "
+                             "detections (TEMPORARY stand-in for a real-bogus "
+                             "cut); 0 = no cap (default: %(default)s)")
+    parser.add_argument("--no-forced-phot", action="store_true",
+                        help="skip per-chip forced photometry "
+                             "(prvDiaForcedSources stays null); on by default")
+    parser.add_argument("--forced-window-days", type=float, default=FORCED_WINDOW_DAYS,
+                        metavar="DAYS",
+                        help="look-back window of the forced-photometry run; "
+                             "default: no window, every previous image")
+    parser.add_argument("--forced-store", metavar="PATH", default=None,
+                        help="keep per-chip forced-photometry parquet files here "
+                             "(s3://bucket/prefix or a directory) and re-read "
+                             "them when present; default: memory only")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="diagnostic verbosity on stderr; quiet by "
@@ -284,7 +325,11 @@ def main(argv: list[str] | None = None) -> int:
                              refcat=not args.no_refcat,
                              ned=not args.no_ned,
                              ned_source=args.ned_source,
-                             lvs=not args.no_lvs)
+                             lvs=not args.no_lvs,
+                             max_sources=args.max_sources,
+                             forced_phot=not args.no_forced_phot,
+                             forced_window_days=args.forced_window_days,
+                             forced_store=args.forced_store)
 
     # Make producer, if kafka arg is True
     producer = None

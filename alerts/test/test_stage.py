@@ -34,12 +34,24 @@ def _config(**alerts_overrides):
                      "ned_match": "False", "kona_file": "",
                      "archive_filename_base": "alerts_jid",
                      "archive_codec": "deflate", "publish_to_kafka": "False",
-                     "log_level": "INFO", **alerts_overrides}
+                     "log_level": "INFO",
+                     "forced_phot_s3_bucket_base": "rapid-forced-photometry",
+                     **alerts_overrides}
     return cfg
 
 
+PROC_REQ = "77"     # an arbitrary ProcReqs reqid (main() takes the real one
+                    # from the PROCREQ env var the VPO sets per request)
+
+
 def _settings(**alerts_overrides):
-    return stage.read_alert_settings(_config(**alerts_overrides))
+    settings = stage.read_alert_settings(_config(**alerts_overrides))
+    # main() adds the processing request after reading the config (commit
+    # ec9674ec: S3 objects are filed under <proc_date>/req<reqid>/); the
+    # chip path needs it, so mirror that here
+    settings['proc_req'] = PROC_REQ
+    settings['proc_subdir'] = stage.util.get_proc_subdir(PROC_DATE, PROC_REQ)
+    return settings
 
 
 def _chip(jid, pid=CHIP_PID):
@@ -86,6 +98,27 @@ def test_donotuploadproducts_overrides_the_config(monkeypatch):
     assert stage.read_alert_settings(cfg)["upload_to_s3_bucket"] is True
     monkeypatch.setenv("DONOTUPLOADPRODUCTS", "1")      # any value, like Russ's scripts
     assert stage.read_alert_settings(cfg)["upload_to_s3_bucket"] is False
+
+
+def test_forced_photometry_settings(monkeypatch):
+    monkeypatch.delenv("DONOTUPLOADPRODUCTS", raising=False)
+    s = _settings()
+    assert s["forced_phot"] is True
+    assert s["forced_window_days"] is None                # blank -> no window
+    assert s["forced_phot_s3_bucket_base"] == "rapid-forced-photometry"
+    s = _settings(forced_window_days="30", forced_phot="False")
+    assert s["forced_window_days"] == 30.0 and s["forced_phot"] is False
+    # uploads on but no private bucket named: refuse to start rather than
+    # fall back to a bucket that might be public
+    cfg = _config(forced_phot_s3_bucket_base="")
+    cfg["JOB_PARAMS"]["upload_to_s3_bucket"] = "True"
+    with pytest.raises(ValueError, match="forced_phot_s3_bucket_base"):
+        stage.read_alert_settings(cfg)
+    # ...unless forced photometry is off, or uploads are off
+    cfg["ALERTS"]["forced_phot"] = "False"
+    assert stage.read_alert_settings(cfg)["forced_phot_s3_bucket_base"] is None
+    cfg = _config(forced_phot_s3_bucket_base="")
+    assert stage.read_alert_settings(cfg)["forced_phot"] is True
 
 
 def test_kafka_publication_is_refused():
@@ -163,6 +196,9 @@ def test_produce_chip_writes_archive_and_stats(make_provider, chip_data,
     stats, archive_path = stage.produce_chip(make_provider(), _chip(5),
                                              settings, PROC_DATE, str(tmp_path))
     assert archive_path == str(tmp_path / "alerts_jid5.avro")
+    # S3 objects go under <proc_date>/req<reqid>/jid<N>/
+    names = stage.chip_product_names(_chip(5), settings)
+    assert names["s3_prefix"] == f"{PROC_DATE}/req{PROC_REQ}/jid5/"
     with open(archive_path, "rb") as f:
         alerts = list(fastavro.reader(f))
     assert len(alerts) == stats.n_alerts == len(chip_data.sources)
@@ -189,10 +225,16 @@ def fake_make_provider(monkeypatch, chip_data):
     made = []
 
     def _make(diff_flavor="sfft", kona_file=None, refcat=True, ned=True,
-              ned_source=None, lvs=True):
+              ned_source=None, lvs=True, forced_phot=True,
+              forced_window_days=None, forced_store=None):
+        # forced photometry stays on, as in production: the fake chip has
+        # no searchable images, so the provider's degrade-to-null path runs
         provider = AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor,
                                      kona_lookup=None, refcat=refcat,
-                                     ned_reader=None, lvs_reader=None)
+                                     ned_reader=None, lvs_reader=None,
+                                     forced_phot=forced_phot,
+                                     forced_window_days=forced_window_days,
+                                     forced_store=forced_store)
         made.append(provider)
         return provider
 

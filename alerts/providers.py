@@ -113,6 +113,41 @@ PRV_WINDOW_DAYS = 365.25  # default look-back window for previous detections
 # ===========================================================================
 ALERTABLE_FLAGS = 0   # the sources.flags value the cross-match associates
 
+#: TODO: TEMPORARY. Per-chip cap on alertable detections, highest
+#: signal-to-noise first (AlertDataProvider._cut_to_max_sources), until a
+#: real-bogus score exists to cut on. 0 = no cap.
+MAX_SOURCES_PER_CHIP = 2000
+
+# ---------------------------------------------------------------------------
+# Forced photometry (alerts.forced_phot), run per chip at alert time
+# ---------------------------------------------------------------------------
+# Interim arrangement while no database table exists: every chip run forces
+# photometry at its objects' positions over the previous images and keeps
+# the result as one parquet file per chip in a store (local directory or
+# s3://bucket/prefix), re-read instead of recomputed when present. The
+# parquet layout is the future table's.
+
+#: Look-back window (days) of the per-chip forced-photometry run. None (the
+#: default) means no window: every previous image of the chip's footprint
+#: is measured. A window is a per-deployment choice -- 30 days is the
+#: natural first value -- and only GBTDS, at ~105 epochs/day, is expected
+#: to need a short one (see memory: alerts latency budget).
+FORCED_WINDOW_DAYS: float | None = None
+#: Which image of each epoch is measured: difference -> psfFlux, science
+#: -> scienceFlux.
+FORCED_PRODUCTS = ("diff", "science")
+#: Per-chip parquet file name in the store, under the caller's prefix. The
+#: table layout, the measurement id and the parquet I/O live in
+#: alerts.forced_phot (FORCED_TABLE_DTYPE, forced_measurement_id,
+#: write_table, read_table).
+FORCED_PARQUET_BASENAME = "forced_phot_pid{pid}.parquet"
+
+
+def _finite_or_none(value: Any) -> float | None:
+    """A float, or None for NaN/inf (a failed fit serializes as null)."""
+    value = float(value)
+    return value if np.isfinite(value) else None
+
 # Cutout-image staging: backoff between attempts is
 # STAGE_BACKOFF_BASE_S * 2**(attempt-1). The attempt count is the `retries`
 # argument of _stage(), not a constant.
@@ -315,10 +350,15 @@ class ObjectRecord:
 
 @dataclass
 class ForcedPhot:
-    """One forced-photometry measurement at an object position.
+    """One forced-photometry epoch at an object position: the PSF flux on
+    the difference image and on the science image of the same exposure,
+    both at the same fixed (ra, dec).
 
-    Staged for the diaForcedSource record; no provider fills it yet
-    (RAPID forced photometry writes lightcurve files, not DB rows).
+    Filled by AlertDataProvider from the per-chip forced-photometry run
+    (alerts.forced_phot), cached per chip as a table and expanded per
+    object. Fluxes are instrumental (image units), like diaSource.psfFlux;
+    the nJy calibration is pending for both. ``flags`` ORs the difference-
+    and science-image fit flags (photutils bits plus forced_phot.FLAG_*).
     """
     forced_id: int
     aid: int
@@ -331,6 +371,9 @@ class ForcedPhot:
     band: str | None = None
     flux: float | None = None
     fluxerr: float | None = None
+    science_flux: float | None = None
+    science_fluxerr: float | None = None
+    flags: int = 0
 
 
 @dataclass
@@ -1565,7 +1608,13 @@ class AlertDataProvider:
     def __init__(self, db: Any, diff_flavor: str = "sfft",
                  kona_lookup: Any = None, refcat: bool = True,
                  ned_reader: "NedSliceReader | None" = None,
-                 lvs_reader: "NedSliceReader | None" = None) -> None:
+                 lvs_reader: "NedSliceReader | None" = None,
+                 max_sources: int = MAX_SOURCES_PER_CHIP,
+                 forced_phot: bool = True,
+                 forced_window_days: float | None = FORCED_WINDOW_DAYS,
+                 forced_store: str | None = None,
+                 forced_products: Sequence[str] = FORCED_PRODUCTS,
+                 forced_search: Callable | None = None) -> None:
         """
         Parameters
         ----------
@@ -1573,6 +1622,25 @@ class AlertDataProvider:
             The database connection (anything exposing ``.conn.cursor()``).
         diff_flavor : {"sfft", "zogy"}, optional
             Which differencing algorithm is used.
+        max_sources : int, optional
+            Per chip, keep only this many alertable detections, the highest
+            by signal-to-noise (see _cut_to_max_sources; TEMPORARY stand-in
+            for a real-bogus cut). 0 disables the cut.
+        forced_phot : bool, optional
+            Run forced photometry per chip (see _prefetch_forced). When
+            False, prvDiaForcedSources stays null.
+        forced_window_days : float or None, optional
+            Look-back window of the run, ending at the chip's own epoch;
+            None (default) measures every previous image.
+        forced_store : str, optional
+            Where the per-chip parquet files live: ``s3://bucket/prefix``
+            or a local directory, under the prefix set by
+            set_forced_prefix(). None keeps results in memory only.
+        forced_products : sequence of str, optional
+            Which image of each epoch to measure (FORCED_PRODUCTS).
+        forced_search : callable, optional
+            Replaces alerts.forced_phot.find_prev_images (same signature);
+            for tests, which have no Q3C database to search.
         kona_lookup : callable, optional
             ``expid -> {designation: (ra, dec, vmag)} or None``, giving the
             KONA solar-system predictions for an exposure -- an index over
@@ -1608,6 +1676,21 @@ class AlertDataProvider:
         self.db = db
         self.diff_flavor = diff_flavor
         self.kona_lookup = kona_lookup
+        self.max_sources = int(max_sources)
+        self.forced_phot = bool(forced_phot)
+        self.forced_window_days = (None if forced_window_days is None
+                                   else float(forced_window_days))
+        self.forced_store = forced_store.rstrip("/") if forced_store else None
+        self.forced_products = tuple(forced_products)
+        self._forced_search = forced_search
+        #: key prefix under forced_store for the next chips' parquet files,
+        #: e.g. "<proc_date>/req<reqid>/jid<N>/" set by the alert stage
+        self.forced_prefix = ""
+        # per-chip forced-photometry table (forced_phot.FORCED_TABLE_DTYPE,
+        # sorted by aid then mjdobs) and the pid it covers; see
+        # _prefetch_forced()
+        self._chip_forced: np.ndarray | None = None
+        self._chip_forced_pid: int | None = None
         self.refcat_enabled = bool(refcat)
         # KONA predictions cache: one exposure's detections are processed
         # together, so cache the last expid's dict (None = no KONA data
@@ -1639,7 +1722,6 @@ class AlertDataProvider:
             prefix="rapid_cutouts_")
         self._staging_dir = self._staging_tmp.name
         self._s3: Any = None          # lazily built, retry-configured S3 client
-        self._forced_phot_logged = False  # log the not-implemented note once
         # Reference-catalog cross-match state. The catalog is a per-
         # reference-image product shared by many chips, so it is staged and
         # parsed once per rfid (the parse/stage outcome is cached even when
@@ -1682,6 +1764,8 @@ class AlertDataProvider:
         self._chip_nedmatches.clear()
         self._lvs = None
         self._chip_lvsmatches.clear()
+        self._chip_forced = None
+        self._chip_forced_pid = None
         self._staging_tmp.cleanup()
 
     def __enter__(self) -> "AlertDataProvider":
@@ -1941,11 +2025,38 @@ class AlertDataProvider:
         for row in rows:
             row["band"] = row.get("filter_name")
             sources.append(Source.from_row(row, strict=True))
+        sources = self._cut_to_max_sources(pid, sources)
         self._prefetch_chip(pid, sources)
+        self._prefetch_forced(pid, sources)
         self._match_chip_refcat(pid, sources)
         self._match_chip_ned(pid, sources)
         self._match_chip_lvs(pid, sources)
         yield from sources
+
+    def _cut_to_max_sources(self, pid: int,
+                            sources: list[Source]) -> list[Source]:
+        """Keep the chip's ``max_sources`` highest signal-to-noise detections.
+
+        TODO: TEMPORARY. A stand-in for a real-bogus cut (sources.rb, not
+        yet written by the pipeline) so that a chip with tens of thousands
+        of mostly bogus detections does not run every downstream step,
+        forced photometry above all, on all of them. Replace the ranking
+        key with the real-bogus score once it exists, then reconsider
+        whether a count cap is wanted at all.
+
+        Everything after this point -- association, history, cross-matches,
+        forced photometry, the alerts themselves -- sees only the survivors.
+        ``max_sources`` of 0 disables the cut. Order (by sid) is preserved.
+        """
+        if not self.max_sources or len(sources) <= self.max_sources:
+            return sources
+        ranked = sorted(sources, key=lambda s: (s.snr is None, -(s.snr or 0.0)))
+        kept = {s.sid for s in ranked[:self.max_sources]}
+        logger.info(
+            "pid=%s: keeping the %d highest-S/N of %d alertable detections; "
+            "%d dropped (max_sources, TEMPORARY stand-in for a real-bogus cut)",
+            pid, self.max_sources, len(sources), len(sources) - self.max_sources)
+        return [s for s in sources if s.sid in kept]
 
     def _prefetch_chip(self, pid: int, sources: list[Source],
                        window_days: float = PRV_WINDOW_DAYS) -> None:
@@ -2161,12 +2272,115 @@ class AlertDataProvider:
             detections.append(Source.from_row(row, strict=True))
         return detections
 
+    # ------------------------------------------------------------------
+    # Forced photometry: one run per chip, one lookup per object
+    # ------------------------------------------------------------------
+
+    def _prefetch_forced(self, pid: int, sources: list[Source]) -> None:
+        """Forced photometry for the chip's objects over the look-back
+        window, cached as a table (see the FORCED_* notes at the top).
+
+        One position per associated object, at its current astroobjects
+        position. Reads the chip's parquet from the store when it already
+        exists, otherwise runs the search and photometry (_run_forced) and
+        writes it. A failure anywhere is logged and leaves the cache empty:
+        the chip's alerts still ship, with null prvDiaForcedSources,
+        rather than aborting.
+        """
+        from alerts import forced_phot as fp
+
+        self._chip_forced = None
+        self._chip_forced_pid = pid
+        if not self.forced_phot:
+            return
+        t0 = time.time()
+        try:
+            objects: dict[int, Any] = {}
+            for source in sources:
+                row = self._chip_objects.get(source.sid)
+                if row is not None and row.get("aid") is not None:
+                    objects.setdefault(int(row["aid"]), fp.Position(
+                        int(row["aid"]), float(row["ra0"]), float(row["dec0"])))
+            positions = [objects[aid] for aid in sorted(objects)]
+            if not positions:
+                logger.info("pid=%s: forced photometry: no associated objects", pid)
+                return
+            store_path = None
+            if self.forced_store is not None:
+                store_path = (f"{self.forced_store}/{self.forced_prefix}"
+                              f"{FORCED_PARQUET_BASENAME.format(pid=int(pid))}")
+            table = fp.read_table(store_path) if store_path else None
+            if table is not None:
+                logger.info("pid=%s: forced photometry: read %d rows for %d objects from %s "
+                            "in %.1f s", pid, len(table), len(np.unique(table["aid"])),
+                            store_path, time.time() - t0)
+            else:
+                table = self._run_forced(pid, positions, t0)
+                if store_path:
+                    fp.write_table(table, store_path)
+            self._chip_forced = np.sort(table, order=["aid", "mjdobs"])
+        except Exception:
+            logger.exception("pid=%s: forced photometry failed after %.1f s; alerts will "
+                             "carry null prvDiaForcedSources", pid, time.time() - t0)
+            self._chip_forced = None
+
+    def _run_forced(self, pid: int, positions: list, t0: float) -> np.ndarray:
+        """Search, stage, measure and tabulate one chip's forced photometry:
+        the chip's previous images holding its objects' positions, both
+        products of every epoch merged into one row per object and epoch."""
+        from astropy.time import Time
+
+        from alerts import forced_phot as fp
+
+        (chip,) = self._query("""
+            SELECT d.ra0, d.dec0, d.ppid, l.mjdobs
+            FROM diffimages d JOIN l2files l ON l.rid = d.rid
+            WHERE d.pid = %s
+        """, (pid,))
+        search = self._forced_search or fp.find_prev_images
+        mjd_lo = (None if self.forced_window_days is None
+                  else float(chip["mjdobs"]) - self.forced_window_days)
+        images = search(self._query, positions, float(chip["ra0"]), float(chip["dec0"]),
+                        ppid=int(chip["ppid"]), mjd_lo=mjd_lo,
+                        mjd_hi=float(chip["mjdobs"]) + 1e-6)
+        t_search = time.time() - t0
+        time_proc = float(Time.now().mjd)  # pyright: ignore[reportArgumentType]
+        rows: dict[tuple[int, int], dict[str, Any]] = {}
+        n_pairs = 0
+        for image, product, measurements in fp.run_prev_images(
+                images, positions, self._stage, products=self.forced_products):
+            for m in measurements:
+                n_pairs += 1
+                rec = rows.setdefault((m.pos_id, m.rid), {
+                    "aid": m.pos_id, "rid": m.rid, "pid": image.pid, "expid": image.expid,
+                    "sca": image.sca, "fid": image.fid, "band": image.band or "",
+                    "mjdobs": image.mjdobs, "x": m.x, "y": m.y,
+                    "psf_flux": np.nan, "psf_fluxerr": np.nan,
+                    "science_flux": np.nan, "science_fluxerr": np.nan, "flags": 0})
+                if product == "diff":
+                    rec["psf_flux"], rec["psf_fluxerr"], rec["x"], rec["y"] = m.flux, m.fluxerr, m.x, m.y
+                else:
+                    rec["science_flux"], rec["science_fluxerr"] = m.flux, m.fluxerr
+                rec["flags"] |= int(m.flags)
+        pos_by_aid = {p.pos_id: p for p in positions}
+        table = np.zeros(len(rows), dtype=fp.FORCED_TABLE_DTYPE)
+        for i, rec in enumerate(rows.values()):
+            p = pos_by_aid[rec["aid"]]
+            rec["ra"], rec["dec"], rec["time_proc"] = p.ra, p.dec, time_proc
+            rec["forced_id"] = fp.forced_measurement_id(rec["rid"], rec["aid"], p.ra, p.dec)
+            for name in fp.FORCED_TABLE_DTYPE.names:
+                table[name][i] = rec[name]
+        t_total = time.time() - t0
+        logger.info("pid=%s: forced photometry: %d objects x %d images (window %s d) -> "
+                    "%d rows, %d measurements; search %.1f s, stage+fit %.1f s, total %.1f s",
+                    pid, len(positions), len(images), self.forced_window_days, len(table),
+                    n_pairs, t_search, t_total - t_search, t_total)
+        return table
+
     def get_forced_photometry(self, detection: Source,
                               obj: ObjectRecord) -> list[ForcedPhot]:
-        """Fetch the forced-photometry history at an object position (STUB).
-
-        Forced photometry in RAPID produces FITS files, not DB records;
-        integration with alert packets is not yet implemented.
+        """The forced-photometry history at an object's position: the
+        chip run's rows for ``obj.aid`` up to the triggering detection.
 
         Parameters
         ----------
@@ -2178,15 +2392,30 @@ class AlertDataProvider:
         Returns
         -------
         list of ForcedPhot
-            Always empty for now, so prvDiaForcedSources serializes null.
+            One per epoch up to and including the detection's own, within
+            ``forced_window_days`` when a window is set, oldest first.
+            Empty -- so prvDiaForcedSources serializes null -- when forced
+            photometry is off, failed for the chip, or the object was not
+            among the chip's measured objects.
         """
-        # Log once per provider, not once per source -- a batch run
-        # reaches here tens of thousands of times.
-        if not self._forced_phot_logged:
-            logger.info(
-                "Forced photometry not yet available for alert assembly")
-            self._forced_phot_logged = True
-        return []
+        table = self._chip_forced
+        if table is None or self._chip_forced_pid != detection.pid or len(table) == 0:
+            return []
+        lo = np.searchsorted(table["aid"], obj.aid, side="left")
+        hi = np.searchsorted(table["aid"], obj.aid, side="right")
+        rows = table[lo:hi]
+        keep = rows["mjdobs"] <= detection.mjdobs + 1e-6
+        if self.forced_window_days is not None:
+            keep &= rows["mjdobs"] >= detection.mjdobs - self.forced_window_days
+        return [ForcedPhot(
+            forced_id=int(r["forced_id"]), aid=int(r["aid"]), expid=int(r["expid"]),
+            sca=int(r["sca"]), ra=float(r["ra"]), dec=float(r["dec"]),
+            mjdobs=float(r["mjdobs"]), time_proc=float(r["time_proc"]),
+            band=str(r["band"]) or None,
+            flux=_finite_or_none(r["psf_flux"]), fluxerr=_finite_or_none(r["psf_fluxerr"]),
+            science_flux=_finite_or_none(r["science_flux"]),
+            science_fluxerr=_finite_or_none(r["science_fluxerr"]),
+            flags=int(r["flags"])) for r in rows[keep]]
 
     def get_ss_matches(self, detection: Source) -> list[SSMatch] | None:
         """Associate a detection with nearby known solar system objects.

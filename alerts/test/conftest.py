@@ -64,6 +64,8 @@ PRODUCT_OFFSETS = {
 CHIP_PID = 99          # the fake chip's diffimages.pid
 CHIP_FIELD = 3         # all fake sources live in Roman field 3
 CHIP_RFID = 555        # the chip's reference image (diffimages.rfid)
+CHIP_PPID = 15         # the science pipeline's ppid (diffimages.ppid)
+CHIP_MJDOBS = 60500.5  # the chip's epoch (l2files.mjdobs; its sources' mjdobs)
 
 
 def write_sextractor_refcat(path, entries):
@@ -225,6 +227,53 @@ def chip_image():
     return (rows * 1000 + cols).astype(np.float32)
 
 
+# ---------------------------------------------------------------------------
+# A synthetic chip with injected point sources, for forced photometry
+# ---------------------------------------------------------------------------
+
+PSF_FWHM_PX = 2.5
+NOISE_SIGMA = 1.0
+#: 1-based pixel positions and fluxes of the injected sources
+SYNTHETIC_SOURCES = [(60.0, 80.0, 2000.0), (150.5, 150.5, 500.0),
+                     (230.2, 40.7, 8000.0), (100.0, 250.0, 300.0)]
+
+
+def gaussian_psf_image(size=25, fwhm=PSF_FWHM_PX):
+    yy, xx = np.mgrid[0:size, 0:size]; c = size // 2; s = fwhm / 2.355
+    psf = np.exp(-((xx - c) ** 2 + (yy - c) ** 2) / (2 * s * s))
+    return (psf / psf.sum()).astype(np.float64)
+
+
+@pytest.fixture()
+def synthetic_chip(tmp_path, tpv_header):
+    """A 301x301 chip with the suite's TPV WCS, Gaussian sources of known
+    flux at known 1-based pixel positions (SYNTHETIC_SOURCES), a NaN hole,
+    and its PSF file. Returns (image_path, psf_path, sources)."""
+    from astropy.table import QTable
+    from photutils.datasets import make_model_image
+    from photutils.psf import ImagePSF
+
+    sources = list(SYNTHETIC_SOURCES)
+    psf_img = gaussian_psf_image()
+    model = ImagePSF(psf_img, flux=1.0, x_0=0.0, y_0=0.0)
+    params = QTable({"x_0": [s[0] - 1 for s in sources], "y_0": [s[1] - 1 for s in sources],
+                     "flux": [s[2] for s in sources]})
+    data = make_model_image((301, 301), model, params, model_shape=(25, 25))
+    data += np.random.default_rng(3).normal(0.0, NOISE_SIGMA, data.shape)
+    data[190:210, 190:210] = np.nan                                   # a masked hole
+    image_path = tmp_path / "diff.fits"; psf_path = tmp_path / "psf.fits"
+    fitsio.write(str(image_path), data.astype(np.float32), header=dict(tpv_header), clobber=True)
+    fitsio.write(str(psf_path), (psf_img * 37.0).astype(np.float32), clobber=True)   # un-normalized on purpose
+    return str(image_path), str(psf_path), sources
+
+
+def sky_positions(wcs, pixels, first_id=1):
+    """forced_phot.Position records for 1-based pixel coordinates."""
+    from alerts.forced_phot import Position
+    ra, dec = wcs.all_pix2world([p[0] for p in pixels], [p[1] for p in pixels], 1)
+    return [Position(first_id + i, float(r), float(d)) for i, (r, d) in enumerate(zip(ra, dec))]
+
+
 @pytest.fixture()
 def job_dir(tmp_path, tpv_header, chip_image):
     """A synthetic pipeline job directory with all four cutout products."""
@@ -266,6 +315,7 @@ class ChipData:
     """In-memory stand-in for the database tables behind one chip."""
 
     def __init__(self, tpv_header, job_dir):
+        self.tpv_header = tpv_header      # the chip's WCS (center = CRVAL)
         # diffimages.filename: the DB stores the zogy path; the provider
         # derives the job directory from it and picks the flavored file
         self.diff_filename = str(job_dir / "zogy_diffimage_masked.fits")
@@ -461,6 +511,9 @@ class FakeCursor:
             self._rows = ([{"filename": d.refcat_filename}]
                           if d.refcat_filename and rfid == d.rfid
                           and cattype == 1 else [])
+        elif "d.ra0, d.dec0, d.ppid" in sql:          # _run_forced: chip geometry
+            self._rows = [{"ra0": d.tpv_header["CRVAL1"], "dec0": d.tpv_header["CRVAL2"],
+                           "ppid": CHIP_PPID, "mjdobs": CHIP_MJDOBS}]
         elif "FROM diffimages" in sql:
             self._rows = ([{"filename": d.diff_filename, "rfid": d.rfid}]
                           if d.diff_filename else [])

@@ -28,6 +28,8 @@ Layout (top to bottom, each section depends only on the ones above it)::
                  forced_photometry()       -- parent: one image, N positions
     driver       run_prev_images()         -- stage, measure, yield, discard
                  assemble_history()        -- rows -> per-position lists
+    table        FORCED_TABLE_DTYPE, forced_measurement_id()
+                 write_table() / read_table()   -- parquet, local or s3://
     entry point  main()                    -- one chip by hand: --pid, --positions CSV
 
 Search (data flow)::
@@ -543,24 +545,43 @@ def error_array(data, product, gain=None, mask=None, box_size=ERROR_BOX_PX):
     bad = ~np.isfinite(data)
     if mask is not None:
         bad |= np.asarray(mask, dtype=bool)
-    bkg = Background2D(data, box_size, mask=bad, filter_size=(3, 3),
-                       sigma_clip=SigmaClip(sigma=3.0, maxiters=10),
-                       bkg_estimator=MedianBackground(),
-                       bkg_rms_estimator=MADStdBackgroundRMS())
-    variance = bkg.background_rms.astype(np.float64) ** 2
+    try:
+        # exclude_percentile=100: photutils counts sigma-clipped pixels
+        # towards a box's exclusion, and a difference image's heavy tails
+        # clip >10% of every box (seen on a real sfft image, 2026-09-30),
+        # which at the default 10 rejects every box. The median/MAD
+        # estimators are robust to those pixels; never exclude a box.
+        bkg = Background2D(data, box_size, mask=bad, filter_size=(3, 3),
+                           sigma_clip=SigmaClip(sigma=3.0, maxiters=10),
+                           bkg_estimator=MedianBackground(),
+                           bkg_rms_estimator=MADStdBackgroundRMS(),
+                           exclude_percentile=100.0)
+        background = bkg.background.astype(np.float64)
+        variance = bkg.background_rms.astype(np.float64) ** 2
+    except ValueError as exc:
+        # e.g. an image too small or too masked for any box: one global
+        # robust level and rms, which still gives sane fit weights
+        from astropy.stats import mad_std
+        good = data[~bad]
+        level, rms = (float(np.median(good)), float(mad_std(good))) if good.size else (0.0, np.nan)
+        logger.warning("error_array: Background2D failed (%s); using a global level %.3g, rms %.3g",
+                       str(exc).split("(")[0].strip(), level, rms)
+        background = np.full(data.shape, level)
+        variance = np.full(data.shape, rms ** 2)
     if product == "science":
         if gain is None:
             logger.warning("error_array: science image without gain; Poisson term skipped")
         else:
-            variance += np.clip(data - bkg.background, 0.0, None) / float(gain)
+            variance += np.clip(data - background, 0.0, None) / float(gain)
     error = np.sqrt(variance).astype(np.float32)
     error[bad] = np.nan
     return error
 
 
-#: Measurement.flags bit set by this module (photutils' own flag bits are
-#: below 1 << 8): the fit returned a non-finite flux or uncertainty.
-FLAG_NONFINITE = 1 << 8
+#: Measurement.flags bit set by this module: the fit returned a non-finite
+#: flux or uncertainty. photutils 3.0 uses bits up to 1 << 11 (see the
+#: bit list in param_registry.py), so ours start at 1 << 16.
+FLAG_NONFINITE = 1 << 16
 
 
 def project_positions(wcs, shape, positions, margin=STAMP_MARGIN_PX):
@@ -854,6 +875,100 @@ def assemble_history(rows):
     for rows_for_pos in history.values():
         rows_for_pos.sort(key=lambda r: (r.mjdobs, r.product))
     return history
+
+
+# ---------------------------------------------------------------------------
+# Per-chip table: one row per object and epoch, both products merged
+# ---------------------------------------------------------------------------
+# The layout the alert provider caches per chip and persists as parquet
+# (one file per chip), and the layout a future database table would take.
+
+#: Columns of the per-chip forced-photometry table.
+FORCED_TABLE_DTYPE = np.dtype([
+    ("forced_id", "i8"), ("aid", "i8"), ("rid", "i8"), ("pid", "i8"),
+    ("expid", "i8"), ("sca", "i2"), ("fid", "i2"), ("band", "U8"),
+    ("mjdobs", "f8"), ("ra", "f8"), ("dec", "f8"), ("x", "f4"), ("y", "f4"),
+    ("psf_flux", "f8"), ("psf_fluxerr", "f8"),
+    ("science_flux", "f8"), ("science_fluxerr", "f8"),
+    ("flags", "i4"), ("time_proc", "f8"),
+])
+
+
+def forced_measurement_id(rid, aid, ra, dec):
+    """63-bit id of one forced measurement: a hash of the epoch, the object
+    and the position actually used (to 0.1 mas).
+
+    Deterministic, so re-reading a parquet file or loading it into a table
+    is idempotent; position-dependent, so a re-run at an updated object
+    position is a new measurement with a new id.
+    """
+    import hashlib
+
+    key = f"{int(rid)}:{int(aid)}:{float(ra):.7f}:{float(dec):.7f}".encode()
+    return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big") & (2**63 - 1)
+
+
+def _split_s3(path):
+    bucket, _, key = path[len("s3://"):].partition("/")
+    return bucket, key
+
+
+def write_table(table, path):
+    """Write a FORCED_TABLE_DTYPE table as parquet, to a local path (parent
+    directories created) or an ``s3://bucket/key`` object."""
+    import tempfile
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    arrow = pa.table({name: pa.array(table[name].tolist()) if table.dtype[name].kind == "U"
+                      else pa.array(table[name]) for name in FORCED_TABLE_DTYPE.names})
+    if path.startswith("s3://"):
+        import boto3
+
+        bucket, key = _split_s3(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            local = os.path.join(tmp, os.path.basename(key))
+            pq.write_table(arrow, local)
+            boto3.client("s3").upload_file(local, bucket, key)
+    else:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        pq.write_table(arrow, path)
+    logger.info("write_table: %d rows -> %s", len(table), path)
+
+
+def read_table(path):
+    """A FORCED_TABLE_DTYPE table from a parquet file written by
+    :func:`write_table`, local or ``s3://``; None when there is no such
+    file (or no access to it)."""
+    import tempfile
+
+    import pyarrow.parquet as pq
+
+    def to_table(local):
+        arrow = pq.read_table(local)
+        table = np.zeros(arrow.num_rows, dtype=FORCED_TABLE_DTYPE)
+        for name in FORCED_TABLE_DTYPE.names:
+            table[name] = arrow.column(name).to_numpy(zero_copy_only=False)
+        return table
+
+    if path.startswith("s3://"):
+        import boto3
+        import botocore.exceptions
+
+        bucket, key = _split_s3(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            local = os.path.join(tmp, os.path.basename(key))
+            try:
+                boto3.client("s3").download_file(bucket, key, local)
+            except botocore.exceptions.ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "403", "AccessDenied"):
+                    return None
+                raise
+            return to_table(local)
+    if not os.path.exists(path):
+        return None
+    return to_table(path)
 
 
 # ---------------------------------------------------------------------------

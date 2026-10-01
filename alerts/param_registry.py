@@ -381,31 +381,37 @@ DIA_SOURCE_PARAMS = (
 DIA_FORCED_SOURCE_PARAMS = (
     # --- Identifiers & associations ---
     Param("diaForcedSourceId", "long",            "Unique identifier for this forced source measurement",
-                        STUB, _FP, attr="forced_id"), #TODO: separate ID for forced source?
+                        IMPLEMENTED, "forced_phot: 63-bit hash of (rid, aid, position used); "
+                                     "a re-run at a new position is a new measurement", attr="forced_id"),
     Param("diaObjectId",       "long",            "Associated diaObject identifier",
-                        STUB, _FP, attr="aid"), #TODO: already in diaSource?
+                        IMPLEMENTED, "astroobjects.aid (the position the photometry was forced at)", attr="aid"),
     Param("expId",             "long",            "RAPID-assigned exposure identifier",
-                        STUB, _FP, attr="expid"),
+                        IMPLEMENTED, "diffimages.expid of the measured epoch", attr="expid"),
     Param("detector",          "int",             "Detector (SCA) number",
-                        STUB, _FP, attr="sca"),
+                        IMPLEMENTED, "diffimages.sca of the measured epoch", attr="sca"),
 
     # --- Position ---
     Param("ra",                "double",          "Right ascension of forced measurement position; ICRS [deg]",
-                        STUB, _FP),
+                        IMPLEMENTED, "astroobjects.ra0 at run time (fixed for all epochs of the run)"),
     Param("dec",               "double",          "Declination of forced measurement position; ICRS [deg]",
-                        STUB, _FP),
+                        IMPLEMENTED, "astroobjects.dec0 at run time (fixed for all epochs of the run)"),
 
     # --- Photometry ---
     Param("band",              ["null", "string"], "Filter band name",
-                        STUB, _FP),
+                        IMPLEMENTED, "filters.filter of the measured epoch"),
     Param("psfFlux",           ["null", "float"], "Forced PSF flux on difference image [nJy]",
-                        STUB, _FP, attr="flux"),
+                        IMPLEMENTED, "forced_phot.psfphot on the difference image (instrumental; nJy calibration pending)",
+                        attr="flux"),
     Param("psfFluxErr",        ["null", "float"], "Uncertainty in psfFlux [nJy]",
-                        STUB, _FP, attr="fluxerr"),
+                        IMPLEMENTED, "forced_phot.psfphot (instrumental; nJy calibration pending)", attr="fluxerr"),
+    # TODO: drop "(stub)" from the two doc strings below at the next schema
+    # version bump; the wording is baked into the checked-in .avsc files.
     Param("scienceFlux",       ["null", "float"], "Forced PSF flux on science image (stub) [nJy]",
-                        STUB, _FP),
+                        IMPLEMENTED, "forced_phot.psfphot on the background-subtracted science image "
+                                     "(instrumental; nJy calibration pending)", attr="science_flux"),
     Param("scienceFluxErr",    ["null", "float"], "Uncertainty in scienceFlux (stub) [nJy]",
-                        STUB, _FP),
+                        IMPLEMENTED, "forced_phot.psfphot (instrumental; nJy calibration pending)",
+                        attr="science_fluxerr"),
     # TODO (2026-09-29): decide where the forced-position reference flux lives.
     # Not here for now. It is one number per object per band (per reference
     # version), so the natural home is the diaObject record; the case for
@@ -417,9 +423,9 @@ DIA_FORCED_SOURCE_PARAMS = (
 
     # --- Time ---
     Param("midpointMjd",    "double",          "Effective mid-observation time (UTC scale) [MJD]",
-                        STUB, _FP, attr="mjdobs"),
+                        IMPLEMENTED, "l2files.mjdobs of the measured epoch", attr="mjdobs"),
     Param("timeProcessedMjd", "double",        "Time measurement was processed (UTC scale) [MJD]",
-                        STUB, _FP, attr="time_proc"),
+                        IMPLEMENTED, "time the chip's forced-photometry run started", attr="time_proc"),
     Param("timeWithdrawnMjd", ["null", "double"], "Time measurement was withdrawn (UTC scale) [MJD]",
                         NOT_USED, "alert-withdrawal mechanism (not designed)"),
 )
