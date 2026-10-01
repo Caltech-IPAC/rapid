@@ -3042,7 +3042,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
 #####################################################################################################
 # Add new columns, such as the ZTF "sumrat" metric, to the difference-image catalogs.
 #
-# compute_new_cols_sextractor and compute_new_cols_photutils are the umbrella methods to be called
+# compute_new_cols_sxtractor and compute_new_cols_photutils are the umbrella methods to be called
 # from the science pipeline, one for each catalog flavor.  Each reads the source positions from the
 # catalog, has compute_new_catalog_columns compute every requested column from the difference
 # image, and then rewrites the catalog with the new columns appended, in the format it came in.
@@ -3145,14 +3145,14 @@ def write_lines_to_text_file(lines,output_filename):
 #-------------------------------------------------------------------
 # Compute new columns for a SExtractor ASCII_HEAD catalog and append them to it.
 
-def compute_new_cols_sextractor(diff_image_filename,
+def compute_new_cols_sxtractor(diff_image_filename,
                                 catalog_filename,
                                 new_cols_dict,
                                 sumrat_dict,
                                 output_catalog_filename = None):
 
     """
-    Method compute_new_cols_sextractor
+    Method compute_new_cols_sxtractor
 
     Inputs:
     diff_image_filename     FITS file containing the difference image that SExtractor measured
@@ -3174,8 +3174,8 @@ def compute_new_cols_sextractor(diff_image_filename,
     last existing column.  The column names are written in upper case, as SExtractor's are.
     """
 
-    print("compute_new_cols_sextractor: diff_image_filename =",diff_image_filename)
-    print("compute_new_cols_sextractor: catalog_filename =",catalog_filename)
+    print("compute_new_cols_sxtractor: diff_image_filename =",diff_image_filename)
+    print("compute_new_cols_sxtractor: catalog_filename =",catalog_filename)
 
     with open(catalog_filename, "r") as f:
         lines = [line.rstrip("\r\n") for line in f]
@@ -3186,7 +3186,7 @@ def compute_new_cols_sextractor(diff_image_filename,
     for line in lines:
         if line.startswith("#"):
             if data_lines:
-                raise ValueError(f"Method compute_new_cols_sextractor: comment line after the "
+                raise ValueError(f"Method compute_new_cols_sxtractor: comment line after the "
                                  f"start of the data in {catalog_filename}")
             header_lines.append(line)
         elif line.strip():
@@ -3205,7 +3205,7 @@ def compute_new_cols_sextractor(diff_image_filename,
             col_numbers[fields[1].upper()] = int(fields[0])
 
     if not col_numbers:
-        raise ValueError(f"Method compute_new_cols_sextractor: no ASCII_HEAD column header found "
+        raise ValueError(f"Method compute_new_cols_sxtractor: no ASCII_HEAD column header found "
                          f"in {catalog_filename}")
 
     x_col = new_cols_dict["sextractor_x_col"].strip().upper()
@@ -3213,7 +3213,7 @@ def compute_new_cols_sextractor(diff_image_filename,
 
     for col in (x_col,y_col):
         if col not in col_numbers:
-            raise ValueError(f"Method compute_new_cols_sextractor: position column {col} not "
+            raise ValueError(f"Method compute_new_cols_sxtractor: position column {col} not "
                              f"found in {catalog_filename}")
 
     x_list = []
@@ -3227,7 +3227,7 @@ def compute_new_cols_sextractor(diff_image_filename,
         if ncols is None:
             ncols = len(fields)
         elif len(fields) != ncols:
-            raise ValueError(f"Method compute_new_cols_sextractor: rows of {catalog_filename} "
+            raise ValueError(f"Method compute_new_cols_sxtractor: rows of {catalog_filename} "
                              f"have different numbers of columns ({ncols} and {len(fields)})")
 
         x_list.append(float(fields[col_numbers[x_col] - 1]))
@@ -3249,7 +3249,7 @@ def compute_new_cols_sextractor(diff_image_filename,
 
     for col_name in new_cols:
         if col_name.upper() in col_numbers:
-            raise ValueError(f"Method compute_new_cols_sextractor: column {col_name.upper()} is "
+            raise ValueError(f"Method compute_new_cols_sxtractor: column {col_name.upper()} is "
                              f"already in {catalog_filename}")
 
     for i,col_name in enumerate(new_cols):
@@ -3265,7 +3265,7 @@ def compute_new_cols_sextractor(diff_image_filename,
 
     write_lines_to_text_file(header_lines + data_lines,output_catalog_filename)
 
-    print(f"compute_new_cols_sextractor: added columns {list(new_cols)} for {len(data_lines)} "
+    print(f"compute_new_cols_sxtractor: added columns {list(new_cols)} for {len(data_lines)} "
           f"sources to {output_catalog_filename}")
 
     return new_cols
