@@ -406,7 +406,7 @@ class RAPIDDB:
                   ctype1, ctype2, cunit1, cunit2, a_order, a_0_2, a_0_3, a_0_4, a_1_1,
                   a_1_2, a_1_3, a_2_0, a_2_1, a_2_2, a_3_0, a_3_1, a_4_0, b_order, b_0_2, b_0_3,
                   b_0_4, b_1_1, b_1_2, b_1_3, b_2_0, b_2_1, b_2_2, b_3_0, b_3_1,
-                  b_4_0, equinox, ra, dec, paobsy, pafpa, zptmag, skymean,
+                  b_4_0, equinox, float(ra), float(dec), paobsy, pafpa, zptmag, skymean,
                   overlapfields, limmag)
 
         print('query = {}, params = {}'.format(query, params))
@@ -555,7 +555,7 @@ class RAPIDDB:
                   a_2_0, a_2_1, a_2_2, a_2_3, a_3_0, a_3_1, a_3_2, a_4_0, a_4_1, a_5_0,
                   b_order, b_0_1, b_0_2, b_0_3, b_0_4, b_0_5, b_1_0, b_1_1, b_1_2, b_1_3, b_1_4,
                   b_2_0, b_2_1, b_2_2, b_2_3, b_3_0, b_3_1, b_3_2, b_4_0, b_4_1, b_5_0,
-                  equinox, ra, dec, paobsy, pafpa, zptmag, skymean,
+                  equinox, float(ra), float(dec), paobsy, pafpa, zptmag, skymean,
                   overlapfields, limmag)
 
         print('query = {}, params = {}'.format(query, params))
