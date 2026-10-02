@@ -3070,7 +3070,7 @@ new_catalog_col_descriptions = {
     "roundness1": "PhotUtils DAOStarFinder roundness from symmetry",
     "roundness2": "PhotUtils DAOStarFinder roundness from marginal fits",
     "flux_fit": "PhotUtils PSFPhotometry fitted flux",
-    "snr": "PhotUtils PSFPhotometry flux_fit / flux_err",
+    "snr_fit": "PhotUtils PSFPhotometry flux_fit / flux_err",
     "reduced_chi2": "PhotUtils PSFPhotometry reduced chi-square of fit",
     "n_pixels_fit": "PhotUtils PSFPhotometry number of pixels fit",
     "flags_fit": "PhotUtils PSFPhotometry bit flags",
@@ -3203,7 +3203,7 @@ def compute_new_cols_sxtractor(diff_image_filename,
         are added only when this and psfcat_dict are given.
     diff_unc_filename : str or None, optional
         FITS file containing the uncertainty image of the difference image, which weights the
-        PSF fit.  If None, the fit is unweighted, and snr and reduced_chi2 are written as the
+        PSF fit.  If None, the fit is unweighted, and snr_fit and reduced_chi2 are written as the
         fill value.
     psfcat_dict : dict-like of str or None, optional
         [PSFCAT_DIFFIMAGE] section of the config file, whose fwhm, fit_shape, and aperture_radius

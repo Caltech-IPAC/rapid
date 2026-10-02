@@ -960,7 +960,7 @@ def compute_sumrat_for_diff_image(input_diff_filename,
 # Columns computed by compute_photutils_cols_for_diff_image.
 
 photutils_col_names = ("sharpness","roundness1","roundness2",
-                       "flux_fit","snr","reduced_chi2","n_pixels_fit","flags","cfit")
+                       "flux_fit","snr_fit","reduced_chi2","n_pixels_fit","flags","cfit")
 
 
 #####################################################################################################
@@ -1071,9 +1071,9 @@ def compute_daofind_cols_at_pixels(data,xpix,ypix,fwhm):
 # The fitted flux comes from PSFPhotometry with the same settings as compute_psf_catalog in
 # modules/utils/rapid_pipeline_subs.py, which makes the RAPID PhotUtils catalogs, except that the
 # initial positions are the input ones rather than DAOStarFinder detections.  The positions are
-# free in the fit, as there.  snr is flux_fit / flux_err, as for the snr of the RAPID alerts
+# free in the fit, as there.  snr_fit is flux_fit / flux_err, as for the snr of the RAPID alerts
 # (alerts/param_registry.py).  Without an uncertainty image, flux_err comes from the fit
-# covariance alone and means nothing, so snr is then left at fill_value, and PSFPhotometry
+# covariance alone and means nothing, so snr_fit is then left at fill_value, and PSFPhotometry
 # returns reduced_chi2 as NaN, which also becomes fill_value.
 #####################################################################################################
 
@@ -1092,7 +1092,7 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
 
     """
     Compute DAOStarFinder sharpness, roundness1, and roundness2, and the PSFPhotometry fitted flux,
-    snr, reduced_chi2, n_pixels_fit, flags, and cfit, at each of a list of positions in a
+    snr_fit, reduced_chi2, n_pixels_fit, flags, and cfit, at each of a list of positions in a
     difference image.
 
     Parameters
@@ -1114,7 +1114,7 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
         Radius of the aperture PSFPhotometry estimates the initial fluxes with [pixels].
     input_unc_filename : str or None, optional
         FITS file containing the uncertainty image, which weights the PSF fit.  If None, the fit
-        is unweighted, and snr and reduced_chi2 are fill_value.
+        is unweighted, and snr_fit and reduced_chi2 are fill_value.
     hdu_index : int or None, optional
         HDU index of the difference-image data.  If None, the first HDU holding two-dimensional
         image data is used.  That is always how the uncertainty-image data are found.
@@ -1129,7 +1129,7 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
     photutils_cols : dict of str to list of float
         Lists with one value per input position, in the order of xy_positions, of:
         "sharpness", "roundness1", and "roundness2" (dimensionless, from DAOStarFinder);
-        "flux_fit" (in the units of the image); "snr" (flux_fit / flux_err, dimensionless);
+        "flux_fit" (in the units of the image); "snr_fit" (flux_fit / flux_err, dimensionless);
         "reduced_chi2" (dimensionless); "n_pixels_fit" (number of unmasked pixels fit);
         "flags" (PSFPhotometry bit flags); and "cfit" (central-pixel fit residual relative to
         flux_fit, dimensionless).  "n_pixels_fit" and "flags" are integer-valued floats.
@@ -1255,7 +1255,7 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
 
     if error is not None:
         with np.errstate(divide="ignore", invalid="ignore"):
-            psf_fit_cols["snr"] = psf_fit_cols["flux_fit"] / np.asarray(phot["flux_err"], dtype=np.float64)
+            psf_fit_cols["snr_fit"] = psf_fit_cols["flux_fit"] / np.asarray(phot["flux_err"], dtype=np.float64)
 
     for name,values in psf_fit_cols.items():
         for source_id,value in zip(phot["id"],values):
