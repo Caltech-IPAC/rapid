@@ -957,6 +957,12 @@ def compute_sumrat_for_diff_image(input_diff_filename,
     return sumrat_list
 
 
+# Columns computed by compute_photutils_cols_for_diff_image.
+
+photutils_col_names = ("sharpness","roundness1","roundness2",
+                       "flux_fit","snr","reduced_chi2","n_pixels_fit","flags","cfit")
+
+
 #####################################################################################################
 # Compute the DAOStarFinder sharpness, roundness1, and roundness2 of sources at given pixels.
 #
@@ -1056,8 +1062,8 @@ def compute_daofind_cols_at_pixels(data,xpix,ypix,fwhm):
 
 #####################################################################################################
 # Compute PhotUtils-style columns (DAOStarFinder sharpness, roundness1, and roundness2, and the
-# PSFPhotometry fitted flux) at given source positions, so that they can be added to a SExtractor
-# catalog of a difference image.
+# PSFPhotometry fitted flux, its signal-to-noise ratio, and the fit-quality columns) at given
+# source positions, so that they can be added to a SExtractor catalog of a difference image.
 #
 # The DAOStarFinder quantities are computed by compute_daofind_cols_at_pixels (below), which
 # measures them at a pixel, so each position is rounded to the nearest pixel, as for sumrat.
@@ -1065,7 +1071,10 @@ def compute_daofind_cols_at_pixels(data,xpix,ypix,fwhm):
 # The fitted flux comes from PSFPhotometry with the same settings as compute_psf_catalog in
 # modules/utils/rapid_pipeline_subs.py, which makes the RAPID PhotUtils catalogs, except that the
 # initial positions are the input ones rather than DAOStarFinder detections.  The positions are
-# free in the fit, as there.
+# free in the fit, as there.  snr is flux_fit / flux_err, as for the snr of the RAPID alerts
+# (alerts/param_registry.py).  Without an uncertainty image, flux_err comes from the fit
+# covariance alone and means nothing, so snr is then left at fill_value, and PSFPhotometry
+# returns reduced_chi2 as NaN, which also becomes fill_value.
 #####################################################################################################
 
 def compute_photutils_cols_for_diff_image(input_diff_filename,
@@ -1083,7 +1092,8 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
 
     """
     Compute DAOStarFinder sharpness, roundness1, and roundness2, and the PSFPhotometry fitted flux,
-    at each of a list of positions in a difference image.
+    snr, reduced_chi2, n_pixels_fit, flags, and cfit, at each of a list of positions in a
+    difference image.
 
     Parameters
     ----------
@@ -1104,7 +1114,7 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
         Radius of the aperture PSFPhotometry estimates the initial fluxes with [pixels].
     input_unc_filename : str or None, optional
         FITS file containing the uncertainty image, which weights the PSF fit.  If None, the fit
-        is unweighted.
+        is unweighted, and snr and reduced_chi2 are fill_value.
     hdu_index : int or None, optional
         HDU index of the difference-image data.  If None, the first HDU holding two-dimensional
         image data is used.  That is always how the uncertainty-image data are found.
@@ -1117,9 +1127,12 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
     Returns
     -------
     photutils_cols : dict of str to list of float
-        Lists of "sharpness", "roundness1", "roundness2" (dimensionless), and "flux_fit" (in the
-        units of the image), each with one value per input position, in the order of
-        xy_positions.
+        Lists with one value per input position, in the order of xy_positions, of:
+        "sharpness", "roundness1", and "roundness2" (dimensionless, from DAOStarFinder);
+        "flux_fit" (in the units of the image); "snr" (flux_fit / flux_err, dimensionless);
+        "reduced_chi2" (dimensionless); "n_pixels_fit" (number of unmasked pixels fit);
+        "flags" (PSFPhotometry bit flags); and "cfit" (central-pixel fit residual relative to
+        flux_fit, dimensionless).  "n_pixels_fit" and "flags" are integer-valued floats.
 
     Notes
     -----
@@ -1160,7 +1173,7 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
     ny,nx = data.shape
     n = len(xy_positions)
 
-    photutils_cols = {name: [fill_value] * n for name in ("sharpness","roundness1","roundness2","flux_fit")}
+    photutils_cols = {name: [fill_value] * n for name in photutils_col_names}
 
 
     # Zero-based positions, and the sources that can be measured: finite positions whose nearest
@@ -1228,9 +1241,25 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
                        error = None if error is None else np.where(mask, 1.0, error),
                        init_params = init_params)
 
-    for source_id,flux_fit in zip(phot["id"],phot["flux_fit"]):
-        flux_fit = float(flux_fit)
-        if np.isfinite(flux_fit):
-            photutils_cols["flux_fit"][int(source_id) - 1] = flux_fit
+    # PSFPhotometry results, matched back to the input positions through id.  photutils < 3.0
+    # names n_pixels_fit npixfit.
+
+    n_pixels_fit_name = "n_pixels_fit" if "n_pixels_fit" in phot.colnames else "npixfit"
+
+    psf_fit_cols = {"flux_fit": np.asarray(phot["flux_fit"], dtype=np.float64),
+                    "reduced_chi2": np.asarray(phot["reduced_chi2"], dtype=np.float64)
+                                    if "reduced_chi2" in phot.colnames else np.full(len(phot), np.nan),
+                    "n_pixels_fit": np.asarray(phot[n_pixels_fit_name], dtype=np.float64),
+                    "flags": np.asarray(phot["flags"], dtype=np.float64),
+                    "cfit": np.asarray(phot["cfit"], dtype=np.float64)}
+
+    if error is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            psf_fit_cols["snr"] = psf_fit_cols["flux_fit"] / np.asarray(phot["flux_err"], dtype=np.float64)
+
+    for name,values in psf_fit_cols.items():
+        for source_id,value in zip(phot["id"],values):
+            if np.isfinite(value):
+                photutils_cols[name][int(source_id) - 1] = float(value)
 
     return photutils_cols
