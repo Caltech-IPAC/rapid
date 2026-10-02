@@ -345,6 +345,17 @@ if __name__ == '__main__':
     fake_sources_dict = config_input['FAKE_SOURCES']
     psfcat_refimage_dict = config_input['PSFCAT_REFIMAGE']
 
+    # Parameters of the new difference-image catalog columns, such as sumrat.  The new columns are
+    # skipped for a job config written before these sections were added.
+
+    if config_input.has_section('NEW_CATALOG_COLS') and config_input.has_section('SUMRAT'):
+        new_catalog_cols_dict = config_input['NEW_CATALOG_COLS']
+        sumrat_dict = config_input['SUMRAT']
+    else:
+        print("*** Warning: NEW_CATALOG_COLS or SUMRAT section missing from job config; new catalog columns will not be added")
+        new_catalog_cols_dict = None
+        sumrat_dict = None
+
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
     inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
@@ -2147,6 +2158,19 @@ if __name__ == '__main__':
             print("nsexcatsources_sfftdiffimage =",nsexcatsources_sfftdiffimage)
 
 
+            # Add new columns, such as sumrat, to SExtractor catalog for positive SFFT masked difference image.
+            # The values are measured on the image SExtractor measured the sources on.
+
+            if new_catalog_cols_dict is not None:
+                try:
+                    util.compute_new_cols_sxtractor(filename_sfftdiffimage,
+                                                    filename_sfftdiffimage_sextractor_catalog,
+                                                    new_catalog_cols_dict,
+                                                    sumrat_dict)
+                except Exception as e:
+                    print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
+
+
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
@@ -2165,7 +2189,7 @@ if __name__ == '__main__':
                 filename_detection_image_negative = filename_sfftdiffimage_negative
 
             sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
-            filename_sfftdiffimage_sextractor_catalog_negative = filename_sfftdiffimage_negative.replace(".fits",".txt")
+            filename_sfftdiffimage_sextractor_catalog_negative = filename_detection_image_negative.replace(".fits",".txt")
 
             sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image_negative
             sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage_negative
@@ -2198,6 +2222,19 @@ if __name__ == '__main__':
             nsexcatsources_sfftdiffimage_negative = len(vals_sfftdiffimage_negative)
 
             print("nsexcatsources_sfftdiffimage_negative =",nsexcatsources_sfftdiffimage_negative)
+
+
+            # Add new columns, such as sumrat, to SExtractor catalog for negative SFFT masked difference image.
+            # The values are measured on the image SExtractor measured the sources on.
+
+            if new_catalog_cols_dict is not None:
+                try:
+                    util.compute_new_cols_sxtractor(filename_sfftdiffimage_negative,
+                                                    filename_sfftdiffimage_sextractor_catalog_negative,
+                                                    new_catalog_cols_dict,
+                                                    sumrat_dict)
+                except Exception as e:
+                    print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
 
 
             # Code-timing benchmark.
@@ -2332,9 +2369,26 @@ if __name__ == '__main__':
                     ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
 
 
-                    # Join photometry and finder objects and output parquet file.
+                    # Add new columns, such as sumrat, to PSF-fit catalog for positive SFFT difference image.
+                    # The values are measured on the image the PSF fitting was done on.
 
-                    joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+                    if new_catalog_cols_dict is not None:
+                        try:
+                            util.compute_new_cols_photutils(input_img_filename,
+                                                            output_psfcat_filename,
+                                                            new_catalog_cols_dict,
+                                                            sumrat_dict)
+                        except Exception as e:
+                            print(f"*** Warning: Could not add new columns to {output_psfcat_filename} ({e}); continuing...")
+
+
+                    # Join photometry and finder objects and output parquet file.  The photometry
+                    # catalog is read back from the text file, so that the parquet file has the same
+                    # columns, including the new ones such as sumrat, and the same values.
+
+                    phot_from_txt = QTable.read(output_psfcat_filename, format='ascii', fast_reader=True)
+
+                    joined_table_inner = join(phot_from_txt, psfphot.finder_results, keys='id', join_type='inner')
 
                     nrows = len(joined_table_inner)
                     print(f"nrows in PSF-fit catalog = {nrows}\n")
@@ -2456,9 +2510,26 @@ if __name__ == '__main__':
                     ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
 
 
-                    # Join photometry and finder objects and output parquet file.
+                    # Add new columns, such as sumrat, to PSF-fit catalog for negative SFFT difference image.
+                    # The values are measured on the image the PSF fitting was done on.
 
-                    joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+                    if new_catalog_cols_dict is not None:
+                        try:
+                            util.compute_new_cols_photutils(input_img_filename,
+                                                            output_psfcat_filename_negative,
+                                                            new_catalog_cols_dict,
+                                                            sumrat_dict)
+                        except Exception as e:
+                            print(f"*** Warning: Could not add new columns to {output_psfcat_filename_negative} ({e}); continuing...")
+
+
+                    # Join photometry and finder objects and output parquet file.  The photometry
+                    # catalog is read back from the text file, so that the parquet file has the same
+                    # columns, including the new ones such as sumrat, and the same values.
+
+                    phot_from_txt = QTable.read(output_psfcat_filename_negative, format='ascii', fast_reader=True)
+
+                    joined_table_inner = join(phot_from_txt, psfphot.finder_results, keys='id', join_type='inner')
 
                     nrows = len(joined_table_inner)
                     print(f"nrows in PSF-fit catalog = {nrows}\n")
