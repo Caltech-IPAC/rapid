@@ -955,3 +955,282 @@ def compute_sumrat_for_diff_image(input_diff_filename,
             sumrat_list.append(fill_value)
 
     return sumrat_list
+
+
+#####################################################################################################
+# Compute the DAOStarFinder sharpness, roundness1, and roundness2 of sources at given pixels.
+#
+# DAOStarFinder is run with its source-finding step skipped (xycoords) and its sharpness and
+# roundness filters off, but find_stars still drops every source with any quantity that is not
+# finite, losing, for example, the finite sharpness of a source whose roundness2 is not finite.
+# So the unfiltered catalog is taken from DAOStarFinder._get_raw_catalog, which is private
+# photutils API.  If a later photutils changes it, DAOStarFinder is instead run on a cutout around
+# each source in turn through the public find_stars, which gives the same values for the sources
+# it keeps (pixels outside the image are 0 either way) and leaves NaN for the ones it drops.
+#####################################################################################################
+
+def compute_daofind_cols_at_pixels(data,xpix,ypix,fwhm):
+
+    """
+    Compute the DAOStarFinder sharpness, roundness1, and roundness2 of sources centered on given
+    pixels of an image.
+
+    Parameters
+    ----------
+    data : 2D numpy.ndarray
+        Image data, with no non-finite values.
+    xpix, ypix : 1D numpy.ndarray of int
+        Zero-based column and row indices of the source pixels, all within the image.
+    fwhm : float
+        FWHM of the DAOStarFinder Gaussian kernel [pixels].
+
+    Returns
+    -------
+    dao_cols : dict of str to numpy.ndarray
+        Arrays of "sharpness", "roundness1", and "roundness2" (dimensionless), one value per
+        pixel, NaN where a value could not be computed.
+    """
+
+    import warnings
+    from photutils.detection import DAOStarFinder
+
+    names = ("sharpness","roundness1","roundness2")
+    xycoords = np.column_stack((xpix,ypix)).astype(int)
+    dao_cols = {name: np.full(len(xycoords), np.nan) for name in names}
+
+    if len(xycoords) == 0:
+        return dao_cols
+
+
+    # The sharpness and roundness filters are turned off through sharpness_range and
+    # roundness_range in photutils >= 3.0, and through infinite bounds before.  The threshold does
+    # not affect these quantities.
+
+    try:
+        finder = DAOStarFinder(threshold=1.0, fwhm=fwhm, min_separation=0,
+                               sharpness_range=None, roundness_range=None)
+    except TypeError:
+        finder = DAOStarFinder(threshold=1.0, fwhm=fwhm, min_separation=0,
+                               sharplo=-np.inf, sharphi=np.inf, roundlo=-np.inf, roundhi=np.inf)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
+        try:
+            finder.xycoords = xycoords
+            cat = finder._get_raw_catalog(data)
+
+            for name in names:
+                dao_cols[name] = np.array(getattr(cat,name), dtype=np.float64)
+
+            return dao_cols
+
+        except Exception as e:
+            print(f"*** Warning: DAOStarFinder._get_raw_catalog failed ({e}); computing sharpness and "
+                  "roundness source by source instead, which leaves NaN for any source with a "
+                  "non-finite quantity")
+
+
+        # The quantities use the convolved image up to h pixels from the source, which in turn
+        # uses the image up to another h pixels away, h being the kernel half-width.
+
+        h = max(finder.kernel.shape) // 2
+        m = 2 * h + 1
+
+        ny,nx = data.shape
+        data_padded = np.zeros((ny + 2 * m, nx + 2 * m))
+        data_padded[m:m + ny, m:m + nx] = data
+
+        finder.xycoords = np.array([[m, m]])
+
+        for i,(x,y) in enumerate(xycoords):
+
+            table = finder.find_stars(data_padded[y:y + 2 * m + 1, x:x + 2 * m + 1])
+
+            if table is not None and len(table) == 1:
+                for name in names:
+                    dao_cols[name][i] = float(table[name][0])
+
+    return dao_cols
+
+
+#####################################################################################################
+# Compute PhotUtils-style columns (DAOStarFinder sharpness, roundness1, and roundness2, and the
+# PSFPhotometry fitted flux) at given source positions, so that they can be added to a SExtractor
+# catalog of a difference image.
+#
+# The DAOStarFinder quantities are computed by compute_daofind_cols_at_pixels (below), which
+# measures them at a pixel, so each position is rounded to the nearest pixel, as for sumrat.
+#
+# The fitted flux comes from PSFPhotometry with the same settings as compute_psf_catalog in
+# modules/utils/rapid_pipeline_subs.py, which makes the RAPID PhotUtils catalogs, except that the
+# initial positions are the input ones rather than DAOStarFinder detections.  The positions are
+# free in the fit, as there.
+#####################################################################################################
+
+def compute_photutils_cols_for_diff_image(input_diff_filename,
+                                          input_psf_filename,
+                                          xy_positions,
+                                          *,
+                                          coord_base,
+                                          fwhm,
+                                          fit_shape,
+                                          aperture_radius,
+                                          input_unc_filename = None,
+                                          hdu_index = None,
+                                          psf_hdu_index = 0,
+                                          fill_value = np.nan):
+
+    """
+    Compute DAOStarFinder sharpness, roundness1, and roundness2, and the PSFPhotometry fitted flux,
+    at each of a list of positions in a difference image.
+
+    Parameters
+    ----------
+    input_diff_filename : str
+        FITS file containing the difference image.
+    input_psf_filename : str
+        FITS file containing the PSF model of the difference image, with odd NAXIS1 and NAXIS2
+        and sampled at the pixel scale of the image.
+    xy_positions : sequence of (float, float)
+        Source positions [pixels], with x along NAXIS1 and y along NAXIS2.
+    coord_base : {0, 1}
+        0 if the positions are zero-based, 1 if one-based (FITS, SExtractor).
+    fwhm : float
+        FWHM of the DAOStarFinder Gaussian kernel [pixels].
+    fit_shape : tuple of (int, int)
+        Shape (ny, nx) of the region fit around each source by PSFPhotometry; odd numbers.
+    aperture_radius : float
+        Radius of the aperture PSFPhotometry estimates the initial fluxes with [pixels].
+    input_unc_filename : str or None, optional
+        FITS file containing the uncertainty image, which weights the PSF fit.  If None, the fit
+        is unweighted.
+    hdu_index : int or None, optional
+        HDU index of the difference-image data.  If None, the first HDU holding two-dimensional
+        image data is used.  That is always how the uncertainty-image data are found.
+    psf_hdu_index : int, optional
+        HDU index of the PSF-model data.
+    fill_value : float, optional
+        Value returned for a source whose position is not finite or falls off the image, or
+        whose quantity comes out not finite.
+
+    Returns
+    -------
+    photutils_cols : dict of str to list of float
+        Lists of "sharpness", "roundness1", "roundness2" (dimensionless), and "flux_fit" (in the
+        units of the image), each with one value per input position, in the order of
+        xy_positions.
+
+    Notes
+    -----
+    Non-finite image pixels are set to 0 for DAOStarFinder, which treats pixels outside the image
+    the same way, and are masked in the PSF fit.
+    """
+
+    import warnings
+    from astropy.table import QTable
+    from photutils.psf import PSFPhotometry, ImagePSF
+
+    if coord_base not in (0, 1):
+        raise ValueError(f"Method compute_photutils_cols_for_diff_image: coord_base = {coord_base} "
+                         "must be 0 (zero-based) or 1 (one-based)")
+
+    with fits.open(input_diff_filename) as hdul:
+
+        if hdu_index is None:
+            hdu_index = get_image_hdu_index(hdul)
+
+        data = np.array(hdul[hdu_index].data, dtype=np.float64)
+
+    error = None
+
+    if input_unc_filename is not None:
+
+        with fits.open(input_unc_filename) as hdul:
+            error = np.array(hdul[get_image_hdu_index(hdul)].data, dtype=np.float64)
+
+        if error.shape != data.shape:
+            raise ValueError(f"Method compute_photutils_cols_for_diff_image: uncertainty image "
+                             f"{input_unc_filename} has shape {error.shape}, which does not match "
+                             f"the shape {data.shape} of {input_diff_filename}")
+
+    with fits.open(input_psf_filename) as hdul:
+        data_psf = np.array(hdul[psf_hdu_index].data, dtype=np.float64)
+
+    ny,nx = data.shape
+    n = len(xy_positions)
+
+    photutils_cols = {name: [fill_value] * n for name in ("sharpness","roundness1","roundness2","flux_fit")}
+
+
+    # Zero-based positions, and the sources that can be measured: finite positions whose nearest
+    # pixel lies on the image.
+
+    x0 = np.array([float(x) for x,y in xy_positions], dtype=np.float64) - coord_base
+    y0 = np.array([float(y) for x,y in xy_positions], dtype=np.float64) - coord_base
+
+    valid = np.isfinite(x0) & np.isfinite(y0)
+
+    xind = np.zeros(n, dtype=int)
+    yind = np.zeros(n, dtype=int)
+    xind[valid] = np.floor(x0[valid] + 0.5).astype(int)
+    yind[valid] = np.floor(y0[valid] + 0.5).astype(int)
+
+    valid &= (xind >= 0) & (xind < nx) & (yind >= 0) & (yind < ny)
+
+    if not np.any(valid):
+        return photutils_cols
+
+
+    #------
+    # DAOStarFinder sharpness, roundness1, and roundness2.
+
+    data_finite = np.where(np.isfinite(data), data, 0.0)
+    index_valid = np.flatnonzero(valid)
+
+    dao_cols = compute_daofind_cols_at_pixels(data_finite, xind[index_valid], yind[index_valid], fwhm)
+
+    for name,values in dao_cols.items():
+        for i,value in zip(index_valid,values):
+            if np.isfinite(value):
+                photutils_cols[name][i] = float(value)
+
+
+    #------
+    # PSFPhotometry fitted flux, with the PSF model set up as in compute_psf_catalog.
+
+    psf_ny,psf_nx = data_psf.shape
+
+    psf_model = ImagePSF(data_psf,
+                         flux = np.sum(data_psf),
+                         x_0 = (psf_nx - 1) / 2,
+                         y_0 = (psf_ny - 1) / 2)
+
+    psfphot = PSFPhotometry(psf_model = psf_model,
+                            fit_shape = tuple(fit_shape),
+                            aperture_radius = aperture_radius)
+
+    init_params = QTable()
+    init_params["id"] = index_valid + 1
+    init_params["x"] = x0[index_valid]
+    init_params["y"] = y0[index_valid]
+
+    mask = ~np.isfinite(data)
+
+    if error is not None:
+        mask |= ~np.isfinite(error)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
+        phot = psfphot(np.where(mask, 0.0, data),
+                       mask = mask,
+                       error = None if error is None else np.where(mask, 1.0, error),
+                       init_params = init_params)
+
+    for source_id,flux_fit in zip(phot["id"],phot["flux_fit"]):
+        flux_fit = float(flux_fit)
+        if np.isfinite(flux_fit):
+            photutils_cols["flux_fit"][int(source_id) - 1] = flux_fit
+
+    return photutils_cols

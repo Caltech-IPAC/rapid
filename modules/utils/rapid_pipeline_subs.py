@@ -3066,7 +3066,17 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
 
 new_catalog_col_descriptions = {
     "sumrat": "Ratio sum(p)/sum(|p|) of median-filtered stamp on source",
+    "sharpness": "PhotUtils DAOStarFinder sharpness",
+    "roundness1": "PhotUtils DAOStarFinder roundness from symmetry",
+    "roundness2": "PhotUtils DAOStarFinder roundness from marginal fits",
+    "flux_fit": "PhotUtils PSFPhotometry fitted flux",
 }
+
+
+# PhotUtils-style columns that compute_new_cols_sxtractor can add to a SExtractor catalog, all
+# computed by rda.compute_photutils_cols_for_diff_image.
+
+sxtractor_photutils_col_names = ("sharpness","roundness1","roundness2","flux_fit")
 
 
 #-------------------------------------------------------------------
@@ -3146,32 +3156,55 @@ def write_lines_to_text_file(lines,output_filename):
 # Compute new columns for a SExtractor ASCII_HEAD catalog and append them to it.
 
 def compute_new_cols_sxtractor(diff_image_filename,
-                                catalog_filename,
-                                new_cols_dict,
-                                sumrat_dict,
-                                output_catalog_filename = None):
+                               catalog_filename,
+                               new_cols_dict,
+                               sumrat_dict,
+                               output_catalog_filename = None,
+                               *,
+                               diff_psf_filename = None,
+                               diff_unc_filename = None,
+                               psfcat_dict = None):
 
     """
-    Method compute_new_cols_sxtractor
+    Compute new columns, such as sumrat and the PhotUtils-style sharpness, roundness1, roundness2,
+    and flux_fit, for the sources of a SExtractor ASCII_HEAD catalog and append them to it.
 
-    Inputs:
-    diff_image_filename     FITS file containing the difference image that SExtractor measured
-                            the catalog sources on (its input image, not its detection image).
-    catalog_filename        SExtractor catalog of CATALOG_TYPE = ASCII_HEAD.
-    new_cols_dict           [NEW_CATALOG_COLS] section of the config file, as a dictionary of
-                            strings, giving the columns to add and the position columns to use
-                            (sextractor_x_col and sextractor_y_col, e.g. XWIN_IMAGE and
-                            YWIN_IMAGE, which are one-based).
-    sumrat_dict             [SUMRAT] section of the config file, as a dictionary of strings.
-    output_catalog_filename Catalog file to write.  If None, catalog_filename is rewritten in place.
+    Parameters
+    ----------
+    diff_image_filename : str
+        FITS file containing the difference image that SExtractor measured the catalog sources
+        on (its input image, not its detection image).
+    catalog_filename : str
+        SExtractor catalog of CATALOG_TYPE = ASCII_HEAD.
+    new_cols_dict : dict-like of str
+        [NEW_CATALOG_COLS] section of the config file, giving the columns to add (new_cols, and
+        sxtractor_photutils_cols for the PhotUtils-style ones) and the one-based position
+        columns to use (sextractor_x_col and sextractor_y_col, e.g. XWIN_IMAGE and YWIN_IMAGE).
+    sumrat_dict : dict-like of str
+        [SUMRAT] section of the config file.
+    output_catalog_filename : str or None, optional
+        Catalog file to write.  If None, catalog_filename is rewritten in place.
+    diff_psf_filename : str or None, optional
+        FITS file containing the PSF model of the difference image.  The PhotUtils-style columns
+        are added only when this and psfcat_dict are given.
+    diff_unc_filename : str or None, optional
+        FITS file containing the uncertainty image of the difference image, which weights the
+        PSF fit for flux_fit.  If None, the fit is unweighted.
+    psfcat_dict : dict-like of str or None, optional
+        [PSFCAT_DIFFIMAGE] section of the config file, whose fwhm, fit_shape, and aperture_radius
+        are used, so that the PhotUtils-style columns are computed as in the RAPID PhotUtils
+        catalogs.
 
-    Returns:
-    new_cols                Dictionary mapping each new lower-case column name to its list of
-                            values, in catalog-row order.
+    Returns
+    -------
+    new_cols : dict of str to list
+        Each new lower-case column name mapped to its list of values, in catalog-row order.
 
+    Notes
+    -----
     The new columns are appended after the last column of every row, and a header line in the
-    SExtractor style ("#  116 SUMRAT  description") is added for each, numbered on from the
-    last existing column.  The column names are written in upper case, as SExtractor's are.
+    SExtractor style ("# 116 SUMRAT  description") is added for each, numbered on from the last
+    existing column.  The column names are written in upper case, as SExtractor's are.
     """
 
     print("compute_new_cols_sxtractor: diff_image_filename =",diff_image_filename)
@@ -3246,6 +3279,44 @@ def compute_new_cols_sxtractor(diff_image_filename,
                                                            1,
                                                            new_cols_dict,
                                                            sumrat_dict)
+
+
+    # PhotUtils-style columns, which only SExtractor catalogs need, since PhotUtils catalogs have
+    # them already.
+
+    photutils_col_names = [c.strip().lower()
+                           for c in (new_cols_dict.get("sxtractor_photutils_cols") or "").split(",")
+                           if c.strip()]
+
+    for col_name in photutils_col_names:
+        if col_name not in sxtractor_photutils_col_names:
+            raise ValueError(f"Method compute_new_cols_sxtractor: unknown PhotUtils-style column "
+                             f"{col_name}; available are {sxtractor_photutils_col_names}")
+
+    if photutils_col_names and (diff_psf_filename is None or psfcat_dict is None):
+
+        print("compute_new_cols_sxtractor: PhotUtils-style columns skipped, since diff_psf_filename "
+              "or psfcat_dict was not given")
+
+    elif photutils_col_names:
+
+        fit_shape = tuple(int(v) for v in
+                          psfcat_dict["fit_shape"].replace("(","").replace(")","").replace(" ","").split(","))
+
+        photutils_cols = rda.compute_photutils_cols_for_diff_image(
+            diff_image_filename,
+            diff_psf_filename,
+            list(zip(x_list,y_list)),
+            coord_base = 1,
+            fwhm = float(psfcat_dict["fwhm"]),
+            fit_shape = fit_shape,
+            aperture_radius = float(psfcat_dict["aperture_radius"]),
+            input_unc_filename = diff_unc_filename,
+            fill_value = float(new_cols_dict["photutils_cols_fill_value"]))
+
+        for col_name in photutils_col_names:
+            new_cols[col_name] = photutils_cols[col_name]
+            new_cols_format[col_name] = new_cols_dict["photutils_cols_format"]
 
     for col_name in new_cols:
         if col_name.upper() in col_numbers:
