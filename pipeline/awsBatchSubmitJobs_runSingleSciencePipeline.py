@@ -2158,15 +2158,20 @@ if __name__ == '__main__':
             print("nsexcatsources_sfftdiffimage =",nsexcatsources_sfftdiffimage)
 
 
-            # Add new columns, such as sumrat, to SExtractor catalog for positive SFFT masked difference image.
-            # The values are measured on the image SExtractor measured the sources on.
+            # Add new columns, such as sumrat and the PhotUtils-style columns, to SExtractor catalog for
+            # positive SFFT masked difference image.  The values are measured on the image SExtractor
+            # measured the sources on, with the PSF, uncertainty image, and PSF-fit parameters of the
+            # SFFT PhotUtils catalogs.
 
             if new_catalog_cols_dict is not None:
                 try:
                     util.compute_new_cols_sxtractor(filename_sfftdiffimage,
                                                     filename_sfftdiffimage_sextractor_catalog,
                                                     new_catalog_cols_dict,
-                                                    sumrat_dict)
+                                                    sumrat_dict,
+                                                    diff_psf_filename=filename_sfftdiffpsf,
+                                                    diff_unc_filename=filename_sfftdiffimage_unc_masked,
+                                                    psfcat_dict=psfcat_diffimage_dict)
                 except Exception as e:
                     print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
 
@@ -2224,15 +2229,20 @@ if __name__ == '__main__':
             print("nsexcatsources_sfftdiffimage_negative =",nsexcatsources_sfftdiffimage_negative)
 
 
-            # Add new columns, such as sumrat, to SExtractor catalog for negative SFFT masked difference image.
-            # The values are measured on the image SExtractor measured the sources on.
+            # Add new columns, such as sumrat and the PhotUtils-style columns, to SExtractor catalog for
+            # negative SFFT masked difference image.  The values are measured on the image SExtractor
+            # measured the sources on, with the PSF, uncertainty image, and PSF-fit parameters of the
+            # SFFT PhotUtils catalogs.
 
             if new_catalog_cols_dict is not None:
                 try:
                     util.compute_new_cols_sxtractor(filename_sfftdiffimage_negative,
                                                     filename_sfftdiffimage_sextractor_catalog_negative,
                                                     new_catalog_cols_dict,
-                                                    sumrat_dict)
+                                                    sumrat_dict,
+                                                    diff_psf_filename=filename_sfftdiffpsf,
+                                                    diff_unc_filename=filename_sfftdiffimage_unc_masked,
+                                                    psfcat_dict=psfcat_diffimage_dict)
                 except Exception as e:
                     print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
 
