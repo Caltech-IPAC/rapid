@@ -501,7 +501,7 @@ if __name__ == '__main__':
     wfi_pixscale_arcsec = 0.11
     fwhm_ref = fwhm_ref_medpix*wfi_pixscale_arcsec
     if np.isnan(fwhm_ref) or fwhm_ref < 0.0:
-        fwhm_ref = 2.0
+        fwhm_ref = 2.0*wfi_pixscale_arcsec
 
     print("fwhm_ref =",fwhm_ref)
 
