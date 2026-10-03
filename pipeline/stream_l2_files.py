@@ -4,6 +4,7 @@ import fsspec
 from astropy.time import Time
 from astroquery.mast import MastMissions
 import asdf
+import numpy as np
 """
 Download files from MAST given a program id and other optional parameters
 """
@@ -88,12 +89,15 @@ results = missions.query_criteria(
 
 if mjdmin is not None:
     good_indx_min = Time(results['exposure_start_time']).mjd > mjdmin
+else:
+    good_indx_min = np.bool_(np.ones(len(results)))
+
 if mjdmax is not None:
     good_indx_max = Time(results['exposure_end_time']).mjd < mjdmax
-if mjdmin is not None or mjdmax is not None:
-    filtered_results = results[good_indx_min & good_indx_max]
 else:
-    filtered_results = results
+    good_indx_max = np.bool_(np.ones(len(results)))
+
+filtered_results = results[good_indx_min & good_indx_max]
 
 products = missions.get_unique_product_list(filtered_results)
 filtered_products = missions.filter_products(products, file_suffix='_cal')
