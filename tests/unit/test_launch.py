@@ -598,6 +598,160 @@ def test_reconcile_failed_exit_code_wins_over_an_infrastructure_reason(monkeypat
         monkeypatch, status="FAILED", container_exit_code=70,
         status_reason="Host EC2 (instance i-0123) terminated.")
     assert result.disposition == "failed"
+    assert "reclaim" not in recorded["execution_record"]["scheduler_metadata"]["batch"]
+
+
+# ======================================================================
+# Spot reclaims: the reclaim flag and the reclaim queue
+# ======================================================================
+
+@pytest.mark.parametrize("reasons", [
+    {"status_reason": "Host EC2 (instance i-0123) terminated."},
+    {"attempt_status_reason": "Host EC2 (instance i-0123) terminated."},
+])
+def test_reconcile_marks_a_host_reclaim(monkeypatch, reasons):
+    result, recorded = _reconcile_one(
+        monkeypatch, status="FAILED", container_exit_code=None, **reasons)
+    assert result.disposition == "transient"
+    assert recorded["execution_record"]["scheduler_metadata"]["batch"]["reclaim"] is True
+
+
+@pytest.mark.parametrize("reasons", [
+    {"container_reason": "CannotPullContainerError: pull rate limit"},
+    {"container_reason": "DockerTimeoutError: Could not transition to started"},
+])
+def test_reconcile_does_not_mark_other_infrastructure_failures(monkeypatch, reasons):
+    result, recorded = _reconcile_one(
+        monkeypatch, status="FAILED", container_exit_code=None, **reasons)
+    assert result.disposition == "transient"
+    assert "reclaim" not in recorded["execution_record"]["scheduler_metadata"]["batch"]
+
+
+def _submit_for_queue(monkeypatch, *, reclaim_queue, reclaimed):
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue1")
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "def1")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://bucket/prefix")
+    if reclaim_queue is None:
+        monkeypatch.delenv("RAPIDPIPE_BATCH_RECLAIM_QUEUE", raising=False)
+    else:
+        monkeypatch.setenv("RAPIDPIPE_BATCH_RECLAIM_QUEUE", reclaim_queue)
+    _patch_repository(monkeypatch)
+    lookups = []
+
+    def _fake_unit_was_reclaimed(conn, run_id, stage, unit_id):
+        lookups.append((run_id, stage, unit_id))
+        if reclaimed is None:
+            raise AssertionError("no reclaim lookup expected")
+        return reclaimed
+
+    monkeypatch.setattr(launch_batch, "_unit_was_reclaimed", _fake_unit_was_reclaimed)
+    fake = FakeBatch()
+    launch_batch.submit_unit(
+        _FakeConn(), run_id="RUN01", stage="admit", unit_kind="detector-image",
+        unit_id="u1", inputs_location="s3://in/pre", client=fake)
+    return fake.submitted[0]["jobQueue"], lookups
+
+
+@pytest.mark.parametrize("reclaim_queue", [None, "", "queue1"])
+def test_submit_unit_without_a_distinct_reclaim_queue_is_unchanged(monkeypatch, reclaim_queue):
+    # Unset, empty or equal: the job queue, and no reclaim lookup at all.
+    queue, lookups = _submit_for_queue(monkeypatch, reclaim_queue=reclaim_queue, reclaimed=None)
+    assert queue == "queue1"
+    assert lookups == []
+
+
+def test_submit_unit_sends_a_reclaimed_unit_to_the_reclaim_queue(monkeypatch):
+    queue, lookups = _submit_for_queue(monkeypatch, reclaim_queue="ondemand", reclaimed=True)
+    assert queue == "ondemand"
+    assert lookups == [("RUN01", "admit", "u1")]
+
+
+def test_submit_unit_keeps_a_never_reclaimed_unit_on_the_job_queue(monkeypatch):
+    queue, lookups = _submit_for_queue(monkeypatch, reclaim_queue="ondemand", reclaimed=False)
+    assert queue == "queue1"
+    assert lookups == [("RUN01", "admit", "u1")]
+
+
+class _QueueAwareBatch(FakeBatch):
+    """FakeBatch whose ``list_jobs`` finds a job only on the queue it was
+    placed on, so a test can tell which queues were searched."""
+
+    def __init__(self, placed):
+        super().__init__()
+        self.placed = placed  # job name -> (queue, job id)
+        self.searched = []
+
+    def list_jobs(self, *, jobQueue, filters=None, nextToken=None, **_):
+        name = next(f["values"][0] for f in filters or [] if f["name"] == "JOB_NAME")
+        self.searched.append(jobQueue)
+        queue, job_id = self.placed.get(name, (None, None))
+        jobs = [{"jobId": job_id, "jobName": name}] if queue == jobQueue else []
+        return {"jobSummaryList": jobs}
+
+
+def _resolve_one_jobless(monkeypatch, *, reclaim_queue, placed_on, fake=None):
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue1")
+    monkeypatch.delenv("RAPIDPIPE_BATCH_JOB_NAME_PREFIX", raising=False)
+    if reclaim_queue is None:
+        monkeypatch.delenv("RAPIDPIPE_BATCH_RECLAIM_QUEUE", raising=False)
+    else:
+        monkeypatch.setenv("RAPIDPIPE_BATCH_RECLAIM_QUEUE", reclaim_queue)
+
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, query, params=None):
+            pass
+
+        def fetchall(self):
+            return [("ATTEMPT01", "admit")]
+
+        def fetchone(self):
+            return ("loc-1", None, None, True)
+
+    class _Conn(_FakeConn):
+        def cursor(self):
+            return _Cursor()
+
+    recorded = []
+    monkeypatch.setattr(launch_batch, "record_scheduler_job",
+                        lambda conn, attempt_id, job_id: recorded.append((attempt_id, job_id)))
+    name = launch_batch._job_name("rapid", "admit", "ATTEMPT01")
+    if fake is None:
+        fake = _QueueAwareBatch({name: (placed_on, "job-9")})
+    else:
+        fake.add_job(name)
+    results = launch_batch.resolve_jobless(_Conn(), run_id="r1", client=fake)
+    return results, recorded, getattr(fake, "searched", None)
+
+
+def test_resolve_jobless_finds_a_job_on_the_reclaim_queue(monkeypatch):
+    results, recorded, searched = _resolve_one_jobless(
+        monkeypatch, reclaim_queue="ondemand", placed_on="ondemand")
+    assert searched == ["queue1", "ondemand"]
+    assert recorded == [("ATTEMPT01", "job-9")]
+    assert results[0].batch_status == "REPAIRED"
+
+
+def test_resolve_jobless_same_job_on_two_queue_spellings_is_not_ambiguous(monkeypatch):
+    # A queue's name and its ARN are different strings for one queue:
+    # FakeBatch's list_jobs ignores the queue, so both searches find the job.
+    results, recorded, _ = _resolve_one_jobless(
+        monkeypatch, reclaim_queue="arn:aws:batch:region:acct:job-queue/queue1",
+        placed_on=None, fake=FakeBatch())
+    assert results[0].batch_status == "REPAIRED"
+    assert len(recorded) == 1
+
+
+def test_resolve_jobless_searches_one_queue_when_the_reclaim_queue_is_the_same(monkeypatch):
+    results, recorded, searched = _resolve_one_jobless(
+        monkeypatch, reclaim_queue="queue1", placed_on="queue1")
+    assert searched == ["queue1"]
+    assert recorded == [("ATTEMPT01", "job-9")]
 
 
 def test_reconcile_missing_job_id_is_lost(monkeypatch):
