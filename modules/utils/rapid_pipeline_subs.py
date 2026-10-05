@@ -3066,6 +3066,8 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
 
 new_catalog_col_descriptions = {
     "sumrat": "Ratio sum(p)/sum(|p|) of median-filtered stamp on source",
+    "nneg": "Number of negative pixels in stamp on source",
+    "nbad": "Number of bad (NaN) pixels in stamp on source",
     "sharpness": "PhotUtils DAOStarFinder sharpness",
     "roundness1": "PhotUtils DAOStarFinder roundness from symmetry",
     "roundness2": "PhotUtils DAOStarFinder roundness from marginal fits",
@@ -3159,6 +3161,7 @@ def compute_new_catalog_columns(diff_image_filename,
 
     new_cols = {}
     new_cols_format = {}
+    nneg_nbad = None
 
     for col_name in col_names:
 
@@ -3174,6 +3177,23 @@ def compute_new_catalog_columns(diff_image_filename,
                 fill_value = float(sumrat_dict["fill_value"]))
 
             new_cols_format[col_name] = sumrat_dict["col_format"]
+
+        elif col_name in ("nneg","nbad"):
+
+            # Both come from one pass over the stamps, made the first time either is requested.
+            # Configs written before the nneg_nbad parameters existed get the ZTF stamp size and
+            # the usual fill value.
+
+            if nneg_nbad is None:
+                nneg_nbad = dict(zip(("nneg","nbad"), rda.compute_nneg_nbad_for_diff_image(
+                    diff_image_filename,
+                    xy_positions,
+                    coord_base = coord_base,
+                    stamp_size = int(new_cols_dict.get("nneg_nbad_stamp_size","5")),
+                    fill_value = float(new_cols_dict.get("nneg_nbad_fill_value","-999.0")))))
+
+            new_cols[col_name] = nneg_nbad[col_name]
+            new_cols_format[col_name] = ".0f"
 
         else:
             raise ValueError(f"Method compute_new_catalog_columns: unknown new catalog column "
