@@ -605,6 +605,7 @@ import numpy as np
 
 from alerts.forced_phot import PrevImage, forced_measurement_id
 from alerts.produce import assemble_alert
+from alerts.providers import FORCED_WINDOW_DAYS
 from conftest import CHIP_MJDOBS, CHIP_PPID
 
 
@@ -662,15 +663,17 @@ def test_forced_photometry_reaches_the_alert(chip_data, synthetic_chip, tmp_path
     with forced_provider(chip_data, search, forced_store=str(store)) as provider:
         provider.forced_prefix = "20260916/req77/jid5/"
         sources = list(provider.iter_sources(CHIP_PID))
-        # the search got the chip's geometry and no window
+        # the search got the chip's geometry and the default window
         (kw,) = search.calls
-        assert kw["ppid"] == CHIP_PPID and kw["mjd_lo"] is None
+        assert kw["ppid"] == CHIP_PPID
+        assert abs(kw["mjd_lo"] - (CHIP_MJDOBS - FORCED_WINDOW_DAYS)) < 1e-9
         assert abs(kw["mjd_hi"] - CHIP_MJDOBS) < 1e-5
         source = sources[0]
         obj = provider.get_object_for_source(source)
         forced = provider.get_forced_photometry(source, obj)
-        # one record per epoch, oldest first, both products filled
-        assert [f.mjdobs for f in forced] == [CHIP_MJDOBS - 50.0, CHIP_MJDOBS - 1.0, CHIP_MJDOBS]
+        # one record per epoch inside the default window, oldest first,
+        # both products filled (the 50-day-old epoch falls outside 30 days)
+        assert [f.mjdobs for f in forced] == [CHIP_MJDOBS - 1.0, CHIP_MJDOBS]
         for f in forced:
             assert f.aid == obj.aid and f.band == "W146" and f.expid == 1 and f.sca == 7
             assert (f.ra, f.dec) == (obj.ra0, obj.dec0)
@@ -686,7 +689,7 @@ def test_forced_photometry_reaches_the_alert(chip_data, synthetic_chip, tmp_path
         assert (store / "20260916" / "req77" / "jid5" / f"forced_phot_pid{CHIP_PID}.parquet").exists()
         # and the alert carries the records
         alert = assemble_alert(provider, source.sid)
-        assert len(alert["prvDiaForcedSources"]) == 3
+        assert len(alert["prvDiaForcedSources"]) == 2
         rec = alert["prvDiaForcedSources"][-1]
         assert rec["diaObjectId"] == obj.aid and rec["psfFlux"] is not None
         assert rec["scienceFlux"] is not None and rec["midpointMjd"] == CHIP_MJDOBS

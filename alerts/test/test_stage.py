@@ -104,10 +104,13 @@ def test_forced_photometry_settings(monkeypatch):
     monkeypatch.delenv("DONOTUPLOADPRODUCTS", raising=False)
     s = _settings()
     assert s["forced_phot"] is True
-    assert s["forced_window_days"] is None                # blank -> no window
+    assert s["forced_window_days"] == stage.FORCED_WINDOW_DAYS   # absent -> package default
     assert s["forced_phot_s3_bucket_base"] == "rapid-forced-photometry"
-    s = _settings(forced_window_days="30", forced_phot="False")
-    assert s["forced_window_days"] == 30.0 and s["forced_phot"] is False
+    s = _settings(forced_window_days="15", forced_phot="False")
+    assert s["forced_window_days"] == 15.0 and s["forced_phot"] is False
+    assert _settings(forced_window_days="")["forced_window_days"] == stage.FORCED_WINDOW_DAYS
+    assert _settings(forced_window_days="none")["forced_window_days"] is None
+    assert _settings(forced_window_days="0")["forced_window_days"] is None
     # uploads on but no private bucket named: refuse to start rather than
     # fall back to a bucket that might be public
     cfg = _config(forced_phot_s3_bucket_base="")

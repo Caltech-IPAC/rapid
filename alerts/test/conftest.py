@@ -612,11 +612,14 @@ def make_provider(chip_data):
     providers = []
 
     def _make(diff_flavor="sfft", kona_lookup=None, refcat=True,
-              ned_reader=None, lvs_reader=None):
+              ned_reader=None, lvs_reader=None, forced_phot=False):
+        # forced photometry off by default: many tests take the single-alert
+        # path, which raises NotImplementedError with it on; the forced
+        # tests in test_provider.py build their own provider with it on
         provider = AlertDataProvider(
             FakeDB(chip_data), diff_flavor=diff_flavor,
             kona_lookup=kona_lookup, refcat=refcat, ned_reader=ned_reader,
-            lvs_reader=lvs_reader)
+            lvs_reader=lvs_reader, forced_phot=forced_phot)
         providers.append(provider)
         return provider
 

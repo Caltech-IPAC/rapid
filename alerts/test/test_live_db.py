@@ -166,7 +166,10 @@ class _DBShim:
 
 @pytest.fixture(scope="module")
 def live_provider(db_conn):
-    provider = AlertDataProvider(_DBShim(db_conn))
+    # forced photometry off: these tests assemble alerts by sid (the
+    # single-alert path), which raises NotImplementedError with it on; the
+    # per-chip run is exercised by the batch path, not here
+    provider = AlertDataProvider(_DBShim(db_conn), forced_phot=False)
     yield provider
     provider.close()
 

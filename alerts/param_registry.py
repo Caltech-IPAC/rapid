@@ -392,9 +392,9 @@ DIA_FORCED_SOURCE_PARAMS = (
 
     # --- Position ---
     Param("ra",                "double",          "Right ascension of forced measurement position; ICRS [deg]",
-                        IMPLEMENTED, "astroobjects.ra0 at run time (fixed for all epochs of the run)"),
+                        IMPLEMENTED, "astroobjects.ra0, the object's initial sky position (first detection)"),
     Param("dec",               "double",          "Declination of forced measurement position; ICRS [deg]",
-                        IMPLEMENTED, "astroobjects.dec0 at run time (fixed for all epochs of the run)"),
+                        IMPLEMENTED, "astroobjects.dec0, the object's initial sky position (first detection)"),
 
     # --- Photometry ---
     Param("band",              ["null", "string"], "Filter band name",
@@ -734,7 +734,7 @@ ALERT_PARAMS = (
 
     # --- Object history ------------------------------------------------------
     Param("prvDiaSources",      ["null", {"type": "array", "items": "@diaSource"}],
-                                "Previous detections of the same object within 12 months",
+                                "Previous detections of the same object",
                         IMPLEMENTED, "produce.assemble_alert()"),
     Param("diaObject",          ["null", "@diaObject"],  "Summary object record",
                         IMPLEMENTED, "produce.assemble_alert()"),

@@ -43,7 +43,7 @@
                 }
             ],
             "default": null,
-            "doc": "Previous detections of the same object within 12 months"
+            "doc": "Previous detections of the same object"
         },
         {
             "name": "diaObject",

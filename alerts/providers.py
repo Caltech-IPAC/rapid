@@ -127,12 +127,12 @@ MAX_SOURCES_PER_CHIP = 2000
 # s3://bucket/prefix), re-read instead of recomputed when present. The
 # parquet layout is the future table's.
 
-#: Look-back window (days) of the per-chip forced-photometry run. None (the
-#: default) means no window: every previous image of the chip's footprint
-#: is measured. A window is a per-deployment choice -- 30 days is the
-#: natural first value -- and only GBTDS, at ~105 epochs/day, is expected
-#: to need a short one (see memory: alerts latency budget).
-FORCED_WINDOW_DAYS: float | None = None
+#: Look-back window (days) of the per-chip forced-photometry run; None
+#: means no window, every previous image of the chip's footprint.
+#: TODO: re-evaluate once the per-chip timing is benchmarked (2026-10-05);
+#: 30 days is a first value, and GBTDS at ~105 epochs/day will need its
+#: own, shorter setting.
+FORCED_WINDOW_DAYS: float | None = 30.0
 #: Which image of each epoch is measured: difference -> psfFlux, science
 #: -> scienceFlux.
 FORCED_PRODUCTS = ("diff", "science")
@@ -2280,12 +2280,17 @@ class AlertDataProvider:
         """Forced photometry for the chip's objects over the look-back
         window, cached as a table (see the FORCED_* notes at the top).
 
-        One position per associated object, at its current astroobjects
-        position. Reads the chip's parquet from the store when it already
-        exists, otherwise runs the search and photometry (_run_forced) and
-        writes it. A failure anywhere is logged and leaves the cache empty:
-        the chip's alerts still ship, with null prvDiaForcedSources,
-        rather than aborting.
+        One position per associated object: astroobjects (ra0, dec0), the
+        object's initial sky position (its first detection), which does
+        not change between runs. Reads the chip's parquet from the store
+        when it already exists, otherwise runs the search and photometry
+        (_run_forced) and writes it. A failure anywhere is logged and
+        leaves the cache empty: the chip's alerts still ship, with null
+        prvDiaForcedSources, rather than aborting.
+
+        TODO: the re-baseline policy (when, if ever, to move the forced
+        position to the object's mean, astroobjectsmeta meanra/meandec,
+        and recompute the set) is not decided or implemented.
         """
         from alerts import forced_phot as fp
 
@@ -2398,6 +2403,15 @@ class AlertDataProvider:
             photometry is off, failed for the chip, or the object was not
             among the chip's measured objects.
         """
+        if self.forced_phot and self._chip_forced_pid != detection.pid:
+            # The per-chip run happens in iter_sources(); the single-alert
+            # path (get_detection) has no prefetch and no object cache to
+            # build positions from. TODO: How it should work is undecided.
+            raise NotImplementedError(
+                f"forced photometry on the single-alert path is not implemented "
+                f"(sid={detection.sid}, pid={detection.pid}): produce the chip "
+                f"with iter_sources()/--pid, or construct the provider with "
+                f"forced_phot=False (--no-forced-phot)")
         table = self._chip_forced
         if table is None or self._chip_forced_pid != detection.pid or len(table) == 0:
             return []

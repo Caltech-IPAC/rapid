@@ -57,6 +57,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 from alerts.cli import make_provider
 from alerts.ned_reader import DEFAULT_NED_SOURCE
+from alerts.providers import FORCED_WINDOW_DAYS
 from alerts.produce import BatchStats, batch_produce, open_alert_archive
 
 to_zone = tz.gettz('America/Los_Angeles')
@@ -74,6 +75,25 @@ EXIT_FATAL = 64
 #-------------------------------------------------------------------------------------------------------------
 # Configuration.
 #-------------------------------------------------------------------------------------------------------------
+
+def parse_forced_window(value):
+
+    '''
+    [ALERTS] forced_window_days: blank or absent -> the alerts package default
+    (providers.FORCED_WINDOW_DAYS); "none" or 0 -> no window (every previous image);
+    otherwise a number of days.
+    '''
+
+    text = str(value).strip().lower()
+
+    if text == '':
+        return FORCED_WINDOW_DAYS
+
+    if text == 'none' or float(text) == 0.0:
+        return None
+
+    return float(text)
+
 
 def read_alert_settings(config_input):
 
@@ -116,7 +136,7 @@ def read_alert_settings(config_input):
         # must be private (public access block on) in every deployment, like the
         # commissioning product bucket.  Blank window = every previous image.
         'forced_phot': alerts.getboolean('forced_phot', fallback=True),
-        'forced_window_days': alerts.getfloat('forced_window_days', fallback=None),
+        'forced_window_days': parse_forced_window(alerts.get('forced_window_days', fallback='')),
         'forced_phot_s3_bucket_base': alerts.get('forced_phot_s3_bucket_base', fallback='').strip() or None,
     }
 

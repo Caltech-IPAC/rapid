@@ -294,8 +294,9 @@ def main(argv: list[str] | None = None) -> int:
                              "(prvDiaForcedSources stays null); on by default")
     parser.add_argument("--forced-window-days", type=float, default=FORCED_WINDOW_DAYS,
                         metavar="DAYS",
-                        help="look-back window of the forced-photometry run; "
-                             "default: no window, every previous image")
+                        help="look-back window of the forced-photometry run "
+                             "(default: %(default)s); 0 = no window, every "
+                             "previous image")
     parser.add_argument("--forced-store", metavar="PATH", default=None,
                         help="keep per-chip forced-photometry parquet files here "
                              "(s3://bucket/prefix or a directory) and re-read "
@@ -328,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
                              lvs=not args.no_lvs,
                              max_sources=args.max_sources,
                              forced_phot=not args.no_forced_phot,
-                             forced_window_days=args.forced_window_days,
+                             forced_window_days=args.forced_window_days or None,
                              forced_store=args.forced_store)
 
     # Make producer, if kafka arg is True
