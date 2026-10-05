@@ -3069,6 +3069,9 @@ new_catalog_col_descriptions = {
     "sharpness": "PhotUtils DAOStarFinder sharpness",
     "roundness1": "PhotUtils DAOStarFinder roundness from symmetry",
     "roundness2": "PhotUtils DAOStarFinder roundness from marginal fits",
+    "x_dao_peak": "Pixel x where DAOStarFinder columns measured [pixel]",
+    "y_dao_peak": "Pixel y where DAOStarFinder columns measured [pixel]",
+    "dao_flags": "Bad pixels in core for DAOStarFinder columns (bits)",
     "flux_fit": "PhotUtils PSFPhotometry fitted flux",
     "snr_fit": "PhotUtils PSFPhotometry flux_fit / flux_err",
     "reduced_chi2": "PhotUtils PSFPhotometry reduced chi-square of fit",
@@ -3084,13 +3087,41 @@ new_catalog_col_descriptions = {
 
 sxtractor_photutils_col_names = rda.photutils_col_names
 
-sxtractor_photutils_int_col_names = ("n_pixels_fit","flags")
+sxtractor_photutils_int_col_names = ("x_dao_peak","y_dao_peak","dao_flags","n_pixels_fit","flags")
 
 
 # Catalog names of the PhotUtils-style columns that would otherwise clash with SExtractor's own
 # (FLAGS); the others keep their PhotUtils names.
 
 sxtractor_photutils_catalog_names = {"flags": "flags_fit"}
+
+
+#-------------------------------------------------------------------
+# Parse the PSFPhotometry xy_bounds parameter from its config-file string: "None" (free positions),
+# a single number (the same bound along x and y), or a pair "(bx, by)", either of which may be
+# None (no bound along that axis).  Bounds are in pixels.
+
+def parse_xy_bounds(xy_bounds_str):
+
+    def parse_value(s):
+        s = s.strip()
+        return None if s.lower() == "none" else float(s)
+
+    s = xy_bounds_str.strip().replace("(","").replace(")","")
+
+    if s.lower() in ("", "none"):
+        return None
+
+    values = [parse_value(v) for v in s.split(",")]
+
+    if len(values) == 1:
+        return values[0]
+
+    if len(values) == 2:
+        return tuple(values)
+
+    raise ValueError(f"Method parse_xy_bounds: cannot parse xy_bounds = {xy_bounds_str}; expected "
+                     "None, a number, or a pair (bx, by)")
 
 
 #-------------------------------------------------------------------
@@ -3319,6 +3350,13 @@ def compute_new_cols_sxtractor(diff_image_filename,
         fit_shape = tuple(int(v) for v in
                           psfcat_dict["fit_shape"].replace("(","").replace(")","").replace(" ","").split(","))
 
+
+        # Configs written before photutils_cols_snap_radius and photutils_cols_xy_bounds existed
+        # get the defaults: snap to the convolved peak within 1 pixel, and free fitted positions.
+
+        snap_radius = int(new_cols_dict.get("photutils_cols_snap_radius","1"))
+        xy_bounds = parse_xy_bounds(new_cols_dict.get("photutils_cols_xy_bounds","None"))
+
         photutils_cols = rda.compute_photutils_cols_for_diff_image(
             diff_image_filename,
             diff_psf_filename,
@@ -3328,6 +3366,8 @@ def compute_new_cols_sxtractor(diff_image_filename,
             fit_shape = fit_shape,
             aperture_radius = float(psfcat_dict["aperture_radius"]),
             input_unc_filename = diff_unc_filename,
+            snap_radius = snap_radius,
+            xy_bounds = xy_bounds,
             fill_value = float(new_cols_dict["photutils_cols_fill_value"]))
 
         for col_name in photutils_col_names:

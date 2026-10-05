@@ -959,8 +959,125 @@ def compute_sumrat_for_diff_image(input_diff_filename,
 
 # Columns computed by compute_photutils_cols_for_diff_image.
 
-photutils_col_names = ("sharpness","roundness1","roundness2",
+photutils_col_names = ("sharpness","roundness1","roundness2","x_dao_peak","y_dao_peak","dao_flags",
                        "flux_fit","snr_fit","reduced_chi2","n_pixels_fit","flags","cfit")
+
+
+#####################################################################################################
+# Set up a DAOStarFinder that measures sources at given pixels without filtering any out.
+#
+# The sharpness and roundness filters are turned off through sharpness_range and roundness_range
+# in photutils >= 3.0, and through infinite bounds before.  The threshold does not affect the
+# quantities measured at given pixels.
+#####################################################################################################
+
+def make_unfiltered_daofinder(fwhm):
+
+    """
+    Return a DAOStarFinder with a Gaussian kernel of the given FWHM and its sharpness and
+    roundness filters turned off.
+
+    Parameters
+    ----------
+    fwhm : float
+        FWHM of the DAOStarFinder Gaussian kernel [pixels].
+
+    Returns
+    -------
+    finder : photutils.detection.DAOStarFinder
+        The finder; finder.kernel.data is the lowered, normalized kernel it convolves images with.
+    """
+
+    from photutils.detection import DAOStarFinder
+
+    try:
+        finder = DAOStarFinder(threshold=1.0, fwhm=fwhm, min_separation=0,
+                               sharpness_range=None, roundness_range=None)
+    except TypeError:
+        finder = DAOStarFinder(threshold=1.0, fwhm=fwhm, min_separation=0,
+                               sharplo=-np.inf, sharphi=np.inf, roundlo=-np.inf, roundhi=np.inf)
+
+    return finder
+
+
+#####################################################################################################
+# Move source pixels to the peak of the DAOStarFinder-convolved image.
+#
+# DAOStarFinder measures sharpness and roundness at a local maximum of the image convolved with
+# its kernel.  A position from another catalog, such as a SExtractor windowed centroid, rounded to
+# the nearest pixel, can land a pixel away from that maximum, especially for faint sources, and the
+# quantities measured there are then not comparable to DAOStarFinder's own: roundness1 in
+# particular is a four-fold asymmetry about the center pixel, which an off-peak center inflates.
+# Each pixel is therefore moved to the maximum of the convolved image within snap_radius pixels
+# (a square box, clipped at the image edges), staying put when it is itself a maximum there.
+#
+# The convolution is done the way DAOStarFinder does it (scipy.ndimage.convolve with zeros beyond
+# the image edges), so that the snapped pixel is the one DAOStarFinder would find.
+#####################################################################################################
+
+def snap_to_daofind_peak(data,xpix,ypix,fwhm,snap_radius = 1):
+
+    """
+    Move each of a list of source pixels to the maximum of the DAOStarFinder-convolved image
+    within snap_radius pixels.
+
+    Parameters
+    ----------
+    data : 2D numpy.ndarray
+        Image data, with no non-finite values.
+    xpix, ypix : 1D numpy.ndarray of int
+        Zero-based column and row indices of the source pixels, all within the image.
+    fwhm : float
+        FWHM of the DAOStarFinder Gaussian kernel [pixels].
+    snap_radius : int, optional
+        Half-width of the square box searched [pixels].  0 leaves the pixels unchanged.
+
+    Returns
+    -------
+    xsnap, ysnap : 1D numpy.ndarray of int
+        Zero-based column and row indices of the snapped pixels, in the order of the input.
+    """
+
+    from scipy.ndimage import convolve
+
+    xpix = np.asarray(xpix, dtype=int)
+    ypix = np.asarray(ypix, dtype=int)
+
+    if snap_radius < 0:
+        raise ValueError(f"Method snap_to_daofind_peak: snap_radius = {snap_radius} must be >= 0")
+
+    if snap_radius == 0 or len(xpix) == 0:
+        return xpix.copy(),ypix.copy()
+
+    finder = make_unfiltered_daofinder(fwhm)
+
+    convolved_data = convolve(np.asarray(data, dtype=np.float64), finder.kernel.data,
+                              mode="constant", cval=0.0)
+
+    ny,nx = convolved_data.shape
+
+
+    # Candidate pixels of every source, shape (n_sources, n_offsets), clipped at the image edges
+    # (a clipped candidate repeats an edge pixel, which does not change the maximum).
+
+    offsets = np.arange(-snap_radius, snap_radius + 1)
+    dy,dx = np.meshgrid(offsets, offsets, indexing="ij")
+
+    xcand = np.clip(xpix[:, np.newaxis] + dx.ravel()[np.newaxis, :], 0, nx - 1)
+    ycand = np.clip(ypix[:, np.newaxis] + dy.ravel()[np.newaxis, :], 0, ny - 1)
+
+    values = convolved_data[ycand, xcand]
+    ibest = np.argmax(values, axis=1)
+
+
+    # Keep the input pixel when it is a maximum itself, rather than move it to a tied neighbor.
+
+    keep = convolved_data[ypix, xpix] >= values[np.arange(len(xpix)), ibest]
+
+    xsnap = np.where(keep, xpix, xcand[np.arange(len(xpix)), ibest])
+    ysnap = np.where(keep, ypix, ycand[np.arange(len(ypix)), ibest])
+
+    return xsnap,ysnap
 
 
 #####################################################################################################
@@ -998,7 +1115,6 @@ def compute_daofind_cols_at_pixels(data,xpix,ypix,fwhm):
     """
 
     import warnings
-    from photutils.detection import DAOStarFinder
 
     names = ("sharpness","roundness1","roundness2")
     xycoords = np.column_stack((xpix,ypix)).astype(int)
@@ -1007,17 +1123,7 @@ def compute_daofind_cols_at_pixels(data,xpix,ypix,fwhm):
     if len(xycoords) == 0:
         return dao_cols
 
-
-    # The sharpness and roundness filters are turned off through sharpness_range and
-    # roundness_range in photutils >= 3.0, and through infinite bounds before.  The threshold does
-    # not affect these quantities.
-
-    try:
-        finder = DAOStarFinder(threshold=1.0, fwhm=fwhm, min_separation=0,
-                               sharpness_range=None, roundness_range=None)
-    except TypeError:
-        finder = DAOStarFinder(threshold=1.0, fwhm=fwhm, min_separation=0,
-                               sharplo=-np.inf, sharphi=np.inf, roundlo=-np.inf, roundhi=np.inf)
+    finder = make_unfiltered_daofinder(fwhm)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -1065,13 +1171,35 @@ def compute_daofind_cols_at_pixels(data,xpix,ypix,fwhm):
 # PSFPhotometry fitted flux, its signal-to-noise ratio, and the fit-quality columns) at given
 # source positions, so that they can be added to a SExtractor catalog of a difference image.
 #
-# The DAOStarFinder quantities are computed by compute_daofind_cols_at_pixels (below), which
-# measures them at a pixel, so each position is rounded to the nearest pixel, as for sumrat.
+# The DAOStarFinder quantities are computed by compute_daofind_cols_at_pixels (above), which
+# measures them at a pixel: each position is rounded to the nearest pixel, as for sumrat, and then
+# moved to the peak of the convolved image by snap_to_daofind_peak (above), where DAOStarFinder
+# itself would measure the source.  The snapped pixel is returned as x_dao_peak and y_dao_peak, in
+# the coordinate convention of the input positions.
+#
+# Non-finite pixels are set to 0 for DAOStarFinder, which is how it treats pixels beyond the image
+# edges.  On a difference image, whose background is 0, that leaves the quantities essentially
+# unchanged unless the zeroed pixel is in the core of the source: in a synthetic test (Gaussian
+# PSF of FWHM 1.6 pixels, SNR 30), a zeroed pixel 2 or more pixels from the peak, or diagonally
+# next to it, moved sharpness and roundness2 by <= 0.02, but one directly next to the peak moved
+# them by about 0.1-0.2 (about 3 sigma), and a zeroed peak made sharpness meaningless.  The
+# quantities are kept, and dao_flags records whether the core held such pixels, as bits:
+#
+#     1   a bad (non-finite) pixel is the snapped peak pixel or one of its four direct neighbors,
+#         where the quantities were measured
+#     2   a bad pixel is the pixel nearest the input position or one of its four direct
+#         neighbors; a bad pixel at the true peak lowers the convolved image there and can pull
+#         the snap away from it (diagonally, out of reach of bit 1, in about a quarter of cases)
+#     4   one of those pixels lies beyond the image edge, where DAOStarFinder uses 0
+#
+# so that dao_flags = 0 means the core was clean.  Moving the pixel by the snap is not flagged,
+# since it is the correct measurement; x_dao_peak and y_dao_peak record it.
 #
 # The fitted flux comes from PSFPhotometry with the same settings as compute_psf_catalog in
 # modules/utils/rapid_pipeline_subs.py, which makes the RAPID PhotUtils catalogs, except that the
-# initial positions are the input ones rather than DAOStarFinder detections.  The positions are
-# free in the fit, as there.  snr_fit is flux_fit / flux_err, as for the snr of the RAPID alerts
+# initial positions are the input ones (not snapped) rather than DAOStarFinder detections.  The
+# positions are free in the fit, as there, unless xy_bounds is given, which limits how far each
+# fitted position may move from its initial one.  snr_fit is flux_fit / flux_err, as for the snr of the RAPID alerts
 # (alerts/param_registry.py).  Without an uncertainty image, flux_err comes from the fit
 # covariance alone and means nothing, so snr_fit is then left at fill_value, and PSFPhotometry
 # returns reduced_chi2 as NaN, which also becomes fill_value.
@@ -1086,6 +1214,8 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
                                           fit_shape,
                                           aperture_radius,
                                           input_unc_filename = None,
+                                          snap_radius = 1,
+                                          xy_bounds = None,
                                           hdu_index = None,
                                           psf_hdu_index = 0,
                                           fill_value = np.nan):
@@ -1115,6 +1245,14 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
     input_unc_filename : str or None, optional
         FITS file containing the uncertainty image, which weights the PSF fit.  If None, the fit
         is unweighted, and snr_fit and reduced_chi2 are fill_value.
+    snap_radius : int, optional
+        Half-width of the square box [pixels] within which the pixel nearest to each position is
+        moved to the peak of the DAOStarFinder-convolved image before sharpness and roundness are
+        measured (see snap_to_daofind_peak).  0 measures them at the nearest pixel.
+    xy_bounds : None, float, or tuple of (float, float), optional
+        Passed to PSFPhotometry: the largest distance [pixels] a fitted position may move from its
+        initial one, along x and y.  None leaves the positions free.  A fit held at the bound has
+        bit 32 ("fitted parameter near a bound") set in "flags".
     hdu_index : int or None, optional
         HDU index of the difference-image data.  If None, the first HDU holding two-dimensional
         image data is used.  That is always how the uncertainty-image data are found.
@@ -1129,15 +1267,20 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
     photutils_cols : dict of str to list of float
         Lists with one value per input position, in the order of xy_positions, of:
         "sharpness", "roundness1", and "roundness2" (dimensionless, from DAOStarFinder);
-        "flux_fit" (in the units of the image); "snr_fit" (flux_fit / flux_err, dimensionless);
-        "reduced_chi2" (dimensionless); "n_pixels_fit" (number of unmasked pixels fit);
-        "flags" (PSFPhotometry bit flags); and "cfit" (central-pixel fit residual relative to
-        flux_fit, dimensionless).  "n_pixels_fit" and "flags" are integer-valued floats.
+        "x_dao_peak" and "y_dao_peak" (the snapped pixel they were measured at, in the
+        convention of coord_base); "dao_flags" (bit flags of bad pixels in the source core; see
+        above); "flux_fit" (in the units of the image); "snr_fit" (flux_fit / flux_err,
+        dimensionless); "reduced_chi2" (dimensionless); "n_pixels_fit" (number of unmasked pixels
+        fit); "flags" (PSFPhotometry bit flags, in which bit 32 marks a fitted position held at
+        xy_bounds); and "cfit" (central-pixel fit residual relative
+        to flux_fit, dimensionless).  "x_dao_peak", "y_dao_peak", "dao_flags", "n_pixels_fit",
+        and "flags" are integer-valued floats.
 
     Notes
     -----
     Non-finite image pixels are set to 0 for DAOStarFinder, which treats pixels outside the image
-    the same way, and are masked in the PSF fit.
+    the same way, and are masked in the PSF fit.  dao_flags records whether any of them, or pixels
+    beyond the image edges, fell in the core of a source.
     """
 
     import warnings
@@ -1201,12 +1344,51 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
     data_finite = np.where(np.isfinite(data), data, 0.0)
     index_valid = np.flatnonzero(valid)
 
-    dao_cols = compute_daofind_cols_at_pixels(data_finite, xind[index_valid], yind[index_valid], fwhm)
+    xsnap,ysnap = snap_to_daofind_peak(data_finite,
+                                       xind[index_valid],
+                                       yind[index_valid],
+                                       fwhm,
+                                       snap_radius = snap_radius)
+
+    dao_cols = compute_daofind_cols_at_pixels(data_finite, xsnap, ysnap, fwhm)
+
 
     for name,values in dao_cols.items():
         for i,value in zip(index_valid,values):
             if np.isfinite(value):
                 photutils_cols[name][i] = float(value)
+
+
+    # dao_flags: bad (non-finite) pixels in the plus-shaped core (a pixel and its four direct
+    # neighbors) around the snapped peak (bit 1) and around the pixel nearest the input position
+    # (bit 2), and core pixels beyond the image edges (bit 4).  The image is padded by one pixel
+    # to mark those.
+
+    beyond_edge = np.ones((ny + 2, nx + 2), dtype=bool)
+    beyond_edge[1:ny + 1, 1:nx + 1] = False
+
+    bad_pixels = np.zeros((ny + 2, nx + 2), dtype=bool)
+    bad_pixels[1:ny + 1, 1:nx + 1] = ~np.isfinite(data)
+
+    plus = ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1))
+
+    def core_hits(mask,xc,yc):
+        hits = np.zeros(len(xc), dtype=bool)
+        for dx,dy in plus:
+            hits |= mask[yc + 1 + dy, xc + 1 + dx]
+        return hits
+
+    xnear = xind[index_valid]
+    ynear = yind[index_valid]
+
+    dao_flags = (1 * core_hits(bad_pixels,xsnap,ysnap)
+                 + 2 * core_hits(bad_pixels,xnear,ynear)
+                 + 4 * (core_hits(beyond_edge,xsnap,ysnap) | core_hits(beyond_edge,xnear,ynear)))
+
+    for i,flag,xs,ys in zip(index_valid,dao_flags,xsnap,ysnap):
+        photutils_cols["dao_flags"][i] = float(flag)
+        photutils_cols["x_dao_peak"][i] = float(xs + coord_base)
+        photutils_cols["y_dao_peak"][i] = float(ys + coord_base)
 
 
     #------
@@ -1221,7 +1403,8 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
 
     psfphot = PSFPhotometry(psf_model = psf_model,
                             fit_shape = tuple(fit_shape),
-                            aperture_radius = aperture_radius)
+                            aperture_radius = aperture_radius,
+                            xy_bounds = xy_bounds)
 
     init_params = QTable()
     init_params["id"] = index_valid + 1
