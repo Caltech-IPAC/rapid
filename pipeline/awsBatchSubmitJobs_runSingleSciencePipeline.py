@@ -2043,9 +2043,36 @@ if __name__ == '__main__':
                                                  filename_cconvdiff)
 
 
-            # Replace NaNs in output SFFT difference image, if any, with zeros.
+            # Mask the SFFT difference image (and the cross-convolved image used for detection, if
+            # any) with output_resampled_reference_cov_map, and restore the NaNs that were replaced
+            # with zeros in the science and reference images before differencing, as is done for the
+            # ZOGY and naive difference images.  Without this, the zeroed pixels (e.g., saturated star
+            # cores) become deep holes in the SFFT difference image, about -600 sigma on a socsims
+            # frame, that look like valid data to everything downstream, so detections on or next to
+            # them cannot be flagged (e.g., by DAO_FLAGS).  SFFT writes its outputs under the final,
+            # "_masked" file names, so each is renamed to "_unmasked" first and masked back into its
+            # own name.
 
-            util.replace_nans_with_value(filename_sfftdiffimage,0.0)
+            sfft_images_to_mask = [filename_sfftdiffimage]
+
+            if crossconv_flag:
+                sfft_images_to_mask.append(filename_cconvdiff)
+
+            for filename_sfft_image in sfft_images_to_mask:
+
+                filename_sfft_image_unmasked = filename_sfft_image.replace("_masked.fits","_unmasked.fits")
+                os.replace(filename_sfft_image,filename_sfft_image_unmasked)
+
+                dfis.mask_difference_image_with_resampled_reference_cov_map(filename_sfft_image_unmasked,
+                                                                            output_resampled_reference_cov_map,
+                                                                            filename_sfft_image,
+                                                                            post_zogy_keep_diffimg_lower_cov_map_thresh)
+
+                if nan_indices_sciimage:
+                    util.restore_nans(filename_sfft_image,nan_indices_sciimage)
+
+                if nan_indices_refimage:
+                    util.restore_nans(filename_sfft_image,nan_indices_refimage)
 
 
             # Compute negative SFFT difference and cconv images.
