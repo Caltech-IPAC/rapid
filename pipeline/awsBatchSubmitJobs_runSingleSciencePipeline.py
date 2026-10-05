@@ -345,6 +345,17 @@ if __name__ == '__main__':
     fake_sources_dict = config_input['FAKE_SOURCES']
     psfcat_refimage_dict = config_input['PSFCAT_REFIMAGE']
 
+    # Parameters of the new difference-image catalog columns, such as sumrat.  The new columns are
+    # skipped for a job config written before these sections were added.
+
+    if config_input.has_section('NEW_CATALOG_COLS') and config_input.has_section('SUMRAT'):
+        new_catalog_cols_dict = config_input['NEW_CATALOG_COLS']
+        sumrat_dict = config_input['SUMRAT']
+    else:
+        print("*** Warning: NEW_CATALOG_COLS or SUMRAT section missing from job config; new catalog columns will not be added")
+        new_catalog_cols_dict = None
+        sumrat_dict = None
+
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
     inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
@@ -2032,9 +2043,36 @@ if __name__ == '__main__':
                                                  filename_cconvdiff)
 
 
-            # Replace NaNs in output SFFT difference image, if any, with zeros.
+            # Mask the SFFT difference image (and the cross-convolved image used for detection, if
+            # any) with output_resampled_reference_cov_map, and restore the NaNs that were replaced
+            # with zeros in the science and reference images before differencing, as is done for the
+            # ZOGY and naive difference images.  Without this, the zeroed pixels (e.g., saturated star
+            # cores) become deep holes in the SFFT difference image, about -600 sigma on a socsims
+            # frame, that look like valid data to everything downstream, so detections on or next to
+            # them cannot be flagged (e.g., by DAO_FLAGS).  SFFT writes its outputs under the final,
+            # "_masked" file names, so each is renamed to "_unmasked" first and masked back into its
+            # own name.
 
-            util.replace_nans_with_value(filename_sfftdiffimage,0.0)
+            sfft_images_to_mask = [filename_sfftdiffimage]
+
+            if crossconv_flag:
+                sfft_images_to_mask.append(filename_cconvdiff)
+
+            for filename_sfft_image in sfft_images_to_mask:
+
+                filename_sfft_image_unmasked = filename_sfft_image.replace("_masked.fits","_unmasked.fits")
+                os.replace(filename_sfft_image,filename_sfft_image_unmasked)
+
+                dfis.mask_difference_image_with_resampled_reference_cov_map(filename_sfft_image_unmasked,
+                                                                            output_resampled_reference_cov_map,
+                                                                            filename_sfft_image,
+                                                                            post_zogy_keep_diffimg_lower_cov_map_thresh)
+
+                if nan_indices_sciimage:
+                    util.restore_nans(filename_sfft_image,nan_indices_sciimage)
+
+                if nan_indices_refimage:
+                    util.restore_nans(filename_sfft_image,nan_indices_refimage)
 
 
             # Compute negative SFFT difference and cconv images.
@@ -2147,6 +2185,24 @@ if __name__ == '__main__':
             print("nsexcatsources_sfftdiffimage =",nsexcatsources_sfftdiffimage)
 
 
+            # Add new columns, such as sumrat and the PhotUtils-style columns, to SExtractor catalog for
+            # positive SFFT masked difference image.  The values are measured on the image SExtractor
+            # measured the sources on, with the PSF, uncertainty image, and PSF-fit parameters of the
+            # SFFT PhotUtils catalogs.
+
+            if new_catalog_cols_dict is not None:
+                try:
+                    util.compute_new_cols_sxtractor(filename_sfftdiffimage,
+                                                    filename_sfftdiffimage_sextractor_catalog,
+                                                    new_catalog_cols_dict,
+                                                    sumrat_dict,
+                                                    diff_psf_filename=filename_sfftdiffpsf,
+                                                    diff_unc_filename=filename_sfftdiffimage_unc_masked,
+                                                    psfcat_dict=psfcat_diffimage_dict)
+                except Exception as e:
+                    print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
+
+
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
@@ -2165,7 +2221,7 @@ if __name__ == '__main__':
                 filename_detection_image_negative = filename_sfftdiffimage_negative
 
             sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
-            filename_sfftdiffimage_sextractor_catalog_negative = filename_sfftdiffimage_negative.replace(".fits",".txt")
+            filename_sfftdiffimage_sextractor_catalog_negative = filename_detection_image_negative.replace(".fits",".txt")
 
             sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image_negative
             sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage_negative
@@ -2198,6 +2254,24 @@ if __name__ == '__main__':
             nsexcatsources_sfftdiffimage_negative = len(vals_sfftdiffimage_negative)
 
             print("nsexcatsources_sfftdiffimage_negative =",nsexcatsources_sfftdiffimage_negative)
+
+
+            # Add new columns, such as sumrat and the PhotUtils-style columns, to SExtractor catalog for
+            # negative SFFT masked difference image.  The values are measured on the image SExtractor
+            # measured the sources on, with the PSF, uncertainty image, and PSF-fit parameters of the
+            # SFFT PhotUtils catalogs.
+
+            if new_catalog_cols_dict is not None:
+                try:
+                    util.compute_new_cols_sxtractor(filename_sfftdiffimage_negative,
+                                                    filename_sfftdiffimage_sextractor_catalog_negative,
+                                                    new_catalog_cols_dict,
+                                                    sumrat_dict,
+                                                    diff_psf_filename=filename_sfftdiffpsf,
+                                                    diff_unc_filename=filename_sfftdiffimage_unc_masked,
+                                                    psfcat_dict=psfcat_diffimage_dict)
+                except Exception as e:
+                    print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
 
 
             # Code-timing benchmark.
@@ -2332,9 +2406,26 @@ if __name__ == '__main__':
                     ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
 
 
-                    # Join photometry and finder objects and output parquet file.
+                    # Add new columns, such as sumrat, to PSF-fit catalog for positive SFFT difference image.
+                    # The values are measured on the image the PSF fitting was done on.
 
-                    joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+                    if new_catalog_cols_dict is not None:
+                        try:
+                            util.compute_new_cols_photutils(input_img_filename,
+                                                            output_psfcat_filename,
+                                                            new_catalog_cols_dict,
+                                                            sumrat_dict)
+                        except Exception as e:
+                            print(f"*** Warning: Could not add new columns to {output_psfcat_filename} ({e}); continuing...")
+
+
+                    # Join photometry and finder objects and output parquet file.  The photometry
+                    # catalog is read back from the text file, so that the parquet file has the same
+                    # columns, including the new ones such as sumrat, and the same values.
+
+                    phot_from_txt = QTable.read(output_psfcat_filename, format='ascii', fast_reader=True)
+
+                    joined_table_inner = join(phot_from_txt, psfphot.finder_results, keys='id', join_type='inner')
 
                     nrows = len(joined_table_inner)
                     print(f"nrows in PSF-fit catalog = {nrows}\n")
@@ -2456,9 +2547,26 @@ if __name__ == '__main__':
                     ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
 
 
-                    # Join photometry and finder objects and output parquet file.
+                    # Add new columns, such as sumrat, to PSF-fit catalog for negative SFFT difference image.
+                    # The values are measured on the image the PSF fitting was done on.
 
-                    joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+                    if new_catalog_cols_dict is not None:
+                        try:
+                            util.compute_new_cols_photutils(input_img_filename,
+                                                            output_psfcat_filename_negative,
+                                                            new_catalog_cols_dict,
+                                                            sumrat_dict)
+                        except Exception as e:
+                            print(f"*** Warning: Could not add new columns to {output_psfcat_filename_negative} ({e}); continuing...")
+
+
+                    # Join photometry and finder objects and output parquet file.  The photometry
+                    # catalog is read back from the text file, so that the parquet file has the same
+                    # columns, including the new ones such as sumrat, and the same values.
+
+                    phot_from_txt = QTable.read(output_psfcat_filename_negative, format='ascii', fast_reader=True)
+
+                    joined_table_inner = join(phot_from_txt, psfphot.finder_results, keys='id', join_type='inner')
 
                     nrows = len(joined_table_inner)
                     print(f"nrows in PSF-fit catalog = {nrows}\n")
