@@ -446,6 +446,108 @@ def test_reconcile_missing_job_id_is_lost(conn, batch_env):
         assert disposition == "lost"
 
 
+def test_reclaimed_unit_resubmits_to_the_reclaim_queue_for_good(conn, batch_env, monkeypatch):
+    monkeypatch.setenv("RAPIDPIPE_BATCH_RECLAIM_QUEUE", "test-reclaim-queue")
+    run_id = _make_run(conn, kind="scratch", max_attempts=4)
+    conn.commit()
+
+    fake_batch = FakeBatch()
+    first = _submit_one(conn, fake_batch, run_id=run_id, unit_id="reclaim-001/SCA07")
+    conn.commit()
+    assert fake_batch.submitted[-1]["jobQueue"] == "test-queue"
+
+    fake_batch.set_status(first.job_id, "FAILED",
+                          status_reason="Host EC2 (instance i-0123) terminated.")
+    launch_batch.reconcile(conn, run_id=run_id, client=fake_batch, s3_client=FakeS3())
+    conn.commit()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.disposition, e.scheduler_metadata -> 'batch' -> 'reclaim' "
+            "FROM attempts a JOIN execution_records e ON e.attempt = a.id WHERE a.id = %s",
+            (first.attempt_id,))
+        assert cur.fetchone() == ("transient", True)
+
+    second = _submit_one(conn, fake_batch, run_id=run_id, unit_id="reclaim-001/SCA07")
+    conn.commit()
+    assert fake_batch.submitted[-1]["jobQueue"] == "test-reclaim-queue"
+
+    # The reclaim is the unit's own: another unit of the run, and the same
+    # unit id in another run, stay on the job queue.
+    _submit_one(conn, fake_batch, run_id=run_id, unit_id="reclaim-001/SCA08")
+    conn.commit()
+    assert fake_batch.submitted[-1]["jobQueue"] == "test-queue"
+    other_run = _make_run(conn, kind="scratch", max_attempts=2)
+    conn.commit()
+    _submit_one(conn, fake_batch, run_id=other_run, unit_id="reclaim-001/SCA07")
+    conn.commit()
+    assert fake_batch.submitted[-1]["jobQueue"] == "test-queue"
+
+    # A later transient that is not a reclaim does not send it back.
+    fake_batch.set_status(second.job_id, "FAILED", container_exit_code=75)
+    launch_batch.reconcile(conn, run_id=run_id, client=fake_batch, s3_client=FakeS3())
+    conn.commit()
+    _submit_one(conn, fake_batch, run_id=run_id, unit_id="reclaim-001/SCA07")
+    conn.commit()
+    assert fake_batch.submitted[-1]["jobQueue"] == "test-reclaim-queue"
+
+
+def test_reclaim_carries_into_a_run_seeded_from_it(conn, batch_env, monkeypatch):
+    monkeypatch.setenv("RAPIDPIPE_BATCH_RECLAIM_QUEUE", "test-reclaim-queue")
+    seed_run = _make_run(conn, kind="scratch", max_attempts=1)
+    conn.commit()
+
+    fake_batch = FakeBatch()
+    first = _submit_one(conn, fake_batch, run_id=seed_run, unit_id="reclaim-003/SCA07")
+    conn.commit()
+    fake_batch.set_status(first.job_id, "FAILED",
+                          status_reason="Host EC2 (instance i-0123) terminated.")
+    launch_batch.reconcile(conn, run_id=seed_run, client=fake_batch, s3_client=FakeS3())
+    conn.commit()
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT unit FROM attempts WHERE id = %s", (first.attempt_id,))
+        (seed_unit,) = cur.fetchone()
+
+    # Two generations of re-run: a re-run of a re-run still finds the reclaim.
+    middle_run = _make_run(conn, kind="scratch", max_attempts=1)
+    repo.add_unit(conn, middle_run, "admit", "detector-image", "reclaim-003/SCA07",
+                  seeded_from_unit=seed_unit)
+    conn.commit()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM units WHERE run = %s", (middle_run,))
+        (middle_unit,) = cur.fetchone()
+    rerun = _make_run(conn, kind="scratch", max_attempts=1)
+    repo.add_unit(conn, rerun, "admit", "detector-image", "reclaim-003/SCA07",
+                  seeded_from_unit=middle_unit)
+    conn.commit()
+
+    _submit_one(conn, fake_batch, run_id=rerun, unit_id="reclaim-003/SCA07")
+    conn.commit()
+    assert fake_batch.submitted[-1]["jobQueue"] == "test-reclaim-queue"
+
+
+def test_non_reclaim_transient_resubmits_to_the_job_queue(conn, batch_env, monkeypatch):
+    monkeypatch.setenv("RAPIDPIPE_BATCH_RECLAIM_QUEUE", "test-reclaim-queue")
+    run_id = _make_run(conn, kind="scratch", max_attempts=2)
+    conn.commit()
+
+    fake_batch = FakeBatch()
+    first = _submit_one(conn, fake_batch, run_id=run_id, unit_id="reclaim-002/SCA07")
+    conn.commit()
+
+    fake_batch.set_status(first.job_id, "FAILED",
+                          container_reason="CannotPullContainerError: pull rate limit")
+    results = launch_batch.reconcile(
+        conn, run_id=run_id, client=fake_batch, s3_client=FakeS3())
+    conn.commit()
+    assert results[0].disposition == "transient"
+
+    _submit_one(conn, fake_batch, run_id=run_id, unit_id="reclaim-002/SCA07")
+    conn.commit()
+    assert fake_batch.submitted[-1]["jobQueue"] == "test-queue"
+
+
 def test_reconcile_running_job_left_untouched(conn, batch_env):
     run_id = _make_run(conn, kind="scratch", max_attempts=2)
     conn.commit()

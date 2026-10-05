@@ -30,6 +30,13 @@ specification.md, "Repositories": "Account identifiers, bucket names and
 hostnames are injected at deploy time, never committed to `rapid`."):
 
 - ``RAPIDPIPE_BATCH_JOB_QUEUE`` -- the Batch job queue name or ARN.
+- ``RAPIDPIPE_BATCH_RECLAIM_QUEUE`` -- optional: the queue for every
+  further attempt of a unit once one of its attempts, in the run or a run
+  it was seeded from, was lost to a Spot reclaim (:func:`is_host_reclaim`),
+  so a reclaimed unit moves to on-demand capacity and never retries on
+  Spot. Unset, or equal to
+  ``RAPIDPIPE_BATCH_JOB_QUEUE``, every attempt goes to the job queue and
+  no reclaim lookup is made (:func:`queue_for_unit`).
 - ``RAPIDPIPE_BATCH_JOB_DEFINITION_SCRATCH`` /
   ``RAPIDPIPE_BATCH_JOB_DEFINITION_PRODUCTION`` -- the Batch job
   definition name or ARN for a run of that kind (:func:`job_definition_for`).
@@ -393,10 +400,10 @@ def submit_unit(
     if outputs_root is None or job_definition is None:
         kind = _run_kind(conn, run_id)
         outputs_root = outputs_root or outputs_root_for(kind)
-        job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
+        job_queue = queue_for_unit(conn, run_id, stage, unit_id)
         job_definition = job_definition or job_definition_for(kind)
     else:
-        job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
+        job_queue = queue_for_unit(conn, run_id, stage, unit_id)
     job_name_prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX", "rapid")
     batch = client if client is not None else batch_client()
     if released is not None:
@@ -629,19 +636,93 @@ def _last_container_exit_code(job: dict[str, Any]) -> int | None:
     return container.get("exitCode")
 
 
+def _status_reasons(job: dict[str, Any]) -> list[Any]:
+    """The job's own ``statusReason`` and its last attempt's."""
+    attempts = job.get("attempts") or []
+    last = attempts[-1] if attempts else {}
+    return [job.get("statusReason"), last.get("statusReason")]
+
+
+def is_host_reclaim(job: dict[str, Any]) -> bool:
+    """Whether ``job`` lost its EC2 host (a Spot reclaim): a ``statusReason``,
+    the job's or its last attempt's, starts with one of
+    :data:`RETRYABLE_INFRASTRUCTURE_REASONS`' ``statusReason`` prefixes."""
+    prefixes = RETRYABLE_INFRASTRUCTURE_REASONS["statusReason"]
+    return any(isinstance(r, str) and r.startswith(prefixes) for r in _status_reasons(job))
+
+
 def is_retryable_infrastructure_failure(job: dict[str, Any]) -> bool:
     """Whether a FAILED ``job`` with no container exit code failed for one of
     :data:`RETRYABLE_INFRASTRUCTURE_REASONS`."""
+    if is_host_reclaim(job):
+        return True
     attempts = job.get("attempts") or []
     last = attempts[-1] if attempts else {}
-    status_reasons = [job.get("statusReason"), last.get("statusReason")]
     container_reasons = [(last.get("container") or {}).get("reason"),
                          (job.get("container") or {}).get("reason")]
-    for reasons, prefixes in ((status_reasons, RETRYABLE_INFRASTRUCTURE_REASONS["statusReason"]),
-                              (container_reasons, RETRYABLE_INFRASTRUCTURE_REASONS["reason"])):
-        if any(isinstance(r, str) and r.startswith(prefixes) for r in reasons):
-            return True
-    return False
+    prefixes = RETRYABLE_INFRASTRUCTURE_REASONS["reason"]
+    return any(isinstance(r, str) and r.startswith(prefixes) for r in container_reasons)
+
+
+def _unit_was_reclaimed(conn, run_id: str, stage: str, unit_id: str) -> bool:
+    """Whether any attempt of ``unit_id`` in ``run_id``'s ``stage``, or of
+    the unit it was seeded from (``units.seeded_from_unit``, followed back
+    through every seed, so a ``--retry-failed`` re-run keeps it), was
+    recorded ``transient`` for a Spot reclaim (:func:`reconcile` marks it
+    ``scheduler_metadata.batch.reclaim``).
+
+    A module-level function so the database-free unit tests can
+    monkeypatch it alongside the repository calls.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH RECURSIVE lineage (id, seed) AS (
+                SELECT id, seeded_from_unit FROM units
+                WHERE run = %s AND stage = %s AND unit_id = %s
+                UNION
+                SELECT u.id, u.seeded_from_unit
+                FROM units u JOIN lineage l ON u.id = l.seed
+            )
+            SELECT EXISTS (
+                SELECT 1
+                FROM lineage l
+                JOIN attempts a ON a.unit = l.id
+                JOIN execution_records e ON e.attempt = a.id
+                WHERE a.disposition = 'transient'
+                  AND (e.scheduler_metadata -> 'batch' ->> 'reclaim') = 'true'
+            )
+            """,
+            (run_id, stage, unit_id))
+        (reclaimed,) = cur.fetchone()
+    return bool(reclaimed)
+
+
+def _search_queues() -> list[str]:
+    """The queues a job of this deployment can be on: the job queue, then
+    the reclaim queue when it is set and differs."""
+    job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
+    reclaim_queue = os.environ.get("RAPIDPIPE_BATCH_RECLAIM_QUEUE") or job_queue
+    return [job_queue] if reclaim_queue == job_queue else [job_queue, reclaim_queue]
+
+
+def queue_for_unit(conn, run_id: str, stage: str, unit_id: str) -> str:
+    """The Batch queue the next attempt of ``unit_id`` is submitted to.
+
+    ``RAPIDPIPE_BATCH_JOB_QUEUE``, unless ``RAPIDPIPE_BATCH_RECLAIM_QUEUE``
+    is set, differs from it, and an earlier attempt of this unit, in this
+    run or a run it was seeded from, was lost to a Spot reclaim
+    (:func:`_unit_was_reclaimed`): then the
+    reclaim queue, for every further attempt, so a reclaimed unit runs on
+    on-demand capacity and never retries on Spot. Any other transient
+    (exit 75, a container-start failure, ``lost``) on a unit never
+    reclaimed keeps the job queue. Unset or equal, no lookup is made.
+    """
+    queues = _search_queues()
+    if len(queues) == 1:
+        return queues[0]
+    job_queue, reclaim_queue = queues
+    return reclaim_queue if _unit_was_reclaimed(conn, run_id, stage, unit_id) else job_queue
 
 
 def _epoch_ms_to_iso(value: Any) -> str | None:
@@ -889,11 +970,15 @@ def reconcile(
                 # records this as a termination without a stage exit
                 # code (stage contract, "Exit codes").
                 disposition = "killed"
+            execution_record = _with_batch_scheduler_metadata(
+                _execution_record_with_defaults(conn, run_id), job)
+            if disposition == "transient" and is_host_reclaim(job):
+                # What queue_for_unit reads to send the unit's further
+                # attempts to the reclaim queue.
+                execution_record["scheduler_metadata"]["batch"]["reclaim"] = True
             record_attempt_result(
                 conn, attempt_id, exit_code, disposition, output_location,
-                _with_batch_scheduler_metadata(
-                    _execution_record_with_defaults(conn, run_id), job),
-                scheduler_job_id=job_id)
+                execution_record, scheduler_job_id=job_id)
             conn.commit()
             results.append(Reconciled(
                 attempt_id=attempt_id, job_id=job_id, batch_status=status,
@@ -956,8 +1041,10 @@ def resolve_jobless(
     ``scheduler_job_id``: its allocation committed but the Batch submission
     (or recording its job id) failed or has not happened yet, so
     :func:`reconcile` never looks at it and ``run cancel`` cannot terminate
-    it. For each one, the Batch queue (``RAPIDPIPE_BATCH_JOB_QUEUE``) is
-    searched, every status, for the name :func:`submit_unit` gives its job
+    it. For each one, the Batch queue (``RAPIDPIPE_BATCH_JOB_QUEUE``, and
+    ``RAPIDPIPE_BATCH_RECLAIM_QUEUE`` too when it is set and differs, since
+    a reclaimed unit's attempt is submitted there) is searched, every
+    status, for the name :func:`submit_unit` gives its job
     (:func:`_job_name` with ``RAPIDPIPE_BATCH_JOB_NAME_PREFIX``):
 
     - exactly one job: its id is recorded on the attempt
@@ -994,13 +1081,17 @@ def resolve_jobless(
     if not jobless:
         return []
 
-    job_queue = _require_env("RAPIDPIPE_BATCH_JOB_QUEUE")
+    queues = _search_queues()
     prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX", "rapid")
     batch = client if client is not None else batch_client()
     note = f"no scheduler job after {older_than_seconds:g} s"
     results: list[Reconciled] = []
     for attempt_id, stage in jobless:
-        found = _jobs_named(batch, job_queue, _job_name(prefix, stage, attempt_id))
+        job_name = _job_name(prefix, stage, attempt_id)
+        # Distinct ids: a queue's name and its ARN are two strings for one
+        # queue, and the same job found twice is not an ambiguity.
+        found = list(dict.fromkeys(
+            job_id for queue in queues for job_id in _jobs_named(batch, queue, job_name)))
         if len(found) > 1:
             results.append(Reconciled(
                 attempt_id=attempt_id, job_id=",".join(found), batch_status="AMBIGUOUS",
