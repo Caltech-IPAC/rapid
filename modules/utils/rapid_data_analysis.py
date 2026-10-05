@@ -957,6 +957,129 @@ def compute_sumrat_for_diff_image(input_diff_filename,
     return sumrat_list
 
 
+#####################################################################################################
+# Count the negative and the bad pixels in a small stamp centered on each difference-image source,
+# the ZTF "nneg" and "nbad" metrics (imgdiffextract.pl).
+#
+# nneg is the number of pixels below 0 and nbad the number of bad (non-finite) pixels in an
+# unfiltered square stamp (5x5 in ZTF) centered on the pixel nearest the source, as for sumrat.  A
+# real point source has few negative pixels near its center, while the dipole residuals of
+# misregistration or a PSF mismatch, and noise, have many; for pure noise about half the pixels are
+# negative.  nbad counts masked pixels, which in the RAPID difference images are NaN: pixels below
+# the reference coverage threshold and pixels that were NaN in the science or reference image, such
+# as saturated star cores.
+#
+# Like sumrat, nneg depends on the sign of the image: the sources must be positive in it, so the
+# catalog of a negative difference image is paired with the negative image.
+#####################################################################################################
+
+def compute_nneg_nbad_for_diff_image(input_diff_filename,
+                                     xy_positions,
+                                     *,
+                                     coord_base,
+                                     stamp_size = 5,
+                                     hdu_index = None,
+                                     fill_value = np.nan):
+
+    """
+    Count the negative and the bad (non-finite) pixels in a square stamp centered on each of a
+    list of positions in a difference image.
+
+    Parameters
+    ----------
+    input_diff_filename : str
+        FITS file containing the difference image.
+    xy_positions : sequence of (float, float)
+        Source positions [pixels], with x along NAXIS1 and y along NAXIS2.
+    coord_base : {0, 1}
+        0 if the positions are zero-based (numpy, photutils), 1 if one-based (FITS, SExtractor).
+    stamp_size : int, optional
+        Side length of the stamp [pixels]; must be odd.  ZTF uses 5.
+    hdu_index : int or None, optional
+        HDU index of the image data.  If None, the first HDU holding two-dimensional image data
+        is used.
+    fill_value : float, optional
+        Value returned for a position that is not finite or whose stamp does not fall entirely
+        within the image.
+
+    Returns
+    -------
+    nneg_list, nbad_list : list of float
+        Number of finite pixels below 0, and number of non-finite pixels, in the stamp of each
+        position (integer-valued), in the order of xy_positions.
+
+    Notes
+    -----
+    The stamp is centered on the pixel nearest to each position, pixel floor(x + 0.5) for
+    zero-based x, as for compute_sumrat_for_diff_image.
+    """
+
+    if coord_base not in (0, 1):
+        raise ValueError(f"Method compute_nneg_nbad_for_diff_image: coord_base = {coord_base} "
+                         "must be 0 (zero-based) or 1 (one-based)")
+
+    if stamp_size <= 0 or stamp_size % 2 == 0:
+        raise ValueError(f"Method compute_nneg_nbad_for_diff_image: stamp_size = {stamp_size} "
+                         "must be a positive odd integer")
+
+    with fits.open(input_diff_filename) as hdul:
+
+        if hdu_index is None:
+            hdu_index = get_image_hdu_index(hdul)
+
+        data = np.array(hdul[hdu_index].data, dtype=np.float64)
+
+    ny,nx = data.shape
+    h = stamp_size // 2
+    n = len(xy_positions)
+
+    nneg_list = [fill_value] * n
+    nbad_list = [fill_value] * n
+
+    if n == 0:
+        return nneg_list,nbad_list
+
+
+    # Zero-based index of the pixel nearest each position, and the positions whose stamp lies
+    # entirely within the image.
+
+    x0 = np.array([float(x) for x,y in xy_positions], dtype=np.float64) - coord_base
+    y0 = np.array([float(y) for x,y in xy_positions], dtype=np.float64) - coord_base
+
+    valid = np.isfinite(x0) & np.isfinite(y0)
+
+    xind = np.zeros(n, dtype=int)
+    yind = np.zeros(n, dtype=int)
+    xind[valid] = np.floor(x0[valid] + 0.5).astype(int)
+    yind[valid] = np.floor(y0[valid] + 0.5).astype(int)
+
+    valid &= (xind >= h) & (xind <= nx - h - 1) & (yind >= h) & (yind <= ny - h - 1)
+
+    index_valid = np.flatnonzero(valid)
+
+    if len(index_valid) == 0:
+        return nneg_list,nbad_list
+
+
+    # All the stamps at once, shape (n_valid, stamp_size, stamp_size).
+
+    offsets = np.arange(-h, h + 1)
+
+    stamps = data[yind[index_valid, np.newaxis, np.newaxis] + offsets[np.newaxis, :, np.newaxis],
+                  xind[index_valid, np.newaxis, np.newaxis] + offsets[np.newaxis, np.newaxis, :]]
+
+    finite = np.isfinite(stamps)
+
+    nneg = np.sum(finite & (np.where(finite, stamps, 0.0) < 0.0), axis=(1, 2))
+    nbad = np.sum(~finite, axis=(1, 2))
+
+    for i,neg,bad in zip(index_valid,nneg,nbad):
+        nneg_list[i] = float(neg)
+        nbad_list[i] = float(bad)
+
+    return nneg_list,nbad_list
+
+
 # Columns computed by compute_photutils_cols_for_diff_image.
 
 photutils_col_names = ("sharpness","roundness1","roundness2","x_dao_peak","y_dao_peak","dao_flags",
