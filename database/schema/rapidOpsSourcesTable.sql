@@ -57,7 +57,10 @@ CREATE TABLE sources (
     fid smallint NOT NULL,                     -- Filter ID
     sca smallint NOT NULL,                     -- SCA number (1...18)
     mjdobs double precision NOT NULL,          -- MJD OBS of exposure
-    rb real                                    -- Null means realbogus not executed
+    rb real,                                   -- Null means realbogus not executed
+    nneg smallint,                             -- Number of negative pixels in 5x5 stamp on source (null = not computed)
+    nbad smallint,                             -- Number of bad pixels in 5x5 stamp on source (null = not computed)
+    sumrat real                                -- sum(p)/sum(|p|) of median-filtered 5x5 stamp on source (null = not computed)
 );
 
 -- Sources table must be owned by rapidporole for inheritance.
@@ -340,7 +343,19 @@ CREATE TABLE xsources (
     fid smallint NOT NULL,                     -- Filter ID
     sca smallint NOT NULL,                     -- SCA number (1...18)
     mjdobs double precision NOT NULL,          -- MJD OBS of exposure
-    rb real                                    -- Null means realbogus not executed
+    rb real,                                   -- Null means realbogus not executed
+    nneg smallint,                             -- NNEG: number of negative pixels in 5x5 stamp on source (null = not computed)
+    nbad smallint,                             -- NBAD: number of bad pixels in 5x5 stamp on source (null = not computed)
+    sumrat real,                               -- SUMRAT: sum(p)/sum(|p|) of median-filtered 5x5 stamp on source (null = not computed)
+    sharpness real,                            -- SHARPNESS: PhotUtils DAOStarFinder sharpness (null = not computed)
+    roundness1 real,                           -- ROUNDNESS1: PhotUtils DAOStarFinder roundness from symmetry (null = not computed)
+    roundness2 real,                           -- ROUNDNESS2: PhotUtils DAOStarFinder roundness from marginal fits (null = not computed)
+    fluxfit real,                              -- FLUX_FIT: PhotUtils PSF-fit instrumental flux (null = not computed)
+    snrfit real,                               -- SNR_FIT: PhotUtils PSF-fit flux / flux error (null = not computed)
+    redchi real,                               -- REDUCED_CHI2: PhotUtils PSF-fit reduced chi2 (null = not computed)
+    npixfit smallint,                          -- N_PIXELS_FIT: number of unmasked pixels used in PSF fit (null = not computed)
+    flagsfit smallint,                         -- FLAGS_FIT: PhotUtils PSF-fit bitwise flags (null = not computed)
+    cfit real                                  -- CFIT: PSF-fit residual in central pixel divided by fit flux (null = not computed)
 );
 
 -- XSources table must be owned by rapidporole for inheritance.
