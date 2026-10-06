@@ -29,9 +29,17 @@
 -- routes give the same column order.  Grants are table-level, so no grants change.  No stored
 -- function refers to these tables, so rapidOpsProcs.sql does not need re-running.
 --
+-- Run it as a PostgreSQL superuser, not $USER or the pipeline's database user.  The
+-- migration adds columns to sources and xsources, which are owned by rapidporole, and through
+-- them to every child table.  This prints t when connected as a superuser:
+--
+--     SELECT rolsuper FROM pg_roles WHERE rolname = current_user;
+--
 -- Run it in one transaction, so that a failure part way through leaves nothing behind:
 --
---     psql ... --single-transaction -v ON_ERROR_STOP=1 -f 20261006_sources_xsources_catalog_cols.sql
+--     psql -h localhost -p 5432 -d rapidopsdb -U <superuser> \
+--          --single-transaction -v ON_ERROR_STOP=1 \
+--          -f database/schema/migrations/20261006_sources_xsources_catalog_cols.sql
 --
 -- Before running:
 --
