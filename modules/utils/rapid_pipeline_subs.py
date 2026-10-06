@@ -3080,6 +3080,14 @@ new_catalog_col_descriptions = {
     "n_pixels_fit": "PhotUtils PSFPhotometry number of pixels fit",
     "flags_fit": "PhotUtils PSFPhotometry bit flags",
     "cfit": "PhotUtils PSFPhotometry central-pixel fit residual",
+    "x_fit": "PhotUtils PSFPhotometry fitted x position [pixel]",
+    "y_fit": "PhotUtils PSFPhotometry fitted y position [pixel]",
+    "x_err": "PhotUtils PSFPhotometry x position uncertainty [pixel]",
+    "y_err": "PhotUtils PSFPhotometry y position uncertainty [pixel]",
+    "rb_score": "RuBR-AT real/bogus score in [0,1], 1 = real-like",
+    "rb_label": "RuBR-AT label at threshold: 1 real, 0 bogus, -1 not scored",
+    "rb_valid": "1 if RuBR-AT scored the source, else 0",
+    "rb_threshold": "RuBR-AT validation-selected score threshold",
 }
 
 
@@ -3218,6 +3226,152 @@ def write_lines_to_text_file(lines,output_filename):
 
 
 #-------------------------------------------------------------------
+# Read a SExtractor catalog of CATALOG_TYPE = ASCII_HEAD into its header lines, data lines,
+# one-based column numbers, and column count, for methods that append columns to it.
+
+def read_sxtractor_ascii_head(catalog_filename):
+
+    """
+    Method read_sxtractor_ascii_head
+
+    Inputs:
+    catalog_filename        SExtractor catalog of CATALOG_TYPE = ASCII_HEAD.
+
+    Returns:
+    header_lines            The "#" header lines, in order.
+    data_lines              The data rows, in order, without line terminators.
+    col_numbers             Dictionary of upper-case parameter name to one-based column number,
+                            from header lines like "#   3 XWIN_IMAGE   Windowed position ...".
+                            A vector parameter, such as MAG_APER, has one header line, giving
+                            the number of its first element.
+    ncols                   Number of columns in the data rows.  With no rows, the number of the
+                            last header line's column, which is the column count unless that
+                            column is a vector; it then only numbers new header lines.
+    """
+
+    with open(catalog_filename, "r") as f:
+        lines = [line.rstrip("\r\n") for line in f]
+
+    header_lines = []
+    data_lines = []
+
+    for line in lines:
+        if line.startswith("#"):
+            if data_lines:
+                raise ValueError(f"Method read_sxtractor_ascii_head: comment line after the "
+                                 f"start of the data in {catalog_filename}")
+            header_lines.append(line)
+        elif line.strip():
+            data_lines.append(line)
+
+    col_numbers = {}
+
+    for line in header_lines:
+        fields = line[1:].split()
+        if len(fields) >= 2 and fields[0].isdigit():
+            col_numbers[fields[1].upper()] = int(fields[0])
+
+    if not col_numbers:
+        raise ValueError(f"Method read_sxtractor_ascii_head: no ASCII_HEAD column header found "
+                         f"in {catalog_filename}")
+
+    ncols = None
+
+    for line in data_lines:
+        nfields = len(line.split())
+        if ncols is None:
+            ncols = nfields
+        elif nfields != ncols:
+            raise ValueError(f"Method read_sxtractor_ascii_head: rows of {catalog_filename} "
+                             f"have different numbers of columns ({ncols} and {nfields})")
+
+    if ncols is None:
+        ncols = max(col_numbers.values())
+
+    return header_lines,data_lines,col_numbers,ncols
+
+
+#-------------------------------------------------------------------
+# Values of one column of a SExtractor ASCII_HEAD catalog read by read_sxtractor_ascii_head,
+# as floats, in row order.
+
+def sxtractor_column_values(data_lines,
+                            col_numbers,
+                            col_name,
+                            catalog_filename = ""):
+
+    col = str(col_name).strip().upper()
+
+    if col not in col_numbers:
+        raise ValueError(f"Method sxtractor_column_values: column {col} not found in {catalog_filename}")
+
+    index = col_numbers[col] - 1
+
+    return [float(line.split()[index]) for line in data_lines]
+
+
+#-------------------------------------------------------------------
+# Append new columns to a SExtractor ASCII_HEAD catalog read by read_sxtractor_ascii_head and
+# write it.  Each new column gets a header line in the SExtractor style ("# 116 SUMRAT
+# description"), numbered on from the last existing column, with its name in upper case, as
+# SExtractor's are; the values are appended after the last column of every row.
+
+def append_sxtractor_cols(header_lines,
+                          data_lines,
+                          col_numbers,
+                          ncols,
+                          new_cols,
+                          new_cols_format,
+                          catalog_filename,
+                          output_catalog_filename = None):
+
+    """
+    Method append_sxtractor_cols
+
+    Inputs:
+    header_lines, data_lines, col_numbers, ncols
+                            As returned by read_sxtractor_ascii_head for catalog_filename.
+    new_cols                Dictionary of lower-case column name to its list of values, one per
+                            data row.  Descriptions for the header lines come from
+                            new_catalog_col_descriptions.
+    new_cols_format         Dictionary of column name to its Python format spec.
+    catalog_filename        Catalog the lines were read from.
+    output_catalog_filename Catalog file to write.  If None, catalog_filename is rewritten.
+
+    Returns:
+    output_catalog_filename The catalog file written.
+    """
+
+    for col_name in new_cols:
+        if col_name.upper() in col_numbers:
+            raise ValueError(f"Method append_sxtractor_cols: column {col_name.upper()} is "
+                             f"already in {catalog_filename}")
+
+    for col_name,values in new_cols.items():
+        if len(values) != len(data_lines):
+            raise ValueError(f"Method append_sxtractor_cols: column {col_name} has {len(values)} values "
+                             f"for {len(data_lines)} rows of {catalog_filename}")
+
+    header_lines = list(header_lines)
+    data_lines = list(data_lines)
+
+    for i,col_name in enumerate(new_cols):
+        description = new_catalog_col_descriptions.get(col_name,"")
+        header_lines.append(f"#{ncols + 1 + i:4d} {col_name.upper():<22s} {description}")
+
+    for j in range(len(data_lines)):
+        for col_name,values in new_cols.items():
+            data_lines[j] += " " + format(values[j],new_cols_format[col_name]).rjust(12)
+
+    if output_catalog_filename is None:
+        output_catalog_filename = catalog_filename
+
+    write_lines_to_text_file(header_lines + data_lines,output_catalog_filename)
+
+    return output_catalog_filename
+
+
+#-------------------------------------------------------------------
 # Compute new columns for a SExtractor ASCII_HEAD catalog and append them to it.
 
 def compute_new_cols_sxtractor(diff_image_filename,
@@ -3277,68 +3431,13 @@ def compute_new_cols_sxtractor(diff_image_filename,
     print("compute_new_cols_sxtractor: diff_image_filename =",diff_image_filename)
     print("compute_new_cols_sxtractor: catalog_filename =",catalog_filename)
 
-    with open(catalog_filename, "r") as f:
-        lines = [line.rstrip("\r\n") for line in f]
-
-    header_lines = []
-    data_lines = []
-
-    for line in lines:
-        if line.startswith("#"):
-            if data_lines:
-                raise ValueError(f"Method compute_new_cols_sxtractor: comment line after the "
-                                 f"start of the data in {catalog_filename}")
-            header_lines.append(line)
-        elif line.strip():
-            data_lines.append(line)
-
-
-    # One-based column numbers of the parameters, from header lines like
-    # "#   3 XWIN_IMAGE   Windowed position estimate along x   [pixel]".  A vector parameter,
-    # such as MAG_APER, has one header line, giving the number of its first element.
-
-    col_numbers = {}
-
-    for line in header_lines:
-        fields = line[1:].split()
-        if len(fields) >= 2 and fields[0].isdigit():
-            col_numbers[fields[1].upper()] = int(fields[0])
-
-    if not col_numbers:
-        raise ValueError(f"Method compute_new_cols_sxtractor: no ASCII_HEAD column header found "
-                         f"in {catalog_filename}")
+    header_lines,data_lines,col_numbers,ncols = read_sxtractor_ascii_head(catalog_filename)
 
     x_col = new_cols_dict["sextractor_x_col"].strip().upper()
     y_col = new_cols_dict["sextractor_y_col"].strip().upper()
 
-    for col in (x_col,y_col):
-        if col not in col_numbers:
-            raise ValueError(f"Method compute_new_cols_sxtractor: position column {col} not "
-                             f"found in {catalog_filename}")
-
-    x_list = []
-    y_list = []
-    ncols = None
-
-    for line in data_lines:
-
-        fields = line.split()
-
-        if ncols is None:
-            ncols = len(fields)
-        elif len(fields) != ncols:
-            raise ValueError(f"Method compute_new_cols_sxtractor: rows of {catalog_filename} "
-                             f"have different numbers of columns ({ncols} and {len(fields)})")
-
-        x_list.append(float(fields[col_numbers[x_col] - 1]))
-        y_list.append(float(fields[col_numbers[y_col] - 1]))
-
-
-    # With no rows, the last header line gives the number of the last column, which is the
-    # column count unless that column is a vector; it then only numbers the new header lines.
-
-    if ncols is None:
-        ncols = max(col_numbers.values())
+    x_list = sxtractor_column_values(data_lines,col_numbers,x_col,catalog_filename)
+    y_list = sxtractor_column_values(data_lines,col_numbers,y_col,catalog_filename)
 
     new_cols,new_cols_format = compute_new_catalog_columns(diff_image_filename,
                                                            x_list,
@@ -3398,25 +3497,144 @@ def compute_new_cols_sxtractor(diff_image_filename,
             else:
                 new_cols_format[catalog_col_name] = new_cols_dict["photutils_cols_format"]
 
-    for col_name in new_cols:
-        if col_name.upper() in col_numbers:
-            raise ValueError(f"Method compute_new_cols_sxtractor: column {col_name.upper()} is "
-                             f"already in {catalog_filename}")
-
-    for i,col_name in enumerate(new_cols):
-        description = new_catalog_col_descriptions.get(col_name,"")
-        header_lines.append(f"#{ncols + 1 + i:4d} {col_name.upper():<22s} {description}")
-
-    for j in range(len(data_lines)):
-        for col_name,values in new_cols.items():
-            data_lines[j] += " " + format(values[j],new_cols_format[col_name]).rjust(12)
-
-    if output_catalog_filename is None:
-        output_catalog_filename = catalog_filename
-
-    write_lines_to_text_file(header_lines + data_lines,output_catalog_filename)
+    output_catalog_filename = append_sxtractor_cols(header_lines,
+                                                    data_lines,
+                                                    col_numbers,
+                                                    ncols,
+                                                    new_cols,
+                                                    new_cols_format,
+                                                    catalog_filename,
+                                                    output_catalog_filename)
 
     print(f"compute_new_cols_sxtractor: added columns {list(new_cols)} for {len(data_lines)} "
+          f"sources to {output_catalog_filename}")
+
+    return new_cols
+
+
+#-------------------------------------------------------------------
+# Compute RuBR-AT real/bogus columns for the sources of a SExtractor ASCII_HEAD catalog and
+# append them to it.  The catalog must already hold the PhotUtils-style columns that
+# compute_new_cols_sxtractor adds (at least X_FIT, Y_FIT, FLUX_FIT, SNR_FIT, CFIT, REDUCED_CHI2,
+# X_ERR, Y_ERR, N_PIXELS_FIT, FLAGS_FIT, SHARPNESS, ROUNDNESS1, and ROUNDNESS2), so it must run
+# after that method.
+
+def compute_new_cols_rb_sxtractor(sci_image_filename,
+                                  ref_image_filename,
+                                  diff_image_filename,
+                                  catalog_filename,
+                                  rb_dict,
+                                  output_catalog_filename = None,
+                                  *,
+                                  filter_name = None,
+                                  l2_image_filename = None):
+
+    """
+    Method compute_new_cols_rb_sxtractor
+
+    Inputs:
+    sci_image_filename      FITS file containing the background-subtracted science image.
+    ref_image_filename      FITS file containing the resampled, gain-matched reference image.
+    diff_image_filename     FITS file containing the difference image that SExtractor measured
+                            the catalog sources on.  All three images share one pixel grid.
+    catalog_filename        SExtractor catalog of CATALOG_TYPE = ASCII_HEAD, with the
+                            PhotUtils-style columns already appended.
+    rb_dict                 [RUBRAT] section of the config file, as a dictionary of strings:
+                            checkpoint, feats_scaler, and threshold_json (the RuBR-AT model
+                            files), survey_id (0 HLTDS or 1 GBTDS), batch_size, fill_value
+                            (written to RB_SCORE for a source not scored), col_format (Python
+                            format spec of RB_SCORE and RB_THRESHOLD), and optionally
+                            sentinel_values (comma-separated catalog values treated as missing;
+                            default -999).
+    output_catalog_filename Catalog file to write.  If None, catalog_filename is rewritten in place.
+    filter_name             Roman WFI filter of the science image.  If None, it is read from the
+                            FILTER keyword of l2_image_filename.
+    l2_image_filename       L2 science image whose header gives the filter when filter_name is
+                            None.
+
+    Returns:
+    new_cols                Dictionary mapping each new lower-case column name (rb_score,
+                            rb_label, rb_valid, rb_threshold) to its list of values, in
+                            catalog-row order.
+
+    Notes:
+    The per-source reasons a source was not scored (rb_status from rda.compute_rb) are text and
+    are not written to the numeric catalog; their counts are printed instead.
+    """
+
+    print("compute_new_cols_rb_sxtractor: diff_image_filename =",diff_image_filename)
+    print("compute_new_cols_rb_sxtractor: catalog_filename =",catalog_filename)
+
+    if filter_name is None:
+        if l2_image_filename is None:
+            raise ValueError("Method compute_new_cols_rb_sxtractor: either filter_name or "
+                             "l2_image_filename must be given")
+        filter_name = rda.get_l2_image_metadata(l2_image_filename)["filter"]
+        if filter_name is None:
+            raise ValueError(f"Method compute_new_cols_rb_sxtractor: no FILTER keyword in {l2_image_filename}")
+
+    header_lines,data_lines,col_numbers,ncols = read_sxtractor_ascii_head(catalog_filename)
+
+
+    # The catalog columns the classifier accepts (see rda._rb_column_aliases), as present.
+    # rda.compute_rb reports any that are missing.
+
+    accepted = {alias.upper() for aliases in rda._rb_column_aliases.values() for alias in aliases}
+    accepted.add("SNR_FIT")
+
+    catalog_cols = {col: sxtractor_column_values(data_lines,col_numbers,col,catalog_filename)
+                    for col in col_numbers if col in accepted}
+
+    sentinel_values = tuple(float(v) for v in rb_dict.get("sentinel_values","-999").split(",") if v.strip())
+
+    fill_value = float(rb_dict["fill_value"])
+
+    rb_cols = rda.compute_rb(sci_image_filename,
+                             ref_image_filename,
+                             diff_image_filename,
+                             catalog_cols,
+                             coord_base = 1,
+                             filter_name = filter_name,
+                             checkpoint = rb_dict["checkpoint"],
+                             feats_scaler = rb_dict["feats_scaler"],
+                             threshold_json = rb_dict["threshold_json"],
+                             survey_id = int(rb_dict["survey_id"]),
+                             batch_size = int(rb_dict.get("batch_size","256")),
+                             sentinel_values = sentinel_values,
+                             fill_value = fill_value)
+
+    n_scored = sum(rb_cols["rb_valid"])
+
+    status_counts = {}
+    for status in rb_cols["rb_status"]:
+        if status:
+            status_counts[status] = status_counts.get(status,0) + 1
+
+    threshold = rb_cols["rb_threshold"][0] if rb_cols["rb_threshold"] else None
+
+    print(f"compute_new_cols_rb_sxtractor: scored {n_scored} of {len(data_lines)} sources "
+          f"(filter {filter_name}, threshold {threshold}); not scored: {status_counts}")
+
+    new_cols = {"rb_score": rb_cols["rb_score"],
+                "rb_label": rb_cols["rb_label"],
+                "rb_valid": rb_cols["rb_valid"],
+                "rb_threshold": rb_cols["rb_threshold"]}
+
+    new_cols_format = {"rb_score": rb_dict["col_format"],
+                       "rb_label": ".0f",
+                       "rb_valid": ".0f",
+                       "rb_threshold": rb_dict["col_format"]}
+
+    output_catalog_filename = append_sxtractor_cols(header_lines,
+                                                    data_lines,
+                                                    col_numbers,
+                                                    ncols,
+                                                    new_cols,
+                                                    new_cols_format,
+                                                    catalog_filename,
+                                                    output_catalog_filename)
+
+    print(f"compute_new_cols_rb_sxtractor: added columns {list(new_cols)} for {len(data_lines)} "
           f"sources to {output_catalog_filename}")
 
     return new_cols

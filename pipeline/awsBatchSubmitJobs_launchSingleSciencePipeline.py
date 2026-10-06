@@ -366,6 +366,7 @@ fake_sources_dict = config_input['FAKE_SOURCES']
 
 new_catalog_cols_dict = config_input['NEW_CATALOG_COLS']
 sumrat_dict = config_input['SUMRAT']
+rubrat_dict = config_input['RUBRAT'] if config_input.has_section('RUBRAT') else None
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -954,6 +955,8 @@ if __name__ == '__main__':
     job_config['PSFCAT_REFIMAGE'] = psfcat_refimage_dict
     job_config['NEW_CATALOG_COLS'] = new_catalog_cols_dict
     job_config['SUMRAT'] = sumrat_dict
+    if rubrat_dict is not None:
+        job_config['RUBRAT'] = rubrat_dict
 
     job_config['SEXTRACTOR_GAINMATCH'] = {}
     for key in sextractor_gainmatch_dict.keys():

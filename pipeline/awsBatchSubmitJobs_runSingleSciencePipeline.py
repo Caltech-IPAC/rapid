@@ -356,6 +356,33 @@ if __name__ == '__main__':
         new_catalog_cols_dict = None
         sumrat_dict = None
 
+    # Parameters of the RuBR-AT real/bogus columns.  Skipped unless the [RUBRAT] section is present
+    # and enabled, since the classifier needs the rubrat package and TensorFlow.
+
+    rubrat_dict = None
+
+    if config_input.has_section('RUBRAT'):
+        if config_input['RUBRAT'].get('enabled','False').strip().lower() == 'true':
+
+            # Download the model files from their S3 prefix into the working directory, and point
+            # the dictionary at the local copies.
+
+            rubrat_dict = dict(config_input['RUBRAT'])
+            rubrat_s3_prefix = rubrat_dict['s3_prefix'].rstrip('/')
+
+            for key in ('checkpoint','feats_scaler','threshold_json'):
+                s3_full_name = rubrat_s3_prefix + '/' + rubrat_dict[key]
+                local_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name)
+                if not downloaded_from_bucket:
+                    print(f"*** Warning: Could not download RuBR-AT {key} from {s3_full_name}; real/bogus columns will not be added")
+                    rubrat_dict = None
+                    break
+                rubrat_dict[key] = local_filename
+        else:
+            print("RUBRAT section not enabled in job config; real/bogus columns will not be added")
+    else:
+        print("*** Warning: RUBRAT section missing from job config; real/bogus columns will not be added")
+
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
     inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
@@ -2203,6 +2230,22 @@ if __name__ == '__main__':
                     print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
 
 
+            # Add RuBR-AT real/bogus columns to SExtractor catalog for positive SFFT masked difference
+            # image, from the PhotUtils-style columns added above and cutouts of the science,
+            # reference, and difference images.  The filter comes from the L2 science image header.
+
+            if rubrat_dict is not None:
+                try:
+                    util.compute_new_cols_rb_sxtractor(filename_bkg_subbed_science_image,
+                                                       output_resampled_gainmatched_reference_image,
+                                                       filename_sfftdiffimage,
+                                                       filename_sfftdiffimage_sextractor_catalog,
+                                                       rubrat_dict,
+                                                       l2_image_filename=science_image_filename)
+                except Exception as e:
+                    print(f"*** Warning: Could not add real/bogus columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
+
+
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
@@ -2272,6 +2315,23 @@ if __name__ == '__main__':
                                                     psfcat_dict=psfcat_diffimage_dict)
                 except Exception as e:
                     print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
+
+
+            # Add RuBR-AT real/bogus columns to SExtractor catalog for negative SFFT masked difference
+            # image.  The sources are scored as they are, from cutouts of the (positive) science,
+            # reference, and negative difference images; the current model was not trained on
+            # negative-image sources.
+
+            if rubrat_dict is not None:
+                try:
+                    util.compute_new_cols_rb_sxtractor(filename_bkg_subbed_science_image,
+                                                       output_resampled_gainmatched_reference_image,
+                                                       filename_sfftdiffimage_negative,
+                                                       filename_sfftdiffimage_sextractor_catalog_negative,
+                                                       rubrat_dict,
+                                                       l2_image_filename=science_image_filename)
+                except Exception as e:
+                    print(f"*** Warning: Could not add real/bogus columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
 
 
             # Code-timing benchmark.
