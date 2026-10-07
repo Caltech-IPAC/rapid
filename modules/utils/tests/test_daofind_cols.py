@@ -200,7 +200,7 @@ def test_parse_xy_bounds_rejects_three_values():
 
 
 #-------------------------------------------------------------------
-# compute_new_cols_sxtractor, with configs written before and after the new parameters.
+# compute_extra_cols_sxtractor, with configs written before and after the new parameters.
 
 def write_sextractor_catalog(path, xy_one_based):
     lines = ["#   1 NUMBER                 Running object number",
@@ -214,7 +214,7 @@ def write_sextractor_catalog(path, xy_one_based):
 
 
 @pytest.mark.parametrize("new_keys", [True, False])
-def test_compute_new_cols_sxtractor(tmp_path, new_keys):
+def test_compute_extra_cols_sxtractor(tmp_path, new_keys):
     rng = np.random.default_rng(3)
     data = gaussian_image((61, 61), [(20.0, 20.0, 30.0), (40.0, 35.0, 30.0)]) \
         + rng.normal(0, 1, (61, 61))
@@ -240,7 +240,7 @@ def test_compute_new_cols_sxtractor(tmp_path, new_keys):
                    "fill_value": "-999.0", "col_format": ".6f"}
     psfcat_dict = {"fwhm": "2.0", "fit_shape": "(9, 9)", "aperture_radius": "3"}
 
-    new_cols = util.compute_new_cols_sxtractor(image, catalog, new_cols_dict, sumrat_dict,
+    new_cols = util.compute_extra_cols_sxtractor(image, catalog, new_cols_dict, sumrat_dict,
                                                diff_psf_filename=psf, diff_unc_filename=unc,
                                                psfcat_dict=psfcat_dict)
 

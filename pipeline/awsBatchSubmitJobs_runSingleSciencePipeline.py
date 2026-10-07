@@ -356,17 +356,17 @@ if __name__ == '__main__':
         new_catalog_cols_dict = None
         sumrat_dict = None
 
-    # Parameters of the RuBR-AT real/bogus columns.  Skipped unless the [RUBRAT] section is present
-    # and enabled, since the classifier needs the rubrat package and TensorFlow.
+    # Parameters of the RuBR-AT real/bogus columns, used when rb is among the new catalog columns.
+    # The model files are downloaded from their S3 prefix into the working directory, and the
+    # dictionary is pointed at the local copies.
 
     rubrat_dict = None
 
-    if config_input.has_section('RUBRAT'):
-        if config_input['RUBRAT'].get('enabled','False').strip().lower() == 'true':
+    rb_requested = (new_catalog_cols_dict is not None and
+                    'rb' in [c.strip().lower() for c in new_catalog_cols_dict['new_cols'].split(',')])
 
-            # Download the model files from their S3 prefix into the working directory, and point
-            # the dictionary at the local copies.
-
+    if rb_requested:
+        if config_input.has_section('RUBRAT'):
             rubrat_dict = dict(config_input['RUBRAT'])
             rubrat_s3_prefix = rubrat_dict['s3_prefix'].rstrip('/')
 
@@ -379,9 +379,7 @@ if __name__ == '__main__':
                     break
                 rubrat_dict[key] = local_filename
         else:
-            print("RUBRAT section not enabled in job config; real/bogus columns will not be added")
-    else:
-        print("*** Warning: RUBRAT section missing from job config; real/bogus columns will not be added")
+            print("*** Warning: rb requested in NEW_CATALOG_COLS but RUBRAT section missing from job config; real/bogus columns will not be added")
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
@@ -2219,31 +2217,19 @@ if __name__ == '__main__':
 
             if new_catalog_cols_dict is not None:
                 try:
-                    util.compute_new_cols_sxtractor(filename_sfftdiffimage,
+                    util.compute_extra_cols_sxtractor(filename_sfftdiffimage,
                                                     filename_sfftdiffimage_sextractor_catalog,
                                                     new_catalog_cols_dict,
                                                     sumrat_dict,
                                                     diff_psf_filename=filename_sfftdiffpsf,
                                                     diff_unc_filename=filename_sfftdiffimage_unc_masked,
-                                                    psfcat_dict=psfcat_diffimage_dict)
+                                                    psfcat_dict=psfcat_diffimage_dict,
+                                                    sci_image_filename=filename_bkg_subbed_science_image,
+                                                    ref_image_filename=output_resampled_gainmatched_reference_image,
+                                                    rb_dict=rubrat_dict,
+                                                    l2_image_filename=science_image_filename)
                 except Exception as e:
                     print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
-
-
-            # Add RuBR-AT real/bogus columns to SExtractor catalog for positive SFFT masked difference
-            # image, from the PhotUtils-style columns added above and cutouts of the science,
-            # reference, and difference images.  The filter comes from the L2 science image header.
-
-            if rubrat_dict is not None:
-                try:
-                    util.compute_new_cols_rb_sxtractor(filename_bkg_subbed_science_image,
-                                                       output_resampled_gainmatched_reference_image,
-                                                       filename_sfftdiffimage,
-                                                       filename_sfftdiffimage_sextractor_catalog,
-                                                       rubrat_dict,
-                                                       l2_image_filename=science_image_filename)
-                except Exception as e:
-                    print(f"*** Warning: Could not add real/bogus columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
 
 
             # Code-timing benchmark.
@@ -2306,32 +2292,19 @@ if __name__ == '__main__':
 
             if new_catalog_cols_dict is not None:
                 try:
-                    util.compute_new_cols_sxtractor(filename_sfftdiffimage_negative,
+                    util.compute_extra_cols_sxtractor(filename_sfftdiffimage_negative,
                                                     filename_sfftdiffimage_sextractor_catalog_negative,
                                                     new_catalog_cols_dict,
                                                     sumrat_dict,
                                                     diff_psf_filename=filename_sfftdiffpsf,
                                                     diff_unc_filename=filename_sfftdiffimage_unc_masked,
-                                                    psfcat_dict=psfcat_diffimage_dict)
+                                                    psfcat_dict=psfcat_diffimage_dict,
+                                                    sci_image_filename=filename_bkg_subbed_science_image,
+                                                    ref_image_filename=output_resampled_gainmatched_reference_image,
+                                                    rb_dict=rubrat_dict,
+                                                    l2_image_filename=science_image_filename)
                 except Exception as e:
                     print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
-
-
-            # Add RuBR-AT real/bogus columns to SExtractor catalog for negative SFFT masked difference
-            # image.  The sources are scored as they are, from cutouts of the (positive) science,
-            # reference, and negative difference images; the current model was not trained on
-            # negative-image sources.
-
-            if rubrat_dict is not None:
-                try:
-                    util.compute_new_cols_rb_sxtractor(filename_bkg_subbed_science_image,
-                                                       output_resampled_gainmatched_reference_image,
-                                                       filename_sfftdiffimage_negative,
-                                                       filename_sfftdiffimage_sextractor_catalog_negative,
-                                                       rubrat_dict,
-                                                       l2_image_filename=science_image_filename)
-                except Exception as e:
-                    print(f"*** Warning: Could not add real/bogus columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
 
 
             # Code-timing benchmark.
@@ -2471,10 +2444,15 @@ if __name__ == '__main__':
 
                     if new_catalog_cols_dict is not None:
                         try:
-                            util.compute_new_cols_photutils(input_img_filename,
+                            util.compute_extra_cols_photutils(input_img_filename,
                                                             output_psfcat_filename,
                                                             new_catalog_cols_dict,
-                                                            sumrat_dict)
+                                                            sumrat_dict,
+                                                            finder_catalog_filename=output_psfcat_finder_filename,
+                                                            sci_image_filename=filename_bkg_subbed_science_image,
+                                                            ref_image_filename=output_resampled_gainmatched_reference_image,
+                                                            rb_dict=rubrat_dict,
+                                                            l2_image_filename=science_image_filename)
                         except Exception as e:
                             print(f"*** Warning: Could not add new columns to {output_psfcat_filename} ({e}); continuing...")
 
@@ -2612,10 +2590,15 @@ if __name__ == '__main__':
 
                     if new_catalog_cols_dict is not None:
                         try:
-                            util.compute_new_cols_photutils(input_img_filename,
+                            util.compute_extra_cols_photutils(input_img_filename,
                                                             output_psfcat_filename_negative,
                                                             new_catalog_cols_dict,
-                                                            sumrat_dict)
+                                                            sumrat_dict,
+                                                            finder_catalog_filename=output_psfcat_finder_filename_negative,
+                                                            sci_image_filename=filename_bkg_subbed_science_image,
+                                                            ref_image_filename=output_resampled_gainmatched_reference_image,
+                                                            rb_dict=rubrat_dict,
+                                                            l2_image_filename=science_image_filename)
                         except Exception as e:
                             print(f"*** Warning: Could not add new columns to {output_psfcat_filename_negative} ({e}); continuing...")
 
