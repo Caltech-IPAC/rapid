@@ -248,7 +248,8 @@ def test_live_kona_file_wiring(live_provider, roundtrip_sid, tmp_path):
 
     with AlertDataProvider(
             _DBShim(live_provider.db.conn),
-            kona_lookup=load_kona_predictions(kona_file).get) as provider:
+            kona_lookup=load_kona_predictions(kona_file).get,
+            forced_phot=False) as provider:        # single-alert path, see live_provider
         alert = assemble_alert(provider, roundtrip_sid)
 
     assert alert["diaSource"]["isSSCandidate"] is True

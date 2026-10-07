@@ -136,6 +136,15 @@ FORCED_WINDOW_DAYS: float | None = 30.0
 #: Which image of each epoch is measured: difference -> psfFlux, science
 #: -> scienceFlux.
 FORCED_PRODUCTS = ("diff", "science")
+#: Forced photometry measures the SFFT difference image (team decision,
+#: 2026-10-07), whatever flavor the cutouts use and whichever flavor the
+#: diffimages.filename column names (zogy, in the socsim database -- that
+#: product carries NaN-masked bright-star cores and a different PSF).
+#: Same file as DIFF_FLAVORS["sfft"] below.
+#: TODO (photometry unification): add a zogy path here -- follow the
+#: provider's diff_flavor (DIFF_FLAVORS[self.diff_flavor]) instead of this
+#: constant, once forced photometry on the zogy products is validated.
+FORCED_DIFF_BASENAME = "sfftdiffimage_masked.fits"
 #: Per-chip parquet file name in the store, under the caller's prefix. The
 #: table layout, the measurement id and the parquet I/O live in
 #: alerts.forced_phot (FORCED_TABLE_DTYPE, forced_measurement_id,
@@ -2347,7 +2356,8 @@ class AlertDataProvider:
                   else float(chip["mjdobs"]) - self.forced_window_days)
         images = search(self._query, positions, float(chip["ra0"]), float(chip["dec0"]),
                         ppid=int(chip["ppid"]), mjd_lo=mjd_lo,
-                        mjd_hi=float(chip["mjdobs"]) + 1e-6)
+                        mjd_hi=float(chip["mjdobs"]) + 1e-6,
+                        diff_basename=FORCED_DIFF_BASENAME)
         t_search = time.time() - t0
         time_proc = float(Time.now().mjd)  # pyright: ignore[reportArgumentType]
         rows: dict[tuple[int, int], dict[str, Any]] = {}
