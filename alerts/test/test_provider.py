@@ -617,7 +617,7 @@ class FakeSearch:
     def __init__(self, synthetic_chip, tmp_path, fail=False):
         import shutil
         image_path, psf_path, _ = synthetic_chip
-        self.sci_psf = str(tmp_path / "WFI_SCA07_F146_PSF_DET_DIST_normalized.fits")
+        self.sci_psf = str(tmp_path / "sciimage_psf_f146_sca07_normalized.fits")
         shutil.copy(psf_path, self.sci_psf)
         self.image_path, self.psf_path = image_path, psf_path
         self.calls = []; self.fail = fail
@@ -629,7 +629,8 @@ class FakeSearch:
         idx = np.arange(len(positions))
         return [PrevImage(rid=rid, pid=rid * 10, diff_filename=self.image_path,
                           sci_filename=self.image_path, diff_psf=self.psf_path,
-                          sci_psf=self.sci_psf, l2_filename="l2.fits.gz", mjdobs=mjd,
+                          sci_psf=self.sci_psf, diff_uncert="/nonexistent/unc.fits",
+                          sci_uncert="/nonexistent/unc.fits", l2_filename="l2.fits.gz", mjdobs=mjd,
                           fid=8, band="W146", expid=1, sca=7, corners=(0,) * 8,
                           position_index=idx)
                 for rid, mjd in ((13, CHIP_MJDOBS - 50.0), (12, CHIP_MJDOBS - 1.0), (11, CHIP_MJDOBS))]
@@ -668,6 +669,8 @@ def test_forced_photometry_reaches_the_alert(chip_data, synthetic_chip, tmp_path
         assert kw["ppid"] == CHIP_PPID
         assert abs(kw["mjd_lo"] - (CHIP_MJDOBS - FORCED_WINDOW_DAYS)) < 1e-9
         assert abs(kw["mjd_hi"] - CHIP_MJDOBS) < 1e-5
+        # the provider's flavor, not whatever diffimages.filename names
+        assert kw["diff_basename"] == "sfftdiffimage_masked.fits"
         source = sources[0]
         obj = provider.get_object_for_source(source)
         forced = provider.get_forced_photometry(source, obj)

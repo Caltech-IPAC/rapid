@@ -185,14 +185,12 @@ The DiffImMeta database table stores various QA measures for difference images.
 +--------------------+-------------------------------------------------------------------------------------------+
 
 
-
 Source Matching
 ************************************
 
-Four basic PostgreSQL database tables are used for source cross-matching PSF-fit catalogs
+Four basic PostgreSQL database tables are used for cross-matching PSF-fit catalogs
 made by the Python photutils package from the SFFT difference images and curating
-source-extracted lightcurves (until a final decision on which image-differencing and
-source-extraction methods are best):
+source-extracted lightcurves:
 
 * Sources (extracted/selected from catalogs)
 * AstroObjects (astronomical objects for which time-dependent sources form light curves)
@@ -288,3 +286,69 @@ The Sources database table has the ``rb`` float column for storing real-bogus sc
 computed from a Machine-Learning algorithm that is optimized for Roman WFI data,
 which is a fractional number in the [0.0, 1.0] range that corresponds to the likelihood
 that a source is real (as opposed to bogus).
+
+Extra columns have been added to these PhotUtils catalogs, in order to aid in prefiltering
+records that are loaded into the database (and for alert generation):
+
++--------------------+-----------------------------------------------------------------------------------+
+| Extra column       | Definition                                                                        |
++====================+===================================================================================+
+| sumrat             | sum(p)/sum(|p|) of median-filtered 5x5 stamp on source (null = not computed)      |
++--------------------+-----------------------------------------------------------------------------------+
+| nneg               | Number of negative pixels in 5x5 stamp on source (null = not computed)            |
++--------------------+-----------------------------------------------------------------------------------+
+| nbad               | Number of bad pixels in 5x5 stamp on source (null = not computed)                 |
++--------------------+-----------------------------------------------------------------------------------+
+| rb                 | Real-bogus score                                                                  |
++--------------------+-----------------------------------------------------------------------------------+
+
+
+XSource Matching
+************************************
+
+There are also four basic PostgreSQL database tables used for cross-matching SExtractor catalogs
+from the SFFT difference images and curating xsource-extracted lightcurves, with prefix "X"
+to indicate relevance to SExtractor catalogs:
+
+* XSources (extracted/selected from catalogs)
+* XAstroObjects (astronomical objects for which time-dependent sources form light curves)
+* XMerges (associations between XSources and XAstroObjects via source cross-matching)
+* XAstroObjectsMeta (statistics on astronomical-object lightcurves added after source matching)
+
+A diagram of the source-matching database-table schema is given as follows:
+
+.. image:: xsource_matching.png
+
+Extra columns have been added to these SExtractor catalogs, which include some PhotUtils quantities
+at the intial SExtractor extracted position,
+in order to aid in prefiltering records that are loaded into the database (and for alert generation):
+
++--------------------+-----------------------------------------------------------------------------------+
+| Extra column       | Definition                                                                        |
++====================+===================================================================================+
+| SUMRAT             | sum(p)/sum(|p|) of median-filtered 5x5 stamp on source (null = not computed)      |
++--------------------+-----------------------------------------------------------------------------------+
+| NNEG               | Number of negative pixels in 5x5 stamp on source (null = not computed)            |
++--------------------+-----------------------------------------------------------------------------------+
+| NBAD               | Number of bad pixels in 5x5 stamp on source (null = not computed)                 |
++--------------------+-----------------------------------------------------------------------------------+
+| RB                 | Real-bogus score                                                                  |
++--------------------+-----------------------------------------------------------------------------------+
+| SHARPNESS          | SHARPNESS: PhotUtils DAOStarFinder sharpness (null = not computed)                |
++--------------------+-----------------------------------------------------------------------------------+
+| ROUNDNESS1         | PhotUtils DAOStarFinder roundness from symmetry (null = not computed)             |
++--------------------+-----------------------------------------------------------------------------------+
+| ROUNDNESS2         | PhotUtils DAOStarFinder roundness from marginal fits (null = not computed)        |
++--------------------+-----------------------------------------------------------------------------------+
+| FLUX_FIT           | PhotUtils PSF-fit instrumental flux (null = not computed)                         |
++--------------------+-----------------------------------------------------------------------------------+
+| SNR_FIT            | PhotUtils PSF-fit flux / flux error (null = not computed)                         |
++--------------------+-----------------------------------------------------------------------------------+
+| REDUCED_CHI2       | PhotUtils PSF-fit reduced chi2 (null = not computed)                              |
++--------------------+-----------------------------------------------------------------------------------+
+| N_PIXELS_FIT       | Number of unmasked pixels used in PSF fit (null = not computed)                   |
++--------------------+-----------------------------------------------------------------------------------+
+| FLAGS_FIT          | PhotUtils PSF-fit bitwise flags (null = not computed)                             |
++--------------------+-----------------------------------------------------------------------------------+
+| CFIT               | PSF-fit residual in central pixel divided by fit flux (null = not computed)       |
++--------------------+-----------------------------------------------------------------------------------+
