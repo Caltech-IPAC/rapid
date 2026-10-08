@@ -357,7 +357,7 @@ if __name__ == '__main__':
         sumrat_dict = None
 
     # Parameters of the RuBR-AT real/bogus columns, used when either of them (rb_score,
-    # rb_threshold) is among the extra catalog columns.  The model files are downloaded
+    # rb_label) is among the extra catalog columns.  The model files are downloaded
     # from their S3 prefix into the working directory, and the dictionary is pointed at the local
     # copies.
 

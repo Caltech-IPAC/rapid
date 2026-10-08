@@ -3085,7 +3085,7 @@ extra_catalog_col_descriptions = {
     "x_err": "PhotUtils PSFPhotometry x position uncertainty [pixel]",
     "y_err": "PhotUtils PSFPhotometry y position uncertainty [pixel]",
     "rb_score": "RuBR-AT real/bogus score in [0,1], 1 = real-like; fill if not scored",
-    "rb_threshold": "RuBR-AT score threshold for a real label",
+    "rb_label": "RuBR-AT real/bogus label: 1 real, 0 bogus, -1 not scored",
 }
 
 
@@ -3136,11 +3136,15 @@ def parse_xy_bounds(xy_bounds_str):
 # Compute the requested extra catalog columns for a list of source positions.
 
 # The RuBR-AT real/bogus columns, from one classifier run (rda.compute_rb): the score, and the
-# threshold at or above which a source counts as real, so that the label follows from the two.
-# The run's other outputs are not written: rb_valid is implied by the score (the fill value
-# marks a source not scored), rb_label by score and threshold, and rb_status is text.
+# label (1 real, 0 bogus, -1 not scored), which is the score compared with the model's threshold
+# (real at or above it).  The run's other outputs are not written: rb_threshold is the same for
+# every source and is logged instead, rb_valid is implied by the label, and rb_status is text.
 
-rb_catalog_col_names = ("rb_score","rb_threshold")
+rb_catalog_col_names = ("rb_score","rb_label")
+
+# Formats of the rb columns that are not written with the [RUBRAT] col_format.
+
+rb_catalog_col_formats = {"rb_label": "d"}
 
 
 def _compute_extra_catalog_cols(diff_image_filename,
@@ -3167,7 +3171,7 @@ def _compute_extra_catalog_cols(diff_image_filename,
     extra_cols_dict           [EXTRA_CATALOG_COLS] section of the config file, as a dictionary of
                             strings.  Its extra_cols entry is the comma-separated list of the
                             columns to compute: sumrat, nneg, nbad, and the RuBR-AT real/bogus
-                            columns rb_score and rb_threshold.
+                            columns rb_score and rb_label.
     sumrat_dict             [SUMRAT] section of the config file, as a dictionary of strings.
     catalog_cols            For the rb columns: mapping of catalog column name to a sequence of values, one
                             per position, holding the PSF-fit and DAOStarFinder columns that
@@ -3276,7 +3280,7 @@ def _compute_extra_catalog_cols(diff_image_filename,
                 continue
 
             extra_cols[col_name] = rb_cols[col_name]
-            extra_cols_format[col_name] = rb_dict["col_format"]
+            extra_cols_format[col_name] = rb_catalog_col_formats.get(col_name,rb_dict["col_format"])
 
         elif col_name == "sumrat":
 
@@ -3527,7 +3531,7 @@ def compute_extra_cols_sxtractor(diff_image_filename,
     sci_image_filename, ref_image_filename : str or None, optional
         FITS files containing the background-subtracted science image and the resampled,
         gain-matched reference image, on the pixel grid of the difference image.  The rb columns
-        (rb_score and rb_threshold in extra_cols) are added only when these,
+        (rb_score and rb_label in extra_cols) are added only when these,
         rb_dict, and l2_image_filename are given and
         the PhotUtils-style columns they need have been computed.
     rb_dict : dict-like of str or None, optional
@@ -3697,7 +3701,7 @@ def compute_extra_cols_photutils(diff_image_filename,
 
     The extra columns are appended to the column-name line and to every row, so that the catalog
     still reads with astropy (format='ascii'), as loadPSFCatIntoDBSourcesTable.py reads it.
-    The rb columns (rb_score and rb_threshold in extra_cols) are added only
+    The rb columns (rb_score and rb_label in extra_cols) are added only
     when finder_catalog_filename and the other
     rb inputs are given.
     """
