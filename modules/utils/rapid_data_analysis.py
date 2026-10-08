@@ -1614,6 +1614,12 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
 
 _rb_classifiers = {}
 
+# RAPID filter names that the classifier's filter registry spells differently.  The registry
+# accepts the Roman names (F062 ... F213, F146) and the RAPID aliases (R062, Z087, Y106, J129,
+# H158, F184, K213); the RAPID database calls the wide filter W146.
+
+_rb_filter_aliases = {"W146": "F146"}
+
 # Catalog column names accepted for each name the classifier requires, in order of preference.
 # Matching is case-insensitive.
 
@@ -1667,9 +1673,10 @@ def compute_rb(input_sci_filename,
     coord_base              Pixel-coordinate convention of the position columns, which must be
                             given: 0 for zero-based coordinates (numpy, photutils) or 1 for
                             one-based coordinates (FITS, SExtractor).
-    filter_name             Roman WFI filter of the science image, as a RAPID alias (e.g., H158)
-                            or standard name (e.g., F158).  The classifier maps it to its filter
-                            token and rejects a filter it was not trained with.
+    filter_name             Roman WFI filter of the science image, as a RAPID alias (e.g., H158),
+                            standard name (e.g., F158), or RAPID database name (W146, mapped to
+                            F146 through _rb_filter_aliases).  The classifier maps it to its
+                            filter token and rejects a filter it was not trained with.
     checkpoint              RuBR-AT Keras checkpoint file (best.keras).
     feats_scaler            Feature-scaler JSON file paired with the checkpoint.
     threshold_json          JSON file holding the validation-selected score threshold paired
@@ -1805,6 +1812,8 @@ def compute_rb(input_sci_filename,
                                               survey_id = int(survey_id),
                                               batch_size = int(batch_size))
         _rb_classifiers[key] = classifier
+
+    filter_name = _rb_filter_aliases.get(str(filter_name).strip().upper(), filter_name)
 
     scored = classifier.score_arrays(sci, ref, diff, pd.DataFrame(resolved), filter_name = filter_name)
 

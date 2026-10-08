@@ -107,15 +107,15 @@ def test_compute_extra_cols_sxtractor(tmp_path, new_keys):
     image = write_fits(tmp_path / "diff.fits", stamp_image())
     catalog = write_sextractor_catalog(tmp_path / "cat.txt", [(11.0, 11.0), (2.0, 11.0)])
 
-    new_cols_dict = {"new_cols": "sumrat, nneg, nbad",
+    extra_cols_dict = {"extra_cols": "sumrat, nneg, nbad",
                      "sextractor_x_col": "XWIN_IMAGE", "sextractor_y_col": "YWIN_IMAGE"}
     if new_keys:
-        new_cols_dict["nneg_nbad_stamp_size"] = "5"
-        new_cols_dict["nneg_nbad_fill_value"] = "-999.0"
+        extra_cols_dict["nneg_nbad_stamp_size"] = "5"
+        extra_cols_dict["nneg_nbad_fill_value"] = "-999.0"
 
-    new_cols = util.compute_extra_cols_sxtractor(image, catalog, new_cols_dict, SUMRAT_DICT)
-    assert list(new_cols) == ["sumrat", "nneg", "nbad"]
-    assert new_cols["nneg"] == [3.0, FILL] and new_cols["nbad"] == [2.0, FILL]
+    extra_cols = util.compute_extra_cols_sxtractor(image, catalog, extra_cols_dict, SUMRAT_DICT)
+    assert list(extra_cols) == ["sumrat", "nneg", "nbad"]
+    assert extra_cols["nneg"] == [3.0, FILL] and extra_cols["nbad"] == [2.0, FILL]
 
     lines = open(catalog).read().splitlines()
     header = [line for line in lines if line.startswith("#")]
@@ -131,9 +131,9 @@ def test_compute_extra_cols_photutils(tmp_path):
     catalog = tmp_path / "psfcat.txt"
     catalog.write_text("id x_fit y_fit flux_fit\n1 10.0 10.0 5.0\n")
 
-    new_cols_dict = {"new_cols": "nbad, nneg", "photutils_x_col": "x_fit", "photutils_y_col": "y_fit"}
-    new_cols = util.compute_extra_cols_photutils(image, str(catalog), new_cols_dict, SUMRAT_DICT)
-    assert new_cols == {"nbad": [2.0], "nneg": [3.0]}
+    extra_cols_dict = {"extra_cols": "nbad, nneg", "photutils_x_col": "x_fit", "photutils_y_col": "y_fit"}
+    extra_cols = util.compute_extra_cols_photutils(image, str(catalog), extra_cols_dict, SUMRAT_DICT)
+    assert extra_cols == {"nbad": [2.0], "nneg": [3.0]}
 
     lines = catalog.read_text().splitlines()
     assert lines[0].split()[-2:] == ["nbad", "nneg"]
