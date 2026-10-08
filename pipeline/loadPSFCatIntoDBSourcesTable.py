@@ -172,6 +172,16 @@ naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage']) + 1
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 
+# Prefilter thresholds for the records loaded into the sources tables, and the fill values of
+# the extra catalog columns, which are loaded as NULL.
+
+sumrat_prefilter_threshold,rb_prefilter_threshold,catalog_fill_values = util.get_database_prefilter_params(config_input)
+
+print("sumrat_prefilter_threshold =",sumrat_prefilter_threshold)
+print("rb_prefilter_threshold =",rb_prefilter_threshold)
+print("catalog_fill_values =",catalog_fill_values)
+
+
 # Set debug = 1 here to get debug messages in main program.
 
 debug = 1
@@ -220,6 +230,17 @@ cols.append("expid")
 cols.append("fid")
 cols.append("sca")
 cols.append("mjdobs")
+
+# Extra catalog columns (NULL when not computed): catalog name, database name, integer flag.
+
+extra_cols = [("rb_score","rb",False),
+              ("nneg","nneg",True),
+              ("nbad","nbad",True),
+              ("sumrat","sumrat",False),
+              ("rb_label","rblabel",True)]
+
+for catalog_col,db_col,integer in extra_cols:
+    cols.append(db_col)
 
 cols_comma_separated_string = ", ".join(cols)
 columns = tuple(cols)
@@ -344,6 +365,29 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
         nrows = nkeep
 
 
+    # Prefilter: reject sources with sumrat or rb at or below its threshold, where computed.
+
+    keep = util.prefilter_database_records(nrows,
+                                           util.catalog_float_values(joined_table_inner,"sumrat",catalog_fill_values),
+                                           util.catalog_float_values(joined_table_inner,"rb_score",catalog_fill_values),
+                                           sumrat_prefilter_threshold,
+                                           rb_prefilter_threshold)
+
+    nkeep = int(np.count_nonzero(keep))
+
+    print(f"write_joined_table_inner_to_csv_file: isdiffpos={isdiffpos}, "
+          f"prefilter rejected {nrows - nkeep} of {nrows} sources")
+
+    if nkeep == 0:
+        return
+
+    if nkeep < nrows:
+        joined_table_inner = joined_table_inner[keep]
+        hp6_arr = hp6_arr[keep]
+        hp9_arr = hp9_arr[keep]
+        nrows = nkeep
+
+
     # Column mapping (catalog name -> db name) applied once
     t = joined_table_inner
     ra_arr = np.array(t['ra'], dtype=np.float64)
@@ -369,7 +413,8 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
         field_arr, hp6_arr, hp9_arr,
         np.full(nrows, expid), np.full(nrows, fid),
         np.full(nrows, sca), np.full(nrows, mjdobs),
-    ])
+    ] + [util.catalog_values_for_copy(t, catalog_col, integer=integer, fill_values=catalog_fill_values)
+         for catalog_col,db_col,integer in extra_cols])
 
     np.savetxt(csv_fh, data, delimiter=',', fmt='%s')
 

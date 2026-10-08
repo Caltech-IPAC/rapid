@@ -3819,3 +3819,184 @@ def compute_extra_cols_photutils(diff_image_filename,
           f"sources to {output_catalog_filename}")
 
     return extra_cols
+
+
+#####################################################################################################
+# Loading the extra difference-image catalog columns into the Sources and XSources database
+# tables, used by pipeline/loadPSFCatIntoDBSourcesTable.py and pipeline/loadSECatIntoDBSourcesTable.py.
+#
+# A catalog value is "missing" when its column is absent (a catalog made before the column
+# existed, or the rb columns when the classifier did not run), when it is not finite, or when it
+# is one of the catalog fill values (e.g., -999).  Missing values are loaded as NULL, and they
+# never cause a record to be rejected by prefilter_database_records.
+#####################################################################################################
+
+def catalog_float_values(table,col_name,fill_values = (-999.0,)):
+
+    """
+    Return a catalog column as floats, with NaN for missing values.
+
+    Parameters
+    ----------
+    table : astropy.table.Table or QTable
+        Catalog table.
+    col_name : str
+        Column name.
+    fill_values : sequence of float, optional
+        Catalog fill values, which are treated as missing.
+
+    Returns
+    -------
+    values : numpy.ndarray of float or None
+        The column values, NaN where missing, or None if the table has no such column.
+    """
+
+    if col_name not in table.colnames:
+        return None
+
+    col = table[col_name]
+    col = getattr(col,"value",col)
+
+    values = np.ma.filled(np.ma.asarray(col, dtype=np.float64), np.nan).astype(np.float64)
+
+    for fill_value in fill_values:
+        values[values == float(fill_value)] = np.nan
+
+    values[~np.isfinite(values)] = np.nan
+
+    return values
+
+
+def catalog_values_for_copy(table,col_name,integer = False,fill_values = (-999.0,)):
+
+    """
+    Return a catalog column as strings for PostgreSQL COPY, with \\N (NULL) for missing values.
+
+    Parameters
+    ----------
+    table : astropy.table.Table or QTable
+        Catalog table.
+    col_name : str
+        Column name.  If the table has no such column, every value is \\N.
+    integer : bool, optional
+        True for a column loaded into an integer database column, whose values are written
+        without decimals.
+    fill_values : sequence of float, optional
+        Catalog fill values, which are loaded as NULL.
+
+    Returns
+    -------
+    values : numpy.ndarray of object
+        One string per row: the value, or \\N.
+    """
+
+    out = np.full(len(table), "\\N", dtype=object)
+
+    values = catalog_float_values(table,col_name,fill_values = fill_values)
+
+    if values is None:
+        return out
+
+    ok = np.isfinite(values)
+
+    if integer:
+        out[ok] = [str(int(round(v))) for v in values[ok]]
+    else:
+        out[ok] = [repr(float(v)) for v in values[ok]]
+
+    return out
+
+
+def prefilter_database_records(nrows,
+                               sumrat,
+                               rb,
+                               sumrat_prefilter_threshold,
+                               rb_prefilter_threshold):
+
+    """
+    Select the catalog records to be loaded into the Sources or XSources database child tables:
+    those with sumrat > sumrat_prefilter_threshold and rb > rb_prefilter_threshold.
+
+    Parameters
+    ----------
+    nrows : int
+        Number of catalog records.
+    sumrat : numpy.ndarray of float or None
+        sumrat of each record, NaN where missing (see catalog_float_values), or None if the
+        catalog has no sumrat column.
+    rb : numpy.ndarray of float or None
+        Real/bogus score of each record, NaN where missing, or None if the catalog has no
+        score column (the classifier did not run).
+    sumrat_prefilter_threshold : float or None
+        A record is rejected when its sumrat is less than or equal to this value.  None: no
+        sumrat cut.
+    rb_prefilter_threshold : float or None
+        A record is rejected when its rb is less than or equal to this value.  None: no rb cut.
+
+    Returns
+    -------
+    keep : numpy.ndarray of bool
+        True for each record to be loaded.
+
+    Notes
+    -----
+    Each cut applies only where its value was computed: a record whose sumrat or rb is missing
+    is not rejected for it.
+    """
+
+    keep = np.ones(nrows, dtype=bool)
+
+    with np.errstate(invalid="ignore"):
+
+        if sumrat is not None and sumrat_prefilter_threshold is not None:
+            keep &= ~(np.isfinite(sumrat) & (sumrat <= sumrat_prefilter_threshold))
+
+        if rb is not None and rb_prefilter_threshold is not None:
+            keep &= ~(np.isfinite(rb) & (rb <= rb_prefilter_threshold))
+
+    return keep
+
+
+def get_database_prefilter_params(config_input):
+
+    """
+    Read the prefilter thresholds and the catalog fill values used when loading the extra
+    catalog columns into the Sources and XSources database tables.
+
+    Parameters
+    ----------
+    config_input : configparser.ConfigParser
+        Parsed cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini.
+
+    Returns
+    -------
+    sumrat_prefilter_threshold : float or None
+        [DATABASE_PREFILTER] sumrat_prefilter_threshold, or None (no sumrat cut) if the section
+        is missing.
+    rb_prefilter_threshold : float or None
+        [DATABASE_PREFILTER] rb_prefilter_threshold, or None (no rb cut) if the section is
+        missing.
+    fill_values : tuple of float
+        The distinct fill values written to the extra catalog columns ([SUMRAT] fill_value,
+        [EXTRA_CATALOG_COLS] nneg_nbad_fill_value and photutils_cols_fill_value, [RUBRAT]
+        fill_value), -999.0 for any that is not set.
+    """
+
+    if config_input.has_section("DATABASE_PREFILTER"):
+        sumrat_prefilter_threshold = float(config_input["DATABASE_PREFILTER"]["sumrat_prefilter_threshold"])
+        rb_prefilter_threshold = float(config_input["DATABASE_PREFILTER"]["rb_prefilter_threshold"])
+    else:
+        print("*** Warning: DATABASE_PREFILTER section missing from config; records will not be prefiltered")
+        sumrat_prefilter_threshold = None
+        rb_prefilter_threshold = None
+
+    fill_values = set()
+
+    for section,key in (("SUMRAT","fill_value"),
+                        ("EXTRA_CATALOG_COLS","nneg_nbad_fill_value"),
+                        ("EXTRA_CATALOG_COLS","photutils_cols_fill_value"),
+                        ("RUBRAT","fill_value")):
+        value = config_input.get(section,key,fallback="-999.0") if config_input.has_section(section) else "-999.0"
+        fill_values.add(float(value))
+
+    return sumrat_prefilter_threshold,rb_prefilter_threshold,tuple(sorted(fill_values))
