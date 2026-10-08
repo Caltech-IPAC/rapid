@@ -300,7 +300,7 @@ records that are loaded into the database (and for alert generation):
 +--------------------+-----------------------------------------------------------------------------------+
 | Extra column       | Definition                                                                        |
 +====================+===================================================================================+
-| sumrat             | sum(p)/sum(|p|) of median-filtered 5x5 stamp on source (null = not computed)      |
+| sumrat             | sum(p)/sum(\|p\|) of median-filtered 5x5 stamp on source (null = not computed)    |
 +--------------------+-----------------------------------------------------------------------------------+
 | nneg               | Number of negative pixels in 5x5 stamp on source (null = not computed)            |
 +--------------------+-----------------------------------------------------------------------------------+
@@ -335,7 +335,7 @@ in order to aid in prefiltering records that are loaded into the database (and f
 +--------------------+-----------------------------------------------------------------------------------+
 | Extra column       | Definition                                                                        |
 +====================+===================================================================================+
-| SUMRAT             | sum(p)/sum(|p|) of median-filtered 5x5 stamp on source (null = not computed)      |
+| SUMRAT             | sum(p)/sum(\|p\|) of median-filtered 5x5 stamp on source (null = not computed)    |
 +--------------------+-----------------------------------------------------------------------------------+
 | NNEG               | Number of negative pixels in 5x5 stamp on source (null = not computed)            |
 +--------------------+-----------------------------------------------------------------------------------+
