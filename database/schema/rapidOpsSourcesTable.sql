@@ -60,7 +60,8 @@ CREATE TABLE sources (
     rb real,                                   -- Null means realbogus not executed
     nneg smallint,                             -- Number of negative pixels in 5x5 stamp on source (null = not computed)
     nbad smallint,                             -- Number of bad pixels in 5x5 stamp on source (null = not computed)
-    sumrat real                                -- sum(p)/sum(|p|) of median-filtered 5x5 stamp on source (null = not computed)
+    sumrat real,                               -- sum(p)/sum(|p|) of median-filtered 5x5 stamp on source (null = not computed)
+    rblabel smallint                           -- RuBR-AT real/bogus label: 1 real, 0 bogus, -1 not scored (null = not computed)
 );
 
 -- Sources table must be owned by rapidporole for inheritance.
@@ -355,7 +356,8 @@ CREATE TABLE xsources (
     redchi real,                               -- REDUCED_CHI2: PhotUtils PSF-fit reduced chi2 (null = not computed)
     npixfit smallint,                          -- N_PIXELS_FIT: number of unmasked pixels used in PSF fit (null = not computed)
     flagsfit smallint,                         -- FLAGS_FIT: PhotUtils PSF-fit bitwise flags (null = not computed)
-    cfit real                                  -- CFIT: PSF-fit residual in central pixel divided by fit flux (null = not computed)
+    cfit real,                                 -- CFIT: PSF-fit residual in central pixel divided by fit flux (null = not computed)
+    rblabel smallint                           -- RB_LABEL: RuBR-AT real/bogus label: 1 real, 0 bogus, -1 not scored (null = not computed)
 );
 
 -- XSources table must be owned by rapidporole for inheritance.
