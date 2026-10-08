@@ -200,7 +200,7 @@ def test_parse_xy_bounds_rejects_three_values():
 
 
 #-------------------------------------------------------------------
-# compute_new_cols_sxtractor, with configs written before and after the new parameters.
+# compute_extra_cols_sxtractor, with configs written before and after the new parameters.
 
 def write_sextractor_catalog(path, xy_one_based):
     lines = ["#   1 NUMBER                 Running object number",
@@ -214,7 +214,7 @@ def write_sextractor_catalog(path, xy_one_based):
 
 
 @pytest.mark.parametrize("new_keys", [True, False])
-def test_compute_new_cols_sxtractor(tmp_path, new_keys):
+def test_compute_extra_cols_sxtractor(tmp_path, new_keys):
     rng = np.random.default_rng(3)
     data = gaussian_image((61, 61), [(20.0, 20.0, 30.0), (40.0, 35.0, 30.0)]) \
         + rng.normal(0, 1, (61, 61))
@@ -227,31 +227,31 @@ def test_compute_new_cols_sxtractor(tmp_path, new_keys):
     # One-based SExtractor positions, the first 0.6 pixel off its peak.
     catalog = write_sextractor_catalog(tmp_path / "cat.txt", [(20.4, 21.0), (41.0, 36.0)])
 
-    new_cols_dict = {"new_cols": "sumrat",
+    extra_cols_dict = {"extra_cols": "sumrat",
                      "sextractor_x_col": "XWIN_IMAGE", "sextractor_y_col": "YWIN_IMAGE",
                      "sxtractor_photutils_cols": "sharpness, roundness1, roundness2, x_dao_peak, "
                                                  "y_dao_peak, dao_flags, flux_fit, flags",
                      "photutils_cols_fill_value": "-999.0", "photutils_cols_format": ".6f"}
     if new_keys:
-        new_cols_dict["photutils_cols_snap_radius"] = "1"
-        new_cols_dict["photutils_cols_xy_bounds"] = "None"
+        extra_cols_dict["photutils_cols_snap_radius"] = "1"
+        extra_cols_dict["photutils_cols_xy_bounds"] = "None"
 
     sumrat_dict = {"stamp_size": "5", "filter_size": "3", "lower_median": "False",
                    "fill_value": "-999.0", "col_format": ".6f"}
     psfcat_dict = {"fwhm": "2.0", "fit_shape": "(9, 9)", "aperture_radius": "3"}
 
-    new_cols = util.compute_new_cols_sxtractor(image, catalog, new_cols_dict, sumrat_dict,
+    extra_cols = util.compute_extra_cols_sxtractor(image, catalog, extra_cols_dict, sumrat_dict,
                                                diff_psf_filename=psf, diff_unc_filename=unc,
                                                psfcat_dict=psfcat_dict)
 
     expected = raw_daofind(np.where(np.isfinite(data), data, 0.0), [20], [20])
-    assert new_cols["sharpness"][0] == pytest.approx(expected["sharpness"][0], abs=1e-5)
-    assert new_cols["roundness1"][0] == pytest.approx(expected["roundness1"][0], abs=1e-5)
-    assert (new_cols["x_dao_peak"][0], new_cols["y_dao_peak"][0]) == (21.0, 21.0)
-    assert new_cols["dao_flags"][0] == 0
-    assert int(new_cols["dao_flags"][1]) & 3 != 0
-    assert new_cols["sharpness"][1] != FILL
-    assert new_cols["flux_fit"][1] != FILL
+    assert extra_cols["sharpness"][0] == pytest.approx(expected["sharpness"][0], abs=1e-5)
+    assert extra_cols["roundness1"][0] == pytest.approx(expected["roundness1"][0], abs=1e-5)
+    assert (extra_cols["x_dao_peak"][0], extra_cols["y_dao_peak"][0]) == (21.0, 21.0)
+    assert extra_cols["dao_flags"][0] == 0
+    assert int(extra_cols["dao_flags"][1]) & 3 != 0
+    assert extra_cols["sharpness"][1] != FILL
+    assert extra_cols["flux_fit"][1] != FILL
 
     header = [line for line in open(catalog) if line.startswith("#")]
     for name in ("SHARPNESS", "X_DAO_PEAK", "Y_DAO_PEAK", "DAO_FLAGS", "FLAGS_FIT"):
@@ -260,5 +260,5 @@ def test_compute_new_cols_sxtractor(tmp_path, new_keys):
     # Integer columns are written without decimals.
     row = open(catalog).read().splitlines()[-1].split()
     names = [line.split()[2] for line in header]
-    assert row[names.index("DAO_FLAGS")] == str(int(new_cols["dao_flags"][1]))
+    assert row[names.index("DAO_FLAGS")] == str(int(extra_cols["dao_flags"][1]))
     assert row[names.index("X_DAO_PEAK")] == "41"

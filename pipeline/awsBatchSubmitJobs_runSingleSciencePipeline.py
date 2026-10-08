@@ -345,16 +345,43 @@ if __name__ == '__main__':
     fake_sources_dict = config_input['FAKE_SOURCES']
     psfcat_refimage_dict = config_input['PSFCAT_REFIMAGE']
 
-    # Parameters of the new difference-image catalog columns, such as sumrat.  The new columns are
+    # Parameters of the extra difference-image catalog columns, such as sumrat.  The extra columns are
     # skipped for a job config written before these sections were added.
 
-    if config_input.has_section('NEW_CATALOG_COLS') and config_input.has_section('SUMRAT'):
-        new_catalog_cols_dict = config_input['NEW_CATALOG_COLS']
+    if config_input.has_section('EXTRA_CATALOG_COLS') and config_input.has_section('SUMRAT'):
+        extra_catalog_cols_dict = config_input['EXTRA_CATALOG_COLS']
         sumrat_dict = config_input['SUMRAT']
     else:
-        print("*** Warning: NEW_CATALOG_COLS or SUMRAT section missing from job config; new catalog columns will not be added")
-        new_catalog_cols_dict = None
+        print("*** Warning: EXTRA_CATALOG_COLS or SUMRAT section missing from job config; extra catalog columns will not be added")
+        extra_catalog_cols_dict = None
         sumrat_dict = None
+
+    # Parameters of the RuBR-AT real/bogus columns, used when either of them (rb_score,
+    # rb_label) is among the extra catalog columns.  The model files are downloaded
+    # from their S3 prefix into the working directory, and the dictionary is pointed at the local
+    # copies.
+
+    rubrat_dict = None
+
+    rb_requested = (extra_catalog_cols_dict is not None and
+                    any(c.strip().lower() in util.rb_catalog_col_names
+                        for c in extra_catalog_cols_dict['extra_cols'].split(',')))
+
+    if rb_requested:
+        if config_input.has_section('RUBRAT'):
+            rubrat_dict = dict(config_input['RUBRAT'])
+            rubrat_s3_prefix = rubrat_dict['s3_prefix'].rstrip('/')
+
+            for key in ('checkpoint','feats_scaler','threshold_json'):
+                s3_full_name = rubrat_s3_prefix + '/' + rubrat_dict[key]
+                local_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name)
+                if not downloaded_from_bucket:
+                    print(f"*** Warning: Could not download RuBR-AT {key} from {s3_full_name}; real/bogus columns will not be added")
+                    rubrat_dict = None
+                    break
+                rubrat_dict[key] = local_filename
+        else:
+            print("*** Warning: rb columns requested in EXTRA_CATALOG_COLS but RUBRAT section missing from job config; real/bogus columns will not be added")
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
@@ -2185,22 +2212,26 @@ if __name__ == '__main__':
             print("nsexcatsources_sfftdiffimage =",nsexcatsources_sfftdiffimage)
 
 
-            # Add new columns, such as sumrat and the PhotUtils-style columns, to SExtractor catalog for
+            # Add extra columns, such as sumrat and the PhotUtils-style columns, to SExtractor catalog for
             # positive SFFT masked difference image.  The values are measured on the image SExtractor
             # measured the sources on, with the PSF, uncertainty image, and PSF-fit parameters of the
             # SFFT PhotUtils catalogs.
 
-            if new_catalog_cols_dict is not None:
+            if extra_catalog_cols_dict is not None:
                 try:
-                    util.compute_new_cols_sxtractor(filename_sfftdiffimage,
+                    util.compute_extra_cols_sxtractor(filename_sfftdiffimage,
                                                     filename_sfftdiffimage_sextractor_catalog,
-                                                    new_catalog_cols_dict,
+                                                    extra_catalog_cols_dict,
                                                     sumrat_dict,
                                                     diff_psf_filename=filename_sfftdiffpsf,
                                                     diff_unc_filename=filename_sfftdiffimage_unc_masked,
-                                                    psfcat_dict=psfcat_diffimage_dict)
+                                                    psfcat_dict=psfcat_diffimage_dict,
+                                                    sci_image_filename=filename_bkg_subbed_science_image,
+                                                    ref_image_filename=output_resampled_gainmatched_reference_image,
+                                                    rb_dict=rubrat_dict,
+                                                    l2_image_filename=science_image_filename)
                 except Exception as e:
-                    print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
+                    print(f"*** Warning: Could not add extra columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
 
 
             # Code-timing benchmark.
@@ -2256,22 +2287,26 @@ if __name__ == '__main__':
             print("nsexcatsources_sfftdiffimage_negative =",nsexcatsources_sfftdiffimage_negative)
 
 
-            # Add new columns, such as sumrat and the PhotUtils-style columns, to SExtractor catalog for
+            # Add extra columns, such as sumrat and the PhotUtils-style columns, to SExtractor catalog for
             # negative SFFT masked difference image.  The values are measured on the image SExtractor
             # measured the sources on, with the PSF, uncertainty image, and PSF-fit parameters of the
             # SFFT PhotUtils catalogs.
 
-            if new_catalog_cols_dict is not None:
+            if extra_catalog_cols_dict is not None:
                 try:
-                    util.compute_new_cols_sxtractor(filename_sfftdiffimage_negative,
+                    util.compute_extra_cols_sxtractor(filename_sfftdiffimage_negative,
                                                     filename_sfftdiffimage_sextractor_catalog_negative,
-                                                    new_catalog_cols_dict,
+                                                    extra_catalog_cols_dict,
                                                     sumrat_dict,
                                                     diff_psf_filename=filename_sfftdiffpsf,
                                                     diff_unc_filename=filename_sfftdiffimage_unc_masked,
-                                                    psfcat_dict=psfcat_diffimage_dict)
+                                                    psfcat_dict=psfcat_diffimage_dict,
+                                                    sci_image_filename=filename_bkg_subbed_science_image,
+                                                    ref_image_filename=output_resampled_gainmatched_reference_image,
+                                                    rb_dict=rubrat_dict,
+                                                    l2_image_filename=science_image_filename)
                 except Exception as e:
-                    print(f"*** Warning: Could not add new columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
+                    print(f"*** Warning: Could not add extra columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
 
 
             # Code-timing benchmark.
@@ -2406,17 +2441,22 @@ if __name__ == '__main__':
                     ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
 
 
-                    # Add new columns, such as sumrat, to PSF-fit catalog for positive SFFT difference image.
+                    # Add extra columns, such as sumrat, to PSF-fit catalog for positive SFFT difference image.
                     # The values are measured on the image the PSF fitting was done on.
 
-                    if new_catalog_cols_dict is not None:
+                    if extra_catalog_cols_dict is not None:
                         try:
-                            util.compute_new_cols_photutils(input_img_filename,
+                            util.compute_extra_cols_photutils(input_img_filename,
                                                             output_psfcat_filename,
-                                                            new_catalog_cols_dict,
-                                                            sumrat_dict)
+                                                            extra_catalog_cols_dict,
+                                                            sumrat_dict,
+                                                            finder_catalog_filename=output_psfcat_finder_filename,
+                                                            sci_image_filename=filename_bkg_subbed_science_image,
+                                                            ref_image_filename=output_resampled_gainmatched_reference_image,
+                                                            rb_dict=rubrat_dict,
+                                                            l2_image_filename=science_image_filename)
                         except Exception as e:
-                            print(f"*** Warning: Could not add new columns to {output_psfcat_filename} ({e}); continuing...")
+                            print(f"*** Warning: Could not add extra columns to {output_psfcat_filename} ({e}); continuing...")
 
 
                     # Join photometry and finder objects and output parquet file.  The photometry
@@ -2547,17 +2587,22 @@ if __name__ == '__main__':
                     ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
 
 
-                    # Add new columns, such as sumrat, to PSF-fit catalog for negative SFFT difference image.
+                    # Add extra columns, such as sumrat, to PSF-fit catalog for negative SFFT difference image.
                     # The values are measured on the image the PSF fitting was done on.
 
-                    if new_catalog_cols_dict is not None:
+                    if extra_catalog_cols_dict is not None:
                         try:
-                            util.compute_new_cols_photutils(input_img_filename,
+                            util.compute_extra_cols_photutils(input_img_filename,
                                                             output_psfcat_filename_negative,
-                                                            new_catalog_cols_dict,
-                                                            sumrat_dict)
+                                                            extra_catalog_cols_dict,
+                                                            sumrat_dict,
+                                                            finder_catalog_filename=output_psfcat_finder_filename_negative,
+                                                            sci_image_filename=filename_bkg_subbed_science_image,
+                                                            ref_image_filename=output_resampled_gainmatched_reference_image,
+                                                            rb_dict=rubrat_dict,
+                                                            l2_image_filename=science_image_filename)
                         except Exception as e:
-                            print(f"*** Warning: Could not add new columns to {output_psfcat_filename_negative} ({e}); continuing...")
+                            print(f"*** Warning: Could not add extra columns to {output_psfcat_filename_negative} ({e}); continuing...")
 
 
                     # Join photometry and finder objects and output parquet file.  The photometry

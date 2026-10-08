@@ -1083,7 +1083,8 @@ def compute_nneg_nbad_for_diff_image(input_diff_filename,
 # Columns computed by compute_photutils_cols_for_diff_image.
 
 photutils_col_names = ("sharpness","roundness1","roundness2","x_dao_peak","y_dao_peak","dao_flags",
-                       "flux_fit","snr_fit","reduced_chi2","n_pixels_fit","flags","cfit")
+                       "x_fit","y_fit","x_err","y_err","flux_fit","snr_fit","reduced_chi2",
+                       "n_pixels_fit","flags","cfit")
 
 
 #####################################################################################################
@@ -1392,12 +1393,13 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
         "sharpness", "roundness1", and "roundness2" (dimensionless, from DAOStarFinder);
         "x_dao_peak" and "y_dao_peak" (the snapped pixel they were measured at, in the
         convention of coord_base); "dao_flags" (bit flags of bad pixels in the source core; see
-        above); "flux_fit" (in the units of the image); "snr_fit" (flux_fit / flux_err,
-        dimensionless); "reduced_chi2" (dimensionless); "n_pixels_fit" (number of unmasked pixels
-        fit); "flags" (PSFPhotometry bit flags, in which bit 32 marks a fitted position held at
-        xy_bounds); and "cfit" (central-pixel fit residual relative
-        to flux_fit, dimensionless).  "x_dao_peak", "y_dao_peak", "dao_flags", "n_pixels_fit",
-        and "flags" are integer-valued floats.
+        above); "x_fit" and "y_fit" (the PSF-fitted position, in the convention of coord_base);
+        "x_err" and "y_err" (its fit uncertainties [pixels]); "flux_fit" (in the units of the
+        image); "snr_fit" (flux_fit / flux_err, dimensionless); "reduced_chi2" (dimensionless);
+        "n_pixels_fit" (number of unmasked pixels fit); "flags" (PSFPhotometry bit flags, in which
+        bit 32 marks a fitted position held at xy_bounds); and "cfit" (central-pixel fit residual
+        relative to flux_fit, dimensionless).  "x_dao_peak", "y_dao_peak", "dao_flags",
+        "n_pixels_fit", and "flags" are integer-valued floats.
 
     Notes
     -----
@@ -1557,7 +1559,12 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
                                     if "reduced_chi2" in phot.colnames else np.full(len(phot), np.nan),
                     "n_pixels_fit": np.asarray(phot[n_pixels_fit_name], dtype=np.float64),
                     "flags": np.asarray(phot["flags"], dtype=np.float64),
-                    "cfit": np.asarray(phot["cfit"], dtype=np.float64)}
+                    "cfit": np.asarray(phot["cfit"], dtype=np.float64),
+                    "x_fit": np.asarray(phot["x_fit"], dtype=np.float64) + coord_base,
+                    "y_fit": np.asarray(phot["y_fit"], dtype=np.float64) + coord_base,
+                    "x_err": np.asarray(phot["x_err"], dtype=np.float64),
+                    "y_err": np.asarray(phot["y_err"], dtype=np.float64)
+                    }
 
     if error is not None:
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1569,3 +1576,258 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
                 photutils_cols[name][int(source_id) - 1] = float(value)
 
     return photutils_cols
+
+
+#####################################################################################################
+# Real/bogus (RB) score of difference-image sources from the RuBR-AT classifier.
+#
+# RuBR-AT (rubrat package) scores a source from a 64x64 stack of science, reference, and
+# difference-image cutouts centered on the source, nine features derived from PSF-fit and
+# DAOStarFinder columns, and survey and filter context tokens.  Its RAPIDRealBogusClassifier
+# cuts the stamps, derives the features, applies the training feature scaler, and runs the
+# model, so that the preprocessing here is the one the checkpoint was trained with.  This method
+# only maps RAPID catalog columns onto the names the classifier requires and returns the scores
+# in catalog-row order.
+#
+# The classifier requires, per source: xcentroid, ycentroid (the stamp center; the PSF-fitted
+# position in training), flux_fit, flux_err, cfit, reduced_chi2, x_err, y_err, npixfit, flags
+# (PSFPhotometry), and sharpness, roundness1, roundness2 (DAOStarFinder).  The PhotUtils-style
+# columns of the SExtractor catalogs (compute_photutils_cols_for_diff_image) provide these
+# under their own names, which are accepted here: x_fit/y_fit or XWIN_IMAGE/YWIN_IMAGE for the
+# position, flags_fit for flags, n_pixels_fit for npixfit, and snr_fit in place of flux_err,
+# from which flux_err = flux_fit / snr_fit is recovered (the classifier only uses the ratio).
+#
+# Catalog fill values (e.g., -999) are turned into NaN before scoring, so that the classifier
+# applies its own neutral defaults to a missing measurement instead of reading the fill value
+# as a measurement.  The model's output is a score in [0, 1], higher for sources more like the
+# transients it was trained on; it is not a calibrated probability.  The threshold that turns
+# the score into a label is read from the threshold JSON file shipped with the checkpoint
+# (the metrics.json of rubrat evaluate-research, or a file holding {"threshold": value}), so
+# that the checkpoint, scaler, and threshold are always used as the set they were validated as.
+#
+# The classifier is loaded once per process and reused for every call with the same checkpoint,
+# scaler, threshold file, and survey token.  TensorFlow and rubrat are imported only when this
+# method is called.
+#####################################################################################################
+
+# Classifier instances, keyed by (checkpoint, feats_scaler, threshold, survey_id, batch_size).
+
+_rb_classifiers = {}
+
+# RAPID filter names that the classifier's filter registry spells differently.  The registry
+# accepts the Roman names (F062 ... F213, F146) and the RAPID aliases (R062, Z087, Y106, J129,
+# H158, F184, K213); the RAPID database calls the wide filter W146.
+
+_rb_filter_aliases = {"W146": "F146"}
+
+# Catalog column names accepted for each name the classifier requires, in order of preference.
+# Matching is case-insensitive.
+
+_rb_column_aliases = {
+    "xcentroid": ("x_fit","xcentroid","xwin_image","x_centroid"),
+    "ycentroid": ("y_fit","ycentroid","ywin_image","y_centroid"),
+    "flux_fit": ("flux_fit",),
+    "flux_err": ("flux_err",),
+    "cfit": ("cfit",),
+    "reduced_chi2": ("reduced_chi2",),
+    "x_err": ("x_err",),
+    "y_err": ("y_err",),
+    "npixfit": ("npixfit","n_pixels_fit"),
+    "flags": ("flags_fit","flags"),
+    "sharpness": ("sharpness",),
+    "roundness1": ("roundness1",),
+    "roundness2": ("roundness2",),
+}
+
+rb_col_names = ("rb_score","rb_label","rb_valid","rb_status","rb_threshold")
+
+
+def compute_rb(input_sci_filename,
+               input_ref_filename,
+               input_diff_filename,
+               catalog_cols,
+               *,
+               coord_base,
+               filter_name,
+               checkpoint,
+               feats_scaler,
+               threshold_json,
+               survey_id,
+               batch_size = 256,
+               sentinel_values = (-999.0,),
+               hdu_index = None,
+               fill_value = np.nan):
+
+    """
+    Method compute_rb
+
+    Inputs:
+    input_sci_filename      FITS file containing the background-subtracted science image.
+    input_ref_filename      FITS file containing the resampled, gain-matched reference image.
+    input_diff_filename     FITS file containing the difference image the sources were found
+                            in.  The three images must be on the same pixel grid.
+    catalog_cols            Mapping of catalog column name to a sequence of values, one per
+                            source, all of the same length.  The columns the classifier requires
+                            and the names accepted for them are given above (_rb_column_aliases);
+                            snr_fit is accepted in place of flux_err.  Other columns are ignored.
+    coord_base              Pixel-coordinate convention of the position columns, which must be
+                            given: 0 for zero-based coordinates (numpy, photutils) or 1 for
+                            one-based coordinates (FITS, SExtractor).
+    filter_name             Roman WFI filter of the science image, as a RAPID alias (e.g., H158),
+                            standard name (e.g., F158), or RAPID database name (W146, mapped to
+                            F146 through _rb_filter_aliases).  The classifier maps it to its
+                            filter token and rejects a filter it was not trained with.
+    checkpoint              RuBR-AT Keras checkpoint file (best.keras).
+    feats_scaler            Feature-scaler JSON file paired with the checkpoint.
+    threshold_json          JSON file holding the validation-selected score threshold paired
+                            with the checkpoint: the metrics.json written by rubrat
+                            evaluate-research, or a file holding {"threshold": value}.
+    survey_id               Survey context token of the model: 0 (HLTDS) or 1 (GBTDS).
+    batch_size              Number of sources per model prediction batch.
+    sentinel_values         Catalog values treated as missing and replaced by NaN before scoring.
+    hdu_index               HDU index of the image data in each FITS file.  If None, the first
+                            HDU holding two-dimensional image data is used.
+    fill_value              Value written to rb_score for a source that could not be scored.
+
+    Returns:
+    rb_cols                 Dictionary of lists, one value per source, in catalog-row order:
+                            "rb_score" (float; the model score, or fill_value when not scored),
+                            "rb_label" (int; 1 real, 0 bogus, -1 not scored), "rb_valid" (int;
+                            1 if the source was scored, else 0), "rb_status" (str; empty when
+                            scored, otherwise the classifier's reason, such as
+                            nonfinite_centroid, centroid_outside_image,
+                            nonfinite_or_unusable_cutout, or nonfinite_features), and
+                            "rb_threshold" (float; the threshold read from threshold_json,
+                            the same for every source).
+
+    Notes:
+    A source is not scored when its position is not finite or lies off the image, when any of
+    its three cutouts contains a non-finite pixel (cutouts are zero-padded at the image edges,
+    as in training), or when a feature is not finite after the classifier's defaults.  The
+    classifier is not applied to negated images; sources that are negative in the difference
+    image are scored as they are, which the current checkpoint was not trained on.
+    """
+
+    if coord_base not in (0, 1):
+        raise ValueError(f"Method compute_rb: coord_base = {coord_base} "
+                         "must be 0 (zero-based) or 1 (one-based)")
+
+    if survey_id not in (0, 1):
+        raise ValueError(f"Method compute_rb: survey_id = {survey_id} must be 0 (HLTDS) or 1 (GBTDS)")
+
+
+    # Resolve the catalog columns the classifier requires, case-insensitively, under the
+    # accepted aliases.  flux_err may be recovered from snr_fit.
+
+    cols_by_lower = {str(name).lower(): np.asarray(values, dtype=np.float64)
+                     for name,values in catalog_cols.items()}
+
+    def _find(aliases):
+        for alias in aliases:
+            if alias in cols_by_lower:
+                return cols_by_lower[alias]
+        return None
+
+    resolved = {}
+    missing = []
+
+    for required,aliases in _rb_column_aliases.items():
+        values = _find(aliases)
+        if values is None and required == "flux_err" and "snr_fit" in cols_by_lower:
+            flux_fit = _find(_rb_column_aliases["flux_fit"])
+            if flux_fit is not None:
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    values = flux_fit / cols_by_lower["snr_fit"]
+        if values is None:
+            missing.append(required)
+        else:
+            resolved[required] = values
+
+    if missing:
+        raise ValueError(f"Method compute_rb: catalog lacks required columns {missing}; accepted "
+                         f"names are {[list(_rb_column_aliases[m]) for m in missing]}"
+                         + (" (snr_fit is accepted for flux_err)" if "flux_err" in missing else ""))
+
+    lengths = {len(values) for values in resolved.values()}
+
+    if len(lengths) > 1:
+        raise ValueError(f"Method compute_rb: catalog columns have different lengths {sorted(lengths)}")
+
+    n = lengths.pop() if lengths else 0
+
+
+    # Threshold paired with the checkpoint.  rubrat is imported here only.
+
+    from rubrat.rapid import RAPIDRealBogusClassifier, load_validation_threshold
+
+    threshold = load_validation_threshold(threshold_json)
+
+    rb_cols = {"rb_score": [fill_value] * n,
+               "rb_label": [-1] * n,
+               "rb_valid": [0] * n,
+               "rb_status": ["empty_catalog"] * n,
+               "rb_threshold": [threshold] * n}
+
+    if n == 0:
+        return rb_cols
+
+
+    # Fill values become NaN, so that the classifier treats them as missing; positions are
+    # made zero-based, as the classifier expects.
+
+    for name,values in resolved.items():
+        values = np.array(values, dtype=np.float64, copy=True)
+        for sentinel in sentinel_values:
+            values[values == float(sentinel)] = np.nan
+        resolved[name] = values
+
+    resolved["xcentroid"] = resolved["xcentroid"] - coord_base
+    resolved["ycentroid"] = resolved["ycentroid"] - coord_base
+
+
+    # Load the images once.
+
+    def _load_image(filename):
+        with fits.open(filename) as hdul:
+            index = get_image_hdu_index(hdul) if hdu_index is None else hdu_index
+            return np.array(hdul[index].data, dtype=np.float32)
+
+    sci = _load_image(input_sci_filename)
+    ref = _load_image(input_ref_filename)
+    diff = _load_image(input_diff_filename)
+
+
+    # Load the classifier once per process.
+
+    import pandas as pd
+
+    key = (str(checkpoint), str(feats_scaler), float(threshold), int(survey_id), int(batch_size))
+
+    classifier = _rb_classifiers.get(key)
+
+    if classifier is None:
+        classifier = RAPIDRealBogusClassifier(checkpoint,
+                                              feats_scaler,
+                                              threshold = threshold,
+                                              survey_id = int(survey_id),
+                                              batch_size = int(batch_size))
+        _rb_classifiers[key] = classifier
+
+    filter_name = _rb_filter_aliases.get(str(filter_name).strip().upper(), filter_name)
+
+    scored = classifier.score_arrays(sci, ref, diff, pd.DataFrame(resolved), filter_name = filter_name)
+
+    if len(scored) != n:
+        raise RuntimeError(f"Method compute_rb: classifier returned {len(scored)} rows for {n} sources")
+
+
+    # Catalog-row order is preserved by the classifier.
+
+    for i in range(n):
+        valid = bool(scored["rb_valid"].iloc[i])
+        rb_cols["rb_valid"][i] = int(valid)
+        rb_cols["rb_label"][i] = int(scored["rb_label"].iloc[i])
+        rb_cols["rb_status"][i] = str(scored["rb_status"].iloc[i])
+        rb_cols["rb_score"][i] = float(scored["rb_score"].iloc[i]) if valid else fill_value
+
+    return rb_cols
