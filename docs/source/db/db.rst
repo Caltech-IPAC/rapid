@@ -282,10 +282,17 @@ Because reprocessing generates new product versions (usually latest is best), th
 separate processes that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
 and then explicitly clusters, vacuums, and analyzes these database tables.
 
-The Sources database table has the ``rb`` float column for storing real-bogus scores,
-computed from a Machine-Learning algorithm that is optimized for Roman WFI data,
-which is a fractional number in the [0.0, 1.0] range that corresponds to the likelihood
-that a source is real (as opposed to bogus).
+The Sources and XSources database tables have the ``rb`` float column for storing real-bogus scores,
+computed by the RuBR-AT Machine-Learning classifier, which is optimized for Roman WFI data.
+The score is a fractional number in the [0.0, 1.0] range, higher for sources that look more like
+real transients (as opposed to bogus detections); it is not a calibrated probability.
+The ``rblabel`` smallint column stores the corresponding real-bogus label: 1 = real, 0 = bogus,
+and -1 = not scored (e.g., the source cutout was not usable).  A source is labeled real when its
+score is at or above the threshold that was selected when the classifier model was validated
+(0.5134 for the current model); the threshold is fixed for a given model, so it is not stored per source.
+These columns are null when the classifier was not run.
+The catalog columns rb_score and rb_label (RB_SCORE and RB_LABEL in the SExtractor catalogs)
+are loaded into the ``rb`` and ``rblabel`` database columns, respectively.
 
 Extra columns have been added to these PhotUtils catalogs, in order to aid in prefiltering
 records that are loaded into the database (and for alert generation):
@@ -299,7 +306,9 @@ records that are loaded into the database (and for alert generation):
 +--------------------+-----------------------------------------------------------------------------------+
 | nbad               | Number of bad pixels in 5x5 stamp on source (null = not computed)                 |
 +--------------------+-----------------------------------------------------------------------------------+
-| rb                 | Real-bogus score                                                                  |
+| rb_score           | Real-bogus score in [0,1] (fill value -999 = not scored)                          |
++--------------------+-----------------------------------------------------------------------------------+
+| rb_label           | Real-bogus label: 1 = real, 0 = bogus, -1 = not scored                            |
 +--------------------+-----------------------------------------------------------------------------------+
 
 
@@ -332,7 +341,9 @@ in order to aid in prefiltering records that are loaded into the database (and f
 +--------------------+-----------------------------------------------------------------------------------+
 | NBAD               | Number of bad pixels in 5x5 stamp on source (null = not computed)                 |
 +--------------------+-----------------------------------------------------------------------------------+
-| RB                 | Real-bogus score                                                                  |
+| RB_SCORE           | Real-bogus score in [0,1] (fill value -999 = not scored)                          |
++--------------------+-----------------------------------------------------------------------------------+
+| RB_LABEL           | Real-bogus label: 1 = real, 0 = bogus, -1 = not scored                            |
 +--------------------+-----------------------------------------------------------------------------------+
 | SHARPNESS          | SHARPNESS: PhotUtils DAOStarFinder sharpness (null = not computed)                |
 +--------------------+-----------------------------------------------------------------------------------+
