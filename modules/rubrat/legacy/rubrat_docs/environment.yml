@@ -1,0 +1,37 @@
+name: roman-surf
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    # Roman/RAPID product handling
+    - roman-datamodels==0.31.0
+    - romanisim==0.13.1
+    - asdf==5.3.0
+    - astropy==7.2.0
+    - s3fs==2026.3.0
+    - pyarrow==24.0.0
+    - pandas==3.0.2
+    - photutils==3.0.0
+    - sep==1.4.1
+
+    # RuBR-AT modeling, evaluation, and plotting
+    - tensorflow==2.20.0
+    - keras==3.14.1
+    - numpy==2.4.4
+    - scipy==1.17.1
+    - scikit-learn==1.9.0
+    - matplotlib==3.10.9
+    - stpsf==2.1.0
+    - tqdm==4.67.3
+
+    # Reproducible workflows and interactive analysis
+    - jupyterlab==4.5.6
+    - pyyaml==6.0.3
+    - snakemake==9.24.0
+    - pytest==9.0.3
+
+    # rimtimsim: not on PyPI — clone from https://github.com/robertfwilson/rimtimsim
+    # and add to sys.path via a .pth file in site-packages (see README setup notes)
