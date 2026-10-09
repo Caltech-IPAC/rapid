@@ -24,10 +24,10 @@ import fastavro
 import pytest
 
 from alerts.gen_schema import generate
-from alerts.param_registry import RECORDS, VERSION, Status
+from alerts.param_registry import RECORDS, VERSION, Param, Status
 from alerts.produce import (assemble_alert, build_dia_source,
-                                  build_dia_forced_source, load_schema,
-                                  serialize_alert)
+                                  build_dia_forced_source, build_record,
+                                  load_schema, serialize_alert)
 from alerts.providers import (Cutouts, ForcedPhot, LvsMatch, NedMatch,
                                     ObjectRecord, RefMatch, Source, SSMatch)
 
@@ -269,10 +269,43 @@ def test_non_nullable_implemented_param_with_none_raises():
 
 
 def test_stub_params_null_even_with_value_staged():
+    # The rule under test is build_record's: a STUB param serializes null
+    # even when its attribute holds a value, while an IMPLEMENTED param
+    # reading the same attribute carries it. The registry no longer has a
+    # STUB param with a staged attribute (diaForcedSource was the last
+    # such record until forced photometry was integrated), so the rule is
+    # exercised on a local param list.
+    params = (
+        Param("stubbed", ["null", "float"], "stub reading .flux", Status.STUB,
+              "not integrated", attr="flux"),
+        Param("live", ["null", "float"], "implemented reading .flux",
+              Status.IMPLEMENTED, "sources.fluxfit", attr="flux"),
+    )
     fp = ForcedPhot(forced_id=1, aid=777, expid=42, sca=7, ra=150.1,
                     dec=2.2, mjdobs=60500.5, time_proc=60500.6,
                     flux=123.4)
-    assert all(v is None for v in build_dia_forced_source(fp).values())
+    assert build_record(params, fp) == {"stubbed": None, "live": 123.4}
+
+
+def test_forced_source_record_carries_measurements_and_nulls_unused():
+    fp = ForcedPhot(forced_id=1, aid=777, expid=42, sca=7, ra=150.1,
+                    dec=2.2, mjdobs=60500.5, time_proc=60500.6, band="W146",
+                    flux=123.4, fluxerr=5.6, science_flux=2000.0,
+                    science_fluxerr=7.8, flags=0)
+    rec = build_dia_forced_source(fp)
+    assert rec["diaForcedSourceId"] == 1 and rec["diaObjectId"] == 777
+    assert (rec["expId"], rec["detector"], rec["band"]) == (42, 7, "W146")
+    assert (rec["ra"], rec["dec"]) == (150.1, 2.2)
+    assert (rec["psfFlux"], rec["psfFluxErr"]) == (123.4, 5.6)
+    assert (rec["scienceFlux"], rec["scienceFluxErr"]) == (2000.0, 7.8)
+    assert (rec["midpointMjd"], rec["timeProcessedMjd"]) == (60500.5, 60500.6)
+    # the one NOT_USED param is left out of the record entirely
+    assert "timeWithdrawnMjd" not in rec
+    # a failed fit is carried as None fluxes, not dropped
+    nan_fp = ForcedPhot(forced_id=2, aid=777, expid=42, sca=7, ra=150.1,
+                        dec=2.2, mjdobs=60500.5, time_proc=60500.6)
+    rec = build_dia_forced_source(nan_fp)
+    assert rec["psfFlux"] is None and rec["scienceFlux"] is None
 
 
 def test_strict_from_row_rejects_incomplete_rows():

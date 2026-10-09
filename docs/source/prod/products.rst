@@ -285,8 +285,17 @@ package, and consists of the following records:
 - ``diaForcedSource`` -- forced photometry at the object position
 - ``diaObject`` -- the associated astronomical object, aggregated from all
   of its constituent detections.
-- ``ssMatch`` -- an associated solar system source: will contain MPC designation,
-  info about the position, and the predicted V-band magnitude.
+- ``ssMatch`` -- a known solar system object predicted near the source: MPC
+  designation, predicted position, separation, and predicted V-band
+  magnitude.
+- ``refMatch`` -- a source from the reference-image SExtractor catalog near
+  the detection, delivered as two arrays of 3 (star-classified and
+  galaxy-classified) with its photometry and shape measurements.
+- ``nedMatch`` -- a NED (NASA/IPAC Extragalactic Database) object near the
+  detection, with its type and redshift.
+- ``lvsMatch`` -- a NED-LVS (Local Volume Sample) galaxy near the detection,
+  with distance, angular size, photometry, star-formation rate, and stellar
+  mass.
 
 Current State of the Alert Schema
 ==================================
@@ -299,17 +308,29 @@ for per-parameter implementation status)
 
 - The alert schema currently contains schema version information, the
   triggering source detection, previous source detections, persistent
-  object metadata, including aggregate photometry, and cutouts at the
-  source position of the difference, science, and reference images.
+  object metadata, cross-matches to known solar system objects, the
+  reference-image catalog, NED, and NED-LVS, and cutouts at the source
+  position of the difference, science, and reference images.
 - Cutouts are currently 129x129 pixels (~14"), but we may increase the
   size if memory constraints allow.
+- Every cross-match is delivered as an array of match records containing
+  an identifier, the matched object's ``ra`` and ``dec``, its
+  separation ``sep`` [arcsec] and position angle ``pa`` [deg, East of
+  North] from the triggering source, followed by catalog-specific fields
+  with their native semantics. Each array is ``null`` when the match could
+  not be run, empty when nothing lies within the search radius, or contains
+  the nearest matches, nearest first, capped at 3 (a full array means the
+  neighborhood may extend beyond what is reported). Search radii:
+
+  - ``ssMatches``: ~7" (the cutout's inscribed circle)
+  - ``refStarMatches`` / ``refGalaxyMatches``: 5"
+  - ``nedMatches``: 10"
+  - ``lvsMatches``: 30"
 
 - Before releasing version 1.0, we plan to include:
 
   - Forced photometry history (see ``diaForcedSource``)
-  - solar-system cross-matching
-  - cross-matching to the reference image SExtractor catalog
-  - cross-matches to other surveys (NED, Gaia).
+  - cross-matches to Gaia.
 
 ``diaSource``
 
@@ -318,19 +339,24 @@ for per-parameter implementation status)
   - A source ID from our pipeline
   - Exposure metadata (MJD, exposure ID, SCA, exposure time, band, ...)
   - The associated object ID
+  - Roman field and HEALPix (order 6 and 9) indices
+  - The processing ID of the difference image
   - Source centroid position and uncertainties
-  - PSF Photometry on the difference, science, and reference images
-    (at the difference image source centroid)
-  - PSF Fit quality parameters
+  - PSF Photometry on the difference image (at the difference image
+    source centroid)
+  - PSF Fit quality parameters and the PhotUtils fit-flag bitmask
+  - ``isSSCandidate``: whether a known solar system object is predicted
+    within 0.5" of the source (see ``ssMatch``); null when the
+    solar-system association was not run
 
 - We plan to include:
 
-  - Reference image ID, including co-add information
+  - Co-add information for the reference image
+  - Forced PSF photometry on the science and reference images at the
+    object's detected position
   - Aperture photometry
   - Shape measurements from SExtractor (currently migrating from
     photutils)
-  - Flags, including whether the source is a likely solar-system
-    object
 
 ``diaForcedSource``
 
@@ -355,27 +381,72 @@ for per-parameter implementation status)
 - The object schema currently contains:
 
   - Object ID
-  - Position and position uncertainty (standard deviation on detected
-    positions)
+  - First measured position, mean position
+  - Position uncertainty (std dev of detected positions)
+  - Detection history: number of associated sources, MJD of the first and
+    last detection, and the validity start of the summary (the
+    triggering epoch)
 
 - We plan to include:
 
+  - Mean position
   - Coverage history
   - Aggregate photometric statistics on each band (mean, min, max, slopes,
     and number of measurements)
 
 ``ssMatch``
 
-- Awaits solar-system processing (KONA per-visit output). Will contain
-  the MPC designation, the predicted position of the object at the
-  triggering epoch, and the predicted V-band magnitude.
+- Known solar system objects predicted near the source by KONA (Known
+  Object Name Association), which propagates the MPC orbit catalog to
+  each exposure's mid-time.
+- Contains:
+
+  - MPC designation, separation, PA
+  - Predicted position at the triggering epoch (mid-exposure time)
+  - Predicted V-band magnitude from the IAU H/G model
+
+``refMatch``
+
+- Sources from the reference image's mosaic SExtractor catalog, split by
+  ``CLASS_STAR`` into ``refStarMatches`` and ``refGalaxyMatches``.
+- Contains:
+
+  - SExtractor ID number, position, separation, PA
+  - ``CLASS_STAR``
+  - Extraction flags
+  - ``MAG_AUTO`` (instrumental; nJy calibration pending)
+  - Elongation
+  - FWHM
+  - Half-light radius & Kron radius
+
+``nedMatch``
+
+- Objects from a local copy of the NED object directory.
+- Contains:
+
+  - NED preferred name, position, separation, PA
+  - NED object type
+  - Preferred redshift, uncertainty, flag, and NED redshift code
+
+``lvsMatch``
+
+- Galaxies from NED Local Volume Sample (LVS; Cook et al. 2023), NED's
+  vetted sample within 1000 Mpc.
+- Contains:
+
+  - NED preferred name (in catalog as objid), position, separation and
+    position angle
+  - Redshift, redshift type, and quality flag
+  - Adopted distance and its method
+  - Angular diameter, axis ratio, and galaxy position angle
+  - Foreground reddening
+  - 2MASS Ks, WISE W1, and GALEX NUV magnitudes + uncertainties
+  - Star-formation rate and stellar mass + uncertainties
 
 Other cross-matches:
 
-- We plan to design a cross-match schema for both internal references
-  and other surveys, to be included in the top-level alert schema. Our
-  current plan is to include the top 3 closest matches for each catalog,
-  potentially taking into account the half-light radius for extended sources.
+- Cross-matches to Gaia are planned, following the same match-record
+  strategy.
 
 Sample Alert Packet
 ==================================
@@ -388,7 +459,12 @@ Sample Alert Packet
    versioning with Confluent schema in order to use. This file's schema
    may become out of date from the current alert code.
 
-:download:`sample_alert.avro <sample_alert.avro>` (schema version ``00.02``).
+:download:`sample_alert.avro <sample_alert.avro>` (schema version ``00.05``).
+
+The sample is a source in a Galactic bulge field of the SOC simulations.
+``ssMatches`` is empty, as the nearest known object is well outside the
+search radius. The NED and NED-LVS cross-matches are off, as these are planned
+to run on extragalactic fields only.
 
 This is a standard Avro object container file with the schema embedded, so
 it can be read without any RAPID code, e.g.::

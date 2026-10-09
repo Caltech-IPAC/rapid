@@ -15,6 +15,8 @@ import boto3
 from botocore.exceptions import ClientError
 from scipy.ndimage import zoom
 
+import modules.utils.rapid_data_analysis as rda
+
 plot_flag = False
 
 debug = True
@@ -3035,3 +3037,966 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     # Return source_tables_to_crossmatch_list and fields_list.
 
     return source_tables_to_crossmatch_list,fields_list,jid_list,meta_list
+
+
+#####################################################################################################
+# Add extra columns, such as the ZTF "sumrat" metric, to the difference-image catalogs.
+#
+# compute_extra_cols_sxtractor and compute_extra_cols_photutils are the umbrella methods to be called
+# from the science pipeline, one for each catalog flavor.  Each reads the source positions from the
+# catalog, has _compute_extra_catalog_cols compute every requested column from the difference
+# image, and then rewrites the catalog with the extra columns appended, in the format it came in.
+#
+# The catalog and the difference image must belong together: the catalog of a negative difference
+# image is paired with the negative difference image (e.g., diffimage_masked_negative.fits), in
+# which its sources are positive.
+#
+# To add a extra column: write the method that computes it in modules/utils/rapid_data_analysis.py,
+# add a branch for it in _compute_extra_catalog_cols, and list its name in the extra_cols parameter
+# of the [EXTRA_CATALOG_COLS] section of cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini.
+#
+# The existing lines of a catalog are rewritten unchanged, with the new values appended, so that
+# readers of the original columns are unaffected.  This holds for parse_ascii_text_sextractor_catalog
+# as well, which locates columns through the SExtractor parameters file, since the extra columns come
+# after all of the columns listed there.
+#####################################################################################################
+
+# Column names and descriptions, for the header of a SExtractor ASCII_HEAD catalog.  PhotUtils
+# catalogs get the names in lower case.
+
+extra_catalog_col_descriptions = {
+    "sumrat": "Ratio sum(p)/sum(|p|) of median-filtered stamp on source",
+    "nneg": "Number of negative pixels in stamp on source",
+    "nbad": "Number of bad (NaN) pixels in stamp on source",
+    "sharpness": "PhotUtils DAOStarFinder sharpness",
+    "roundness1": "PhotUtils DAOStarFinder roundness from symmetry",
+    "roundness2": "PhotUtils DAOStarFinder roundness from marginal fits",
+    "x_dao_peak": "Pixel x where DAOStarFinder columns measured [pixel]",
+    "y_dao_peak": "Pixel y where DAOStarFinder columns measured [pixel]",
+    "dao_flags": "Bad pixels in core for DAOStarFinder columns (bits)",
+    "flux_fit": "PhotUtils PSFPhotometry fitted flux",
+    "snr_fit": "PhotUtils PSFPhotometry flux_fit / flux_err",
+    "reduced_chi2": "PhotUtils PSFPhotometry reduced chi-square of fit",
+    "n_pixels_fit": "PhotUtils PSFPhotometry number of pixels fit",
+    "flags_fit": "PhotUtils PSFPhotometry bit flags",
+    "cfit": "PhotUtils PSFPhotometry central-pixel fit residual",
+    "x_fit": "PhotUtils PSFPhotometry fitted x position [pixel]",
+    "y_fit": "PhotUtils PSFPhotometry fitted y position [pixel]",
+    "x_err": "PhotUtils PSFPhotometry x position uncertainty [pixel]",
+    "y_err": "PhotUtils PSFPhotometry y position uncertainty [pixel]",
+    "rb_score": "RuBR-AT real/bogus score in [0,1], 1 = real-like; fill if not scored",
+    "rb_label": "RuBR-AT real/bogus label: 1 real, 0 bogus, -1 not scored",
+}
+
+
+# PhotUtils-style columns that compute_extra_cols_sxtractor can add to a SExtractor catalog, all
+# computed by rda.compute_photutils_cols_for_diff_image.  The integer-valued ones are written
+# without decimals.
+
+sxtractor_photutils_col_names = rda.photutils_col_names
+
+sxtractor_photutils_int_col_names = ("x_dao_peak","y_dao_peak","dao_flags","n_pixels_fit","flags")
+
+
+# Catalog names of the PhotUtils-style columns that would otherwise clash with SExtractor's own
+# (FLAGS); the others keep their PhotUtils names.
+
+sxtractor_photutils_catalog_names = {"flags": "flags_fit"}
+
+
+#-------------------------------------------------------------------
+# Parse the PSFPhotometry xy_bounds parameter from its config-file string: "None" (free positions),
+# a single number (the same bound along x and y), or a pair "(bx, by)", either of which may be
+# None (no bound along that axis).  Bounds are in pixels.
+
+def parse_xy_bounds(xy_bounds_str):
+
+    def parse_value(s):
+        s = s.strip()
+        return None if s.lower() == "none" else float(s)
+
+    s = xy_bounds_str.strip().replace("(","").replace(")","")
+
+    if s.lower() in ("", "none"):
+        return None
+
+    values = [parse_value(v) for v in s.split(",")]
+
+    if len(values) == 1:
+        return values[0]
+
+    if len(values) == 2:
+        return tuple(values)
+
+    raise ValueError(f"Method parse_xy_bounds: cannot parse xy_bounds = {xy_bounds_str}; expected "
+                     "None, a number, or a pair (bx, by)")
+
+
+#-------------------------------------------------------------------
+# Compute the requested extra catalog columns for a list of source positions.
+
+# The RuBR-AT real/bogus columns, from one classifier run (rda.compute_rb): the score, and the
+# label (1 real, 0 bogus, -1 not scored), which is the score compared with the model's threshold
+# (real at or above it).  The run's other outputs are not written: rb_threshold is the same for
+# every source and is logged instead, rb_valid is implied by the label, and rb_status is text.
+
+rb_catalog_col_names = ("rb_score","rb_label")
+
+# Formats of the rb columns that are not written with the [RUBRAT] col_format.
+
+rb_catalog_col_formats = {"rb_label": "d"}
+
+
+def _compute_extra_catalog_cols(diff_image_filename,
+                                x_list,
+                                y_list,
+                                coord_base,
+                                extra_cols_dict,
+                                sumrat_dict,
+                                *,
+                                catalog_cols = None,
+                                sci_image_filename = None,
+                                ref_image_filename = None,
+                                rb_dict = None,
+                                l2_image_filename = None):
+
+    """
+    Method _compute_extra_catalog_cols
+
+    Inputs:
+    diff_image_filename     FITS file containing the difference image the sources were found in.
+    x_list, y_list          Source positions [pixels], with x along NAXIS1 and y along NAXIS2.
+    coord_base              0 if the positions are zero-based (PhotUtils), 1 if one-based
+                            (SExtractor).
+    extra_cols_dict           [EXTRA_CATALOG_COLS] section of the config file, as a dictionary of
+                            strings.  Its extra_cols entry is the comma-separated list of the
+                            columns to compute: sumrat, nneg, nbad, and the RuBR-AT real/bogus
+                            columns rb_score and rb_label.
+    sumrat_dict             [SUMRAT] section of the config file, as a dictionary of strings.
+    catalog_cols            For the rb columns: mapping of catalog column name to a sequence of values, one
+                            per position, holding the PSF-fit and DAOStarFinder columns that
+                            rda.compute_rb requires (see rda._rb_column_aliases).  The positions
+                            x_list and y_list are added as the fallback stamp center.
+    sci_image_filename      For rb: FITS file containing the background-subtracted science image.
+    ref_image_filename      For rb: FITS file containing the resampled, gain-matched reference
+                            image.
+    rb_dict                 For rb: [RUBRAT] section of the config file, as a dictionary of
+                            strings (model files checkpoint, feats_scaler, and threshold_json,
+                            already downloaded; survey_id; batch_size; sentinel_values;
+                            fill_value; col_format).
+    l2_image_filename       For rb: L2 science image whose FILTER header keyword gives the filter.
+
+    Returns:
+    extra_cols                Dictionary, in the order of extra_cols_dict["extra_cols"], mapping each
+                            lower-case column name to its list of values, one per position.
+    extra_cols_format         Dictionary mapping each column name to its Python format spec.
+
+    Notes:
+    The rb columns are skipped, with a message, when any of their inputs is not given, and
+    skipped with a warning when the classifier fails, so that the other columns are still
+    returned.  The classifier needs the rubrat package and TensorFlow.
+    """
+
+    col_names = [c.strip().lower() for c in extra_cols_dict["extra_cols"].split(",") if c.strip()]
+
+    xy_positions = list(zip(x_list,y_list))
+
+    extra_cols = {}
+    extra_cols_format = {}
+    nneg_nbad = None
+    rb_cols = None
+    rb_skipped = False
+
+    for col_name in col_names:
+
+        if col_name in rb_catalog_col_names:
+
+            # All of the rb columns come from one classifier run, made the first time any of them
+            # is requested.  If the run cannot be made, they are all skipped, with one message.
+
+            if rb_cols is None and not rb_skipped:
+
+                rb_inputs = (("catalog_cols",catalog_cols),
+                             ("sci_image_filename",sci_image_filename),
+                             ("ref_image_filename",ref_image_filename),
+                             ("rb_dict",rb_dict),
+                             ("l2_image_filename",l2_image_filename))
+
+                missing = [name for name,value in rb_inputs if value is None]
+
+                if missing:
+                    print(f"_compute_extra_catalog_cols: rb columns skipped, since {', '.join(missing)} "
+                          "not given")
+                    rb_skipped = True
+
+                else:
+                    try:
+                        rb_catalog_cols = dict(catalog_cols)
+                        rb_catalog_cols.setdefault("xcentroid",x_list)
+                        rb_catalog_cols.setdefault("ycentroid",y_list)
+
+                        filter_name = rda.get_l2_image_metadata(l2_image_filename)["filter"]
+
+                        if filter_name is None:
+                            raise ValueError(f"no FILTER keyword in {l2_image_filename}")
+
+                        sentinel_values = tuple(float(v) for v in rb_dict.get("sentinel_values","-999").split(",")
+                                                if v.strip())
+
+                        rb_cols = rda.compute_rb(sci_image_filename,
+                                                 ref_image_filename,
+                                                 diff_image_filename,
+                                                 rb_catalog_cols,
+                                                 coord_base = coord_base,
+                                                 filter_name = filter_name,
+                                                 checkpoint = rb_dict["checkpoint"],
+                                                 feats_scaler = rb_dict["feats_scaler"],
+                                                 threshold_json = rb_dict["threshold_json"],
+                                                 survey_id = int(rb_dict["survey_id"]),
+                                                 batch_size = int(rb_dict.get("batch_size","256")),
+                                                 sentinel_values = sentinel_values,
+                                                 fill_value = float(rb_dict["fill_value"]))
+
+                    except Exception as e:
+                        print(f"*** Warning: _compute_extra_catalog_cols: rb columns skipped ({e})")
+                        rb_skipped = True
+
+                    else:
+                        # The per-source reasons a source was not scored are text, so they are
+                        # summarized here rather than written to the catalog.
+
+                        status_counts = {}
+                        for status in rb_cols["rb_status"]:
+                            if status:
+                                status_counts[status] = status_counts.get(status,0) + 1
+
+                        threshold = rb_cols["rb_threshold"][0] if rb_cols["rb_threshold"] else None
+
+                        print(f"_compute_extra_catalog_cols: rb scored {sum(rb_cols['rb_valid'])} of "
+                              f"{len(xy_positions)} sources (filter {filter_name}, threshold {threshold}); "
+                              f"not scored: {status_counts}")
+
+            if rb_cols is None:
+                continue
+
+            extra_cols[col_name] = rb_cols[col_name]
+            extra_cols_format[col_name] = rb_catalog_col_formats.get(col_name,rb_dict["col_format"])
+
+        elif col_name == "sumrat":
+
+            extra_cols[col_name] = rda.compute_sumrat_for_diff_image(
+                diff_image_filename,
+                xy_positions,
+                coord_base = coord_base,
+                stamp_size = int(sumrat_dict["stamp_size"]),
+                filter_size = int(sumrat_dict["filter_size"]),
+                lower_median = sumrat_dict["lower_median"].strip().lower() == "true",
+                fill_value = float(sumrat_dict["fill_value"]))
+
+            extra_cols_format[col_name] = sumrat_dict["col_format"]
+
+        elif col_name in ("nneg","nbad"):
+
+            # Both come from one pass over the stamps, made the first time either is requested.
+            # Configs written before the nneg_nbad parameters existed get the ZTF stamp size and
+            # the usual fill value.
+
+            if nneg_nbad is None:
+                nneg_nbad = dict(zip(("nneg","nbad"), rda.compute_nneg_nbad_for_diff_image(
+                    diff_image_filename,
+                    xy_positions,
+                    coord_base = coord_base,
+                    stamp_size = int(extra_cols_dict.get("nneg_nbad_stamp_size","5")),
+                    fill_value = float(extra_cols_dict.get("nneg_nbad_fill_value","-999.0")))))
+
+            extra_cols[col_name] = nneg_nbad[col_name]
+            extra_cols_format[col_name] = ".0f"
+
+        else:
+            raise ValueError(f"Method _compute_extra_catalog_cols: unknown extra catalog column "
+                             f"{col_name}")
+
+    return extra_cols,extra_cols_format
+
+
+#-------------------------------------------------------------------
+# Rewrite a text catalog through a temporary file, so that a failure partway through cannot
+# leave a truncated catalog behind.
+
+def write_lines_to_text_file(lines,output_filename):
+
+    tmp_filename = output_filename + ".tmp"
+
+    with open(tmp_filename, "w") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+    os.replace(tmp_filename,output_filename)
+
+
+#-------------------------------------------------------------------
+# Read a SExtractor catalog of CATALOG_TYPE = ASCII_HEAD into its header lines, data lines,
+# one-based column numbers, and column count, for methods that append columns to it.
+
+def read_sxtractor_ascii_head(catalog_filename):
+
+    """
+    Method read_sxtractor_ascii_head
+
+    Inputs:
+    catalog_filename        SExtractor catalog of CATALOG_TYPE = ASCII_HEAD.
+
+    Returns:
+    header_lines            The "#" header lines, in order.
+    data_lines              The data rows, in order, without line terminators.
+    col_numbers             Dictionary of upper-case parameter name to one-based column number,
+                            from header lines like "#   3 XWIN_IMAGE   Windowed position ...".
+                            A vector parameter, such as MAG_APER, has one header line, giving
+                            the number of its first element.
+    ncols                   Number of columns in the data rows.  With no rows, the number of the
+                            last header line's column, which is the column count unless that
+                            column is a vector; it then only numbers new header lines.
+    """
+
+    with open(catalog_filename, "r") as f:
+        lines = [line.rstrip("\r\n") for line in f]
+
+    header_lines = []
+    data_lines = []
+
+    for line in lines:
+        if line.startswith("#"):
+            if data_lines:
+                raise ValueError(f"Method read_sxtractor_ascii_head: comment line after the "
+                                 f"start of the data in {catalog_filename}")
+            header_lines.append(line)
+        elif line.strip():
+            data_lines.append(line)
+
+    col_numbers = {}
+
+    for line in header_lines:
+        fields = line[1:].split()
+        if len(fields) >= 2 and fields[0].isdigit():
+            col_numbers[fields[1].upper()] = int(fields[0])
+
+    if not col_numbers:
+        raise ValueError(f"Method read_sxtractor_ascii_head: no ASCII_HEAD column header found "
+                         f"in {catalog_filename}")
+
+    ncols = None
+
+    for line in data_lines:
+        nfields = len(line.split())
+        if ncols is None:
+            ncols = nfields
+        elif nfields != ncols:
+            raise ValueError(f"Method read_sxtractor_ascii_head: rows of {catalog_filename} "
+                             f"have different numbers of columns ({ncols} and {nfields})")
+
+    if ncols is None:
+        ncols = max(col_numbers.values())
+
+    return header_lines,data_lines,col_numbers,ncols
+
+
+#-------------------------------------------------------------------
+# Values of one column of a SExtractor ASCII_HEAD catalog read by read_sxtractor_ascii_head,
+# as floats, in row order.
+
+def sxtractor_column_values(data_lines,
+                            col_numbers,
+                            col_name,
+                            catalog_filename = ""):
+
+    col = str(col_name).strip().upper()
+
+    if col not in col_numbers:
+        raise ValueError(f"Method sxtractor_column_values: column {col} not found in {catalog_filename}")
+
+    index = col_numbers[col] - 1
+
+    return [float(line.split()[index]) for line in data_lines]
+
+
+#-------------------------------------------------------------------
+# Append extra columns to a SExtractor ASCII_HEAD catalog read by read_sxtractor_ascii_head and
+# write it.  Each extra column gets a header line in the SExtractor style ("# 116 SUMRAT
+# description"), numbered on from the last existing column, with its name in upper case, as
+# SExtractor's are; the values are appended after the last column of every row.
+
+def append_sxtractor_cols(header_lines,
+                          data_lines,
+                          col_numbers,
+                          ncols,
+                          extra_cols,
+                          extra_cols_format,
+                          catalog_filename,
+                          output_catalog_filename = None):
+
+    """
+    Method append_sxtractor_cols
+
+    Inputs:
+    header_lines, data_lines, col_numbers, ncols
+                            As returned by read_sxtractor_ascii_head for catalog_filename.
+    extra_cols                Dictionary of lower-case column name to its list of values, one per
+                            data row.  Descriptions for the header lines come from
+                            extra_catalog_col_descriptions.
+    extra_cols_format         Dictionary of column name to its Python format spec.
+    catalog_filename        Catalog the lines were read from.
+    output_catalog_filename Catalog file to write.  If None, catalog_filename is rewritten.
+
+    Returns:
+    output_catalog_filename The catalog file written.
+    """
+
+    for col_name in extra_cols:
+        if col_name.upper() in col_numbers:
+            raise ValueError(f"Method append_sxtractor_cols: column {col_name.upper()} is "
+                             f"already in {catalog_filename}")
+
+    for col_name,values in extra_cols.items():
+        if len(values) != len(data_lines):
+            raise ValueError(f"Method append_sxtractor_cols: column {col_name} has {len(values)} values "
+                             f"for {len(data_lines)} rows of {catalog_filename}")
+
+    header_lines = list(header_lines)
+    data_lines = list(data_lines)
+
+    for i,col_name in enumerate(extra_cols):
+        description = extra_catalog_col_descriptions.get(col_name,"")
+        header_lines.append(f"#{ncols + 1 + i:4d} {col_name.upper():<22s} {description}")
+
+    for j in range(len(data_lines)):
+        for col_name,values in extra_cols.items():
+            data_lines[j] += " " + format(values[j],extra_cols_format[col_name]).rjust(12)
+
+    if output_catalog_filename is None:
+        output_catalog_filename = catalog_filename
+
+    write_lines_to_text_file(header_lines + data_lines,output_catalog_filename)
+
+    return output_catalog_filename
+
+
+#-------------------------------------------------------------------
+# Compute extra columns for a SExtractor ASCII_HEAD catalog and append them to it.
+
+def compute_extra_cols_sxtractor(diff_image_filename,
+                               catalog_filename,
+                               extra_cols_dict,
+                               sumrat_dict,
+                               output_catalog_filename = None,
+                               *,
+                               diff_psf_filename = None,
+                               diff_unc_filename = None,
+                               psfcat_dict = None,
+                               sci_image_filename = None,
+                               ref_image_filename = None,
+                               rb_dict = None,
+                               l2_image_filename = None):
+
+    """
+    Compute extra columns, such as sumrat, PhotUtils-style columns like sharpness and flux_fit,
+    and RuBR-AT real/bogus columns, for the sources of a SExtractor ASCII_HEAD catalog and
+    append them to it.
+
+    Parameters
+    ----------
+    diff_image_filename : str
+        FITS file containing the difference image that SExtractor measured the catalog sources
+        on (its input image, not its detection image).
+    catalog_filename : str
+        SExtractor catalog of CATALOG_TYPE = ASCII_HEAD.
+    extra_cols_dict : dict-like of str
+        [EXTRA_CATALOG_COLS] section of the config file, giving the columns to add (extra_cols, and
+        sxtractor_photutils_cols for the PhotUtils-style ones) and the one-based position
+        columns to use (sextractor_x_col and sextractor_y_col, e.g. XWIN_IMAGE and YWIN_IMAGE).
+    sumrat_dict : dict-like of str
+        [SUMRAT] section of the config file.
+    output_catalog_filename : str or None, optional
+        Catalog file to write.  If None, catalog_filename is rewritten in place.
+    diff_psf_filename : str or None, optional
+        FITS file containing the PSF model of the difference image.  The PhotUtils-style columns
+        are added only when this and psfcat_dict are given.
+    diff_unc_filename : str or None, optional
+        FITS file containing the uncertainty image of the difference image, which weights the
+        PSF fit.  If None, the fit is unweighted, and snr_fit and reduced_chi2 are written as the
+        fill value.
+    psfcat_dict : dict-like of str or None, optional
+        [PSFCAT_DIFFIMAGE] section of the config file, whose fwhm, fit_shape, and aperture_radius
+        are used, so that the PhotUtils-style columns are computed as in the RAPID PhotUtils
+        catalogs.
+    sci_image_filename, ref_image_filename : str or None, optional
+        FITS files containing the background-subtracted science image and the resampled,
+        gain-matched reference image, on the pixel grid of the difference image.  The rb columns
+        (rb_score and rb_label in extra_cols) are added only when these,
+        rb_dict, and l2_image_filename are given and
+        the PhotUtils-style columns they need have been computed.
+    rb_dict : dict-like of str or None, optional
+        [RUBRAT] section of the config file, with the model files already downloaded.
+    l2_image_filename : str or None, optional
+        L2 science image whose FILTER header keyword gives the filter for the rb columns.
+
+    Returns
+    -------
+    extra_cols : dict of str to list
+        Each new lower-case column name mapped to its list of values, in catalog-row order: the
+        PhotUtils-style columns first, then the extra_cols ones.  The PhotUtils flags column is
+        named flags_fit, since SExtractor catalogs have FLAGS.
+
+    Notes
+    -----
+    The extra columns are appended after the last column of every row, and a header line in the
+    SExtractor style ("# 116 SUMRAT  description") is added for each, numbered on from the last
+    existing column.  The column names are written in upper case, as SExtractor's are.
+    """
+
+    print("compute_extra_cols_sxtractor: diff_image_filename =",diff_image_filename)
+    print("compute_extra_cols_sxtractor: catalog_filename =",catalog_filename)
+
+    header_lines,data_lines,col_numbers,ncols = read_sxtractor_ascii_head(catalog_filename)
+
+    x_col = extra_cols_dict["sextractor_x_col"].strip().upper()
+    y_col = extra_cols_dict["sextractor_y_col"].strip().upper()
+
+    x_list = sxtractor_column_values(data_lines,col_numbers,x_col,catalog_filename)
+    y_list = sxtractor_column_values(data_lines,col_numbers,y_col,catalog_filename)
+
+
+    # PhotUtils-style columns, which only SExtractor catalogs need, since PhotUtils catalogs have
+    # them already.  They are computed first, since the rb columns are computed from them.
+
+    extra_cols = {}
+    extra_cols_format = {}
+
+    photutils_col_names = [c.strip().lower()
+                           for c in (extra_cols_dict.get("sxtractor_photutils_cols") or "").split(",")
+                           if c.strip()]
+
+    for col_name in photutils_col_names:
+        if col_name not in sxtractor_photutils_col_names:
+            raise ValueError(f"Method compute_extra_cols_sxtractor: unknown PhotUtils-style column "
+                             f"{col_name}; available are {sxtractor_photutils_col_names}")
+
+    if photutils_col_names and (diff_psf_filename is None or psfcat_dict is None):
+
+        print("compute_extra_cols_sxtractor: PhotUtils-style columns skipped, since diff_psf_filename "
+              "or psfcat_dict was not given")
+
+    elif photutils_col_names:
+
+        fit_shape = tuple(int(v) for v in
+                          psfcat_dict["fit_shape"].replace("(","").replace(")","").replace(" ","").split(","))
+
+
+        # Configs written before photutils_cols_snap_radius and photutils_cols_xy_bounds existed
+        # get the defaults: snap to the convolved peak within 1 pixel, and free fitted positions.
+
+        snap_radius = int(extra_cols_dict.get("photutils_cols_snap_radius","1"))
+        xy_bounds = parse_xy_bounds(extra_cols_dict.get("photutils_cols_xy_bounds","None"))
+
+        photutils_cols = rda.compute_photutils_cols_for_diff_image(
+            diff_image_filename,
+            diff_psf_filename,
+            list(zip(x_list,y_list)),
+            coord_base = 1,
+            fwhm = float(psfcat_dict["fwhm"]),
+            fit_shape = fit_shape,
+            aperture_radius = float(psfcat_dict["aperture_radius"]),
+            input_unc_filename = diff_unc_filename,
+            snap_radius = snap_radius,
+            xy_bounds = xy_bounds,
+            fill_value = float(extra_cols_dict["photutils_cols_fill_value"]))
+
+        for col_name in photutils_col_names:
+            catalog_col_name = sxtractor_photutils_catalog_names.get(col_name,col_name)
+            extra_cols[catalog_col_name] = photutils_cols[col_name]
+            if col_name in sxtractor_photutils_int_col_names:
+                extra_cols_format[catalog_col_name] = ".0f"
+            else:
+                extra_cols_format[catalog_col_name] = extra_cols_dict["photutils_cols_format"]
+
+
+    # The extra_cols columns.  The rb columns take their PSF-fit and DAOStarFinder inputs from the
+    # PhotUtils-style columns just computed (under their catalog names, e.g. flags_fit), so they
+    # are skipped when those were not.
+
+    catalog_cols = dict(extra_cols) if extra_cols else None
+
+    other_cols,other_cols_format = _compute_extra_catalog_cols(diff_image_filename,
+                                                               x_list,
+                                                               y_list,
+                                                               1,
+                                                               extra_cols_dict,
+                                                               sumrat_dict,
+                                                               catalog_cols = catalog_cols,
+                                                               sci_image_filename = sci_image_filename,
+                                                               ref_image_filename = ref_image_filename,
+                                                               rb_dict = rb_dict,
+                                                               l2_image_filename = l2_image_filename)
+
+    extra_cols.update(other_cols)
+    extra_cols_format.update(other_cols_format)
+
+    output_catalog_filename = append_sxtractor_cols(header_lines,
+                                                    data_lines,
+                                                    col_numbers,
+                                                    ncols,
+                                                    extra_cols,
+                                                    extra_cols_format,
+                                                    catalog_filename,
+                                                    output_catalog_filename)
+
+    print(f"compute_extra_cols_sxtractor: added columns {list(extra_cols)} for {len(data_lines)} "
+          f"sources to {output_catalog_filename}")
+
+    return extra_cols
+
+
+#-------------------------------------------------------------------
+# Compute extra columns for a PhotUtils PSF-fit catalog and append them to it.
+
+def compute_extra_cols_photutils(diff_image_filename,
+                               catalog_filename,
+                               extra_cols_dict,
+                               sumrat_dict,
+                               output_catalog_filename = None,
+                               *,
+                               finder_catalog_filename = None,
+                               sci_image_filename = None,
+                               ref_image_filename = None,
+                               rb_dict = None,
+                               l2_image_filename = None):
+
+    """
+    Method compute_extra_cols_photutils
+
+    Inputs:
+    diff_image_filename     FITS file containing the difference image that the PSF fitting was
+                            done on.
+    catalog_filename        PhotUtils PSF-fit catalog, as written by astropy ascii.write in its
+                            default basic format: one line of column names followed by one
+                            space-separated line per source (e.g., zogy_diffimage_masked_psfcat.txt).
+    extra_cols_dict           [EXTRA_CATALOG_COLS] section of the config file, as a dictionary of
+                            strings, giving the columns to add and the position columns to use
+                            (photutils_x_col and photutils_y_col, e.g. x_fit and y_fit, which
+                            are zero-based).
+    sumrat_dict             [SUMRAT] section of the config file, as a dictionary of strings.
+    output_catalog_filename Catalog file to write.  If None, catalog_filename is rewritten in place.
+    finder_catalog_filename For rb: the DAOStarFinder catalog paired with the PSF-fit catalog
+                            (e.g., zogy_diffimage_masked_psfcat_finder.txt), whose sharpness,
+                            roundness1, and roundness2 are matched to the PSF-fit rows by id.
+    sci_image_filename      For rb: FITS file containing the background-subtracted science image.
+    ref_image_filename      For rb: FITS file containing the resampled, gain-matched reference
+                            image.
+    rb_dict                 For rb: [RUBRAT] section of the config file, with the model files
+                            already downloaded.
+    l2_image_filename       For rb: L2 science image whose FILTER header keyword gives the filter.
+
+    Returns:
+    extra_cols                Dictionary mapping each new lower-case column name to its list of
+                            values, in catalog-row order.
+
+    The extra columns are appended to the column-name line and to every row, so that the catalog
+    still reads with astropy (format='ascii'), as loadPSFCatIntoDBSourcesTable.py reads it.
+    The rb columns (rb_score and rb_label in extra_cols) are added only
+    when finder_catalog_filename and the other
+    rb inputs are given.
+    """
+
+    from astropy.io import ascii
+
+    print("compute_extra_cols_photutils: diff_image_filename =",diff_image_filename)
+    print("compute_extra_cols_photutils: catalog_filename =",catalog_filename)
+
+    with open(catalog_filename, "r") as f:
+        lines = [line.rstrip("\r\n") for line in f]
+
+
+    # Comment lines ("#"), which ascii.write puts out only for table metadata, are kept at the
+    # top as they are.  The first other line holds the column names.
+
+    comment_lines = []
+    other_lines = []
+
+    for line in lines:
+        if line.startswith("#") and not other_lines:
+            comment_lines.append(line)
+        elif line.strip():
+            other_lines.append(line)
+
+    if not other_lines:
+        raise ValueError(f"Method compute_extra_cols_photutils: no column-name line found in "
+                         f"{catalog_filename}")
+
+    names_line = other_lines[0]
+    data_lines = other_lines[1:]
+
+    table = ascii.read(catalog_filename, format="basic", guess=False)
+
+    if len(table) != len(data_lines):
+        raise ValueError(f"Method compute_extra_cols_photutils: {catalog_filename} has "
+                         f"{len(data_lines)} data lines but {len(table)} table rows")
+
+    x_col = extra_cols_dict["photutils_x_col"].strip()
+    y_col = extra_cols_dict["photutils_y_col"].strip()
+
+    for col in (x_col,y_col):
+        if col not in table.colnames:
+            raise ValueError(f"Method compute_extra_cols_photutils: position column {col} not "
+                             f"found in {catalog_filename}")
+
+    def _column(tbl,name):
+        return [float(v) for v in np.ma.filled(np.ma.asarray(tbl[name], dtype=float), np.nan)]
+
+    x_list = _column(table,x_col)
+    y_list = _column(table,y_col)
+
+
+    # For the rb columns: the PSF-fit columns of this catalog, plus the DAOStarFinder columns of
+    # the finder catalog matched by id (NaN where an id is absent), as rda.compute_rb accepts
+    # them.  Without the finder catalog, catalog_cols is None and the rb columns are skipped.
+
+    catalog_cols = None
+
+    if finder_catalog_filename is not None:
+
+        finder = ascii.read(finder_catalog_filename, format="basic", guess=False)
+
+        psf_col_names = ("x_fit","y_fit","flux_fit","flux_err","cfit","reduced_chi2",
+                         "x_err","y_err","n_pixels_fit","npixfit","flags")
+        finder_col_names = ("sharpness","roundness1","roundness2")
+
+        catalog_cols = {name: _column(table,name) for name in psf_col_names if name in table.colnames}
+
+        if "id" in table.colnames and "id" in finder.colnames:
+            finder_rows = {int(i): j for j,i in enumerate(finder["id"])}
+            row_index = [finder_rows.get(int(i)) for i in table["id"]]
+            for name in finder_col_names:
+                if name in finder.colnames:
+                    values = _column(finder,name)
+                    catalog_cols[name] = [values[j] if j is not None else np.nan for j in row_index]
+        elif len(finder) == len(table):
+            for name in finder_col_names:
+                if name in finder.colnames:
+                    catalog_cols[name] = _column(finder,name)
+        else:
+            raise ValueError(f"Method compute_extra_cols_photutils: {finder_catalog_filename} has no id "
+                             f"column to match on and {len(finder)} rows for {len(table)} PSF-fit rows")
+
+    extra_cols,extra_cols_format = _compute_extra_catalog_cols(diff_image_filename,
+                                                           x_list,
+                                                           y_list,
+                                                           0,
+                                                           extra_cols_dict,
+                                                           sumrat_dict,
+                                                           catalog_cols = catalog_cols,
+                                                           sci_image_filename = sci_image_filename,
+                                                           ref_image_filename = ref_image_filename,
+                                                           rb_dict = rb_dict,
+                                                           l2_image_filename = l2_image_filename)
+
+    for col_name in extra_cols:
+        if col_name in table.colnames:
+            raise ValueError(f"Method compute_extra_cols_photutils: column {col_name} is already "
+                             f"in {catalog_filename}")
+
+    for col_name in extra_cols:
+        names_line += " " + col_name
+
+    for j in range(len(data_lines)):
+        for col_name,values in extra_cols.items():
+            data_lines[j] += " " + format(values[j],extra_cols_format[col_name])
+
+    if output_catalog_filename is None:
+        output_catalog_filename = catalog_filename
+
+    write_lines_to_text_file(comment_lines + [names_line] + data_lines,output_catalog_filename)
+
+    print(f"compute_extra_cols_photutils: added columns {list(extra_cols)} for {len(data_lines)} "
+          f"sources to {output_catalog_filename}")
+
+    return extra_cols
+
+
+#####################################################################################################
+# Loading the extra difference-image catalog columns into the Sources and XSources database
+# tables, used by pipeline/loadPSFCatIntoDBSourcesTable.py and pipeline/loadSECatIntoDBSourcesTable.py.
+#
+# A catalog value is "missing" when its column is absent (a catalog made before the column
+# existed, or the rb columns when the classifier did not run), when it is not finite, or when it
+# is one of the catalog fill values (e.g., -999).  Missing values are loaded as NULL, and they
+# never cause a record to be rejected by prefilter_database_records.
+#####################################################################################################
+
+def catalog_float_values(table,col_name,fill_values = (-999.0,)):
+
+    """
+    Return a catalog column as floats, with NaN for missing values.
+
+    Parameters
+    ----------
+    table : astropy.table.Table or QTable
+        Catalog table.
+    col_name : str
+        Column name.
+    fill_values : sequence of float, optional
+        Catalog fill values, which are treated as missing.
+
+    Returns
+    -------
+    values : numpy.ndarray of float or None
+        The column values, NaN where missing, or None if the table has no such column.
+    """
+
+    if col_name not in table.colnames:
+        return None
+
+    col = table[col_name]
+    col = getattr(col,"value",col)
+
+    values = np.ma.filled(np.ma.asarray(col, dtype=np.float64), np.nan).astype(np.float64)
+
+    for fill_value in fill_values:
+        values[values == float(fill_value)] = np.nan
+
+    values[~np.isfinite(values)] = np.nan
+
+    return values
+
+
+def catalog_values_for_copy(table,col_name,integer = False,fill_values = (-999.0,)):
+
+    """
+    Return a catalog column as strings for PostgreSQL COPY, with \\N (NULL) for missing values.
+
+    Parameters
+    ----------
+    table : astropy.table.Table or QTable
+        Catalog table.
+    col_name : str
+        Column name.  If the table has no such column, every value is \\N.
+    integer : bool, optional
+        True for a column loaded into an integer database column, whose values are written
+        without decimals.
+    fill_values : sequence of float, optional
+        Catalog fill values, which are loaded as NULL.
+
+    Returns
+    -------
+    values : numpy.ndarray of object
+        One string per row: the value, or \\N.
+    """
+
+    out = np.full(len(table), "\\N", dtype=object)
+
+    values = catalog_float_values(table,col_name,fill_values = fill_values)
+
+    if values is None:
+        return out
+
+    ok = np.isfinite(values)
+
+    if integer:
+        out[ok] = [str(int(round(v))) for v in values[ok]]
+    else:
+        out[ok] = [repr(float(v)) for v in values[ok]]
+
+    return out
+
+
+def prefilter_database_records(nrows,
+                               sumrat,
+                               rb,
+                               sumrat_prefilter_threshold,
+                               rb_prefilter_threshold):
+
+    """
+    Select the catalog records to be loaded into the Sources or XSources database child tables:
+    those with sumrat > sumrat_prefilter_threshold and rb > rb_prefilter_threshold.
+
+    Parameters
+    ----------
+    nrows : int
+        Number of catalog records.
+    sumrat : numpy.ndarray of float or None
+        sumrat of each record, NaN where missing (see catalog_float_values), or None if the
+        catalog has no sumrat column.
+    rb : numpy.ndarray of float or None
+        Real/bogus score of each record, NaN where missing, or None if the catalog has no
+        score column (the classifier did not run).
+    sumrat_prefilter_threshold : float or None
+        A record is rejected when its sumrat is less than or equal to this value.  None: no
+        sumrat cut.
+    rb_prefilter_threshold : float or None
+        A record is rejected when its rb is less than or equal to this value.  None: no rb cut.
+
+    Returns
+    -------
+    keep : numpy.ndarray of bool
+        True for each record to be loaded.
+
+    Notes
+    -----
+    Each cut applies only where its value was computed: a record whose sumrat or rb is missing
+    is not rejected for it.
+    """
+
+    keep = np.ones(nrows, dtype=bool)
+
+    with np.errstate(invalid="ignore"):
+
+        if sumrat is not None and sumrat_prefilter_threshold is not None:
+            keep &= ~(np.isfinite(sumrat) & (sumrat <= sumrat_prefilter_threshold))
+
+        if rb is not None and rb_prefilter_threshold is not None:
+            keep &= ~(np.isfinite(rb) & (rb <= rb_prefilter_threshold))
+
+    return keep
+
+
+def get_database_prefilter_params(config_input):
+
+    """
+    Read the prefilter thresholds and the catalog fill values used when loading the extra
+    catalog columns into the Sources and XSources database tables.
+
+    Parameters
+    ----------
+    config_input : configparser.ConfigParser
+        Parsed cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini.
+
+    Returns
+    -------
+    sumrat_prefilter_threshold : float or None
+        [DATABASE_PREFILTER] sumrat_prefilter_threshold, or None (no sumrat cut) if the section
+        is missing.
+    rb_prefilter_threshold : float or None
+        [DATABASE_PREFILTER] rb_prefilter_threshold, or None (no rb cut) if the section is
+        missing.
+    fill_values : tuple of float
+        The distinct fill values written to the extra catalog columns ([SUMRAT] fill_value,
+        [EXTRA_CATALOG_COLS] nneg_nbad_fill_value and photutils_cols_fill_value, [RUBRAT]
+        fill_value), -999.0 for any that is not set.
+    """
+
+    if config_input.has_section("DATABASE_PREFILTER"):
+        sumrat_prefilter_threshold = float(config_input["DATABASE_PREFILTER"]["sumrat_prefilter_threshold"])
+        rb_prefilter_threshold = float(config_input["DATABASE_PREFILTER"]["rb_prefilter_threshold"])
+    else:
+        print("*** Warning: DATABASE_PREFILTER section missing from config; records will not be prefiltered")
+        sumrat_prefilter_threshold = None
+        rb_prefilter_threshold = None
+
+    fill_values = set()
+
+    for section,key in (("SUMRAT","fill_value"),
+                        ("EXTRA_CATALOG_COLS","nneg_nbad_fill_value"),
+                        ("EXTRA_CATALOG_COLS","photutils_cols_fill_value"),
+                        ("RUBRAT","fill_value")):
+        value = config_input.get(section,key,fallback="-999.0") if config_input.has_section(section) else "-999.0"
+        fill_values.add(float(value))
+
+    return sumrat_prefilter_threshold,rb_prefilter_threshold,tuple(sorted(fill_values))

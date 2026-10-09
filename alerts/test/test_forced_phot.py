@@ -14,6 +14,7 @@ import pytest
 
 import fitsio
 
+from conftest import NOISE_SIGMA, sky_positions  # noqa: F401 (synthetic_chip is a fixture)
 from wcs_eval import separation_mas, tpv_pixel_to_sky
 
 from alerts.forced_phot import (CONE_RADIUS_DEG, FLAG_NONFINITE,
@@ -25,7 +26,10 @@ from alerts.forced_phot import (CONE_RADIUS_DEG, FLAG_NONFINITE,
                                 forced_photometry, load_psf, open_image,
                                 project_positions, psfphot, q3c_search,
                                 read_positions_csv, run_prev_images,
-                                sci_psf_basename, write_measurements_csv)
+                                sci_psf_basename, write_measurements_csv,
+                                diff_uncert_basename, sci_uncert_basename,
+                                FORCED_TABLE_DTYPE, forced_measurement_id,
+                                read_table, write_table)
 
 # l2filemeta corners of a real chip (ra1,dec1 .. ra4,dec4, perimeter order)
 # and its center (== CRVAL). Sides ~0.125 deg, rolled ~30 deg.
@@ -229,7 +233,9 @@ def test_q3c_search_query_shape_and_row_mapping():
     assert img.sci_filename == f"{JOB_DIR}/{SCI_BASENAME}"
     assert img.diff_psf == f"{JOB_DIR}/sfftdiffpsf.fits"
     # as seen in real job dir 20260722/jid129264 (socsim, W146, SCA 7)
-    assert img.sci_psf == f"{JOB_DIR}/WFI_SCA07_F146_PSF_DET_DIST_normalized.fits"
+    assert img.sci_psf == f"{JOB_DIR}/sciimage_psf_f146_sca07_normalized.fits"
+    assert img.diff_uncert == f"{JOB_DIR}/sfftdiffimage_uncert_masked.fits"
+    assert img.sci_uncert == f"{JOB_DIR}/r10_reformatted_unc.fits"
     assert img.l2_filename == "s3://l2/r10.fits.gz"
     assert img.position_index.size == 0
 
@@ -250,10 +256,21 @@ def test_q3c_search_diff_basename_override_switches_image_and_psf_together():
 
 
 def test_psf_basenames_follow_the_job_directory_convention():
-    # rimtimsim jid143919: Z087 on SCA 2 -> WFI_SCA02_F087_PSF_DET_DIST_normalized.fits
-    assert sci_psf_basename("Z087", 2) == "WFI_SCA02_F087_PSF_DET_DIST_normalized.fits"
-    assert sci_psf_basename("F184", 18) == "WFI_SCA18_F184_PSF_DET_DIST_normalized.fits"
+    # socsim jid145793: W146 on SCA 9 -> sciimage_psf_f146_sca09_normalized.fits
+    assert sci_psf_basename("W146", 9) == "sciimage_psf_f146_sca09_normalized.fits"
+    assert sci_psf_basename("Z087", 2) == "sciimage_psf_f087_sca02_normalized.fits"
+    assert sci_psf_basename("F184", 18) == "sciimage_psf_f184_sca18_normalized.fits"
     assert diff_psf_basename("sfftdiffimage_dconv_masked.fits") == "sfftdiffpsf_dconv.fits"
+    # uncertainty images: "uncert_" inserted; the sfft branch writes one name
+    # for plain and dconv runs; the science one follows the L2 basename
+    assert diff_uncert_basename("sfftdiffimage_masked.fits") == "sfftdiffimage_uncert_masked.fits"
+    assert diff_uncert_basename("sfftdiffimage_dconv_masked.fits") == "sfftdiffimage_uncert_masked.fits"
+    assert diff_uncert_basename("zogy_diffimage_masked.fits") == "zogy_diffimage_uncert_masked.fits"
+    assert sci_uncert_basename("s3://b/20260722/jid1/r0034001002001003059_0001_wfi07_f146_cal_lite.fits.gz") \
+        == "r0034001002001003059_0001_wfi07_f146_cal_lite_reformatted_unc.fits"
+    assert sci_uncert_basename("x.fits") == "x_reformatted_unc.fits"
+    with pytest.raises(ValueError):
+        diff_uncert_basename("naive_diffimage_masked.fits")
     # an unknown filter or flavor must fail before anything is staged
     with pytest.raises(ValueError):
         sci_psf_basename("F146", 1)          # Roman token given where the RAPID name is expected
@@ -375,44 +392,8 @@ def test_error_array_masks_and_rejects_bad_product():
 # photometry: projection, PSF, fitting, and the parent on a synthetic chip
 # ---------------------------------------------------------------------------
 
-PSF_FWHM_PX = 2.5
-NOISE_SIGMA = 1.0
-
-
-def gaussian_psf_image(size=25, fwhm=PSF_FWHM_PX):
-    yy, xx = np.mgrid[0:size, 0:size]; c = size // 2; s = fwhm / 2.355
-    psf = np.exp(-((xx - c) ** 2 + (yy - c) ** 2) / (2 * s * s))
-    return (psf / psf.sum()).astype(np.float64)
-
-
-@pytest.fixture()
-def synthetic_chip(tmp_path, tpv_header):
-    """A 301x301 chip with the suite's TPV WCS, Gaussian sources of known
-    flux at known 1-based pixel positions, a NaN hole, and its PSF file.
-    Returns (image_path, psf_path, sources) with sources = [(x, y, flux)]."""
-    from astropy.table import QTable
-    from photutils.datasets import make_model_image
-    from photutils.psf import ImagePSF
-
-    sources = [(60.0, 80.0, 2000.0), (150.5, 150.5, 500.0), (230.2, 40.7, 8000.0), (100.0, 250.0, 300.0)]
-    psf_img = gaussian_psf_image()
-    model = ImagePSF(psf_img, flux=1.0, x_0=0.0, y_0=0.0)
-    params = QTable({"x_0": [s[0] - 1 for s in sources], "y_0": [s[1] - 1 for s in sources],
-                     "flux": [s[2] for s in sources]})
-    data = make_model_image((301, 301), model, params, model_shape=(25, 25))
-    data += np.random.default_rng(3).normal(0.0, NOISE_SIGMA, data.shape)
-    data[190:210, 190:210] = np.nan                                   # a masked hole
-    image_path = tmp_path / "diff.fits"; psf_path = tmp_path / "psf.fits"
-    fitsio.write(str(image_path), data.astype(np.float32), header=dict(tpv_header), clobber=True)
-    fitsio.write(str(psf_path), (psf_img * 37.0).astype(np.float32), clobber=True)   # un-normalized on purpose
-    return str(image_path), str(psf_path), sources
-
-
-def sky_positions(wcs, pixels, first_id=1):
-    """Position records for 1-based pixel coordinates, via the image WCS."""
-    ra, dec = wcs.all_pix2world([p[0] for p in pixels], [p[1] for p in pixels], 1)
-    return [Position(first_id + i, float(r), float(d)) for i, (r, d) in enumerate(zip(ra, dec))]
-
+# synthetic_chip, sky_positions and NOISE_SIGMA come from conftest (shared
+# with the provider tests)
 
 def test_project_positions_round_trips_and_applies_margin(synthetic_chip):
     image_path, _, _ = synthetic_chip
@@ -493,9 +474,12 @@ class CopyingStage:
         return local
 
 
-def prev_image(rid, mjdobs, image_path, psf_path, corners=REAL_CORNERS, position_index=(), sci_psf=None):
+def prev_image(rid, mjdobs, image_path, psf_path, corners=REAL_CORNERS, position_index=(), sci_psf=None,
+               uncert="/nonexistent/unc.fits"):
+    # uncert defaults to a missing file so the estimator fallback runs
     return PrevImage(rid=rid, pid=rid * 10, diff_filename=image_path, sci_filename=image_path,
-                     diff_psf=psf_path, sci_psf=sci_psf or psf_path, l2_filename="l2.fits.gz", mjdobs=mjdobs,
+                     diff_psf=psf_path, sci_psf=sci_psf or psf_path, diff_uncert=uncert, sci_uncert=uncert,
+                     l2_filename="l2.fits.gz", mjdobs=mjdobs,
                      fid=8, band="W146", expid=1, sca=7, corners=corners,
                      position_index=np.array(position_index, dtype=int))
 
@@ -507,7 +491,7 @@ def test_run_prev_images_measures_products_stamps_rows_and_cleans_up(synthetic_c
     staging = tmp_path / "staging"; staging.mkdir(); stage = CopyingStage(str(staging))
     # as in production, the science PSF has its own basename
     import shutil
-    sci_psf = str(tmp_path / "WFI_SCA07_F146_PSF_DET_DIST_normalized.fits"); shutil.copy(psf_path, sci_psf)
+    sci_psf = str(tmp_path / "sciimage_psf_f146_sca07_normalized.fits"); shutil.copy(psf_path, sci_psf)
     # epoch 2 holds only the first two positions (a partial overlap)
     images = [prev_image(11, 61680.1, image_path, psf_path, position_index=[0, 1, 2, 3], sci_psf=sci_psf),
               prev_image(12, 61680.2, image_path, psf_path, position_index=[0, 1], sci_psf=sci_psf)]
@@ -569,6 +553,27 @@ def test_run_prev_images_failure_is_skipped_or_raised(synthetic_chip, tmp_path, 
         list(run_prev_images(images, positions, stage, products=("diff",), strict=True))
 
 
+def test_run_prev_images_uses_the_records_uncertainty_by_default(synthetic_chip, tmp_path, tpv_header, caplog):
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    positions = sky_positions(img.wcs, [(sources[0][0], sources[0][1])])
+    unc_path = str(tmp_path / "sfftdiffimage_uncert_masked.fits")
+    fitsio.write(unc_path, np.full(img.shape, 4.0, dtype=np.float32), header=dict(tpv_header), clobber=True)
+    staging = tmp_path / "s"; staging.mkdir(); stage = CopyingStage(str(staging))
+    # the record names a real uncertainty file: it is staged and used
+    with_unc = list(run_prev_images([prev_image(11, 61680.1, image_path, psf_path, position_index=[0], uncert=unc_path)],
+                                    positions, stage, products=("diff",)))
+    assert unc_path in stage.calls
+    # the record names a missing one: warn and fall back to the estimate
+    with caplog.at_level("WARNING"):
+        without = list(run_prev_images([prev_image(11, 61680.1, image_path, psf_path, position_index=[0])],
+                                       positions, stage, products=("diff",), strict=True))
+    assert "uncertainty image /nonexistent/unc.fits not staged" in caplog.text
+    assert with_unc[0][2][0].flags == 0 and without[0][2][0].flags == 0
+    ratio = with_unc[0][2][0].fluxerr / without[0][2][0].fluxerr
+    assert 3.0 < ratio < 5.0                   # 4x the per-pixel error (~1) -> ~4x the flux error
+
+
 def test_run_prev_images_uses_uncertainty_hook(synthetic_chip, tmp_path, tpv_header, chip_image):
     image_path, psf_path, sources = synthetic_chip
     img = open_image(image_path)
@@ -616,6 +621,40 @@ def test_csv_round_trip(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# per-chip table: id and parquet round trip
+# ---------------------------------------------------------------------------
+
+def test_forced_measurement_id_is_deterministic_and_position_sensitive():
+    a = forced_measurement_id(11, 777, 266.668271, -28.865889)
+    assert a == forced_measurement_id(11, 777, 266.668271, -28.865889)
+    assert 0 < a < 2**63
+    assert a != forced_measurement_id(12, 777, 266.668271, -28.865889)   # another epoch
+    assert a != forced_measurement_id(11, 778, 266.668271, -28.865889)   # another object
+    # a re-run at a moved position (~0.7 mas) is a new measurement
+    assert a != forced_measurement_id(11, 777, 266.668271 + 2e-7, -28.865889)
+    # ...but jitter below the 1e-7 deg (0.36 mas) rounding grain is not
+    assert a == forced_measurement_id(11, 777, 266.668271 + 1e-9, -28.865889)
+
+
+def test_table_parquet_round_trip(tmp_path):
+    table = np.zeros(3, dtype=FORCED_TABLE_DTYPE)
+    table["forced_id"] = [5, 6, 7]; table["aid"] = [777, 777, 778]; table["rid"] = [11, 12, 11]
+    table["band"] = ["W146", "W146", "Z087"]; table["mjdobs"] = [60500.5, 60499.0, 60500.5]
+    table["psf_flux"] = [1.5, np.nan, -2.0]; table["science_flux"] = [100.0, 101.0, np.nan]
+    table["flags"] = [0, 1 << 16, 0]; table["x"] = [10.5, 11.5, 12.5]
+    path = tmp_path / "sub" / "dir" / "forced_phot_pid99.parquet"     # parents created
+    write_table(table, str(path))
+    back = read_table(str(path))
+    assert back.dtype == FORCED_TABLE_DTYPE and len(back) == 3
+    for name in FORCED_TABLE_DTYPE.names:
+        if table.dtype[name].kind == "f":
+            assert np.array_equal(back[name], table[name], equal_nan=True)
+        else:
+            assert np.array_equal(back[name], table[name])
+    assert read_table(str(tmp_path / "missing.parquet")) is None
+
+
+# ---------------------------------------------------------------------------
 # records
 # ---------------------------------------------------------------------------
 
@@ -624,7 +663,8 @@ def test_records_are_plain_and_keyed():
     with pytest.raises(Exception):
         p.ra = 3.0                       # frozen: the key/position pair never mutates
     img = PrevImage(rid=1, pid=2, diff_filename="d.fits", sci_filename="s.fits", diff_psf="dp.fits",
-                    sci_psf="sp.fits", l2_filename="l2.fits.gz", mjdobs=60000.0, fid=8, band="W146",
+                    sci_psf="sp.fits", diff_uncert="du.fits", sci_uncert="su.fits",
+                    l2_filename="l2.fits.gz", mjdobs=60000.0, fid=8, band="W146",
                     expid=3, sca=4, corners=REAL_CORNERS)
     assert img.position_index.size == 0
     m = Measurement(pos_id=7, rid=1, x=10.0, y=20.0, flux=math.nan, fluxerr=math.nan, flags=1)

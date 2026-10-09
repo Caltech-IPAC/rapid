@@ -1,8 +1,9 @@
 """
 RAPID Data Analysis
 
-Methods for characterizing RAPID images, currently the computation of the point-source
-limiting magnitude of a Roman WFI L2 image stored as a FITS file.
+Methods for characterizing RAPID images: the computation of the point-source limiting
+magnitude of a Roman WFI L2 image stored as a FITS file, and the ZTF "sumrat" metric of
+sources in a difference image.
 
 Data units
 ----------
@@ -751,3 +752,1082 @@ def compute_limiting_magnitude_for_l2_image(input_img_filename,
     limmag["poissonratio"] = poisson_ratio
 
     return limmag
+
+
+#####################################################################################################
+# Median-filter a small image stamp with a square box, the way PDL's med2d does it with
+# Boundary => 'Truncate' and a kernel of ones, which is how the ZTF pipeline (imgdiffextract.pl)
+# smooths the stamp it computes sumrat from.
+#
+# Truncate means that kernel positions falling outside the stamp are skipped rather than padded,
+# so an edge pixel is the median of the 6 in-stamp neighbors and a corner pixel of 4.  Bad (NaN)
+# pixels are skipped likewise.  With an even number of values, med2d returns the lower of the two
+# middle ones (element (count-1)/2 of the sorted list) rather than their mean.  That choice is not
+# neutral: the edge pixels of a small stamp mostly have even counts (16 of the 25 pixels of a 5x5
+# stamp), so their filtered values are biased low, and for pure Gaussian noise this pulls the mean
+# sumrat of a 5x5 stamp from about 0 down to about -0.32.  By default (lower_median = False) the
+# mean of the two middle values is taken instead, which removes the bias; lower_median = True
+# reproduces med2d, and hence ZTF, exactly.  A pixel whose neighborhood holds no finite values
+# comes out NaN.
+#####################################################################################################
+
+def median_filter_truncate(stamp,filter_size = 3,lower_median = False):
+
+    """
+    Method median_filter_truncate
+
+    Inputs:
+    stamp                   Two-dimensional array of pixel values, in any units.
+    filter_size             Side length of the square median-filter box [pixels]; must be odd.
+    lower_median            If True (as in PDL's med2d), an even number of values yields the lower
+                            of the two middle values; if False, their mean.
+
+    Returns:
+    filtered                Median-filtered stamp, of the same shape and units as stamp.
+    """
+
+    if filter_size <= 0 or filter_size % 2 == 0:
+        raise ValueError(f"Method median_filter_truncate: filter_size = {filter_size} "
+                         "must be a positive odd integer")
+
+    stamp = np.array(stamp, dtype=np.float64)
+
+    h = filter_size // 2
+    ny,nx = stamp.shape
+
+
+    # Pad with NaN, which stands in for the skipped out-of-stamp positions, and stack the
+    # filter_size^2 shifted copies of the stamp along a new leading axis.
+
+    padded = np.full((ny + 2 * h, nx + 2 * h), np.nan)
+    padded[h:h + ny, h:h + nx] = stamp
+
+    neighbors = np.array([padded[dy:dy + ny, dx:dx + nx]
+                          for dy in range(filter_size)
+                          for dx in range(filter_size)])
+
+
+    # np.sort puts NaN last, so the finite values of each neighborhood come first in ascending
+    # order and the two middle ones are at indices (count-1)//2 and count//2 among them, which
+    # coincide when count is odd.
+
+    neighbors = np.sort(neighbors, axis=0)
+    count = np.sum(np.isfinite(neighbors), axis=0)
+
+    index_lo = np.maximum(count - 1, 0) // 2
+    filtered = np.take_along_axis(neighbors, index_lo[np.newaxis, :, :], axis=0)[0]
+
+    if not lower_median:
+        index_hi = np.minimum(count // 2, filter_size * filter_size - 1)
+        filtered_hi = np.take_along_axis(neighbors, index_hi[np.newaxis, :, :], axis=0)[0]
+        filtered = 0.5 * (filtered + filtered_hi)
+
+    filtered[count == 0] = np.nan
+
+    return filtered
+
+
+#####################################################################################################
+# Compute the "sumrat" metric of a difference-image source, as the ZTF pipeline does
+# (psffitsimple in imgdiffextract.pl):
+#
+#     sumrat = sum(p) / sum(|p|)
+#
+# over the pixels p of a small (5x5 in ZTF) stamp centered on the source, after the stamp has
+# been median-filtered with a 3x3 box to suppress outliers that would otherwise dominate the
+# sums.  For pure Gaussian noise in an unfiltered 5x5 stamp, sumrat is 0 +/- 0.22 (1 sigma);
+# the median filtering correlates the pixels, which widens that to about +/- 0.5.  The
+# lower-median edge handling of ZTF (lower_median = True; see median_filter_truncate) would
+# also shift the mean to about -0.32, so it is not the default here.
+# A real positive source drives sumrat toward 1.  The dipole ("yin-yang")
+# residuals of misregistration or a PSF mismatch have positive and negative lobes that cancel,
+# giving a value near 0.  ZTF requires sumrat > 0.4 for a candidate.
+#
+# The metric is dimensionless, so the units of the difference image do not matter.  It does
+# depend on the sign of the image: a source must be positive in it.  Pass negate = True to
+# measure sources that are negative in the difference image (ZTF's isdiffpos = 0).
+#####################################################################################################
+
+def compute_sumrat_for_diff_image(input_diff_filename,
+                                  xy_positions,
+                                  *,
+                                  coord_base,
+                                  stamp_size = 5,
+                                  filter_size = 3,
+                                  negate = False,
+                                  lower_median = False,
+                                  hdu_index = None,
+                                  fill_value = np.nan):
+
+    """
+    Method compute_sumrat_for_diff_image
+
+    Inputs:
+    input_diff_filename     FITS file containing the difference image.
+    xy_positions            Sequence of (x, y) source positions [pixels], with x along NAXIS1
+                            (the column) and y along NAXIS2 (the row), such as source centroids.
+    coord_base              Pixel-coordinate convention of xy_positions, which must be given:
+                            0 for zero-based coordinates (numpy, photutils), in which the center
+                            of the first pixel is (0, 0), or 1 for one-based coordinates (FITS,
+                            SExtractor, ds9), in which it is (1, 1).
+    stamp_size              Side length of the square stamp sumrat is computed over [pixels];
+                            must be odd.  ZTF uses 5 (its negbadlinsz parameter).
+    filter_size             Side length of the median-filter box applied to the stamp
+                            [pixels]; must be odd.  ZTF uses 3.  Set to 1 to skip the filtering.
+    negate                  If True, negate the image before computing sumrat, so that sources
+                            that are negative in the difference image are measured.
+    lower_median            Passed to median_filter_truncate.  False (the default) removes the
+                            negative bias that ZTF's choice puts into sumrat; True reproduces
+                            ZTF exactly.
+    hdu_index               HDU index of the image data.  If None, the first HDU holding
+                            two-dimensional image data is used.
+    fill_value              Value returned for a position that is not finite, whose stamp does
+                            not fall entirely within the image, or whose filtered stamp has no
+                            usable pixels
+                            (ZTF writes -999 in these cases).
+
+    Returns:
+    sumrat_list             List of sumrat values (dimensionless), one per input position, in
+                            the order of xy_positions.
+
+    Notes:
+    The stamp is centered on the pixel nearest to each position, which is pixel
+    floor(x + 0.5) for zero-based x and floor(x + 0.5) - 1 (as a zero-based index) for one-based x,
+    matching ZTF.  ZTF additionally skips sources within 3 pixels of the image edge, because its
+    PSF-fit stamp (7x7) must fit inside the image; here only the sumrat stamp has to.  NaN pixels are treated as bad and are skipped by both the median filter and
+    the sums, as PDL's bad values are in ZTF.
+    """
+
+    if coord_base not in (0, 1):
+        raise ValueError(f"Method compute_sumrat_for_diff_image: coord_base = {coord_base} "
+                         "must be 0 (zero-based) or 1 (one-based)")
+
+    if stamp_size <= 0 or stamp_size % 2 == 0:
+        raise ValueError(f"Method compute_sumrat_for_diff_image: stamp_size = {stamp_size} "
+                         "must be a positive odd integer")
+
+    with fits.open(input_diff_filename) as hdul:
+
+        if hdu_index is None:
+            hdu_index = get_image_hdu_index(hdul)
+
+        data = np.array(hdul[hdu_index].data, dtype=np.float64)
+
+    if negate:
+        data = -data
+
+    ny,nx = data.shape
+    h = stamp_size // 2
+
+    sumrat_list = []
+
+    for x,y in xy_positions:
+
+        if not (np.isfinite(float(x)) and np.isfinite(float(y))):
+            sumrat_list.append(fill_value)
+            continue
+
+
+        # Zero-based index of the pixel nearest to the position.
+
+        xind = int(math.floor(float(x) + 0.5)) - coord_base
+        yind = int(math.floor(float(y) + 0.5)) - coord_base
+
+        if xind < h or xind > nx - h - 1 or yind < h or yind > ny - h - 1:
+            sumrat_list.append(fill_value)
+            continue
+
+        stamp = data[yind - h:yind + h + 1, xind - h:xind + h + 1]
+
+        if filter_size > 1:
+            stamp = median_filter_truncate(stamp,
+                                           filter_size = filter_size,
+                                           lower_median = lower_median)
+
+        good = np.isfinite(stamp)
+
+        stamp_sum = np.sum(stamp[good])
+        stamp_sum_abs = np.sum(np.abs(stamp[good]))
+
+        if np.any(good) and stamp_sum_abs > 0.0:
+            sumrat_list.append(float(stamp_sum / stamp_sum_abs))
+        else:
+            sumrat_list.append(fill_value)
+
+    return sumrat_list
+
+
+#####################################################################################################
+# Count the negative and the bad pixels in a small stamp centered on each difference-image source,
+# the ZTF "nneg" and "nbad" metrics (imgdiffextract.pl).
+#
+# nneg is the number of pixels below 0 and nbad the number of bad (non-finite) pixels in an
+# unfiltered square stamp (5x5 in ZTF) centered on the pixel nearest the source, as for sumrat.  A
+# real point source has few negative pixels near its center, while the dipole residuals of
+# misregistration or a PSF mismatch, and noise, have many; for pure noise about half the pixels are
+# negative.  nbad counts masked pixels, which in the RAPID difference images are NaN: pixels below
+# the reference coverage threshold and pixels that were NaN in the science or reference image, such
+# as saturated star cores.
+#
+# Like sumrat, nneg depends on the sign of the image: the sources must be positive in it, so the
+# catalog of a negative difference image is paired with the negative image.
+#####################################################################################################
+
+def compute_nneg_nbad_for_diff_image(input_diff_filename,
+                                     xy_positions,
+                                     *,
+                                     coord_base,
+                                     stamp_size = 5,
+                                     hdu_index = None,
+                                     fill_value = np.nan):
+
+    """
+    Count the negative and the bad (non-finite) pixels in a square stamp centered on each of a
+    list of positions in a difference image.
+
+    Parameters
+    ----------
+    input_diff_filename : str
+        FITS file containing the difference image.
+    xy_positions : sequence of (float, float)
+        Source positions [pixels], with x along NAXIS1 and y along NAXIS2.
+    coord_base : {0, 1}
+        0 if the positions are zero-based (numpy, photutils), 1 if one-based (FITS, SExtractor).
+    stamp_size : int, optional
+        Side length of the stamp [pixels]; must be odd.  ZTF uses 5.
+    hdu_index : int or None, optional
+        HDU index of the image data.  If None, the first HDU holding two-dimensional image data
+        is used.
+    fill_value : float, optional
+        Value returned for a position that is not finite or whose stamp does not fall entirely
+        within the image.
+
+    Returns
+    -------
+    nneg_list, nbad_list : list of float
+        Number of finite pixels below 0, and number of non-finite pixels, in the stamp of each
+        position (integer-valued), in the order of xy_positions.
+
+    Notes
+    -----
+    The stamp is centered on the pixel nearest to each position, pixel floor(x + 0.5) for
+    zero-based x, as for compute_sumrat_for_diff_image.
+    """
+
+    if coord_base not in (0, 1):
+        raise ValueError(f"Method compute_nneg_nbad_for_diff_image: coord_base = {coord_base} "
+                         "must be 0 (zero-based) or 1 (one-based)")
+
+    if stamp_size <= 0 or stamp_size % 2 == 0:
+        raise ValueError(f"Method compute_nneg_nbad_for_diff_image: stamp_size = {stamp_size} "
+                         "must be a positive odd integer")
+
+    with fits.open(input_diff_filename) as hdul:
+
+        if hdu_index is None:
+            hdu_index = get_image_hdu_index(hdul)
+
+        data = np.array(hdul[hdu_index].data, dtype=np.float64)
+
+    ny,nx = data.shape
+    h = stamp_size // 2
+    n = len(xy_positions)
+
+    nneg_list = [fill_value] * n
+    nbad_list = [fill_value] * n
+
+    if n == 0:
+        return nneg_list,nbad_list
+
+
+    # Zero-based index of the pixel nearest each position, and the positions whose stamp lies
+    # entirely within the image.
+
+    x0 = np.array([float(x) for x,y in xy_positions], dtype=np.float64) - coord_base
+    y0 = np.array([float(y) for x,y in xy_positions], dtype=np.float64) - coord_base
+
+    valid = np.isfinite(x0) & np.isfinite(y0)
+
+    xind = np.zeros(n, dtype=int)
+    yind = np.zeros(n, dtype=int)
+    xind[valid] = np.floor(x0[valid] + 0.5).astype(int)
+    yind[valid] = np.floor(y0[valid] + 0.5).astype(int)
+
+    valid &= (xind >= h) & (xind <= nx - h - 1) & (yind >= h) & (yind <= ny - h - 1)
+
+    index_valid = np.flatnonzero(valid)
+
+    if len(index_valid) == 0:
+        return nneg_list,nbad_list
+
+
+    # All the stamps at once, shape (n_valid, stamp_size, stamp_size).
+
+    offsets = np.arange(-h, h + 1)
+
+    stamps = data[yind[index_valid, np.newaxis, np.newaxis] + offsets[np.newaxis, :, np.newaxis],
+                  xind[index_valid, np.newaxis, np.newaxis] + offsets[np.newaxis, np.newaxis, :]]
+
+    finite = np.isfinite(stamps)
+
+    nneg = np.sum(finite & (np.where(finite, stamps, 0.0) < 0.0), axis=(1, 2))
+    nbad = np.sum(~finite, axis=(1, 2))
+
+    for i,neg,bad in zip(index_valid,nneg,nbad):
+        nneg_list[i] = float(neg)
+        nbad_list[i] = float(bad)
+
+    return nneg_list,nbad_list
+
+
+# Columns computed by compute_photutils_cols_for_diff_image.
+
+photutils_col_names = ("sharpness","roundness1","roundness2","x_dao_peak","y_dao_peak","dao_flags",
+                       "x_fit","y_fit","x_err","y_err","flux_fit","snr_fit","reduced_chi2",
+                       "n_pixels_fit","flags","cfit")
+
+
+#####################################################################################################
+# Set up a DAOStarFinder that measures sources at given pixels without filtering any out.
+#
+# The sharpness and roundness filters are turned off through sharpness_range and roundness_range
+# in photutils >= 3.0, and through infinite bounds before.  The threshold does not affect the
+# quantities measured at given pixels.
+#####################################################################################################
+
+def make_unfiltered_daofinder(fwhm):
+
+    """
+    Return a DAOStarFinder with a Gaussian kernel of the given FWHM and its sharpness and
+    roundness filters turned off.
+
+    Parameters
+    ----------
+    fwhm : float
+        FWHM of the DAOStarFinder Gaussian kernel [pixels].
+
+    Returns
+    -------
+    finder : photutils.detection.DAOStarFinder
+        The finder; finder.kernel.data is the lowered, normalized kernel it convolves images with.
+    """
+
+    from photutils.detection import DAOStarFinder
+
+    try:
+        finder = DAOStarFinder(threshold=1.0, fwhm=fwhm, min_separation=0,
+                               sharpness_range=None, roundness_range=None)
+    except TypeError:
+        finder = DAOStarFinder(threshold=1.0, fwhm=fwhm, min_separation=0,
+                               sharplo=-np.inf, sharphi=np.inf, roundlo=-np.inf, roundhi=np.inf)
+
+    return finder
+
+
+#####################################################################################################
+# Move source pixels to the peak of the DAOStarFinder-convolved image.
+#
+# DAOStarFinder measures sharpness and roundness at a local maximum of the image convolved with
+# its kernel.  A position from another catalog, such as a SExtractor windowed centroid, rounded to
+# the nearest pixel, can land a pixel away from that maximum, especially for faint sources, and the
+# quantities measured there are then not comparable to DAOStarFinder's own: roundness1 in
+# particular is a four-fold asymmetry about the center pixel, which an off-peak center inflates.
+# Each pixel is therefore moved to the maximum of the convolved image within snap_radius pixels
+# (a square box, clipped at the image edges), staying put when it is itself a maximum there.
+#
+# The convolution is done the way DAOStarFinder does it (scipy.ndimage.convolve with zeros beyond
+# the image edges), so that the snapped pixel is the one DAOStarFinder would find.
+#####################################################################################################
+
+def snap_to_daofind_peak(data,xpix,ypix,fwhm,snap_radius = 1):
+
+    """
+    Move each of a list of source pixels to the maximum of the DAOStarFinder-convolved image
+    within snap_radius pixels.
+
+    Parameters
+    ----------
+    data : 2D numpy.ndarray
+        Image data, with no non-finite values.
+    xpix, ypix : 1D numpy.ndarray of int
+        Zero-based column and row indices of the source pixels, all within the image.
+    fwhm : float
+        FWHM of the DAOStarFinder Gaussian kernel [pixels].
+    snap_radius : int, optional
+        Half-width of the square box searched [pixels].  0 leaves the pixels unchanged.
+
+    Returns
+    -------
+    xsnap, ysnap : 1D numpy.ndarray of int
+        Zero-based column and row indices of the snapped pixels, in the order of the input.
+    """
+
+    from scipy.ndimage import convolve
+
+    xpix = np.asarray(xpix, dtype=int)
+    ypix = np.asarray(ypix, dtype=int)
+
+    if snap_radius < 0:
+        raise ValueError(f"Method snap_to_daofind_peak: snap_radius = {snap_radius} must be >= 0")
+
+    if snap_radius == 0 or len(xpix) == 0:
+        return xpix.copy(),ypix.copy()
+
+    finder = make_unfiltered_daofinder(fwhm)
+
+    convolved_data = convolve(np.asarray(data, dtype=np.float64), finder.kernel.data,
+                              mode="constant", cval=0.0)
+
+    ny,nx = convolved_data.shape
+
+
+    # Candidate pixels of every source, shape (n_sources, n_offsets), clipped at the image edges
+    # (a clipped candidate repeats an edge pixel, which does not change the maximum).
+
+    offsets = np.arange(-snap_radius, snap_radius + 1)
+    dy,dx = np.meshgrid(offsets, offsets, indexing="ij")
+
+    xcand = np.clip(xpix[:, np.newaxis] + dx.ravel()[np.newaxis, :], 0, nx - 1)
+    ycand = np.clip(ypix[:, np.newaxis] + dy.ravel()[np.newaxis, :], 0, ny - 1)
+
+    values = convolved_data[ycand, xcand]
+    ibest = np.argmax(values, axis=1)
+
+
+    # Keep the input pixel when it is a maximum itself, rather than move it to a tied neighbor.
+
+    keep = convolved_data[ypix, xpix] >= values[np.arange(len(xpix)), ibest]
+
+    xsnap = np.where(keep, xpix, xcand[np.arange(len(xpix)), ibest])
+    ysnap = np.where(keep, ypix, ycand[np.arange(len(ypix)), ibest])
+
+    return xsnap,ysnap
+
+
+#####################################################################################################
+# Compute the DAOStarFinder sharpness, roundness1, and roundness2 of sources at given pixels.
+#
+# DAOStarFinder is run with its source-finding step skipped (xycoords) and its sharpness and
+# roundness filters off, but find_stars still drops every source with any quantity that is not
+# finite, losing, for example, the finite sharpness of a source whose roundness2 is not finite.
+# So the unfiltered catalog is taken from DAOStarFinder._get_raw_catalog, which is private
+# photutils API.  If a later photutils changes it, DAOStarFinder is instead run on a cutout around
+# each source in turn through the public find_stars, which gives the same values for the sources
+# it keeps (pixels outside the image are 0 either way) and leaves NaN for the ones it drops.
+#####################################################################################################
+
+def compute_daofind_cols_at_pixels(data,xpix,ypix,fwhm):
+
+    """
+    Compute the DAOStarFinder sharpness, roundness1, and roundness2 of sources centered on given
+    pixels of an image.
+
+    Parameters
+    ----------
+    data : 2D numpy.ndarray
+        Image data, with no non-finite values.
+    xpix, ypix : 1D numpy.ndarray of int
+        Zero-based column and row indices of the source pixels, all within the image.
+    fwhm : float
+        FWHM of the DAOStarFinder Gaussian kernel [pixels].
+
+    Returns
+    -------
+    dao_cols : dict of str to numpy.ndarray
+        Arrays of "sharpness", "roundness1", and "roundness2" (dimensionless), one value per
+        pixel, NaN where a value could not be computed.
+    """
+
+    import warnings
+
+    names = ("sharpness","roundness1","roundness2")
+    xycoords = np.column_stack((xpix,ypix)).astype(int)
+    dao_cols = {name: np.full(len(xycoords), np.nan) for name in names}
+
+    if len(xycoords) == 0:
+        return dao_cols
+
+    finder = make_unfiltered_daofinder(fwhm)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
+        try:
+            finder.xycoords = xycoords
+            cat = finder._get_raw_catalog(data)
+
+            for name in names:
+                dao_cols[name] = np.array(getattr(cat,name), dtype=np.float64)
+
+            return dao_cols
+
+        except Exception as e:
+            print(f"*** Warning: DAOStarFinder._get_raw_catalog failed ({e}); computing sharpness and "
+                  "roundness source by source instead, which leaves NaN for any source with a "
+                  "non-finite quantity")
+
+
+        # The quantities use the convolved image up to h pixels from the source, which in turn
+        # uses the image up to another h pixels away, h being the kernel half-width.
+
+        h = max(finder.kernel.shape) // 2
+        m = 2 * h + 1
+
+        ny,nx = data.shape
+        data_padded = np.zeros((ny + 2 * m, nx + 2 * m))
+        data_padded[m:m + ny, m:m + nx] = data
+
+        finder.xycoords = np.array([[m, m]])
+
+        for i,(x,y) in enumerate(xycoords):
+
+            table = finder.find_stars(data_padded[y:y + 2 * m + 1, x:x + 2 * m + 1])
+
+            if table is not None and len(table) == 1:
+                for name in names:
+                    dao_cols[name][i] = float(table[name][0])
+
+    return dao_cols
+
+
+#####################################################################################################
+# Compute PhotUtils-style columns (DAOStarFinder sharpness, roundness1, and roundness2, and the
+# PSFPhotometry fitted flux, its signal-to-noise ratio, and the fit-quality columns) at given
+# source positions, so that they can be added to a SExtractor catalog of a difference image.
+#
+# The DAOStarFinder quantities are computed by compute_daofind_cols_at_pixels (above), which
+# measures them at a pixel: each position is rounded to the nearest pixel, as for sumrat, and then
+# moved to the peak of the convolved image by snap_to_daofind_peak (above), where DAOStarFinder
+# itself would measure the source.  The snapped pixel is returned as x_dao_peak and y_dao_peak, in
+# the coordinate convention of the input positions.
+#
+# Non-finite pixels are set to 0 for DAOStarFinder, which is how it treats pixels beyond the image
+# edges.  On a difference image, whose background is 0, that leaves the quantities essentially
+# unchanged unless the zeroed pixel is in the core of the source: in a synthetic test (Gaussian
+# PSF of FWHM 1.6 pixels, SNR 30), a zeroed pixel 2 or more pixels from the peak, or diagonally
+# next to it, moved sharpness and roundness2 by <= 0.02, but one directly next to the peak moved
+# them by about 0.1-0.2 (about 3 sigma), and a zeroed peak made sharpness meaningless.  The
+# quantities are kept, and dao_flags records whether the core held such pixels, as bits:
+#
+#     1   a bad (non-finite) pixel is the snapped peak pixel or one of its four direct neighbors,
+#         where the quantities were measured
+#     2   a bad pixel is the pixel nearest the input position or one of its four direct
+#         neighbors; a bad pixel at the true peak lowers the convolved image there and can pull
+#         the snap away from it (diagonally, out of reach of bit 1, in about a quarter of cases)
+#     4   one of those pixels lies beyond the image edge, where DAOStarFinder uses 0
+#
+# so that dao_flags = 0 means the core was clean.  Moving the pixel by the snap is not flagged,
+# since it is the correct measurement; x_dao_peak and y_dao_peak record it.
+#
+# The fitted flux comes from PSFPhotometry with the same settings as compute_psf_catalog in
+# modules/utils/rapid_pipeline_subs.py, which makes the RAPID PhotUtils catalogs, except that the
+# initial positions are the input ones (not snapped) rather than DAOStarFinder detections.  The
+# positions are free in the fit, as there, unless xy_bounds is given, which limits how far each
+# fitted position may move from its initial one.  snr_fit is flux_fit / flux_err, as for the snr of the RAPID alerts
+# (alerts/param_registry.py).  Without an uncertainty image, flux_err comes from the fit
+# covariance alone and means nothing, so snr_fit is then left at fill_value, and PSFPhotometry
+# returns reduced_chi2 as NaN, which also becomes fill_value.
+#####################################################################################################
+
+def compute_photutils_cols_for_diff_image(input_diff_filename,
+                                          input_psf_filename,
+                                          xy_positions,
+                                          *,
+                                          coord_base,
+                                          fwhm,
+                                          fit_shape,
+                                          aperture_radius,
+                                          input_unc_filename = None,
+                                          snap_radius = 1,
+                                          xy_bounds = None,
+                                          hdu_index = None,
+                                          psf_hdu_index = 0,
+                                          fill_value = np.nan):
+
+    """
+    Compute DAOStarFinder sharpness, roundness1, and roundness2, and the PSFPhotometry fitted flux,
+    snr_fit, reduced_chi2, n_pixels_fit, flags, and cfit, at each of a list of positions in a
+    difference image.
+
+    Parameters
+    ----------
+    input_diff_filename : str
+        FITS file containing the difference image.
+    input_psf_filename : str
+        FITS file containing the PSF model of the difference image, with odd NAXIS1 and NAXIS2
+        and sampled at the pixel scale of the image.
+    xy_positions : sequence of (float, float)
+        Source positions [pixels], with x along NAXIS1 and y along NAXIS2.
+    coord_base : {0, 1}
+        0 if the positions are zero-based, 1 if one-based (FITS, SExtractor).
+    fwhm : float
+        FWHM of the DAOStarFinder Gaussian kernel [pixels].
+    fit_shape : tuple of (int, int)
+        Shape (ny, nx) of the region fit around each source by PSFPhotometry; odd numbers.
+    aperture_radius : float
+        Radius of the aperture PSFPhotometry estimates the initial fluxes with [pixels].
+    input_unc_filename : str or None, optional
+        FITS file containing the uncertainty image, which weights the PSF fit.  If None, the fit
+        is unweighted, and snr_fit and reduced_chi2 are fill_value.
+    snap_radius : int, optional
+        Half-width of the square box [pixels] within which the pixel nearest to each position is
+        moved to the peak of the DAOStarFinder-convolved image before sharpness and roundness are
+        measured (see snap_to_daofind_peak).  0 measures them at the nearest pixel.
+    xy_bounds : None, float, or tuple of (float, float), optional
+        Passed to PSFPhotometry: the largest distance [pixels] a fitted position may move from its
+        initial one, along x and y.  None leaves the positions free.  A fit held at the bound has
+        bit 32 ("fitted parameter near a bound") set in "flags".
+    hdu_index : int or None, optional
+        HDU index of the difference-image data.  If None, the first HDU holding two-dimensional
+        image data is used.  That is always how the uncertainty-image data are found.
+    psf_hdu_index : int, optional
+        HDU index of the PSF-model data.
+    fill_value : float, optional
+        Value returned for a source whose position is not finite or falls off the image, or
+        whose quantity comes out not finite.
+
+    Returns
+    -------
+    photutils_cols : dict of str to list of float
+        Lists with one value per input position, in the order of xy_positions, of:
+        "sharpness", "roundness1", and "roundness2" (dimensionless, from DAOStarFinder);
+        "x_dao_peak" and "y_dao_peak" (the snapped pixel they were measured at, in the
+        convention of coord_base); "dao_flags" (bit flags of bad pixels in the source core; see
+        above); "x_fit" and "y_fit" (the PSF-fitted position, in the convention of coord_base);
+        "x_err" and "y_err" (its fit uncertainties [pixels]); "flux_fit" (in the units of the
+        image); "snr_fit" (flux_fit / flux_err, dimensionless); "reduced_chi2" (dimensionless);
+        "n_pixels_fit" (number of unmasked pixels fit); "flags" (PSFPhotometry bit flags, in which
+        bit 32 marks a fitted position held at xy_bounds); and "cfit" (central-pixel fit residual
+        relative to flux_fit, dimensionless).  "x_dao_peak", "y_dao_peak", "dao_flags",
+        "n_pixels_fit", and "flags" are integer-valued floats.
+
+    Notes
+    -----
+    Non-finite image pixels are set to 0 for DAOStarFinder, which treats pixels outside the image
+    the same way, and are masked in the PSF fit.  dao_flags records whether any of them, or pixels
+    beyond the image edges, fell in the core of a source.
+    """
+
+    import warnings
+    from astropy.table import QTable
+    from photutils.psf import PSFPhotometry, ImagePSF
+
+    if coord_base not in (0, 1):
+        raise ValueError(f"Method compute_photutils_cols_for_diff_image: coord_base = {coord_base} "
+                         "must be 0 (zero-based) or 1 (one-based)")
+
+    with fits.open(input_diff_filename) as hdul:
+
+        if hdu_index is None:
+            hdu_index = get_image_hdu_index(hdul)
+
+        data = np.array(hdul[hdu_index].data, dtype=np.float64)
+
+    error = None
+
+    if input_unc_filename is not None:
+
+        with fits.open(input_unc_filename) as hdul:
+            error = np.array(hdul[get_image_hdu_index(hdul)].data, dtype=np.float64)
+
+        if error.shape != data.shape:
+            raise ValueError(f"Method compute_photutils_cols_for_diff_image: uncertainty image "
+                             f"{input_unc_filename} has shape {error.shape}, which does not match "
+                             f"the shape {data.shape} of {input_diff_filename}")
+
+    with fits.open(input_psf_filename) as hdul:
+        data_psf = np.array(hdul[psf_hdu_index].data, dtype=np.float64)
+
+    ny,nx = data.shape
+    n = len(xy_positions)
+
+    photutils_cols = {name: [fill_value] * n for name in photutils_col_names}
+
+
+    # Zero-based positions, and the sources that can be measured: finite positions whose nearest
+    # pixel lies on the image.
+
+    x0 = np.array([float(x) for x,y in xy_positions], dtype=np.float64) - coord_base
+    y0 = np.array([float(y) for x,y in xy_positions], dtype=np.float64) - coord_base
+
+    valid = np.isfinite(x0) & np.isfinite(y0)
+
+    xind = np.zeros(n, dtype=int)
+    yind = np.zeros(n, dtype=int)
+    xind[valid] = np.floor(x0[valid] + 0.5).astype(int)
+    yind[valid] = np.floor(y0[valid] + 0.5).astype(int)
+
+    valid &= (xind >= 0) & (xind < nx) & (yind >= 0) & (yind < ny)
+
+    if not np.any(valid):
+        return photutils_cols
+
+
+    #------
+    # DAOStarFinder sharpness, roundness1, and roundness2.
+
+    data_finite = np.where(np.isfinite(data), data, 0.0)
+    index_valid = np.flatnonzero(valid)
+
+    xsnap,ysnap = snap_to_daofind_peak(data_finite,
+                                       xind[index_valid],
+                                       yind[index_valid],
+                                       fwhm,
+                                       snap_radius = snap_radius)
+
+    dao_cols = compute_daofind_cols_at_pixels(data_finite, xsnap, ysnap, fwhm)
+
+
+    for name,values in dao_cols.items():
+        for i,value in zip(index_valid,values):
+            if np.isfinite(value):
+                photutils_cols[name][i] = float(value)
+
+
+    # dao_flags: bad (non-finite) pixels in the plus-shaped core (a pixel and its four direct
+    # neighbors) around the snapped peak (bit 1) and around the pixel nearest the input position
+    # (bit 2), and core pixels beyond the image edges (bit 4).  The image is padded by one pixel
+    # to mark those.
+
+    beyond_edge = np.ones((ny + 2, nx + 2), dtype=bool)
+    beyond_edge[1:ny + 1, 1:nx + 1] = False
+
+    bad_pixels = np.zeros((ny + 2, nx + 2), dtype=bool)
+    bad_pixels[1:ny + 1, 1:nx + 1] = ~np.isfinite(data)
+
+    plus = ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1))
+
+    def core_hits(mask,xc,yc):
+        hits = np.zeros(len(xc), dtype=bool)
+        for dx,dy in plus:
+            hits |= mask[yc + 1 + dy, xc + 1 + dx]
+        return hits
+
+    xnear = xind[index_valid]
+    ynear = yind[index_valid]
+
+    dao_flags = (1 * core_hits(bad_pixels,xsnap,ysnap)
+                 + 2 * core_hits(bad_pixels,xnear,ynear)
+                 + 4 * (core_hits(beyond_edge,xsnap,ysnap) | core_hits(beyond_edge,xnear,ynear)))
+
+    for i,flag,xs,ys in zip(index_valid,dao_flags,xsnap,ysnap):
+        photutils_cols["dao_flags"][i] = float(flag)
+        photutils_cols["x_dao_peak"][i] = float(xs + coord_base)
+        photutils_cols["y_dao_peak"][i] = float(ys + coord_base)
+
+
+    #------
+    # PSFPhotometry fitted flux, with the PSF model set up as in compute_psf_catalog.
+
+    psf_ny,psf_nx = data_psf.shape
+
+    psf_model = ImagePSF(data_psf,
+                         flux = np.sum(data_psf),
+                         x_0 = (psf_nx - 1) / 2,
+                         y_0 = (psf_ny - 1) / 2)
+
+    psfphot = PSFPhotometry(psf_model = psf_model,
+                            fit_shape = tuple(fit_shape),
+                            aperture_radius = aperture_radius,
+                            xy_bounds = xy_bounds)
+
+    init_params = QTable()
+    init_params["id"] = index_valid + 1
+    init_params["x"] = x0[index_valid]
+    init_params["y"] = y0[index_valid]
+
+    mask = ~np.isfinite(data)
+
+    if error is not None:
+        mask |= ~np.isfinite(error)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
+        phot = psfphot(np.where(mask, 0.0, data),
+                       mask = mask,
+                       error = None if error is None else np.where(mask, 1.0, error),
+                       init_params = init_params)
+
+    # PSFPhotometry results, matched back to the input positions through id.  photutils < 3.0
+    # names n_pixels_fit npixfit.
+
+    n_pixels_fit_name = "n_pixels_fit" if "n_pixels_fit" in phot.colnames else "npixfit"
+
+    psf_fit_cols = {"flux_fit": np.asarray(phot["flux_fit"], dtype=np.float64),
+                    "reduced_chi2": np.asarray(phot["reduced_chi2"], dtype=np.float64)
+                                    if "reduced_chi2" in phot.colnames else np.full(len(phot), np.nan),
+                    "n_pixels_fit": np.asarray(phot[n_pixels_fit_name], dtype=np.float64),
+                    "flags": np.asarray(phot["flags"], dtype=np.float64),
+                    "cfit": np.asarray(phot["cfit"], dtype=np.float64),
+                    "x_fit": np.asarray(phot["x_fit"], dtype=np.float64) + coord_base,
+                    "y_fit": np.asarray(phot["y_fit"], dtype=np.float64) + coord_base,
+                    "x_err": np.asarray(phot["x_err"], dtype=np.float64),
+                    "y_err": np.asarray(phot["y_err"], dtype=np.float64)
+                    }
+
+    if error is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            psf_fit_cols["snr_fit"] = psf_fit_cols["flux_fit"] / np.asarray(phot["flux_err"], dtype=np.float64)
+
+    for name,values in psf_fit_cols.items():
+        for source_id,value in zip(phot["id"],values):
+            if np.isfinite(value):
+                photutils_cols[name][int(source_id) - 1] = float(value)
+
+    return photutils_cols
+
+
+#####################################################################################################
+# Real/bogus (RB) score of difference-image sources from the RuBR-AT classifier.
+#
+# RuBR-AT (rubrat package) scores a source from a 64x64 stack of science, reference, and
+# difference-image cutouts centered on the source, nine features derived from PSF-fit and
+# DAOStarFinder columns, and survey and filter context tokens.  Its RAPIDRealBogusClassifier
+# cuts the stamps, derives the features, applies the training feature scaler, and runs the
+# model, so that the preprocessing here is the one the checkpoint was trained with.  This method
+# only maps RAPID catalog columns onto the names the classifier requires and returns the scores
+# in catalog-row order.
+#
+# The classifier requires, per source: xcentroid, ycentroid (the stamp center; the PSF-fitted
+# position in training), flux_fit, flux_err, cfit, reduced_chi2, x_err, y_err, npixfit, flags
+# (PSFPhotometry), and sharpness, roundness1, roundness2 (DAOStarFinder).  The PhotUtils-style
+# columns of the SExtractor catalogs (compute_photutils_cols_for_diff_image) provide these
+# under their own names, which are accepted here: x_fit/y_fit or XWIN_IMAGE/YWIN_IMAGE for the
+# position, flags_fit for flags, n_pixels_fit for npixfit, and snr_fit in place of flux_err,
+# from which flux_err = flux_fit / snr_fit is recovered (the classifier only uses the ratio).
+#
+# Catalog fill values (e.g., -999) are turned into NaN before scoring, so that the classifier
+# applies its own neutral defaults to a missing measurement instead of reading the fill value
+# as a measurement.  The model's output is a score in [0, 1], higher for sources more like the
+# transients it was trained on; it is not a calibrated probability.  The threshold that turns
+# the score into a label is read from the threshold JSON file shipped with the checkpoint
+# (the metrics.json of rubrat evaluate-research, or a file holding {"threshold": value}), so
+# that the checkpoint, scaler, and threshold are always used as the set they were validated as.
+#
+# The classifier is loaded once per process and reused for every call with the same checkpoint,
+# scaler, threshold file, and survey token.  TensorFlow and rubrat are imported only when this
+# method is called.
+#####################################################################################################
+
+# Classifier instances, keyed by (checkpoint, feats_scaler, threshold, survey_id, batch_size).
+
+_rb_classifiers = {}
+
+# RAPID filter names that the classifier's filter registry spells differently.  The registry
+# accepts the Roman names (F062 ... F213, F146) and the RAPID aliases (R062, Z087, Y106, J129,
+# H158, F184, K213); the RAPID database calls the wide filter W146.
+
+_rb_filter_aliases = {"W146": "F146"}
+
+# Catalog column names accepted for each name the classifier requires, in order of preference.
+# Matching is case-insensitive.
+
+_rb_column_aliases = {
+    "xcentroid": ("x_fit","xcentroid","xwin_image","x_centroid"),
+    "ycentroid": ("y_fit","ycentroid","ywin_image","y_centroid"),
+    "flux_fit": ("flux_fit",),
+    "flux_err": ("flux_err",),
+    "cfit": ("cfit",),
+    "reduced_chi2": ("reduced_chi2",),
+    "x_err": ("x_err",),
+    "y_err": ("y_err",),
+    "npixfit": ("npixfit","n_pixels_fit"),
+    "flags": ("flags_fit","flags"),
+    "sharpness": ("sharpness",),
+    "roundness1": ("roundness1",),
+    "roundness2": ("roundness2",),
+}
+
+rb_col_names = ("rb_score","rb_label","rb_valid","rb_status","rb_threshold")
+
+
+def compute_rb(input_sci_filename,
+               input_ref_filename,
+               input_diff_filename,
+               catalog_cols,
+               *,
+               coord_base,
+               filter_name,
+               checkpoint,
+               feats_scaler,
+               threshold_json,
+               survey_id,
+               batch_size = 256,
+               sentinel_values = (-999.0,),
+               hdu_index = None,
+               fill_value = np.nan):
+
+    """
+    Method compute_rb
+
+    Inputs:
+    input_sci_filename      FITS file containing the background-subtracted science image.
+    input_ref_filename      FITS file containing the resampled, gain-matched reference image.
+    input_diff_filename     FITS file containing the difference image the sources were found
+                            in.  The three images must be on the same pixel grid.
+    catalog_cols            Mapping of catalog column name to a sequence of values, one per
+                            source, all of the same length.  The columns the classifier requires
+                            and the names accepted for them are given above (_rb_column_aliases);
+                            snr_fit is accepted in place of flux_err.  Other columns are ignored.
+    coord_base              Pixel-coordinate convention of the position columns, which must be
+                            given: 0 for zero-based coordinates (numpy, photutils) or 1 for
+                            one-based coordinates (FITS, SExtractor).
+    filter_name             Roman WFI filter of the science image, as a RAPID alias (e.g., H158),
+                            standard name (e.g., F158), or RAPID database name (W146, mapped to
+                            F146 through _rb_filter_aliases).  The classifier maps it to its
+                            filter token and rejects a filter it was not trained with.
+    checkpoint              RuBR-AT Keras checkpoint file (best.keras).
+    feats_scaler            Feature-scaler JSON file paired with the checkpoint.
+    threshold_json          JSON file holding the validation-selected score threshold paired
+                            with the checkpoint: the metrics.json written by rubrat
+                            evaluate-research, or a file holding {"threshold": value}.
+    survey_id               Survey context token of the model: 0 (HLTDS) or 1 (GBTDS).
+    batch_size              Number of sources per model prediction batch.
+    sentinel_values         Catalog values treated as missing and replaced by NaN before scoring.
+    hdu_index               HDU index of the image data in each FITS file.  If None, the first
+                            HDU holding two-dimensional image data is used.
+    fill_value              Value written to rb_score for a source that could not be scored.
+
+    Returns:
+    rb_cols                 Dictionary of lists, one value per source, in catalog-row order:
+                            "rb_score" (float; the model score, or fill_value when not scored),
+                            "rb_label" (int; 1 real, 0 bogus, -1 not scored), "rb_valid" (int;
+                            1 if the source was scored, else 0), "rb_status" (str; empty when
+                            scored, otherwise the classifier's reason, such as
+                            nonfinite_centroid, centroid_outside_image,
+                            nonfinite_or_unusable_cutout, or nonfinite_features), and
+                            "rb_threshold" (float; the threshold read from threshold_json,
+                            the same for every source).
+
+    Notes:
+    A source is not scored when its position is not finite or lies off the image, when any of
+    its three cutouts contains a non-finite pixel (cutouts are zero-padded at the image edges,
+    as in training), or when a feature is not finite after the classifier's defaults.  The
+    classifier is not applied to negated images; sources that are negative in the difference
+    image are scored as they are, which the current checkpoint was not trained on.
+    """
+
+    if coord_base not in (0, 1):
+        raise ValueError(f"Method compute_rb: coord_base = {coord_base} "
+                         "must be 0 (zero-based) or 1 (one-based)")
+
+    if survey_id not in (0, 1):
+        raise ValueError(f"Method compute_rb: survey_id = {survey_id} must be 0 (HLTDS) or 1 (GBTDS)")
+
+
+    # Resolve the catalog columns the classifier requires, case-insensitively, under the
+    # accepted aliases.  flux_err may be recovered from snr_fit.
+
+    cols_by_lower = {str(name).lower(): np.asarray(values, dtype=np.float64)
+                     for name,values in catalog_cols.items()}
+
+    def _find(aliases):
+        for alias in aliases:
+            if alias in cols_by_lower:
+                return cols_by_lower[alias]
+        return None
+
+    resolved = {}
+    missing = []
+
+    for required,aliases in _rb_column_aliases.items():
+        values = _find(aliases)
+        if values is None and required == "flux_err" and "snr_fit" in cols_by_lower:
+            flux_fit = _find(_rb_column_aliases["flux_fit"])
+            if flux_fit is not None:
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    values = flux_fit / cols_by_lower["snr_fit"]
+        if values is None:
+            missing.append(required)
+        else:
+            resolved[required] = values
+
+    if missing:
+        raise ValueError(f"Method compute_rb: catalog lacks required columns {missing}; accepted "
+                         f"names are {[list(_rb_column_aliases[m]) for m in missing]}"
+                         + (" (snr_fit is accepted for flux_err)" if "flux_err" in missing else ""))
+
+    lengths = {len(values) for values in resolved.values()}
+
+    if len(lengths) > 1:
+        raise ValueError(f"Method compute_rb: catalog columns have different lengths {sorted(lengths)}")
+
+    n = lengths.pop() if lengths else 0
+
+
+    # Threshold paired with the checkpoint.  rubrat is imported here only.
+
+    from rubrat.rapid import RAPIDRealBogusClassifier, load_validation_threshold
+
+    threshold = load_validation_threshold(threshold_json)
+
+    rb_cols = {"rb_score": [fill_value] * n,
+               "rb_label": [-1] * n,
+               "rb_valid": [0] * n,
+               "rb_status": ["empty_catalog"] * n,
+               "rb_threshold": [threshold] * n}
+
+    if n == 0:
+        return rb_cols
+
+
+    # Fill values become NaN, so that the classifier treats them as missing; positions are
+    # made zero-based, as the classifier expects.
+
+    for name,values in resolved.items():
+        values = np.array(values, dtype=np.float64, copy=True)
+        for sentinel in sentinel_values:
+            values[values == float(sentinel)] = np.nan
+        resolved[name] = values
+
+    resolved["xcentroid"] = resolved["xcentroid"] - coord_base
+    resolved["ycentroid"] = resolved["ycentroid"] - coord_base
+
+
+    # Load the images once.
+
+    def _load_image(filename):
+        with fits.open(filename) as hdul:
+            index = get_image_hdu_index(hdul) if hdu_index is None else hdu_index
+            return np.array(hdul[index].data, dtype=np.float32)
+
+    sci = _load_image(input_sci_filename)
+    ref = _load_image(input_ref_filename)
+    diff = _load_image(input_diff_filename)
+
+
+    # Load the classifier once per process.
+
+    import pandas as pd
+
+    key = (str(checkpoint), str(feats_scaler), float(threshold), int(survey_id), int(batch_size))
+
+    classifier = _rb_classifiers.get(key)
+
+    if classifier is None:
+        classifier = RAPIDRealBogusClassifier(checkpoint,
+                                              feats_scaler,
+                                              threshold = threshold,
+                                              survey_id = int(survey_id),
+                                              batch_size = int(batch_size))
+        _rb_classifiers[key] = classifier
+
+    filter_name = _rb_filter_aliases.get(str(filter_name).strip().upper(), filter_name)
+
+    scored = classifier.score_arrays(sci, ref, diff, pd.DataFrame(resolved), filter_name = filter_name)
+
+    if len(scored) != n:
+        raise RuntimeError(f"Method compute_rb: classifier returned {len(scored)} rows for {n} sources")
+
+
+    # Catalog-row order is preserved by the classifier.
+
+    for i in range(n):
+        valid = bool(scored["rb_valid"].iloc[i])
+        rb_cols["rb_valid"][i] = int(valid)
+        rb_cols["rb_label"][i] = int(scored["rb_label"].iloc[i])
+        rb_cols["rb_status"][i] = str(scored["rb_status"].iloc[i])
+        rb_cols["rb_score"][i] = float(scored["rb_score"].iloc[i]) if valid else fill_value
+
+    return rb_cols

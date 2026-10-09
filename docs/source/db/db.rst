@@ -185,14 +185,12 @@ The DiffImMeta database table stores various QA measures for difference images.
 +--------------------+-------------------------------------------------------------------------------------------+
 
 
-
 Source Matching
 ************************************
 
-Four basic PostgreSQL database tables are used for source cross-matching PSF-fit catalogs
+Four basic PostgreSQL database tables are used for cross-matching PSF-fit catalogs
 made by the Python photutils package from the SFFT difference images and curating
-source-extracted lightcurves (until a final decision on which image-differencing and
-source-extraction methods are best):
+source-extracted lightcurves:
 
 * Sources (extracted/selected from catalogs)
 * AstroObjects (astronomical objects for which time-dependent sources form light curves)
@@ -284,7 +282,84 @@ Because reprocessing generates new product versions (usually latest is best), th
 separate processes that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
 and then explicitly clusters, vacuums, and analyzes these database tables.
 
-The Sources database table has the ``rb`` float column for storing real-bogus scores,
-computed from a Machine-Learning algorithm that is optimized for Roman WFI data,
-which is a fractional number in the [0.0, 1.0] range that corresponds to the likelihood
-that a source is real (as opposed to bogus).
+The Sources and XSources database tables have the ``rb`` float column for storing real-bogus scores,
+computed by the RuBR-AT Machine-Learning classifier, which is optimized for Roman WFI data.
+The score is a fractional number in the [0.0, 1.0] range, higher for sources that look more like
+real transients (as opposed to bogus detections); it is not a calibrated probability.
+The ``rblabel`` smallint column stores the corresponding real-bogus label: 1 = real, 0 = bogus,
+and -1 = not scored (e.g., the source cutout was not usable).  A source is labeled real when its
+score is at or above the threshold that was selected when the classifier model was validated
+(0.5134 for the current model); the threshold is fixed for a given model, so it is not stored per source.
+These columns are null when the classifier was not run.
+The catalog columns rb_score and rb_label (RB_SCORE and RB_LABEL in the SExtractor catalogs)
+are loaded into the ``rb`` and ``rblabel`` database columns, respectively.
+
+Extra columns have been added to these PhotUtils catalogs, in order to aid in prefiltering
+records that are loaded into the database (and for alert generation):
+
++--------------------+-----------------------------------------------------------------------------------+
+| Extra column       | Definition                                                                        |
++====================+===================================================================================+
+| sumrat             | sum(p)/sum(\|p\|) of median-filtered 5x5 stamp on source (null = not computed)    |
++--------------------+-----------------------------------------------------------------------------------+
+| nneg               | Number of negative pixels in 5x5 stamp on source (null = not computed)            |
++--------------------+-----------------------------------------------------------------------------------+
+| nbad               | Number of bad pixels in 5x5 stamp on source (null = not computed)                 |
++--------------------+-----------------------------------------------------------------------------------+
+| rb_score           | Real-bogus score in [0,1] (fill value -999 = not scored)                          |
++--------------------+-----------------------------------------------------------------------------------+
+| rb_label           | Real-bogus label: 1 = real, 0 = bogus, -1 = not scored                            |
++--------------------+-----------------------------------------------------------------------------------+
+
+
+XSource Matching
+************************************
+
+There are also four basic PostgreSQL database tables used for cross-matching SExtractor catalogs
+from the SFFT difference images and curating xsource-extracted lightcurves, with prefix "X"
+to indicate relevance to SExtractor catalogs:
+
+* XSources (extracted/selected from catalogs)
+* XAstroObjects (astronomical objects for which time-dependent sources form light curves)
+* XMerges (associations between XSources and XAstroObjects via source cross-matching)
+* XAstroObjectsMeta (statistics on astronomical-object lightcurves added after source matching)
+
+A diagram of the source-matching database-table schema is given as follows:
+
+.. image:: xsource_matching.png
+
+Extra columns have been added to these SExtractor catalogs, which include some PhotUtils quantities
+at the initial SExtractor extracted position,
+in order to aid in prefiltering records that are loaded into the database (and for alert generation):
+
++--------------------+-----------------------------------------------------------------------------------+
+| Extra column       | Definition                                                                        |
++====================+===================================================================================+
+| SUMRAT             | sum(p)/sum(\|p\|) of median-filtered 5x5 stamp on source (null = not computed)    |
++--------------------+-----------------------------------------------------------------------------------+
+| NNEG               | Number of negative pixels in 5x5 stamp on source (null = not computed)            |
++--------------------+-----------------------------------------------------------------------------------+
+| NBAD               | Number of bad pixels in 5x5 stamp on source (null = not computed)                 |
++--------------------+-----------------------------------------------------------------------------------+
+| RB_SCORE           | Real-bogus score in [0,1] (fill value -999 = not scored)                          |
++--------------------+-----------------------------------------------------------------------------------+
+| RB_LABEL           | Real-bogus label: 1 = real, 0 = bogus, -1 = not scored                            |
++--------------------+-----------------------------------------------------------------------------------+
+| SHARPNESS          | SHARPNESS: PhotUtils DAOStarFinder sharpness (null = not computed)                |
++--------------------+-----------------------------------------------------------------------------------+
+| ROUNDNESS1         | PhotUtils DAOStarFinder roundness from symmetry (null = not computed)             |
++--------------------+-----------------------------------------------------------------------------------+
+| ROUNDNESS2         | PhotUtils DAOStarFinder roundness from marginal fits (null = not computed)        |
++--------------------+-----------------------------------------------------------------------------------+
+| FLUX_FIT           | PhotUtils PSF-fit instrumental flux (null = not computed)                         |
++--------------------+-----------------------------------------------------------------------------------+
+| SNR_FIT            | PhotUtils PSF-fit flux / flux error (null = not computed)                         |
++--------------------+-----------------------------------------------------------------------------------+
+| REDUCED_CHI2       | PhotUtils PSF-fit reduced chi2 (null = not computed)                              |
++--------------------+-----------------------------------------------------------------------------------+
+| N_PIXELS_FIT       | Number of unmasked pixels used in PSF fit (null = not computed)                   |
++--------------------+-----------------------------------------------------------------------------------+
+| FLAGS_FIT          | PhotUtils PSF-fit bitwise flags (null = not computed)                             |
++--------------------+-----------------------------------------------------------------------------------+
+| CFIT               | PSF-fit residual in central pixel divided by fit flux (null = not computed)       |
++--------------------+-----------------------------------------------------------------------------------+

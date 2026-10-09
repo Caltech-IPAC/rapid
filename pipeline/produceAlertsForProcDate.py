@@ -57,6 +57,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 from alerts.cli import make_provider
 from alerts.ned_reader import DEFAULT_NED_SOURCE
+from alerts.providers import FORCED_WINDOW_DAYS
 from alerts.produce import BatchStats, batch_produce, open_alert_archive
 
 to_zone = tz.gettz('America/Los_Angeles')
@@ -74,6 +75,25 @@ EXIT_FATAL = 64
 #-------------------------------------------------------------------------------------------------------------
 # Configuration.
 #-------------------------------------------------------------------------------------------------------------
+
+def parse_forced_window(value):
+
+    '''
+    [ALERTS] forced_window_days: blank or absent -> the alerts package default
+    (providers.FORCED_WINDOW_DAYS); "none" or 0 -> no window (every previous image);
+    otherwise a number of days.
+    '''
+
+    text = str(value).strip().lower()
+
+    if text == '':
+        return FORCED_WINDOW_DAYS
+
+    if text == 'none' or float(text) == 0.0:
+        return None
+
+    return float(text)
+
 
 def read_alert_settings(config_input):
 
@@ -111,7 +131,18 @@ def read_alert_settings(config_input):
         'log_level': alerts.get('log_level', fallback='INFO').upper(),
         'upload_to_s3_bucket': job_params.getboolean('upload_to_s3_bucket', fallback=True),
         'product_s3_bucket_base': job_params['product_s3_bucket_base'],
+        # Forced photometry (alerts.forced_phot), run per chip at alert time while no
+        # database table exists; per-chip parquet files go to their own bucket, which
+        # must be private (public access block on) in every deployment, like the
+        # commissioning product bucket.  Blank window = every previous image.
+        'forced_phot': alerts.getboolean('forced_phot', fallback=True),
+        'forced_window_days': parse_forced_window(alerts.get('forced_window_days', fallback='')),
+        'forced_phot_s3_bucket_base': alerts.get('forced_phot_s3_bucket_base', fallback='').strip() or None,
     }
+
+    if settings['forced_phot'] and settings['upload_to_s3_bucket'] and not settings['forced_phot_s3_bucket_base']:
+        raise ValueError("forced_phot = True with S3 upload on, but [ALERTS] forced_phot_s3_bucket_base "
+                         "is not set; name the (private) forced-photometry bucket or set forced_phot = False")
 
     if os.getenv('DONOTUPLOADPRODUCTS') is not None:
         print("Env. var. DONOTUPLOADPRODUCTS is set; alert archives will not be uploaded to S3.")
@@ -292,13 +323,24 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
         if len(my_chips) == 0:
             return results
 
+        # Forced-photometry parquet files: beside the other products' layout
+        # (<proc_date>/req<reqid>/jid<N>/) in their own bucket, or under work_dir
+        # when uploads are off (upload_to_s3_bucket = False / DONOTUPLOADPRODUCTS).
+        if settings['upload_to_s3_bucket'] and settings['forced_phot_s3_bucket_base']:
+            forced_store = f"s3://{settings['forced_phot_s3_bucket_base']}"
+        else:
+            forced_store = os.path.join(work_dir, "forced_phot")
+
         try:
             provider = make_provider(diff_flavor=settings['diff_flavor'],
                                      kona_file=settings['kona_file'],
                                      refcat=settings['refcat_match'],
                                      ned=settings['ned_match'],
                                      ned_source=settings['ned_source'],
-                                     lvs=settings['lvs_match'])
+                                     lvs=settings['lvs_match'],
+                                     forced_phot=settings['forced_phot'],
+                                     forced_window_days=settings['forced_window_days'],
+                                     forced_store=forced_store)
         except SystemExit as e:
             raise RuntimeError(f"*** Error opening alert data provider in index_thread={index_thread}: {e}")
 
@@ -312,6 +354,7 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
                 chip_start_time = time.time()
                 names = chip_product_names(chip, settings)
                 summary_path = os.path.join(work_dir, names['summary_filename'])
+                provider.forced_prefix = names['s3_prefix']
 
                 log.info("Chip start: jid=%s, pid=%s", chip['jid'], chip['pid'])
 

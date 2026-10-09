@@ -48,7 +48,7 @@ RUN pip install --upgrade boto3
 RUN pip install --upgrade --ignore-installed pyfftw
 RUN pip install --upgrade sympy
 RUN pip install --upgrade sip_tpv
-RUN pip install --upgrade photutils
+RUN pip install --upgrade "photutils<4"
 RUN pip install --upgrade matplotlib
 RUN pip install --upgrade galsim
 RUN pip install --upgrade romanisim
@@ -68,7 +68,7 @@ RUN python3.11 -m pip install --upgrade boto3
 RUN python3.11 -m pip install --upgrade pyfftw
 RUN python3.11 -m pip install --upgrade sympy
 RUN python3.11 -m pip install --upgrade sip_tpv
-RUN python3.11 -m pip install --upgrade photutils
+RUN python3.11 -m pip install --upgrade "photutils<4"
 RUN python3.11 -m pip install --upgrade matplotlib
 RUN python3.11 -m pip install --upgrade asdf
 RUN python3.11 -m pip install --upgrade crds
@@ -86,6 +86,14 @@ RUN python3.11 -m pip install --upgrade psutil
 RUN python3.11 -m pip install --upgrade fsspec
 RUN python3.11 -m pip install --upgrade s3fs
 RUN python3.11 -m pip install git+https://github.com/snbianco/astroquery.git@2026.2
+
+# Install TensorFlow (with Keras 3) for the RuBR-AT real/bogus classifier, which compute_rb in
+# modules/utils/rapid_data_analysis.py runs for the rb_score and rb_label catalog columns.
+# If TensorFlow requires an older numpy than the one installed above, pip downgrades numpy
+# here and warns about any package above that then conflicts.  --no-cache-dir keeps pip's copy
+# of the downloaded wheels (about 0.6 GB) out of the image.
+
+RUN python3.11 -m pip install --upgrade --no-cache-dir tensorflow
 
 # Set up separate Python 3.11 venv under root directory for sfft.
 

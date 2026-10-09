@@ -653,15 +653,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                         fh.write("*** Error: Could not parse input_images_csv_name_for_download; quitting...\n")
                         exit(64)
 
-                    filename_match2 = re.match(r".+?/(.+)", input_images_csv_file_s3_bucket_object_name)
-
-                    try:
-                        input_images_csv_filename = filename_match2.group(1)
-                        fh.write("input_images_csv_filename = {}\n".format(input_images_csv_filename))
-
-                    except:
-                        fh.write("*** Error: Could not parse input_images_csv_file_s3_bucket_object_name; quitting...\n")
-                        exit(64)
+                    input_images_csv_filename = os.path.basename(input_images_csv_file_s3_bucket_object_name)
 
                     fh.write("Downloading s3://{}/{} into {}...".\
                         format(input_images_csv_file_s3_bucket_name,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))

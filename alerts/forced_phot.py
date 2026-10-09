@@ -28,6 +28,8 @@ Layout (top to bottom, each section depends only on the ones above it)::
                  forced_photometry()       -- parent: one image, N positions
     driver       run_prev_images()         -- stage, measure, yield, discard
                  assemble_history()        -- rows -> per-position lists
+    table        FORCED_TABLE_DTYPE, forced_measurement_id()
+                 write_table() / read_table()   -- parquet, local or s3://
     entry point  main()                    -- one chip by hand: --pid, --positions CSV
 
 Search (data flow)::
@@ -81,7 +83,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from astropy.io import fits
-from astropy.stats import SigmaClip
 from astropy.wcs import WCS
 from photutils.background import (Background2D, MADStdBackgroundRMS,
                                   MedianBackground)
@@ -121,9 +122,10 @@ class PrevImage:
     of the raw SCA; not sky directions -- chips are rolled).
 
     ``diff_filename`` comes from the database; ``sci_filename``,
-    ``diff_psf`` and ``sci_psf`` are the job-directory products named by
-    convention (see :func:`sci_psf_basename`, :func:`diff_psf_basename`);
-    ``l2_filename`` is the raw L2 file the science image was made from.
+    ``diff_psf``, ``sci_psf``, ``diff_uncert`` and ``sci_uncert`` are the
+    job-directory products named by convention (see the ``*_basename``
+    helpers); ``l2_filename`` is the raw L2 file the science image was
+    made from.
 
     ``position_index`` is filled by :func:`find_prev_images`: indices into
     the caller's position list of the positions this image contains.
@@ -134,6 +136,8 @@ class PrevImage:
     sci_filename: str
     diff_psf: str
     sci_psf: str
+    diff_uncert: str
+    sci_uncert: str
     l2_filename: str
     mjdobs: float
     fid: int
@@ -250,12 +254,33 @@ DIFF_PSF_BASENAMES = {
     "zogy_diffimage_masked.fits": "diffpsf.fits",
 }
 
+#: Difference-image basename -> its per-pixel uncertainty image in the same
+#: job directory (awsBatchSubmitJobs_runSingleSciencePipeline.py: the
+#: masked basename with "uncert_" inserted; the sfft branch writes
+#: sfftdiffimage_uncert_masked.fits whether or not cross-convolution was
+#: on). Built by differenceImageSubs.compute_diffimage_uncertainty: the
+#: science and reference Poisson terms plus the difference image's clipped
+#: scatter. The pipeline's own PSF photometry passes it as ``error``.
+DIFF_UNCERT_BASENAMES = {
+    "sfftdiffimage_masked.fits": "sfftdiffimage_uncert_masked.fits",
+    "sfftdiffimage_dconv_masked.fits": "sfftdiffimage_uncert_masked.fits",
+    "zogy_diffimage_masked.fits": "zogy_diffimage_uncert_masked.fits",
+}
+
+#: Science-image uncertainty in the job directory: the L2 file's ERR
+#: array, reformatted beside the science image as
+#: <l2 basename>_reformatted_unc.fits (e.g. r0034..._f146_cal_lite_reformatted_unc.fits).
+SCI_UNCERT_SUFFIX = "_reformatted_unc.fits"
+
 #: Science-image PSF in the job directory: the psfs-table file for the
-#: (filter, SCA), normalized by the science pipeline. Seen in real job
-#: directories (socsim jid129264, rimtimsim jid143919, 2026-09-29):
-#: WFI_SCA07_F146_PSF_DET_DIST_normalized.fits. The filter token is the
-#: Roman designation, not the RAPID name the filters table uses.
-SCI_PSF_PATTERN = "WFI_SCA{sca:02d}_{roman}_PSF_DET_DIST_normalized.fits"
+#: (filter, SCA), normalized by the science pipeline, e.g.
+#: sciimage_psf_f146_sca09_normalized.fits (socsim jid145793). The filter
+#: token is the Roman designation in lower case, not the RAPID name the
+#: filters table uses. The WebbPSF-library family (WFI_SCA<nn>_F<nnn>_
+#: PSF_DET_DIST) found in older job directories is no longer used
+#: (team decision, 2026-10-06): a job directory without this file simply
+#: has no science-image forced photometry for that epoch.
+SCI_PSF_PATTERN = "sciimage_psf_{roman_lower}_sca{sca:02d}_normalized.fits"
 
 #: RAPID filter name (filters.filter) -> Roman designation used in PSF
 #: filenames. Same table as database/scripts/db_register_sciimg_psfs.py.
@@ -285,7 +310,7 @@ def sci_psf_basename(band, sca):
     except KeyError:
         raise ValueError(f"no Roman filter token for RAPID filter {band!r}; "
                          f"known: {sorted(ROMAN_FILTER_TOKENS)}") from None
-    return SCI_PSF_PATTERN.format(sca=int(sca), roman=roman)
+    return SCI_PSF_PATTERN.format(sca=int(sca), roman_lower=roman.lower())
 
 
 def diff_psf_basename(diff_basename):
@@ -295,6 +320,26 @@ def diff_psf_basename(diff_basename):
     except KeyError:
         raise ValueError(f"no PSF known for difference image {diff_basename!r}; "
                          f"known: {sorted(DIFF_PSF_BASENAMES)}") from None
+
+
+def diff_uncert_basename(diff_basename):
+    """Job-directory basename of the uncertainty image of a difference image."""
+    try:
+        return DIFF_UNCERT_BASENAMES[diff_basename]
+    except KeyError:
+        raise ValueError(f"no uncertainty image known for difference image {diff_basename!r}; "
+                         f"known: {sorted(DIFF_UNCERT_BASENAMES)}") from None
+
+
+def sci_uncert_basename(l2_filename):
+    """Job-directory basename of the science image's uncertainty, from the
+    L2 file name (``.fits`` or ``.fits.gz``)."""
+    base = l2_filename.rsplit("/", 1)[-1]
+    for ext in (".fits.gz", ".fits"):
+        if base.endswith(ext):
+            base = base[:-len(ext)]
+            break
+    return base + SCI_UNCERT_SUFFIX
 
 
 def q3c_search(query, ra0, dec0, radius_deg=CONE_RADIUS_DEG, fid=None, ppid=None,
@@ -374,6 +419,8 @@ def _row_to_prev_image(row, diff_basename=None):
         sci_filename=f"{job_dir}/{SCI_BASENAME}",
         diff_psf=f"{job_dir}/{diff_psf_basename(basename)}",
         sci_psf=f"{job_dir}/{sci_psf_basename(band, sca)}",
+        diff_uncert=f"{job_dir}/{diff_uncert_basename(basename)}",
+        sci_uncert=f"{job_dir}/{sci_uncert_basename(str(row['l2_filename']))}",
         l2_filename=str(row["l2_filename"]),
         mjdobs=float(row["mjdobs"]), fid=int(row["fid"]), band=band,
         expid=int(row["expid"]), sca=sca,
@@ -501,11 +548,12 @@ def open_image(path, uncert_path=None):
 
 
 def error_array(data, product, gain=None, mask=None, box_size=ERROR_BOX_PX):
-    """Stopgap per-pixel uncertainty for an image without one.
+    """Fallback per-pixel uncertainty for an image whose pipeline
+    uncertainty product (PrevImage.diff_uncert / sci_uncert) is missing.
 
-    Replace by reading the pipeline's uncertainty product once that exists
-    (``open_image(..., uncert_path=...)``); nothing else depends on how the
-    error was obtained.
+    The normal path is ``open_image(..., uncert_path=...)`` with that
+    product, as the pipeline's own PSF photometry does; nothing else
+    depends on how the error was obtained.
 
     Parameters
     ----------
@@ -543,24 +591,43 @@ def error_array(data, product, gain=None, mask=None, box_size=ERROR_BOX_PX):
     bad = ~np.isfinite(data)
     if mask is not None:
         bad |= np.asarray(mask, dtype=bool)
-    bkg = Background2D(data, box_size, mask=bad, filter_size=(3, 3),
-                       sigma_clip=SigmaClip(sigma=3.0, maxiters=10),
-                       bkg_estimator=MedianBackground(),
-                       bkg_rms_estimator=MADStdBackgroundRMS())
-    variance = bkg.background_rms.astype(np.float64) ** 2
+    try:
+        # No sigma clipping: photutils counts clipped pixels towards a box's
+        # exclusion, and a difference image's heavy tails clip >10% of every
+        # box (16% measured on a real sfft image, 2026-10-05), which at the
+        # default exclude_percentile rejects every box. The median/MAD
+        # estimators are robust without the clip, and keeping the default
+        # exclusion means a box is still dropped when it is mostly masked.
+        bkg = Background2D(data, box_size, mask=bad, filter_size=(3, 3),
+                           sigma_clip=None,
+                           bkg_estimator=MedianBackground(),
+                           bkg_rms_estimator=MADStdBackgroundRMS())
+        background = bkg.background.astype(np.float64)
+        variance = bkg.background_rms.astype(np.float64) ** 2
+    except ValueError as exc:
+        # e.g. an image too small or too masked for any box: one global
+        # robust level and rms, which still gives sane fit weights
+        from astropy.stats import mad_std
+        good = data[~bad]
+        level, rms = (float(np.median(good)), float(mad_std(good))) if good.size else (0.0, np.nan)
+        logger.warning("error_array: Background2D failed (%s); using a global level %.3g, rms %.3g",
+                       str(exc).split("(")[0].strip(), level, rms)
+        background = np.full(data.shape, level)
+        variance = np.full(data.shape, rms ** 2)
     if product == "science":
         if gain is None:
             logger.warning("error_array: science image without gain; Poisson term skipped")
         else:
-            variance += np.clip(data - bkg.background, 0.0, None) / float(gain)
+            variance += np.clip(data - background, 0.0, None) / float(gain)
     error = np.sqrt(variance).astype(np.float32)
     error[bad] = np.nan
     return error
 
 
-#: Measurement.flags bit set by this module (photutils' own flag bits are
-#: below 1 << 8): the fit returned a non-finite flux or uncertainty.
-FLAG_NONFINITE = 1 << 8
+#: Measurement.flags bit set by this module: the fit returned a non-finite
+#: flux or uncertainty. photutils 3.0 uses bits up to 1 << 11 (see the
+#: bit list in param_registry.py), so ours start at 1 << 16.
+FLAG_NONFINITE = 1 << 16
 
 
 def project_positions(wcs, shape, positions, margin=STAMP_MARGIN_PX):
@@ -726,11 +793,11 @@ def forced_photometry(image_path, psf_path, positions, rid, product, uncert_path
 # Driver
 # ---------------------------------------------------------------------------
 
-#: Which image of each epoch to measure, and where its file and PSF are on
-#: the PrevImage record.
+#: Which image of each epoch to measure, and where its file, PSF and
+#: uncertainty image are on the PrevImage record.
 IMAGE_PRODUCTS = {
-    "diff": ("diff_filename", "diff_psf"),
-    "science": ("sci_filename", "sci_psf"),
+    "diff": ("diff_filename", "diff_psf", "diff_uncert"),
+    "science": ("sci_filename", "sci_psf", "sci_uncert"),
 }
 
 
@@ -756,10 +823,11 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
     products : sequence of {"diff", "science"}
         Which image of each epoch to measure.
     uncert_url : callable, optional
-        ``uncert_url(image, product) -> url or None`` naming the per-pixel
-        uncertainty product to stage alongside; None means estimate it
-        (see :func:`error_array`). The hook for the pipeline's uncertainty
-        images once they are trusted.
+        ``uncert_url(image, product) -> url or None`` overriding which
+        per-pixel uncertainty image is staged alongside. By default the
+        record's own (``diff_uncert`` / ``sci_uncert``, the pipeline's
+        products) is used; a return of None, or a file that cannot be
+        staged, falls back to :func:`error_array` with a warning.
     gain, fit_shape, margin
         Passed to :func:`forced_photometry`.
     strict : bool
@@ -791,7 +859,7 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
         if not subset:
             continue
         for product in products:
-            file_attr, psf_attr = IMAGE_PRODUCTS[product]
+            file_attr, psf_attr, unc_attr = IMAGE_PRODUCTS[product]
             url, psf_url = getattr(image, file_attr), getattr(image, psf_attr)
             staged = []
             try:
@@ -804,9 +872,18 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
                 else:
                     psf_local = stage(psf_url); staged.append((psf_url, psf_local))
                 unc_local = None
-                unc = uncert_url(image, product) if uncert_url is not None else None
+                unc = (uncert_url(image, product) if uncert_url is not None
+                       else getattr(image, unc_attr))
                 if unc is not None:
-                    unc_local = stage(unc); staged.append((unc, unc_local))
+                    try:
+                        unc_local = stage(unc); staged.append((unc, unc_local))
+                        if unc_local is None or not os.path.exists(unc_local):
+                            raise FileNotFoundError(unc_local or unc)   # plain paths pass stagers untouched
+                    except Exception as exc:
+                        unc_local = None
+                        logger.warning("run_prev_images: rid=%s %s: uncertainty image %s not "
+                                       "staged (%s); estimating the error instead",
+                                       image.rid, product, unc, exc)
                 rows = forced_photometry(local, psf_local, subset, rid=image.rid, product=product,
                                          uncert_path=unc_local, gain=gain,
                                          fit_shape=fit_shape, margin=margin)
@@ -854,6 +931,100 @@ def assemble_history(rows):
     for rows_for_pos in history.values():
         rows_for_pos.sort(key=lambda r: (r.mjdobs, r.product))
     return history
+
+
+# ---------------------------------------------------------------------------
+# Per-chip table: one row per object and epoch, both products merged
+# ---------------------------------------------------------------------------
+# The layout the alert provider caches per chip and persists as parquet
+# (one file per chip), and the layout a future database table would take.
+
+#: Columns of the per-chip forced-photometry table.
+FORCED_TABLE_DTYPE = np.dtype([
+    ("forced_id", "i8"), ("aid", "i8"), ("rid", "i8"), ("pid", "i8"),
+    ("expid", "i8"), ("sca", "i2"), ("fid", "i2"), ("band", "U8"),
+    ("mjdobs", "f8"), ("ra", "f8"), ("dec", "f8"), ("x", "f4"), ("y", "f4"),
+    ("psf_flux", "f8"), ("psf_fluxerr", "f8"),
+    ("science_flux", "f8"), ("science_fluxerr", "f8"),
+    ("flags", "i4"), ("time_proc", "f8"),
+])
+
+
+def forced_measurement_id(rid, aid, ra, dec):
+    """63-bit id of one forced measurement: a hash of the epoch, the object
+    and the position actually used (to 0.1 mas).
+
+    Deterministic, so re-reading a parquet file or loading it into a table
+    is idempotent; position-dependent, so a re-run at an updated object
+    position is a new measurement with a new id.
+    """
+    import hashlib
+
+    key = f"{int(rid)}:{int(aid)}:{float(ra):.7f}:{float(dec):.7f}".encode()
+    return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big") & (2**63 - 1)
+
+
+def _split_s3(path):
+    bucket, _, key = path[len("s3://"):].partition("/")
+    return bucket, key
+
+
+def write_table(table, path):
+    """Write a FORCED_TABLE_DTYPE table as parquet, to a local path (parent
+    directories created) or an ``s3://bucket/key`` object."""
+    import tempfile
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    arrow = pa.table({name: pa.array(table[name].tolist()) if table.dtype[name].kind == "U"
+                      else pa.array(table[name]) for name in FORCED_TABLE_DTYPE.names})
+    if path.startswith("s3://"):
+        import boto3
+
+        bucket, key = _split_s3(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            local = os.path.join(tmp, os.path.basename(key))
+            pq.write_table(arrow, local)
+            boto3.client("s3").upload_file(local, bucket, key)
+    else:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        pq.write_table(arrow, path)
+    logger.info("write_table: %d rows -> %s", len(table), path)
+
+
+def read_table(path):
+    """A FORCED_TABLE_DTYPE table from a parquet file written by
+    :func:`write_table`, local or ``s3://``; None when there is no such
+    file (or no access to it)."""
+    import tempfile
+
+    import pyarrow.parquet as pq
+
+    def to_table(local):
+        arrow = pq.read_table(local)
+        table = np.zeros(arrow.num_rows, dtype=FORCED_TABLE_DTYPE)
+        for name in FORCED_TABLE_DTYPE.names:
+            table[name] = arrow.column(name).to_numpy(zero_copy_only=False)
+        return table
+
+    if path.startswith("s3://"):
+        import boto3
+        import botocore.exceptions
+
+        bucket, key = _split_s3(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            local = os.path.join(tmp, os.path.basename(key))
+            try:
+                boto3.client("s3").download_file(bucket, key, local)
+            except botocore.exceptions.ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "403", "AccessDenied"):
+                    return None
+                raise
+            return to_table(local)
+    if not os.path.exists(path):
+        return None
+    return to_table(path)
 
 
 # ---------------------------------------------------------------------------

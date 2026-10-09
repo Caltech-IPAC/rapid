@@ -21,7 +21,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.6"
+swvers = "1.7"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -169,6 +169,11 @@ product_config_filename_base = config_input['JOB_PARAMS']['product_config_filena
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
+# Number of times an AWS Batch job that failed for an infrastructure reason (e.g.,
+# CannotPullContainerError) is resubmitted; 0 turns resubmission off.
+
+n_retry_failed_aws_batch_job = int(config_input['JOB_PARAMS'].get('n_retry_failed_aws_batch_job','0'))
+
 
 # Print variables.
 
@@ -181,6 +186,7 @@ print("job_config_filename_base =",job_config_filename_base)
 print("product_config_filename_base =",product_config_filename_base)
 print("awaicgen_output_mosaic_image_file =",awaicgen_output_mosaic_image_file)
 print("zogy_output_diffimage_file =",zogy_output_diffimage_file)
+print("n_retry_failed_aws_batch_job =",n_retry_failed_aws_batch_job)
 print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 print("launch_science_pipelines_code =", launch_science_pipelines_code)
@@ -408,6 +414,221 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh,reqid
 
 
 #-------------------------------------------------------------------------------------------------------------
+# Resubmission of AWS Batch jobs that failed for infrastructure reasons.
+#
+# A FAILED job is resubmitted only when it failed before or outside the pipeline code: AWS Batch
+# reports one of the errors below (e.g., the container image could not be pulled), or the
+# container never produced an exit code.  A job whose pipeline exited with its own error code
+# (>= 64) is reported but not resubmitted, since it would most likely fail the same way again,
+# and neither is a job cancelled or terminated by an operator.
+#-------------------------------------------------------------------------------------------------------------
+
+infrastructure_failure_patterns = ("CannotPullContainerError",
+                                   "CannotStartContainerError",
+                                   "CannotCreateContainerError",
+                                   "CannotInspectContainerError",
+                                   "ResourceInitializationError",
+                                   "DockerTimeoutError",
+                                   "Host EC2")
+
+
+def classify_failed_aws_batch_job(job):
+
+    """
+    Decide whether a FAILED AWS Batch job failed for an infrastructure reason, and describe why
+    it failed.
+
+    Parameters
+    ----------
+    job : dict
+        One element of the "jobs" list returned by Batch.Client.describe_jobs.
+
+    Returns
+    -------
+    is_infrastructure_failure : bool
+        True if the job should be resubmitted.
+    failure_reason : str
+        The job's status reason, container reason, and exit code, for logging.
+    """
+
+    container = job.get('container') or {}
+    attempts = job.get('attempts') or []
+    last_attempt_container = (attempts[-1].get('container') or {}) if attempts else {}
+
+    texts = [job.get('statusReason') or '', container.get('reason') or '']
+
+    for attempt in attempts:
+        texts.append(attempt.get('statusReason') or '')
+        texts.append((attempt.get('container') or {}).get('reason') or '')
+
+    exit_code = last_attempt_container.get('exitCode', container.get('exitCode'))
+
+    failure_reason = (f"statusReason={job.get('statusReason')}, "
+                      f"container reason={last_attempt_container.get('reason', container.get('reason'))}, "
+                      f"exitCode={exit_code}")
+
+    if job.get('isCancelled') or job.get('isTerminated'):
+        return False,failure_reason + " (cancelled or terminated)"
+
+    if any(pattern in text for pattern in infrastructure_failure_patterns for text in texts):
+        return True,failure_reason
+
+    if exit_code is None:
+        return True,failure_reason + " (container produced no exit code)"
+
+    return False,failure_reason
+
+
+def resubmit_aws_batch_job(client,job):
+
+    """
+    Submit a new AWS Batch job with the same name, queue, job-definition revision, and
+    environment variables as a failed one.
+
+    Parameters
+    ----------
+    client : Batch.Client
+        boto3 AWS Batch client.
+    job : dict
+        The failed job, as returned by Batch.Client.describe_jobs.
+
+    Returns
+    -------
+    new_aws_batch_job_id : str
+        AWS Batch job ID of the resubmitted job.
+    """
+
+    environment = [env for env in (job.get('container') or {}).get('environment',[])
+                   if not env['name'].startswith('AWS_BATCH_')]
+
+    response = client.submit_job(jobName=job['jobName'],
+                                 jobQueue=job['jobQueue'],
+                                 jobDefinition=job['jobDefinition'],
+                                 containerOverrides={'environment': environment})
+
+    return response['jobId']
+
+
+def resubmit_failed_aws_batch_jobs(job_type,proc_date,config_input,dbh,reqid,n_retry):
+
+    """
+    Resubmit the AWS Batch jobs of a given job type and processing date that failed for an
+    infrastructure reason (e.g., CannotPullContainerError), and wait for them to finish, up to
+    n_retry times.
+
+    Parameters
+    ----------
+    job_type : str
+        "refimage", "science", or "postproc".
+    proc_date : str
+        Processing date (yyyy-mm-dd).
+    config_input : configparser.ConfigParser
+        Parsed awsBatchSubmitJobs_launchSingleSciencePipeline.ini.
+    dbh : RAPIDDB
+        Open database connection.
+    reqid : int
+        ProcReqs record of the current processing request.
+    n_retry : int
+        Maximum number of resubmissions of each job; 0 resubmits nothing.
+
+    Notes
+    -----
+    Each resubmitted job keeps its Jobs record, whose awsbatchjobid is updated to the new AWS
+    Batch job, so that wait_until_aws_batch_jobs_finished and the job-registration scripts
+    follow the new job.  Jobs still failed after n_retry resubmissions are left for the
+    job-registration scripts to close out as before.
+    """
+
+    ppid = look_up_ppid_of_job_type(job_type)
+
+    client = boto3.client('batch')
+
+    for n_try in range(n_retry + 1):
+
+
+        # Look up the failed jobs among the Jobs records not yet closed out.
+
+        jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date)
+
+        if dbh.exit_code >= 64:
+            finalize_procreqs_and_exit(dbh,reqid,-1,dbh.exit_code)
+
+        jid_of_awsbatchjobid = {jobs_record[1]: jobs_record[0] for jobs_record in jobs_records
+                                if jobs_record[1] is not None}
+
+        awsbatchjobids = list(jid_of_awsbatchjobid.keys())
+
+        jobs_to_resubmit = []
+        n_failed = 0
+
+        for i in range(0,len(awsbatchjobids),100):        # describe_jobs takes up to 100 job IDs
+
+            try:
+                response = client.describe_jobs(jobs=awsbatchjobids[i:i + 100])
+            except Exception as error:
+                print(f"*** Warning: client.describe_jobs failed ({error}); continuing...")
+                continue
+
+            for job in response['jobs']:
+
+                if job['status'] != "FAILED":
+                    continue
+
+                n_failed += 1
+
+                jid = jid_of_awsbatchjobid[job['jobId']]
+
+                is_infrastructure_failure,failure_reason = classify_failed_aws_batch_job(job)
+
+                print(f"Failed AWS Batch job: job_type={job_type}, jid={jid}, awsbatchjobid={job['jobId']}, "
+                      f"jobName={job['jobName']}: {failure_reason}; "
+                      f"{'infrastructure failure' if is_infrastructure_failure else 'not resubmitted'}")
+
+                if is_infrastructure_failure:
+                    jobs_to_resubmit.append((jid,job))
+
+        print(f"resubmit_failed_aws_batch_jobs: job_type={job_type}, n_try={n_try}: "
+              f"{n_failed} failed jobs, {len(jobs_to_resubmit)} with infrastructure failures")
+
+        if len(jobs_to_resubmit) == 0:
+            return
+
+        if n_try == n_retry:
+            print(f"*** Warning: {len(jobs_to_resubmit)} {job_type} AWS Batch jobs still failed for infrastructure "
+                  f"reasons after {n_retry} resubmissions (jids={[jid for jid,job in jobs_to_resubmit]}); continuing...")
+            return
+
+
+        # Resubmit them, pointing their Jobs records at the new AWS Batch jobs.
+
+        for jid,job in jobs_to_resubmit:
+
+            try:
+                new_awsbatchjobid = resubmit_aws_batch_job(client,job)
+            except Exception as error:
+                print(f"*** Warning: Could not resubmit AWS Batch job (jid={jid},jobName={job['jobName']}) "
+                      f"({error}); continuing...")
+                continue
+
+            print(f"Resubmitted AWS Batch job (resubmission {n_try + 1} of {n_retry}): jid={jid}, "
+                  f"jobName={job['jobName']}, old awsbatchjobid={job['jobId']}, new awsbatchjobid={new_awsbatchjobid}")
+
+            dbh.update_job_with_aws_batch_job_id(jid,new_awsbatchjobid)
+
+            if dbh.exit_code >= 64:
+                print(f"*** Error: Could not update Jobs record with resubmitted AWS Batch job ID (jid={jid}); quitting...")
+                finalize_procreqs_and_exit(dbh,reqid,-1,dbh.exit_code)
+
+
+        # Wait for the resubmitted jobs to finish.
+
+        print(f"Waiting until resubmitted AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
+
+        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh,reqid)
+
+
+
+#-------------------------------------------------------------------------------------------------------------
 # Main program.
 #-------------------------------------------------------------------------------------------------------------
 
@@ -514,6 +735,20 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
+        # Resubmit refimage AWS Batch jobs that failed for infrastructure reasons, such as
+        # CannotPullContainerError, and wait for them to finish.
+
+        resubmit_failed_aws_batch_jobs(job_type,proc_date,config_input,dbh,reqid,n_retry_failed_aws_batch_job)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds to resubmit failed refimage AWS Batch jobs =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Register metadata from reference-image pipelines into operations database.
 
         os.environ['MAKEREFIMAGESFLAG'] = "True"
@@ -595,6 +830,20 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
+        # Resubmit science AWS Batch jobs that failed for infrastructure reasons, such as
+        # CannotPullContainerError, and wait for them to finish.
+
+        resubmit_failed_aws_batch_jobs(job_type,proc_date,config_input,dbh,reqid,n_retry_failed_aws_batch_job)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds to resubmit failed science AWS Batch jobs =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Register metadata from science pipelines into operations database.
 
         ppid = look_up_ppid_of_job_type(job_type)
@@ -659,6 +908,20 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("VPO Elapsed time in seconds after waiting for postproc-pipeline AWS Batch jobs to finish =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Resubmit postproc AWS Batch jobs that failed for infrastructure reasons, such as
+        # CannotPullContainerError, and wait for them to finish.
+
+        resubmit_failed_aws_batch_jobs(job_type,proc_date,config_input,dbh,reqid,n_retry_failed_aws_batch_job)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds to resubmit failed postproc AWS Batch jobs =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
