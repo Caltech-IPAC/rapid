@@ -84,6 +84,14 @@ RUN python3.11 -m pip install --upgrade fastavro
 RUN python3.11 -m pip install --upgrade pytest
 RUN python3.11 -m pip install --upgrade psutil
 
+# Install TensorFlow (with Keras 3) for the RuBR-AT real/bogus classifier, which compute_rb in
+# modules/utils/rapid_data_analysis.py runs for the rb_score and rb_label catalog columns.
+# If TensorFlow requires an older numpy than the one installed above, pip downgrades numpy
+# here and warns about any package above that then conflicts.  --no-cache-dir keeps pip's copy
+# of the downloaded wheels (about 0.6 GB) out of the image.
+
+RUN python3.11 -m pip install --upgrade --no-cache-dir tensorflow
+
 # Set up separate Python 3.11 venv under root directory for sfft.
 
 RUN python3.11 -m venv /sfft_env
