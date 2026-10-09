@@ -329,7 +329,7 @@ A diagram of the source-matching database-table schema is given as follows:
 .. image:: xsource_matching.png
 
 Extra columns have been added to these SExtractor catalogs, which include some PhotUtils quantities
-at the intial SExtractor extracted position,
+at the initial SExtractor extracted position,
 in order to aid in prefiltering records that are loaded into the database (and for alert generation):
 
 +--------------------+-----------------------------------------------------------------------------------+
