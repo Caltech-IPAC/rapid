@@ -8,8 +8,10 @@ RAPID Virtual Pipeline Operator
    still missing is the automation around that.  The VPO must be started by hand for each
    processing date, and the mode in which it would pick up the current date and keep running
    on its own still contains test scaffolding (see the note at the end of this page).
-   Selecting the observation datetime range is still a manual decision, and failed pipelines
-   are not yet identified and rerun automatically.
+   Selecting the observation datetime range is still a manual decision.  AWS Batch jobs that
+   fail for infrastructure reasons, such as ``CannotPullContainerError``, are now resubmitted
+   automatically (see `Resubmitting failed AWS Batch jobs`_), but pipelines that fail with
+   their own error code are not yet rerun.
 
    Expect the details on this page to change as that work lands.
 
@@ -85,8 +87,9 @@ should not be set by hand:
 * ``PIPEID``, ``MAKEREFIMAGESFLAG``, ``DRYRUN`` -- set as each stage requires.
 
 The input configuration file is ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``.
-The VPO reads the S3 bucket bases and the ``[AWS_BATCH]`` job queue, job definitions and job
-name bases from it; the codes it launches read their own parameters from the same file.
+The VPO reads the S3 bucket bases, the ``[AWS_BATCH]`` job queue, job definitions and job
+name bases, and the ``[JOB_PARAMS]`` parameter ``n_retry_failed_aws_batch_job`` from it; the
+codes it launches read their own parameters from the same file.
 
 
 Stages
@@ -108,7 +111,8 @@ log file named after the stage and the processing date.
      - Launches the reference-image pipelines (``ppid = 12``) as AWS Batch jobs.
    * - 2
      - *wait*
-     - Waits for the reference-image AWS Batch jobs to finish.
+     - Waits for the reference-image AWS Batch jobs to finish, and resubmits those that failed
+       for infrastructure reasons.
    * - 3
      - ``parallelRegisterCompletedJobsInDB.py``
      - Registers reference-image pipeline metadata in the operations database.
@@ -117,7 +121,8 @@ log file named after the stage and the processing date.
      - Launches the science pipelines (``ppid = 15``) as AWS Batch jobs.
    * - 5
      - *wait*
-     - Waits for the science AWS Batch jobs to finish.
+     - Waits for the science AWS Batch jobs to finish, and resubmits those that failed
+       for infrastructure reasons.
    * - 6
      - ``parallelRegisterCompletedJobsInDB.py``
      - Registers science-pipeline metadata in the operations database.
@@ -126,7 +131,8 @@ log file named after the stage and the processing date.
      - Launches the post-processing pipelines (``ppid = 17``) as AWS Batch jobs.
    * - 8
      - *wait*
-     - Waits for the post-processing AWS Batch jobs to finish.
+     - Waits for the post-processing AWS Batch jobs to finish, and resubmits those that failed
+       for infrastructure reasons.
    * - 9
      - ``parallelRegisterCompletedJobsInDBAfterPostProc.py``
      - Registers post-processing pipeline metadata in the operations database.
@@ -184,6 +190,44 @@ unrecognized job status, or an AWS Batch job ID that is no longer known to AWS, 
 the run.
 
 
+Resubmitting failed AWS Batch jobs
+====================================
+
+After each wait (stages 2, 5 and 8), the VPO looks for the jobs of that stage that ended
+``FAILED``, logs each one with its AWS Batch status reason, container reason and exit code,
+and resubmits those that failed for an *infrastructure* reason.  A failed job counts as an
+infrastructure failure when either:
+
+* AWS Batch reports one of ``CannotPullContainerError``, ``CannotStartContainerError``,
+  ``CannotCreateContainerError``, ``CannotInspectContainerError``,
+  ``ResourceInitializationError`` or ``DockerTimeoutError``, or that its EC2 host was
+  terminated (``Host EC2 ... terminated``, e.g., a Spot instance reclaimed), or
+* the container never produced an exit code.
+
+These jobs are not resubmitted:
+
+* Jobs that exited with an exit code of their own.  The pipelines exit with 64 or higher when
+  they fail on their own errors, and a container killed for running out of memory exits with
+  137.  A rerun would most likely fail the same way.
+* Jobs cancelled or terminated by an operator.
+
+A resubmitted job gets the same job name, job queue, job-definition revision and
+environment variables as the failed one, so it runs the same pipeline on the same inputs.
+Its ``Jobs`` record is kept, and its ``awsbatchjobid`` is updated to the new AWS Batch job,
+so that the wait and the job registration that follow use the new job.  The VPO then waits
+for the resubmitted jobs and checks again, resubmitting each job at most
+``n_retry_failed_aws_batch_job`` times (``[JOB_PARAMS]``; 3 by default, 0 to turn
+resubmission off).  Jobs still failing after that are reported with a warning and are
+registered as failed, as before.
+
+Each pass is logged, with lines such as::
+
+    Failed AWS Batch job: job_type=science, jid=..., awsbatchjobid=..., jobName=...: statusReason=..., container reason=CannotPullContainerError: ..., exitCode=None; infrastructure failure
+    Resubmitted AWS Batch job (resubmission 1 of 3): jid=..., jobName=..., old awsbatchjobid=..., new awsbatchjobid=...
+
+and the VPO prints the elapsed time spent resubmitting after each of the three stages.
+
+
 The ProcReqs record
 ************************************
 
@@ -219,6 +263,11 @@ request, and the ``ProcReqs`` record is still closed out with ``status = 1``.
 
 A failure to open the database connection, or to insert the ``ProcReqs`` record, exits with
 the database handler's own exit code before any stage runs.
+
+Resubmitting failed AWS Batch jobs (see `Resubmitting failed AWS Batch jobs`_) stops the run
+only if a resubmitted job's ``Jobs`` record cannot be updated with its new AWS Batch job ID;
+the ``ProcReqs`` record is then closed out with ``status = -1``.  A job that cannot be
+resubmitted is reported and the run continues.
 
 
 .. note::
