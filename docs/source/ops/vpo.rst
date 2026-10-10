@@ -2,16 +2,14 @@ RAPID Virtual Pipeline Operator
 ####################################################
 
 .. important::
-   The VPO is a work in progress and is not yet fully automated, though it is not far from
-   it.  What it already does, it does end to end: given a processing date, it runs a whole
-   processing request through all eighteen stages without further intervention.  What is
-   still missing is the automation around that.  The VPO must be started by hand for each
-   processing date, and the mode in which it would pick up the current date and keep running
-   on its own still contains test scaffolding (see the note at the end of this page).
-   Selecting the observation datetime range is still a manual decision.  AWS Batch jobs that
-   fail for infrastructure reasons, such as ``CannotPullContainerError``, are now resubmitted
-   automatically (see `Resubmitting failed AWS Batch jobs`_), but pipelines that fail with
-   their own error code are not yet rerun.
+   The VPO is a work in progress.  It runs a whole processing request through all eighteen
+   stages without further intervention, and, started without a processing date, it now keeps
+   running on its own, choosing the observation range of each request from the database (see
+   `Open-loop operation`_).  AWS Batch jobs that fail for infrastructure reasons, such as
+   ``CannotPullContainerError``, are resubmitted automatically (see
+   `Resubmitting failed AWS Batch jobs`_).  Still missing: pipelines that fail with their own
+   error code are not rerun, L2Files left unprocessed within an observation range already
+   covered are not revisited automatically, and a stage failure stops the open loop.
 
    Expect the details on this page to change as that work lands.
 
@@ -37,8 +35,16 @@ that has access to the operations database.
 Running the VPO
 ************************************
 
-The VPO takes the processing date as its single command-line argument, and reads the rest
-of its inputs from the environment:
+The VPO runs in one of two modes:
+
+* **Processing-date run.**  Given the processing date as its single command-line argument,
+  the VPO runs one processing request for the observation range given by ``STARTDATETIME``
+  and ``ENDDATETIME``, and then exits.
+* **Open loop.**  Without a command-line argument, the VPO runs processing requests one
+  after another, choosing the observation range of each itself; ``STARTDATETIME`` and
+  ``ENDDATETIME`` are not used.  See `Open-loop operation`_.
+
+A processing-date run reads the rest of its inputs from the environment:
 
 .. code-block::
 
@@ -54,7 +60,7 @@ command-line argument, and it is what the S3 object keys and the ``Jobs`` record
 under.
 
 These environment variables are required, and the VPO quits with exit code 64 if any is
-unset:
+unset (``STARTDATETIME`` and ``ENDDATETIME`` only for a processing-date run):
 
 .. list-table::
    :header-rows: 1
@@ -68,9 +74,9 @@ unset:
    * - ``RAPID_WORK``
      - Working directory for the run.
    * - ``STARTDATETIME``
-     - Observation start datetime of the exposures to process.
+     - Observation start datetime of the exposures to process (processing-date run only).
    * - ``ENDDATETIME``
-     - Observation end datetime of the exposures to process.
+     - Observation end datetime of the exposures to process (processing-date run only).
    * - ``AWS_ACCESS_KEY_ID``
      - AWS credentials, needed to submit and poll AWS Batch jobs.
    * - ``AWS_SECRET_ACCESS_KEY``
@@ -88,8 +94,67 @@ should not be set by hand:
 
 The input configuration file is ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``.
 The VPO reads the S3 bucket bases, the ``[AWS_BATCH]`` job queue, job definitions and job
-name bases, and the ``[JOB_PARAMS]`` parameter ``n_retry_failed_aws_batch_job`` from it; the
-codes it launches read their own parameters from the same file.
+name bases, and the ``[JOB_PARAMS]`` parameters ``n_retry_failed_aws_batch_job``,
+``min_elapsed_observation_seconds``, ``max_elapsed_observation_seconds`` and
+``open_loop_sleep_seconds`` from it; the codes it launches read their own parameters from the
+same file.
+
+
+Open-loop operation
+************************************
+
+Started without a processing date, the VPO loops.  At the start of each iteration it opens
+the database connection and chooses the observation range of the next processing request:
+
+1. The *high-water mark* is the latest ``obsendtime`` of a ``ProcReqs`` record that finished
+   normally (``status = 1``).  Requests that failed (``-1``) or never finished (``0``) do not
+   count, so their range is covered again.
+2. The *unprocessed* L2Files are those observed at or after the high-water mark with
+   ``vbest > 0`` and ``status > 0`` and no ``DiffImages`` record with ``vbest > 0``.
+3. If there are none, or they span less than ``min_elapsed_observation_seconds`` of
+   observation time (earliest to latest ``dateobs``), the VPO closes the connection, sleeps
+   ``open_loop_sleep_seconds`` and checks again.
+4. Otherwise the range starts at the earliest unprocessed ``dateobs`` and ends just after the
+   latest one, or ``max_elapsed_observation_seconds`` after the start, whichever comes first.
+   As in a processing-date run, the launch scripts select ``dateobs >= STARTDATETIME`` and
+   ``dateobs < ENDDATETIME``, so an L2File exactly at a capped end falls in the next range.
+
+The request then runs exactly as a processing-date run, with the current Pacific-time date
+as its processing date and the chosen range recorded in its ``ProcReqs`` record.  Several
+requests may run on the same processing date; each files its S3 objects under its own
+``req<reqid>``.
+
+The ``[JOB_PARAMS]`` parameters, with their values in
+``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 15 45
+
+   * - Parameter
+     - Value
+     - Meaning
+   * - ``min_elapsed_observation_seconds``
+     - 3600
+     - Least observation time the unprocessed L2Files must span for a request to run.
+   * - ``max_elapsed_observation_seconds``
+     - 86400
+     - Longest observation range of one request.
+   * - ``open_loop_sleep_seconds``
+     - 600
+     - Time between checks while there is not enough unprocessed data.
+
+The high-water mark means an observation range is never covered twice.  L2Files in a
+covered range that did not get a difference image -- for example because their field did not
+yet have enough frames for a reference image, so the science launcher skipped them -- are
+left for a processing-date run by hand.  Unprocessed L2Files spanning less than
+``min_elapsed_observation_seconds`` wait until more data arrive; when no more will, process
+them with a processing-date run, or lower the parameter.
+
+To stop the open loop, send the VPO ``SIGINT`` (Ctrl-C) or ``SIGQUIT``.  It finishes the
+processing request under way, if any, and exits with code 0 before starting the next one,
+or within ten seconds if it is sleeping.  A stage failure still terminates the VPO, as
+described under `Error handling`_.
 
 
 Stages
@@ -271,8 +336,7 @@ resubmitted is reported and the run continues.
 
 
 .. note::
-   The VPO also has a mode in which the processing date is omitted from the command line, in
-   which case it takes the current Pacific-time date and loops.  That path still contains
-   test scaffolding -- a dummy counting loop, a 30-second sleep, and a deliberate
-   ``SIGINT`` to itself on the fourth iteration -- so it is not yet usable for operations.
-   Always give the processing date explicitly.
+   In the open loop, a stage failure stops the VPO, as in a processing-date run, rather than
+   moving on to the next processing request, so that the failure is investigated.  The failed
+   request's ``ProcReqs`` record has ``status = -1``, so its observation range is chosen again
+   when the VPO is restarted.

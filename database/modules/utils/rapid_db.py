@@ -4092,3 +4092,85 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def get_procreqs_observation_high_water_mark(self,debug=1):
+
+        '''
+        Query the latest observation end time covered by a processing request that finished
+        normally, used by the open-loop Virtual Pipeline Operator so that it never re-covers an
+        observation range already processed.
+
+        Returns
+        -------
+        high_water_mark : datetime.datetime or None
+            max(obsendtime) of the ProcReqs records with status = 1, or None if there are none.
+        '''
+
+        self.exit_code = 0
+
+        query = "select max(obsendtime) from procreqs where status = 1;"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+        try:
+            self.cur.execute(query)
+            record = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error querying ProcReqs observation high-water mark (error={error}); returning...')
+            self.conn.rollback()         # Rollback database transaction
+            self.exit_code = 67
+            return
+
+        return record[0] if record is not None else None
+
+
+########################################################################################################
+
+    def get_unprocessed_l2files_observation_range(self,high_water_mark=None,debug=1):
+
+        '''
+        Query the observation-time range of the L2Files that still need difference images: those
+        with vbest > 0 and status > 0 and no DiffImages record with vbest > 0.
+
+        Parameters
+        ----------
+        high_water_mark : datetime.datetime or None, optional
+            Only L2Files with dateobs at or after this time are considered.  None: all L2Files.
+
+        Returns
+        -------
+        record : tuple
+            (earliest dateobs, latest dateobs, number of L2Files); the dateobs are None when there
+            are no such L2Files.
+        '''
+
+        self.exit_code = 0
+
+        query = "select min(l.dateobs), max(l.dateobs), count(*) from L2Files l " +\
+                "where l.vbest > 0 " +\
+                "and l.status > 0 "
+
+        if high_water_mark is not None:
+            query += f"and l.dateobs >= '{high_water_mark}' "
+
+        query += "and not exists (select 1 from DiffImages d where d.rid = l.rid and d.vbest > 0);"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+        try:
+            self.cur.execute(query)
+            record = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error querying observation range of unprocessed L2Files (error={error}); returning...')
+            self.conn.rollback()         # Rollback database transaction
+            self.exit_code = 67
+            return
+
+        return record
