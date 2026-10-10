@@ -22,7 +22,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.8"
+swvers = "1.9"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -179,15 +179,25 @@ zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 # Number of times an AWS Batch job that failed for an infrastructure reason (e.g.,
 # CannotPullContainerError) is resubmitted; 0 turns resubmission off.
 
-n_retry_failed_aws_batch_job = int(config_input['JOB_PARAMS'].get('n_retry_failed_aws_batch_job','0'))
+# VPO settings, from the [VPO_SETTINGS] section (with these defaults if it or a key is missing).
+
+# Number of times an AWS Batch job that failed for an infrastructure reason (e.g.,
+# CannotPullContainerError) is resubmitted; 0 turns resubmission off.
+
+n_retry_failed_aws_batch_job = config_input.getint('VPO_SETTINGS','n_retry_failed_aws_batch_job',fallback=3)
 
 # Open loop: an iteration runs only when the unprocessed L2Files span at least
 # min_elapsed_observation_seconds of observation time, and covers at most
-# max_elapsed_observation_seconds; otherwise the VPO sleeps open_loop_sleep_seconds and checks again.
+# max_elapsed_observation_seconds; otherwise the VPO sleeps open_loop_sleep_seconds and checks
+# again.  An exposure with L2Files for fewer than n_scas_per_exposure SCAs, one registered within
+# the last l2file_settle_seconds, is taken to be still arriving, and the range ends before it.
 
-min_elapsed_observation_seconds = float(config_input['JOB_PARAMS'].get('min_elapsed_observation_seconds','900'))
-max_elapsed_observation_seconds = float(config_input['JOB_PARAMS'].get('max_elapsed_observation_seconds','7200'))
-open_loop_sleep_seconds = float(config_input['JOB_PARAMS'].get('open_loop_sleep_seconds','600'))
+min_elapsed_observation_seconds = config_input.getfloat('VPO_SETTINGS','min_elapsed_observation_seconds',fallback=900.0)
+max_elapsed_observation_seconds = config_input.getfloat('VPO_SETTINGS','max_elapsed_observation_seconds',fallback=7200.0)
+open_loop_sleep_seconds = config_input.getfloat('VPO_SETTINGS','open_loop_sleep_seconds',fallback=600.0)
+l2file_settle_seconds = config_input.getfloat('VPO_SETTINGS','l2file_settle_seconds',fallback=1800.0)
+
+n_scas_per_exposure = 18          # Roman WFI
 
 
 # Print variables.
@@ -205,6 +215,7 @@ print("n_retry_failed_aws_batch_job =",n_retry_failed_aws_batch_job)
 print("min_elapsed_observation_seconds =",min_elapsed_observation_seconds)
 print("max_elapsed_observation_seconds =",max_elapsed_observation_seconds)
 print("open_loop_sleep_seconds =",open_loop_sleep_seconds)
+print("l2file_settle_seconds =",l2file_settle_seconds)
 print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 print("launch_science_pipelines_code =", launch_science_pipelines_code)
@@ -650,22 +661,35 @@ def resubmit_failed_aws_batch_jobs(job_type,proc_date,config_input,dbh,reqid,n_r
 # Open loop: choice of the observation range of each processing request, and sleeping between them.
 #-------------------------------------------------------------------------------------------------------------
 
-def compute_open_loop_observation_range(dbh,min_elapsed_seconds,max_elapsed_seconds):
+def compute_open_loop_observation_range(dbh,
+                                        ppid,
+                                        min_elapsed_seconds,
+                                        max_elapsed_seconds,
+                                        settle_seconds,
+                                        n_scas = 18):
 
     """
     Compute the observation range of the next open-loop processing request: from the earliest
-    L2File that still needs a difference image, for at most max_elapsed_seconds, provided the
-    L2Files that still need one span at least min_elapsed_seconds.
+    L2File that still needs a difference image, for at most max_elapsed_seconds and ending
+    before any exposure that is still arriving, provided the L2Files that still need one in that
+    range span at least min_elapsed_seconds.
 
     Parameters
     ----------
     dbh : RAPIDDB
         Open database connection.
+    ppid : int
+        Pipeline ID of the difference images: the science pipeline (ppid = 15).
     min_elapsed_seconds : float
         The unprocessed L2Files must span at least this much observation time [s] for a
         processing request to be made.
     max_elapsed_seconds : float
         Maximum length of the observation range [s].
+    settle_seconds : float
+        An exposure with L2Files for fewer than n_scas SCAs, one of them registered within this
+        many seconds, is taken to be still arriving [s].
+    n_scas : int, optional
+        Number of SCAs in a complete exposure.
 
     Returns
     -------
@@ -676,11 +700,18 @@ def compute_open_loop_observation_range(dbh,min_elapsed_seconds,max_elapsed_seco
     Notes
     -----
     An L2File still needs a difference image when it has vbest > 0 and status > 0 and no
-    DiffImages record with vbest > 0.  Only L2Files observed at or after the end of the latest
+    DiffImages record of the science pipeline (ppid) with vbest > 0.  Only L2Files observed at or after the end of the latest
     processing request that finished normally (ProcReqs status = 1) are considered, so an
     observation range is never covered twice, even if some of its L2Files could not be
     processed (e.g., no reference image for their field); those are left for a processing-date
     run by hand.
+
+    Because of that, an exposure must not be processed while some of its SCAs are still to be
+    registered: all its L2Files share one dateobs, so SCAs registered after the request that
+    covered it would fall before the high-water mark and never be processed.  The range
+    therefore ends before the earliest exposure that is still arriving.  An exposure still
+    incomplete after settle_seconds without a new L2File (e.g., an SCA never delivered) is
+    processed with the SCAs it has.
     """
 
     high_water_mark = dbh.get_procreqs_observation_high_water_mark()
@@ -688,7 +719,20 @@ def compute_open_loop_observation_range(dbh,min_elapsed_seconds,max_elapsed_seco
     if dbh.exit_code >= 64:
         return None,None
 
-    record = dbh.get_unprocessed_l2files_observation_range(high_water_mark)
+    settling = dbh.get_earliest_settling_exposure(ppid,high_water_mark,n_scas,settle_seconds)
+
+    if dbh.exit_code >= 64:
+        return None,None
+
+    before = None
+
+    if settling is not None:
+        settling_expid,before,settling_nscas,settling_created = settling
+        print(f"compute_open_loop_observation_range: exposure expid={settling_expid} (dateobs={before}) "
+              f"is still arriving: L2Files for {settling_nscas} of {n_scas} SCAs, latest registered "
+              f"{settling_created}; the observation range ends before it")
+
+    record = dbh.get_unprocessed_l2files_observation_range(ppid,high_water_mark,before)
 
     if dbh.exit_code >= 64:
         return None,None
@@ -699,7 +743,11 @@ def compute_open_loop_observation_range(dbh,min_elapsed_seconds,max_elapsed_seco
           f"unprocessed L2Files={n_l2files}, earliest dateobs={earliest}, latest dateobs={latest}")
 
     if n_l2files == 0 or earliest is None:
-        print("compute_open_loop_observation_range: no unprocessed L2Files")
+        if before is None:
+            print("compute_open_loop_observation_range: no unprocessed L2Files")
+        else:
+            print("compute_open_loop_observation_range: no unprocessed L2Files before the exposure "
+                  "still arriving; waiting for it")
         return None,None
 
     span_seconds = (latest - earliest).total_seconds()
@@ -801,8 +849,11 @@ if __name__ == '__main__':
                 break
 
             startdatetime,enddatetime = compute_open_loop_observation_range(dbh,
+                                                                            look_up_ppid_of_job_type("science"),
                                                                             min_elapsed_observation_seconds,
-                                                                            max_elapsed_observation_seconds)
+                                                                            max_elapsed_observation_seconds,
+                                                                            l2file_settle_seconds,
+                                                                            n_scas_per_exposure)
 
             if dbh.exit_code >= 64:
                 print(f"*** Error: Could not compute open-loop observation range (dbh.exit_code = {dbh.exit_code}); quitting...")
