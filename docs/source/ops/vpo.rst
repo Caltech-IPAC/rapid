@@ -197,12 +197,8 @@ The VPO's own log shows what each iteration decided.  Lines to look for:
     Open loop: completed processing request reqid=...; starting iteration i = ...
     Terminating gracefully before starting a new processing request...
 
-.. warning::
-   The per-stage log files are named after the stage and the processing date only (for
-   example, ``launch_science_pipelines_code_2026-10-10.out``) and are rewritten by each run.
-   In the open loop, every processing request on the same processing date therefore
-   overwrites the per-stage log files of the previous one, and only the last request's are
-   left.  The VPO's own log keeps the record of every request.
+Each request's per-stage log files carry its ``reqid`` (see `Stages`_), so the requests on
+the same processing date keep separate logs.
 
 
 Stages
@@ -210,7 +206,9 @@ Stages
 
 The VPO runs the following stages in order for the processing date.  Each stage is a
 separate Python script, launched as a subprocess, whose stdout and stderr go to a per-stage
-log file named after the stage and the processing date.
+log file in the working directory named after the stage, the processing date and the
+``reqid`` of the processing request, for example
+``launch_science_pipelines_code_2026-10-10_req123.out``.
 
 .. list-table::
    :header-rows: 1
