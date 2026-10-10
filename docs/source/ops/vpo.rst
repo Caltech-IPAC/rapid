@@ -94,10 +94,8 @@ should not be set by hand:
 
 The input configuration file is ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``.
 The VPO reads the S3 bucket bases, the ``[AWS_BATCH]`` job queue, job definitions and job
-name bases, and the ``[JOB_PARAMS]`` parameters ``n_retry_failed_aws_batch_job``,
-``min_elapsed_observation_seconds``, ``max_elapsed_observation_seconds`` and
-``open_loop_sleep_seconds`` from it; the codes it launches read their own parameters from the
-same file.
+name bases, and its own settings, in the ``[VPO_SETTINGS]`` section, from it; the codes it
+launches read their own parameters from the same file.
 
 
 Open-loop operation
@@ -111,21 +109,33 @@ the database connection and chooses the observation range of the next processing
    count, so their range is covered again.
 2. The *unprocessed* L2Files are those observed at or after the high-water mark with
    ``vbest > 0`` and ``status > 0`` and no ``DiffImages`` record with ``vbest > 0``.
-3. If there are none, or they span less than ``min_elapsed_observation_seconds`` of
+3. An exposure is *still arriving* if it has unprocessed L2Files, L2Files for fewer than 18
+   SCAs, and an L2File registered (``L2Files.created``) within the last
+   ``l2file_settle_seconds``.  If there is one, only unprocessed L2Files observed before the
+   earliest such exposure are considered.
+4. If there are none, or they span less than ``min_elapsed_observation_seconds`` of
    observation time (earliest to latest ``dateobs``), the VPO closes the connection, sleeps
    ``open_loop_sleep_seconds`` and checks again.
-4. Otherwise the range starts at the earliest unprocessed ``dateobs`` and ends just after the
+5. Otherwise the range starts at the earliest unprocessed ``dateobs`` and ends just after the
    latest one, or ``max_elapsed_observation_seconds`` after the start, whichever comes first.
    As in a processing-date run, the launch scripts select ``dateobs >= STARTDATETIME`` and
    ``dateobs < ENDDATETIME``, so an L2File exactly at a capped end falls in the next range.
+
+Step 3 exists because an exposure's L2Files are registered one SCA file at a time, as the
+ingest converts them, and all of them carry the exposure's ``dateobs``.  If a request covered
+an exposure before all its SCAs were registered, the late SCAs would fall before the
+high-water mark set by that request, and the open loop would never process them.  An
+exposure still incomplete after ``l2file_settle_seconds`` without a new L2File (for example,
+an SCA that was never delivered or failed conversion) is processed with the SCAs it has.
 
 The request then runs exactly as a processing-date run, with the current Pacific-time date
 as its processing date and the chosen range recorded in its ``ProcReqs`` record.  Several
 requests may run on the same processing date; each files its S3 objects under its own
 ``req<reqid>``.
 
-The ``[JOB_PARAMS]`` parameters, with their values in
-``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``:
+The ``[VPO_SETTINGS]`` parameters, with their values in
+``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`` (the VPO uses the same values if
+the section or a parameter is missing):
 
 .. list-table::
    :header-rows: 1
@@ -143,6 +153,14 @@ The ``[JOB_PARAMS]`` parameters, with their values in
    * - ``open_loop_sleep_seconds``
      - 600
      - Time between checks while there is not enough unprocessed data.
+   * - ``l2file_settle_seconds``
+     - 1800
+     - Time without a new L2File after which an incomplete exposure is no longer taken to be
+       still arriving.
+   * - ``n_retry_failed_aws_batch_job``
+     - 3
+     - Resubmissions of AWS Batch jobs that failed for infrastructure reasons (see
+       `Resubmitting failed AWS Batch jobs`_).
 
 The high-water mark means an observation range is never covered twice.  L2Files in a
 covered range that did not get a difference image -- for example because their field did not
@@ -281,7 +299,7 @@ environment variables as the failed one, so it runs the same pipeline on the sam
 Its ``Jobs`` record is kept, and its ``awsbatchjobid`` is updated to the new AWS Batch job,
 so that the wait and the job registration that follow use the new job.  The VPO then waits
 for the resubmitted jobs and checks again, resubmitting each job at most
-``n_retry_failed_aws_batch_job`` times (``[JOB_PARAMS]``; 3 by default, 0 to turn
+``n_retry_failed_aws_batch_job`` times (``[VPO_SETTINGS]``; 3 by default, 0 to turn
 resubmission off).  Jobs still failing after that are reported with a warning and are
 registered as failed, as before.
 

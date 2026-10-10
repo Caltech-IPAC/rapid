@@ -4131,7 +4131,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_unprocessed_l2files_observation_range(self,high_water_mark=None,debug=1):
+    def get_unprocessed_l2files_observation_range(self,high_water_mark=None,before=None,debug=1):
 
         '''
         Query the observation-time range of the L2Files that still need difference images: those
@@ -4141,6 +4141,8 @@ class RAPIDDB:
         ----------
         high_water_mark : datetime.datetime or None, optional
             Only L2Files with dateobs at or after this time are considered.  None: all L2Files.
+        before : datetime.datetime or None, optional
+            Only L2Files with dateobs before this time are considered.  None: no upper limit.
 
         Returns
         -------
@@ -4158,6 +4160,9 @@ class RAPIDDB:
         if high_water_mark is not None:
             query += f"and l.dateobs >= '{high_water_mark}' "
 
+        if before is not None:
+            query += f"and l.dateobs < '{before}' "
+
         query += "and not exists (select 1 from DiffImages d where d.rid = l.rid and d.vbest > 0);"
 
         if debug == 1:
@@ -4169,6 +4174,63 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error querying observation range of unprocessed L2Files (error={error}); returning...')
+            self.conn.rollback()         # Rollback database transaction
+            self.exit_code = 67
+            return
+
+        return record
+
+
+########################################################################################################
+
+    def get_earliest_settling_exposure(self,high_water_mark,n_scas_per_exposure,settle_seconds,debug=1):
+
+        '''
+        Query the earliest exposure that is still arriving: it has L2Files that still need
+        difference images, L2Files (vbest > 0) for fewer than n_scas_per_exposure SCAs, and an
+        L2File registered (L2Files.created) within the last settle_seconds.
+
+        Parameters
+        ----------
+        high_water_mark : datetime.datetime or None
+            Only exposures with dateobs at or after this time are considered.  None: all.
+        n_scas_per_exposure : int
+            Number of SCAs in a complete exposure (18 for the Roman WFI).
+        settle_seconds : float
+            An incomplete exposure with no L2File registered for this long is no longer taken to
+            be arriving.
+
+        Returns
+        -------
+        record : tuple or None
+            (expid, dateobs, number of SCAs, latest L2Files.created) of the earliest such
+            exposure, or None if there is none.
+        '''
+
+        self.exit_code = 0
+
+        query = "select l.expid, min(l.dateobs), count(distinct l.sca), max(l.created) from L2Files l " +\
+                "where l.vbest > 0 "
+
+        if high_water_mark is not None:
+            query += f"and l.dateobs >= '{high_water_mark}' "
+
+        query += "group by l.expid " +\
+                 f"having count(distinct l.sca) < {int(n_scas_per_exposure)} " +\
+                 f"and max(l.created) > localtimestamp - interval '{float(settle_seconds)} seconds' " +\
+                 "and bool_or(l.status > 0 and not exists " +\
+                 "(select 1 from DiffImages d where d.rid = l.rid and d.vbest > 0)) " +\
+                 "order by min(l.dateobs), l.expid limit 1;"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+        try:
+            self.cur.execute(query)
+            record = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error querying earliest settling exposure (error={error}); returning...')
             self.conn.rollback()         # Rollback database transaction
             self.exit_code = 67
             return
