@@ -135,10 +135,10 @@ The ``[JOB_PARAMS]`` parameters, with their values in
      - Value
      - Meaning
    * - ``min_elapsed_observation_seconds``
-     - 3600
+     - 900
      - Least observation time the unprocessed L2Files must span for a request to run.
    * - ``max_elapsed_observation_seconds``
-     - 86400
+     - 7200
      - Longest observation range of one request.
    * - ``open_loop_sleep_seconds``
      - 600

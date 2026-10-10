@@ -185,8 +185,8 @@ n_retry_failed_aws_batch_job = int(config_input['JOB_PARAMS'].get('n_retry_faile
 # min_elapsed_observation_seconds of observation time, and covers at most
 # max_elapsed_observation_seconds; otherwise the VPO sleeps open_loop_sleep_seconds and checks again.
 
-min_elapsed_observation_seconds = float(config_input['JOB_PARAMS'].get('min_elapsed_observation_seconds','3600'))
-max_elapsed_observation_seconds = float(config_input['JOB_PARAMS'].get('max_elapsed_observation_seconds','86400'))
+min_elapsed_observation_seconds = float(config_input['JOB_PARAMS'].get('min_elapsed_observation_seconds','900'))
+max_elapsed_observation_seconds = float(config_input['JOB_PARAMS'].get('max_elapsed_observation_seconds','7200'))
 open_loop_sleep_seconds = float(config_input['JOB_PARAMS'].get('open_loop_sleep_seconds','600'))
 
 
