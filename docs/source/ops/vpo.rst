@@ -108,7 +108,8 @@ the database connection and chooses the observation range of the next processing
    normally (``status = 1``).  Requests that failed (``-1``) or never finished (``0``) do not
    count, so their range is covered again.
 2. The *unprocessed* L2Files are those observed at or after the high-water mark with
-   ``vbest > 0`` and ``status > 0`` and no ``DiffImages`` record with ``vbest > 0``.
+   ``vbest > 0`` and ``status > 0`` and no ``DiffImages`` record of the science pipeline
+   (``ppid = 15``) with ``vbest > 0``.
 3. An exposure is *still arriving* if it has unprocessed L2Files, L2Files for fewer than 18
    SCAs, and an L2File registered (``L2Files.created``) within the last
    ``l2file_settle_seconds``.  If there is one, only unprocessed L2Files observed before the

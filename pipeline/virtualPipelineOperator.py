@@ -662,6 +662,7 @@ def resubmit_failed_aws_batch_jobs(job_type,proc_date,config_input,dbh,reqid,n_r
 #-------------------------------------------------------------------------------------------------------------
 
 def compute_open_loop_observation_range(dbh,
+                                        ppid,
                                         min_elapsed_seconds,
                                         max_elapsed_seconds,
                                         settle_seconds,
@@ -677,6 +678,8 @@ def compute_open_loop_observation_range(dbh,
     ----------
     dbh : RAPIDDB
         Open database connection.
+    ppid : int
+        Pipeline ID of the difference images: the science pipeline (ppid = 15).
     min_elapsed_seconds : float
         The unprocessed L2Files must span at least this much observation time [s] for a
         processing request to be made.
@@ -697,7 +700,7 @@ def compute_open_loop_observation_range(dbh,
     Notes
     -----
     An L2File still needs a difference image when it has vbest > 0 and status > 0 and no
-    DiffImages record with vbest > 0.  Only L2Files observed at or after the end of the latest
+    DiffImages record of the science pipeline (ppid) with vbest > 0.  Only L2Files observed at or after the end of the latest
     processing request that finished normally (ProcReqs status = 1) are considered, so an
     observation range is never covered twice, even if some of its L2Files could not be
     processed (e.g., no reference image for their field); those are left for a processing-date
@@ -716,7 +719,7 @@ def compute_open_loop_observation_range(dbh,
     if dbh.exit_code >= 64:
         return None,None
 
-    settling = dbh.get_earliest_settling_exposure(high_water_mark,n_scas,settle_seconds)
+    settling = dbh.get_earliest_settling_exposure(ppid,high_water_mark,n_scas,settle_seconds)
 
     if dbh.exit_code >= 64:
         return None,None
@@ -729,7 +732,7 @@ def compute_open_loop_observation_range(dbh,
               f"is still arriving: L2Files for {settling_nscas} of {n_scas} SCAs, latest registered "
               f"{settling_created}; the observation range ends before it")
 
-    record = dbh.get_unprocessed_l2files_observation_range(high_water_mark,before)
+    record = dbh.get_unprocessed_l2files_observation_range(ppid,high_water_mark,before)
 
     if dbh.exit_code >= 64:
         return None,None
@@ -846,6 +849,7 @@ if __name__ == '__main__':
                 break
 
             startdatetime,enddatetime = compute_open_loop_observation_range(dbh,
+                                                                            look_up_ppid_of_job_type("science"),
                                                                             min_elapsed_observation_seconds,
                                                                             max_elapsed_observation_seconds,
                                                                             l2file_settle_seconds,
