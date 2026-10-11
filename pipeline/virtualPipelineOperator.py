@@ -22,7 +22,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.9"
+swvers = "1.10"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -892,7 +892,11 @@ if __name__ == '__main__':
 
         # Launch reference-image pipelines.
 
-        fname_out = "launch_reference_image_pipelines_code" + "_" + proc_date + ".out"
+        # Each stage's stdout and stderr go to a log file named after the stage, the processing date
+        # and the processing request, so that the open loop's requests on the same processing date
+        # keep separate logs.
+
+        fname_out = "launch_reference_image_pipelines_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         launch_reference_image_pipelines_cmd = [python_cmd,
                                                 launch_reference_image_pipelines_code]
 
@@ -954,7 +958,7 @@ if __name__ == '__main__':
                                                            # is dual purposed to handle both reference-image pipeline jobs
                                                            # and science pipeline jobs.
 
-        fname_out = "register_reference_image_pipeline_jobs_code" + "_" + proc_date + ".out"
+        fname_out = "register_reference_image_pipeline_jobs_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         register_reference_image_pipeline_jobs_cmd = [python_cmd,
                                                       register_reference_image_pipeline_jobs_code,
                                                       proc_date]
@@ -987,7 +991,7 @@ if __name__ == '__main__':
         os.environ['STARTDATETIME'] = startdatetime
         os.environ['ENDDATETIME'] = enddatetime
 
-        fname_out = "launch_science_pipelines_code" + "_" + proc_date + ".out"
+        fname_out = "launch_science_pipelines_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         launch_science_pipelines_cmd = [python_cmd,
                                         launch_science_pipelines_code]
 
@@ -1045,7 +1049,7 @@ if __name__ == '__main__':
         print("ppid =",ppid)
         os.environ['PIPEID'] = str(ppid)              # Required by register_science_pipeline_jobs_code
 
-        fname_out = "register_science_pipeline_jobs_code" + "_" + proc_date + ".out"
+        fname_out = "register_science_pipeline_jobs_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         register_science_pipeline_jobs_cmd = [python_cmd,
                                               register_science_pipeline_jobs_code,
                                               proc_date]
@@ -1069,7 +1073,7 @@ if __name__ == '__main__':
         #
         # Load environment variable JOBPROCDATE to specify processing date.
 
-        fname_out = "launch_postproc_pipelines_code" + "_" + proc_date + ".out"
+        fname_out = "launch_postproc_pipelines_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         launch_postproc_pipelines_cmd = [python_cmd,
                                         launch_postproc_pipelines_code]
 
@@ -1123,7 +1127,7 @@ if __name__ == '__main__':
 
         # Register metadata from post-processing pipelines into operations database.
 
-        fname_out = "register_postproc_pipeline_jobs_code" + "_" + proc_date + ".out"
+        fname_out = "register_postproc_pipeline_jobs_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         register_postproc_pipeline_jobs_cmd = [python_cmd,
                                               register_postproc_pipeline_jobs_code,
                                               proc_date]
@@ -1147,7 +1151,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "load_psfcat_into_db_sources_code" + "_" + proc_date + ".out"
+        fname_out = "load_psfcat_into_db_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         load_psfcat_into_db_sources_cmd = [python_cmd,
                                            load_psfcat_into_db_sources_code]
 
@@ -1171,7 +1175,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "load_secat_into_db_xsources_code" + "_" + proc_date + ".out"
+        fname_out = "load_secat_into_db_xsources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         load_secat_into_db_xsources_cmd = [python_cmd,
                                            load_secat_into_db_xsources_code]
 
@@ -1194,7 +1198,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "crossmatch_sources_code" + "_" + proc_date + ".out"
+        fname_out = "crossmatch_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         crossmatch_sources_cmd = [python_cmd,
                                   crossmatch_sources_code]
 
@@ -1217,7 +1221,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "crossmatch_xsources_code" + "_" + proc_date + ".out"
+        fname_out = "crossmatch_xsources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         crossmatch_xsources_cmd = [python_cmd,
                                    crossmatch_xsources_code]
 
@@ -1240,7 +1244,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "compute_statistics_for_astroobjects_code" + "_" + proc_date + ".out"
+        fname_out = "compute_statistics_for_astroobjects_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         compute_statistics_for_astroobjects_cmd = [python_cmd,
                                                    compute_statistics_for_astroobjects_code]
 
@@ -1263,7 +1267,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "compute_statistics_for_xastroobjects_code" + "_" + proc_date + ".out"
+        fname_out = "compute_statistics_for_xastroobjects_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         compute_statistics_for_xastroobjects_cmd = [python_cmd,
                                                     compute_statistics_for_xastroobjects_code]
 
@@ -1284,7 +1288,7 @@ if __name__ == '__main__':
 
         # Launch script to delete not-best Merges database records.
 
-        fname_out = "prune_notbest_merges_code" + "_" + proc_date + ".out"
+        fname_out = "prune_notbest_merges_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         prune_notbest_merges_cmd = [python_cmd,
                                     prune_notbest_merges_code]
 
@@ -1305,7 +1309,7 @@ if __name__ == '__main__':
 
         # Launch script to delete not-best XMerges database records.
 
-        fname_out = "prune_notbest_xmerges_code" + "_" + proc_date + ".out"
+        fname_out = "prune_notbest_xmerges_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         prune_notbest_xmerges_cmd = [python_cmd,
                                      prune_notbest_xmerges_code]
 
@@ -1330,7 +1334,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "produce_alerts_code" + "_" + proc_date + ".out"
+        fname_out = "produce_alerts_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         produce_alerts_cmd = [python_cmd,
                               produce_alerts_code]
 

@@ -59,6 +59,16 @@ exposures to be processed.  They are not the processing date: the processing dat
 command-line argument, and it is what the S3 object keys and the ``Jobs`` records are filed
 under.
 
+The open loop is started the same way, without the processing date and without
+``STARTDATETIME`` and ``ENDDATETIME``:
+
+.. code-block::
+
+    export DBNAME=socsimsdb
+    unset STARTDATETIME ENDDATETIME
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py >& virtualPipelineOperator_openloop.out &
+
 These environment variables are required, and the VPO quits with exit code 64 if any is
 unset (``STARTDATETIME`` and ``ENDDATETIME`` only for a processing-date run):
 
@@ -175,13 +185,30 @@ processing request under way, if any, and exits with code 0 before starting the 
 or within ten seconds if it is sleeping.  A stage failure still terminates the VPO, as
 described under `Error handling`_.
 
+The VPO's own log shows what each iteration decided.  Lines to look for:
+
+.. code-block::
+
+    compute_open_loop_observation_range: high_water_mark=..., unprocessed L2Files=..., earliest dateobs=..., latest dateobs=...
+    compute_open_loop_observation_range: exposure expid=... (dateobs=...) is still arriving: L2Files for 12 of 18 SCAs, latest registered ...; the observation range ends before it
+    compute_open_loop_observation_range: unprocessed L2Files span ... s, less than min_elapsed_observation_seconds = 900.0; waiting for more data
+    Sleeping 600.0 seconds before checking for unprocessed L2Files again...
+    Open-loop observation range: startdatetime = ... , enddatetime = ...
+    Open loop: completed processing request reqid=...; starting iteration i = ...
+    Terminating gracefully before starting a new processing request...
+
+Each request's per-stage log files carry its ``reqid`` (see `Stages`_), so the requests on
+the same processing date keep separate logs.
+
 
 Stages
 ************************************
 
 The VPO runs the following stages in order for the processing date.  Each stage is a
 separate Python script, launched as a subprocess, whose stdout and stderr go to a per-stage
-log file named after the stage and the processing date.
+log file in the working directory named after the stage, the processing date and the
+``reqid`` of the processing request, for example
+``launch_science_pipelines_code_2026-10-10_req123.out``.
 
 .. list-table::
    :header-rows: 1
@@ -346,7 +373,9 @@ the preceding stages, so a failure there is reported but does not abort the proc
 request, and the ``ProcReqs`` record is still closed out with ``status = 1``.
 
 A failure to open the database connection, or to insert the ``ProcReqs`` record, exits with
-the database handler's own exit code before any stage runs.
+the database handler's own exit code before any stage runs.  In the open loop, so does a
+failure of the database queries that choose the observation range; no ``ProcReqs`` record has
+been created at that point.
 
 Resubmitting failed AWS Batch jobs (see `Resubmitting failed AWS Batch jobs`_) stops the run
 only if a resubmitted job's ``Jobs`` record cannot be updated with its new AWS Batch job ID;
