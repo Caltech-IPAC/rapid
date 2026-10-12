@@ -217,8 +217,8 @@ S3OBJPRF          S3 object prefix where reference image is stored
 RFFILEN           Filename of reference image in S3 bucket
 INFOBITS          Bit-wise flags for special conditions about the reference image (BITnn below)
 STATUS            Overall quality: 1 = usable, 0 = bad (a fatal InfoBit is set)
-BITnn             Definition of InfoBit nn, with its threshold; see cdf/infobitsref.txt and the
-                  [REFIMAGE_INFOBITS] section of the configuration file
+BITnn             Definition of InfoBit nn, with its threshold filled in (bits in use only; see
+                  :ref:`refimage-infobits`)
 BUNIT             Reference-image data units [DN/s]
 FIELD             Roman sky-tile number
 FID               RAPID-OPS-DB filter number

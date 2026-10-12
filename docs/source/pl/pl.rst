@@ -181,6 +181,115 @@ Also below are a 7Kx7K-pixel reference image and its associated coverage map, re
 .. image:: awaicgen_output_mosaic_cov_map_100.png
 
 
+.. _refimage-infobits:
+
+Reference-image InfoBits and status
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Every newly generated reference image gets an ``infobits`` bit-flag word and a ``status``, as ZTF
+reference images do.  Each InfoBit records one quality condition; the ``status`` is 1 (usable),
+or 0 (bad) when any *fatal* bit is set.  They are computed by ``evaluate_refimage_quality`` in
+``pipeline/referenceImageSubs.py``, in both the reference-image pipeline
+(``awsBatchSubmitJobs_runSingleReferenceImagePipeline.py``) and the science pipeline when it
+generates its own reference image (``awsBatchSubmitJobs_runSingleSciencePipeline.py``), after the
+reference image's SExtractor and PhotUtils PSF-fit catalogs have been made.  A reference image
+taken from the database keeps the InfoBits and status it was registered with.
+
+The bits are defined in ``cdf/infobitsref.txt``.  A bit is set when its condition is met; a metric
+that could not be computed (NaN) sets no bit, and comparisons are strict (a value equal to its
+threshold sets no bit).  Reference-image pixels are in DN/s at the filter zero point
+``zprefimg``, and the pixel scale is read from the reference image's WCS (0.11 arcsec).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 6 34 40 20
+
+   * - Bit
+     - Set when
+     - Metric
+     - Threshold
+   * - 0
+     - Median background level > t00
+     - ``gmedian`` of the reference image [DN/s]
+     - t00 = 1.0 DN/s
+   * - 1
+     - Robust pixel noise > t01
+     - ``datascale`` = 0.5 (p84 - p16) of the reference image [DN/s]
+     - t01 = 0.1 DN/s
+   * - 2
+     - Percent of bad/saturated pixels > t02
+     - NaN pixels with coverage > 0, plus saturated pixels, as a percentage of the pixels with
+       coverage > 0
+     - t02 = 65 %
+   * - 3
+     - Median source FWHM > t03
+     - Median ``FWHM_IMAGE`` of the reference-image SExtractor catalog, times the pixel scale
+     - t03 = 1.0 arcsec
+   * - 4
+     - Percentile of source FWHM > t04
+     - ``fwhm_percentile`` (90th) percentile of the same FWHMs
+     - t04 = 2.0 arcsec
+   * - 5
+     - Limiting magnitude from the PSF-fit catalog < t05
+     - ``zprefimg`` - 2.5 log10(``maglim_snr`` x median ``flux_err``) of the PhotUtils catalog
+     - t05 = 15.0 mag
+   * - 6
+     - Limiting magnitude from the image noise < t06
+     - ``maglim_snr``-sigma point-source limit from the background noise and the PSF noise
+       pixels (``compute_limiting_magnitude_for_l2_image``)
+     - t06 = 15.0 mag
+   * - 7
+     - Number of PSF-fit catalog sources < t07
+     - Rows of the PhotUtils catalog (0 if it could not be made)
+     - t07 = 10
+   * - 8
+     - Number of SExtractor catalog sources < t08
+     - Rows of the SExtractor catalog
+     - t08 = 10
+   * - 9
+     - Reserved
+     - (ZTF: median number of input photometric-calibration matches; RAPID has none)
+     -
+   * - 10
+     - Robust spread of the input zero points > t10
+     - 0.5 (p84 - p16) of the input images' ``ZPTMAG``
+     - t10 = 3.5 mag
+   * - 16
+     - PSF-fit catalog not possible
+     - The PhotUtils PSF-fit catalog could not be made
+     -
+
+The bits follow ZTF's, with these differences: bit 2 counts only the pixels with coverage, since
+the reference-image mosaic is NaN outside the area its input images cover; bits 3 and 4 use the
+reference image's own SExtractor catalog, since RAPID does not record the seeing of the input
+images; and bit 4 uses a percentile rather than ZTF's maximum, since the largest FWHM in the
+catalog is that of a galaxy or blend.
+
+The thresholds, ``fwhm_percentile``, ``maglim_snr``, and the fatal bits are set in the
+``[REFIMAGE_INFOBITS]`` section of ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``,
+which the reference-image and science pipeline launchers copy into each job's configuration
+(the values above are used if it is missing).  The fatal bits are 2, 5, 7, 8 and 16, as for ZTF.
+The thresholds are provisional: where the units are those of ZTF (percent, numbers of sources,
+magnitudes of zero-point spread) they are ZTF's, and the others are set loose enough that a
+normal reference image raises no bit.  They are to be tuned on real data; every job log prints
+the metrics as ``Reference-image QA metrics: {...}``, followed by the InfoBits and status.
+
+The InfoBits and status are recorded in:
+
+* the ``infobits`` and ``status`` columns of the ``RefImages`` database record, through the
+  product configuration file;
+* the reference image and its uncertainty image, as FITS keywords ``INFOBITS`` and ``STATUS``,
+  with a ``BITnn`` keyword for each bit in use whose comment is its definition with the
+  threshold filled in (see :doc:`../prod/products`).
+
+.. note::
+   A reference image with ``status = 0`` is not used: the database query for the best reference
+   image of a field and filter selects only ``status > 0``.  The next reference-image launch, or
+   the science pipeline, will therefore generate it again from the same inputs, most likely with
+   the same result.  Tighten the thresholds or add fatal bits only after checking the metrics on
+   real reference images.
+
+
 Image Differencing
 ************************************
 
