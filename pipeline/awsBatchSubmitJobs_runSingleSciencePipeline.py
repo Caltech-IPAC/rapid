@@ -51,6 +51,7 @@ import pipeline.differenceImageSubs as dfis
 import pipeline.sfftCommandSubs as sfftcmd
 import pipeline.zogyNoiseSubs as zogynoise
 import pipeline.artifactRepairSubs as artrepair
+import pipeline.psfFwhmSubs as psffwhm
 
 start_time_benchmark = time.time()
 start_time_benchmark_at_start = start_time_benchmark
@@ -677,7 +678,7 @@ if __name__ == '__main__':
     # Compute additional quantities needed for later.
 
     sextractor_refimage_paramsfile = cfg_path + "/rapidSexParamsRefImage.inp"
-    params_to_get_refimage = ["FWHM_IMAGE"]
+    params_to_get_refimage = psffwhm.point_source_catalog_params
 
     vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_sex_refimage_catalog,
                                                              sextractor_refimage_paramsfile,
@@ -685,15 +686,11 @@ if __name__ == '__main__':
 
     nsexcatsources_refimage = len(vals_refimage)
 
-    vals_fwhm = []
-    for val in vals_refimage:
-        vals_fwhm.append(float(val[0]))
 
-    np_vals_fwhm = np.array(vals_fwhm)
+    # The median FWHM is taken over point sources; over all sources galaxies pull it up.
 
-    fwhm_ref_minpix = np.nanmin(np_vals_fwhm)
-    fwhm_ref_maxpix = np.nanmax(np_vals_fwhm)
-    fwhm_ref_medpix = np.nanmedian(np_vals_fwhm)
+    fwhm_ref_minpix,fwhm_ref_maxpix,fwhm_ref_medpix = psffwhm.catalog_fwhm_stats(vals_refimage,
+                                                                                 label="reference-image")
 
 
     print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix =",fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix)
@@ -1053,7 +1050,7 @@ if __name__ == '__main__':
     # Compute additional quantities needed for the science-image PSF.
 
     sextractor_sciimage_paramsfile = cfg_path + "/rapidSexParamsSciImage.inp"
-    params_to_get_sciimage = ["FWHM_IMAGE"]
+    params_to_get_sciimage = psffwhm.point_source_catalog_params
 
     vals_sciimage = util.parse_ascii_text_sextractor_catalog(filename_sciimage_catalog,
                                                              sextractor_sciimage_paramsfile,
@@ -1061,15 +1058,11 @@ if __name__ == '__main__':
 
     nsexcatsources_sciimage = len(vals_sciimage)
 
-    fwhm_sci_vals = []
-    for val in vals_sciimage:
-        fwhm_sci_vals.append(float(val[0]))
 
-    np_fwhm_sci_vals = np.array(fwhm_sci_vals)
+    # The median FWHM is taken over point sources; over all sources galaxies pull it up.
 
-    fwhm_sci_minpix = np.nanmin(np_fwhm_sci_vals)
-    fwhm_sci_maxpix = np.nanmax(np_fwhm_sci_vals)
-    fwhm_sci_medpix = np.nanmedian(np_fwhm_sci_vals)
+    fwhm_sci_minpix,fwhm_sci_maxpix,fwhm_sci_medpix = psffwhm.catalog_fwhm_stats(vals_sciimage,
+                                                                                 label="science-image")
 
     print("fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix =",fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix)
 
