@@ -49,9 +49,9 @@ import database.modules.utils.rapid_db as db
 import pipeline.referenceImageSubs as rfis
 import pipeline.differenceImageSubs as dfis
 import pipeline.sfftCommandSubs as sfftcmd
+import pipeline.sfftDetectionSubs as sfftdet
 import pipeline.zogyNoiseSubs as zogynoise
 import pipeline.artifactRepairSubs as artrepair
-import pipeline.sfftDetectionSubs as sfftdet
 
 start_time_benchmark = time.time()
 start_time_benchmark_at_start = start_time_benchmark
