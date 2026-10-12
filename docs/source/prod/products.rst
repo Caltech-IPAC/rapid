@@ -215,7 +215,10 @@ PPID              Unique RAPID-OPS-DB ID for Pipelines table in RAPID operations
 S3BUCKN           S3 bucket where reference image is stored
 S3OBJPRF          S3 object prefix where reference image is stored
 RFFILEN           Filename of reference image in S3 bucket
-INFOBITS          Bit-wise FLAGS for special conditions about reference image (TBD)
+INFOBITS          Bit-wise flags for special conditions about the reference image (BITnn below)
+STATUS            Overall quality: 1 = usable, 0 = bad (a fatal InfoBit is set)
+BITnn             Definition of InfoBit nn, with its threshold; see cdf/infobitsref.txt and the
+                  [REFIMAGE_INFOBITS] section of the configuration file
 BUNIT             Reference-image data units [DN/s]
 FIELD             Roman sky-tile number
 FID               RAPID-OPS-DB filter number
