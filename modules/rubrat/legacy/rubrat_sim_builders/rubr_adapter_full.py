@@ -1,3 +1,10 @@
+# DEPRECATED - kept for reference only; not imported by the pipeline and not maintained.
+# Origin: RuBR-AT src/ingestion/rubr_adapter.py (Aayush Kuloor, commit 3e665de), copied here
+# untrimmed 2026-10-09.  The live preprocessing/rubr_adapter.py is this file with the truth-catalog
+# generation, labelling (sections 3-5), legacy six-feature dict, and NPZ batch assembly (8-10)
+# removed; those parts remain here for the OpenUniverse/RImTimSim simulations.  Imports refer to
+# the RuBR-AT layout and will not resolve here as written.
+
 """
 rubr_adapter.py — FITS-to-RuBR Integration Adapter
 =====================================================

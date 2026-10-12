@@ -9,9 +9,9 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from classification.evaluation import build_model_report, predict_model
-from classification.metrics import compute_optimal_threshold
-from rubrat.magnitude import apply_hltds_magnitude_policy, corrected_ab_magnitude
+from modules.rubrat.training.evaluation import build_model_report, predict_model
+from modules.rubrat.training.metrics import compute_optimal_threshold
+from modules.rubrat.training.magnitude import apply_hltds_magnitude_policy, corrected_ab_magnitude
 
 
 def _metadata(values: np.ndarray) -> list[dict[str, Any]]:

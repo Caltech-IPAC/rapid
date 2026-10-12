@@ -1758,7 +1758,7 @@ def compute_rb(input_sci_filename,
 
     # Threshold paired with the checkpoint.  rubrat is imported here only.
 
-    from rubrat.rapid import RAPIDRealBogusClassifier, load_validation_threshold
+    from modules.rubrat.inference.classifier import RealBogusClassifier, load_validation_threshold
 
     threshold = load_validation_threshold(threshold_json)
 
@@ -1806,7 +1806,7 @@ def compute_rb(input_sci_filename,
     classifier = _rb_classifiers.get(key)
 
     if classifier is None:
-        classifier = RAPIDRealBogusClassifier(checkpoint,
+        classifier = RealBogusClassifier(checkpoint,
                                               feats_scaler,
                                               threshold = threshold,
                                               survey_id = int(survey_id),

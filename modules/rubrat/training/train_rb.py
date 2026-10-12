@@ -4,18 +4,18 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+# The rapid repository root, recorded in run metadata through git_commit().  Run with the
+# repository root on PYTHONPATH, as the other RAPID scripts are.
+ROOT = Path(__file__).resolve().parents[3]
 
 from tensorflow import keras
 
-from classification import gpu_config  # noqa: F401
-from classification.losses import focal_bce
-from classification.model_factory import build_rb_model, load_config
-from classification.training import (
+from modules.rubrat.model import gpu_config  # noqa: F401
+from modules.rubrat.training.losses import focal_bce
+from modules.rubrat.model.model_factory import build_rb_model, load_config
+from modules.rubrat.training.train_utils import (
     ValidationReportCallback,
     WarmupCosineDecay,
     git_commit,
@@ -26,7 +26,7 @@ from classification.training import (
     steps_for,
     write_json,
 )
-from rubrat.provenance import run_context
+from modules.rubrat.training.provenance import run_context
 
 
 def parse_args() -> argparse.Namespace:

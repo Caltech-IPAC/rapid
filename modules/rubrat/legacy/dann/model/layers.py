@@ -1,3 +1,8 @@
+# DEPRECATED - kept for reference only; not imported by the pipeline and not maintained.
+# Origin: rapid/RuBR/model/layers.py (Ashish Mahabal, commit 90fbc83b, 2026-05-29), moved here
+# 2026-10-09.  Rotation-invariant image encoder and gradient-reversal layer of the earlier
+# six-feature RotInv model, used by the scripts in legacy/dann/; not the RuBR-AT model.
+
 import tensorflow as tf
 from tensorflow.keras import layers, Model
 

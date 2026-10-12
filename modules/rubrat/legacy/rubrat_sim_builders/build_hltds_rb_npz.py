@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# DEPRECATED - kept for reference only; not imported by the pipeline and not maintained.
+# Origin: RuBR-AT scripts/build_hltds_rb_npz.py (Aayush Kuloor, commit 3e665de), moved here
+# 2026-10-09.  Builds training shards from OpenUniverse HLTDS products, Roman_TDS truth files, and
+# DAOStarFinder catalogs.  Superseded by the socsims/SExtractor shard builder to be written in
+# preprocessing/.  Imports refer to the RuBR-AT layout (classification.*, ingestion.*) and will
+# not resolve here as written.
 """Build Phase 1 HLTDS real/bogus NPZ splits."""
 
 from __future__ import annotations

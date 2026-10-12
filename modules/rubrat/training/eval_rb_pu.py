@@ -5,20 +5,16 @@ from __future__ import annotations
 
 import argparse
 import csv
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 
 import numpy as np
 from tensorflow import keras
 
-from classification import gpu_config  # noqa: F401
-from classification import model_factory as _model_factory  # noqa: F401  # register custom Keras layers
-from classification.data_utils import load_npz_dataset
-from classification.pu import validate_pu_shards
-from classification.training import prefer_gpu_memory_growth, write_json
+from modules.rubrat.model import gpu_config  # noqa: F401
+from modules.rubrat.model import model_factory as _model_factory  # noqa: F401  # register custom Keras layers
+from modules.rubrat.preprocessing.data_utils import load_npz_dataset
+from modules.rubrat.training.pu import validate_pu_shards
+from modules.rubrat.training.train_utils import prefer_gpu_memory_growth, write_json
 
 SURVEY_IDS = {"hltds": 0, "gbtds": 1}
 

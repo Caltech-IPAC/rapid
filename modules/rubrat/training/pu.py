@@ -7,7 +7,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from classification.data_utils import EXPECTED_FEATURE_NAMES, FeatureZScore, resolve_npz_paths
+from modules.rubrat.preprocessing.data_utils import EXPECTED_FEATURE_NAMES, FeatureZScore, resolve_npz_paths
 
 
 def _positive_group(meta: object, shard: Path, index: int) -> str:
@@ -79,7 +79,7 @@ def nnpu_risk(y_pu, y_pred, positive_prior: float, *, eps: float = 1e-7) -> dict
     """
     import tensorflow as tf
 
-    from classification import gpu_config  # noqa: F401
+    from modules.rubrat.model import gpu_config  # noqa: F401
 
     pi_p = tf.cast(positive_prior, tf.float32)
     y = tf.cast(tf.reshape(y_pu, (-1,)), tf.float32)
@@ -173,7 +173,7 @@ def make_pu_dataset(
     """Create a PU ``tf.data.Dataset`` yielding model inputs and ``pu_label``."""
     import tensorflow as tf
 
-    from classification import gpu_config  # noqa: F401
+    from modules.rubrat.model import gpu_config  # noqa: F401
 
     if controlled_labels is None:
         validate_pu_shards(paths, expected_survey_id=expected_survey_id, verbose=verbose)

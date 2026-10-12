@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# DEPRECATED - kept for reference only; not imported by the pipeline and not maintained.
+# Origin: RuBR-AT scripts/label_detection_catalogs.py (Aayush Kuloor, commit 3e665de), moved here
+# 2026-10-09.  Truth-matches OpenUniverse HLTDS detection catalogs to Roman_TDS index and
+# injection files to write per-jid label tables.  The socsims truth is the per-field injection
+# catalogs instead (s3://rapid-pipeline-files/injection_catalogs_<date>/), so a new matcher is to
+# be written in preprocessing/.  Imports refer to the RuBR-AT layout (ingestion.*) and will not
+# resolve here as written.
 """
 Cross-match pipeline detection catalogs to simulation truth and write labels.
 

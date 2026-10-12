@@ -11,16 +11,13 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
 
-from classification import gpu_config  # noqa: F401
-from classification import model_factory as _model_factory  # noqa: F401  # registers custom Keras layers
-from classification.data_utils import FeatureZScore, coerce_feats, load_npz_dataset, resolve_npz_paths
-from classification.metrics import confusion_matrix
-from classification.training import prefer_gpu_memory_growth
-from ingestion.rubr_adapter import build_feats_dict_legacy, load_detection_catalog
-
+from modules.rubrat.model import gpu_config  # noqa: F401
+from modules.rubrat.model import model_factory as _model_factory  # noqa: F401  # registers custom Keras layers
+from modules.rubrat.preprocessing.data_utils import FeatureZScore, coerce_feats, load_npz_dataset, resolve_npz_paths
+from modules.rubrat.training.metrics import confusion_matrix
+from modules.rubrat.training.train_utils import prefer_gpu_memory_growth
 REPORT_SCHEMA_VERSION = "cnn_eval_v1"
 RB_THRESHOLD = 0.5
-RUBR_THRESHOLD = 0.577
 
 
 def write_json(path: str | Path, payload: dict[str, Any]) -> None:
@@ -303,72 +300,6 @@ def build_model_report(
         report["roc_curve"] = roc_curve_points(y_true, score_vector)
         report["pr_curve"] = pr_curve_points(y_true, score_vector)
     return report
-
-
-def legacy_feature_rows_from_metadata(metadata: np.ndarray | Sequence[Any]) -> np.ndarray:
-    """Re-extract legacy six RuBR features from PSF rows referenced by metadata."""
-    rows = []
-    parquet_cache: dict[str, pd.DataFrame] = {}
-    for meta in metadata_list(metadata):
-        row_dict: dict[str, Any] | None = None
-        parquet_path = meta.get("parquet_path") or meta.get("psf_path")
-        row_index = meta.get("row_index")
-        if parquet_path is not None and row_index is not None and Path(str(parquet_path)).is_file():
-            path = str(parquet_path)
-            if path not in parquet_cache:
-                if Path(path).suffix == ".parquet":
-                    parquet_cache[path] = pd.read_parquet(path)
-                else:
-                    parquet_cache[path] = load_detection_catalog(Path(path))
-            df = parquet_cache[path]
-            i = int(row_index)
-            if 0 <= i < len(df):
-                row_dict = df.iloc[i].to_dict()
-        if row_dict is None:
-            row_dict = meta
-        feat = build_feats_dict_legacy(row_dict)
-        rows.append([feat[k] for k in sorted(feat)])
-    return np.asarray(rows, dtype=np.float32)
-
-
-def images_channels_last_to_rubr_channels_first(X: np.ndarray) -> np.ndarray:
-    arr = np.asarray(X, dtype=np.float32)
-    if arr.ndim != 4 or arr.shape[-1] != 3:
-        raise ValueError(f"Expected channels-last (N,H,W,3), got {arr.shape}")
-    # New CNN order is science, reference, sfft_diff. Legacy RuBR order is
-    # reference, science, sfft_diff.
-    return np.transpose(arr[..., [1, 0, 2]], (0, 3, 1, 2)).astype(np.float32)
-
-
-def load_rubr_scores(
-    *,
-    predictions_path: str | Path | None,
-    model_path: str | Path | None,
-    X_channels_first: np.ndarray,
-    legacy_feats: np.ndarray,
-    batch_size: int = 128,
-) -> tuple[np.ndarray | None, dict[str, Any]]:
-    if predictions_path:
-        path = Path(predictions_path)
-        if path.suffix == ".npz":
-            with np.load(path, allow_pickle=True) as z:
-                key = "scores" if "scores" in z.files else "pred" if "pred" in z.files else z.files[0]
-                return np.asarray(z[key], dtype=np.float64).reshape(-1), {"source": str(path), "key": key}
-        df = pd.read_csv(path)
-        for key in ("score", "scores", "pred", "rb_score"):
-            if key in df.columns:
-                return df[key].to_numpy(dtype=np.float64), {"source": str(path), "key": key}
-        raise ValueError(f"Could not find a score column in {path}")
-    if model_path:
-        from rubr_compat.load import load_rubr_model
-
-        model = load_rubr_model(model_path)
-        try:
-            pred = model.predict({"images": X_channels_first, "feats": legacy_feats}, batch_size=batch_size, verbose=0)
-        except Exception:
-            pred = model.predict([X_channels_first, legacy_feats], batch_size=batch_size, verbose=0)
-        return np.asarray(pred, dtype=np.float64).reshape(-1), {"source": str(model_path), "kind": "keras_model"}
-    return None, {"status": "not_run", "reason": "provide --rubr-predictions or --rubr-model"}
 
 
 def attention_scores_for_batch(model: keras.Model, inputs: dict[str, np.ndarray]) -> np.ndarray:

@@ -16,11 +16,11 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
-from classification.data_utils import EXPECTED_FEATURE_NAMES, FeatureZScore
-from classification.npz_builders import FILTER_IDS, arcsinh_stack_cutout, feature_row, filter_id
-from ingestion.fits_loader import load_fits
-from ingestion.rubr_adapter import load_detection_catalog, normalize_filter_name
-from rubrat.validation import sha256_file
+from modules.rubrat.preprocessing.data_utils import EXPECTED_FEATURE_NAMES, FeatureZScore
+from modules.rubrat.preprocessing.npz_builders import FILTER_IDS, arcsinh_stack_cutout, feature_row, filter_id
+from modules.rubrat.preprocessing.fits_loader import load_fits
+from modules.rubrat.preprocessing.rubr_adapter import load_detection_catalog, normalize_filter_name
+from modules.rubrat.preprocessing.validation import sha256_file
 
 SCIENCE_PRODUCT = "bkg_subbed_science_image.fits"
 REFERENCE_PRODUCT = "awaicgen_output_mosaic_image_resampled_gainmatched.fits"
@@ -182,7 +182,7 @@ def _canonical_filter(name: str) -> str:
     return canonical
 
 
-class RAPIDRealBogusClassifier:
+class RealBogusClassifier:
     """Long-lived RuBR-AT scorer suitable for one or many RAPID jobs."""
 
     def __init__(
@@ -211,7 +211,7 @@ class RAPIDRealBogusClassifier:
 
         from tensorflow import keras
 
-        from classification import model_factory as _model_factory  # noqa: F401
+        from modules.rubrat.model import model_factory as _model_factory  # noqa: F401
 
         self.model = keras.models.load_model(self.checkpoint, compile=False)
         image_input = next((item for item in self.model.inputs if item.name.split(":")[0] == "images"), None)

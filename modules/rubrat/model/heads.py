@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tensorflow.keras import layers
 
-from classification import gpu_config  # noqa: F401
+from modules.rubrat.model import gpu_config  # noqa: F401
 
 
 def _mlp_head(x, units: int, dropout: float, name: str):

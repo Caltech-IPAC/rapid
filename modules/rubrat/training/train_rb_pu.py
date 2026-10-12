@@ -5,20 +5,20 @@ from __future__ import annotations
 
 import argparse
 import math
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+# The rapid repository root, recorded in run metadata through git_commit().  Run with the
+# repository root on PYTHONPATH, as the other RAPID scripts are.
+ROOT = Path(__file__).resolve().parents[3]
 
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 
-from classification import gpu_config  # noqa: F401
-from classification.model_factory import build_rb_model, load_config
-from classification.pu import controlled_scar_labels, make_pu_dataset, nnpu_risk, validate_pu_shards
-from classification.training import (
+from modules.rubrat.model import gpu_config  # noqa: F401
+from modules.rubrat.model.model_factory import build_rb_model, load_config
+from modules.rubrat.training.pu import controlled_scar_labels, make_pu_dataset, nnpu_risk, validate_pu_shards
+from modules.rubrat.training.train_utils import (
     WarmupCosineDecay,
     git_commit,
     prefer_gpu_memory_growth,
@@ -26,7 +26,7 @@ from classification.training import (
     set_reproducible,
     write_json,
 )
-from rubrat.provenance import run_context
+from modules.rubrat.training.provenance import run_context
 
 SURVEY_IDS = {"hltds": 0, "gbtds": 1}
 

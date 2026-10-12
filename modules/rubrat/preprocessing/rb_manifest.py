@@ -8,7 +8,7 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 
-from classification.data_utils import resolve_npz_paths
+from modules.rubrat.preprocessing.data_utils import resolve_npz_paths
 
 
 def row_id(*, jid: str, row_index: int) -> str:

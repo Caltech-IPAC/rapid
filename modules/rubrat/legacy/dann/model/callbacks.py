@@ -1,3 +1,8 @@
+# DEPRECATED - kept for reference only; not imported by the pipeline and not maintained.
+# Origin: rapid/RuBR/model/callbacks.py (Ashish Mahabal, commit 90fbc83b, 2026-05-29), moved here
+# 2026-10-09.  Training callbacks for the earlier six-feature RotInv model, used by the scripts in
+# legacy/dann/.
+
 import tensorflow as tf
 
 

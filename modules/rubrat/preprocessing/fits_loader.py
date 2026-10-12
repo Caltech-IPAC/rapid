@@ -25,7 +25,7 @@ Shape contract
 
 Usage
 -----
-    from ingestion.fits_loader import load_fits, load_fits_meta, validate_fits_output
+    from modules.rubrat.preprocessing.fits_loader import load_fits, load_fits_meta, validate_fits_output
 
     result = load_fits('/path/to/bkg_subbed_science_image.fits')
     meta   = load_fits_meta('/path/to/file.fits')

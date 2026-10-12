@@ -4,12 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from classification.data_utils import resolve_npz_paths, save_feature_scaler  # noqa: E402
+from modules.rubrat.preprocessing.data_utils import resolve_npz_paths, save_feature_scaler
 
 
 def _is_train_npz(path: Path) -> bool:

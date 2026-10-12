@@ -1,3 +1,9 @@
+# DEPRECATED - kept for reference only; not imported by the pipeline and not maintained.
+# Origin: rapid/RuBR/experiments/domain_adaption/train_control_baseline.py (Ashish Mahabal,
+# commit 90fbc83b, 2026-05-29), moved here 2026-10-09.  Non-adversarial control for the DANN
+# experiment, on the earlier six-feature RotInv model; not the RuBR-AT model in model/.
+# Imports refer to its original layout (model.*) and resolve only with legacy/dann/ on sys.path.
+
 """
 Control Training Script for Transient Detection
 

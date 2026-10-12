@@ -1,3 +1,8 @@
+# DEPRECATED - kept for reference only; not imported by the pipeline and not maintained.
+# Origin: rapid/RuBR/model/dann_model.py (Ashish Mahabal, commit 90fbc83b, 2026-05-29), moved
+# here 2026-10-09.  DANN architecture (gradient-reversal domain head) over the earlier
+# six-feature RotInv encoder, used by the scripts in legacy/dann/; not the RuBR-AT model.
+
 """
 Domain Adversarial Neural Network (DANN) Model Architecture
 

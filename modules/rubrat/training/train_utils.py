@@ -14,9 +14,9 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 
-from classification import gpu_config  # noqa: F401 — restrict CUDA to GPU 0 before TF init
-from classification.data_utils import FeatureZScore, load_npz_dataset, make_dataset, resolve_npz_paths
-from classification.metrics import classification_report, compute_optimal_threshold, macro_f1
+from modules.rubrat.model import gpu_config  # noqa: F401 — restrict CUDA to GPU 0 before TF init
+from modules.rubrat.preprocessing.data_utils import FeatureZScore, load_npz_dataset, make_dataset, resolve_npz_paths
+from modules.rubrat.training.metrics import classification_report, compute_optimal_threshold, macro_f1
 
 
 def set_reproducible(seed: int = 42) -> None:

@@ -12,10 +12,10 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
-from classification.data_utils import EXPECTED_FEATURE_NAMES, coerce_feats
-from classification.phase0_utils import convert_truth_id, normalize_psf_aliases
-from ingestion.fits_loader import load_fits
-from ingestion.rubr_adapter import build_feats_dict, extract_cutout
+from modules.rubrat.preprocessing.data_utils import EXPECTED_FEATURE_NAMES, coerce_feats
+from modules.rubrat.preprocessing.phase0_utils import convert_truth_id, normalize_psf_aliases
+from modules.rubrat.preprocessing.fits_loader import load_fits
+from modules.rubrat.preprocessing.rubr_adapter import build_feats_dict, extract_cutout
 
 FILTER_IDS = {
     "R062": 0,

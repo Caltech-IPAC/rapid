@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from classification.data_utils import resolve_npz_paths
-from rubrat.validation import sha256_file
+from modules.rubrat.preprocessing.data_utils import resolve_npz_paths
+from modules.rubrat.preprocessing.validation import sha256_file
 
 
 def artifact_refs(paths: str | Path | Sequence[str | Path]) -> list[dict[str, Any]]:

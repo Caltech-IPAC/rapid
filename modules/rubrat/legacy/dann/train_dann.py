@@ -1,3 +1,9 @@
+# DEPRECATED - kept for reference only; not imported by the pipeline and not maintained.
+# Origin: rapid/RuBR/experiments/domain_adaption/train_dann.py (Ashish Mahabal, commit 90fbc83b,
+# 2026-05-29), moved here 2026-10-09.  Domain-adversarial (DANN) training of the earlier
+# six-feature RotInv real/bogus model; it does not target the RuBR-AT model in model/.
+# Imports refer to its original layout (model.*) and resolve only with legacy/dann/ on sys.path.
+
 """
 Domain Adversarial Training for Transient Detection
 

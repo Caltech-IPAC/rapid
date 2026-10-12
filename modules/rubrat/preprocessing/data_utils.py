@@ -112,7 +112,7 @@ def load_npz_dataset(
 def _import_tf():
     import tensorflow as tf
 
-    from classification import gpu_config  # noqa: F401
+    from modules.rubrat.model import gpu_config  # noqa: F401
 
     return tf
 

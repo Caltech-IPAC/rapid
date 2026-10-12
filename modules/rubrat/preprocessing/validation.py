@@ -9,8 +9,8 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from classification.data_utils import EXPECTED_FEATURE_NAMES, resolve_npz_paths
-from classification.rb_manifest import row_id_from_metadata
+from modules.rubrat.preprocessing.data_utils import EXPECTED_FEATURE_NAMES, resolve_npz_paths
+from modules.rubrat.preprocessing.rb_manifest import row_id_from_metadata
 
 HLTDS_REQUIRED = (
     "bkg_subbed_science_image.fits",

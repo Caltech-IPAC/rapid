@@ -10,9 +10,9 @@ import yaml
 from tensorflow import keras
 from tensorflow.keras import layers
 
-from classification import gpu_config  # noqa: F401
-from classification.cnn_encoder import ResNetEncoder, RotInvariantResNetEncoder, SmallCNNEncoder
-from classification.cross_attention import (
+from modules.rubrat.model import gpu_config  # noqa: F401
+from modules.rubrat.model.cnn_encoder import ResNetEncoder, RotInvariantResNetEncoder, SmallCNNEncoder
+from modules.rubrat.model.cross_attention import (
     CrossAttentionFusion,
     GAPLateConcatFusion,
     GatedFusion,
@@ -20,8 +20,8 @@ from classification.cross_attention import (
     TabularOnlyFusion,
     TabularQueryBuilder,
 )
-from classification.data_utils import EXPECTED_FEATURE_NAMES
-from classification.heads import build_rb_head
+from modules.rubrat.preprocessing.data_utils import EXPECTED_FEATURE_NAMES
+from modules.rubrat.model.heads import build_rb_head
 
 
 @keras.utils.register_keras_serializable(package="UnifiedRAPID")

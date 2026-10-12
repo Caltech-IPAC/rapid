@@ -8,7 +8,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-from classification import gpu_config  # noqa: F401
+from modules.rubrat.model import gpu_config  # noqa: F401
 
 
 @keras.utils.register_keras_serializable(package="UnifiedRAPID")
