@@ -396,7 +396,12 @@ if __name__ == '__main__':
         medpixunc = stats_uncimage["gmed"]
 
 
-        # Generate SExtractor reference-image catalog.
+        # Generate SExtractor reference-image catalog, with magnitudes on the reference image's
+        # zero point (the MAGZP the coadd was scaled to).
+
+        sextractor_refimage_dict["sextractor_MAG_ZEROPOINT".lower()] = str(zprefimg)
+
+        print("Reference-image SExtractor MAG_ZEROPOINT =",zprefimg)
 
         refimgsexcat_return_list = rfis.generateSExtractorReferenceImageCatalog(s3_client,
                                                                                 product_s3_bucket,
