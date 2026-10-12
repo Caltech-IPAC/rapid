@@ -48,6 +48,7 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import pipeline.referenceImageSubs as rfis
 import pipeline.differenceImageSubs as dfis
+import pipeline.referenceBackgroundSubs as refbkg
 import pipeline.sfftCommandSubs as sfftcmd
 import pipeline.sfftDetectionSubs as sfftdet
 import pipeline.zogyNoiseSubs as zogynoise
@@ -1091,6 +1092,12 @@ if __name__ == '__main__':
     hdu_index_for_reference_image_data = 0
     pv_convert_flag_for_reference_image_data = False                   # TODO
 
+
+    # The configured SWarp SUBTRACT_BACK, read before resampling, which overwrites it in
+    # swarp_dict (to N) for the coverage map and uncertainty image.
+
+    swarp_subtract_back_reference = swarp_dict["swarp_SUBTRACT_BACK".lower()].strip().upper() != "N"
+
     sci_fits_file_with_pv,\
         ref_fits_file_with_pv,\
         ref_cov_fits_file_with_pv,\
@@ -1123,8 +1130,9 @@ if __name__ == '__main__':
     util.normalize_image(filename_sciimage_psf,hdu_index,filename_sciimage_psf_normalized)
 
 
-    # Subtract background from science image.  Since the reference image has been swarped,
-    # it already has the background subtracted.
+    # Subtract background from science image, and, if [BKGEST] subtract_from_reference is set,
+    # from the resampled reference image with the same estimator (with SWarp's SUBTRACT_BACK
+    # turned off).  Otherwise the reference keeps whatever background SWarp subtracted.
 
     bkgest_code = rapid_sw + '/c/bin/bkgest'
     bkgest_include_dir = rapid_sw + '/c/include'
@@ -1158,6 +1166,75 @@ if __name__ == '__main__':
     print("Elapsed time in seconds after running bkgest on science image =",
         round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
+
+
+    # Subtract the background from the resampled reference image with the same bkgest settings,
+    # so that any bias of the estimator (e.g., from unresolved stars in a crowded field) is
+    # common-mode and cancels in the difference image.  See pipeline/referenceBackgroundSubs.py.
+    # The resampled reference image is replaced in place, so every later step and product
+    # sees the background-subtracted image under its usual name.
+
+    bkgest_subtract_from_reference = ast.literal_eval(bkgest_dict.get("subtract_from_reference","False"))
+
+    print("bkgest_subtract_from_reference =",bkgest_subtract_from_reference)
+
+    if not bkgest_subtract_from_reference and not swarp_subtract_back_reference:
+        print("*** Warning: neither SWarp nor bkgest subtracts the reference-image background")
+
+    if bkgest_subtract_from_reference:
+
+        if swarp_subtract_back_reference:
+            print("*** Warning: SWarp SUBTRACT_BACK is on, so bkgest only removes what SWarp left behind")
+
+        filename_bkgest_input_reference_image = output_resampled_reference_image.replace(".fits","_bkgest_input.fits")
+        filename_bkgest_output_reference_image = output_resampled_reference_image.replace(".fits","_bkgest_output.fits")
+        filename_global_clippedmean_refimage_tbl = bkgest_dict.get("filename_global_clippedmean_refimage_tbl",
+                                                                   "global_clippedmean_reference_image.tbl")
+
+        uncovered_reference_pixels = refbkg.uncovered_pixels(output_resampled_reference_cov_map)
+
+        print("Resampled reference pixels without coverage, excluded from bkgest =",
+              int(np.count_nonzero(uncovered_reference_pixels)))
+
+        refbkg.write_bkgest_input(output_resampled_reference_image,
+                                  uncovered_reference_pixels,
+                                  filename_bkgest_input_reference_image)
+
+        bkgest_cmd = [bkgest_code,
+                      '-i',
+                      filename_bkgest_input_reference_image,
+                      '-f',
+                      bkgest_dict["output_image_type"],
+                      '-c',
+                      bkgest_dict["clippedmean_calc_type"],
+                      '-g',
+                      bkgest_dict["local_clippedmean_grid_spacing"],
+                      '-w',
+                      bkgest_dict["local_clippedmean_input_window"],
+                      '-a',
+                      bkgest_include_dir,
+                      '-ot',
+                      filename_global_clippedmean_refimage_tbl,
+                      '-o2',
+                      filename_bkgest_output_reference_image]
+
+        exitcode_from_bkgest = util.execute_command(bkgest_cmd)
+
+        if not os.path.exists(filename_bkgest_output_reference_image):
+            raise RuntimeError(f"bkgest on the reference image wrote no output (exit code {exitcode_from_bkgest})")
+
+        refbkg.restore_uncovered_pixels(filename_bkgest_output_reference_image,
+                                        output_resampled_reference_image,
+                                        uncovered_reference_pixels,
+                                        output_resampled_reference_image)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after running bkgest on reference image =",
+            round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
 
 
     #######################################################################################
