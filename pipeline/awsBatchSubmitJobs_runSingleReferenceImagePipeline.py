@@ -15,12 +15,27 @@ exit_code            Definition
 
 RAPID pipeline output_refimage_file_infobits:
 
+The InfoBits of a newly generated reference image are set by
+pipeline/referenceImageSubs.py:evaluate_refimage_quality, as for ZTF reference images.
+The bits are defined in cdf/infobitsref.txt, and their thresholds and the fatal bits,
+which set the reference image's status to 0 (bad), are in the [REFIMAGE_INFOBITS]
+section of the configuration file.
+
 ==========  ==========================================================================
-infobit     Definition
+infobit     Definition (threshold in [REFIMAGE_INFOBITS])
 ==========  ==========================================================================
-     0      Median background level is > x DN/s
-     1      Robust pixel noise (RMS) is > x DN/s
-     2      Etc.
+     0      Median background level is > t00 DN/s
+     1      Robust pixel noise (RMS) is > t01 DN/s
+     2      Percent of bad/saturated pixels (of covered pixels) is > t02 %
+     3      Median of source FWHM is > t03 arcsec
+     4      fwhm_percentile percentile of source FWHM is > t04 arcsec
+     5      Maglim from PSF-fit catalog uncertainties is < t05 mag
+     6      Maglim from background noise and PSF is < t06 mag
+     7      Number of PSF-fit catalog sources is < t07
+     8      Number of SExtractor catalog sources is < t08
+     9      Reserved
+    10      Robust RMS of input image ZPTMAGs is > t10 mag
+    16      PSF-fit catalog not possible
 ==========  ==========================================================================
  '''
 
@@ -362,6 +377,7 @@ if __name__ == '__main__':
         zprefimg = generateReferenceImage_return_list[12]
         total_refimage_exptime = generateReferenceImage_return_list[13]
         input_images_used_csv_file_s3_bucket_object_name = generateReferenceImage_return_list[14]
+        input_zptmags_refimage = generateReferenceImage_return_list[15]
 
         shutil.move(f"{refimage_generation_subdir}/{awaicgen_output_mosaic_image_file}", awaicgen_output_mosaic_image_file)
         print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_image_file} up to {awaicgen_output_mosaic_image_file}")
@@ -541,6 +557,23 @@ if __name__ == '__main__':
 
     if rfid is None:
 
+        # Compute the InfoBits and status of the new reference image from its QA metrics.
+
+        infobits_refimage,status_refimage,infobit_cards_refimage,qa_metrics_refimage = \
+            rfis.evaluate_refimage_quality(config_input,
+                                           cfg_path,
+                                           awaicgen_output_mosaic_image_file,
+                                           awaicgen_output_mosaic_cov_map_file,
+                                           filename_refimage_psf,
+                                           filename_psf_refimage_catalog,
+                                           flag_psf_refimage_catalog,
+                                           zprefimg,
+                                           input_zptmags_refimage,
+                                           stats_refimage,
+                                           np_vals_fwhm,
+                                           nsexcatsources_refimage,
+                                           refimage_psf_catalog_nrows)
+
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file_checksum'] = checksum_refimage
 
         mosaic_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name)
@@ -553,7 +586,7 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file'] = mosaic_image_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_cov_map_file'] = mosaic_cov_map_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_uncert_image_file'] = mosaic_uncert_image_name_for_db_record
-        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = str(1)
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = str(status_refimage)
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
 
         product_config['REF_IMAGE']['sextractor_refimage_catalog_filename_for_db'] = refimage_sex_catalog_name_for_db_record
@@ -600,7 +633,10 @@ if __name__ == '__main__':
                                                jdstart,
                                                jdend,
                                                zprefimg,
-                                               total_refimage_exptime)
+                                               total_refimage_exptime,
+                                               infobits = infobits_refimage,
+                                               status = status_refimage,
+                                               infobit_cards = infobit_cards_refimage)
 
 
         # Also, add same informational FITS keywords to header of reference-image uncertainty image.
@@ -615,7 +651,10 @@ if __name__ == '__main__':
                                                jdstart,
                                                jdend,
                                                zprefimg,
-                                               total_refimage_exptime)
+                                               total_refimage_exptime,
+                                               infobits = infobits_refimage,
+                                               status = status_refimage,
+                                               infobit_cards = infobit_cards_refimage)
 
 
         # Upload reference-image file to S3 bucket.

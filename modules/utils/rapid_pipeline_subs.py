@@ -1903,11 +1903,33 @@ def compute_psf_catalog(n_clip_sigma,
 # Overwrite FITS file if output filename is same as input filename.
 #####################################################################################
 
+def format_infobits_comment(infobits):
+
+    """
+    Format the FITS comment of an INFOBITS keyword, listing the bits that are set, as for ZTF.
+
+    Parameters
+    ----------
+    infobits : int
+        Bit flags.
+
+    Returns
+    -------
+    comment : str
+        "infoBits string; bit(s) = 4, 9", or "infoBits string; bit(s) = none" if no bit is set.
+    """
+
+    bits = [str(bit) for bit in range(32) if int(infobits) & 2**bit]
+
+    return "infoBits string; bit(s) = " + (", ".join(bits) if bits else "none")
+
+
 def addKeywordsToFITSHeader(input_fits_filename,
                             keywords,
                             values,
                             hdu_index,
-                            output_fits_filename):
+                            output_fits_filename,
+                            comments = None):
 
 
     # Read input FITS file.
@@ -1923,7 +1945,10 @@ def addKeywordsToFITSHeader(input_fits_filename,
 
     # Add keywords to header.
 
-    for key,val in zip(keywords,values):
+    if comments is None:
+        comments = [None] * len(keywords)
+
+    for key,val,comment in zip(keywords,values,comments):
 
         if str(val).isdigit():
             hdr[key] = int(str(val))
@@ -1933,6 +1958,9 @@ def addKeywordsToFITSHeader(input_fits_filename,
                 hdr[key] = float(str(val))
             except:
                 hdr[key] = str(val)
+
+        if comment is not None:
+            hdr.comments[key] = comment
 
 
     # Write output FITS file.
