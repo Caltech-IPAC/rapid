@@ -576,7 +576,12 @@ if __name__ == '__main__':
         medpixunc = stats_uncimage["gmed"]
 
 
-        # Generate SExtractor reference-image catalog.
+        # Generate SExtractor reference-image catalog, with magnitudes on the reference image's
+        # zero point (the MAGZP the coadd was scaled to).
+
+        sextractor_refimage_dict["sextractor_MAG_ZEROPOINT".lower()] = str(zprefimg)
+
+        print("Reference-image SExtractor MAG_ZEROPOINT =",zprefimg)
 
         refimgsexcat_return_list = rfis.generateSExtractorReferenceImageCatalog(s3_client,
                                                                                 product_s3_bucket,
@@ -1013,6 +1018,24 @@ if __name__ == '__main__':
 
 
 
+
+
+    # Put the science-image and difference-image SExtractor magnitudes on the science image's AB
+    # zero point.  The reformatted image is in DN/s, the units ZPTMAG is defined for, and the
+    # difference images are on the science image's flux scale.  The gain-match runs keep their
+    # MAG_ZEROPOINT, because gainMatchScienceAndReferenceImages adds the zero point itself.
+
+    zptmag_sci = fits.getheader(reformatted_science_image_filename,0).get("ZPTMAG")
+
+    if zptmag_sci is None:
+        print("*** Warning: No ZPTMAG in the science-image header; science- and difference-image "
+              "SExtractor magnitudes left on MAG_ZEROPOINT =",
+              sextractor_sciimage_dict["sextractor_MAG_ZEROPOINT".lower()])
+    else:
+        sextractor_sciimage_dict["sextractor_MAG_ZEROPOINT".lower()] = str(zptmag_sci)
+        sextractor_diffimage_dict["sextractor_MAG_ZEROPOINT".lower()] = str(zptmag_sci)
+
+        print("Science- and difference-image SExtractor MAG_ZEROPOINT =",zptmag_sci)
 
 
     # Generate science-image catalog.
