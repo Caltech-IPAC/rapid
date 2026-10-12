@@ -637,7 +637,7 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     hdr["TOTEXPTM"] = (total_refimage_exptime,"Total input-image exposure time [s]")
 
     if infobits is not None:
-        hdr["INFOBITS"] = (int(infobits),"Processing-summary bit flags (BITnn below)")
+        hdr["INFOBITS"] = (int(infobits),util.format_infobits_comment(infobits))
 
     if status is not None:
         hdr["STATUS"] = (int(status),"Overall quality: 1 = usable, 0 = bad")
