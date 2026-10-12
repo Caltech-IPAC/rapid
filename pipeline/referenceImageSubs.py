@@ -3,11 +3,14 @@ import re
 from botocore.exceptions import ClientError
 from astropy.io import fits
 from astropy.io import ascii
+from astropy.wcs import WCS
+from astropy.wcs.utils import proj_plane_pixel_scales
 from astropy.table import join
 import numpy as np
 import time
 
 import modules.utils.rapid_pipeline_subs as util
+import modules.utils.rapid_data_analysis as rda
 import database.modules.utils.rapid_db as db
 
 
@@ -38,7 +41,7 @@ def generateReferenceImage(s3_client,
 
     start_time_benchmark = time.time()
 
-    infobits_refimage = 0                                                             # TODO
+    infobits_refimage = 0         # Placeholder; computed later by evaluate_refimage_quality.
 
 
     # Resolved per filter inside the loop over input frames, from the FILTER of the frames
@@ -91,6 +94,7 @@ def generateReferenceImage(s3_client,
     jdstart = 999999999.0
     jdend = 0.0
     total_exptime = 0.0
+    input_zptmags = []
 
     csv_records = []
 
@@ -234,6 +238,7 @@ def generateReferenceImage(s3_client,
             zprefimg = util.get_reference_image_zeropoint(awaicgen_dict,hdr.get("FILTER"))
 
             zptmag = hdr["ZPTMAG"]
+            input_zptmags.append(float(zptmag))
             flux_scale_factor = 10 ** (0.4 * (zprefimg - zptmag))
             print(f"For zptmag = {zptmag}:")
             print(f"    flux_scale_factor = {flux_scale_factor}")
@@ -498,6 +503,7 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(zprefimg)
     generateReferenceImage_return_list.append(total_exptime)
     generateReferenceImage_return_list.append(input_images_used_csv_file_s3_bucket_object_name)
+    generateReferenceImage_return_list.append(input_zptmags)
 
     return generateReferenceImage_return_list
 
@@ -601,7 +607,10 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
                                       jdstart,
                                       jdend,
                                       zprefimg,
-                                      total_refimage_exptime):
+                                      total_refimage_exptime,
+                                      infobits = None,
+                                      status = None,
+                                      infobit_cards = None):
 
     hdu_index = 0
 
@@ -626,6 +635,16 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     hdr["JDEND"] = (jdend,"Obs. JD of latest image used [days]")
     hdr["MAGZP"] = (zprefimg,"Zero point of reference image [mag]")
     hdr["TOTEXPTM"] = (total_refimage_exptime,"Total input-image exposure time [s]")
+
+    if infobits is not None:
+        hdr["INFOBITS"] = (int(infobits),"Processing-summary bit flags (BITnn below)")
+
+    if status is not None:
+        hdr["STATUS"] = (int(status),"Overall quality: 1 = usable, 0 = bad")
+
+    if infobit_cards is not None:
+        for keyword,bit,comment in infobit_cards:
+            hdr[keyword] = (bit,comment)
 
 
     # Add keywords for reference-image input filenames.
@@ -955,3 +974,359 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
     generateReferenceImageCatalog_return_list.append(nrows)
 
     return generateReferenceImageCatalog_return_list
+
+
+#####################################################################################
+# Reference-image InfoBits: processing-summary/QA bit flags, as for ZTF reference
+# images.  The bits are defined in cdf/infobitsref.txt, their thresholds and the
+# bits that make a reference image bad ("fatal" bits) in the [REFIMAGE_INFOBITS]
+# section of the configuration file.  A bit is set when its condition is met; a
+# metric that could not be computed sets no bit.
+#####################################################################################
+
+# Defaults, used when the configuration file has no [REFIMAGE_INFOBITS] section
+# (e.g., a job config written before it existed).  Same values as the ini file.
+
+refimage_infobits_defaults = {"t00": 1.0,
+                              "t01": 0.1,
+                              "t02": 65.0,
+                              "t03": 1.0,
+                              "t04": 2.0,
+                              "t05": 15.0,
+                              "t06": 15.0,
+                              "t07": 10,
+                              "t08": 10,
+                              "t10": 3.5,
+                              "fatalinfobits": "2,5,7,8,16",
+                              "fwhm_percentile": 90.0,
+                              "maglim_snr": 5.0}
+
+
+def get_refimage_infobits_params(config_input):
+
+    """
+    Read the reference-image InfoBits thresholds and fatal bits from the [REFIMAGE_INFOBITS]
+    section of the configuration file, with defaults for any that are missing.
+
+    Parameters
+    ----------
+    config_input : configparser.ConfigParser
+        Job configuration.
+
+    Returns
+    -------
+    params : dict
+        Thresholds t00..t08 and t10, "fatalinfobits" (list of int), "fwhm_percentile", and
+        "maglim_snr".
+    """
+
+    if not config_input.has_section("REFIMAGE_INFOBITS"):
+        print("*** Warning: REFIMAGE_INFOBITS section missing from config; using default "
+              "reference-image InfoBits thresholds")
+
+    params = {}
+
+    for key,default in refimage_infobits_defaults.items():
+        value = config_input.get("REFIMAGE_INFOBITS",key,fallback=str(default))
+        if key == "fatalinfobits":
+            params[key] = [int(b) for b in value.split(",") if b.strip()]
+        elif key in ("t07","t08"):
+            params[key] = int(float(value))
+        else:
+            params[key] = float(value)
+
+    return params
+
+
+def compute_robust_spread(values):
+
+    """
+    Compute the robust spread 0.5 * (p84 - p16) of a set of values, the same statistic as
+    the datascale image metric.
+
+    Parameters
+    ----------
+    values : sequence of float
+        Values; non-finite ones are ignored.
+
+    Returns
+    -------
+    spread : float
+        The robust spread, or NaN for fewer than two finite values.
+    """
+
+    v = np.asarray(values, dtype=np.float64)
+    v = v[np.isfinite(v)]
+
+    if len(v) < 2:
+        return np.nan
+
+    p16,p84 = np.percentile(v,[16.0,84.0])
+
+    return 0.5 * (p84 - p16)
+
+
+def compute_refimage_maglimits(refimage_filename,
+                               psf_filename,
+                               psfcat_filename,
+                               zprefimg,
+                               snr = 5.0):
+
+    """
+    Compute the two limiting magnitudes of a reference image used by its InfoBits: one from
+    the photometric uncertainties of its PSF-fit catalog, and one from the image background
+    noise and the PSF (rapid_data_analysis.compute_limiting_magnitude_for_l2_image).
+
+    Parameters
+    ----------
+    refimage_filename : str
+        FITS file of the reference image, in DN/s.
+    psf_filename : str
+        FITS file of the reference-image PSF.
+    psfcat_filename : str or None
+        PhotUtils PSF-fit catalog of the reference image (with a flux_err column), or None.
+    zprefimg : float
+        Zero point of the reference image [AB mag, for flux in DN/s].
+    snr : float, optional
+        Signal-to-noise ratio of the limit.
+
+    Returns
+    -------
+    maglimcat : float
+        zprefimg - 2.5 log10(snr * median flux_err) over the catalog sources [mag], or NaN.
+    maglimit : float
+        snr-sigma point-source limiting magnitude from the background noise [mag], or NaN.
+    """
+
+    maglimcat = np.nan
+
+    if psfcat_filename is not None:
+        try:
+            cat = ascii.read(psfcat_filename)
+            flux_err = np.asarray(cat["flux_err"], dtype=np.float64)
+            flux_err = flux_err[np.isfinite(flux_err) & (flux_err > 0.0)]
+            if len(flux_err) > 0:
+                maglimcat = float(zprefimg - 2.5 * np.log10(snr * np.median(flux_err)))
+        except Exception as e:
+            print(f"*** Warning: Could not compute catalog-based limiting magnitude from {psfcat_filename} ({e})")
+
+    maglimit = np.nan
+
+    try:
+        limmag = rda.compute_limiting_magnitude_for_l2_image(refimage_filename,
+                                                             psf_filename,
+                                                             zptmag = zprefimg,
+                                                             n_sigma_limit = snr,
+                                                             dn_per_sec_factor = 1.0,
+                                                             poisson_ratio_warn = None)
+        maglimit = float(limmag["maglimit"])
+    except Exception as e:
+        print(f"*** Warning: Could not compute formula-based limiting magnitude of {refimage_filename} ({e})")
+
+    return maglimcat,maglimit
+
+
+def compute_refimage_infobits(metrics,params):
+
+    """
+    Set the reference-image InfoBits from its QA metrics, and the overall status from the
+    fatal bits.
+
+    Parameters
+    ----------
+    metrics : dict
+        "gmedian" and "datascale" [DN/s], "pctbad" [% of covered pixels], "fwhm_med_arcsec" and
+        "fwhm_pctl_arcsec" [arcsec], "maglimcat" and "maglimit" [mag], "npsfcat",
+        "nsexcat", "zptmag_rms" [mag], and "psfcat_flag" (bool).  A NaN metric sets no bit.
+    params : dict
+        As returned by get_refimage_infobits_params.
+
+    Returns
+    -------
+    infobits : int
+        Bit flags.
+    status : int
+        1 if no fatal bit is set (usable), 0 otherwise (bad).
+    """
+
+    def above(name,threshold):
+        v = metrics.get(name)
+        return v is not None and np.isfinite(v) and v > threshold
+
+    def below(name,threshold):
+        v = metrics.get(name)
+        return v is not None and np.isfinite(v) and v < threshold
+
+    conditions = {0: above("gmedian",params["t00"]),
+                  1: above("datascale",params["t01"]),
+                  2: above("pctbad",params["t02"]),
+                  3: above("fwhm_med_arcsec",params["t03"]),
+                  4: above("fwhm_pctl_arcsec",params["t04"]),
+                  5: below("maglimcat",params["t05"]),
+                  6: below("maglimit",params["t06"]),
+                  7: below("npsfcat",params["t07"]),
+                  8: below("nsexcat",params["t08"]),
+                  10: above("zptmag_rms",params["t10"]),
+                  16: not bool(metrics.get("psfcat_flag",True))}
+
+    infobits = 0
+
+    for bit,condition in conditions.items():
+        if condition:
+            infobits |= 2**bit
+
+    fatal = sum(2**b for b in params["fatalinfobits"])
+
+    status = 0 if (infobits & fatal) else 1
+
+    return infobits,status
+
+
+def get_refimage_infobit_cards(infobit_definitions_filename,params):
+
+    """
+    Read the InfoBit definitions (cdf/infobitsref.txt), substitute the thresholds, and return
+    the definitions in use as FITS header cards.
+
+    Parameters
+    ----------
+    infobit_definitions_filename : str
+        cdf/infobitsref.txt, with lines "BITnn   = nn / definition with tnn" (and pXX for
+        the FWHM percentile).
+    params : dict
+        As returned by get_refimage_infobits_params.
+
+    Returns
+    -------
+    cards : list of (str, int, str)
+        (keyword, bit, definition) for each bit not RESERVED.
+    """
+
+    formats = {"t00": "{:.1f}", "t01": "{:.2f}", "t02": "{:.1f}", "t03": "{:.2f}",
+               "t04": "{:.2f}", "t05": "{:.1f}", "t06": "{:.1f}", "t07": "{:d}",
+               "t08": "{:d}", "t10": "{:.2f}"}
+
+    cards = []
+
+    with open(infobit_definitions_filename) as f:
+        for line in f:
+            if "RESERVED" in line or "=" not in line:
+                continue
+            keyword,rest = line.split("=",1)
+            value,comment = rest.split("/",1)
+            comment = comment.strip()
+            for key,fmt in formats.items():
+                comment = comment.replace(key,fmt.format(params[key]))
+            comment = comment.replace("pXX",f"{params['fwhm_percentile']:g}TH")
+            cards.append((keyword.strip(),int(value),comment))
+
+    return cards
+
+
+def evaluate_refimage_quality(config_input,
+                              cfg_path,
+                              refimage_filename,
+                              cov_map_filename,
+                              psf_filename,
+                              psfcat_filename,
+                              psfcat_flag,
+                              zprefimg,
+                              input_zptmags,
+                              stats_refimage,
+                              fwhm_values_pix,
+                              nsexcat,
+                              npsfcat):
+
+    """
+    Compute the QA metrics, InfoBits, and status of a newly generated reference image, and
+    the InfoBit definitions for its header.
+
+    Parameters
+    ----------
+    config_input : configparser.ConfigParser
+        Job configuration, with the [REFIMAGE_INFOBITS] section.
+    cfg_path : str
+        Directory of cdf/infobitsref.txt.
+    refimage_filename : str
+        FITS file of the reference image, in DN/s.
+    cov_map_filename : str
+        FITS file of its depth-of-coverage map.  The percentage of bad pixels is taken over the
+        pixels with coverage > 0 only, since the mosaic grid is larger than the area its input
+        images cover and is NaN outside that area.
+    psf_filename : str
+        FITS file of the reference-image PSF.
+    psfcat_filename : str or None
+        PhotUtils PSF-fit catalog of the reference image.
+    psfcat_flag : bool
+        Whether the PSF-fit catalog could be made.
+    zprefimg : float
+        Zero point of the reference image [AB mag, for flux in DN/s].
+    input_zptmags : sequence of float
+        ZPTMAG of the input images.
+    stats_refimage : dict
+        As returned by util.fits_data_statistics_with_clipping for the reference image.
+    fwhm_values_pix : sequence of float
+        FWHM_IMAGE of the sources in the reference-image SExtractor catalog [pixels].
+    nsexcat, npsfcat : int
+        Numbers of sources in the SExtractor and PSF-fit catalogs.
+
+    Returns
+    -------
+    infobits : int
+        Bit flags.
+    status : int
+        1 if usable, 0 if bad.
+    infobit_cards : list of (str, int, str)
+        Header cards for the InfoBit definitions in use.
+    metrics : dict
+        The QA metrics the bits were set from.
+    """
+
+    params = get_refimage_infobits_params(config_input)
+
+    with fits.open(refimage_filename) as hdul:
+        hdr = hdul[0].header
+        image = np.asarray(hdul[0].data)
+        pixscale_arcsec = float(np.mean(proj_plane_pixel_scales(WCS(hdr)))) * 3600.0
+
+
+    # Bad pixels: non-finite pixels inside the covered area, plus saturated pixels.
+
+    with fits.open(cov_map_filename) as hdul:
+        covered = np.asarray(hdul[0].data) > 0
+
+    ncovered = int(np.count_nonzero(covered))
+    nbad = int(np.count_nonzero(covered & ~np.isfinite(image))) + int(stats_refimage["satcount"])
+    del image
+
+    fwhm = np.asarray(fwhm_values_pix, dtype=np.float64)
+    fwhm = fwhm[np.isfinite(fwhm) & (fwhm > 0.0)]
+
+    maglimcat,maglimit = compute_refimage_maglimits(refimage_filename,
+                                                    psf_filename,
+                                                    psfcat_filename if psfcat_flag else None,
+                                                    zprefimg,
+                                                    snr = params["maglim_snr"])
+
+    metrics = {"gmedian": float(stats_refimage["gmed"]),
+               "datascale": float(stats_refimage["gsigma"]),
+               "pctbad": 100.0 * nbad / ncovered if ncovered > 0 else np.nan,
+               "fwhm_med_arcsec": float(np.median(fwhm)) * pixscale_arcsec if len(fwhm) > 0 else np.nan,
+               "fwhm_pctl_arcsec": float(np.percentile(fwhm,params["fwhm_percentile"])) * pixscale_arcsec
+                                   if len(fwhm) > 0 else np.nan,
+               "maglimcat": maglimcat,
+               "maglimit": maglimit,
+               "npsfcat": int(npsfcat) if psfcat_flag else 0,
+               "nsexcat": int(nsexcat),
+               "zptmag_rms": compute_robust_spread(input_zptmags),
+               "psfcat_flag": bool(psfcat_flag)}
+
+    infobits,status = compute_refimage_infobits(metrics,params)
+
+    infobit_cards = get_refimage_infobit_cards(cfg_path + "/infobitsref.txt",params)
+
+    print("Reference-image QA metrics:",metrics)
+    print(f"Reference-image InfoBits = {infobits} (bits {[b for b in range(32) if infobits & 2**b]}), "
+          f"status = {status} (fatal bits {params['fatalinfobits']})")
+
+    return infobits,status,infobit_cards,metrics
