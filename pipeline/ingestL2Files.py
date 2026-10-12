@@ -100,6 +100,15 @@ by its square.  The data-quality array and everything else are passed through
 unscaled.  BUNIT records the result.
 
 
+Data-quality masking
+--------------------
+
+Pixels whose DQ value has any of the DQMASKBITS bits set are written as NaN in the
+science image and in the ERR and VAR_* planes (see pipeline/dqMaskSubs.py for the
+default and why JUMP_DET is not in it).  The DQ array itself is written unchanged.
+Each masked HDU records the bits in DQMASK and the number of pixels in NDQMASK.
+
+
 Environment
 -----------
 
@@ -113,6 +122,9 @@ NUM_CORES               Number of parallel processes.  Defaults to the number
 SIPDISTORTIONDEGREE     Degree of the SIP fit to the gWCS.  Defaults to 5,
                         which is what the L2Files table stores.
 MAXFILESTOINGEST        Stop after this many files, for short tests.
+DQMASKBITS              DQ bits whose pixels are set to NaN, as an integer
+                        (0x... accepted).  Defaults to 0x2110C03; 0 turns the
+                        masking off.
 DONTCHECKALREADYINGESTED
                         Set to skip the L2Files query for already-ingested
                         files and (re-)ingest everything in the input bucket.
@@ -201,6 +213,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
+import pipeline.dqMaskSubs as dqmask
 import modules.utils.rapid_data_analysis as rda
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
@@ -396,6 +409,29 @@ max_files_to_ingest = get_int_from_env('MAXFILESTOINGEST',None,minimum=1)
 print("max_files_to_ingest =",max_files_to_ingest)
 
 
+# DQ bits whose pixels are set to NaN.  Read with base 0 so that the hex form the flags are
+# usually written in is accepted as well as decimal.
+
+dq_mask_bits_str = os.getenv('DQMASKBITS')
+
+if dq_mask_bits_str is None:
+    dq_mask_bits = dqmask.default_dq_mask_bits
+else:
+    try:
+        dq_mask_bits = int(dq_mask_bits_str,0)
+    except ValueError:
+        print(f"*** Error: Env. var. DQMASKBITS = {dq_mask_bits_str} is not an integer; quitting...")
+        print("terminating_exitcode =",exit_code_config)
+        exit(exit_code_config)
+
+    if not 0 <= dq_mask_bits < 2**32:
+        print(f"*** Error: Env. var. DQMASKBITS = {dq_mask_bits_str} is not a 32-bit unsigned value; quitting...")
+        print("terminating_exitcode =",exit_code_config)
+        exit(exit_code_config)
+
+print("dq_mask_bits =",hex(dq_mask_bits))
+
+
 # Translate the Roman optical-element names into the filter names used by the RAPID
 # database Filters table, which follow the Open Universe simulations:
 #
@@ -455,6 +491,14 @@ exptime_scaling_exponent = {"data": 1,
                             "var_poisson": 2,
                             "var_rnoise": 2,
                             "var_flat": 2}
+
+
+# The ASDF node holding the data-quality array, and the nodes whose flagged pixels are set to
+# NaN: the science image and its uncertainty planes.
+
+dq_node_name = "dq"
+
+dq_masked_node_names = ("data","err","var_poisson","var_rnoise","var_flat")
 
 
 # The keywords copied from the primary header into the science-image header: those that
@@ -1078,12 +1122,13 @@ def asdf_table_nodes(dm):
     return nodes
 
 
-def build_image_hdu(node_name,array,primary_hdr,wcs_header,science_shape,exptime):
+def build_image_hdu(node_name,array,primary_hdr,wcs_header,science_shape,exptime,dq_masked=None):
 
     '''
     Return the image HDU for one ASDF array, converted from the DN/s of the L2 product into
     the DN the pipeline works in by the exponent of EXPTIME that its units call for, and
-    carrying the science WCS if it is laid out like the science image.
+    carrying the science WCS if it is laid out like the science image.  If dq_masked is given
+    and this is one of dq_masked_node_names, the masked pixels are set to NaN.
 
     One HDU at a time, rather than a list of all of them, because at the real SCA size of
     4088 x 4088 each array is 67 MB as float32 and there are ten of them; holding the whole
@@ -1119,6 +1164,12 @@ def build_image_hdu(node_name,array,primary_hdr,wcs_header,science_shape,exptime
         data *= np.float32(float(exptime) ** exponent)
 
 
+    n_dq_masked = None
+
+    if dq_masked is not None and node_name in dq_masked_node_names:
+        n_dq_masked = dqmask.apply_dq_mask(data,dq_masked)
+
+
     # Only an array laid out like the science image can share its WCS; a reference-pixel
     # border or an amplifier array covers different pixels and would be mislocated by it.
 
@@ -1147,6 +1198,10 @@ def build_image_hdu(node_name,array,primary_hdr,wcs_header,science_shape,exptime
         hdr["BUNIT"] = ("DN**2","units of this array")
 
     hdr["EXPTSCAL"] = (float(exptime) ** exponent,"factor applied to convert from the ASDF units")
+
+    if n_dq_masked is not None:
+        hdr["DQMASK"] = (dq_mask_bits,f"DQ bits ({hex(dq_mask_bits)}) set to NaN here")
+        hdr["NDQMASK"] = (n_dq_masked,"number of pixels set to NaN by DQMASK")
 
     return fits.ImageHDU(data=data,header=hdr,name=extname)
 
@@ -1233,6 +1288,28 @@ def build_fits_file(dm,asdf_path,fits_path):
     wcs_header = gwcs_to_fits_sip_header(dm.meta.wcs,science_shape,sip_distortion_degree)
 
 
+    # The DQ mask is found before any HDU is written, because the science image comes first
+    # and the DQ array after it.  A file without a usable DQ array is still converted, but
+    # unmasked, and says so.
+
+    dq_masked = None
+
+    if dq_mask_bits != 0:
+
+        dq_array = dict(image_nodes).get(dq_node_name)
+
+        if dq_array is None:
+            print(f"*** Warning: ASDF file has no {dq_node_name} array; science image left unmasked ({asdf_path})")
+        elif dq_array.shape != science_shape:
+            print(f"*** Warning: {dq_node_name} array shape {dq_array.shape} differs from science shape "
+                  f"{science_shape}; science image left unmasked ({asdf_path})")
+        else:
+            dq_masked = dqmask.find_dq_masked_pixels(dq_array,dq_mask_bits)
+
+            print(f"DQ mask {hex(dq_mask_bits)}: {np.count_nonzero(dq_masked)} pixels "
+                  f"({100.0 * np.mean(dq_masked):.3f}%) set to NaN ({asdf_path})")
+
+
     # The file is written one HDU at a time rather than assembled into an HDUList and handed
     # to writeto, so that only one image array is ever in memory.  At the real SCA size the
     # whole set is well over a gigabyte, and this script runs num_cores conversions at once.
@@ -1263,7 +1340,8 @@ def build_fits_file(dm,asdf_path,fits_path):
 
         for node_name,array in image_nodes:
 
-            hdu = build_image_hdu(node_name,array,primary_hdr,wcs_header,science_shape,exptime)
+            hdu = build_image_hdu(node_name,array,primary_hdr,wcs_header,science_shape,exptime,
+                                  dq_masked=dq_masked)
 
             fits.append(partial_fits_path,hdu.data,hdu.header,checksum=True)
 
