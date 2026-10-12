@@ -51,6 +51,7 @@ import pipeline.differenceImageSubs as dfis
 import pipeline.sfftCommandSubs as sfftcmd
 import pipeline.zogyNoiseSubs as zogynoise
 import pipeline.artifactRepairSubs as artrepair
+import pipeline.sfftDetectionSubs as sfftdet
 
 start_time_benchmark = time.time()
 start_time_benchmark_at_start = start_time_benchmark
@@ -334,6 +335,8 @@ if __name__ == '__main__':
     swarp_dict = config_input['SWARP']
 
     sextractor_diffimage_dict = config_input['SEXTRACTOR_DIFFIMAGE']
+    sextractor_diffimage_sfft_dict = config_input['SEXTRACTOR_DIFFIMAGE_SFFT'] \
+        if config_input.has_section('SEXTRACTOR_DIFFIMAGE_SFFT') else None
     sextractor_sciimage_dict = config_input['SEXTRACTOR_SCIIMAGE']
     sextractor_refimage_dict = config_input['SEXTRACTOR_REFIMAGE']
     bkgest_dict = config_input['BKGEST']
@@ -2214,7 +2217,10 @@ if __name__ == '__main__':
             sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
             sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
             sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_sfftdiffimage_sextractor_catalog
-            sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
+            # Lay the optional [SEXTRACTOR_DIFFIMAGE_SFFT] detection settings over a copy (see
+            # pipeline/sfftDetectionSubs.py); they are skipped when cross-convolution is on.
+            sextractor_cmd = util.build_sextractor_command_line_args(
+                sfftdet.sfft_sextractor_dict(sextractor_diffimage_dict,sextractor_diffimage_sfft_dict,crossconv_flag,cfg_path))
             exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
 
@@ -2289,7 +2295,9 @@ if __name__ == '__main__':
             sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
             sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
             sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_sfftdiffimage_sextractor_catalog_negative
-            sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
+            # Same [SEXTRACTOR_DIFFIMAGE_SFFT] overrides as the positive pass.
+            sextractor_cmd = util.build_sextractor_command_line_args(
+                sfftdet.sfft_sextractor_dict(sextractor_diffimage_dict,sextractor_diffimage_sfft_dict,crossconv_flag,cfg_path))
             exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
 
