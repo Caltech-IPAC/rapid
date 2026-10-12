@@ -13,6 +13,7 @@ import boto3
 from datetime import datetime, timezone
 from dateutil import tz
 import time
+from datetime import timedelta
 
 to_zone = tz.gettz('America/Los_Angeles')
 
@@ -21,7 +22,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.7"
+swvers = "1.10"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -77,13 +78,19 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 istop = 0
 
 def signal_handler(signum, frame):
-    print('Caught signal', signum)
+
+    # Ask the open loop to stop at its next safe point: before starting a processing request,
+    # or while sleeping between iterations.  A request already under way is completed first.
+
     global istop
+    print('Caught signal', signum, '; will stop at the next safe point')
     istop = 1
 
 
 # Get processing date of interest from command-line argument.
 # This only needs to be given for running the VPO for just one specific processing date.
+# Without it, the VPO runs automatically in an open loop, choosing the observation range of
+# each processing request itself (see compute_open_loop_observation_range).
 
 try:
     datearg = (sys.argv)[1]
@@ -131,26 +138,26 @@ if aws_secret_access_key is None:
     exit(64)
 
 
-# To process OpenUniverse simulation images, environment variables STARTDATETIME and ENDDATETIME
-# specify observation datetimes.  Later, this will be augmented with code to query the
-# SOCProcs database table for controlling the processing the Roman Space Telescope WFI data.
-#
-# Inputs are observation start and end datetimes of exposures to be processed.
+# For a run for one specific processing date, environment variables STARTDATETIME and
+# ENDDATETIME specify the observation start and end datetimes of the exposures to be processed.
 # E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
+# In the open loop (no processing date given), they are not used: each iteration computes its
+# own observation range from the L2Files and DiffImages database tables.
 
 startdatetime = os.getenv('STARTDATETIME')
-
-if startdatetime is None:
-
-    print("*** Error: Env. var. STARTDATETIME not set; quitting...")
-    exit(64)
-
 enddatetime = os.getenv('ENDDATETIME')
 
-if enddatetime is None:
+if datearg is not None:
 
-    print("*** Error: Env. var. ENDDATETIME not set; quitting...")
-    exit(64)
+    if startdatetime is None:
+
+        print("*** Error: Env. var. STARTDATETIME not set; quitting...")
+        exit(64)
+
+    if enddatetime is None:
+
+        print("*** Error: Env. var. ENDDATETIME not set; quitting...")
+        exit(64)
 
 
 # Read input parameters from .ini file.
@@ -172,7 +179,25 @@ zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 # Number of times an AWS Batch job that failed for an infrastructure reason (e.g.,
 # CannotPullContainerError) is resubmitted; 0 turns resubmission off.
 
-n_retry_failed_aws_batch_job = int(config_input['JOB_PARAMS'].get('n_retry_failed_aws_batch_job','0'))
+# VPO settings, from the [VPO_SETTINGS] section (with these defaults if it or a key is missing).
+
+# Number of times an AWS Batch job that failed for an infrastructure reason (e.g.,
+# CannotPullContainerError) is resubmitted; 0 turns resubmission off.
+
+n_retry_failed_aws_batch_job = config_input.getint('VPO_SETTINGS','n_retry_failed_aws_batch_job',fallback=3)
+
+# Open loop: an iteration runs only when the unprocessed L2Files span at least
+# min_elapsed_observation_seconds of observation time, and covers at most
+# max_elapsed_observation_seconds; otherwise the VPO sleeps open_loop_sleep_seconds and checks
+# again.  An exposure with L2Files for fewer than n_scas_per_exposure SCAs, one registered within
+# the last l2file_settle_seconds, is taken to be still arriving, and the range ends before it.
+
+min_elapsed_observation_seconds = config_input.getfloat('VPO_SETTINGS','min_elapsed_observation_seconds',fallback=900.0)
+max_elapsed_observation_seconds = config_input.getfloat('VPO_SETTINGS','max_elapsed_observation_seconds',fallback=7200.0)
+open_loop_sleep_seconds = config_input.getfloat('VPO_SETTINGS','open_loop_sleep_seconds',fallback=600.0)
+l2file_settle_seconds = config_input.getfloat('VPO_SETTINGS','l2file_settle_seconds',fallback=1800.0)
+
+n_scas_per_exposure = 18          # Roman WFI
 
 
 # Print variables.
@@ -187,6 +212,10 @@ print("product_config_filename_base =",product_config_filename_base)
 print("awaicgen_output_mosaic_image_file =",awaicgen_output_mosaic_image_file)
 print("zogy_output_diffimage_file =",zogy_output_diffimage_file)
 print("n_retry_failed_aws_batch_job =",n_retry_failed_aws_batch_job)
+print("min_elapsed_observation_seconds =",min_elapsed_observation_seconds)
+print("max_elapsed_observation_seconds =",max_elapsed_observation_seconds)
+print("open_loop_sleep_seconds =",open_loop_sleep_seconds)
+print("l2file_settle_seconds =",l2file_settle_seconds)
 print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 print("launch_science_pipelines_code =", launch_science_pipelines_code)
@@ -629,6 +658,140 @@ def resubmit_failed_aws_batch_jobs(job_type,proc_date,config_input,dbh,reqid,n_r
 
 
 #-------------------------------------------------------------------------------------------------------------
+# Open loop: choice of the observation range of each processing request, and sleeping between them.
+#-------------------------------------------------------------------------------------------------------------
+
+def compute_open_loop_observation_range(dbh,
+                                        ppid,
+                                        min_elapsed_seconds,
+                                        max_elapsed_seconds,
+                                        settle_seconds,
+                                        n_scas = 18):
+
+    """
+    Compute the observation range of the next open-loop processing request: from the earliest
+    L2File that still needs a difference image, for at most max_elapsed_seconds and ending
+    before any exposure that is still arriving, provided the L2Files that still need one in that
+    range span at least min_elapsed_seconds.
+
+    Parameters
+    ----------
+    dbh : RAPIDDB
+        Open database connection.
+    ppid : int
+        Pipeline ID of the difference images: the science pipeline (ppid = 15).
+    min_elapsed_seconds : float
+        The unprocessed L2Files must span at least this much observation time [s] for a
+        processing request to be made.
+    max_elapsed_seconds : float
+        Maximum length of the observation range [s].
+    settle_seconds : float
+        An exposure with L2Files for fewer than n_scas SCAs, one of them registered within this
+        many seconds, is taken to be still arriving [s].
+    n_scas : int, optional
+        Number of SCAs in a complete exposure.
+
+    Returns
+    -------
+    startdatetime, enddatetime : str or None
+        Observation range, as the launch scripts use it: dateobs >= startdatetime and
+        dateobs < enddatetime.  Both are None when there is nothing to process yet.
+
+    Notes
+    -----
+    An L2File still needs a difference image when it has vbest > 0 and status > 0 and no
+    DiffImages record of the science pipeline (ppid) with vbest > 0.  Only L2Files observed at or after the end of the latest
+    processing request that finished normally (ProcReqs status = 1) are considered, so an
+    observation range is never covered twice, even if some of its L2Files could not be
+    processed (e.g., no reference image for their field); those are left for a processing-date
+    run by hand.
+
+    Because of that, an exposure must not be processed while some of its SCAs are still to be
+    registered: all its L2Files share one dateobs, so SCAs registered after the request that
+    covered it would fall before the high-water mark and never be processed.  The range
+    therefore ends before the earliest exposure that is still arriving.  An exposure still
+    incomplete after settle_seconds without a new L2File (e.g., an SCA never delivered) is
+    processed with the SCAs it has.
+    """
+
+    high_water_mark = dbh.get_procreqs_observation_high_water_mark()
+
+    if dbh.exit_code >= 64:
+        return None,None
+
+    settling = dbh.get_earliest_settling_exposure(ppid,high_water_mark,n_scas,settle_seconds)
+
+    if dbh.exit_code >= 64:
+        return None,None
+
+    before = None
+
+    if settling is not None:
+        settling_expid,before,settling_nscas,settling_created = settling
+        print(f"compute_open_loop_observation_range: exposure expid={settling_expid} (dateobs={before}) "
+              f"is still arriving: L2Files for {settling_nscas} of {n_scas} SCAs, latest registered "
+              f"{settling_created}; the observation range ends before it")
+
+    record = dbh.get_unprocessed_l2files_observation_range(ppid,high_water_mark,before)
+
+    if dbh.exit_code >= 64:
+        return None,None
+
+    earliest,latest,n_l2files = record
+
+    print(f"compute_open_loop_observation_range: high_water_mark={high_water_mark}, "
+          f"unprocessed L2Files={n_l2files}, earliest dateobs={earliest}, latest dateobs={latest}")
+
+    if n_l2files == 0 or earliest is None:
+        if before is None:
+            print("compute_open_loop_observation_range: no unprocessed L2Files")
+        else:
+            print("compute_open_loop_observation_range: no unprocessed L2Files before the exposure "
+                  "still arriving; waiting for it")
+        return None,None
+
+    span_seconds = (latest - earliest).total_seconds()
+
+    if span_seconds < min_elapsed_seconds:
+        print(f"compute_open_loop_observation_range: unprocessed L2Files span {span_seconds} s, "
+              f"less than min_elapsed_observation_seconds = {min_elapsed_seconds}; waiting for more data")
+        return None,None
+
+
+    # The range is half-open, so it must end just after the latest L2File it is to include.
+    # Postgres timestamps resolve microseconds.
+
+    if span_seconds < max_elapsed_seconds:
+        end = latest + timedelta(microseconds=1)
+    else:
+        end = earliest + timedelta(seconds=max_elapsed_seconds)
+
+    startdatetime = earliest.strftime('%Y-%m-%d %H:%M:%S.%f')
+    enddatetime = end.strftime('%Y-%m-%d %H:%M:%S.%f')
+
+    print(f"compute_open_loop_observation_range: startdatetime={startdatetime}, enddatetime={enddatetime}")
+
+    return startdatetime,enddatetime
+
+
+def sleep_unless_stopped(seconds):
+
+    """
+    Sleep for the given number of seconds, returning early if a stop signal arrives.
+
+    Parameters
+    ----------
+    seconds : float
+        Time to sleep [s].
+    """
+
+    end = time.time() + seconds
+
+    while istop == 0 and time.time() < end:
+        time.sleep(min(10.0, end - time.time()))
+
+
+#-------------------------------------------------------------------------------------------------------------
 # Main program.
 #-------------------------------------------------------------------------------------------------------------
 
@@ -675,6 +838,38 @@ if __name__ == '__main__':
             exit(exitcode_from_dbh)
 
 
+        # In the open loop, choose the observation range of this processing request, or sleep and
+        # check again if there is not yet enough unprocessed data.
+
+        if datearg is None:
+
+            if istop == 1:
+                print("Terminating gracefully before starting a new processing request...")
+                dbh.close()
+                break
+
+            startdatetime,enddatetime = compute_open_loop_observation_range(dbh,
+                                                                            look_up_ppid_of_job_type("science"),
+                                                                            min_elapsed_observation_seconds,
+                                                                            max_elapsed_observation_seconds,
+                                                                            l2file_settle_seconds,
+                                                                            n_scas_per_exposure)
+
+            if dbh.exit_code >= 64:
+                print(f"*** Error: Could not compute open-loop observation range (dbh.exit_code = {dbh.exit_code}); quitting...")
+                exitcode_from_dbh = dbh.exit_code
+                dbh.close()
+                exit(exitcode_from_dbh)
+
+            if startdatetime is None:
+                dbh.close()
+                print(f"Sleeping {open_loop_sleep_seconds} seconds before checking for unprocessed L2Files again...")
+                sleep_unless_stopped(open_loop_sleep_seconds)
+                continue
+
+            print("Open-loop observation range: startdatetime =",startdatetime,", enddatetime =",enddatetime)
+
+
         # Create record in ProcReqs database table.
 
         reqid = dbh.insert_procreqs_record(startdatetime,enddatetime)
@@ -697,7 +892,11 @@ if __name__ == '__main__':
 
         # Launch reference-image pipelines.
 
-        fname_out = "launch_reference_image_pipelines_code" + "_" + proc_date + ".out"
+        # Each stage's stdout and stderr go to a log file named after the stage, the processing date
+        # and the processing request, so that the open loop's requests on the same processing date
+        # keep separate logs.
+
+        fname_out = "launch_reference_image_pipelines_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         launch_reference_image_pipelines_cmd = [python_cmd,
                                                 launch_reference_image_pipelines_code]
 
@@ -759,7 +958,7 @@ if __name__ == '__main__':
                                                            # is dual purposed to handle both reference-image pipeline jobs
                                                            # and science pipeline jobs.
 
-        fname_out = "register_reference_image_pipeline_jobs_code" + "_" + proc_date + ".out"
+        fname_out = "register_reference_image_pipeline_jobs_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         register_reference_image_pipeline_jobs_cmd = [python_cmd,
                                                       register_reference_image_pipeline_jobs_code,
                                                       proc_date]
@@ -792,7 +991,7 @@ if __name__ == '__main__':
         os.environ['STARTDATETIME'] = startdatetime
         os.environ['ENDDATETIME'] = enddatetime
 
-        fname_out = "launch_science_pipelines_code" + "_" + proc_date + ".out"
+        fname_out = "launch_science_pipelines_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         launch_science_pipelines_cmd = [python_cmd,
                                         launch_science_pipelines_code]
 
@@ -850,7 +1049,7 @@ if __name__ == '__main__':
         print("ppid =",ppid)
         os.environ['PIPEID'] = str(ppid)              # Required by register_science_pipeline_jobs_code
 
-        fname_out = "register_science_pipeline_jobs_code" + "_" + proc_date + ".out"
+        fname_out = "register_science_pipeline_jobs_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         register_science_pipeline_jobs_cmd = [python_cmd,
                                               register_science_pipeline_jobs_code,
                                               proc_date]
@@ -874,7 +1073,7 @@ if __name__ == '__main__':
         #
         # Load environment variable JOBPROCDATE to specify processing date.
 
-        fname_out = "launch_postproc_pipelines_code" + "_" + proc_date + ".out"
+        fname_out = "launch_postproc_pipelines_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         launch_postproc_pipelines_cmd = [python_cmd,
                                         launch_postproc_pipelines_code]
 
@@ -928,7 +1127,7 @@ if __name__ == '__main__':
 
         # Register metadata from post-processing pipelines into operations database.
 
-        fname_out = "register_postproc_pipeline_jobs_code" + "_" + proc_date + ".out"
+        fname_out = "register_postproc_pipeline_jobs_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         register_postproc_pipeline_jobs_cmd = [python_cmd,
                                               register_postproc_pipeline_jobs_code,
                                               proc_date]
@@ -952,7 +1151,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "load_psfcat_into_db_sources_code" + "_" + proc_date + ".out"
+        fname_out = "load_psfcat_into_db_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         load_psfcat_into_db_sources_cmd = [python_cmd,
                                            load_psfcat_into_db_sources_code]
 
@@ -976,7 +1175,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "load_secat_into_db_xsources_code" + "_" + proc_date + ".out"
+        fname_out = "load_secat_into_db_xsources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         load_secat_into_db_xsources_cmd = [python_cmd,
                                            load_secat_into_db_xsources_code]
 
@@ -999,7 +1198,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "crossmatch_sources_code" + "_" + proc_date + ".out"
+        fname_out = "crossmatch_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         crossmatch_sources_cmd = [python_cmd,
                                   crossmatch_sources_code]
 
@@ -1022,7 +1221,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "crossmatch_xsources_code" + "_" + proc_date + ".out"
+        fname_out = "crossmatch_xsources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         crossmatch_xsources_cmd = [python_cmd,
                                    crossmatch_xsources_code]
 
@@ -1045,7 +1244,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "compute_statistics_for_astroobjects_code" + "_" + proc_date + ".out"
+        fname_out = "compute_statistics_for_astroobjects_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         compute_statistics_for_astroobjects_cmd = [python_cmd,
                                                    compute_statistics_for_astroobjects_code]
 
@@ -1068,7 +1267,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "compute_statistics_for_xastroobjects_code" + "_" + proc_date + ".out"
+        fname_out = "compute_statistics_for_xastroobjects_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         compute_statistics_for_xastroobjects_cmd = [python_cmd,
                                                     compute_statistics_for_xastroobjects_code]
 
@@ -1089,7 +1288,7 @@ if __name__ == '__main__':
 
         # Launch script to delete not-best Merges database records.
 
-        fname_out = "prune_notbest_merges_code" + "_" + proc_date + ".out"
+        fname_out = "prune_notbest_merges_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         prune_notbest_merges_cmd = [python_cmd,
                                     prune_notbest_merges_code]
 
@@ -1110,7 +1309,7 @@ if __name__ == '__main__':
 
         # Launch script to delete not-best XMerges database records.
 
-        fname_out = "prune_notbest_xmerges_code" + "_" + proc_date + ".out"
+        fname_out = "prune_notbest_xmerges_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         prune_notbest_xmerges_cmd = [python_cmd,
                                      prune_notbest_xmerges_code]
 
@@ -1135,7 +1334,7 @@ if __name__ == '__main__':
         #
         # Environment variable JOBPROCDATE to specify processing date is required.
 
-        fname_out = "produce_alerts_code" + "_" + proc_date + ".out"
+        fname_out = "produce_alerts_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
         produce_alerts_cmd = [python_cmd,
                               produce_alerts_code]
 
@@ -1181,34 +1380,18 @@ if __name__ == '__main__':
             break
 
 
-        # Test code.
-
-        a = 1
-        for n in range(10):
-            a = a + 1
-            print("n,a =",n,a)
-
-        print("Sleeping 30 seconds...")
-        time.sleep(30)
-        print("Waking up...")
-
-        if i == 3:
-            #os.kill(os.getpid(), signal.SIGQUIT)          # Quits gracefully via signal handler upon receiving control-/
-            os.kill(os.getpid(), signal.SIGINT)           # Quits gracefully via signal handler upon receiving control-c
-            #os.kill(os.getpid(), signal.SIGSTOP)          # Pauses the process so it cannot be caught or ignored, and will hang indefinitely.
-            #os.kill(os.getpid(), signal.SIGKILL)           # Quits unconditionally and immediately.
+        # Open loop: go on to the next processing request, unless asked to stop.
 
         if istop == 1:
-            print("Terminating gracefully now...")
-            exitcode = 7
-            exit(exitcode)
+            print("Terminating gracefully after completing the processing request...")
+            break
 
         i += 1
-        print("i = ",i)
+        print(f"Open loop: completed processing request reqid={reqid}; starting iteration i = {i}...")
 
 
         #
-        # End of open loop (but we are not iterating because of break above).
+        # End of open loop.
         #
 
 
