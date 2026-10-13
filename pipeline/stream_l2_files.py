@@ -32,6 +32,8 @@ p.add_argument("--mjdmax", type=float, default=None,
                 help="maximum exposure start date; default is all time")
 p.add_argument("--dryrun", action='store_true',
                 help="query the archive but don't download the files")
+p.add_argument("--unguided", action='store_true',
+                help="include unguided images in archive query")
 
 args = p.parse_args()
 
@@ -45,6 +47,7 @@ mjdmin = args.mjdmin
 mjdmax = args.mjdmax
 ingest_bucket = args.ingest_bucket
 dryrun = args.dryrun
+unguided = args.unguided
 
 # Create MastMissions object and assign mission to 'roman'
 missions = MastMissions(mission='roman')
@@ -79,6 +82,14 @@ if segment is not None:
     search['segment'] = segment
 if visit is not None:
     search['visit'] = visit
+if unguided==False:
+    search['guide_star_id']=['!PGS0100001','!PGS0200001','!PGS0300001','!PGS0400001','!PGS0500001','!PGS0600001','!PGS0700001',
+                            '!PGS0800001','!PGS0900001','!PGS1000001','!PGS1100001','!PGS1200001','!PGS1300001','!PGS1400001',
+                            '!PGS1500001','!PGS1600001', '!PGS1700001', '!PGS100001']
+if mjdmin is not None:
+    search['exposure_start_time']=f">{Time(mjdstart, format='mjd').fits}"
+if mjdmax is not None:
+    search['exposure_end_time'] = f"<{Time(mjdend, format='mjd').fits}"
 
 
 # Query with column criteria
@@ -87,19 +98,7 @@ results = missions.query_criteria(
     select_cols=col_list,
 )
 
-if mjdmin is not None:
-    good_indx_min = Time(results['exposure_start_time']).mjd > mjdmin
-else:
-    good_indx_min = np.bool_(np.ones(len(results)))
-
-if mjdmax is not None:
-    good_indx_max = Time(results['exposure_end_time']).mjd < mjdmax
-else:
-    good_indx_max = np.bool_(np.ones(len(results)))
-
-filtered_results = results[good_indx_min & good_indx_max]
-
-products = missions.get_unique_product_list(filtered_results)
+products = missions.get_unique_product_list(results)
 filtered_products = missions.filter_products(products, file_suffix='_cal')
 print(f"{len(filtered_products)} to download")
 
