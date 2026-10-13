@@ -257,12 +257,15 @@ if __name__ == '__main__':
                        str(version_refimage),
                        str(ppid),
                        proc_utc_datetime]
+            kwdcomments = [None] * len(keywords)
+            kwdcomments[keywords.index('INFOBITS')] = util.format_infobits_comment(infobits_refimage)
             hdu_index = 0
             util.addKeywordsToFITSHeader(awaicgen_output_mosaic_image_file,
                                          keywords,
                                          kwdvals,
                                          hdu_index,
-                                         awaicgen_output_mosaic_image_file)
+                                         awaicgen_output_mosaic_image_file,
+                                         comments = kwdcomments)
 
 
             # Compute MD5 checksum of reference image.

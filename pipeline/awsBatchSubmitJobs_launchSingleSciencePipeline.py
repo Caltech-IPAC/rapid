@@ -357,6 +357,7 @@ bkgest_dict = config_input['BKGEST']
 gainmatch_dict = config_input['GAINMATCH']
 psfcat_diffimage_dict = config_input['PSFCAT_DIFFIMAGE']
 psfcat_refimage_dict = config_input['PSFCAT_REFIMAGE']
+refimage_infobits_dict = config_input['REFIMAGE_INFOBITS'] if config_input.has_section('REFIMAGE_INFOBITS') else None
 
 sextractor_gainmatch_dict = {}
 for key in config_input['SEXTRACTOR_GAINMATCH'].keys():
@@ -959,6 +960,8 @@ if __name__ == '__main__':
     job_config['GAINMATCH'] = gainmatch_dict
     job_config['PSFCAT_DIFFIMAGE'] = psfcat_diffimage_dict
     job_config['PSFCAT_REFIMAGE'] = psfcat_refimage_dict
+    if refimage_infobits_dict is not None:
+        job_config['REFIMAGE_INFOBITS'] = refimage_infobits_dict
     job_config['EXTRA_CATALOG_COLS'] = extra_catalog_cols_dict
     job_config['SUMRAT'] = sumrat_dict
     if rubrat_dict is not None:

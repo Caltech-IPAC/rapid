@@ -281,6 +281,7 @@ for key in config_input['SEXTRACTOR_REFIMAGE'].keys():
     sextractor_refimage_dict[key] = config_input['SEXTRACTOR_REFIMAGE'][key]
 
 psfcat_refimage_dict = config_input['PSFCAT_REFIMAGE']
+refimage_infobits_dict = config_input['REFIMAGE_INFOBITS'] if config_input.has_section('REFIMAGE_INFOBITS') else None
 fake_sources_dict = config_input['FAKE_SOURCES']
 
 
@@ -738,6 +739,8 @@ if __name__ == '__main__':
         job_config['SEXTRACTOR_REFIMAGE'][key] = sextractor_refimage_dict[key]
 
     job_config['PSFCAT_REFIMAGE'] = psfcat_refimage_dict
+    if refimage_infobits_dict is not None:
+        job_config['REFIMAGE_INFOBITS'] = refimage_infobits_dict
 
 
     # Write output config file for job.
