@@ -120,7 +120,8 @@ class RAPIDDB:
         # Connect to database
 
         try:
-            self.conn = psycopg2.connect(host=dbserver,database=dbname,port=dbport,user=dbuser,password=dbpass)
+            self.conn = psycopg2.connect(host=dbserver,database=dbname,port=dbport,user=dbuser,password=dbpass,
+                                         keepalives=1, keepalives_idle=60, keepalives_interval=10, keepalives_count=5)
         except:
             print("Could not connect to database...")
             self.exit_code = 64
