@@ -121,11 +121,13 @@ MAX_SOURCES_PER_CHIP = 2000
 # ---------------------------------------------------------------------------
 # Forced photometry (alerts.forced_phot), run per chip at alert time
 # ---------------------------------------------------------------------------
-# Interim arrangement while no database table exists: every chip run forces
-# photometry at its objects' positions over the previous images and keeps
-# the result as one parquet file per chip in a store (local directory or
-# s3://bucket/prefix), re-read instead of recomputed when present. The
-# parquet layout is the future table's.
+# Interim arrangement while no database table exists: results live in a
+# per-object parquet store (forced_phot's object store: one file per object
+# per month under its field, in a local directory or s3://bucket/prefix).
+# A chip run reads its objects' stored histories, measures only the epochs
+# they are missing (normally just the chip's own; a new object gets the
+# full look-back), and rewrites the touched month files. The table layout
+# is the future database table's.
 
 #: Look-back window (days) of the per-chip forced-photometry run; None
 #: means no window, every previous image of the chip's footprint.
@@ -145,11 +147,15 @@ FORCED_PRODUCTS = ("diff", "science")
 #: provider's diff_flavor (DIFF_FLAVORS[self.diff_flavor]) instead of this
 #: constant, once forced photometry on the zogy products is validated.
 FORCED_DIFF_BASENAME = "sfftdiffimage_masked.fits"
-#: Per-chip parquet file name in the store, under the caller's prefix. The
-#: table layout, the measurement id and the parquet I/O live in
-#: alerts.forced_phot (FORCED_TABLE_DTYPE, forced_measurement_id,
-#: write_table, read_table).
-FORCED_PARQUET_BASENAME = "forced_phot_pid{pid}.parquet"
+#: A stored history whose position differs from the object's forced
+#: position by more than this (degrees; 0.1 px at 0.11"/px) was measured
+#: somewhere else and is discarded and recomputed rather than extended --
+#: a flux bias that steps mid-history is worse than a recompute. Cannot
+#: trigger today (the forced position is the fixed initial ra0/dec0); it
+#: is the guard for the re-baseline policy, see _prefetch_forced.
+FORCED_POSITION_TOL_DEG = 0.1 * 0.11 / 3600.0
+#: Threads for the per-object store round trips (latency-bound).
+FORCED_STORE_WORKERS = 16
 
 
 def _finite_or_none(value: Any) -> float | None:
@@ -1642,9 +1648,9 @@ class AlertDataProvider:
             Look-back window of the run, ending at the chip's own epoch;
             None (default) measures every previous image.
         forced_store : str, optional
-            Where the per-chip parquet files live: ``s3://bucket/prefix``
-            or a local directory, under the prefix set by
-            set_forced_prefix(). None keeps results in memory only.
+            The per-object parquet store (forced_phot's object store):
+            ``s3://bucket/prefix`` or a local directory. None keeps
+            results in memory only, recomputed every run.
         forced_products : sequence of str, optional
             Which image of each epoch to measure (FORCED_PRODUCTS).
         forced_search : callable, optional
@@ -1692,9 +1698,6 @@ class AlertDataProvider:
         self.forced_store = forced_store.rstrip("/") if forced_store else None
         self.forced_products = tuple(forced_products)
         self._forced_search = forced_search
-        #: key prefix under forced_store for the next chips' parquet files,
-        #: e.g. "<proc_date>/req<reqid>/jid<N>/" set by the alert stage
-        self.forced_prefix = ""
         # per-chip forced-photometry table (forced_phot.FORCED_TABLE_DTYPE,
         # sorted by aid then mjdobs) and the pid it covers; see
         # _prefetch_forced()
@@ -2291,15 +2294,21 @@ class AlertDataProvider:
 
         One position per associated object: astroobjects (ra0, dec0), the
         object's initial sky position (its first detection), which does
-        not change between runs. Reads the chip's parquet from the store
-        when it already exists, otherwise runs the search and photometry
-        (_run_forced) and writes it. A failure anywhere is logged and
-        leaves the cache empty: the chip's alerts still ship, with null
-        prvDiaForcedSources, rather than aborting.
+        not change between runs. With a store, each object's stored
+        history inside the window is read first and only the epochs it is
+        missing are measured (normally the chip's own; everything, for a
+        new object), then the touched month files are rewritten. Without
+        a store everything in the window is measured. A failure anywhere
+        is logged and leaves the cache empty: the chip's alerts still
+        ship, with null prvDiaForcedSources, rather than aborting.
 
+        A stored history measured at a different position than the
+        object's forced position (by more than FORCED_POSITION_TOL_DEG) is
+        discarded and recomputed, never extended.
         TODO: the re-baseline policy (when, if ever, to move the forced
         position to the object's mean, astroobjectsmeta meanra/meandec,
-        and recompute the set) is not decided or implemented.
+        and recompute the set) is not decided or implemented; that guard
+        is where it would act.
         """
         from alerts import forced_phot as fp
 
@@ -2309,63 +2318,123 @@ class AlertDataProvider:
             return
         t0 = time.time()
         try:
-            objects: dict[int, Any] = {}
+            objects: dict[int, tuple[Any, int]] = {}          # aid -> (Position, field)
             for source in sources:
                 row = self._chip_objects.get(source.sid)
                 if row is not None and row.get("aid") is not None:
-                    objects.setdefault(int(row["aid"]), fp.Position(
-                        int(row["aid"]), float(row["ra0"]), float(row["dec0"])))
-            positions = [objects[aid] for aid in sorted(objects)]
-            if not positions:
+                    objects.setdefault(int(row["aid"]), (fp.Position(
+                        int(row["aid"]), float(row["ra0"]), float(row["dec0"])), int(source.field)))
+            if not objects:
                 logger.info("pid=%s: forced photometry: no associated objects", pid)
                 return
-            store_path = None
+            aids = sorted(objects)
+            positions = [objects[aid][0] for aid in aids]
+            (chip,) = self._query("""
+                SELECT d.ra0, d.dec0, d.ppid, l.mjdobs
+                FROM diffimages d JOIN l2files l ON l.rid = d.rid
+                WHERE d.pid = %s
+            """, (pid,))
+            mjd_hi = float(chip["mjdobs"]) + 1e-6
+            mjd_lo = (None if self.forced_window_days is None
+                      else float(chip["mjdobs"]) - self.forced_window_days)
+
+            # 1. stored histories inside the window, one read per object
+            histories: dict[int, np.ndarray] = {}
+            etags: dict[int, dict] = {}
             if self.forced_store is not None:
-                store_path = (f"{self.forced_store}/{self.forced_prefix}"
-                              f"{FORCED_PARQUET_BASENAME.format(pid=int(pid))}")
-            table = fp.read_table(store_path) if store_path else None
-            if table is not None:
-                logger.info("pid=%s: forced photometry: read %d rows for %d objects from %s "
-                            "in %.1f s", pid, len(table), len(np.unique(table["aid"])),
-                            store_path, time.time() - t0)
+                read = lambda aid: fp.read_object_history(            # noqa: E731
+                    self.forced_store, objects[aid][1], aid, mjd_lo, mjd_hi)
+                for aid, (table, tags) in zip(aids, fp.run_parallel(read, aids, FORCED_STORE_WORKERS)):
+                    pos = objects[aid][0]
+                    if len(table) and (np.abs(table["ra"] - pos.ra).max() > FORCED_POSITION_TOL_DEG
+                                       or np.abs(table["dec"] - pos.dec).max() > FORCED_POSITION_TOL_DEG):
+                        logger.warning("pid=%s aid=%d: stored forced photometry was measured at a "
+                                       "different position; discarding %d rows and recomputing",
+                                       pid, aid, len(table))
+                        table = table[:0]
+                    histories[aid], etags[aid] = table, tags
+            t_read = time.time() - t0
+
+            # 2. the images holding the positions, then only the missing pairs
+            search = self._forced_search or fp.find_prev_images
+            images = search(self._query, positions, float(chip["ra0"]), float(chip["dec0"]),
+                            ppid=int(chip["ppid"]), mjd_lo=mjd_lo, mjd_hi=mjd_hi,
+                            diff_basename=FORCED_DIFF_BASENAME)
+            n_candidates = len(images)
+            have = {aid: set(histories[aid]["rid"].tolist()) if aid in histories else set()
+                    for aid in aids}
+            for image in images:
+                image.position_index = np.array(
+                    [i for i in image.position_index if image.rid not in have[aids[i]]], dtype=int)
+            images = [image for image in images if len(image.position_index)]
+            t_search = time.time() - t0
+
+            # 3. measure the missing pairs
+            new_rows = self._run_forced(pid, images, positions)
+            t_fit = time.time() - t0
+
+            # 4. merge, write back the touched months, cache
+            merged = {aid: (histories.get(aid, new_rows[:0]), new_rows[new_rows["aid"] == aid])
+                      for aid in aids}
+            tables = {aid: fp.merge_rows(hist, new) for aid, (hist, new) in merged.items()}
+            if self.forced_store is not None:
+                def write(aid):
+                    new = merged[aid][1]
+                    if not len(new):
+                        return 0
+                    periods = sorted(set(fp.period_key(new["mjdobs"]).tolist()))
+                    field = objects[aid][1]
+                    try:
+                        fp.write_object_history(self.forced_store, field, aid, tables[aid], periods, etags.get(aid))
+                    except fp.StaleWriteError:
+                        # another worker wrote this object meanwhile: take its
+                        # rows, add ours, and try once more
+                        latest, tags = fp.read_object_history(self.forced_store, field, aid, mjd_lo, mjd_hi)
+                        tables[aid] = fp.merge_rows(latest, new)
+                        fp.write_object_history(self.forced_store, field, aid, tables[aid], periods, tags)
+                    return len(periods)
+                n_files = sum(fp.run_parallel(write, aids, FORCED_STORE_WORKERS))
             else:
-                table = self._run_forced(pid, positions, t0)
-                if store_path:
-                    fp.write_table(table, store_path)
+                n_files = 0
+            table = np.concatenate([tables[aid] for aid in aids]) if aids else new_rows
             self._chip_forced = np.sort(table, order=["aid", "mjdobs"])
+            t_total = time.time() - t0
+            logger.info("pid=%s: forced photometry: %d objects, %d stored rows read; measured "
+                        "%d of %d images in the window (%d new rows); %d month files written; "
+                        "read %.1f s, search %.1f s, stage+fit %.1f s, write %.1f s, total %.1f s",
+                        pid, len(aids), sum(len(h) for h in histories.values()), len(images),
+                        n_candidates, len(new_rows), n_files, t_read, t_search - t_read,
+                        t_fit - t_search, t_total - t_fit, t_total)
         except Exception:
             logger.exception("pid=%s: forced photometry failed after %.1f s; alerts will "
                              "carry null prvDiaForcedSources", pid, time.time() - t0)
             self._chip_forced = None
 
-    def _run_forced(self, pid: int, positions: list, t0: float) -> np.ndarray:
-        """Search, stage, measure and tabulate one chip's forced photometry:
-        the chip's previous images holding its objects' positions, both
-        products of every epoch merged into one row per object and epoch."""
+    def _run_forced(self, pid: int, images: list, positions: list) -> np.ndarray:
+        """Stage and measure the (position, image) pairs named by the
+        images' ``position_index``, both products of every epoch merged
+        into one row per object and epoch. The alerting chip's own images,
+        already staged for the cutouts, are reused rather than re-staged."""
         from astropy.time import Time
 
         from alerts import forced_phot as fp
 
-        (chip,) = self._query("""
-            SELECT d.ra0, d.dec0, d.ppid, l.mjdobs
-            FROM diffimages d JOIN l2files l ON l.rid = d.rid
-            WHERE d.pid = %s
-        """, (pid,))
-        search = self._forced_search or fp.find_prev_images
-        mjd_lo = (None if self.forced_window_days is None
-                  else float(chip["mjdobs"]) - self.forced_window_days)
-        images = search(self._query, positions, float(chip["ra0"]), float(chip["dec0"]),
-                        ppid=int(chip["ppid"]), mjd_lo=mjd_lo,
-                        mjd_hi=float(chip["mjdobs"]) + 1e-6,
-                        diff_basename=FORCED_DIFF_BASENAME)
-        t_search = time.time() - t0
+        # the chip's own images are the cutout sources: stage them once
+        # (if not already) and hand the driver the local copies
+        staged_here: dict[str, str] = {}
+        for image in images:
+            if image.pid == pid:
+                for url in (image.diff_filename, image.sci_filename):
+                    local = os.path.join(self._staging_dir, os.path.basename(url))
+                    if os.path.exists(local) or url == local:
+                        staged_here[url] = local
+        stage = (lambda url: staged_here.get(url) or self._stage(url)) if staged_here else self._stage
         time_proc = float(Time.now().mjd)  # pyright: ignore[reportArgumentType]
         rows: dict[tuple[int, int], dict[str, Any]] = {}
-        n_pairs = 0
         for image, product, measurements in fp.run_prev_images(
-                images, positions, self._stage, products=self.forced_products):
+                images, positions, stage, products=self.forced_products,
+                keep_staged=set(staged_here.values())):
             for m in measurements:
-                n_pairs += 1
                 rec = rows.setdefault((m.pos_id, m.rid), {
                     "aid": m.pos_id, "rid": m.rid, "pid": image.pid, "expid": image.expid,
                     "sca": image.sca, "fid": image.fid, "band": image.band or "",
@@ -2385,11 +2454,6 @@ class AlertDataProvider:
             rec["forced_id"] = fp.forced_measurement_id(rec["rid"], rec["aid"], p.ra, p.dec)
             for name in fp.FORCED_TABLE_DTYPE.names:
                 table[name][i] = rec[name]
-        t_total = time.time() - t0
-        logger.info("pid=%s: forced photometry: %d objects x %d images (window %s d) -> "
-                    "%d rows, %d measurements; search %.1f s, stage+fit %.1f s, total %.1f s",
-                    pid, len(positions), len(images), self.forced_window_days, len(table),
-                    n_pairs, t_search, t_total - t_search, t_total)
         return table
 
     def get_forced_photometry(self, detection: Source,

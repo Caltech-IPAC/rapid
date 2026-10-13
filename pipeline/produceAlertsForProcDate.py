@@ -323,9 +323,11 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
         if len(my_chips) == 0:
             return results
 
-        # Forced-photometry parquet files: beside the other products' layout
-        # (<proc_date>/req<reqid>/jid<N>/) in their own bucket, or under work_dir
-        # when uploads are off (upload_to_s3_bucket = False / DONOTUPLOADPRODUCTS).
+        # Forced-photometry object store (alerts/forced_phot.py: one parquet file per
+        # object per month, under field=<field>/aid=<aid>/) in its own bucket, or under
+        # work_dir when uploads are off (upload_to_s3_bucket = False / DONOTUPLOADPRODUCTS).
+        # It persists across processing dates: a chip run reads its objects' histories
+        # and measures only the epochs they are missing.
         if settings['upload_to_s3_bucket'] and settings['forced_phot_s3_bucket_base']:
             forced_store = f"s3://{settings['forced_phot_s3_bucket_base']}"
         else:
@@ -354,7 +356,6 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
                 chip_start_time = time.time()
                 names = chip_product_names(chip, settings)
                 summary_path = os.path.join(work_dir, names['summary_filename'])
-                provider.forced_prefix = names['s3_prefix']
 
                 log.info("Chip start: jid=%s, pid=%s", chip['jid'], chip['pid'])
 

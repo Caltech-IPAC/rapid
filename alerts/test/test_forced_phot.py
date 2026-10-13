@@ -28,6 +28,11 @@ from alerts.forced_phot import (CONE_RADIUS_DEG, FLAG_NONFINITE,
                                 read_positions_csv, run_prev_images,
                                 sci_psf_basename, write_measurements_csv,
                                 diff_uncert_basename, sci_uncert_basename,
+                                StaleWriteError, list_object_periods,
+                                merge_rows, object_period_path, object_prefix,
+                                period_key, periods_in_window,
+                                read_object_history, run_parallel,
+                                write_object_history,
                                 FORCED_TABLE_DTYPE, forced_measurement_id,
                                 read_table, write_table)
 
@@ -644,14 +649,120 @@ def test_table_parquet_round_trip(tmp_path):
     table["flags"] = [0, 1 << 16, 0]; table["x"] = [10.5, 11.5, 12.5]
     path = tmp_path / "sub" / "dir" / "forced_phot_pid99.parquet"     # parents created
     write_table(table, str(path))
-    back = read_table(str(path))
+    back, etag = read_table(str(path))
+    assert etag is None                                               # local files have no ETag
     assert back.dtype == FORCED_TABLE_DTYPE and len(back) == 3
     for name in FORCED_TABLE_DTYPE.names:
         if table.dtype[name].kind == "f":
             assert np.array_equal(back[name], table[name], equal_nan=True)
         else:
             assert np.array_equal(back[name], table[name])
-    assert read_table(str(tmp_path / "missing.parquet")) is None
+    assert read_table(str(tmp_path / "missing.parquet")) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# object store: <store>/field=<f>/aid=<a>/<yyyymm>.parquet
+# ---------------------------------------------------------------------------
+
+def make_rows(aid, rids, mjds, flux=1.0, time_proc=1.0, ra=266.6, dec=-28.9):
+    t = np.zeros(len(rids), dtype=FORCED_TABLE_DTYPE)
+    t["aid"] = aid; t["rid"] = rids; t["mjdobs"] = mjds; t["psf_flux"] = flux; t["time_proc"] = time_proc
+    t["ra"] = ra; t["dec"] = dec; t["forced_id"] = [forced_measurement_id(r, aid, ra, dec) for r in rids]
+    return t
+
+
+def test_period_keys_follow_utc_calendar_months():
+    # MJD 61680.5 = 2027-10-02 12:00 UTC; 61709.5 = 2027-10-31; 61710.5 = 2027-11-01
+    assert period_key(61680.5) == "202710"
+    assert list(period_key([61680.5, 61709.5, 61710.5])) == ["202710", "202710", "202711"]
+    assert periods_in_window(61680.5, 61710.5) == ["202710", "202711"]
+    assert periods_in_window(61680.5, 61680.6) == ["202710"]
+    # across a year end: 2027-12-02 .. 2028-01-02
+    assert periods_in_window(61741.0, 61772.0) == ["202712", "202801"]
+
+
+def test_object_store_paths_and_listing(tmp_path):
+    store = str(tmp_path / "store")
+    assert object_prefix(store + "/", 4666327, 77) == f"{store}/field=4666327/aid=77"
+    assert object_period_path(store, 4666327, 77, "202710") == f"{store}/field=4666327/aid=77/202710.parquet"
+    assert object_prefix("s3://bucket/pre/", 1, 2) == "s3://bucket/pre/field=1/aid=2"
+    assert list_object_periods(store, 4666327, 77) == []            # nothing written yet
+    write_object_history(store, 4666327, 77, make_rows(77, [1, 2], [61680.5, 61711.0]), ["202710", "202711"])
+    assert list_object_periods(store, 4666327, 77) == ["202710", "202711"]
+
+
+def test_object_history_round_trip_window_and_merge(tmp_path):
+    store = str(tmp_path / "store"); field, aid = 4666327, 77
+    rows = make_rows(aid, [11, 12, 13], [61680.5, 61700.0, 61711.0], flux=1.0, time_proc=1.0)
+    # only the periods named are written; a named period without rows is skipped
+    assert write_object_history(store, field, aid, rows, ["202709", "202710", "202711"]) == ["202710", "202711"]
+    # open window: everything, sorted by time; local files carry no etags
+    hist, etags = read_object_history(store, field, aid)
+    assert hist["rid"].tolist() == [11, 12, 13] and etags == {"202710": None, "202711": None}
+    # a window inside October reads one file and cuts to the window
+    hist, etags = read_object_history(store, field, aid, mjd_lo=61690.0, mjd_hi=61705.0)
+    assert hist["rid"].tolist() == [12] and list(etags) == ["202710"]
+    # merge: a new epoch is added, a re-measured epoch replaces its row
+    new = make_rows(aid, [13, 14], [61711.0, 61712.0], flux=2.0, time_proc=2.0)
+    merged = merge_rows(read_object_history(store, field, aid)[0], new)
+    assert merged["rid"].tolist() == [11, 12, 13, 14]
+    assert merged["psf_flux"].tolist() == [1.0, 1.0, 2.0, 2.0]
+    assert merge_rows(np.zeros(0, dtype=FORCED_TABLE_DTYPE), new)["rid"].tolist() == [13, 14]
+    assert merge_rows(merged, np.zeros(0, dtype=FORCED_TABLE_DTYPE))["rid"].tolist() == [11, 12, 13, 14]
+    # rewriting November from the merged table replaces that file whole
+    write_object_history(store, field, aid, merged, ["202711"])
+    hist, _ = read_object_history(store, field, aid)
+    assert hist["rid"].tolist() == [11, 12, 13, 14] and hist["psf_flux"][2] == 2.0
+    # an object with nothing stored
+    hist, etags = read_object_history(store, field, 78)
+    assert len(hist) == 0 and hist.dtype == FORCED_TABLE_DTYPE and etags == {}
+
+
+def test_write_table_conditional_put_on_s3(monkeypatch):
+    # exercise the S3 branches without S3: a fake client that honours IfMatch
+    import alerts.forced_phot as fp
+    import botocore.exceptions
+
+    class FakeS3:
+        objects = {}
+        def put_object(self, Bucket, Key, Body, **kw):
+            if "IfMatch" in kw and self.objects.get(Key, (None, None))[1] != kw["IfMatch"]:
+                raise botocore.exceptions.ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
+            self.objects[Key] = (Body, f'"etag-{len(self.objects)}-{len(Body)}"')
+        def get_object(self, Bucket, Key):
+            if Key not in self.objects:
+                raise botocore.exceptions.ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+            body, etag = self.objects[Key]
+            import io; return {"Body": io.BytesIO(body), "ETag": etag}
+        def get_paginator(self, name):
+            objs = self.objects
+            class P:
+                def paginate(self, Bucket, Prefix):
+                    yield {"Contents": [{"Key": k} for k in objs if k.startswith(Prefix)]}
+            return P()
+    monkeypatch.setattr(fp, "_s3_client", lambda: FakeS3())
+    store = "s3://bucket/forced"
+    rows = make_rows(5, [1], [61680.5])
+    assert read_table(f"{store}/field=1/aid=5/202710.parquet") == (None, None)
+    write_object_history(store, 1, 5, rows, ["202710"])
+    hist, etags = read_object_history(store, 1, 5)
+    assert hist["rid"].tolist() == [1] and etags["202710"].startswith('"etag-')
+    assert list_object_periods(store, 1, 5) == ["202710"]
+    # a write conditioned on the etag we read succeeds; a stale one is refused
+    write_object_history(store, 1, 5, merge_rows(hist, make_rows(5, [2], [61681.5])), ["202710"], etags)
+    with pytest.raises(StaleWriteError):
+        write_object_history(store, 1, 5, hist, ["202710"], etags)      # etag is now stale
+    assert read_object_history(store, 1, 5)[0]["rid"].tolist() == [1, 2]
+
+
+def test_run_parallel_preserves_order_and_raises():
+    assert run_parallel(lambda x: x * x, range(10), workers=4) == [i * i for i in range(10)]
+    assert run_parallel(lambda x: x, [], workers=4) == []
+    def boom(x):
+        if x == 3: raise ValueError("three")
+        return x
+    with pytest.raises(ValueError, match="three"):
+        run_parallel(boom, range(5), workers=2)
 
 
 # ---------------------------------------------------------------------------
