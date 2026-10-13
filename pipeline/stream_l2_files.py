@@ -87,9 +87,9 @@ if unguided==False:
                             '!PGS0800001','!PGS0900001','!PGS1000001','!PGS1100001','!PGS1200001','!PGS1300001','!PGS1400001',
                             '!PGS1500001','!PGS1600001', '!PGS1700001', '!PGS100001']
 if mjdmin is not None:
-    search['exposure_start_time']=f">{Time(mjdstart, format='mjd').fits}"
+    search['exposure_start_time']=f">{Time(mjdmin, format='mjd').fits}"
 if mjdmax is not None:
-    search['exposure_end_time'] = f"<{Time(mjdend, format='mjd').fits}"
+    search['exposure_end_time'] = f"<{Time(mjdmax, format='mjd').fits}"
 
 
 # Query with column criteria
