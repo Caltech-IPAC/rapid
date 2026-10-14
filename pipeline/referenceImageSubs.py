@@ -1233,7 +1233,8 @@ def evaluate_refimage_quality(config_input,
                               zprefimg,
                               input_zptmags,
                               stats_refimage,
-                              fwhm_values_pix,
+                              fwhm_mode_pix,
+                              fwhm_pctl_pix,
                               nsexcat,
                               npsfcat):
 
@@ -1265,8 +1266,11 @@ def evaluate_refimage_quality(config_input,
         ZPTMAG of the input images.
     stats_refimage : dict
         As returned by util.fits_data_statistics_with_clipping for the reference image.
-    fwhm_values_pix : sequence of float
-        FWHM_IMAGE of the sources in the reference-image SExtractor catalog [pixels].
+    fwhm_mode_pix : float
+        Mode of FWHM_IMAGE over the point sources in the reference-image SExtractor catalog,
+        or its median fallback, as returned by psfFwhmSubs.catalog_fwhm_stats [pixels].
+    fwhm_pctl_pix : float
+        The fwhm_percentile percentile of FWHM_IMAGE over the same sources [pixels].
     nsexcat, npsfcat : int
         Numbers of sources in the SExtractor and PSF-fit catalogs.
 
@@ -1299,8 +1303,9 @@ def evaluate_refimage_quality(config_input,
     nbad = int(np.count_nonzero(covered & ~np.isfinite(image))) + int(stats_refimage["satcount"])
     del image
 
-    fwhm = np.asarray(fwhm_values_pix, dtype=np.float64)
-    fwhm = fwhm[np.isfinite(fwhm) & (fwhm > 0.0)]
+    def fwhm_pix_to_arcsec(fwhm_pix):
+        fwhm_pix = float(fwhm_pix)
+        return fwhm_pix * pixscale_arcsec if np.isfinite(fwhm_pix) and fwhm_pix > 0.0 else np.nan
 
     maglimcat,maglimit = compute_refimage_maglimits(refimage_filename,
                                                     psf_filename,
@@ -1311,9 +1316,8 @@ def evaluate_refimage_quality(config_input,
     metrics = {"gmedian": float(stats_refimage["gmed"]),
                "datascale": float(stats_refimage["gsigma"]),
                "pctbad": 100.0 * nbad / ncovered if ncovered > 0 else np.nan,
-               "fwhm_med_arcsec": float(np.median(fwhm)) * pixscale_arcsec if len(fwhm) > 0 else np.nan,
-               "fwhm_pctl_arcsec": float(np.percentile(fwhm,params["fwhm_percentile"])) * pixscale_arcsec
-                                   if len(fwhm) > 0 else np.nan,
+               "fwhm_med_arcsec": fwhm_pix_to_arcsec(fwhm_mode_pix),
+               "fwhm_pctl_arcsec": fwhm_pix_to_arcsec(fwhm_pctl_pix),
                "maglimcat": maglimcat,
                "maglimit": maglimit,
                "npsfcat": int(npsfcat) if psfcat_flag else 0,
