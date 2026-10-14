@@ -1065,8 +1065,8 @@ if __name__ == '__main__':
                                                                                  label="science-image")
 
     print("fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix =",fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix)
-
-    fwhm_sci = fwhm_sci_medpix
+    wfi_pixscale_arcsec = 0.11
+    fwhm_sci = fwhm_sci_medpix*wfi_pixscale_arcsec
     if np.isnan(fwhm_sci) or fwhm_sci < 0.0:
         fwhm_sci = 2.0
 
