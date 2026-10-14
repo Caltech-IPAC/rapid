@@ -169,7 +169,7 @@ def compute_sca_center_and_corner_sky_positions_from_wfi_center_sky_position(ra,
 
     # Define a tangent projection for the Roman WFI Field of View.
 
-    pixel_scale = 0.11         # Arcseconds.
+    pixel_scale = util.ROMAN_WFI_PLATESCALE         # Arcseconds.
     cdelt1 = pixel_scale / 3600.0
     cdelt2 = pixel_scale / 3600.0
 

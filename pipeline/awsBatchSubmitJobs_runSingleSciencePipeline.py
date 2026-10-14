@@ -694,7 +694,7 @@ if __name__ == '__main__':
 
 
     print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix =",fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix)
-    wfi_pixscale_arcsec = 0.11
+    wfi_pixscale_arcsec = util.ROMAN_WFI_PLATESCALE
     fwhm_ref = fwhm_ref_medpix*wfi_pixscale_arcsec
     if np.isnan(fwhm_ref) or fwhm_ref < 0.0:
         fwhm_ref = 2.0*wfi_pixscale_arcsec
@@ -1065,7 +1065,7 @@ if __name__ == '__main__':
                                                                                  label="science-image")
 
     print("fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix =",fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix)
-    wfi_pixscale_arcsec = 0.11
+    wfi_pixscale_arcsec = util.ROMAN_WFI_PLATESCALE
     fwhm_sci = fwhm_sci_medpix*wfi_pixscale_arcsec
     if np.isnan(fwhm_sci) or fwhm_sci < 0.0:
         fwhm_sci = 2.0*wfi_pixscale_arcsec
