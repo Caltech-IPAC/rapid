@@ -225,7 +225,7 @@ def test_resume_refuses_a_different_database_target(setup):
     with pytest.raises(HookFailed):
         _cut(db, repo, hooks)
     (hooks / "fail-pins").unlink()
-    db.info.dbname = "rapid"
+    db.info.dbname = "rapid_other"
     with pytest.raises(ReleaseRefused, match="database target"):
         _cut(db, repo, hooks, resume="rebuild-v0.1")
 
