@@ -24,6 +24,9 @@ debug = True
 rtd = 180.0 / math.pi
 dtr = 1.0 / rtd
 
+# Nominal Roman WFI plate scale [arcsec/pixel].
+ROMAN_WFI_PLATESCALE = 0.11
+
 from dateutil import tz
 
 to_zone = tz.gettz('America/Los_Angeles')
