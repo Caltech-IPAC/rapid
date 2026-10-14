@@ -95,7 +95,7 @@ if __name__ == '__main__':
 
     # Size of a Roman WFI pixel on a side, in arcseconds.
 
-    roman_wfi_pixel_arcseconds = 0.11
+    roman_wfi_pixel_arcseconds = util.ROMAN_WFI_PLATESCALE
 
     ras_asdf = []
     decs_asdf = []
