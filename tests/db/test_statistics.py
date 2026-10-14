@@ -156,7 +156,7 @@ def test_statistics_writes_one_row_per_object_and_one_complete_set(conn, tmp_pat
                     (entry.instance,))
         assert [r[0] for r in cur.fetchall()] == [association]
         cur.execute("SELECT relpersistence FROM pg_class WHERE relname = %s", (TABLE,))
-        assert cur.fetchone() == ("u",)
+        assert cur.fetchone() == ("p",)
 
     # A second attempt on the same membership reuses the set: no second row per object
     # (the first attempt succeeded).

@@ -63,7 +63,7 @@ def test_create_makes_devs_child_table_once(conn):
             "SELECT c.relpersistence, pg_get_userbyid(c.relowner), p.relname "
             "FROM pg_class c JOIN pg_inherits i ON i.inhrelid = c.oid "
             "JOIN pg_class p ON p.oid = i.inhparent WHERE c.relname = %s", (table,))
-        assert cur.fetchone() == ("u", "rapidporole", "sources")
+        assert cur.fetchone() == ("p", "rapidporole", "sources")
 
         cur.execute("SELECT indexname FROM pg_indexes WHERE tablename = %s", (table,))
         indexes = {r[0] for r in cur.fetchall()}

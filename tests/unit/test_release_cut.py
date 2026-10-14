@@ -74,7 +74,7 @@ def test_full_cut_runs_in_order_and_records_every_state(setup):
     assert row["schema_version"] == "20260924-08-releases.sql"
     assert (row["image_digest"], row["image_ref"]) == (DIGEST, IMAGE_REF)
     assert row["completed_at"] is not None
-    assert row["notes"]["database_target"] == "rapid_rebuild"
+    assert row["notes"]["database_target"] == "rapid"
     assert row["notes"]["skipped"] == []
     assert row["notes"]["pins_rows"] == 2
     assert db.deployments("rebuild-v0.1") == {
