@@ -216,6 +216,11 @@ if __name__ == '__main__':
     refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_dir']
     refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 
+    # North-up reference-image PSF for the PhotUtils catalog of a reference image generated here,
+    # the one the reference-image pipeline uses (None for a job config written before it was added).
+
+    refimage_catalog_psf_filename = config_input.get('REF_IMAGE','refimage_psf_filename',fallback=None)
+
     product_s3_bucket = product_s3_bucket_base
 
     product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
@@ -600,6 +605,31 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
+        # The reference image is north up, so its PhotUtils catalog (and the formula-based limiting
+        # magnitude of its InfoBits) use the north-up reference-image PSF, as in the reference-image
+        # pipeline, rather than the reference PSF rotated into the science-image frame, which is for
+        # image differencing.  Fall back to the latter if the north-up PSF is not available.
+
+        filename_refimage_catalog_psf = filename_refimage_psf
+
+        if refimage_catalog_psf_filename is None:
+            print("*** Warning: REF_IMAGE refimage_psf_filename missing from job config; using "
+                  f"{filename_refimage_psf} for the reference-image PhotUtils catalog")
+        else:
+            refimage_catalog_psf_filename = refimage_catalog_psf_filename.replace("FID",str(fid_sciimage))
+            s3_full_name_refimage_catalog_psf = "s3://" + job_info_s3_bucket + "/" + refimage_psf_s3_bucket_dir + "/" + refimage_catalog_psf_filename
+            filename_downloaded,subdirs_downloaded,downloaded_from_bucket = \
+                util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_catalog_psf)
+
+            if downloaded_from_bucket:
+                filename_refimage_catalog_psf = filename_downloaded
+            else:
+                print(f"*** Warning: Could not download north-up reference-image PSF ({s3_full_name_refimage_catalog_psf}); "
+                      f"using {filename_refimage_psf} for the reference-image PhotUtils catalog")
+
+        print("filename_refimage_catalog_psf =",filename_refimage_catalog_psf)
+
+
         # Generate PhotUtils reference-image catalog.
 
         refimgpsfcat_return_list = rfis.generatePhotUtilsReferenceImageCatalog(s3_client,
@@ -608,7 +638,7 @@ if __name__ == '__main__':
                                                                                proc_subdir,
                                                                                awaicgen_output_mosaic_image_file,
                                                                                awaicgen_output_mosaic_uncert_image_file,
-                                                                               filename_refimage_psf,
+                                                                               filename_refimage_catalog_psf,
                                                                                psfcat_refimage_dict,
                                                                                upload_to_s3_bucket)
 
@@ -747,7 +777,7 @@ if __name__ == '__main__':
                                            cfg_path,
                                            awaicgen_output_mosaic_image_file,
                                            awaicgen_output_mosaic_cov_map_file,
-                                           filename_refimage_psf,
+                                           filename_refimage_catalog_psf,
                                            filename_psf_refimage_catalog,
                                            flag_psf_refimage_catalog,
                                            zprefimg,
