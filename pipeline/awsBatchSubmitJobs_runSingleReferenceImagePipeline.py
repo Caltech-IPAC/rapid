@@ -55,6 +55,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
 import pipeline.referenceImageSubs as rfis
+import pipeline.psfFwhmSubs as psffwhm
 
 
 swname = "awsBatchSubmitJobs_runSingleReferenceImagePipeline.py"
@@ -494,7 +495,7 @@ if __name__ == '__main__':
     # Compute additional quantities needed for later.
 
     sextractor_refimage_paramsfile = cfg_path + "/rapidSexParamsRefImage.inp"
-    params_to_get_refimage = ["FWHM_IMAGE"]
+    params_to_get_refimage = psffwhm.point_source_catalog_params
 
     vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_sex_refimage_catalog,
                                                              sextractor_refimage_paramsfile,
@@ -502,22 +503,22 @@ if __name__ == '__main__':
 
     nsexcatsources_refimage = len(vals_refimage)
 
-    vals_fwhm = []
-    for val in vals_refimage:
-        vals_fwhm.append(float(val[0]))
 
-    np_vals_fwhm = np.array(vals_fwhm)
+    # The median FWHM is taken over point sources; over all sources galaxies pull it up.
 
-    fwhm_ref_minpix = np.nanmin(np_vals_fwhm)
-    fwhm_ref_maxpix = np.nanmax(np_vals_fwhm)
-    fwhm_ref_medpix = np.nanmedian(np_vals_fwhm)
+    fwhm_percentile = rfis.get_refimage_infobits_params(config_input)["fwhm_percentile"]
 
+    fwhm_ref_minpix,fwhm_ref_maxpix,fwhm_ref_medpix,fwhm_ref_pctlpix = \
+        psffwhm.catalog_fwhm_stats(vals_refimage,
+                                   label="reference-image",
+                                   percentile=fwhm_percentile)
 
-    print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix =",fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix)
-
-    fwhm_ref = fwhm_ref_medpix
+    print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix,fwhm_ref_pctlpix =",
+          fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix,fwhm_ref_pctlpix)
+    wfi_pixscale_arcsec = util.ROMAN_WFI_PLATESCALE
+    fwhm_ref = fwhm_ref_medpix*wfi_pixscale_arcsec
     if np.isnan(fwhm_ref) or fwhm_ref < 0.0:
-        fwhm_ref = 2.0
+        fwhm_ref = 2.0*wfi_pixscale_arcsec
 
     print("fwhm_ref =",fwhm_ref)
 
@@ -570,7 +571,8 @@ if __name__ == '__main__':
                                            zprefimg,
                                            input_zptmags_refimage,
                                            stats_refimage,
-                                           np_vals_fwhm,
+                                           fwhm_ref_medpix,
+                                           fwhm_ref_pctlpix,
                                            nsexcatsources_refimage,
                                            refimage_psf_catalog_nrows)
 
