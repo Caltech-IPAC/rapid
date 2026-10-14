@@ -5,6 +5,8 @@ from astropy.time import Time
 from astroquery.mast import MastMissions
 import asdf
 import numpy as np
+import datetime
+
 """
 Download files from MAST given a program id and other optional parameters
 """
@@ -48,6 +50,8 @@ mjdmax = args.mjdmax
 ingest_bucket = args.ingest_bucket
 dryrun = args.dryrun
 unguided = args.unguided
+
+start = datetime.datetime.now()
 
 # Create MastMissions object and assign mission to 'roman'
 missions = MastMissions(mission='roman')
@@ -113,3 +117,7 @@ for filename in filtered_products['filename']:
             s3_url = f"s3://{ingest_bucket}/{filename}"
             with fsspec.open(s3_url, "wb") as f:
                 af.write_to(f)
+end = datetime.datetime.now()
+elapsed_min = (end - start).total_seconds() / 60
+print(f"Elapsed: {elapsed_min:.2f} min")
+print(f'{elapsed_min/len(filtered_products)} min per file')
