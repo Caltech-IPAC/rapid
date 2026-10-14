@@ -689,11 +689,15 @@ if __name__ == '__main__':
 
     # The median FWHM is taken over point sources; over all sources galaxies pull it up.
 
-    fwhm_ref_minpix,fwhm_ref_maxpix,fwhm_ref_medpix = psffwhm.catalog_fwhm_stats(vals_refimage,
-                                                                                 label="reference-image")
+    fwhm_percentile = rfis.get_refimage_infobits_params(config_input)["fwhm_percentile"]
 
+    fwhm_ref_minpix,fwhm_ref_maxpix,fwhm_ref_medpix,fwhm_ref_pctlpix = \
+        psffwhm.catalog_fwhm_stats(vals_refimage,
+                                   label="reference-image",
+                                   percentile=fwhm_percentile)
 
-    print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix =",fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix)
+    print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix,fwhm_ref_pctlpix =",
+          fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix,fwhm_ref_pctlpix)
     wfi_pixscale_arcsec = util.ROMAN_WFI_PLATESCALE
     fwhm_ref = fwhm_ref_medpix*wfi_pixscale_arcsec
     if np.isnan(fwhm_ref) or fwhm_ref < 0.0:
@@ -750,7 +754,8 @@ if __name__ == '__main__':
                                            zprefimg,
                                            input_zptmags_refimage,
                                            stats_refimage,
-                                           np_vals_fwhm,
+                                           fwhm_ref_medpix,
+                                           fwhm_ref_pctlpix,
                                            nsexcatsources_refimage,
                                            refimage_psf_catalog_nrows)
 
@@ -1061,8 +1066,9 @@ if __name__ == '__main__':
 
     # The median FWHM is taken over point sources; over all sources galaxies pull it up.
 
-    fwhm_sci_minpix,fwhm_sci_maxpix,fwhm_sci_medpix = psffwhm.catalog_fwhm_stats(vals_sciimage,
-                                                                                 label="science-image")
+    fwhm_sci_minpix,fwhm_sci_maxpix,fwhm_sci_medpix,_ = psffwhm.catalog_fwhm_stats(vals_sciimage,
+                                                                                   label="science-image",
+                                                                                   percentile=fwhm_percentile)
 
     print("fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix =",fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix)
     wfi_pixscale_arcsec = util.ROMAN_WFI_PLATESCALE

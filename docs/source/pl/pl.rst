@@ -222,12 +222,13 @@ threshold sets no bit).  Reference-image pixels are in DN/s at the filter zero p
        coverage > 0
      - t02 = 65 %
    * - 3
-     - Median source FWHM > t03
-     - Median ``FWHM_IMAGE`` of the reference-image SExtractor catalog, times the pixel scale
+     - Point-source FWHM > t03
+     - Mode of ``FWHM_IMAGE`` over the point sources of the reference-image SExtractor catalog
+       (median fallbacks when there are few point sources), times the pixel scale
      - t03 = 1.0 arcsec
    * - 4
-     - Percentile of source FWHM > t04
-     - ``fwhm_percentile`` (90th) percentile of the same FWHMs
+     - Percentile of point-source FWHM > t04
+     - ``fwhm_percentile`` (90th) percentile of ``FWHM_IMAGE`` over the same sources
      - t04 = 2.0 arcsec
    * - 5
      - Limiting magnitude from the PSF-fit catalog < t05
