@@ -24,7 +24,7 @@ class _Info:
 
 
 class FakeReleaseDB:
-    def __init__(self, *, dbname: str = "rapid_rebuild", log_path: Path | None = None,
+    def __init__(self, *, dbname: str = "rapid", log_path: Path | None = None,
                  releases_table: bool = True):
         self.info = _Info(dbname)
         self.log_path = log_path

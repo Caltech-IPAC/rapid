@@ -87,7 +87,7 @@ def test_create_makes_devs_field_tables_once(conn):
         for table in (a, m):
             cur.execute("SELECT relpersistence, pg_get_userbyid(relowner) FROM pg_class "
                         "WHERE relname = %s", (table,))
-            assert cur.fetchone() == ("u", "rapidporole")
+            assert cur.fetchone() == ("p", "rapidporole")
 
         assert _indexes(cur, a) == {f"{a}_aid_idx", f"{a}_radec_idx", f"{a}_result_set_idx",
                                     f"{a}_run_idx", f"{a}_set_aid_key"}
@@ -112,7 +112,7 @@ def test_create_makes_devs_astroobjectsmeta_table_once(conn):
         assert objects.ensure_astroobjectsmeta_table(cur, FIELD) is False
         cur.execute("SELECT relpersistence, pg_get_userbyid(relowner), reloptions FROM pg_class "
                     "WHERE relname = %s", (t,))
-        assert cur.fetchone() == ("u", "rapidporole", ["fillfactor=70"])
+        assert cur.fetchone() == ("p", "rapidporole", ["fillfactor=70"])
         assert _indexes(cur, t) == {f"{t}_nsources_idx", f"{t}_meanradec_idx",
                                     f"{t}_result_set_idx", f"{t}_run_idx", f"{t}_set_aid_key"}
         constraints = _constraints(cur, t)

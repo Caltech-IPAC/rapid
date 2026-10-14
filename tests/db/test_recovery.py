@@ -132,7 +132,7 @@ def _seed_run(held, **overrides):
     kwargs = dict(kind="production", selected_stages=CHAIN, max_attempts=3,
                   settings_overlay_ref="s3://settings/overlay.toml",
                   input_selection_ref="s3://selection/set.json", lane="batch",
-                  resource_profile="rebuild", database_target="rapid_rebuild",
+                  resource_profile="rebuild", database_target="rapid",
                   check_policy_ref="rebuild-trial@1", purpose="step 6 demo P6")
     kwargs.update(overrides)
     return _make_run(held, **kwargs)
@@ -246,7 +246,7 @@ def test_only_failed_copies_the_non_complete_units_and_the_stage_suffix(held, cl
         "production", "brusholme", f"re-run of failed units of {seed}: step 6 demo P6",
         ["difference", "register", "load"], "abc123", "sha256:deadbeef", None,
         "s3://settings/overlay.toml", "s3://selection/set.json", "batch", "rebuild",
-        "rapid_rebuild", 3, "rebuild-trial@1", seed, False)
+        "rapid", 3, "rebuild-trial@1", seed, False)
 
     units = _all(held, """
         SELECT u.stage, u.unit_kind, u.unit_id, u.state, s.unit_id, s.run
