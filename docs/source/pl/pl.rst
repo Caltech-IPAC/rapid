@@ -280,7 +280,28 @@ The InfoBits and status are recorded in:
   product configuration file;
 * the reference image and its uncertainty image, as FITS keywords ``INFOBITS`` and ``STATUS``,
   with a ``BITnn`` keyword for each bit in use whose comment is its definition with the
-  threshold filled in (see :doc:`../prod/products`).
+  threshold filled in (see :doc:`../prod/products`).  As for ZTF, the comment of ``INFOBITS``
+  lists the bits that are set (``bit(s) = none`` if none is).  For example, a reference image
+  with bits 4 and 9 set has
+
+  .. code-block::
+
+      INFOBITS=                  528 / infoBits string; bit(s) = 4, 9
+      STATUS  =                    1 / Overall quality: 1 = usable, 0 = bad
+      BIT00   =                    0 / MEDIAN BACKGROUND LEVEL is > 1.0 DN/s
+      BIT01   =                    1 / ROBUST PIXEL NOISE (RMS) is > 0.10 DN/s
+      BIT02   =                    2 / PERCENT OF BAD/SATURATED PIXELS is > 65.0%
+      BIT03   =                    3 / MEDIAN OF SOURCE FWHM is > 1.00"
+      BIT04   =                    4 / 90TH PCTILE OF SOURCE FWHM is > 2.00"
+      BIT05   =                    5 / MAGLIM FROM PSF CATALOG UNCERTS is < 15.0 mag
+      BIT06   =                    6 / MAGLIM FROM EMPIRICAL FORMULA is < 15.0 mag
+      BIT07   =                    7 / NUMBER OF PSF CATALOG SOURCES is < 10
+      BIT08   =                    8 / NUMBER OF SEXTRACTOR CAT SOURCES is < 10
+      BIT10   =                   10 / ROBUST RMS OF INPUT IMAGE ZPs is > 3.50 mag
+      BIT16   =                   16 / PSF-FIT CATALOG NOT POSSIBLE
+
+  The post-processing pipeline rewrites ``INFOBITS`` from the ``RefImages`` record, with the
+  same comment, so reference images made before the comment was introduced get it too.
 
 .. note::
    A reference image with ``status = 0`` is not used: the database query for the best reference
