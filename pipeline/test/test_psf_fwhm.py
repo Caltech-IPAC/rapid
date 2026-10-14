@@ -28,7 +28,7 @@ def test_params_match_row_layout():
 def test_elongated_galaxies_are_cut():
     stars = [_row(1.9) for _ in range(60)]
     galaxies = [_row(4.0, elongation=1.8) for _ in range(120)]
-    minpix, maxpix, medpix = catalog_fwhm_stats(stars + galaxies)
+    minpix, maxpix, medpix, _ = catalog_fwhm_stats(stars + galaxies, percentile=90.0)
     assert medpix == pytest.approx(1.9, abs=0.05)
     assert minpix == pytest.approx(1.9)
     assert maxpix == pytest.approx(4.0)
@@ -40,14 +40,14 @@ def test_mode_finds_stars_among_more_numerous_round_galaxies():
     galaxies = rng.uniform(2.0, 6.0, 1000)
     assert np.median(np.r_[stars, galaxies]) > 2.5
     rows = [_row(f) for f in np.r_[stars, galaxies]]
-    _, _, medpix = catalog_fwhm_stats(rows)
+    _, _, medpix, _ = catalog_fwhm_stats(rows, percentile=90.0)
     assert medpix == pytest.approx(1.86, abs=0.05)
     assert fwhm_mode(np.r_[stars, galaxies]) == pytest.approx(1.86, abs=0.05)
 
 
 def test_between_ten_and_fifty_point_sources_uses_their_median():
     rows = [_row(1.9) for _ in range(20)] + [_row(4.0, elongation=1.8) for _ in range(100)]
-    _, _, medpix = catalog_fwhm_stats(rows)
+    _, _, medpix, _ = catalog_fwhm_stats(rows, percentile=90.0)
     assert medpix == pytest.approx(1.9)
 
 
@@ -67,9 +67,38 @@ def test_thresholds_are_inclusive():
 
 def test_too_few_point_sources_falls_back_to_all_sources():
     rows = [_row(1.9) for _ in range(5)] + [_row(4.0, elongation=1.8) for _ in range(20)]
-    _, _, medpix = catalog_fwhm_stats(rows)
+    _, _, medpix, _ = catalog_fwhm_stats(rows, percentile=90.0)
     assert medpix == pytest.approx(4.0)
 
 
 def test_empty_catalog_gives_nan():
-    assert all(np.isnan(v) for v in catalog_fwhm_stats([]))
+    stats = catalog_fwhm_stats([], percentile=90.0)
+    assert len(stats) == 4
+    assert all(np.isnan(v) for v in stats)
+
+
+def test_percentile_is_over_point_sources_only():
+    stars = [_row(f) for f in np.linspace(1.8, 2.0, 60)]
+    galaxies = [_row(4.0, elongation=1.8) for _ in range(120)]
+    _, _, _, pctlpix = catalog_fwhm_stats(stars + galaxies, percentile=90.0)
+    assert pctlpix == pytest.approx(np.percentile(np.linspace(1.8, 2.0, 60), 90.0))
+
+
+def test_percentile_argument_is_respected():
+    fwhm = np.linspace(1.5, 2.5, 100)
+    rows = [_row(f) for f in fwhm]
+    for percentile in (10.0, 50.0, 90.0):
+        _, _, _, pctlpix = catalog_fwhm_stats(rows, percentile=percentile)
+        assert pctlpix == pytest.approx(np.percentile(fwhm, percentile))
+
+
+def test_percentile_falls_back_to_all_valid_sources():
+    rows = ([_row(1.9) for _ in range(5)] + [_row(4.0, elongation=1.8) for _ in range(20)] +
+            [_row(-1.0, elongation=1.8)])
+    _, _, _, pctlpix = catalog_fwhm_stats(rows, percentile=90.0)
+    assert pctlpix == pytest.approx(np.percentile([1.9] * 5 + [4.0] * 20, 90.0))
+
+
+def test_percentile_is_required():
+    with pytest.raises(TypeError):
+        catalog_fwhm_stats([_row(1.9)])

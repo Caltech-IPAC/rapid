@@ -81,14 +81,34 @@ def fwhm_mode(fwhm,bin_width=mode_bin_width,smoothing_bins=mode_smoothing_bins):
     return float(0.5 * (edges[ipeak] + edges[ipeak + 1]))
 
 
-def catalog_fwhm_stats(catalog_rows,label="image",min_count=min_point_source_count):
+def catalog_fwhm_stats(catalog_rows,label="image",min_count=min_point_source_count,*,percentile):
 
     '''
-    Return (minpix, maxpix, medpix) for the rows of a SExtractor catalog parsed with
-    point_source_catalog_params.
+    Compute FWHM statistics for the rows of a SExtractor catalog parsed with
+    point_source_catalog_params.  medpix is the mode of FWHM_IMAGE over the point sources, and
+    pctlpix is the given percentile of the same sample (see the module docstring for the fallbacks).
 
-    medpix is the mode of FWHM_IMAGE over the point sources (see the module docstring for the
-    fallbacks).  minpix and maxpix are over all sources, as before.
+    Parameters
+    ----------
+    catalog_rows : sequence of sequence of str or float
+        Catalog rows, one value per entry of point_source_catalog_params.
+    label : str, optional
+        Name of the image, used in the printed messages.
+    min_count : int, optional
+        Minimum number of point sources below which the statistics fall back to all sources.
+    percentile : float
+        Percentile of FWHM_IMAGE to compute, in the range 0-100.
+
+    Returns
+    -------
+    minpix : float
+        Minimum FWHM_IMAGE over all sources [pixels].
+    maxpix : float
+        Maximum FWHM_IMAGE over all sources [pixels].
+    medpix : float
+        Mode of FWHM_IMAGE over the point sources, or a median fallback [pixels].
+    pctlpix : float
+        Percentile of FWHM_IMAGE over the same sources as medpix [pixels].
     '''
 
     rows = np.array(catalog_rows,dtype=float).reshape(-1,len(point_source_catalog_params))
@@ -97,7 +117,7 @@ def catalog_fwhm_stats(catalog_rows,label="image",min_count=min_point_source_cou
 
     if fwhm.size == 0:
         print(f"*** Warning: {label} catalog has no sources; FWHM is undefined")
-        return np.nan,np.nan,np.nan
+        return np.nan,np.nan,np.nan,np.nan
 
     with np.errstate(all="ignore"):
         minpix = np.nanmin(fwhm)
@@ -121,4 +141,16 @@ def catalog_fwhm_stats(catalog_rows,label="image",min_count=min_point_source_cou
         print(f"*** Warning: only {npoint} point sources in the {label} catalog (need {min_count}); "
               f"using the median over all {fwhm.size} sources = {medpix} px")
 
-    return minpix,maxpix,medpix
+    # The percentile is taken over the same sources as medpix: the point sources, or all sources
+    # with a valid FWHM when there are too few point sources.
+
+    if npoint >= min_count:
+        pctl_sample = fwhm[point_sources]
+    else:
+        pctl_sample = fwhm[np.isfinite(fwhm) & (fwhm > 0.0)]
+
+    pctlpix = float(np.percentile(pctl_sample,percentile)) if pctl_sample.size > 0 else np.nan
+
+    print(f"{label} FWHM: {percentile} percentile over {pctl_sample.size} sources = {pctlpix} px")
+
+    return minpix,maxpix,medpix,pctlpix
