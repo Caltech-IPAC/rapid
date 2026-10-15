@@ -22,7 +22,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.10"
+swvers = "1.11"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -158,6 +158,21 @@ if datearg is not None:
 
         print("*** Error: Env. var. ENDDATETIME not set; quitting...")
         exit(64)
+
+
+# Environment variables STARTREFIMMJDOBS and ENDREFIMMJDOBS specify the MJD-OBS window of the
+# science images allowed as reference-image inputs.  If not set before the VPO is executed,
+# default to the full range, so that every best science image is allowed.  The child processes
+# launched by the VPO inherit these environment variables.
+
+if not os.getenv('STARTREFIMMJDOBS'):
+    os.environ['STARTREFIMMJDOBS'] = "0.0"
+
+if not os.getenv('ENDREFIMMJDOBS'):
+    os.environ['ENDREFIMMJDOBS'] = "999999.9"
+
+print("STARTREFIMMJDOBS =",os.environ['STARTREFIMMJDOBS'])
+print("ENDREFIMMJDOBS =",os.environ['ENDREFIMMJDOBS'])
 
 
 # Read input parameters from .ini file.
