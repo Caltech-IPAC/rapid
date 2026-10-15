@@ -122,6 +122,18 @@ image.  To use a narrower window, export both variables before starting the VPO:
 The database connection is taken from the usual ``DBNAME``, ``DBSERVER``, ``DBPORT``,
 ``DBUSER`` and ``DBPASS`` variables.
 
+``NUM_CORES`` is optional and is not read by the VPO itself, but the codes it launches inherit
+it.  It sets the number of parallel processes of stages 1, 3, 4, 6 and 10 to 18 (see
+`Stages`_); if it is unset, each of them uses all the cores of the machine
+(``os.cpu_count()``).  Stages 7 and 9 ignore it and always use all the cores.  It must be an
+integer: otherwise stage 1 quits with exit code 64, which fails the processing request (see
+`Error handling`_).
+For example, to run each stage with at most eight processes:
+
+.. code-block::
+
+    export NUM_CORES=8
+
 The VPO sets several environment variables itself, for the codes it launches, so they
 should not be set by hand:
 
