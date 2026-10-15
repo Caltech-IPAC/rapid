@@ -199,6 +199,17 @@ def test_parse_xy_bounds_rejects_three_values():
         util.parse_xy_bounds("(1, 2, 3)")
 
 
+@pytest.mark.parametrize("text, value", [("(17, 17)", (17, 17)), ("(5,5)", (5, 5)), ("5", (5, 5)),
+                                         (" (7, 9) ", (7, 9))])
+def test_parse_fit_shape(text, value):
+    assert util.parse_fit_shape(text) == value
+
+
+def test_parse_fit_shape_rejects_three_values():
+    with pytest.raises(ValueError):
+        util.parse_fit_shape("(5, 5, 5)")
+
+
 #-------------------------------------------------------------------
 # compute_extra_cols_sxtractor, with configs written before and after the new parameters.
 
@@ -230,11 +241,12 @@ def test_compute_extra_cols_sxtractor(tmp_path, new_keys):
     extra_cols_dict = {"extra_cols": "sumrat",
                      "sextractor_x_col": "XWIN_IMAGE", "sextractor_y_col": "YWIN_IMAGE",
                      "sxtractor_photutils_cols": "sharpness, roundness1, roundness2, x_dao_peak, "
-                                                 "y_dao_peak, dao_flags, flux_fit, flags",
+                                                 "y_dao_peak, dao_flags, flux_fit, n_pixels_fit, flags",
                      "photutils_cols_fill_value": "-999.0", "photutils_cols_format": ".6f"}
     if new_keys:
         extra_cols_dict["photutils_cols_snap_radius"] = "1"
         extra_cols_dict["photutils_cols_xy_bounds"] = "None"
+        extra_cols_dict["photutils_cols_fit_shape"] = "(5, 5)"
 
     sumrat_dict = {"stamp_size": "5", "filter_size": "3", "lower_median": "False",
                    "fill_value": "-999.0", "col_format": ".6f"}
@@ -252,6 +264,9 @@ def test_compute_extra_cols_sxtractor(tmp_path, new_keys):
     assert int(extra_cols["dao_flags"][1]) & 3 != 0
     assert extra_cols["sharpness"][1] != FILL
     assert extra_cols["flux_fit"][1] != FILL
+
+    # photutils_cols_fit_shape replaces [PSFCAT_DIFFIMAGE] fit_shape (9 x 9) when given.
+    assert extra_cols["n_pixels_fit"][0] == (25 if new_keys else 81)
 
     header = [line for line in open(catalog) if line.startswith("#")]
     for name in ("SHARPNESS", "X_DAO_PEAK", "Y_DAO_PEAK", "DAO_FLAGS", "FLAGS_FIT"):

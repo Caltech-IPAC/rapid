@@ -3136,6 +3136,24 @@ sxtractor_photutils_catalog_names = {"flags": "flags_fit"}
 
 
 #-------------------------------------------------------------------
+# Parse a PSFPhotometry fit_shape from its config-file string, "(ny, nx)" or "n" (a square box).
+# Sizes are in pixels.
+
+def parse_fit_shape(fit_shape_str):
+
+    values = [int(v) for v in fit_shape_str.replace("(","").replace(")","").replace(" ","").split(",")]
+
+    if len(values) == 1:
+        values = values * 2
+
+    if len(values) != 2:
+        raise ValueError(f"Method parse_fit_shape: cannot parse fit_shape = {fit_shape_str}; expected "
+                         "a number or a pair (ny, nx)")
+
+    return tuple(values)
+
+
+#-------------------------------------------------------------------
 # Parse the PSFPhotometry xy_bounds parameter from its config-file string: "None" (free positions),
 # a single number (the same bound along x and y), or a pair "(bx, by)", either of which may be
 # None (no bound along that axis).  Bounds are in pixels.
@@ -3558,7 +3576,8 @@ def compute_extra_cols_sxtractor(diff_image_filename,
     psfcat_dict : dict-like of str or None, optional
         [PSFCAT_DIFFIMAGE] section of the config file, whose fwhm, fit_shape, and aperture_radius
         are used, so that the PhotUtils-style columns are computed as in the RAPID PhotUtils
-        catalogs.
+        catalogs.  photutils_cols_fit_shape in extra_cols_dict, if given and not None, replaces
+        its fit_shape for these columns only.
     sci_image_filename, ref_image_filename : str or None, optional
         FITS files containing the background-subtracted science image and the resampled,
         gain-matched reference image, on the pixel grid of the difference image.  The rb columns
@@ -3618,8 +3637,17 @@ def compute_extra_cols_sxtractor(diff_image_filename,
 
     elif photutils_col_names:
 
-        fit_shape = tuple(int(v) for v in
-                          psfcat_dict["fit_shape"].replace("(","").replace(")","").replace(" ","").split(","))
+        # The PSF-fit box: photutils_cols_fit_shape if set, otherwise the fit_shape of the RAPID
+        # PhotUtils catalogs ([PSFCAT_DIFFIMAGE]), which configs written before it existed get.
+
+        fit_shape_str = extra_cols_dict.get("photutils_cols_fit_shape","None").strip()
+
+        if fit_shape_str.lower() in ("", "none"):
+            fit_shape_str = psfcat_dict["fit_shape"]
+
+        fit_shape = parse_fit_shape(fit_shape_str)
+
+        print(f"compute_extra_cols_sxtractor: PhotUtils-style columns with fit_shape = {fit_shape}")
 
 
         # Configs written before photutils_cols_snap_radius and photutils_cols_xy_bounds existed
