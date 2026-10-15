@@ -145,8 +145,19 @@ The record is left with ``status = 0`` (not finished).  The VPO's open loop neve
 observation range whose request finished with ``status = 1``, so set that only if the open loop
 should treat the range as done (see :doc:`vpo`).
 
-``NUM_CORES`` optionally sets the number of parallel processes of the stages that run in
-parallel (all but stages 7 and 9); by default they use all the cores of the machine.
+``NUM_CORES`` optionally sets the number of parallel processes of stages 1, 3, 4, 6 and 10 to
+18, for example:
+
+.. code-block::
+
+   export NUM_CORES=8
+
+If it is unset, each of these stages uses all the cores of the machine (``os.cpu_count()``).  It
+must be an integer: stages 1, 3, 4 and 6 quit with exit code 64 otherwise, and stages 10 to 18
+quit with a Python ``ValueError``.  Stages 7 and 9 also run in parallel, but ignore
+``NUM_CORES`` and always use all the cores.  Set it lower to leave cores free for other work on
+the machine, or to limit the number of simultaneous database connections of the stages that
+open one per process.
 
 Each command below writes its output to a log file in ``/work``.
 
