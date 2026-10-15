@@ -186,6 +186,12 @@ sumrat_prefilter_threshold,rb_prefilter_threshold,catalog_fill_values = util.get
 
 print("sumrat_prefilter_threshold =",sumrat_prefilter_threshold)
 print("rb_prefilter_threshold =",rb_prefilter_threshold)
+
+# SNR cut on FLUX_APER_1 / FLUXERR_APER_1 (the 3-pixel-diameter aperture).
+
+snr_prefilter_threshold = util.get_snr_prefilter_threshold(config_input)
+
+print("snr_prefilter_threshold =",snr_prefilter_threshold)
 print("catalog_fill_values =",catalog_fill_values)
 
 
@@ -419,13 +425,19 @@ def write_secat_qtable_to_csv_file(isdiffpos,
         nrows = nkeep
 
 
-    # Prefilter: reject xsources with sumrat or rb at or below its threshold, where computed.
+    # Prefilter: reject xsources with sumrat, rb, or SNR at or below its threshold, where computed.
+
+    with np.errstate(divide="ignore",invalid="ignore"):
+        snr_aper = util.catalog_float_values(secat_qtable,"FLUX_APER_1",catalog_fill_values) / \
+                   util.catalog_float_values(secat_qtable,"FLUXERR_APER_1",catalog_fill_values)
 
     keep = util.prefilter_database_records(nrows,
                                            util.catalog_float_values(secat_qtable,"SUMRAT",catalog_fill_values),
                                            util.catalog_float_values(secat_qtable,"RB_SCORE",catalog_fill_values),
                                            sumrat_prefilter_threshold,
-                                           rb_prefilter_threshold)
+                                           rb_prefilter_threshold,
+                                           snr = snr_aper,
+                                           snr_prefilter_threshold = snr_prefilter_threshold)
 
     nkeep = int(np.count_nonzero(keep))
 

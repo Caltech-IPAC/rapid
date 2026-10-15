@@ -3942,7 +3942,10 @@ def prefilter_database_records(nrows,
                                sumrat,
                                rb,
                                sumrat_prefilter_threshold,
-                               rb_prefilter_threshold):
+                               rb_prefilter_threshold,
+                               *,
+                               snr = None,
+                               snr_prefilter_threshold = None):
 
     """
     Select the catalog records to be loaded into the Sources or XSources database child tables:
@@ -3963,6 +3966,10 @@ def prefilter_database_records(nrows,
         sumrat cut.
     rb_prefilter_threshold : float or None
         A record is rejected when its rb is less than or equal to this value.  None: no rb cut.
+    snr : numpy.ndarray of float or None, optional
+        Signal-to-noise ratio of each record, NaN where missing, or None for no SNR cut.
+    snr_prefilter_threshold : float or None, optional
+        A record is rejected when its snr is less than or equal to this value.  None: no SNR cut.
 
     Returns
     -------
@@ -3985,7 +3992,23 @@ def prefilter_database_records(nrows,
         if rb is not None and rb_prefilter_threshold is not None:
             keep &= ~(np.isfinite(rb) & (rb <= rb_prefilter_threshold))
 
+        if snr is not None and snr_prefilter_threshold is not None:
+            keep &= ~(np.isfinite(snr) & (snr <= snr_prefilter_threshold))
+
     return keep
+
+
+def get_snr_prefilter_threshold(config_input):
+
+    """
+    [DATABASE_PREFILTER] snr_prefilter_threshold as a float, or None (no SNR cut) if the section
+    or the key is missing or the key is None.
+    """
+
+    value = config_input.get("DATABASE_PREFILTER","snr_prefilter_threshold",fallback="None") \
+        if config_input.has_section("DATABASE_PREFILTER") else "None"
+
+    return None if value.strip().lower() in ("", "none") else float(value)
 
 
 def get_database_prefilter_params(config_input):
