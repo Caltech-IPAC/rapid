@@ -221,10 +221,13 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_exposure(self,dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status):
+    def add_exposure(self,dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status,
+        program_id=None,execution_plan=None,pass_number=None,segment=None,observation=None,
+        visit=None,exposure=None,visit_id=None,observation_id=None):
 
         '''
-        Add record in Exposures database table.
+        Add record in Exposures database table.  The keyword arguments are the Roman
+        observation identifiers (ASDF meta.observation); pass_number is meta.observation.pass.
         '''
 
         self.exit_code = 0
@@ -242,7 +245,16 @@ class RAPIDDB:
             "cast('TEMPLATE_FILTER' as character varying(16))," +\
             "cast(TEMPLATE_EXPTIME as real), " +\
             "cast(TEMPLATE_INFOBITS as integer), " +\
-            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "cast(TEMPLATE_STATUS as smallint), " +\
+            "program_id_ => cast(%s as integer), " +\
+            "execution_plan_ => cast(%s as smallint), " +\
+            "pass_ => cast(%s as smallint), " +\
+            "segment_ => cast(%s as smallint), " +\
+            "observation_ => cast(%s as smallint), " +\
+            "visit_ => cast(%s as smallint), " +\
+            "exposure_ => cast(%s as smallint), " +\
+            "visit_id_ => cast(%s as character varying(19)), " +\
+            "observation_id_ => cast(%s as character varying(28))) as " +\
             "(expid integer," +\
             " fid smallint);"
 
@@ -282,9 +294,12 @@ class RAPIDDB:
         pattern = re.compile("|".join(rep.keys()))
         query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
 
-        print('query = {}'.format(query))
+        params = (program_id, execution_plan, pass_number, segment, observation, visit, exposure,
+                  visit_id, observation_id)
 
-        self.cur.execute(query)
+        print('query = {}, params = {}'.format(query, params))
+
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -299,6 +314,29 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def is_program_in_surveys(self,program_id):
+
+        '''
+        Return whether a program has a record in the Surveys database table.
+
+        Parameters
+        ----------
+        program_id : int
+            Roman program number, or negative for simulations.
+
+        Returns
+        -------
+        bool
+            True if a Surveys record exists for program_id.
+        '''
+
+        self.cur.execute("select 1 from Surveys where program_id = %s;", (program_id,))
+
+        return self.cur.fetchone() is not None
 
 
 ########################################################################################################
