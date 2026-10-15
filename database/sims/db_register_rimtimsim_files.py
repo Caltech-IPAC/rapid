@@ -219,7 +219,7 @@ def register_exposure(dbh,header):
     print("dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status = ",\
         dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status)
 
-    dbh.add_exposure(dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status)
+    dbh.add_exposure(dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status,program_id=-3)     # RimTimSims in Surveys table.
 
     expid = dbh.expid
     fid = dbh.fid
