@@ -3238,6 +3238,39 @@ def _compute_extra_catalog_cols(diff_image_filename,
     rb_cols = None
     rb_skipped = False
 
+
+    # The pixel-based columns (sumrat, nneg, nbad) are measured on a background-subtracted copy of
+    # the difference image when pixel_cols_bkg_box is set (see
+    # rda.write_background_subtracted_diff_image); the other columns always use the image itself.
+    # Configs written before pixel_cols_bkg_box existed measure on the image itself.
+
+    pixel_image_filename = diff_image_filename
+    pixel_image_tmp = None
+
+    bkg_box_str = extra_cols_dict.get("pixel_cols_bkg_box","None").strip()
+
+    if bkg_box_str.lower() not in ("", "none", "0") and \
+            any(c in ("sumrat","nneg","nbad") for c in col_names):
+
+        pixel_image_tmp = os.path.splitext(diff_image_filename)[0] + "_pixcols_bkgsub.fits"
+
+        try:
+            median_bkg = rda.write_background_subtracted_diff_image(
+                diff_image_filename,
+                pixel_image_tmp,
+                box_size = int(bkg_box_str),
+                filter_size = int(extra_cols_dict.get("pixel_cols_bkg_filter_size","3")))
+
+        except Exception as e:
+            print(f"*** Warning: _compute_extra_catalog_cols: background subtraction for the pixel "
+                  f"columns failed ({e}); measuring them on {diff_image_filename} itself")
+            pixel_image_tmp = None
+
+        else:
+            pixel_image_filename = pixel_image_tmp
+            print(f"_compute_extra_catalog_cols: pixel columns measured after subtracting a "
+                  f"{bkg_box_str}-px background (median {median_bkg:.4f}) from {diff_image_filename}")
+
     for col_name in col_names:
 
         if col_name in rb_catalog_col_names:
@@ -3316,7 +3349,7 @@ def _compute_extra_catalog_cols(diff_image_filename,
         elif col_name == "sumrat":
 
             extra_cols[col_name] = rda.compute_sumrat_for_diff_image(
-                diff_image_filename,
+                pixel_image_filename,
                 xy_positions,
                 coord_base = coord_base,
                 stamp_size = int(sumrat_dict["stamp_size"]),
@@ -3334,7 +3367,7 @@ def _compute_extra_catalog_cols(diff_image_filename,
 
             if nneg_nbad is None:
                 nneg_nbad = dict(zip(("nneg","nbad"), rda.compute_nneg_nbad_for_diff_image(
-                    diff_image_filename,
+                    pixel_image_filename,
                     xy_positions,
                     coord_base = coord_base,
                     stamp_size = int(extra_cols_dict.get("nneg_nbad_stamp_size","5")),
@@ -3346,6 +3379,9 @@ def _compute_extra_catalog_cols(diff_image_filename,
         else:
             raise ValueError(f"Method _compute_extra_catalog_cols: unknown extra catalog column "
                              f"{col_name}")
+
+    if pixel_image_tmp is not None and os.path.exists(pixel_image_tmp):
+        os.remove(pixel_image_tmp)
 
     return extra_cols,extra_cols_format
 
