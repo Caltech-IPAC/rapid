@@ -92,8 +92,47 @@ unset (``STARTDATETIME`` and ``ENDDATETIME`` only for a processing-date run):
    * - ``AWS_SECRET_ACCESS_KEY``
      - AWS credentials, needed to submit and poll AWS Batch jobs.
 
+These environment variables are optional; the VPO sets the default if one is unset or empty:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 15 55
+
+   * - Variable
+     - Default
+     - Meaning
+   * - ``STARTREFIMMJDOBS``
+     - ``0.0``
+     - Start of the reference-image window (``mjdobs >= STARTREFIMMJDOBS``).
+   * - ``ENDREFIMMJDOBS``
+     - ``999999.9``
+     - End of the reference-image window (``mjdobs < ENDREFIMMJDOBS``).
+
+The reference-image window limits the science images that can be reference-image inputs.
+Stage 1 (via ``awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py``) uses it to select
+the inputs, and stage 4 launches science pipelines only for fields and filters with at least
+``min_n_images_to_coadd`` best science images in it.  The defaults allow every best science
+image.  To use a narrower window, export both variables before starting the VPO:
+
+.. code-block::
+
+    export STARTREFIMMJDOBS=61450.0
+    export ENDREFIMMJDOBS=61455.3
+
 The database connection is taken from the usual ``DBNAME``, ``DBSERVER``, ``DBPORT``,
 ``DBUSER`` and ``DBPASS`` variables.
+
+``NUM_CORES`` is optional and is not read by the VPO itself, but the codes it launches inherit
+it.  It sets the number of parallel processes of stages 1, 3, 4, 6 and 10 to 18 (see
+`Stages`_); if it is unset, each of them uses all the cores of the machine
+(``os.cpu_count()``).  Stages 7 and 9 ignore it and always use all the cores.  It must be an
+integer: otherwise stage 1 quits with exit code 64, which fails the processing request (see
+`Error handling`_).
+For example, to run each stage with at most eight processes:
+
+.. code-block::
+
+    export NUM_CORES=8
 
 The VPO sets several environment variables itself, for the codes it launches, so they
 should not be set by hand:
