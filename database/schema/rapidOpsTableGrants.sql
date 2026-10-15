@@ -28,6 +28,26 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE filters TO rapidporole;
 
 
 -------------------
+-- Surveys table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE surveys FROM rapidreadrole;
+GRANT SELECT ON TABLE surveys TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE surveys FROM rapidadminrole;
+GRANT ALL ON TABLE surveys TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE surveys FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE surveys TO rapidporole;
+
+
+-------------------
 -- SCAs table
 -------------------
 
