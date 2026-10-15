@@ -203,7 +203,7 @@ def register_exposure(dbh,header,expid,fid):
 
     # Insert or update record in Exposures database table.
 
-    dbh.add_exposure(dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status)
+    dbh.add_exposure(dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status,program_id=-2)     # OpenUniverse in Surveys table.
 
     expid = dbh.expid
     fid = dbh.fid
