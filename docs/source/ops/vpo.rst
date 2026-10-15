@@ -92,6 +92,33 @@ unset (``STARTDATETIME`` and ``ENDDATETIME`` only for a processing-date run):
    * - ``AWS_SECRET_ACCESS_KEY``
      - AWS credentials, needed to submit and poll AWS Batch jobs.
 
+These environment variables are optional; the VPO sets the default if one is unset or empty:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 15 55
+
+   * - Variable
+     - Default
+     - Meaning
+   * - ``STARTREFIMMJDOBS``
+     - ``0.0``
+     - Start of the reference-image window (``mjdobs >= STARTREFIMMJDOBS``).
+   * - ``ENDREFIMMJDOBS``
+     - ``999999.9``
+     - End of the reference-image window (``mjdobs < ENDREFIMMJDOBS``).
+
+The reference-image window limits the science images that can be reference-image inputs.
+Stage 1 (via ``awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py``) uses it to select
+the inputs, and stage 4 launches science pipelines only for fields and filters with at least
+``min_n_images_to_coadd`` best science images in it.  The defaults allow every best science
+image.  To use a narrower window, export both variables before starting the VPO:
+
+.. code-block::
+
+    export STARTREFIMMJDOBS=61450.0
+    export ENDREFIMMJDOBS=61455.3
+
 The database connection is taken from the usual ``DBNAME``, ``DBSERVER``, ``DBPORT``,
 ``DBUSER`` and ``DBPASS`` variables.
 

@@ -209,16 +209,18 @@ required.
    export DRYRUN=False
    export STARTDATETIME="2027-10-01 07:12:00"
    export ENDDATETIME="2027-10-02 00:00:00"
-   export STARTREFIMMJDOBS=0
-   export ENDREFIMMJDOBS=99999
+   export STARTREFIMMJDOBS=0.0
+   export ENDREFIMMJDOBS=999999.9
 
    python3.11 /code/pipeline/launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py >& launchSciencePipelines_20261015.out
 
 ``RUNFID`` optionally limits the launch to one filter.
 
 .. note::
-   The VPO does not set ``STARTREFIMMJDOBS`` and ``ENDREFIMMJDOBS``, so they must also be in the
-   environment the VPO is started from.
+   The VPO defaults ``STARTREFIMMJDOBS`` to ``0.0`` and ``ENDREFIMMJDOBS`` to ``999999.9`` if
+   they are unset or empty when it is started, so they need not be exported before running
+   the VPO unless a narrower window is wanted.  Run by hand, as above, this script still
+   requires them.
 
 
 Stage 6: register science pipelines
