@@ -22,17 +22,17 @@ BASE = {"sextractor_filter": "N", "sextractor_filter_name": "/cfg/rapidSexDiffIm
         "sextractor_detect_minarea": "5", "sextractor_detect_thresh": "2.5",
         "sextractor_analysis_thresh": "2.5", "sextractor_deblend_nthresh": "32"}
 OVERRIDES = {"sextractor_filter": "Y", "sextractor_filter_name": "rapidSexDiffImageSfftFilter.conv",
-             "sextractor_detect_minarea": "1", "sextractor_detect_thresh": "2.0",
-             "sextractor_analysis_thresh": "2.0"}
+             "sextractor_detect_minarea": "2", "sextractor_detect_thresh": "2.5",
+             "sextractor_analysis_thresh": "2.5"}
 
 
 def test_overrides_applied_and_filter_resolved_against_cfg_path():
     out = sfft_sextractor_dict(BASE, OVERRIDES, False, "/cfg")
     assert out["sextractor_filter"] == "Y"
     assert out["sextractor_filter_name"] == "/cfg/rapidSexDiffImageSfftFilter.conv"
-    assert out["sextractor_detect_minarea"] == "1"
-    assert out["sextractor_detect_thresh"] == "2.0"
-    assert out["sextractor_analysis_thresh"] == "2.0"
+    assert out["sextractor_detect_minarea"] == "2"
+    assert out["sextractor_detect_thresh"] == "2.5"
+    assert out["sextractor_analysis_thresh"] == "2.5"
     assert out["sextractor_deblend_nthresh"] == "32"
 
 
@@ -62,7 +62,7 @@ def test_ini_blocks_ship_enabled_with_the_tested_settings(section):
 def test_naive_block_is_never_skipped_for_crossconv():
     """The naive passes call sfft_sextractor_dict with crossconv_flag False."""
     out = sfft_sextractor_dict(BASE, OVERRIDES, False, "/cfg")
-    assert out["sextractor_detect_minarea"] == "1"
+    assert out["sextractor_detect_minarea"] == "2"
 
 
 def test_conv_file_is_a_normalised_7x7_fwhm2_gaussian():
