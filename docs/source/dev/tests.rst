@@ -104,6 +104,19 @@ Date              Software modification
 8/5/2026          Made correction to ``data_unc`` formula (line 64 of ``pipeline/differenceImageSubs.py``).
 8/5/2026          Modified to feed ``dfis.compute_diffimage_uncertainty method`` background-subtracted ``filename_bkg_subbed_science_image`` instead of ``reformatted_science_image_filename`` (with background).
 8/5/2026          Set ``min_separation = 1.0`` pixels for PhotUtils catalog generation.
+10/14/2026        * New ``ProcReqs`` database table that reserves a unique ``reqid`` for each VPO processing episode.
+                  * Req ID included in S3 pathnames (stored in ``ProcReqs`` database table, and referenced in DB via ``Jobs.reqid`` column).
+                  * Extra columns added to SExtractor and PhotUtils catalogs.
+                  * VPO loads both Sources and XSources child database tables.
+                  * Sources and XSources child database tables have extra columns.
+                  * Pipeline now computes real-bogus scores (``rb``).
+                  * DB load scripts have prefiltering on ``sumrat`` (> 0.4) and ``rb`` (> 0.0 at this time).
+                    Prefilter: reject xsources with ``sumrat`` or ``rb`` at or below its threshold, where computed
+                    (do not reject if no value is available to threshold).
+                  * Alert generation has been incorporated into the RAPID pipeline!
+                  * VPO upgrades to resubmit failed AWS Batch jobs due to infrastructure errors.
+                  * VPO upgrade to execute the RAPID pipeline in an open loop automatically.
+                  * Reference-image infobits, as defined by the ZTF project, are now being computed and set by the RAPID pipeline.
 ===============   ===============================================================================================================================================================================================================================
 
 
