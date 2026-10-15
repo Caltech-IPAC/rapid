@@ -18,7 +18,16 @@ create function addExposure (
     filter_              character varying(16),
     exptime_             real,
     infobits_            integer,
-    status_              smallint
+    status_              smallint,
+    program_id_          integer DEFAULT NULL,
+    execution_plan_      smallint DEFAULT NULL,
+    pass_                smallint DEFAULT NULL,
+    segment_             smallint DEFAULT NULL,
+    observation_         smallint DEFAULT NULL,
+    visit_               smallint DEFAULT NULL,
+    exposure_            smallint DEFAULT NULL,
+    visit_id_            character varying(19) DEFAULT NULL,
+    observation_id_      character varying(28) DEFAULT NULL
 )
     returns record as $$
 
@@ -70,7 +79,16 @@ create function addExposure (
                  fid,
                  exptime,
                  status,
-                 infobits
+                 infobits,
+                 program_id,
+                 execution_plan,
+                 pass,
+                 segment,
+                 observation,
+                 visit,
+                 exposure,
+                 visit_id,
+                 observation_id
                 )
                 values
                 (dateobs_,
@@ -81,7 +99,16 @@ create function addExposure (
                  fid_,
                  exptime_,
                  status_,
-                 infobits_
+                 infobits_,
+                 program_id_,
+                 execution_plan_,
+                 pass_,
+                 segment_,
+                 observation_,
+                 visit_,
+                 exposure_,
+                 visit_id_,
+                 observation_id_
                 )
                 returning expid into strict expid_;
                 exception
@@ -106,6 +133,15 @@ create function addExposure (
                 exptime = exptime_,
                 status = status_,
                 infobits = infobits_,
+                program_id = program_id_,
+                execution_plan = execution_plan_,
+                pass = pass_,
+                segment = segment_,
+                observation = observation_,
+                visit = visit_,
+                exposure = exposure_,
+                visit_id = visit_id_,
+                observation_id = observation_id_,
                 created = now()
             where expid = expid_;
 

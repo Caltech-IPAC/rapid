@@ -49,6 +49,35 @@ INSERT into scas (sca) SELECT generate_series(1,18);
 
 
 -----------------------------
+-- TABLE: Surveys
+-----------------------------
+
+-- Maintained by hand (database/schema/rapidOpsSurveysInserts.sql), never written by ingest.
+-- Several program_ids may share one program_title, e.g., a multi-year survey that is given
+-- a new program number each year.
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE surveys (
+    program_id integer NOT NULL,                         -- Primary key: Roman program number, or negative for simulations
+    program_title character varying(255) NOT NULL,       -- Survey title
+    category character varying(6),                       -- Proposal type, as in ASDF meta.program.category
+                                                         -- (CCS, GAS, GI, CAL, COM, ENG, ...), or SIM for simulations
+    created timestamp without time zone                  -- Timestamp of database record INSERT
+        DEFAULT now() NOT NULL
+);
+
+ALTER TABLE surveys OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY surveys ADD CONSTRAINT surveys_pkey PRIMARY KEY (program_id);
+
+CREATE INDEX surveys_program_title_idx ON surveys (program_title);
+CREATE INDEX surveys_category_idx ON surveys (category);
+
+
+-----------------------------
 -- TABLE: Exposures
 -----------------------------
 
@@ -66,7 +95,18 @@ CREATE TABLE exposures (
     status smallint DEFAULT 1 NOT NULL,
     infobits integer DEFAULT 0 NOT NULL,
     created timestamp without time zone             -- Timestamp of database record INSERT
-        DEFAULT now() NOT NULL
+        DEFAULT now() NOT NULL,
+    program_id integer,                             -- ASDF meta.observation.program (negative for simulations);
+                                                    -- not a foreign key, so a program not yet in Surveys
+                                                    -- does not block ingest
+    execution_plan smallint,                        -- ASDF meta.observation.execution_plan
+    pass smallint,                                  -- ASDF meta.observation.pass
+    segment smallint,                               -- ASDF meta.observation.segment
+    observation smallint,                           -- ASDF meta.observation.observation
+    visit smallint,                                 -- ASDF meta.observation.visit
+    exposure smallint,                              -- ASDF meta.observation.exposure
+    visit_id character varying(19),                 -- ASDF meta.observation.visit_id
+    observation_id character varying(28)            -- ASDF meta.observation.observation_id
 );
 
 ALTER TABLE exposures OWNER TO rapidadminrole;
@@ -99,6 +139,9 @@ CREATE INDEX exposures_mjdobs_idx ON exposures (mjdobs);
 CREATE INDEX exposures_status_idx ON exposures (status);
 CREATE INDEX exposures_infobits_idx ON exposures (infobits);
 CREATE INDEX exposures_dateobs_idx ON exposures (dateobs);
+CREATE INDEX exposures_program_id_idx ON exposures (program_id);
+CREATE INDEX exposures_visit_id_idx ON exposures (visit_id);
+CREATE INDEX exposures_observation_id_idx ON exposures (observation_id);
 
 
 -----------------------------
