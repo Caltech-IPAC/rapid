@@ -1,10 +1,12 @@
 """
-File    : ned_catalog.py
+File    : catalog_store.py
 Author  : Emily Everetts, Claude Code
 Date    : 09/26
 
-Mirror, verify and repartition the NED object directory for the alert
-cross-match (providers.py, nedMatches) -- without ever staging it on a disk.
+The external catalogs behind the alert cross-matches (providers.py), each
+copied into S3 or a local directory without ever staging it on a disk:
+the NED object directory (mirror, verify, repartition), NED-LVS
+(ingest-lvs) and Gaia DR3 (ingest-gaia). NED first.
 
 Caltech/IPAC-IRSA publishes NED as a HATS collection (HEALPix-partitioned
 parquet). Its 264 leaves are order-2/3 pixels of 50-200 square degrees, up to
@@ -31,24 +33,31 @@ Usage, end to end for a new release:
 
     # on a machine that can reach the collection URL (IPAC network) AND S3;
     # streams HTTP -> S3, nothing is written locally
-    python -m alerts.ned_catalog mirror --base-url <collection-url> \\
+    python -m alerts.catalog_store mirror --base-url <collection-url> \\
                                         --dest s3://rapid-pipeline-files/ned
-    python -m alerts.ned_catalog verify --dest s3://rapid-pipeline-files/ned
+    python -m alerts.catalog_store verify --dest s3://rapid-pipeline-files/ned
 
     # on EC2, next to the bucket; reads each leaf into memory (<= ~1 GB) and
     # deletes it from S3 once its order-6 files are written
-    python -m alerts.ned_catalog repartition --dest s3://rapid-pipeline-files/ned \\
+    python -m alerts.catalog_store repartition --dest s3://rapid-pipeline-files/ned \\
                                              --jobs 4 --delete-leaves
-    python -m alerts.ned_catalog manifest    --dest s3://rapid-pipeline-files/ned
+    python -m alerts.catalog_store manifest    --dest s3://rapid-pipeline-files/ned
 
     # NED-LVS (the Local Volume Sample, one FITS table; see that section):
     # mirrored the same way, then converted to parquet streaming from the
     # store -- no local disk, ~0.5 GB of memory, runs from any machine
-    python -m alerts.ned_catalog ingest-lvs  --dest s3://rapid-pipeline-files/ned
-    python -m alerts.ned_catalog manifest    --dest s3://rapid-pipeline-files/ned
+    python -m alerts.catalog_store ingest-lvs  --dest s3://rapid-pipeline-files/ned
+    python -m alerts.catalog_store manifest    --dest s3://rapid-pipeline-files/ned
+
+    # Gaia DR3 (LINCC's HATS copy; see that section) goes to a prefix of its
+    # own: each of its 2,016 partitions is read over HTTP one row group at a
+    # time, cut down to GAIA_COLUMNS and written to the store -- no local
+    # disk, runs from any machine, resumable
+    python -m alerts.catalog_store ingest-gaia --dest s3://rapid-pipeline-files/gaia --jobs 8
 
 ``--dest`` also accepts a local directory, which is how the tests and dry
-runs work (``repartition --leaves`` limits a run to named leaves).
+runs work (``repartition --leaves`` and ``ingest-gaia --leaves`` limit a run
+to named leaves).
 
 Row keys: ``_healpix_29`` is the NESTED order-29 pixel index (verified against
 healpy on release 36.1_20260527_v2), so the order-6 pixel is
@@ -64,6 +73,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -407,6 +417,28 @@ def mirror_file(url: str, store: Store, dest_rel: str,
     raise RuntimeError(f"giving up on {dest_rel}: {last}")
 
 
+class _ThreadSessions:
+    """One ``requests.Session`` per worker thread, all closed at the end
+    (a session per file leaked sockets: ResourceWarning in the tests).
+    Shared by mirror() and ingest_gaia()."""
+
+    def __init__(self) -> None:
+        self._local = threading.local()
+        self._all: list[Any] = []
+        self._lock = threading.Lock()
+
+    def get(self) -> Any:
+        if not hasattr(self._local, "session"):
+            self._local.session = requests.Session()
+            with self._lock:
+                self._all.append(self._local.session)
+        return self._local.session
+
+    def close_all(self) -> None:
+        for s in self._all:
+            s.close()
+
+
 def mirror(base_url: str, dest: str, jobs: int = 4) -> dict[str, int]:
     """Mirror the whole collection at `base_url` into ``<dest>/objectdir/hats``.
 
@@ -414,30 +446,18 @@ def mirror(base_url: str, dest: str, jobs: int = 4) -> dict[str, int]:
     manifest's md5 are skipped, so a rerun finishes an interrupted mirror
     and a new release replaces only what changed.
     """
-    import threading
     base_url = base_url.rstrip("/") + "/"
     store = Store(dest)
-    # one HTTP session per worker thread, all closed at the end (a session
-    # per file leaked sockets: ResourceWarning in the tests)
-    local = threading.local()
-    sessions: list[Any] = []
-    lock = threading.Lock()
-
-    def session_for_thread() -> Any:
-        if not hasattr(local, "session"):
-            local.session = requests.Session()
-            with lock:
-                sessions.append(local.session)
-        return local.session
+    sessions = _ThreadSessions()
 
     def one(rel: str, md5: str) -> str:
         return mirror_file(base_url + rel, store, f"{HATS_SUBDIR}/{rel}", md5,
-                           session=session_for_thread())
+                           session=sessions.get())
 
     try:
         for name in COLLECTION_FILES:              # small; always refreshed
             mirror_file(base_url + name, store, f"{HATS_SUBDIR}/{name}",
-                        session=session_for_thread())
+                        session=sessions.get())
         md5s = parse_md5sums(store.read_text(f"{HATS_SUBDIR}/md5sums.txt"))
         counts = {"skipped": 0, "mirrored": 0, "failed": 0}
         with ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -452,8 +472,7 @@ def mirror(base_url: str, dest: str, jobs: int = 4) -> dict[str, int]:
                 if i % 10 == 0 or i == len(futures):
                     logger.info("mirror: %d/%d files %s", i, len(futures), counts)
     finally:
-        for s in sessions:
-            s.close()
+        sessions.close_all()
     return counts
 
 
@@ -628,8 +647,8 @@ def repartition(dest: str, jobs: int = 2, leaves: list[str] | None = None,
 #     <prefix>/lvs/nedlvs.json            version, url, rows, columns, md5 --
 #                                         merged into manifest.json as "lvs"
 #
-#     python -m alerts.ned_catalog ingest-lvs --dest s3://rapid-pipeline-files/ned
-#     python -m alerts.ned_catalog manifest   --dest s3://rapid-pipeline-files/ned
+#     python -m alerts.catalog_store ingest-lvs --dest s3://rapid-pipeline-files/ned
+#     python -m alerts.catalog_store manifest   --dest s3://rapid-pipeline-files/ned
 #
 # All 84 columns are kept on purpose: the table is ~2 M rows, so pruning
 # saves nothing worth a re-ingest, and which columns reach an alert is the
@@ -850,7 +869,7 @@ def ingest_lvs(dest: str, url: str = LVS_URL, force: bool = False) -> dict[str, 
         "hp6_column": LVS_HP6_COLUMN,
         "seconds": round(time.time() - t0, 1),
         "written_at": datetime.now(timezone.utc).isoformat(),
-        "tool": f"alerts.ned_catalog {TOOL_VERSION}",
+        "tool": f"alerts.catalog_store {TOOL_VERSION}",
         "git_sha": git_sha(),
     }
     store.write_text(LVS_INFO, json.dumps(info, indent=1))
@@ -858,6 +877,275 @@ def ingest_lvs(dest: str, url: str = LVS_URL, force: bool = False) -> dict[str, 
                 info["release"], f"{info['rows']:,}", len(info["columns"]),
                 LVS_PARQUET, info["seconds"])
     return {**info, "status": "done"}
+
+
+# ---------------------------------------------------------------------------
+# Gaia DR3
+#
+# LINCC Frameworks publishes Gaia DR3 gaia_source as a HATS catalog
+# (https://data.lsdb.io/hats/gaia_dr3/gaia/): 1.81 billion rows, 153
+# columns, ~750 GB, in 2,016 partitions of at most 2 million rows at
+# HEALPix orders 2-6 (denser sky, finer pixels). A partition is one parquet
+# file of ~6 row groups, so it can be read over HTTP a row group at a time
+# with Range requests -- pyarrow does that through a seekable file object
+# (_HttpRangeFile) and, with ``pre_buffer``, fetches the wanted column
+# chunks of a row group in a few requests.
+#
+# Only GAIA_COLUMNS are kept (~104 bytes/row zstd, measured on the densest
+# bulge partition: ~190 GB for the whole sky instead of ~750 GB). That is a
+# STORAGE decision made here; which of them reach an alert is the schema's
+# (param_registry.py). Adding a column means re-running the ingest with
+# --force. The catalog gets a prefix of its own (not NED's), keeping the
+# partition layout as LINCC publishes it with the two metadata files copied
+# verbatim, so the alert reader locates a cone's partitions the way any
+# HATS reader does:
+#
+#     <prefix>/hats.properties, partition_info.csv      verbatim
+#     <prefix>/dataset/Norder=<o>/Dir=<d>/Npix=<p>.parquet
+#                                                      GAIA_COLUMNS, zstd
+#     <prefix>/_ingest_done/N<o>_P<p>.json             one per finished leaf
+#     <prefix>/gaia.json                               the ingest record
+#
+# Idempotent and resumable: a leaf with a done marker is skipped, an
+# interrupted leaf has no marker and is redone; --force redoes everything.
+#
+#     python -m alerts.catalog_store ingest-gaia --dest s3://rapid-pipeline-files/gaia --jobs 8
+# ---------------------------------------------------------------------------
+
+GAIA_URL = "https://data.lsdb.io/hats/gaia_dr3/gaia/"
+GAIA_DONE_SUBDIR = "_ingest_done"
+GAIA_INFO = "gaia.json"
+GAIA_METADATA_FILES = ("hats.properties", "partition_info.csv")
+
+# The columns kept: identity, astrometry (to propagate the 2016.0 positions
+# to the Roman epoch), astrometric quality, mean photometry, and the
+# star/galaxy/quasar/variable classification. `_healpix_29` is the row key
+# every HATS reader prefilters on.
+GAIA_COLUMNS = (
+    "_healpix_29", "source_id", "ra", "dec", "ra_error", "dec_error",
+    "pmra", "pmdec", "pmra_error", "pmdec_error", "parallax", "parallax_error",
+    "ruwe", "astrometric_excess_noise", "ipd_frac_multi_peak", "duplicated_source",
+    "phot_g_mean_mag", "phot_bp_mean_mag", "phot_rp_mean_mag", "bp_rp",
+    "phot_g_mean_flux_over_error",
+    "phot_variable_flag", "non_single_star", "in_qso_candidates",
+    "in_galaxy_candidates", "classprob_dsc_combmod_star",
+    "classprob_dsc_combmod_galaxy", "classprob_dsc_combmod_quasar",
+)
+GAIA_COMPRESSION = "zstd"
+
+
+class _HttpRangeFile:
+    """A read-only, seekable file over an HTTP URL, for ``pa.PythonFile``.
+
+    Every ``read`` is one Range request; pyarrow's ``pre_buffer`` keeps the
+    count per row group to a handful. The size comes from a one-byte probe,
+    which also checks that the server honours ranges.
+    """
+
+    def __init__(self, url: str, session: Any, timeout_s: float = 300.0) -> None:
+        self.url, self.session, self.timeout_s = url, session, timeout_s
+        self.pos = 0
+        self.closed = False
+        with session.get(url, headers={"Range": "bytes=0-0"}, timeout=timeout_s) as r:
+            r.raise_for_status()
+            if r.status_code != 206:
+                raise RuntimeError(f"{url}: server does not honour Range requests")
+            self.size = int(r.headers["Content-Range"].rpartition("/")[2])
+
+    def read(self, n: int = -1) -> bytes:
+        if n < 0:
+            n = self.size - self.pos
+        if n == 0 or self.pos >= self.size:
+            return b""
+        end = min(self.size, self.pos + n) - 1
+        r = self.session.get(self.url, headers={"Range": f"bytes={self.pos}-{end}"},
+                             timeout=self.timeout_s)
+        r.raise_for_status()
+        data = r.content
+        if len(data) != end - self.pos + 1:
+            raise RuntimeError(f"{self.url}: short Range read "
+                               f"({len(data)} of {end - self.pos + 1} bytes)")
+        self.pos += len(data)
+        return data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        base = {0: 0, 1: self.pos, 2: self.size}[whence]
+        self.pos = base + offset
+        return self.pos
+
+    def tell(self) -> int:
+        return self.pos
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def open_parquet_source(url: str, session: Any = None) -> Any:
+    """A pyarrow random-access file for `url`: Range reads for http(s),
+    a plain file otherwise (local collections: dry runs and tests)."""
+    if url.startswith(("http://", "https://")):
+        return pa.PythonFile(_HttpRangeFile(url, session or requests.Session()), mode="r")
+    return pa.OSFile(url.removeprefix("file://"), "rb")
+
+
+def copy_source_file(url: str, store: Store, dest_rel: str, session: Any = None) -> None:
+    """Copy one small file at `url` (http(s), or a local path) into the store."""
+    if url.startswith(("http://", "https://")):
+        mirror_file(url, store, dest_rel, session=session)
+    else:
+        store.put_bytes(dest_rel, Path(url.removeprefix("file://")).read_bytes())
+
+
+def gaia_leaf_rel(order: int, npix: int, suffix: str = ".parquet") -> str:
+    """Relative path of a leaf inside LINCC's layout (``hats_npix_suffix``
+    names the file; NED's collection uses a directory per pixel instead,
+    see leaf_path())."""
+    return f"dataset/Norder={order}/Dir={10_000 * (npix // 10_000)}/Npix={npix}{suffix}"
+
+
+def gaia_done_marker(order: int, npix: int) -> str:
+    return f"{GAIA_DONE_SUBDIR}/N{order}_P{npix}.json"
+
+
+def project_leaf(source: Any, store: Store, dest_rel: str,
+                 columns: tuple[str, ...] = GAIA_COLUMNS) -> dict[str, Any]:
+    """Copy `columns` of the parquet `source` (a pyarrow random-access
+    file) to `dest_rel` in the store, one row group at a time, so memory
+    stays at one row group (a few hundred thousand rows). Returns the row
+    count, row groups and bytes written."""
+    reader = pq.ParquetFile(source, pre_buffer=True)
+    missing = [c for c in columns if c not in reader.schema_arrow.names]
+    if missing:
+        raise ValueError(f"source lacks columns {missing}")
+    if not store.is_s3:
+        Path(store.key(dest_rel)).parent.mkdir(parents=True, exist_ok=True)
+    writer = None
+    rows = 0
+    try:
+        for i in range(reader.num_row_groups):
+            chunk = reader.read_row_group(i, columns=list(columns))
+            if writer is None:
+                writer = pq.ParquetWriter(store.fs_path(dest_rel), chunk.schema,
+                                          filesystem=store.fs,
+                                          compression=GAIA_COMPRESSION)
+            writer.write_table(chunk)
+            rows += chunk.num_rows
+    finally:
+        if writer is not None:
+            writer.close()
+    return {"rows": rows, "row_groups": reader.num_row_groups,
+            "bytes": store.size(dest_rel)}
+
+
+def source_ref_epoch(url: str, leaf_rel: str, session: Any = None) -> float | None:
+    """The reference epoch (Julian year) of the catalog's positions, from
+    the `ref_epoch` column statistics of one source leaf's first row group
+    -- a footer-sized read. None, with a warning, when the column or its
+    statistics are absent. Every DR3 row says 2016.0; a later release
+    changes it, and the reader needs the value to propagate proper motions.
+    """
+    with open_parquet_source(url + leaf_rel, session) as source:
+        pf = pq.ParquetFile(source)
+        if "ref_epoch" not in pf.schema_arrow.names or pf.metadata.num_row_groups == 0:
+            logger.warning("gaia: %s has no ref_epoch column; epoch not recorded", leaf_rel)
+            return None
+        col = pf.schema_arrow.get_field_index("ref_epoch")
+        stats = pf.metadata.row_group(0).column(col).statistics
+        if stats is None or not stats.has_min_max or stats.min != stats.max:
+            logger.warning("gaia: %s has no single ref_epoch; epoch not recorded", leaf_rel)
+            return None
+        return float(stats.min)
+
+
+def ingest_gaia(dest: str, url: str = GAIA_URL, jobs: int = 4,
+                leaves: list[tuple[int, int]] | None = None,
+                force: bool = False) -> dict[str, Any]:
+    """Project LINCC's Gaia DR3 HATS catalog at `url` into `dest`.
+
+    The two metadata files are copied first, then every leaf of
+    partition_info.csv (or just `leaves`, for dry runs) is projected to
+    GAIA_COLUMNS by `jobs` threads. A leaf whose done marker exists is
+    skipped unless `force`. Returns the ingest record, which is also
+    written to ``<dest>/gaia.json``: it carries the column list and, once
+    every leaf is done, the row total checked against the catalog's own
+    ``hats_nrows``.
+    """
+    url = url.rstrip("/") + "/"
+    store = Store(dest)
+    sessions = _ThreadSessions()
+    t0 = time.time()
+    try:
+        for name in GAIA_METADATA_FILES:
+            copy_source_file(url + name, store, name, sessions.get())
+        props = read_properties(store.read_text("hats.properties"))
+        suffix = props.get("hats_npix_suffix", ".parquet")
+        all_leaves = parse_partition_info(store.read_text("partition_info.csv"))
+        todo = all_leaves if leaves is None else [lf for lf in all_leaves if lf in set(leaves)]
+        if leaves is not None and len(todo) != len(leaves):
+            raise ValueError(f"leaves not in partition_info.csv: "
+                             f"{sorted(set(leaves) - set(todo))}")
+
+        def one(order: int, npix: int) -> str:
+            marker = gaia_done_marker(order, npix)
+            if store.exists(marker) and not force:
+                return "skipped"
+            rel = gaia_leaf_rel(order, npix, suffix)
+            with open_parquet_source(url + rel, sessions.get()) as source:
+                result = project_leaf(source, store, rel)
+            store.write_text(marker, json.dumps({
+                "order": order, "npix": npix, "file": rel, **result,
+                "written_at": datetime.now(timezone.utc).isoformat()}, indent=1))
+            return "done"
+
+        counts = {"skipped": 0, "done": 0, "failed": 0}
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futures = {pool.submit(one, o, p): (o, p) for o, p in todo}
+            for i, fut in enumerate(as_completed(futures), start=1):
+                try:
+                    counts[fut.result()] += 1
+                except Exception as exc:
+                    counts["failed"] += 1
+                    logger.error("gaia leaf %s: %s", futures[fut], exc)
+                if i % 10 == 0 or i == len(futures):
+                    logger.info("gaia: %d/%d leaves %s (%.0f s)", i, len(futures),
+                                counts, time.time() - t0)
+        ref_epoch = source_ref_epoch(url, gaia_leaf_rel(*all_leaves[0], suffix=suffix),
+                                     sessions.get()) if all_leaves else None
+    finally:
+        sessions.close_all()
+
+    done = [json.loads(store.read_text(rel)) for rel in store.list_files(GAIA_DONE_SUBDIR)
+            if rel.endswith(".json")]
+    rows = sum(d["rows"] for d in done)
+    info = {
+        "release": props.get("obs_collection"),
+        "hats_release_date": props.get("hats_release_date"),
+        "source_url": url,
+        "hats_nrows": int(props.get("hats_nrows", 0)),
+        "ref_epoch": ref_epoch,
+        "columns": list(GAIA_COLUMNS),
+        "compression": GAIA_COMPRESSION,
+        "leaves_done": len(done), "leaves_total": len(all_leaves),
+        "complete": len(done) == len(all_leaves),
+        "rows": rows,
+        "rows_match_hats_nrows": (rows == int(props.get("hats_nrows", 0))
+                                  if len(done) == len(all_leaves) else None),
+        "bytes": sum(d["bytes"] for d in done),
+        "written_at": datetime.now(timezone.utc).isoformat(),
+        "tool": f"alerts.catalog_store {TOOL_VERSION}",
+        "git_sha": git_sha(),
+    }
+    store.write_text(GAIA_INFO, json.dumps(info, indent=1))
+    logger.info("gaia: %s, %d/%d leaves, %s rows, %.1f GB, this run %s (%.0f s)",
+                info["release"], info["leaves_done"], info["leaves_total"],
+                f"{rows:,}", info["bytes"] / 1e9, counts, time.time() - t0)
+    return {**info, "counts": counts}
 
 
 # ---------------------------------------------------------------------------
@@ -893,7 +1181,7 @@ def build_manifest(dest: str) -> dict[str, Any]:
         "hats_nrows": int(props.get("hats_nrows", 0)),
         "hats_properties": props,
         "written_at": datetime.now(timezone.utc).isoformat(),
-        "tool": f"alerts.ned_catalog {TOOL_VERSION}",
+        "tool": f"alerts.catalog_store {TOOL_VERSION}",
         "git_sha": git_sha(),
         "hats": {"subdir": HATS_SUBDIR, "n_leaves": len(leaves), "md5sums": md5s},
         "hp6": {"subdir": HP6_SUBDIR, "order": HP6_ORDER,
@@ -965,6 +1253,18 @@ def main(argv: list[str] | None = None) -> int:
                    help="re-download and re-convert even if the stored source "
                         "matches what the server reports")
 
+    p = sub.add_parser("ingest-gaia", help="project LINCC's Gaia DR3 HATS catalog "
+                                           "(GAIA_COLUMNS only) into the store")
+    p.add_argument("--dest", required=True, help="s3://bucket/prefix or a local dir")
+    p.add_argument("--url", default=GAIA_URL,
+                   help="catalog root (the directory holding hats.properties); "
+                        "a local directory works too")
+    p.add_argument("--jobs", type=int, default=4, help="parallel leaves")
+    p.add_argument("--leaves", nargs="*", default=None, metavar="ORDER/NPIX",
+                   help="only these leaves, e.g. 6/28823 (dry runs)")
+    p.add_argument("--force", action="store_true",
+                   help="redo leaves that already have a done marker")
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=getattr(logging, args.log_level),
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -994,6 +1294,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({k: info.get(k) for k in
                           ("status", "release", "rows", "parquet")}, indent=1))
         return 0
+    if args.command == "ingest-gaia":
+        leaves = ([tuple(int(x) for x in s.split("/")) for s in args.leaves]
+                  if args.leaves is not None else None)
+        info = ingest_gaia(args.dest, url=args.url, jobs=args.jobs,
+                           leaves=leaves, force=args.force)
+        print(json.dumps({k: info.get(k) for k in
+                          ("release", "leaves_done", "leaves_total", "complete",
+                           "rows", "rows_match_hats_nrows", "bytes", "counts")},
+                         indent=1))
+        return 1 if info["counts"]["failed"] else 0
     return 2
 
 
