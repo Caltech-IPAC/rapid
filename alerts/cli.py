@@ -22,7 +22,8 @@ from pathlib import Path
 
 # Support both `python -m alerts.cli` (module) and `python cli.py` (script).
 if __package__:
-    from .ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader, LvsReader
+    from .catalog_readers import (DEFAULT_GAIA_SOURCE, DEFAULT_NED_SOURCE,
+                                  GaiaReader, Hp6NedReader, LvsReader)
     from .produce import batch_produce, open_alert_archive, produce_alert
     from .providers import (FORCED_WINDOW_DAYS, MAX_SOURCES_PER_CHIP,
                             AlertDataProvider)
@@ -30,7 +31,8 @@ else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from alerts.ned_reader import DEFAULT_NED_SOURCE, Hp6NedReader, LvsReader
+    from alerts.catalog_readers import (DEFAULT_GAIA_SOURCE, DEFAULT_NED_SOURCE,
+                                        GaiaReader, Hp6NedReader, LvsReader)
     from alerts.produce import (batch_produce, open_alert_archive,
                                       produce_alert)
     from alerts.providers import (FORCED_WINDOW_DAYS, MAX_SOURCES_PER_CHIP,
@@ -77,7 +79,7 @@ def build_ned_reader(ned_source: str | None,
     ----------
     ned_source : str or None
         ``s3://bucket/prefix`` or a local directory holding
-        ``objectdir_hp6/`` (see alerts/ned_catalog.py). None means off.
+        ``objectdir_hp6/`` (see alerts/catalog_store.py). None means off.
     enabled : bool, optional
         False turns NED matching off regardless of `ned_source`.
     """
@@ -97,7 +99,7 @@ def build_lvs_reader(ned_source: str | None,
     """Open the local NED-LVS table for the provider, or None to leave it off.
 
     The table lives under the same root as the NED copy (``<ned_source>/lvs/``,
-    built by ``alerts.ned_catalog ingest-lvs``). Same degrade-not-fail rule
+    built by ``alerts.catalog_store ingest-lvs``). Same degrade-not-fail rule
     as build_ned_reader: a table that cannot be opened is logged as a
     warning and lvsMatches stays null.
 
@@ -120,12 +122,41 @@ def build_lvs_reader(ned_source: str | None,
         return None
 
 
+def build_gaia_reader(gaia_source: str | None,
+                      enabled: bool = True) -> "GaiaReader | None":
+    """Open the local Gaia copy for the provider, or None to leave it off.
+
+    The copy has its own prefix (``alerts.catalog_store ingest-gaia``).
+    Same degrade-not-fail rule as build_ned_reader: a copy that cannot be
+    opened is logged as a warning and gaiaMatches stays null.
+
+    Parameters
+    ----------
+    gaia_source : str or None
+        The Gaia root, ``s3://bucket/prefix`` or a local directory. None
+        means off.
+    enabled : bool, optional
+        False turns Gaia matching off regardless of `gaia_source`.
+    """
+    if not enabled or not gaia_source:
+        return None
+    try:
+        return GaiaReader(gaia_source)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Gaia matching off: could not open the Gaia copy at %s (%s: %s)",
+            gaia_source, type(exc).__name__, exc)
+        return None
+
+
 def make_provider(diff_flavor: str = "sfft",
                   kona_file: str | Path | None = None,
                   refcat: bool = True,
                   ned: bool = True,
                   ned_source: str | None = DEFAULT_NED_SOURCE,
                   lvs: bool = True,
+                  gaia: bool = True,
+                  gaia_source: str | None = DEFAULT_GAIA_SOURCE,
                   max_sources: int = MAX_SOURCES_PER_CHIP,
                   forced_phot: bool = True,
                   forced_window_days: float | None = FORCED_WINDOW_DAYS,
@@ -163,7 +194,7 @@ def make_provider(diff_flavor: str = "sfft",
         refStarMatches and refGalaxyMatches stay null.
     ned : bool, optional
         Cross-match detections against the local copy of the NED object
-        directory (alerts/ned_reader.py; a few parquet reads per chip, no
+        directory (alerts/catalog_readers.py; a few parquet reads per chip, no
         web service). On by default, like refcat. When off, nedMatches
         stays null.
     ned_source : str or None, optional
@@ -177,6 +208,13 @@ def make_provider(diff_flavor: str = "sfft",
         same root (``<ned_source>/lvs/``; the whole table held in memory
         per process). On by default; when off, or when the table cannot be
         opened, lvsMatches stays null (see build_lvs_reader).
+    gaia : bool, optional
+        Cross-match detections against the local Gaia DR3 copy at
+        `gaia_source` (its own prefix; a few parquet row groups per chip).
+        On by default; when off, or when the copy cannot be opened,
+        gaiaMatches stays null (see build_gaia_reader).
+    gaia_source : str, optional
+        Where the Gaia copy lives; defaults to the pipeline's bucket.
 
     Returns
     -------
@@ -197,6 +235,7 @@ def make_provider(diff_flavor: str = "sfft",
     # be opened degrades to null nedMatches with a warning.
     ned_reader = build_ned_reader(ned_source, enabled=ned)
     lvs_reader = build_lvs_reader(ned_source, enabled=lvs)
+    gaia_reader = build_gaia_reader(gaia_source, enabled=gaia)
 
     # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
     repo_root = Path(__file__).resolve().parents[1]
@@ -213,6 +252,7 @@ def make_provider(diff_flavor: str = "sfft",
     return AlertDataProvider(db, diff_flavor=diff_flavor,
                              kona_lookup=kona_lookup, refcat=refcat,
                              ned_reader=ned_reader, lvs_reader=lvs_reader,
+                             gaia_reader=gaia_reader,
                              max_sources=max_sources, forced_phot=forced_phot,
                              forced_window_days=forced_window_days,
                              forced_store=forced_store)
@@ -279,11 +319,20 @@ def main(argv: list[str] | None = None) -> int:
                         default=DEFAULT_NED_SOURCE,
                         help="the local NED copy: s3://bucket/prefix or a "
                              "directory holding objectdir_hp6/ and lvs/ (built "
-                             "by alerts/ned_catalog.py); default %(default)s")
+                             "by alerts/catalog_store.py); default %(default)s")
     parser.add_argument("--no-lvs", action="store_true",
                         help="skip the NED-LVS cross-match (lvsMatches stays "
                              "null); on by default, reading lvs/nedlvs.parquet "
                              "under --ned-source")
+    parser.add_argument("--no-gaia", action="store_true",
+                        help="skip the Gaia cross-match (gaiaMatches stays "
+                             "null); on by default, reading the local Gaia "
+                             "copy at --gaia-source")
+    parser.add_argument("--gaia-source", metavar="PREFIX",
+                        default=DEFAULT_GAIA_SOURCE,
+                        help="the local Gaia DR3 copy: s3://bucket/prefix or a "
+                             "directory (built by alerts/catalog_store.py "
+                             "ingest-gaia); default %(default)s")
     parser.add_argument("--max-sources", type=int, default=MAX_SOURCES_PER_CHIP,
                         metavar="N",
                         help="per chip, alert only on the N highest-S/N "
@@ -327,6 +376,8 @@ def main(argv: list[str] | None = None) -> int:
                              ned=not args.no_ned,
                              ned_source=args.ned_source,
                              lvs=not args.no_lvs,
+                             gaia=not args.no_gaia,
+                             gaia_source=args.gaia_source,
                              max_sources=args.max_sources,
                              forced_phot=not args.no_forced_phot,
                              forced_window_days=args.forced_window_days or None,

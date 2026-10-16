@@ -43,12 +43,12 @@ import fastavro.write
 from fastavro.types import Schema
 
 from .param_registry import (ALERT_PARAMS, DIA_FORCED_SOURCE_PARAMS, DIA_OBJECT_PARAMS,
-                     DIA_SOURCE_PARAMS, LVS_MATCH_PARAMS, NED_MATCH_PARAMS,
-                     REF_MATCH_PARAMS, SS_MATCH_PARAMS, RECORDS, VERSION, Param,
-                     Status, is_nullable)
+                     DIA_SOURCE_PARAMS, GAIA_MATCH_PARAMS, LVS_MATCH_PARAMS,
+                     NED_MATCH_PARAMS, REF_MATCH_PARAMS, SS_MATCH_PARAMS, RECORDS,
+                     VERSION, Param, Status, is_nullable)
 from .providers import (PRV_WINDOW_DAYS, AlertDataProvider, AssociationError,
-                        Source, ForcedPhot, LvsMatch, NedMatch, ObjectRecord,
-                        RefMatch, SSMatch)
+                        Source, ForcedPhot, GaiaMatch, LvsMatch, NedMatch,
+                        ObjectRecord, RefMatch, SSMatch)
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +65,16 @@ BUILDER_DATA_CLASSES = {
     "refMatch": RefMatch,
     "nedMatch": NedMatch,
     "lvsMatch": LvsMatch,
+    "gaiaMatch": GaiaMatch,
 }
 
-# Every match record ("ssMatch", "refMatch", future "gaiaMatch", ...) must
-# open with this envelope after its leading string identifier, so consumers
-# can handle match geometry generically; survey-specific fields follow with
-# their native semantics. Enforced by _validate_registry().
+# Every match record ("ssMatch", "refMatch", "gaiaMatch", ...) must open
+# with this envelope after its leading identifier -- a string (names) or a
+# long (Gaia source_id) -- so consumers can handle match geometry
+# generically; survey-specific fields follow with their native semantics.
+# Enforced by _validate_registry().
 MATCH_ENVELOPE = ("ra", "dec", "sep", "pa")
+MATCH_ID_TYPES = ("string", "long")
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +134,10 @@ def _validate_registry() -> None:
         if record.name.endswith("Match"):
             names = tuple(p.name for p in record.params)
             if (len(names) < 5 or names[1:5] != MATCH_ENVELOPE
-                    or record.params[0].avro != "string"):
+                    or record.params[0].avro not in MATCH_ID_TYPES):
                 problems.append(
                     f"{record.name} must open with the match-record "
-                    f"envelope: a string identifier, then "
+                    f"envelope: a {' or '.join(MATCH_ID_TYPES)} identifier, then "
                     f"{'/'.join(MATCH_ENVELOPE)} (got {names[:5]})")
     if problems:
         raise ValueError("param_registry.py is inconsistent:\n  "
@@ -309,6 +312,22 @@ def build_lvs_match(match: LvsMatch) -> dict[str, Any]:
     return build_record(LVS_MATCH_PARAMS, match)
 
 
+def build_gaia_match(match: GaiaMatch) -> dict[str, Any]:
+    """Build a gaiaMatch record dict from a providers.GaiaMatch.
+
+    Parameters
+    ----------
+    match : providers.GaiaMatch
+        One Gaia DR3 source matched near the detection, at its epoch.
+
+    Returns
+    -------
+    dict
+        gaiaMatch param name -> value, per the registry.
+    """
+    return build_record(GAIA_MATCH_PARAMS, match)
+
+
 # ---------------------------------------------------------------------------
 # Alert assembly
 # ---------------------------------------------------------------------------
@@ -403,6 +422,10 @@ def assemble_alert_for_source(provider: AlertDataProvider,
     # galaxies with distances, diameters, photometry, SFR and stellar mass.
     lvs_matches = provider.get_lvs_matches(source)
 
+    # Gaia cross-match: same three states; the nearest Gaia DR3 sources
+    # with positions propagated to this detection's epoch.
+    gaia_matches = provider.get_gaia_matches(source)
+
     cutouts = provider.get_cutouts(source)
 
     alert = {
@@ -421,6 +444,8 @@ def assemble_alert_for_source(provider: AlertDataProvider,
                        else [build_ned_match(m) for m in ned_matches]),
         "lvsMatches": (None if lvs_matches is None
                        else [build_lvs_match(m) for m in lvs_matches]),
+        "gaiaMatches": (None if gaia_matches is None
+                        else [build_gaia_match(m) for m in gaia_matches]),
         "cutoutDifference": cutouts.difference,
         "cutoutScience": cutouts.science,
         "cutoutReference": cutouts.template,
@@ -650,7 +675,7 @@ def produce_alert(provider: AlertDataProvider, sid: int,
 # ran and found nothing, populated) BatchStats tallies, and the cutouts it
 # counts as present. Both name top-level keys of the assembled alert dict.
 MATCH_FIELDS = ("ssMatches", "refStarMatches", "refGalaxyMatches",
-                "nedMatches", "lvsMatches")
+                "nedMatches", "lvsMatches", "gaiaMatches")
 CUTOUT_FIELDS = ("cutoutDifference", "cutoutScience", "cutoutReference")
 
 

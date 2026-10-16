@@ -201,6 +201,33 @@ def make_lvs_table(entries):
     return table
 
 
+def make_gaia_table(entries):
+    """Column arrays keyed by providers.GAIA_COLUMNS from a list of dicts.
+
+    The in-memory stand-in for a Gaia slice, as GaiaReader returns it.
+    Requires "ra", "dec"; "source_id" defaults to the row number, the
+    other ints to 0, bools to False, "phot_variable_flag" to
+    "NOT_AVAILABLE" (Gaia's "not analysed"), numerics to NaN.
+    """
+    from alerts.providers import (GAIA_BOOL_COLUMNS, GAIA_INT_COLUMNS,
+                                  GAIA_NUMERIC_COLUMNS, GAIA_STRING_COLUMNS)
+
+    def column(name, default, dtype):
+        return np.array([e.get(name, default(i) if callable(default) else default)
+                         for i, e in enumerate(entries, start=1)], dtype=dtype)
+
+    table = {}
+    for name in GAIA_INT_COLUMNS:
+        table[name] = column(name, (lambda i: i) if name == "source_id" else 0, np.int64)
+    for name in GAIA_BOOL_COLUMNS:
+        table[name] = column(name, False, bool)
+    for name in GAIA_STRING_COLUMNS:
+        table[name] = column(name, "NOT_AVAILABLE", object)
+    for name in GAIA_NUMERIC_COLUMNS:
+        table[name] = column(name, np.nan, float)
+    return table
+
+
 @pytest.fixture(scope="session")
 def tpv_header():
     # Linear terms lifted from a real RAPID chip; distortion terms are
@@ -601,25 +628,27 @@ def chip_data(tpv_header, job_dir):
 def make_provider(chip_data):
     """Factory for independent AlertDataProviders over the same fake chip.
 
-    kona_lookup, ned_reader and lvs_reader are passed through to the
-    provider (see providers.py), so tests can inject solar-system
-    predictions for the fake chip's exposure (expid 42) and NED / NED-LVS
-    slices (fake_ned_reader over make_ned_table / make_lvs_table) without
-    any KONA or network machinery.
+    kona_lookup, ned_reader, lvs_reader and gaia_reader are passed through
+    to the provider (see providers.py), so tests can inject solar-system
+    predictions for the fake chip's exposure (expid 42) and NED / NED-LVS /
+    Gaia slices (fake_ned_reader over make_ned_table / make_lvs_table /
+    make_gaia_table) without any KONA or network machinery.
     """
     from alerts.providers import AlertDataProvider
 
     providers = []
 
     def _make(diff_flavor="sfft", kona_lookup=None, refcat=True,
-              ned_reader=None, lvs_reader=None, forced_phot=False):
+              ned_reader=None, lvs_reader=None, gaia_reader=None,
+              forced_phot=False):
         # forced photometry off by default: many tests take the single-alert
         # path, which raises NotImplementedError with it on; the forced
         # tests in test_provider.py build their own provider with it on
         provider = AlertDataProvider(
             FakeDB(chip_data), diff_flavor=diff_flavor,
             kona_lookup=kona_lookup, refcat=refcat, ned_reader=ned_reader,
-            lvs_reader=lvs_reader, forced_phot=forced_phot)
+            lvs_reader=lvs_reader, gaia_reader=gaia_reader,
+            forced_phot=forced_phot)
         providers.append(provider)
         return provider
 

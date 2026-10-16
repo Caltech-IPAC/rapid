@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeAlias
 
-VERSION = "00.05"
+VERSION = "00.06"
 
 # Keep for type checking and function hints
 AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
@@ -716,6 +716,83 @@ LVS_MATCH_PARAMS = (
 
 
 # ---------------------------------------------------------------------------
+# gaiaMatch -- one Gaia DR3 source near the triggering source
+#
+# Built from providers.GaiaMatch (match_gaiacat over the local 28-column
+# copy of LINCC's Gaia DR3 HATS catalog). Gaia reaches G ~ 21, so most
+# Roman detections match nothing; a match says "a known star (or quasar /
+# galaxy candidate) sits here", with its motion, brightness, variability
+# and non-single-star flags. Positions are PROPAGATED by proper motion to
+# the detection's epoch before matching, and ra/dec/sep/pa are at that
+# epoch. Types follow the source precision (float32 columns -> float;
+# ra/dec double).
+# ---------------------------------------------------------------------------
+
+_GAIA_SRC = "computed at assembly from the local Gaia DR3 copy (providers.match_gaiacat)"
+
+GAIA_MATCH_PARAMS = (
+    Param("sourceId",      "long",             "Gaia DR3 source_id (stable within DR3; changes between releases)",
+                        IMPLEMENTED, _GAIA_SRC, attr="source_id"),
+    Param("ra",            "double",           "Right ascension of the source PROPAGATED by proper motion to the "
+                                               "triggering source's epoch (mjdobs); ICRS [deg]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("dec",           "double",           "Declination of the source at the triggering source's epoch; "
+                                               "ICRS [deg]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("sep",           "float",            "Angular separation from the triggering source position, at its "
+                                               "epoch [arcsec]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("pa",            "float",            "Position angle from the triggering source to the Gaia source, "
+                                               "East of North [deg]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("pmRA",          ["null", "float"],  "Proper motion in right ascension, pmra*cos(dec) [mas/yr]",
+                        IMPLEMENTED, _GAIA_SRC, attr="pmra"),
+    Param("pmDec",         ["null", "float"],  "Proper motion in declination [mas/yr]",
+                        IMPLEMENTED, _GAIA_SRC, attr="pmdec"),
+    Param("parallax",      ["null", "float"],  "Parallax [mas]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("parallaxUnc",   ["null", "float"],  "Uncertainty in parallax [mas]",
+                        IMPLEMENTED, _GAIA_SRC, attr="parallax_error"),
+    Param("ruwe",          ["null", "float"],  "Renormalised unit weight error of the astrometric fit; > 1.4 "
+                                               "suggests a poor single-star fit (binary, blend)",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("magG",          ["null", "float"],  "Mean G magnitude, Vega [mag]",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_g_mean_mag"),
+    Param("magBP",         ["null", "float"],  "Mean integrated BP magnitude, Vega [mag]",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_bp_mean_mag"),
+    Param("magRP",         ["null", "float"],  "Mean integrated RP magnitude, Vega [mag]",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_rp_mean_mag"),
+    Param("bpRp",          ["null", "float"],  "BP - RP colour [mag]",
+                        IMPLEMENTED, _GAIA_SRC, attr="bp_rp"),
+    Param("fluxOverErrG",  ["null", "float"],  "Mean G flux divided by its error; low values at a given "
+                                               "magnitude indicate variability",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_g_mean_flux_over_error"),
+    Param("variable",      "boolean",          "True if Gaia's variability analysis classified the source as "
+                                               "VARIABLE (phot_variable_flag); False also when not analysed",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_variable_flag"),
+    Param("nonSingleStar", "int",              "Gaia non_single_star bit flags: 0 none, 1 astrometric binary, "
+                                               "2 spectroscopic binary, 4 eclipsing binary",
+                        IMPLEMENTED, _GAIA_SRC, attr="non_single_star"),
+    Param("inQsoCandidates",    "boolean",     "True if the source is in Gaia's quasar-candidates table",
+                        IMPLEMENTED, _GAIA_SRC, attr="in_qso_candidates"),
+    Param("inGalaxyCandidates", "boolean",     "True if the source is in Gaia's galaxy-candidates table",
+                        IMPLEMENTED, _GAIA_SRC, attr="in_galaxy_candidates"),
+    Param("probStar",      ["null", "float"],  "DSC combined-model probability that the source is a star",
+                        IMPLEMENTED, _GAIA_SRC, attr="classprob_dsc_combmod_star"),
+    Param("probGalaxy",    ["null", "float"],  "DSC combined-model probability that the source is a galaxy",
+                        IMPLEMENTED, _GAIA_SRC, attr="classprob_dsc_combmod_galaxy"),
+    Param("probQuasar",    ["null", "float"],  "DSC combined-model probability that the source is a quasar",
+                        IMPLEMENTED, _GAIA_SRC, attr="classprob_dsc_combmod_quasar"),
+    Param("duplicatedSource", "boolean",       "True if Gaia removed another source within ~2 arcsec during "
+                                               "processing (possible blend or duplicate)",
+                        IMPLEMENTED, _GAIA_SRC, attr="duplicated_source"),
+    Param("ipdFracMultiPeak", "int",           "Percentage of Gaia image windows with more than one peak; high "
+                                               "values indicate a blend or resolved pair",
+                        IMPLEMENTED, _GAIA_SRC, attr="ipd_frac_multi_peak"),
+)
+
+
+# ---------------------------------------------------------------------------
 # alert (top level) -- structural params, filled by produce.assemble_alert(),
 # ---------------------------------------------------------------------------
 
@@ -782,6 +859,16 @@ ALERT_PARAMS = (
                                 "the radius; a full array (3) means the neighborhood may extend "
                                 "beyond what is reported. Joins to nedMatches by prefName",
                         IMPLEMENTED, "produce.assemble_alert() via provider.get_lvs_matches()"),
+    Param("gaiaMatches",        ["null", {"type": "array", "items": "@gaiaMatch"}],
+                                "Nearest Gaia DR3 sources (max 3, nearest first) within "
+                                "GAIA_MATCH_RADIUS_ARCSEC (1 arcsec) of the triggering source, with "
+                                "catalog positions propagated by proper motion to its epoch -- a "
+                                "known-star veto and variable/non-single-star tag (Gaia reaches "
+                                "G ~ 21, so most detections match nothing); null if matching was "
+                                "not run (disabled, or the copy unavailable), empty if none within "
+                                "the radius. In the bulge the chance-coincidence rate at 1 arcsec is "
+                                "~0.3 per detection: cut on sep",
+                        IMPLEMENTED, "produce.assemble_alert() via provider.get_gaia_matches()"),
 
     # --- Image cutouts ----------------------------------------------------------
     Param("cutoutDifference",   ["null", "bytes"],   "FITS cutout of difference image",
@@ -811,6 +898,7 @@ RECORDS = (
     Record("refMatch",        "Reference-image catalog source near the triggering source",             REF_MATCH_PARAMS),
     Record("nedMatch",        "NED candidate host galaxy near the triggering source",                  NED_MATCH_PARAMS),
     Record("lvsMatch",        "NED-LVS local-volume galaxy near the triggering source",                LVS_MATCH_PARAMS),
+    Record("gaiaMatch",       "Gaia DR3 source near the triggering source, at its epoch",             GAIA_MATCH_PARAMS),
     Record("alert",           "Top-level alert record",                                  ALERT_PARAMS),
 )
 

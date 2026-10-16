@@ -28,8 +28,9 @@ from alerts.param_registry import RECORDS, VERSION, Param, Status
 from alerts.produce import (assemble_alert, build_dia_source,
                                   build_dia_forced_source, build_record,
                                   load_schema, serialize_alert)
-from alerts.providers import (Cutouts, ForcedPhot, LvsMatch, NedMatch,
-                                    ObjectRecord, RefMatch, Source, SSMatch)
+from alerts.providers import (Cutouts, ForcedPhot, GaiaMatch, LvsMatch,
+                                    NedMatch, ObjectRecord, RefMatch, Source,
+                                    SSMatch)
 
 
 def make_detection(sid, mjd, aid=None):
@@ -108,6 +109,24 @@ class MinimalProvider:
                 LvsMatch(prefname="UGC 00001", ra=150.1010, dec=2.2,
                          sep=3.6, pa=90.0, z_qual=True)]
 
+    def get_gaia_matches(self, detection):
+        # a bright variable star with every field set, then a faint one
+        # with only the required fields, exercising every nullable field
+        return [GaiaMatch(source_id=4057125350474264448, ra=150.10005,
+                          dec=2.2, sep=0.2, pa=90.0, pmra=-3.2, pmdec=-5.9,
+                          parallax=0.41, parallax_error=0.05, ruwe=1.1,
+                          phot_g_mean_mag=17.9, phot_bp_mean_mag=19.1,
+                          phot_rp_mean_mag=16.8, bp_rp=2.3,
+                          phot_g_mean_flux_over_error=310.0,
+                          phot_variable_flag=True, non_single_star=1,
+                          in_qso_candidates=False, in_galaxy_candidates=False,
+                          classprob_dsc_combmod_star=0.99,
+                          classprob_dsc_combmod_galaxy=0.005,
+                          classprob_dsc_combmod_quasar=0.005,
+                          duplicated_source=True, ipd_frac_multi_peak=7),
+                GaiaMatch(source_id=4057125350474264449, ra=150.1002,
+                          dec=2.2, sep=0.8, pa=90.0)]
+
     def get_cutouts(self, detection):
         return Cutouts(difference=b"FAKE_DIFF", science=b"FAKE_SCI",
                        template=None)
@@ -168,6 +187,36 @@ def test_assembled_alert_semantics(alert):
     assert alert["lvsMatches"][1]["objType"] is None
     assert alert["lvsMatches"][1]["diam"] is None
     assert alert["lvsMatches"][1]["mStar"] is None
+    # Gaia cross-match: matched path; the id is a long, flags are bool,
+    # nullable fields null on the sparse entry
+    assert alert["gaiaMatches"][0]["sourceId"] == 4057125350474264448
+    assert isinstance(alert["gaiaMatches"][0]["sourceId"], int)
+    assert alert["gaiaMatches"][0]["pmRA"] == pytest.approx(-3.2)
+    assert alert["gaiaMatches"][0]["magG"] == pytest.approx(17.9)
+    assert alert["gaiaMatches"][0]["variable"] is True
+    assert alert["gaiaMatches"][0]["nonSingleStar"] == 1
+    assert alert["gaiaMatches"][0]["duplicatedSource"] is True
+    assert alert["gaiaMatches"][0]["ipdFracMultiPeak"] == 7
+    assert alert["gaiaMatches"][0]["probStar"] == pytest.approx(0.99)
+    assert alert["gaiaMatches"][1]["pmRA"] is None
+    assert alert["gaiaMatches"][1]["magG"] is None
+    assert alert["gaiaMatches"][1]["variable"] is False
+    assert alert["gaiaMatches"][1]["nonSingleStar"] == 0
+
+
+def test_gaia_match_not_run_stays_null():
+    """gaiaMatches = None must mean "not run" (disabled or copy unavailable)."""
+    provider = MinimalProvider()
+    provider.get_gaia_matches = lambda detection: None
+    alert = assemble_alert(provider, 9999)
+    assert alert["gaiaMatches"] is None
+
+
+def test_gaia_match_ran_clean_is_empty_not_null():
+    provider = MinimalProvider()
+    provider.get_gaia_matches = lambda detection: []
+    alert = assemble_alert(provider, 9999)
+    assert alert["gaiaMatches"] == []
 
 
 def test_time_processed_stamped_at_assembly():

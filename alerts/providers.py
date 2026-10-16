@@ -503,6 +503,46 @@ class LvsMatch:
 
 
 @dataclass
+class GaiaMatch:
+    """One Gaia DR3 source near a detection.
+
+    Built by match_gaiacat() from the local Gaia copy (see the Gaia
+    cross-match section below); becomes one entry of the alert's
+    gaiaMatches array. Gaia answers "is this a known star, and is it
+    variable, moving or a known non-single system" -- it reaches G ~ 21,
+    far shallower than Roman, so most detections match nothing, and that
+    is the expected answer. `ra`/`dec` are the catalog position
+    PROPAGATED by proper motion to the detection's epoch (see
+    propagate_positions); sep/pa are measured against that. Attribute
+    names follow the Gaia DR3 gaia_source columns.
+    """
+    source_id: int       # Gaia DR3 source_id
+    ra: float            # position at the detection epoch, ICRS [deg]
+    dec: float
+    sep: float           # angular separation from the detection [arcsec]
+    pa: float            # position angle detection -> source, E of N [deg]
+    pmra: float | None = None       # proper motion in RA*cos(dec) [mas/yr]
+    pmdec: float | None = None      # proper motion in Dec [mas/yr]
+    parallax: float | None = None   # [mas]
+    parallax_error: float | None = None
+    ruwe: float | None = None       # renormalised unit weight error (>1.4: poor fit / binary)
+    phot_g_mean_mag: float | None = None    # G [mag, Vega]
+    phot_bp_mean_mag: float | None = None   # BP
+    phot_rp_mean_mag: float | None = None   # RP
+    bp_rp: float | None = None              # BP - RP colour [mag]
+    phot_g_mean_flux_over_error: float | None = None  # G flux S/N; low = variable
+    phot_variable_flag: bool = False        # Gaia's "VARIABLE" flag
+    non_single_star: int = 0                # 0 = none; bit flags for astrometric/spectroscopic/eclipsing binary
+    in_qso_candidates: bool = False
+    in_galaxy_candidates: bool = False
+    classprob_dsc_combmod_star: float | None = None     # DSC class probabilities
+    classprob_dsc_combmod_galaxy: float | None = None
+    classprob_dsc_combmod_quasar: float | None = None
+    duplicated_source: bool = False         # another source within ~2" was removed
+    ipd_frac_multi_peak: int = 0            # % of windows with >1 peak (blend)
+
+
+@dataclass
 class Cutouts:
     """Raw FITS bytes for the three image stamps (any may be missing).
 
@@ -1045,7 +1085,7 @@ def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
 #
 # Catalog access is behind the NedSliceReader callable rather than wired to
 # one backend: production reads the local copy of the object directory
-# (alerts/ned_reader.py, one cone per chip); v1 used the NED web service,
+# (alerts/catalog_readers.py, one cone per chip); v1 used the NED web service,
 # removed 2026-09-23. The matcher only ever sees column arrays. Geometry is
 # identical to the reference-catalog match.
 # ---------------------------------------------------------------------------
@@ -1425,8 +1465,8 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
 
 
 # -- NED backend ------------------------------------------------------------
-# alerts/ned_reader.py: Hp6NedReader over the local copy of the object
-# directory (order-6 HEALPix parquet built by alerts/ned_catalog.py). The
+# alerts/catalog_readers.py: Hp6NedReader over the local copy of the object
+# directory (order-6 HEALPix parquet built by alerts/catalog_store.py). The
 # web-service reader (astroquery) was removed 2026-09-23: 3-24 s per chip
 # and hours-long timeouts, and it could never supply zunc.
 
@@ -1437,8 +1477,8 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
 # The nearest NED-LVS galaxies to each detection. NED-LVS is NED's vetted
 # local-volume sample (D < 1000 Mpc, ~2.1 M galaxies) and carries what the
 # object directory lacks: adopted distances, angular diameters, photometry,
-# SFR and stellar mass. Ingested by alerts/ned_catalog.py (ingest-lvs) into
-# <prefix>/lvs/nedlvs.parquet and read by alerts/ned_reader.py LvsReader,
+# SFR and stellar mass. Ingested by alerts/catalog_store.py (ingest-lvs) into
+# <prefix>/lvs/nedlvs.parquet and read by alerts/catalog_readers.py LvsReader,
 # which holds the whole table in memory and answers the NED reader's cone
 # contract (NedSliceReader). The geometry (_nearest_within), the per-chip
 # cone (chip_cone) and the three-state null/[]/populated contract are the
@@ -1598,6 +1638,207 @@ def match_lvscat(ra: Any, dec: Any, catalog: NedCatalog,
 
 
 # ---------------------------------------------------------------------------
+# Gaia cross-match
+#
+# The nearest Gaia DR3 sources to each detection: a star veto / variable-
+# star tag for the bulge, where NED has nothing. The local copy is the
+# 28-column projection of LINCC's HATS catalog that alerts/catalog_store.py
+# (ingest-gaia) writes, read per chip by alerts/catalog_readers.py
+# GaiaReader under the NED reader's cone contract (NedSliceReader). The
+# geometry (_nearest_within), the per-chip cone (chip_cone) and the three-
+# state null/[]/populated contract are the NED cross-match's.
+#
+# What differs is the epoch. Gaia positions are given at the catalog's
+# reference epoch (J2016.0 for DR3) and bulge stars move; by Roman's first
+# season that is 11 years of drift. So, once per chip, every Gaia row in
+# the cone is moved to the exposure's epoch by its proper motion BEFORE the
+# tree is built (propagate_positions), and the fetched cone is widened by
+# the largest drift any Gaia star can have over that interval so a star
+# that moves INTO the chip's cone is not missed (GAIA_PM_MAX_ARCSEC_PER_YEAR).
+# A new Gaia release resets the clock: the reference epoch comes from the
+# copy's ingest record, not from here.
+# ---------------------------------------------------------------------------
+
+# Maximum separation for a reported match. Gaia's astrometry is ~mas and
+# Roman's ~0.1", so a true counterpart sits well inside 1"; the radius is
+# generous for unmodelled motion. In the bulge (1.27 M Gaia sources per
+# deg^2) the chance-coincidence rate rho*pi*r^2 at 1" is ~0.3 per
+# detection -- consumers must cut on `sep`.
+GAIA_MATCH_RADIUS_ARCSEC = 1.0
+
+# Keep at most this many matches, nearest first.
+GAIA_MATCH_NMAX = 3
+
+# Largest proper motion in Gaia: Barnard's star, 10.4"/yr. The chip cone
+# is widened by this times the epoch offset so any star that could drift
+# into the cone is fetched; ~120" for an 11-year offset, which roughly
+# doubles the bulge cone's rows (still one parquet row group).
+GAIA_PM_MAX_ARCSEC_PER_YEAR = 11.0
+
+# Reference epoch used when the reader does not state one (a bare
+# callable in tests). Gaia DR3 positions are at J2016.0.
+GAIA_DEFAULT_REF_EPOCH = 2016.0
+
+# Columns the matcher works in -- the Gaia DR3 gaia_source names, as the
+# local copy keeps them and the GaiaMatch attributes are spelled. The
+# reader delivers exactly these: missing numerics as NaN, ints as 0,
+# bools as False, the variability flag as its string. The copy also holds
+# the position/proper-motion errors and astrometric_excess_noise, which
+# nothing reads yet.
+GAIA_INT_COLUMNS = ("source_id", "non_single_star", "ipd_frac_multi_peak")
+GAIA_BOOL_COLUMNS = ("duplicated_source", "in_qso_candidates", "in_galaxy_candidates")
+GAIA_STRING_COLUMNS = ("phot_variable_flag",)
+GAIA_NUMERIC_COLUMNS = ("ra", "dec", "pmra", "pmdec", "parallax", "parallax_error",
+                        "ruwe", "phot_g_mean_mag", "phot_bp_mean_mag",
+                        "phot_rp_mean_mag", "bp_rp", "phot_g_mean_flux_over_error",
+                        "classprob_dsc_combmod_star", "classprob_dsc_combmod_galaxy",
+                        "classprob_dsc_combmod_quasar")
+GAIA_COLUMNS = GAIA_INT_COLUMNS + GAIA_BOOL_COLUMNS + GAIA_STRING_COLUMNS + GAIA_NUMERIC_COLUMNS
+GAIA_REQUIRED_COLUMNS = ("source_id", "ra", "dec")
+
+# Gaia's phot_variable_flag value meaning "classified variable" (the other
+# value is "NOT_AVAILABLE": not analysed, which is most sources).
+GAIA_VARIABLE_FLAG = "VARIABLE"
+
+
+def epoch_offset_years(mjd: float, ref_epoch: float) -> float:
+    """Years from the Julian epoch `ref_epoch` (e.g. 2016.0) to `mjd`."""
+    ref_mjd = 51544.5 + (ref_epoch - 2000.0) * 365.25     # J2000.0 = MJD 51544.5
+    return (mjd - ref_mjd) / 365.25
+
+
+def propagate_positions(ra: np.ndarray, dec: np.ndarray, pmra: np.ndarray,
+                        pmdec: np.ndarray, dt_years: float,
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Move catalog positions by proper motion over `dt_years`.
+
+    Linear in time: ``dec += pmdec * dt`` and ``ra += pmra * dt / cos(dec)``,
+    with Gaia's `pmra` already including the cos(dec) factor and both in
+    mas/yr. A missing proper motion (NaN) moves nothing. Parallactic
+    motion is ignored (< 1 mas for all but the nearest stars; a Roman
+    pixel is 110 mas). Accurate to well under 0.1" for any Gaia star over
+    decades, except the handful within a few parsecs, which a 1" match
+    radius still absorbs.
+    """
+    ra = np.asarray(ra, dtype=float)
+    dec = np.asarray(dec, dtype=float)
+    dra = np.nan_to_num(np.asarray(pmra, dtype=float)) * dt_years / 3.6e6
+    ddec = np.nan_to_num(np.asarray(pmdec, dtype=float)) * dt_years / 3.6e6
+    new_dec = np.clip(dec + ddec, -90.0, 90.0)
+    new_ra = (ra + dra / np.cos(np.radians(dec))) % 360.0
+    return new_ra, new_dec
+
+
+def build_gaiacat(table: dict[str, Any], dt_years: float = 0.0) -> NedCatalog | None:
+    """Propagate a Gaia slice to the detection epoch and build its tree.
+
+    Parameters
+    ----------
+    table : dict
+        Column arrays keyed by GAIA_COLUMNS. source_id/ra/dec required; the
+        rest filled with nulls (NaN / 0 / False / None) when absent.
+    dt_years : float, optional
+        Years from the catalog's reference epoch to the exposure; the
+        slice's `ra`/`dec` are replaced by the propagated positions.
+
+    Returns
+    -------
+    NedCatalog or None
+        The tree-built slice (the container shared with NED); None (with a
+        logged warning) when required columns are missing -- the cross-
+        match then degrades to "not run". An empty slice has coords=None
+        and matches to [].
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    missing = [c for c in GAIA_REQUIRED_COLUMNS if c not in table]
+    if missing:
+        logger.warning("Gaia slice is missing required columns %s; "
+                       "cross-match skipped", missing)
+        return None
+
+    n = len(np.asarray(table["source_id"]))
+    columns: dict[str, np.ndarray] = {}
+    for name in GAIA_COLUMNS:
+        if name in GAIA_NUMERIC_COLUMNS:
+            dtype, fill = float, np.nan
+        elif name in GAIA_INT_COLUMNS:
+            dtype, fill = np.int64, 0
+        elif name in GAIA_BOOL_COLUMNS:
+            dtype, fill = bool, False
+        else:
+            dtype, fill = object, None
+        values = table[name] if name in table else np.full(n, fill, dtype=dtype)
+        columns[name] = np.asarray(values, dtype=dtype)
+    if n and dt_years:
+        columns["ra"], columns["dec"] = propagate_positions(
+            columns["ra"], columns["dec"], columns["pmra"], columns["pmdec"], dt_years)
+    logger.debug("Gaia slice: %d rows, propagated %.2f yr", n, dt_years)
+
+    coords = (SkyCoord(columns["ra"] * u.deg, columns["dec"] * u.deg)
+              if n else None)
+    return NedCatalog(columns=columns, coords=coords, n_input=n)
+
+
+def _gaia_match_from_row(columns: dict[str, np.ndarray], row: int,
+                         sep: float, pa: float) -> GaiaMatch:
+    """Build one GaiaMatch from slice row `row` at the given sep/PA.
+
+    Absent numerics become None (the schema types them as nullable
+    unions); ints and bools keep their fill values; the variability flag
+    string becomes the boolean "is VARIABLE".
+    """
+    def number(name: str) -> float | None:
+        value = float(columns[name][row])
+        return value if np.isfinite(value) else None
+
+    optional: dict[str, Any] = {}
+    optional.update({name: int(columns[name][row]) for name in GAIA_INT_COLUMNS
+                     if name != "source_id"})
+    optional.update({name: bool(columns[name][row]) for name in GAIA_BOOL_COLUMNS})
+    optional.update({name: number(name) for name in GAIA_NUMERIC_COLUMNS
+                     if name not in ("ra", "dec")})
+    flag = columns["phot_variable_flag"][row]
+    optional["phot_variable_flag"] = (flag is not None
+                                      and str(flag).strip() == GAIA_VARIABLE_FLAG)
+    return GaiaMatch(source_id=int(columns["source_id"][row]),
+                     ra=float(columns["ra"][row]), dec=float(columns["dec"][row]),
+                     sep=sep, pa=pa, **optional)
+
+
+def match_gaiacat(ra: Any, dec: Any, catalog: NedCatalog,
+                  radius_arcsec: float = GAIA_MATCH_RADIUS_ARCSEC,
+                  n_max: int = GAIA_MATCH_NMAX,
+                  ) -> list[list[GaiaMatch]]:
+    """Match detection positions against a (propagated) Gaia slice.
+
+    match_nedcat() with the Gaia row builder: one KD-tree query for the
+    n_max nearest sources of every detection within `radius_arcsec` (see
+    _nearest_within). Per detection, in input order, nearest first and at
+    most `n_max` long; an empty list means "no Gaia source within the
+    radius"; "could not run" is signalled by the provider, not here.
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    ra = np.atleast_1d(np.asarray(ra, dtype=float))
+    dec = np.atleast_1d(np.asarray(dec, dtype=float))
+    results: list[list[GaiaMatch]] = [[] for _ in range(ra.size)]
+
+    coords = catalog.coords
+    if coords is None:
+        return results  # no Gaia sources in this slice
+
+    src = SkyCoord(ra * u.deg, dec * u.deg)
+    for i, cat_idx, sep_arcsec, pa_deg in _nearest_within(src, coords,
+                                                          radius_arcsec, n_max):
+        results[i].append(_gaia_match_from_row(catalog.columns, cat_idx,
+                                               sep_arcsec, pa_deg))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # The alert data provider
 #
 # One provider. The RAPID database is effectively a fast index over the
@@ -1624,6 +1865,7 @@ class AlertDataProvider:
                  kona_lookup: Any = None, refcat: bool = True,
                  ned_reader: "NedSliceReader | None" = None,
                  lvs_reader: "NedSliceReader | None" = None,
+                 gaia_reader: "NedSliceReader | None" = None,
                  max_sources: int = MAX_SOURCES_PER_CHIP,
                  forced_phot: bool = True,
                  forced_window_days: float | None = FORCED_WINDOW_DAYS,
@@ -1679,6 +1921,12 @@ class AlertDataProvider:
             The same contract over the NED-LVS table (columns LVS_COLUMNS;
             see the NED-LVS cross-match section). While None,
             get_lvs_matches() reports "not run" and lvsMatches stays null.
+        gaia_reader : NedSliceReader, optional
+            The same contract over the local Gaia copy (columns
+            GAIA_COLUMNS; see the Gaia cross-match section). A reader may
+            carry a ``ref_epoch`` attribute (Julian year of its positions;
+            GAIA_DEFAULT_REF_EPOCH otherwise). While None,
+            get_gaia_matches() reports "not run" and gaiaMatches stays null.
 
         Raises
         ------
@@ -1761,6 +2009,15 @@ class AlertDataProvider:
         self._lvs_pid: int | None = None
         self._lvs: NedCatalog | None = None
         self._chip_lvsmatches: dict[int, list[LvsMatch]] = {}
+        # Gaia cross-match state, the same shape again (see _match_chip_gaia);
+        # the slice is cached per pid AND propagated to that chip's epoch.
+        self.gaia_reader = gaia_reader
+        self.gaia_enabled = gaia_reader is not None
+        self.gaia_ref_epoch = float(getattr(gaia_reader, "ref_epoch", None)
+                                    or GAIA_DEFAULT_REF_EPOCH)
+        self._gaia_pid: int | None = None
+        self._gaia: NedCatalog | None = None
+        self._chip_gaiamatches: dict[int, list[GaiaMatch]] = {}
 
     def close(self) -> None:
         """Remove locally staged S3 products.
@@ -1776,6 +2033,8 @@ class AlertDataProvider:
         self._chip_nedmatches.clear()
         self._lvs = None
         self._chip_lvsmatches.clear()
+        self._gaia = None
+        self._chip_gaiamatches.clear()
         self._chip_forced = None
         self._chip_forced_pid = None
         self._staging_tmp.cleanup()
@@ -2043,6 +2302,7 @@ class AlertDataProvider:
         self._match_chip_refcat(pid, sources)
         self._match_chip_ned(pid, sources)
         self._match_chip_lvs(pid, sources)
+        self._match_chip_gaia(pid, sources)
         yield from sources
 
     def _cut_to_max_sources(self, pid: int,
@@ -3094,3 +3354,111 @@ class AlertDataProvider:
         if catalog is None:
             return None
         return match_lvscat(detection.ra, detection.dec, catalog)[0]
+
+    # -- Gaia cross-match ---------------------------------------------------
+    # The NED methods again, over the Gaia reader, radius, builder and
+    # matcher, plus the epoch handling described in the Gaia cross-match
+    # section: the cone is widened by the largest possible proper-motion
+    # drift and the slice is propagated to the exposure's epoch.
+
+    def _gaia_pad_arcsec(self, dt_years: float) -> float:
+        """Cone padding: match radius, slack, and the largest drift over dt."""
+        return (GAIA_MATCH_RADIUS_ARCSEC + NED_CONE_SLACK_ARCSEC
+                + GAIA_PM_MAX_ARCSEC_PER_YEAR * abs(dt_years))
+
+    def _fetch_gaiacat(self, ra0: float, dec0: float, radius: float,
+                       dt_years: float) -> NedCatalog | None:
+        """Fetch the Gaia slice for one query cone, propagate it by
+        `dt_years` and build its tree.
+
+        None (with a logged warning) when the reader returned None or
+        raised -- the cross-match then reports "not run"; an empty slice
+        is a NedCatalog with coords=None, which matches to [].
+        """
+        assert self.gaia_reader is not None
+        try:
+            table = self.gaia_reader(ra0, dec0, radius)
+        except Exception as exc:
+            logger.warning("Gaia query failed for cone (%.5f, %.5f) r=%.1f\" "
+                           "(%s: %s); Gaia matching not run", ra0, dec0, radius,
+                           type(exc).__name__, str(exc).splitlines()[0] if str(exc) else "")
+            logger.debug("Gaia query failure traceback", exc_info=True)
+            return None
+        if table is None:
+            logger.warning("Gaia reader returned no slice for cone "
+                           "(%.5f, %.5f) r=%.1f\"; Gaia matching not run",
+                           ra0, dec0, radius)
+            return None
+        return build_gaiacat(table, dt_years)
+
+    def _gaiacat_for_chip(self, pid: int, ra0: float, dec0: float,
+                          radius: float, dt_years: float) -> NedCatalog | None:
+        """The (cached per pid) Gaia slice for a chip's query cone, at the
+        chip's epoch."""
+        if self._gaia_pid == pid:
+            return self._gaia
+        self._gaia = None
+        self._gaia_pid = pid
+        self._gaia = self._fetch_gaiacat(ra0, dec0, radius, dt_years)
+        return self._gaia
+
+    def _match_chip_gaia(self, pid: int, sources: list[Source]) -> None:
+        """Cross-match every chip detection against Gaia.
+
+        As _match_chip_ned: one slice fetch and one vectorized
+        match_gaiacat() pass, results per sid in _chip_gaiamatches. The
+        chip's epoch is its detections' mjdobs (one exposure, so one
+        value; the median guards against a stray row). The cone's clamp
+        (NED_CONE_MAX_ARCSEC) is raised by the proper-motion padding so
+        the padding itself can never trigger it. Off-chip detections are
+        excluded the same way as for NED and end up "not run".
+        """
+        self._chip_gaiamatches = {}
+        if not self.gaia_enabled or not sources:
+            return
+        ra = np.array([s.ra for s in sources])
+        dec = np.array([s.dec for s in sources])
+        dt_years = epoch_offset_years(float(np.median([s.mjdobs for s in sources])),
+                                      self.gaia_ref_epoch)
+        pad = self._gaia_pad_arcsec(dt_years)
+        ra0, dec0, radius, inliers = chip_cone(
+            ra, dec, pad, max_arcsec=NED_CONE_MAX_ARCSEC + pad)
+        n_out = int((~inliers).sum())
+        if n_out:
+            logger.debug("pid=%s: %d of %d detections excluded from the "
+                         "Gaia cone (off-chip positions)", pid, n_out, len(sources))
+            if not inliers.any():
+                return
+        catalog = self._gaiacat_for_chip(pid, ra0, dec0, radius, dt_years)
+        if catalog is None:
+            return
+        results = match_gaiacat(ra[inliers], dec[inliers], catalog)
+        sids = [s.sid for s, ok in zip(sources, inliers) if ok]
+        self._chip_gaiamatches = dict(zip(sids, results))
+
+    def get_gaia_matches(self, detection: Source) -> list[GaiaMatch] | None:
+        """The nearest Gaia sources to a detection, at the detection's epoch.
+
+        These become the alert's gaiaMatches array. In the batch flow the
+        whole chip was already matched in one pass (see _match_chip_gaia);
+        the single-alert flow fetches a slice around just this detection.
+
+        Returns
+        -------
+        list of GaiaMatch or None
+            Sources within GAIA_MATCH_RADIUS_ARCSEC (at most GAIA_MATCH_NMAX,
+            nearest first); an empty list when matching ran and found
+            nothing nearby; None when it could not run (disabled, or the
+            Gaia copy could not be read).
+        """
+        if not self.gaia_enabled:
+            return None
+        if self._chip_pid is not None and self._chip_pid == detection.pid:
+            return self._chip_gaiamatches.get(detection.sid)
+        dt_years = epoch_offset_years(detection.mjdobs, self.gaia_ref_epoch)
+        ra0, dec0, radius = bounding_cone(detection.ra, detection.dec,
+                                          self._gaia_pad_arcsec(dt_years))
+        catalog = self._fetch_gaiacat(ra0, dec0, radius, dt_years)
+        if catalog is None:
+            return None
+        return match_gaiacat(detection.ra, detection.dec, catalog)[0]

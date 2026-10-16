@@ -56,7 +56,7 @@ import boto3
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 from alerts.cli import make_provider
-from alerts.ned_reader import DEFAULT_NED_SOURCE
+from alerts.catalog_readers import DEFAULT_GAIA_SOURCE, DEFAULT_NED_SOURCE
 from alerts.providers import FORCED_WINDOW_DAYS
 from alerts.produce import BatchStats, batch_produce, open_alert_archive
 
@@ -125,6 +125,8 @@ def read_alert_settings(config_input):
         'ned_match': alerts.getboolean('ned_match', fallback=True),
         'ned_source': alerts.get('ned_source', fallback=DEFAULT_NED_SOURCE).strip() or None,
         'lvs_match': alerts.getboolean('lvs_match', fallback=True),
+        'gaia_match': alerts.getboolean('gaia_match', fallback=True),
+        'gaia_source': alerts.get('gaia_source', fallback=DEFAULT_GAIA_SOURCE).strip() or None,
         'kona_file': kona_file,
         'archive_filename_base': alerts.get('archive_filename_base', fallback='alerts_jid'),
         'archive_codec': alerts.get('archive_codec', fallback='deflate'),
@@ -340,6 +342,8 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
                                      ned=settings['ned_match'],
                                      ned_source=settings['ned_source'],
                                      lvs=settings['lvs_match'],
+                                     gaia=settings['gaia_match'],
+                                     gaia_source=settings['gaia_source'],
                                      forced_phot=settings['forced_phot'],
                                      forced_window_days=settings['forced_window_days'],
                                      forced_store=forced_store)
