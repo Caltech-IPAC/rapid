@@ -30,6 +30,9 @@ Layout (top to bottom, each section depends only on the ones above it)::
                  assemble_history()        -- rows -> per-position lists
     table        FORCED_TABLE_DTYPE, forced_measurement_id()
                  write_table() / read_table()   -- parquet, local or s3://
+    object store read_object_history() / merge_rows() / write_object_history()
+                 -- <store>/field=<f>/aid=<a>/<yyyymm>.parquet, one file per
+                    object per month, rewritten whole; conditional S3 puts
     entry point  main()                    -- one chip by hand: --pid, --positions CSV
 
 Search (data flow)::
@@ -803,7 +806,7 @@ IMAGE_PRODUCTS = {
 
 def run_prev_images(images, positions, stage, products=("diff", "science"), uncert_url=None,
                     gain=None, fit_shape=FIT_SHAPE, margin=STAMP_MARGIN_PX, strict=False,
-                    delete_staged=True):
+                    delete_staged=True, keep_staged=()):
     """Measure every position on every previous image, one file at a time.
 
     A generator: for each image and each product it stages the image (and
@@ -835,8 +838,12 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
         skipped, the run continues. True: it propagates.
     delete_staged : bool
         Remove staged copies after use (never the science PSF, which is
-        cached for the run, and never a file the caller passed as a plain
-        path).
+        cached for the run, never a file the caller passed as a plain
+        path, and never a path in ``keep_staged``).
+    keep_staged : iterable of str
+        Staged local files the caller still needs after the run (e.g. the
+        alerting chip's own images, staged once for the cutouts and
+        reused here), never deleted.
 
     Yields
     ------
@@ -901,7 +908,7 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
                 if delete_staged:
                     # stagers key local files by basename, so a staged copy
                     # can share its path with a cached PSF: never delete those
-                    keep = set(sci_psf_cache.values())
+                    keep = set(sci_psf_cache.values()) | set(keep_staged)
                     for src, path in staged:
                         if path != src and path is not None and path not in keep and os.path.exists(path):
                             os.remove(path)
@@ -934,12 +941,12 @@ def assemble_history(rows):
 
 
 # ---------------------------------------------------------------------------
-# Per-chip table: one row per object and epoch, both products merged
+# Table: one row per object and epoch, both products merged
 # ---------------------------------------------------------------------------
-# The layout the alert provider caches per chip and persists as parquet
-# (one file per chip), and the layout a future database table would take.
+# The layout the alert provider caches per chip and persists per object in
+# the object store below, and the layout a future database table would take.
 
-#: Columns of the per-chip forced-photometry table.
+#: Columns of the forced-photometry table.
 FORCED_TABLE_DTYPE = np.dtype([
     ("forced_id", "i8"), ("aid", "i8"), ("rid", "i8"), ("pid", "i8"),
     ("expid", "i8"), ("sca", "i2"), ("fid", "i2"), ("band", "U8"),
@@ -969,62 +976,218 @@ def _split_s3(path):
     return bucket, key
 
 
-def write_table(table, path):
+class StaleWriteError(RuntimeError):
+    """A conditional write found the object changed since it was read."""
+
+
+def _s3_client():
+    import boto3
+    from botocore.config import Config
+    return boto3.client("s3", config=Config(retries={"mode": "standard"}))
+
+
+def write_table(table, path, if_match=None):
     """Write a FORCED_TABLE_DTYPE table as parquet, to a local path (parent
-    directories created) or an ``s3://bucket/key`` object."""
-    import tempfile
+    directories created) or an ``s3://bucket/key`` object.
+
+    ``if_match`` (S3 only): the ETag the object had when it was read; the
+    put is refused with :class:`StaleWriteError` if it has changed since,
+    so two workers updating the same object's file cannot overwrite each
+    other unnoticed. None writes unconditionally.
+    """
+    import io
 
     import pyarrow as pa
     import pyarrow.parquet as pq
 
     arrow = pa.table({name: pa.array(table[name].tolist()) if table.dtype[name].kind == "U"
                       else pa.array(table[name]) for name in FORCED_TABLE_DTYPE.names})
+    buf = io.BytesIO()
+    pq.write_table(arrow, buf)
+    data = buf.getvalue()
     if path.startswith("s3://"):
-        import boto3
+        import botocore.exceptions
 
         bucket, key = _split_s3(path)
-        with tempfile.TemporaryDirectory() as tmp:
-            local = os.path.join(tmp, os.path.basename(key))
-            pq.write_table(arrow, local)
-            boto3.client("s3").upload_file(local, bucket, key)
+        extra = {"IfMatch": if_match} if if_match else {}
+        try:
+            _s3_client().put_object(Bucket=bucket, Key=key, Body=data, **extra)
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("PreconditionFailed", "412"):
+                raise StaleWriteError(f"{path} changed since it was read") from exc
+            raise
     else:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        pq.write_table(arrow, path)
+        with open(path, "wb") as fh:
+            fh.write(data)
     logger.info("write_table: %d rows -> %s", len(table), path)
 
 
 def read_table(path):
-    """A FORCED_TABLE_DTYPE table from a parquet file written by
-    :func:`write_table`, local or ``s3://``; None when there is no such
-    file (or no access to it)."""
-    import tempfile
+    """``(table, etag)`` for a FORCED_TABLE_DTYPE parquet file written by
+    :func:`write_table`, local or ``s3://``; ``(None, None)`` when there
+    is no such file (or no access to it). The ETag feeds
+    :func:`write_table`'s ``if_match`` and is None for local files."""
+    import io
 
     import pyarrow.parquet as pq
 
-    def to_table(local):
-        arrow = pq.read_table(local)
-        table = np.zeros(arrow.num_rows, dtype=FORCED_TABLE_DTYPE)
-        for name in FORCED_TABLE_DTYPE.names:
-            table[name] = arrow.column(name).to_numpy(zero_copy_only=False)
-        return table
-
+    etag = None
     if path.startswith("s3://"):
-        import boto3
         import botocore.exceptions
 
         bucket, key = _split_s3(path)
-        with tempfile.TemporaryDirectory() as tmp:
-            local = os.path.join(tmp, os.path.basename(key))
-            try:
-                boto3.client("s3").download_file(bucket, key, local)
-            except botocore.exceptions.ClientError as exc:
-                if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "403", "AccessDenied"):
-                    return None
-                raise
-            return to_table(local)
-    if not os.path.exists(path):
-        return None
-    return to_table(path)
+        try:
+            resp = _s3_client().get_object(Bucket=bucket, Key=key)
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "403", "AccessDenied"):
+                return None, None
+            raise
+        data, etag = resp["Body"].read(), resp.get("ETag")
+    elif os.path.exists(path):
+        with open(path, "rb") as fh:
+            data = fh.read()
+    else:
+        return None, None
+    arrow = pq.read_table(io.BytesIO(data))
+    table = np.zeros(arrow.num_rows, dtype=FORCED_TABLE_DTYPE)
+    for name in FORCED_TABLE_DTYPE.names:
+        table[name] = arrow.column(name).to_numpy(zero_copy_only=False)
+    return table, etag
+
+
+# ---------------------------------------------------------------------------
+# Object store: one file per object per period, under its field
+# ---------------------------------------------------------------------------
+# <store>/field=<field>/aid=<aid>/<period>.parquet, where <store> is a local
+# directory or an s3://bucket/prefix. The object is the unit of retrieval
+# and update ("which epochs does this object already have?"); the field is
+# only a directory, so a later load or consolidation reads one prefix per
+# field; the period bounds what one chip run reads and rewrites (a file is
+# always rewritten whole with that period's complete set of rows). At GBTDS
+# cadence a month of one object is ~3,000 rows (~300 kB).
+
+#: Period of the per-object files: "month" (calendar month, UTC, of mjdobs).
+#: Changing it is a one-line change plus a backfill (e.g. "week" if the
+#: bytes rewritten per chip run grow too large).
+FORCED_STORE_PERIOD = "month"
+
+
+def period_key(mjd):
+    """The period key(s) for MJD(s): ``"yyyymm"`` (array in, array out)."""
+    from astropy.time import Time
+
+    if FORCED_STORE_PERIOD != "month":
+        raise NotImplementedError(f"period {FORCED_STORE_PERIOD!r}")
+    t = Time(np.atleast_1d(np.asarray(mjd, dtype=float)), format="mjd", scale="utc").ymdhms
+    keys = np.array([f"{int(y):04d}{int(m):02d}" for y, m in zip(t["year"], t["month"])])
+    return keys[0] if np.ndim(mjd) == 0 else keys
+
+
+def periods_in_window(mjd_lo, mjd_hi):
+    """All period keys intersecting ``[mjd_lo, mjd_hi]``, in order."""
+    y, m = int(period_key(mjd_lo)[:4]), int(period_key(mjd_lo)[4:])
+    stop = period_key(mjd_hi)
+    keys = []
+    while True:
+        keys.append(f"{y:04d}{m:02d}")
+        if keys[-1] == stop:
+            return keys
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+
+
+def object_prefix(store, field, aid):
+    """``<store>/field=<field>/aid=<aid>``."""
+    return f"{store.rstrip('/')}/field={int(field)}/aid={int(aid)}"
+
+
+def object_period_path(store, field, aid, key):
+    return f"{object_prefix(store, field, aid)}/{key}.parquet"
+
+
+def list_object_periods(store, field, aid):
+    """The period keys an object has files for, sorted."""
+    prefix = object_prefix(store, field, aid)
+    if prefix.startswith("s3://"):
+        bucket, key = _split_s3(prefix + "/")
+        names = [o["Key"].rsplit("/", 1)[-1]
+                 for page in _s3_client().get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=key)
+                 for o in page.get("Contents", [])]
+    else:
+        names = os.listdir(prefix) if os.path.isdir(prefix) else []
+    return sorted(n[:-len(".parquet")] for n in names if n.endswith(".parquet"))
+
+
+def read_object_history(store, field, aid, mjd_lo=None, mjd_hi=None):
+    """An object's stored forced photometry inside a window.
+
+    Returns ``(table, etags)``: the rows of every period file intersecting
+    the window (every file when the window is open), merged, sorted by
+    ``mjdobs`` and cut to the window; and ``{period: etag}`` for the files
+    read, for :func:`write_object_history`'s conditional writes. An object
+    with no files gives an empty table and ``{}``.
+    """
+    if mjd_lo is not None and mjd_hi is not None:
+        keys = periods_in_window(mjd_lo, mjd_hi)
+    else:
+        keys = list_object_periods(store, field, aid)
+    tables, etags = [], {}
+    for key in keys:
+        table, etag = read_table(object_period_path(store, field, aid, key))
+        if table is not None:
+            tables.append(table)
+            etags[key] = etag
+    if not tables:
+        return np.zeros(0, dtype=FORCED_TABLE_DTYPE), {}
+    table = np.concatenate(tables)
+    if mjd_lo is not None:
+        table = table[table["mjdobs"] >= mjd_lo]
+    if mjd_hi is not None:
+        table = table[table["mjdobs"] <= mjd_hi]
+    return np.sort(table, order=["mjdobs", "rid"]), etags
+
+
+def merge_rows(history, new_rows):
+    """``history`` plus ``new_rows``, one row per epoch (``rid``): a new row
+    replaces an existing row for the same epoch. Sorted by ``mjdobs``."""
+    if len(history) and len(new_rows):
+        history = history[~np.isin(history["rid"], new_rows["rid"])]
+    merged = np.concatenate([history, new_rows]) if len(history) and len(new_rows) else (new_rows if len(new_rows) else history)
+    return np.sort(merged, order=["mjdobs", "rid"])
+
+
+def write_object_history(store, field, aid, table, periods, etags=None):
+    """Rewrite the given period files of an object from ``table`` (the
+    object's merged history; every row of those periods must be in it).
+
+    Each period file is written whole with the rows of ``table`` in that
+    period; on S3 the write is conditional on the ETag recorded when the
+    period was read (``etags``), raising :class:`StaleWriteError` if
+    another worker wrote it meanwhile. A period with no rows is skipped.
+    Returns the periods written.
+    """
+    etags = etags or {}
+    keys = period_key(table["mjdobs"]) if len(table) else np.zeros(0, dtype="U6")
+    written = []
+    for period in periods:
+        rows = table[keys == period]
+        if len(rows):
+            write_table(rows, object_period_path(store, field, aid, period), if_match=etags.get(period))
+            written.append(period)
+    return written
+
+
+def run_parallel(fn, items, workers=16):
+    """``[fn(item) for item in items]`` on a thread pool, results in order;
+    the first exception propagates. For the per-object store round trips,
+    which are latency-bound."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    items = list(items)
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=min(workers, len(items))) as pool:
+        return list(pool.map(fn, items))
 
 
 # ---------------------------------------------------------------------------
@@ -1061,6 +1224,16 @@ def main(argv=None):
     Uses the live database (DB* environment variables, as RAPIDDB does)
     and S3 through the alert provider's staging. Writes one CSV row per
     measurement.
+
+    A diagnostic, deliberately store-free: it measures the positions it
+    is given on the chip's images and keeps no history. Alert production
+    goes through ``alerts.cli --pid ... --forced-store ...``, where the
+    provider reads each object's stored history and measures only the
+    missing epochs (AlertDataProvider._prefetch_forced).
+
+    TODO: this is kept for benchmarking for now, but eventually add a
+        --force-redo or a --no-cache option and make the main path point to
+        the cached version instead. That way can re-benchmark if needed.
     """
     import argparse
 
