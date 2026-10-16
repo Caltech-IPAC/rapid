@@ -958,6 +958,72 @@ def compute_sumrat_for_diff_image(input_diff_filename,
 
 
 #####################################################################################################
+# Subtract a local background from a difference image, for the pixel-based catalog columns (sumrat,
+# nneg, nbad).
+#
+# sumrat and nneg count on the sign of each pixel, so they assume a background of 0, but a
+# difference image can sit on a pedestal: on the socsims the SFFT difference images sit at -2 to
+# -6 DN/s in crowded fields, which drags sumrat down for every positive source and up for every
+# negative one.  The background is a photutils Background2D on a box_size mesh (3-sigma clipping,
+# the SExtractor mode estimator, a filter_size median filter of the mesh), with the non-finite
+# pixels masked, and the non-finite pixels stay non-finite in the output, so that nbad is
+# unchanged.
+#####################################################################################################
+
+def write_background_subtracted_diff_image(input_diff_filename,
+                                           output_filename,
+                                           *,
+                                           box_size = 64,
+                                           filter_size = 3,
+                                           hdu_index = None):
+
+    """
+    Method write_background_subtracted_diff_image
+
+    Inputs:
+    input_diff_filename     FITS file containing the difference image.
+    output_filename         FITS file to write the background-subtracted image to (overwritten).
+    box_size                Side length of the background mesh [pixels].
+    filter_size             Side length of the median filter applied to the mesh [mesh cells];
+                            must be odd.
+    hdu_index               HDU index of the image data.  If None, the first HDU holding
+                            two-dimensional image data is used.
+
+    Returns:
+    median_background       Median of the subtracted background over the finite pixels [image
+                            units], for the log.
+    """
+
+    from astropy.stats import SigmaClip
+    from photutils.background import Background2D, SExtractorBackground, StdBackgroundRMS
+
+    with fits.open(input_diff_filename) as hdul:
+
+        if hdu_index is None:
+            hdu_index = next(i for i,hdu in enumerate(hdul)
+                             if hdu.data is not None and np.ndim(hdu.data) == 2)
+
+        data = np.asarray(hdul[hdu_index].data, dtype=np.float64)
+        header = hdul[hdu_index].header.copy()
+
+    bad = ~np.isfinite(data)
+
+    bkg = Background2D(np.where(bad, 0.0, data),
+                       (box_size, box_size),
+                       filter_size = (filter_size, filter_size),
+                       mask = bad,
+                       sigma_clip = SigmaClip(sigma = 3.0),
+                       bkg_estimator = SExtractorBackground(),
+                       bkgrms_estimator = StdBackgroundRMS())
+
+    output = np.where(bad, data, data - bkg.background).astype(np.float32)
+
+    fits.PrimaryHDU(output, header = header).writeto(output_filename, overwrite = True)
+
+    return float(np.median(bkg.background[~bad])) if np.any(~bad) else float("nan")
+
+
+#####################################################################################################
 # Count the negative and the bad pixels in a small stamp centered on each difference-image source,
 # the ZTF "nneg" and "nbad" metrics (imgdiffextract.pl).
 #
