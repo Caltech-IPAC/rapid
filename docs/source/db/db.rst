@@ -365,6 +365,8 @@ in order to aid in prefiltering records that are loaded into the database (and f
 +--------------------+-----------------------------------------------------------------------------------+
 
 
+.. _db-prefilter:
+
 Prefiltering Records Loaded Into Sources and XSources
 ******************************************************
 

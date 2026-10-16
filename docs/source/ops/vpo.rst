@@ -288,11 +288,12 @@ log file in the working directory named after the stage, the processing date and
      - Registers post-processing pipeline metadata in the operations database.
    * - 10
      - ``loadPSFCatIntoDBSourcesTable.py``
-     - Loads the photutils PSF-fit catalogs into the ``Sources`` child tables.
+     - Loads the photutils PSF-fit catalogs into the ``Sources`` child tables, after the
+       :ref:`database prefilter <db-prefilter>`.
    * - 11
      - ``loadSECatIntoDBSourcesTable.py``
      - Loads the positive and negative SExtractor catalogs into the ``XSources`` child
-       tables.
+       tables, after the :ref:`database prefilter <db-prefilter>`.
    * - 12
      - ``crossMatchSources.py``
      - Cross-matches Sources, building ``AstroObjects_<field>`` and ``Merges_<field>``.
