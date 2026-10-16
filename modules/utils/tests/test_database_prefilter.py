@@ -81,3 +81,16 @@ def test_repo_ini_prefilter_section():
     s, r, fills = util.get_database_prefilter_params(c)
     assert (s, r) == (0.4, 0.0)
     assert fills == (-999.0,)
+
+
+def test_prefilter_snr_cut():
+    sumrat = np.array([0.9, 0.9, 0.9, 0.9])
+    snr = np.array([10.0, 5.0, 3.0, np.nan])
+    keep = util.prefilter_database_records(4, sumrat, None, 0.4, None, snr=snr, snr_prefilter_threshold=5.0)
+    assert list(keep) == [True, False, False, True]
+    assert list(util.prefilter_database_records(4, sumrat, None, 0.4, None, snr=snr)) == [True] * 4
+
+    config = configparser.ConfigParser()
+    assert util.get_snr_prefilter_threshold(config) is None
+    config.read_dict({"DATABASE_PREFILTER": {"snr_prefilter_threshold": "5.0"}})
+    assert util.get_snr_prefilter_threshold(config) == 5.0
