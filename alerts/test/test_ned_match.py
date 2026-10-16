@@ -13,7 +13,7 @@ Three layers, mirroring test_ref_match.py:
     fake_ned_reader: assemble + serialize alerts for all three nedMatches
     states -- null (matching not run), [] (ran and found nothing),
     populated -- through the real provider and its per-chip slice cache.
-  - Hp6NedReader (alerts/ned_reader.py), the production reader over the
+  - Hp6NedReader (alerts/catalog_readers.py), the production reader over the
     local order-6 copy of NED, against synthetic pixel files in tmp_path;
     see the section at the end of this file.
 
@@ -596,8 +596,8 @@ def test_e2e_slice_cached_per_chip_including_failure(make_provider,
 
 
 # ---------------------------------------------------------------------------
-# Hp6NedReader (alerts/ned_reader.py): the NedSliceReader over the local
-# order-6 copy of NED that alerts.ned_catalog builds. Synthetic pixel files
+# Hp6NedReader (alerts/catalog_readers.py): the NedSliceReader over the local
+# order-6 copy of NED that alerts.catalog_store builds. Synthetic pixel files
 # in tmp_path; the reader contract, pixel-edge cones, the cache, and one
 # full alert over the fake chip whose nedMatches come from the store.
 # (Selection is ON in this file, so store objects carry a type or a z.)
@@ -609,8 +609,8 @@ import healpy as hp
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from alerts import ned_catalog as nc
-from alerts import ned_reader as nr
+from alerts import catalog_readers as nr
+from alerts import catalog_store as nc
 from alerts.providers import NED_COLUMNS, build_nedcat, match_nedcat
 
 HP6_NSIDE = 2 ** nc.HP6_ORDER

@@ -8,8 +8,8 @@ Mirrors test_ned_match.py for the second NED product:
   - End-to-end over the fake chip (conftest FakeDB) with an injected
     fake_ned_reader over an LVS table: the three lvsMatches states, the
     Avro round trip, and the join to nedMatches by prefName.
-  - LvsReader (alerts/ned_reader.py), the production reader over the
-    parquet that alerts.ned_catalog ingest-lvs writes, against a synthetic
+  - LvsReader (alerts/catalog_readers.py), the production reader over the
+    parquet that alerts.catalog_store ingest-lvs writes, against a synthetic
     table in tmp_path: cone reads, "" -> None, one load per process, and
     the missing-table refusal.
 
@@ -27,8 +27,8 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from alerts import ned_catalog as nc
-from alerts import ned_reader as nr
+from alerts import catalog_readers as nr
+from alerts import catalog_store as nc
 from alerts.produce import assemble_alert, load_schema, serialize_alert
 from alerts.providers import (LVS_BOOL_COLUMNS, LVS_COLUMNS, LVS_MATCH_NMAX,
                               LVS_MATCH_RADIUS_ARCSEC, LVS_NUMERIC_COLUMNS,
@@ -242,11 +242,11 @@ def test_e2e_batch_flow_matches_all_sources(make_provider, chip_lvs_table):
 
 
 # ---------------------------------------------------------------------------
-# LvsReader (alerts/ned_reader.py) over a synthetic lvs/nedlvs.parquet
+# LvsReader (alerts/catalog_readers.py) over a synthetic lvs/nedlvs.parquet
 # ---------------------------------------------------------------------------
 
 def write_lvs_store(root, entries, release="LVS_TEST"):
-    """Write the parquet + info that alerts.ned_catalog ingest-lvs would,
+    """Write the parquet + info that alerts.catalog_store ingest-lvs would,
     from make_lvs_table entries (plus the `_hp6` column the reader uses)."""
     table = make_lvs_table(entries)
     hp6 = hp.ang2pix(2 ** nc.HP6_ORDER, table["ra"], table["dec"], nest=True, lonlat=True)
