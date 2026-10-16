@@ -117,6 +117,16 @@ Date              Software modification
                   * VPO upgrades to resubmit failed AWS Batch jobs due to infrastructure errors.
                   * VPO upgrade to execute the RAPID pipeline in an open loop automatically.
                   * Reference-image infobits, as defined by the ZTF project, are now being computed and set by the RAPID pipeline.
+10/15/2026        * New ``[SEXTRACTOR_DIFFIMAGE_SFFT]`` and ``[SEXTRACTOR_DIFFIMAGE_NAIVE]`` sections override ``[SEXTRACTOR_DIFFIMAGE]`` for the SFFT and naive difference-image SExtractor catalogs:
+                    7x7 Gaussian filter with FWHM 2.0 pixels, ``DETECT_MINAREA = 2``, ``DETECT_THRESH = ANALYSIS_THRESH = 2.5`` (ZOGY unchanged; SFFT section not applied with ``--crossconv``) (PR #247).
+                  * Reference-image background now subtracted with the same ``bkgest`` command as the science image (``[BKGEST] subtract_from_reference = True``),
+                    instead of by SWarp (``[SWARP] swarp_SUBTRACT_BACK = N`` for the reference image) (PR #256).
+                  * SExtractor ``SEEING_FWHM`` changed from 1.2 to 0.25 arcsec (science-image, reference-image, difference-image and gain-matching catalogs), and ``DEBLEND_NTHRESH`` from 4 to 32 (science-image, reference-image and gain-matching catalogs);
+                    ``[GAINMATCH] min_class_star_thresh`` changed from 0.5 to 0.0 (the ``CLASS_STAR`` cut had left gain matching on its MAGZP-based fallback) (PR #257).
+                  * PhotUtils-style columns in the SExtractor difference-image catalogs now use a 5x5 PSF-fit box (``[EXTRA_CATALOG_COLS] photutils_cols_fit_shape``), instead of 17x17 (PR #258).
+                  * ``sumrat``, ``nneg`` and ``nbad`` now measured after subtracting a local background (``[EXTRA_CATALOG_COLS] pixel_cols_bkg_box = 64``, ``pixel_cols_bkg_filter_size = 3``) (PR #258).
+                  * XSources database prefilter adds an SNR cut, ``FLUX_APER_1 / FLUXERR_APER_1 > 5.0`` (``[DATABASE_PREFILTER] snr_prefilter_threshold``),
+                    and the XSources loader rejects sources within 2 pixels of the image edge (PR #258).
 ===============   ===============================================================================================================================================================================================================================
 
 
