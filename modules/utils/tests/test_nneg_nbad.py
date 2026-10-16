@@ -138,3 +138,39 @@ def test_compute_extra_cols_photutils(tmp_path):
     lines = catalog.read_text().splitlines()
     assert lines[0].split()[-2:] == ["nbad", "nneg"]
     assert lines[1].split()[-2:] == ["2", "3"]
+
+
+#-------------------------------------------------------------------
+# pixel_cols_bkg_box: the pixel columns measured after a local background is subtracted.
+
+def test_background_subtraction_removes_pedestal_and_keeps_nans(tmp_path):
+    rng = np.random.default_rng(5)
+    data = rng.normal(-3.0, 1.0, (256, 256))               # pedestal of -3
+    data[100:104, 50:54] = np.nan
+    image = write_fits(tmp_path / "diff.fits", data)
+    out = str(tmp_path / "bkgsub.fits")
+
+    median_bkg = rda.write_background_subtracted_diff_image(image, out, box_size=64)
+
+    sub = fits.getdata(out)
+    assert median_bkg == pytest.approx(-3.0, abs=0.1)
+    assert abs(np.nanmedian(sub)) < 0.1
+    assert np.array_equal(np.isnan(sub), np.isnan(data))
+
+
+@pytest.mark.parametrize("bkg_box", ["None", "64"])
+def test_pixel_cols_bkg_box(tmp_path, bkg_box):
+    yy, xx = np.mgrid[0:256, 0:256]
+    data = -3.0 + 8.0 * np.exp(-((xx - 128.0) ** 2 + (yy - 128.0) ** 2) / (2 * 1.5 ** 2))
+    image = write_fits(tmp_path / "diff.fits", data)
+
+    extra_cols_dict = {"extra_cols": "sumrat, nneg", "pixel_cols_bkg_box": bkg_box}
+    sumrat_dict = {"stamp_size": "5", "filter_size": "3", "lower_median": "False",
+                   "fill_value": "-999.0", "col_format": ".6f"}
+    cols, _ = util._compute_extra_catalog_cols(image, [128.0], [128.0], 0, extra_cols_dict, sumrat_dict)
+
+    if bkg_box == "None":
+        assert cols["sumrat"][0] < 0.9 and cols["nneg"][0] > 0     # the pedestal pulls the stamp down
+    else:
+        assert cols["sumrat"][0] == pytest.approx(1.0, abs=1e-6) and cols["nneg"][0] == 0
+    assert not (tmp_path / "diff_pixcols_bkgsub.fits").exists()

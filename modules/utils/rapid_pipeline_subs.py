@@ -3136,6 +3136,24 @@ sxtractor_photutils_catalog_names = {"flags": "flags_fit"}
 
 
 #-------------------------------------------------------------------
+# Parse a PSFPhotometry fit_shape from its config-file string, "(ny, nx)" or "n" (a square box).
+# Sizes are in pixels.
+
+def parse_fit_shape(fit_shape_str):
+
+    values = [int(v) for v in fit_shape_str.replace("(","").replace(")","").replace(" ","").split(",")]
+
+    if len(values) == 1:
+        values = values * 2
+
+    if len(values) != 2:
+        raise ValueError(f"Method parse_fit_shape: cannot parse fit_shape = {fit_shape_str}; expected "
+                         "a number or a pair (ny, nx)")
+
+    return tuple(values)
+
+
+#-------------------------------------------------------------------
 # Parse the PSFPhotometry xy_bounds parameter from its config-file string: "None" (free positions),
 # a single number (the same bound along x and y), or a pair "(bx, by)", either of which may be
 # None (no bound along that axis).  Bounds are in pixels.
@@ -3238,6 +3256,39 @@ def _compute_extra_catalog_cols(diff_image_filename,
     rb_cols = None
     rb_skipped = False
 
+
+    # The pixel-based columns (sumrat, nneg, nbad) are measured on a background-subtracted copy of
+    # the difference image when pixel_cols_bkg_box is set (see
+    # rda.write_background_subtracted_diff_image); the other columns always use the image itself.
+    # Configs written before pixel_cols_bkg_box existed measure on the image itself.
+
+    pixel_image_filename = diff_image_filename
+    pixel_image_tmp = None
+
+    bkg_box_str = extra_cols_dict.get("pixel_cols_bkg_box","None").strip()
+
+    if bkg_box_str.lower() not in ("", "none", "0") and \
+            any(c in ("sumrat","nneg","nbad") for c in col_names):
+
+        pixel_image_tmp = os.path.splitext(diff_image_filename)[0] + "_pixcols_bkgsub.fits"
+
+        try:
+            median_bkg = rda.write_background_subtracted_diff_image(
+                diff_image_filename,
+                pixel_image_tmp,
+                box_size = int(bkg_box_str),
+                filter_size = int(extra_cols_dict.get("pixel_cols_bkg_filter_size","3")))
+
+        except Exception as e:
+            print(f"*** Warning: _compute_extra_catalog_cols: background subtraction for the pixel "
+                  f"columns failed ({e}); measuring them on {diff_image_filename} itself")
+            pixel_image_tmp = None
+
+        else:
+            pixel_image_filename = pixel_image_tmp
+            print(f"_compute_extra_catalog_cols: pixel columns measured after subtracting a "
+                  f"{bkg_box_str}-px background (median {median_bkg:.4f}) from {diff_image_filename}")
+
     for col_name in col_names:
 
         if col_name in rb_catalog_col_names:
@@ -3316,7 +3367,7 @@ def _compute_extra_catalog_cols(diff_image_filename,
         elif col_name == "sumrat":
 
             extra_cols[col_name] = rda.compute_sumrat_for_diff_image(
-                diff_image_filename,
+                pixel_image_filename,
                 xy_positions,
                 coord_base = coord_base,
                 stamp_size = int(sumrat_dict["stamp_size"]),
@@ -3334,7 +3385,7 @@ def _compute_extra_catalog_cols(diff_image_filename,
 
             if nneg_nbad is None:
                 nneg_nbad = dict(zip(("nneg","nbad"), rda.compute_nneg_nbad_for_diff_image(
-                    diff_image_filename,
+                    pixel_image_filename,
                     xy_positions,
                     coord_base = coord_base,
                     stamp_size = int(extra_cols_dict.get("nneg_nbad_stamp_size","5")),
@@ -3346,6 +3397,9 @@ def _compute_extra_catalog_cols(diff_image_filename,
         else:
             raise ValueError(f"Method _compute_extra_catalog_cols: unknown extra catalog column "
                              f"{col_name}")
+
+    if pixel_image_tmp is not None and os.path.exists(pixel_image_tmp):
+        os.remove(pixel_image_tmp)
 
     return extra_cols,extra_cols_format
 
@@ -3558,7 +3612,8 @@ def compute_extra_cols_sxtractor(diff_image_filename,
     psfcat_dict : dict-like of str or None, optional
         [PSFCAT_DIFFIMAGE] section of the config file, whose fwhm, fit_shape, and aperture_radius
         are used, so that the PhotUtils-style columns are computed as in the RAPID PhotUtils
-        catalogs.
+        catalogs.  photutils_cols_fit_shape in extra_cols_dict, if given and not None, replaces
+        its fit_shape for these columns only.
     sci_image_filename, ref_image_filename : str or None, optional
         FITS files containing the background-subtracted science image and the resampled,
         gain-matched reference image, on the pixel grid of the difference image.  The rb columns
@@ -3618,8 +3673,17 @@ def compute_extra_cols_sxtractor(diff_image_filename,
 
     elif photutils_col_names:
 
-        fit_shape = tuple(int(v) for v in
-                          psfcat_dict["fit_shape"].replace("(","").replace(")","").replace(" ","").split(","))
+        # The PSF-fit box: photutils_cols_fit_shape if set, otherwise the fit_shape of the RAPID
+        # PhotUtils catalogs ([PSFCAT_DIFFIMAGE]), which configs written before it existed get.
+
+        fit_shape_str = extra_cols_dict.get("photutils_cols_fit_shape","None").strip()
+
+        if fit_shape_str.lower() in ("", "none"):
+            fit_shape_str = psfcat_dict["fit_shape"]
+
+        fit_shape = parse_fit_shape(fit_shape_str)
+
+        print(f"compute_extra_cols_sxtractor: PhotUtils-style columns with fit_shape = {fit_shape}")
 
 
         # Configs written before photutils_cols_snap_radius and photutils_cols_xy_bounds existed
@@ -3942,7 +4006,10 @@ def prefilter_database_records(nrows,
                                sumrat,
                                rb,
                                sumrat_prefilter_threshold,
-                               rb_prefilter_threshold):
+                               rb_prefilter_threshold,
+                               *,
+                               snr = None,
+                               snr_prefilter_threshold = None):
 
     """
     Select the catalog records to be loaded into the Sources or XSources database child tables:
@@ -3963,6 +4030,10 @@ def prefilter_database_records(nrows,
         sumrat cut.
     rb_prefilter_threshold : float or None
         A record is rejected when its rb is less than or equal to this value.  None: no rb cut.
+    snr : numpy.ndarray of float or None, optional
+        Signal-to-noise ratio of each record, NaN where missing, or None for no SNR cut.
+    snr_prefilter_threshold : float or None, optional
+        A record is rejected when its snr is less than or equal to this value.  None: no SNR cut.
 
     Returns
     -------
@@ -3985,7 +4056,23 @@ def prefilter_database_records(nrows,
         if rb is not None and rb_prefilter_threshold is not None:
             keep &= ~(np.isfinite(rb) & (rb <= rb_prefilter_threshold))
 
+        if snr is not None and snr_prefilter_threshold is not None:
+            keep &= ~(np.isfinite(snr) & (snr <= snr_prefilter_threshold))
+
     return keep
+
+
+def get_snr_prefilter_threshold(config_input):
+
+    """
+    [DATABASE_PREFILTER] snr_prefilter_threshold as a float, or None (no SNR cut) if the section
+    or the key is missing or the key is None.
+    """
+
+    value = config_input.get("DATABASE_PREFILTER","snr_prefilter_threshold",fallback="None") \
+        if config_input.has_section("DATABASE_PREFILTER") else "None"
+
+    return None if value.strip().lower() in ("", "none") else float(value)
 
 
 def get_database_prefilter_params(config_input):
