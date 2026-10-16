@@ -287,8 +287,9 @@ code 0 (``echo $?``) before starting the next, since an exit code of 64 or highe
 Alert production (stage 18) only reads what the previous stages wrote, so it can be rerun on
 its own.
 
-The loading stages (10 and 11) prefilter the records they load, by ``sumrat`` and the real/bogus
-score (``[DATABASE_PREFILTER]`` of the configuration file).  The loading stages also accept
+The loading stages (10 and 11) prefilter the records they load, by ``sumrat``, the real/bogus
+score and, for XSources, the aperture SNR (``[DATABASE_PREFILTER]`` of the configuration file;
+see :ref:`database prefilter <db-prefilter>`).  The loading stages also accept
 ``SKIPLOADING`` and ``DONTCHECKDONEFILE``, and alert production ``ALERTSMAXCHIPS`` and
 ``DONOTUPLOADPRODUCTS``, for testing; leave them unset for a normal run.
 

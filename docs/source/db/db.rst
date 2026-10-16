@@ -363,3 +363,61 @@ in order to aid in prefiltering records that are loaded into the database (and f
 +--------------------+-----------------------------------------------------------------------------------+
 | CFIT               | PSF-fit residual in central pixel divided by fit flux (null = not computed)       |
 +--------------------+-----------------------------------------------------------------------------------+
+
+
+.. _db-prefilter:
+
+Prefiltering Records Loaded Into Sources and XSources
+******************************************************
+
+Not every difference-image catalog record is loaded into the database.  When stage 10
+(``pipeline/loadPSFCatIntoDBSourcesTable.py``) loads the PhotUtils PSF-fit catalogs into the
+Sources child tables, and stage 11 (``pipeline/loadSECatIntoDBSourcesTable.py``) loads the
+SExtractor catalogs into the XSources child tables, each record must pass a prefilter, which is
+applied to the catalogs of both the positive and the negative difference images.  Rejected
+records are not loaded into any database table, so they are not cross-matched and do not appear
+in the lightcurves; they remain in the catalog files in S3.
+
+The cuts are set in the ``[DATABASE_PREFILTER]`` section of
+``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``, and are applied by
+``prefilter_database_records`` in ``modules/utils/rapid_pipeline_subs.py``:
+
++--------------------------------+---------+-------------+--------------------------------------------------------------+
+| Parameter                      | Value   | Applies to  | A record is loaded only if                                   |
++================================+=========+=============+==============================================================+
+| ``sumrat_prefilter_threshold`` | 0.4     | Both        | ``sumrat`` (``SUMRAT``) > 0.4                                |
++--------------------------------+---------+-------------+--------------------------------------------------------------+
+| ``rb_prefilter_threshold``     | 0.0     | Both        | real-bogus score ``rb_score`` (``RB_SCORE``) > 0.0           |
++--------------------------------+---------+-------------+--------------------------------------------------------------+
+| ``snr_prefilter_threshold``    | 5.0     | XSources    | ``FLUX_APER_1 / FLUXERR_APER_1`` > 5.0                       |
++--------------------------------+---------+-------------+--------------------------------------------------------------+
+
+The rules are:
+
+* A record must pass every cut to be loaded.  The comparisons are strict, so a record whose
+  value equals its threshold is rejected.
+* A cut applies only where its value was computed.  A record is not rejected for a value that
+  is missing: the catalog column is absent (e.g., the real-bogus classifier was not run), or
+  the value is the catalog fill value (-999.0), NaN or infinite.  For example, ``sumrat`` is
+  missing when the 5x5 stamp does not fit within the image.
+* The SNR cut uses the 3-pixel-diameter SExtractor aperture (``FLUX_APER_1``, the second
+  aperture of ``sextractor_PHOT_APERTURES``) and applies to XSources only.  Set
+  ``snr_prefilter_threshold = None``, or omit it, for no SNR cut.
+* If the ``[DATABASE_PREFILTER]`` section is missing, the loading scripts print a warning and
+  load every record (apart from the position cuts below).  If the section is present,
+  ``sumrat_prefilter_threshold`` and ``rb_prefilter_threshold`` must both be given.
+* The ``rb`` cut is a loose one, independent of the threshold that sets the real-bogus label
+  (0.5134 for the current model): with ``rb_prefilter_threshold = 0.0``, it rejects only
+  records scored exactly 0.0.  Records labeled bogus (``rblabel = 0``) can therefore be loaded.
+
+Before the prefilter, each loading script also rejects records by position:
+
+* Sources: a PSF-fit position (``x_fit``, ``y_fit``, zero-based) outside
+  [-0.5, ``naxis`` - 0.5], or NaN.
+* XSources: a position (``XWIN_IMAGE``, ``YWIN_IMAGE``, one-based) outside
+  [0.5, ``naxis`` + 0.5], or NaN, or whose nearest pixel is within 2 pixels of the image edge.
+  There the 5x5 ``sumrat`` stamp does not fit, so the prefilter could not cut them, and the
+  outermost rows and columns of the difference images are noisy.
+
+For each catalog, the loading scripts log the thresholds used and the number of records
+rejected (``prefilter rejected <n> of <m> sources`` or ``... xsources``).
