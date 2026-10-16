@@ -343,6 +343,14 @@ swarp_dict["swarp_NOPENFILES_MAX"] = config_input['SWARP']['swarp_NOPENFILES_MAX
 sextractor_diffimage_dict = config_input['SEXTRACTOR_DIFFIMAGE']
 sextractor_sciimage_dict = config_input['SEXTRACTOR_SCIIMAGE']
 
+# Optional overrides of [SEXTRACTOR_DIFFIMAGE] for the SFFT difference-image passes.
+sextractor_diffimage_sfft_dict = config_input['SEXTRACTOR_DIFFIMAGE_SFFT'] \
+    if config_input.has_section('SEXTRACTOR_DIFFIMAGE_SFFT') else None
+
+# Optional overrides of [SEXTRACTOR_DIFFIMAGE] for the naive difference-image passes.
+sextractor_diffimage_naive_dict = config_input['SEXTRACTOR_DIFFIMAGE_NAIVE'] \
+    if config_input.has_section('SEXTRACTOR_DIFFIMAGE_NAIVE') else None
+
 sextractor_refimage_dict = {}
 for key in config_input['SEXTRACTOR_REFIMAGE'].keys():
     #print('Input SEXTRACTOR_REFIMAGE: key, value =',key,config_input['SEXTRACTOR_REFIMAGE'][key])
@@ -942,6 +950,10 @@ if __name__ == '__main__':
     job_config['AWAICGEN'] = awaicgen_dict
     job_config['SWARP'] = swarp_dict
     job_config['SEXTRACTOR_DIFFIMAGE'] = sextractor_diffimage_dict
+    if sextractor_diffimage_sfft_dict is not None:
+        job_config['SEXTRACTOR_DIFFIMAGE_SFFT'] = sextractor_diffimage_sfft_dict
+    if sextractor_diffimage_naive_dict is not None:
+        job_config['SEXTRACTOR_DIFFIMAGE_NAIVE'] = sextractor_diffimage_naive_dict
     job_config['SEXTRACTOR_SCIIMAGE'] = sextractor_sciimage_dict
 
     job_config['SEXTRACTOR_REFIMAGE'] = {}
