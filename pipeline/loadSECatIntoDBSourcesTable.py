@@ -34,6 +34,12 @@ nside9 = 2**level9
 # are rejected (in pixel units, for x against naxis1 and y against naxis2).
 # Remember, SExtractor pixels are one-based.
 
+# Sources whose nearest pixel is within edge_margin pixels of the image edge are rejected too:
+# the 5x5 sumrat stamp does not fit there, so their sumrat is missing and the prefilter cannot
+# cut them, and the outermost row and column of the difference images are much noisier than
+# the rest (robust sigma ~3.5x on the socsims), which makes spurious detections along them.
+edge_margin = 2                 # Pixels
+
 tol = 0.0001                    # Fractional pixels
 xy_fit_min = 0.5 - tol
 xy_fit_max_offset = 0.5 + tol
@@ -410,10 +416,18 @@ def write_secat_qtable_to_csv_file(isdiffpos,
     keep = ((XWIN_IMAGE_arr >= xy_fit_min) & (XWIN_IMAGE_arr <= naxis1 + xy_fit_max_offset) &
             (YWIN_IMAGE_arr >= xy_fit_min) & (YWIN_IMAGE_arr <= naxis2 + xy_fit_max_offset))
 
+    with np.errstate(invalid="ignore"):
+        xnear = np.floor(XWIN_IMAGE_arr + 0.5)
+        ynear = np.floor(YWIN_IMAGE_arr + 0.5)
+
+    keep &= ((xnear >= 1 + edge_margin) & (xnear <= naxis1 - edge_margin) &
+             (ynear >= 1 + edge_margin) & (ynear <= naxis2 - edge_margin))
+
     nkeep = int(np.count_nonzero(keep))
 
     print(f"write_secat_qtable_to_csv_file: isdiffpos={isdiffpos}, "
-          f"rejected {nrows - nkeep} of {nrows} xsources with out-of-range xfit,yfit")
+          f"rejected {nrows - nkeep} of {nrows} xsources with out-of-range xfit,yfit or within "
+          f"{edge_margin} pixels of the image edge")
 
     if nkeep == 0:
         return
