@@ -47,7 +47,7 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 
 
-swname = "parallelRegisterCompletedJobInDBAfterPostProc.py"
+swname = "parallelRegisterCompletedJobsInDBAfterPostProc.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 

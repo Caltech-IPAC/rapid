@@ -24,7 +24,7 @@ level9 = 9
 nside9 = 2**level9
 
 
-swname = "registerCompletedJobInDB.py"
+swname = "registerCompletedJobsInDB.py"
 swvers = "1.1"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
