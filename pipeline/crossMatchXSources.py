@@ -24,7 +24,7 @@ import database.modules.utils.roman_tessellation_db as sqlite
 
 
 swname = "crossMatchXSources.py"
-swvers = "1.1"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -67,6 +67,21 @@ if proc_date is None:
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
+
+
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates.  Only the Jobs records of this processing request
+# (Jobs.reqid) are processed, so that other processing requests for the same
+# processing date are left alone.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+print("proc_req =",proc_req)
 
 
 # Observation range of the processing request: only xsources from exposures with L2Files
@@ -1025,7 +1040,8 @@ if __name__ == '__main__':
     xsource_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
                                                                    table_prefix="xsources",
-                                                                   expids=expids_in_range)
+                                                                   expids=expids_in_range,
+                                                                   reqid=proc_req)
 
 
     # Code-timing benchmark.

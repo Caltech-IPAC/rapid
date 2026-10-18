@@ -157,15 +157,16 @@ def read_alert_settings(config_input):
 # Database lookup of the chips to alert on.
 #-------------------------------------------------------------------------------------------------------------
 
-def lookup_chips_for_processing_date(dbh, proc_date, ppid):
+def lookup_chips_for_processing_date(dbh, proc_date, ppid, reqid=None):
 
     '''
     Return one dictionary per chip to alert on (jid, rid, pid, expid, sca, field, fid),
-    for the normal science-pipeline jobs that ended on the processing date.  Jobs without
+    for the normal science-pipeline jobs that ended on the processing date (and, if reqid is
+    given, that belong to that processing request).  Jobs without
     a best difference image are skipped with a warning.  Raises RuntimeError on a database error.
     '''
 
-    jids = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+    jids = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date, reqid)
 
     if dbh.exit_code >= 64:
         raise RuntimeError(f"*** Error getting Jobs records for proc_date={proc_date} "
@@ -594,7 +595,7 @@ def main():
     # Look up the chips (best difference images of normal science-pipeline jobs) for the processing date.
 
     try:
-        chips = lookup_chips_for_processing_date(dbh, proc_date, settings['ppid'])
+        chips = lookup_chips_for_processing_date(dbh, proc_date, settings['ppid'], settings['proc_req'])
     except RuntimeError as e:
         print(e)
         dbh.close()

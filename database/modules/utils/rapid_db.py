@@ -2797,11 +2797,24 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self,proc_date):
+    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self,proc_date,reqid=None):
 
         '''
         Query database for science-pipeline Jobs records that both
         ended on the given processing date and ran normally.
+
+        Parameters
+        ----------
+        proc_date : str
+            Processing date, e.g., "20261018".
+        reqid : int or str, optional
+            If given, only Jobs records of this processing request (Jobs.reqid) are returned.
+            None (the default) returns those of all processing requests.
+
+        Returns
+        -------
+        records : list of int
+            Job IDs (None on a database error, with self.exit_code = 67).
         '''
 
         self.exit_code = 0
@@ -2814,7 +2827,12 @@ class RAPIDDB:
                 "and ended >= cast('" + proc_date + "' as timestamp) " +\
                 "and ended < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
                 "and status > 0 " +\
-                "and exitcode <= 32;"
+                "and exitcode <= 32"
+
+        if reqid is not None:
+            query += " and reqid = " + str(int(reqid))
+
+        query += ";"
 
 
         # Query database.
@@ -2850,12 +2868,27 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_unclosedout_jobs_for_processing_date(self,ppid,proc_date):
+    def get_unclosedout_jobs_for_processing_date(self,ppid,proc_date,reqid=None):
 
         '''
         Query database for Jobs records that were launched on the given processing date,
         but not yet closed out by finalizing started, ended, elapsed, exitcode and status.
-        .
+
+        Parameters
+        ----------
+        ppid : int
+            Pipeline ID.
+        proc_date : str
+            Processing date, e.g., "20261018".
+        reqid : int or str, optional
+            If given, only Jobs records of this processing request (Jobs.reqid) are returned.
+            None (the default) returns those of all processing requests.
+
+        Returns
+        -------
+        records : list of tuple
+            (jid, awsbatchjobid) of each record (None on a database error, with
+            self.exit_code = 67).
         '''
 
         self.exit_code = 0
@@ -2869,7 +2902,12 @@ class RAPIDDB:
                 "and launched < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
                 "and status = 0 " +\
                 "and ended is null " +\
-                "and exitcode is null;"
+                "and exitcode is null"
+
+        if reqid is not None:
+            query += " and reqid = " + str(int(reqid))
+
+        query += ";"
 
 
         # Query database.

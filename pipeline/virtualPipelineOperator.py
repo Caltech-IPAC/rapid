@@ -308,7 +308,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh,reqid
 
     # Query database for Jobs records that are unclosed out on the given processing date.
 
-    jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date)
+    jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date,reqid)
 
     if dbh.exit_code >= 64:
         finalize_procreqs_and_exit(dbh,reqid,-1,dbh.exit_code)
@@ -592,7 +592,7 @@ def resubmit_failed_aws_batch_jobs(job_type,proc_date,config_input,dbh,reqid,n_r
 
         # Look up the failed jobs among the Jobs records not yet closed out.
 
-        jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date)
+        jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date,reqid)
 
         if dbh.exit_code >= 64:
             finalize_procreqs_and_exit(dbh,reqid,-1,dbh.exit_code)

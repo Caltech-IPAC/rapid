@@ -20,7 +20,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "pruneNotBestXMerges.py"
-swvers = "1.0"
+swvers = "1.1"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -63,6 +63,21 @@ if proc_date is None:
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
+
+
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates.  Only the Jobs records of this processing request
+# (Jobs.reqid) are processed, so that other processing requests for the same
+# processing date are left alone.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+print("proc_req =",proc_req)
 
 
 # Other required environment variables.
@@ -441,7 +456,8 @@ if __name__ == '__main__':
 
     xsource_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
-                                                                   table_prefix="xsources")
+                                                                   table_prefix="xsources",
+                                                                   reqid=proc_req)
 
     xsources_child_tables = []
     for table_to_crossmatch_tuple in xsource_tables_to_crossmatch_tuples_list:

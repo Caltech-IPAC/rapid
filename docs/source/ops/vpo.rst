@@ -395,6 +395,12 @@ of those codes file their S3 objects under
 so two processing requests for the same processing date do not overwrite each other's
 files.  See :doc:`../prod/products` for the product layout.
 
+The launch stages record the ``reqid`` in the ``reqid`` column of each ``Jobs`` record they
+create or relaunch.  The later stages (the waits, the registrations, and stages 7 and 10 to 18)
+select only the ``Jobs`` records of the processing date with that ``reqid``, so a processing
+request does not register, post-process, load, cross-match or alert on the jobs of another
+request for the same processing date.
+
 The record is closed out when the run ends, with ``status`` set to:
 
 * ``1`` -- the request finished normally.

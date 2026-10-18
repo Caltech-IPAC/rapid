@@ -915,7 +915,7 @@ if __name__ == '__main__':
         # Query database for Jobs records that were launched on the given processing date,
         # but not yet closed out by finalizing started, ended, elapsed, exitcode and status.
 
-        jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg)
+        jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg,proc_req)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)

@@ -775,7 +775,7 @@ if __name__ == '__main__':
     # that need to be loaded (some or all of such tables may need to be created).
 
     sources_tables_to_load_tuples_list,_,jid_list,meta_list = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,reqid=proc_req)
 
     if len(sources_tables_to_load_tuples_list) == 0:
         print(f"*** Error: No Sources child tables to be loaded;  quitting...")
