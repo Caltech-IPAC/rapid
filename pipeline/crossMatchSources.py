@@ -12,7 +12,7 @@ import database.modules.utils.roman_tessellation_db as sqlite
 
 
 swname = "crossMatchSources.py"
-swvers = "1.2"
+swvers = "1.3"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -1040,17 +1040,20 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Assume astroobjects_<field> and merges_<field> database tables are created in tandem,
-    # so we only need to test for the existence of the former table.
+    # Check the existence of the astroobjects_<field> and merges_<field> database tables
+    # separately: pruneNotBestMerges.py drops an empty merges_<field> table and leaves
+    # astroobjects_<field> in place, so either may be missing.
 
     already_made_dict = {}
 
     for field in fields_list:
 
         tablename1 = f"astroobjects_{field}"
+        tablename2 = f"merges_{field}"
 
         sql_queries = []
-        sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
+        sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL, " +
+                           f"to_regclass('public.{tablename2}') IS NOT NULL;")
 
         try:
             records = dbh.execute_sql_queries(sql_queries,debug)
@@ -1065,9 +1068,7 @@ if __name__ == '__main__':
             dbh.close()
             exit(dbh.exit_code)
 
-        table_exists_flag = records[0][0]
-
-        already_made_dict[field] = table_exists_flag
+        already_made_dict[field] = (records[0][0],records[0][1])
 
 
     # Create astroobjects and merges database tables for all fields associated with processing date.
@@ -1080,9 +1081,9 @@ if __name__ == '__main__':
 
     for field in fields_list:
 
-        table_exists_flag = already_made_dict[field]
+        table1_exists_flag,table2_exists_flag = already_made_dict[field]
 
-        if table_exists_flag:
+        if table1_exists_flag and table2_exists_flag:
             print(f"AstroObjects_<field> and Merges_<field> database tables have " +
                   f"already been made for field={field}; continuing...")
             continue
@@ -1091,10 +1092,13 @@ if __name__ == '__main__':
 
         tablename2 = f"merges_{field}"
 
-        sql_queries.append(f"CREATE TABLE {tablename1} (LIKE astroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-        sql_queries.append(f"ALTER TABLE {tablename1} OWNER TO rapidporole;")
-        sql_queries.append(f"CREATE TABLE {tablename2} (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-        sql_queries.append(f"ALTER TABLE {tablename2} OWNER TO rapidporole;")
+        if not table1_exists_flag:
+            sql_queries.append(f"CREATE TABLE {tablename1} (LIKE astroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+            sql_queries.append(f"ALTER TABLE {tablename1} OWNER TO rapidporole;")
+
+        if not table2_exists_flag:
+            sql_queries.append(f"CREATE TABLE {tablename2} (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+            sql_queries.append(f"ALTER TABLE {tablename2} OWNER TO rapidporole;")
 
     try:
         records = dbh.execute_sql_queries(sql_queries,debug)
@@ -1119,31 +1123,34 @@ if __name__ == '__main__':
 
     for field in fields_list:
 
-        table_exists_flag = already_made_dict[field]
+        table1_exists_flag,table2_exists_flag = already_made_dict[field]
 
         tablename1 = f"astroobjects_{field}"
         tablename2 = f"merges_{field}"
 
-        if not table_exists_flag:        # The following is done once, when the tables are created.
+        # The following is done once, when a table is created.
 
+        if not table1_exists_flag:
             sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
             sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
-            sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
-            sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
             sql_queries.append(f"GRANT SELECT ON TABLE {tablename1} TO GROUP rapidreadrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidreadrole;")
-            sql_queries.append(f"GRANT SELECT ON TABLE {tablename2} TO GROUP rapidreadrole;")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidadminrole;")
             sql_queries.append(f"GRANT ALL ON TABLE {tablename1} TO GROUP rapidadminrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidadminrole;")
-            sql_queries.append(f"GRANT ALL ON TABLE {tablename2} TO GROUP rapidadminrole;")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidporole;")
             sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename1} TO rapidporole;")
+
+        if not table2_exists_flag:
+            sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
+            sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidreadrole;")
+            sql_queries.append(f"GRANT SELECT ON TABLE {tablename2} TO GROUP rapidreadrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidadminrole;")
+            sql_queries.append(f"GRANT ALL ON TABLE {tablename2} TO GROUP rapidadminrole;")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidporole;")
             sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename2} TO rapidporole;")
 
-        else:
+        if table1_exists_flag and table2_exists_flag:
             print(f"AstroObjects_<field> and Merges_<field> database tables have " +
                   f"already been indexed for field={field}; continuing...")
 

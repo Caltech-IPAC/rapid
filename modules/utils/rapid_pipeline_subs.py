@@ -3180,6 +3180,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
         meta_dict = {}
 
         meta_dict["jid"] = jid
+        meta_dict["rid"] = rid
         meta_dict["expid"] = expid
         meta_dict["sca"] = sca
         meta_dict["fid"] = fid
