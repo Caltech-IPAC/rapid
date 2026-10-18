@@ -268,7 +268,14 @@ Stages 10 to 18: database post-processing and alerts
 =======================================================
 
 These take no command-line arguments; they work on the processing date ``JOBPROCDATE`` (and the
-processing request ``PROCREQ``, where they read S3 products).
+processing request ``PROCREQ``, where they read S3 products).  The cross-matching stages (12
+and 13) also require ``STARTDATETIME`` and ``ENDDATETIME``, with the same values as in stage 4:
+they cross-match only the sources of exposures with ``dateobs >= STARTDATETIME`` and
+``dateobs < ENDDATETIME`` in ``L2Files``.  The Sources and XSources child tables hold a whole
+observation date, so they can also hold the sources of other processing requests, which must not
+be cross-matched again.  The cross-matching stages quit with exit code 64 if either variable is
+unset, cannot be parsed as a datetime, or if ``STARTDATETIME`` is not before ``ENDDATETIME``, and
+exit with code 0 without cross-matching anything if no exposure is in the range.
 
 .. code-block::
 
