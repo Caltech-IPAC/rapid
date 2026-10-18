@@ -823,7 +823,8 @@ if __name__ == '__main__':
 
     xsources_tables_to_load_tuples_list,_,jid_list,meta_list = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
-                                                                   table_prefix="xsources")
+                                                                   table_prefix="xsources",
+                                                                   reqid=proc_req)
 
     if len(xsources_tables_to_load_tuples_list) == 0:
         print(f"*** Error: No XSources child tables to be loaded;  quitting...")

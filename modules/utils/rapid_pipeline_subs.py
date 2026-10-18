@@ -2921,7 +2921,7 @@ def get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime):
 # sources in those tables.
 ########################################
 
-def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources",expids=None):
+def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources",expids=None,reqid=None):
 
 
     '''
@@ -2936,6 +2936,10 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     expids, if given, is a list of exposure IDs: only the fields of records with those
     exposure IDs are returned (used by the cross-matching scripts to limit the fields to the
     observation range).  None (the default) returns the fields of all records in the tables.
+
+    reqid, if given, takes the jobs of that processing request (Jobs.reqid), whatever day
+    they ended; None (the default) takes the jobs of all processing requests that ended on
+    the processing date.
     '''
 
 
@@ -2945,7 +2949,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     # Returns a list of job IDs.
 
     try:
-        recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+        recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date,reqid)
     except Exception as e:
         print(f"*** Error: Exception raised in dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date " +
               f"(proc_date={proc_date},e={e});  quitting...")

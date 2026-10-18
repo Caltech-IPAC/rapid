@@ -127,9 +127,11 @@ Inside the container, set the environment that all stages use:
 ``JOBPROCDATE`` is the *processing date*, under which the ``Jobs`` records and the S3 products
 are filed; it is distinct from the observation dates of the data, and stages 3, 6 and 9 also
 take it as their command-line argument.  ``PROCREQ`` is the ``reqid`` of the processing request:
-every stage files its S3 objects under ``<processing date>/req<reqid>/``, and the stages that
-need it quit with exit code 64 if it is not set.  Use the same value in all stages, otherwise a
-registration stage will not find the files its launch stage wrote.
+every stage files its S3 objects under ``<processing date>/req<reqid>/``.  The launch stages
+record it in ``Jobs.reqid``, and the later stages select only the ``Jobs`` records with that
+``reqid`` (whatever day they ran), so that they leave other processing requests on the same
+processing date alone.  The stages quit with exit code 64 if it is not set.  Use the same value
+in all stages, otherwise a later stage will not find the jobs and files of its launch stage.
 
 The VPO creates a ``ProcReqs`` record for each request; run by hand, create one yourself, so that
 the ``reqid`` comes from the same sequence and no other request (in particular, none the VPO
@@ -267,8 +269,8 @@ Stage 9: register post-processing pipelines
 Stages 10 to 18: database post-processing and alerts
 =======================================================
 
-These take no command-line arguments; they work on the processing date ``JOBPROCDATE`` (and the
-processing request ``PROCREQ``, where they read S3 products).  The cross-matching stages (12
+These take no command-line arguments; they work on the jobs of the processing date
+``JOBPROCDATE`` and the processing request ``PROCREQ``.  The cross-matching stages (12
 and 13) also require ``STARTDATETIME`` and ``ENDDATETIME``, with the same values as in stage 4:
 they cross-match only the sources of exposures with ``dateobs >= STARTDATETIME`` and
 ``dateobs < ENDDATETIME`` in ``L2Files``.  The Sources and XSources child tables hold a whole

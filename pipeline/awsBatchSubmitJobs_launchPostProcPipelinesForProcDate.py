@@ -4,16 +4,16 @@ It is assumed that many instances of the RAPID science pipeline for a
 given processing date have already been run, AND the metadata from these jobs
 have already been registered in the Jobs table of the operations database.
 
-Input the processing date for this script, and it will query the
-Jobs database table for all of those jobs that ran normally,
+Set JOBPROCDATE to the processing date and PROCREQ to the reqid of the
+processing request, and it will query the Jobs database table for all
+of the science-pipeline jobs of that processing request that ran normally,
 using a database query like the following:
 
-select * from jobs
+select jid from jobs
 where ppid = 15
-and ended >= '2025-03-26'
-and ended <= started + '1 day'
 and status > 0
-and exitcode <= 32;
+and exitcode <= 32
+and reqid = 123;
 """
 
 import os
@@ -28,7 +28,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py"
-swvers = "1.0"
+swvers = "1.1"
 
 print("swname =", swname)
 print("swvers =", swvers)
@@ -63,6 +63,21 @@ if proc_date is None:
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
+
+
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates.  Only the Jobs records of this processing request
+# (Jobs.reqid) are processed, so that other processing requests for the same
+# processing date are left alone.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+print("proc_req =",proc_req)
 
 
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
@@ -133,7 +148,7 @@ if __name__ == '__main__':
     # Query database for all normal RAPID science-pipeline Jobs records
     # that are associated with the given processing date.
 
-    recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+    recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date,proc_req)
 
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
