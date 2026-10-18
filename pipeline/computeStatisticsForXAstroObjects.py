@@ -23,7 +23,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "computeStatisticsForXAstroObjects.py"
-swvers = "1.1"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -117,6 +117,8 @@ job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base'
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 
 # Get number of cores for parallel processing.
@@ -356,50 +358,27 @@ def run_single_core_job(fields,index_thread):
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # For the current field, query the L2Files table for all records that contain
-        # the current field in the L2Files.overlapfields column (meaning that any
-        # returned science image overlaps the current field), in order to get
-        # <obs_date> and <sca> for generation of a finite list of XSources child
-        # database table to join (and avoid joining with the XSources parent table).
+        # For the current field, look up the XSources child tables that can hold its xsources:
+        # those of the best science images whose source footprint includes the field
+        # (util.lookup_child_tables_for_field), in order to get a finite list of XSources
+        # child database tables to join (and avoid joining with the XSources parent table).
+        # L2Files.overlapfields alone is not used, because it is computed with the image
+        # shrunk by 25 pixels and so can miss an image whose edge xsources fall in the field.
 
         fh.write(f"field = {field}\n")
 
-        query = f"SELECT cast(dateobs as date),sca " +\
-                f"FROM l2files " +\
-                f"WHERE vbest > 0 " +\
-                f"AND status > 0 " +\
-                f"AND overlapfields @> ARRAY[cast({field} as integer)];"
-
-        sql_queries = [query]
-
         try:
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            xsources_child_tables_to_check_existence = \
+                util.lookup_child_tables_for_field(dbh,field,naxis1_sciimage,naxis2_sciimage,
+                                                   table_prefix="xsources",debug=thread_debug)
         except Exception as e:
-            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                     f"(query={query},e={e});  quitting...\n")
+            fh.write(f"*** Error: Exception raised in util.lookup_child_tables_for_field " +
+                     f"(field={field},e={e});  quitting...\n")
             fh.flush()
             fh.close()
             dbh.close()
             raise
 
-        if dbh.exit_code >= 64:
-            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
-            fh.flush()
-            fh.close()
-            dbh.close()
-            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
-
-        xsources_child_tables_to_check_existence_dict = {}
-
-        for record in records:
-
-            obs_date = str(record[0]).replace("-","")
-            sca = str(record[1])
-
-            xsources_tablename = f"xsources_{obs_date}_{sca}"
-            xsources_child_tables_to_check_existence_dict[xsources_tablename] = 1
-
-        xsources_child_tables_to_check_existence = list(xsources_child_tables_to_check_existence_dict.keys())
 
         fh.write(f"xsources_child_tables_to_check_existence = {xsources_child_tables_to_check_existence}\n")
 
@@ -741,7 +720,8 @@ if __name__ == '__main__':
     xsource_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
                                                                    table_prefix="xsources",
-                                                                   reqid=proc_req)
+                                                                   reqid=proc_req,
+                                                                   naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
     xsources_child_tables = []
     for table_to_crossmatch_tuple in xsource_tables_to_crossmatch_tuples_list:

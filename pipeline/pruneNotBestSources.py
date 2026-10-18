@@ -95,6 +95,8 @@ naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 
 # Number of parallel worker processes.
@@ -321,7 +323,8 @@ if __name__ == '__main__':
     # that were cross-matched.
 
     source_tables_to_crossmatch_tuples_list,_,_,_ = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
+                                                                    naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
     sources_child_tables = []
     for table_to_crossmatch_tuple in source_tables_to_crossmatch_tuples_list:

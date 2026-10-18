@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 from scipy.ndimage import zoom
 
 import modules.utils.rapid_data_analysis as rda
+import database.modules.utils.roman_tessellation as tess
 
 plot_flag = False
 
@@ -2916,12 +2917,158 @@ def get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime):
 
 
 ########################################
+# Sky tiles (fields) that the sources of a science image can be assigned to.
+########################################
+
+# Pixels by which the image rectangle is grown before its overlapping sky tiles are computed:
+# the loaders keep sources out to the image edge (positions 0.5 pixel beyond the outermost
+# pixel centres), and SIP distortion, which overlapping_fields ignores, can bow an edge by a
+# few pixels.  L2Files.overlapfields is computed with the image SHRUNK by 25 pixels
+# (DEFAULT_MIN_OVERLAP_PIXELS), so it can miss a field that sources near the edge fall in.
+
+SOURCE_FOOTPRINT_INSET_PIXELS = -5.0
+
+
+def source_footprint_fields(crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,naxis1,naxis2,field=None):
+
+    """
+    Return the sky tiles (fields) that a source in the given science image can be assigned to:
+    every tile overlapped by the image, grown by 5 pixels on each side.
+
+    Parameters
+    ----------
+    crval1, crval2 : float
+        WCS reference sky position (degrees), as in the L2Files table.
+    crpix1, crpix2 : float
+        WCS reference pixel (one-based), as in the L2Files table.
+    cd11, cd12, cd21, cd22 : float
+        WCS CD matrix (degrees per pixel), as in the L2Files table.
+    naxis1, naxis2 : int
+        Image size (pixels).
+    field : int, optional
+        Field of the image center, which is always included.
+
+    Returns
+    -------
+    fields : list of int
+        Ascending, distinct field numbers (Roman tessellation rtids).
+    """
+
+    # Imported here because overlapping_fields imports this module.
+
+    from database.modules.utils.overlapping_fields import overlapping_fields
+
+    return overlapping_fields(crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
+                              naxis1,naxis2,field=field,
+                              min_overlap_pixels=SOURCE_FOOTPRINT_INSET_PIXELS)
+
+
+def _wcs_pointing_key(wcs):
+
+    """
+    Return a hashable key for an image pointing, for caching source_footprint_fields.
+
+    Parameters
+    ----------
+    wcs : sequence of float
+        crval1, crval2, crpix1, crpix2, cd11, cd12, cd21, cd22.
+
+    Returns
+    -------
+    key : tuple of float
+        The values rounded to 1e-6 degree (crval), 1e-3 pixel (crpix) and 1e-12 degree per
+        pixel (CD matrix), far below the 5-pixel margin of source_footprint_fields.
+    """
+
+    return tuple(round(float(v),6) for v in wcs[0:2]) + tuple(round(float(v),3) for v in wcs[2:4]) + \
+           tuple(round(float(v),12) for v in wcs[4:8])
+
+
+def lookup_child_tables_for_field(dbh,field,naxis1,naxis2,table_prefix="sources",debug=0):
+
+    """
+    Return the names of the <table_prefix>_<obs_date>_<sca> child tables that can hold sources
+    of the given field: those of the best science images whose source footprint
+    (source_footprint_fields) includes the field.
+
+    Parameters
+    ----------
+    dbh : database.modules.utils.rapid_db.RAPIDDB
+        Open database connection.
+    field : int
+        Field number (Roman tessellation rtid).
+    naxis1, naxis2 : int
+        Science-image size (pixels).
+    table_prefix : str, optional
+        "sources" (default) or "xsources".
+    debug : int, optional
+        Passed to dbh.execute_sql_queries.
+
+    Returns
+    -------
+    tablenames : list of str
+        Candidate child-table names, which need not all exist.  Raises RuntimeError on a
+        database error.
+
+    Notes
+    -----
+    The candidates are the L2Files records whose overlapfields column holds the field or one
+    of its neighbors (GIN index).  overlapfields is computed with the image shrunk by 25 pixels,
+    so it can miss a field that the image only overlaps near its edge, but such an image
+    always overlaps one of the field's neighbors by more than that.  A record whose
+    overlapfields holds the field itself is kept as is; the others are kept only if their
+    source footprint, computed once per distinct pointing, includes the field.
+    """
+
+    field = int(field)
+    tiles = [field] + [int(rtid) for rtid in tess.neighbors_of(field)]
+    tiles_str = ",".join(str(tile) for tile in tiles)
+
+    query = f"SELECT cast(dateobs as date),sca,overlapfields @> ARRAY[{field}]," +\
+            f"crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,field " +\
+            f"FROM l2files " +\
+            f"WHERE vbest > 0 " +\
+            f"AND status > 0 " +\
+            f"AND overlapfields && ARRAY[{tiles_str}]::integer[];"
+
+    records = dbh.execute_sql_queries([query],debug)
+
+    if dbh.exit_code >= 64 or records is None:
+        raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+    tablenames = {}
+    footprint_has_field = {}            # Keyed by pointing, rounded to 1e-6 degree.
+
+    for record in records:
+
+        obs_date = str(record[0]).replace("-","")
+        tablename = f"{table_prefix}_{obs_date}_{record[1]}"
+
+        if tablename in tablenames:
+            continue
+
+        if not record[2]:
+            wcs = tuple(float(v) for v in record[3:11])
+            key = _wcs_pointing_key(wcs)
+            if key not in footprint_has_field:
+                footprint_has_field[key] = field in source_footprint_fields(*wcs,naxis1,naxis2,
+                                                                             field=record[11])
+            if not footprint_has_field[key]:
+                continue
+
+        tablenames[tablename] = 1
+
+    return list(tablenames.keys())
+
+
+########################################
 # Look up for the given processing date the Sources child table names
 # to cross-match and a distinct list of the fields covered by the
 # sources in those tables.
 ########################################
 
-def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources",expids=None,reqid=None):
+def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources",expids=None,reqid=None,
+                                                             *,naxis1,naxis2):
 
 
     '''
@@ -2933,9 +3080,15 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     and L2-file metadata that yields the (obs_date,sca) pairs is the same either way; only the
     child-table existence check and the distinct-field query depend on the prefix.
 
-    expids, if given, is a list of exposure IDs: only the fields of records with those
-    exposure IDs are returned (used by the cross-matching scripts to limit the fields to the
-    observation range).  None (the default) returns the fields of all records in the tables.
+    The fields are those that the sources of the jobs' science images can be assigned to:
+    the union of source_footprint_fields of each job's L2 file (naxis1 x naxis2 pixels) whose
+    child table exists.  They are computed from the L2Files WCS rather than by querying the
+    child tables, which is much faster, and can include a field none of whose sources has
+    flags = 0 (or that holds no source at all).
+
+    expids, if given, is a list of exposure IDs: only the fields of the jobs of those
+    exposures are returned (used by the cross-matching scripts to limit the fields to the
+    observation range).  None (the default) returns the fields of all the jobs.
 
     reqid, if given, takes the jobs of that processing request (Jobs.reqid), whatever day
     they ended; None (the default) takes the jobs of all processing requests that ended on
@@ -3036,6 +3189,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
         meta_dict["mjdobs"] = mjdobs
         meta_dict["dateobs"] = dateobs
         meta_dict["pid"] = pid
+        meta_dict["wcs"] = (crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22)
 
 
         # Append to lists.
@@ -3092,47 +3246,37 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     print(f"source_tables_to_create_list = {source_tables_to_create_list}")
 
 
-    # Find all distinct fields covered by the Sources child tables,
-    # only for records with flags=0.
+    # Find all fields that the sources of the jobs' science images can be assigned to,
+    # from the footprints of their L2 files, for the jobs whose child table exists
+    # (and, if expids is given, whose exposure is one of them).
+
+    expids_set = None if expids is None else set(int(expid) for expid in expids)
 
     fields_dict = {}
+    footprints = {}                     # Keyed by pointing (see _wcs_pointing_key).
 
-    for table_to_crossmatch_tuple in source_tables_to_crossmatch_list:
+    for jid,meta_dict in zip(jid_list,meta_list):
 
-        obs_date = table_to_crossmatch_tuple[0]
-        sca = table_to_crossmatch_tuple[1]
-        table_crossmatch_key = (obs_date,sca)
+        obs_date = str(meta_dict["dateobs"]).split()[0].replace("-","")
+        table_crossmatch_key = (obs_date,meta_dict["sca"])
 
-        if table_crossmatch_obs_date_sca_dict[table_crossmatch_key] == 1:
+        if table_crossmatch_obs_date_sca_dict[table_crossmatch_key] != 1:
+            continue
 
-            sources_tablename = f"{table_prefix}_{obs_date}_{sca}"
+        if expids_set is not None and int(meta_dict["expid"]) not in expids_set:
+            continue
 
-            sql_queries = []
-            if expids is None:
-                sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
-            elif len(expids) == 0:
-                continue
-            else:
-                expids_str = ",".join(str(int(expid)) for expid in expids)
-                sql_queries.append(f"select distinct field from {sources_tablename} " +
-                                   f"WHERE flags = 0 AND expid IN ({expids_str});")
+        key = _wcs_pointing_key(meta_dict["wcs"])
 
-            try:
-                records = dbh.execute_sql_queries(sql_queries,debug)
-            except Exception as e:
-                print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                      f"(e={e});  quitting...")
-                dbh.close()
-                exit(64)
+        if key not in footprints:
+            crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22 = meta_dict["wcs"]
+            footprints[key] = source_footprint_fields(crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
+                                                      naxis1,naxis2)
 
-            if dbh.exit_code >= 64:
-                print("*** Error from {}; quitting ".format(swname))
-                dbh.close()
-                exit(dbh.exit_code)
+        fields_dict[meta_dict["field"]] = 1
 
-            for record in records:
-                field = record[0]
-                fields_dict[field] = 1
+        for field in footprints[key]:
+            fields_dict[field] = 1
 
 
     fields_list = list(fields_dict.keys())

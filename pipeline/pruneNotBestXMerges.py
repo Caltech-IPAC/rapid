@@ -117,6 +117,8 @@ naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 
 # Open database connections for parallel access.
@@ -457,7 +459,8 @@ if __name__ == '__main__':
     xsource_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
                                                                    table_prefix="xsources",
-                                                                   reqid=proc_req)
+                                                                   reqid=proc_req,
+                                                                   naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
     xsources_child_tables = []
     for table_to_crossmatch_tuple in xsource_tables_to_crossmatch_tuples_list:

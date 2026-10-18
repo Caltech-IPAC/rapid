@@ -54,6 +54,16 @@ The L2Files database table has the ``overlapfields`` int[] column for a storing 
 Roman SCA image, with its unique orientation on the sky, for fields that it overlaps.  The algorithm that computes
 the overlapping fields omits fields with less than 25 pixels of overlap.
 
+Because of that 25-pixel threshold, ``overlapfields`` is not used on its own to find the fields
+of an image's sources: a source loaded from within 25 pixels of the image edge can lie in a
+field the column omits (about 8% of SCA images have such a sliver, a few hundred to a few
+thousand pixels in area).  The database post-processing stages instead compute the fields with
+``util.source_footprint_fields`` in ``modules/utils/rapid_pipeline_subs.py``, from the
+``L2Files`` WCS with the image grown by 5 pixels, and the lightcurve-statistics stages find a
+field's Sources and XSources child tables with ``util.lookup_child_tables_for_field``: the
+images whose ``overlapfields`` holds the field or one of its neighbors, kept if their source
+footprint includes the field.
+
 
 Record Versioning
 ************************************
