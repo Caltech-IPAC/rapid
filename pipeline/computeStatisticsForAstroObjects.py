@@ -12,7 +12,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "computeStatisticsForAstroObjects.py"
-swvers = "1.1"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -109,6 +109,8 @@ output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfca
 output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_finder_filename'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 
 # Get number of cores for parallel processing.
@@ -348,50 +350,27 @@ def run_single_core_job(fields,index_thread):
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # For the current field, query the L2Files table for all records that contain
-        # the current field in the L2Files.overlapfields column (meaning that any
-        # returned science image overlaps the current field), in order to get
-        # <obs_date> and <sca> for generation of a finite list of Sources child
-        # database table to join (and avoid joining with the Sources parent table).
+        # For the current field, look up the Sources child tables that can hold its sources:
+        # those of the best science images whose source footprint includes the field
+        # (util.lookup_child_tables_for_field), in order to get a finite list of Sources
+        # child database tables to join (and avoid joining with the Sources parent table).
+        # L2Files.overlapfields alone is not used, because it is computed with the image
+        # shrunk by 25 pixels and so can miss an image whose edge sources fall in the field.
 
         fh.write(f"field = {field}\n")
 
-        query = f"SELECT cast(dateobs as date),sca " +\
-                f"FROM l2files " +\
-                f"WHERE vbest > 0 " +\
-                f"AND status > 0 " +\
-                f"AND overlapfields @> ARRAY[cast({field} as integer)];"
-
-        sql_queries = [query]
-
         try:
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            sources_child_tables_to_check_existence = \
+                util.lookup_child_tables_for_field(dbh,field,naxis1_sciimage,naxis2_sciimage,
+                                                   table_prefix="sources",debug=thread_debug)
         except Exception as e:
-            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                     f"(query={query},e={e});  quitting...\n")
+            fh.write(f"*** Error: Exception raised in util.lookup_child_tables_for_field " +
+                     f"(field={field},e={e});  quitting...\n")
             fh.flush()
             fh.close()
             dbh.close()
             raise
 
-        if dbh.exit_code >= 64:
-            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
-            fh.flush()
-            fh.close()
-            dbh.close()
-            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
-
-        sources_child_tables_to_check_existence_dict = {}
-
-        for record in records:
-
-            obs_date = str(record[0]).replace("-","")
-            sca = str(record[1])
-
-            sources_tablename = f"sources_{obs_date}_{sca}"
-            sources_child_tables_to_check_existence_dict[sources_tablename] = 1
-
-        sources_child_tables_to_check_existence = list(sources_child_tables_to_check_existence_dict.keys())
 
         fh.write(f"sources_child_tables_to_check_existence = {sources_child_tables_to_check_existence}\n")
 
@@ -731,7 +710,8 @@ if __name__ == '__main__':
     # that were cross-matched and a distinct list of the fields covered by the sources.
 
     source_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,reqid=proc_req)
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,reqid=proc_req,
+                                                                    naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
     sources_child_tables = []
     for table_to_crossmatch_tuple in source_tables_to_crossmatch_tuples_list:

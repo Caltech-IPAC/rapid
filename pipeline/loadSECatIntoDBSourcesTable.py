@@ -183,6 +183,8 @@ naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage']) + 1
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage']) + 1
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 
 # Prefilter thresholds for the records loaded into the xsources tables, and the fill values of
@@ -824,7 +826,8 @@ if __name__ == '__main__':
     xsources_tables_to_load_tuples_list,_,jid_list,meta_list = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
                                                                    table_prefix="xsources",
-                                                                   reqid=proc_req)
+                                                                   reqid=proc_req,
+                                                                   naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
     if len(xsources_tables_to_load_tuples_list) == 0:
         print(f"*** Error: No XSources child tables to be loaded;  quitting...")

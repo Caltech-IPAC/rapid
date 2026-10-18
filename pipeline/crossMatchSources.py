@@ -141,6 +141,8 @@ job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base'
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
@@ -1026,7 +1028,8 @@ if __name__ == '__main__':
     # to cross-match and a distinct list of the fields covered by the sources.
 
     source_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,expids=expids_in_range,reqid=proc_req)
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,expids=expids_in_range,reqid=proc_req,
+                                                                    naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
 
     # Code-timing benchmark.
