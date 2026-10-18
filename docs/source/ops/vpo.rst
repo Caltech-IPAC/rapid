@@ -296,10 +296,12 @@ log file in the working directory named after the stage, the processing date and
        tables, after the :ref:`database prefilter <db-prefilter>`.
    * - 12
      - ``crossMatchSources.py``
-     - Cross-matches Sources, building ``AstroObjects_<field>`` and ``Merges_<field>``.
+     - Cross-matches the Sources of the exposures in the observation range (``STARTDATETIME``
+       to ``ENDDATETIME``), building ``AstroObjects_<field>`` and ``Merges_<field>``.
    * - 13
      - ``crossMatchXSources.py``
-     - Cross-matches XSources, building ``XAstroObjects_<field>`` and ``XMerges_<field>``.
+     - Cross-matches the XSources of the exposures in the observation range, building
+       ``XAstroObjects_<field>`` and ``XMerges_<field>``.
    * - 14
      - ``computeStatisticsForAstroObjects.py``
      - Computes lightcurve statistics into ``AstroObjectsMeta_<field>``.

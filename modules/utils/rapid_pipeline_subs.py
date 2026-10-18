@@ -2855,12 +2855,73 @@ def index_to_radec(idx):
 
 
 ########################################
+# Look up the exposure IDs of the L2 files observed in the observation range
+# [startdatetime, enddatetime), the same range the science pipelines were launched for.
+########################################
+
+def get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime):
+
+    """
+    Return the exposure IDs of the L2Files records with dateobs >= startdatetime and
+    dateobs < enddatetime, the same selection the science-pipeline launch script makes.
+
+    Parameters
+    ----------
+    dbh : database.modules.utils.rapid_db.RAPIDDB
+        Open database connection.
+    startdatetime : str
+        Observation start datetime (UT), e.g., "2027-10-01 07:12:00" (inclusive).
+    enddatetime : str
+        Observation end datetime (UT), e.g., "2027-10-02 00:00:00" (exclusive).
+
+    Returns
+    -------
+    expids : list of int
+        Distinct exposure IDs in ascending order (empty if none).  Exits with code 64 if a
+        datetime cannot be parsed or is not before the other, or on a database error.
+    """
+
+    try:
+        start_dt = datetime.fromisoformat(str(startdatetime).strip())
+        end_dt = datetime.fromisoformat(str(enddatetime).strip())
+    except ValueError as e:
+        print(f"*** Error: STARTDATETIME,ENDDATETIME = {startdatetime},{enddatetime} " +
+              f"cannot be parsed as datetimes ({e}); quitting...")
+        dbh.close()
+        exit(64)
+
+    if start_dt >= end_dt:
+        print(f"*** Error: STARTDATETIME ({startdatetime}) is not before ENDDATETIME ({enddatetime}); quitting...")
+        dbh.close()
+        exit(64)
+
+    query = f"SELECT DISTINCT expid FROM l2files " +\
+            f"WHERE dateobs >= '{start_dt.isoformat(sep=' ')}' " +\
+            f"AND dateobs < '{end_dt.isoformat(sep=' ')}' ORDER BY expid;"
+
+    try:
+        records = dbh.execute_sql_queries([query],0)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+              f"(query={query},e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+        dbh.close()
+        exit(dbh.exit_code)
+
+    return [int(record[0]) for record in records]
+
+
+########################################
 # Look up for the given processing date the Sources child table names
 # to cross-match and a distinct list of the fields covered by the
 # sources in those tables.
 ########################################
 
-def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources"):
+def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources",expids=None):
 
 
     '''
@@ -2871,6 +2932,10 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     the original behavior of this method) and "xsources" for the SExtractor catalogs.  The job
     and L2-file metadata that yields the (obs_date,sca) pairs is the same either way; only the
     child-table existence check and the distinct-field query depend on the prefix.
+
+    expids, if given, is a list of exposure IDs: only the fields of records with those
+    exposure IDs are returned (used by the cross-matching scripts to limit the fields to the
+    observation range).  None (the default) returns the fields of all records in the tables.
     '''
 
 
@@ -3039,7 +3104,14 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
             sources_tablename = f"{table_prefix}_{obs_date}_{sca}"
 
             sql_queries = []
-            sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
+            if expids is None:
+                sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
+            elif len(expids) == 0:
+                continue
+            else:
+                expids_str = ",".join(str(int(expid)) for expid in expids)
+                sql_queries.append(f"select distinct field from {sources_tablename} " +
+                                   f"WHERE flags = 0 AND expid IN ({expids_str});")
 
             try:
                 records = dbh.execute_sql_queries(sql_queries,debug)
