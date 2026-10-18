@@ -10,7 +10,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "pruneNotBestMerges.py"
-swvers = "1.1"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -127,6 +127,24 @@ else:
 print("num_cores =",num_cores)
 
 
+# PRUNEFULLSCAN=True finds the not-best Sources by scanning the processing request's Sources child
+# tables in full, which also finds those of difference images set to vbest = 0 by hand or by
+# another processing request.  By default (unset or False), only the difference images of the
+# request's own rids are considered (see collect_notbest_sids), which is much faster.
+
+full_scan_str = os.getenv('PRUNEFULLSCAN')
+
+if full_scan_str is None or full_scan_str == "False":
+    full_scan = False
+elif full_scan_str == "True":
+    full_scan = True
+else:
+    print(f"*** Error: Env. var. PRUNEFULLSCAN must be True or False (PRUNEFULLSCAN={full_scan_str}); quitting...")
+    exit(64)
+
+print("full_scan =",full_scan)
+
+
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
@@ -158,11 +176,110 @@ def execute_or_raise(dbh,sql_queries,thread_debug,fh,context):
     return records
 
 
-def run_single_core_job(fields,sources_child_tables,index_thread):
+def collect_notbest_sids(dbh,sources_child_tables,rids,full_scan):
 
     '''
-    Remove records from Merges_<field> database tables associated with sources that are no longer best
-    (vbest=0 in associated Diffimages table).
+    Return the sids of the Sources records that are no longer best (vbest = 0 in the associated
+    DiffImages record), from the given Sources child tables.
+
+    Parameters
+    ----------
+    dbh : database.modules.utils.rapid_db.RAPIDDB
+        Open database connection.
+    sources_child_tables : list of str
+        Names of the existing sources_<obs_date>_<sca> child tables of the processing request.
+    rids : list of int
+        L2Files rids of the processing request's science-pipeline jobs.
+    full_scan : bool
+        False (the default mode): only the DiffImages records of the request's rids are
+        considered.  A DiffImages record is set to vbest = 0 by the updateDiffImage stored
+        function when a newer version for the same rid is registered, which happens when this
+        processing request reprocesses the rid, so these are the records this request has made
+        not best.  Their sids are read through the pid index of the child tables that hold them.
+        True: every Sources record in the child tables whose DiffImages record has vbest = 0 is
+        found, whichever processing request (or manual change) set vbest = 0.  This scans the
+        child tables in full.
+
+    Returns
+    -------
+    sids : list of int
+        Distinct not-best sids, in ascending order (empty if none).  Raises RuntimeError on a
+        database error.
+    '''
+
+    thread_debug = 0
+
+    sids = set()
+
+    if full_scan:
+
+        for sources_tablename in sources_child_tables:
+
+            query = f"SELECT a.sid FROM {sources_tablename} AS a " +\
+                    f"JOIN diffimages AS b ON a.pid = b.pid " +\
+                    f"WHERE b.vbest = 0;"
+
+            records = execute_or_raise(dbh,[query],thread_debug,None,
+                                       f"full scan of {sources_tablename} for not-best sids")
+
+            sids.update(int(record[0]) for record in records)
+
+        return sorted(sids)
+
+    if len(rids) == 0:
+        return []
+
+
+    # Not-best difference images of the request's rids, and the child table that holds the
+    # Sources of each (sources_<obs_date>_<sca>, from the L2Files record).
+
+    rids_str = ",".join(str(int(rid)) for rid in sorted(set(rids)))
+
+    query = f"SELECT d.pid,cast(l.dateobs as date),l.sca " +\
+            f"FROM diffimages AS d " +\
+            f"JOIN l2files AS l ON d.rid = l.rid " +\
+            f"WHERE d.ppid = {ppid} " +\
+            f"AND d.vbest = 0 " +\
+            f"AND d.rid IN ({rids_str});"
+
+    records = execute_or_raise(dbh,[query],thread_debug,None,"lookup of not-best difference images")
+
+    print(f"Number of not-best difference images of the processing request's rids = {len(records)}")
+
+    pids_by_table = {}
+
+    for record in records:
+        pid = int(record[0])
+        obs_date = str(record[1]).replace("-","")
+        sources_tablename = f"sources_{obs_date}_{record[2]}"
+        pids_by_table.setdefault(sources_tablename,[]).append(pid)
+
+    existing_tables = set(sources_child_tables)
+
+    for sources_tablename,pids in pids_by_table.items():
+
+        if sources_tablename not in existing_tables:
+            print(f"{sources_tablename} database table is not a child table of this request; skipping...")
+            continue
+
+        pids_str = ",".join(str(pid) for pid in sorted(set(pids)))
+
+        query = f"SELECT sid FROM {sources_tablename} WHERE pid IN ({pids_str});"
+
+        records = execute_or_raise(dbh,[query],thread_debug,None,
+                                   f"lookup of not-best sids in {sources_tablename}")
+
+        sids.update(int(record[0]) for record in records)
+
+    return sorted(sids)
+
+
+def run_single_core_job(fields,notbest_sids,index_thread):
+
+    '''
+    Remove records from Merges_<field> database tables associated with Sources that are no longer best
+    (vbest=0 in associated Diffimages table).  Returns a dictionary of the number of records deleted
+    from each Merges_<field> table (absent tables are left out).
     '''
 
 
@@ -188,6 +305,17 @@ def run_single_core_job(fields,sources_child_tables,index_thread):
         print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
         exit(64)
 
+    ndeleted_by_field = {}
+
+    my_fields = list(range(index_thread, nfields, num_cores))
+
+    if len(my_fields) == 0:
+
+        fh.write(f"No fields assigned to index_thread={index_thread}; nothing to do.\n")
+        fh.close()
+
+        return ndeleted_by_field
+
 
     # Open database connection.
 
@@ -203,104 +331,69 @@ def run_single_core_job(fields,sources_child_tables,index_thread):
 
 
     # Prune not-best merges for all fields associated with this thread:
-    # 1. Collect, once per thread, the sids of all sources that are no longer best
-    #    (vbest=0 in the associated DiffImages record) into a temporary table.
-    # 2. Delete from each Merges_<field> table the records having those sids.
-    #
-    # The set of not-best sids does not depend on field, so it is computed once instead
-    # of being re-derived inside the per-field DELETE, which would rescan every Sources
-    # child table and rejoin DiffImages nfields times.
+    # 1. Load the not-best sids, which the main process collected once, into a temporary table.
+    # 2. Delete from each Merges_<field> table the records having those sids, through its
+    #    sid index.
 
-    my_fields = list(range(index_thread, nfields, num_cores))
+    sids_str = ",".join(str(sid) for sid in notbest_sids)
 
-    if len(my_fields) == 0:
+    sql_queries = [
+        "CREATE TEMP TABLE notbest_sids (sid bigint PRIMARY KEY);",
+        f"INSERT INTO notbest_sids (sid) SELECT unnest(ARRAY[{sids_str}]::bigint[]);",
+        "ANALYZE notbest_sids;",
+    ]
 
-        fh.write(f"No fields assigned to index_thread={index_thread}; nothing to do.\n")
+    execute_or_raise(dbh,sql_queries,thread_debug,fh,"building notbest_sids temporary table")
 
-    else:
+    fh.write(f"Loaded {len(notbest_sids)} not-best sids into temporary table notbest_sids.\n")
+    fh.flush()
 
-        union_parts = []
-        for sources_tablename in sources_child_tables:
-            union_parts.append(
-                f"SELECT a.sid FROM {sources_tablename} AS a "
-                f"JOIN diffimages AS b ON a.pid = b.pid "
-                f"WHERE b.vbest = 0"
-            )
+    for index_field in my_fields:
+
+        field = fields[index_field]
+
+        fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
+
+        merges_tablename = f"merges_{field}"
 
 
-        # UNION, not UNION ALL, so that a sid occurring in more than one Sources child
-        # table does not violate the primary key of the temporary table.
+        # An empty Merges_<field> table is dropped by the vacuum phase of this script,
+        # so it may be absent.
 
-        sql_queries = [
-            "CREATE TEMP TABLE notbest_sids (sid bigint PRIMARY KEY);",
-            "INSERT INTO notbest_sids (sid) " + " UNION ".join(union_parts) + ";",
-            "ANALYZE notbest_sids;",
-        ]
+        sql_queries = [f"SELECT to_regclass('public.{merges_tablename}') IS NOT NULL;"]
+        records = execute_or_raise(dbh,sql_queries,thread_debug,fh,
+                                   f"existence check for {merges_tablename}")
 
-        fh.write(f"Collecting not-best sids from {len(sources_child_tables)} Sources child table(s)...\n")
-        fh.flush()
+        if not records or not records[0][0]:
 
-        execute_or_raise(dbh,sql_queries,thread_debug,fh,"building notbest_sids temporary table")
+            fh.write(f"{merges_tablename} database table does not exist; skipping...\n")
+            fh.flush()
+
+            continue
+
+        query = f"WITH deleted AS (DELETE FROM {merges_tablename} AS m USING notbest_sids AS n " +\
+                f"WHERE m.sid = n.sid RETURNING 1) SELECT count(*) FROM deleted;"
+
+        records = execute_or_raise(dbh,[query],thread_debug,fh,
+                                   f"delete of not-best records from {merges_tablename}")
+
+        ndeleted = int(records[0][0])
+        ndeleted_by_field[field] = ndeleted
 
 
         # Code-timing benchmark.
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to build notbest_sids temporary table = {diff_time_benchmark}\n")
+        fh.write(f"Deleted {ndeleted} not-best record(s) from {merges_tablename} database table " +
+                 f"in {diff_time_benchmark} seconds\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
-        for index_field in my_fields:
-
-            field = fields[index_field]
-
-            fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
-
-            merges_tablename = f"merges_{field}"
+        fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
+        fh.flush()
 
 
-            # An empty Merges_<field> table is dropped by the vacuum phase of this script,
-            # so it may be absent when this script is rerun for the same processing date.
-
-            sql_queries = [f"SELECT to_regclass('public.{merges_tablename}') IS NOT NULL;"]
-            records = execute_or_raise(dbh,sql_queries,thread_debug,fh,
-                                       f"existence check for {merges_tablename}")
-
-            if not records or not records[0][0]:
-
-                fh.write(f"{merges_tablename} database table does not exist; skipping...\n")
-                fh.flush()
-
-                continue
-
-            query = f"DELETE FROM {merges_tablename} WHERE sid IN (SELECT sid FROM notbest_sids);"
-
-            fh.write(f"Deleting not-best records in {merges_tablename} database table...\n")
-            fh.flush()
-
-            execute_or_raise(dbh,[query],thread_debug,fh,
-                             f"delete of not-best records from {merges_tablename}")
-
-
-            # Code-timing benchmark.
-
-            thread_end_time_benchmark = time.time()
-            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-            fh.write(f"Elapsed time in seconds to delete not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\n")
-            thread_start_time_benchmark = thread_end_time_benchmark
-
-
-            # End of loop over fields.
-
-            fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
-
-
-            # Flush write buffer.
-
-            fh.flush()
-
-
-    # Close database connection.
+    # Close database connection (which drops the temporary table).
 
     dbh.close()
 
@@ -315,29 +408,34 @@ def run_single_core_job(fields,sources_child_tables,index_thread):
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
-
-    return message
+    return ndeleted_by_field
 
 
-def execute_parallel_processes(fields_list,sources_child_tables,num_cores):
+def execute_parallel_processes(fields_list,notbest_sids,num_cores):
+
+    '''
+    Run run_single_core_job in num_cores processes, and return the combined dictionary of
+    the number of records deleted from each Merges_<field> table.
+    '''
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,fields_list,sources_child_tables,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,fields_list,notbest_sids,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    ndeleted_by_field = {}
     failures = []
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            ndeleted_by_field.update(future.result())
+            print(f"Finish normally for index_thread = {index}")
         except Exception as e:
             failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
@@ -346,11 +444,14 @@ def execute_parallel_processes(fields_list,sources_child_tables,num_cores):
         print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
         exit(64)
 
+    return ndeleted_by_field
 
-def run_single_core_vacuum_job(fields,index_thread):
+
+def run_single_core_vacuum_job(fields,ndeleted_by_field,index_thread):
 
     '''
-    Vacuum/analyze or drop empty merges_<field> database tables.
+    Drop empty Merges_<field> database tables, and vacuum/analyze those from which records were
+    deleted.
     '''
 
     thread_debug = 0
@@ -386,9 +487,11 @@ def run_single_core_vacuum_job(fields,index_thread):
             print(f"Dropping {tablename} database table...")
             execute_or_raise(dbh,[f"DROP TABLE {tablename};"],thread_debug,None,
                              f"drop of {tablename}")
-        else:
+        elif ndeleted_by_field.get(field,0) > 0:
             print(f"Vacuuming and analyzing {tablename} database table...")
             dbh.vacuum_analyze_table(tablename)
+        else:
+            print(f"No records deleted from {tablename} database table; not vacuuming...")
 
     dbh.close()
 
@@ -400,12 +503,12 @@ def run_single_core_vacuum_job(fields,index_thread):
     return message
 
 
-def execute_parallel_vacuum_processes(fields_list,num_cores):
+def execute_parallel_vacuum_processes(fields_list,ndeleted_by_field,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
-        futures = [executor.submit(run_single_core_vacuum_job,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_vacuum_job,fields_list,ndeleted_by_field,thread_index) for thread_index in range(num_cores)]
 
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)
@@ -433,8 +536,8 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to delete all not-best Merges_<field> database records
-    for fields that are associated with the given processing date.
+    Delete all not-best Merges_<field> database records for the fields of the given
+    processing request.
     '''
 
 
@@ -446,10 +549,10 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Look up for the given processing date the Sources child table names
-    # that were cross-matched and a distinct list of the fields covered by the sources.
+    # Look up for the given processing request the Sources child table names
+    # that were cross-matched, the fields covered by its Sources, and its jobs.
 
-    source_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
+    source_tables_to_crossmatch_tuples_list,fields_list,_,meta_list = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,reqid=proc_req,
                                                                     naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
@@ -461,12 +564,25 @@ if __name__ == '__main__':
 
         sources_tablename = f"sources_{obs_date}_{sca}"
 
-        sources_child_tables.append(sources_tablename)
+        sql_queries = [f"SELECT to_regclass('public.{sources_tablename}') IS NOT NULL;"]
+        records = execute_or_raise(dbh,sql_queries,0,None,f"existence check for {sources_tablename}")
+
+        if records[0][0]:
+            sources_child_tables.append(sources_tablename)
 
     if len(sources_child_tables) == 0:
         print("*** Error: No Sources child tables found;  quitting...")
         dbh.close()
         exit(7)
+
+
+    # Collect, once, the sids of the Sources that are no longer best.
+
+    rids = [meta_dict["rid"] for meta_dict in meta_list]
+
+    notbest_sids = collect_notbest_sids(dbh,sources_child_tables,rids,full_scan)
+
+    print(f"Number of not-best sids to prune (full_scan={full_scan}) = {len(notbest_sids)}")
 
 
     # Close the main database connection before the parallel phases, rather than leaving
@@ -481,21 +597,27 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to collect inputs =",
+    print("Elapsed time in seconds to collect inputs and not-best sids =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
 
     ################################################################################
-    # Execute tasks for fields in parallel, with the number of parallel threads
-    # equal to the number of cores on the job-launcher machine.
+    # Delete the not-best records for fields in parallel, with the number of parallel
+    # threads equal to the number of cores on the job-launcher machine.  Skipped if
+    # there is nothing to prune.
     ################################################################################
 
-    if num_cores > 1:
-        execute_parallel_processes(fields_list,sources_child_tables,num_cores)
+    if len(notbest_sids) == 0:
+        print("No not-best sids; nothing to prune.")
+        ndeleted_by_field = {}
+    elif num_cores > 1:
+        ndeleted_by_field = execute_parallel_processes(fields_list,notbest_sids,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(fields_list,sources_child_tables,thread_index)
+        ndeleted_by_field = run_single_core_job(fields_list,notbest_sids,thread_index)
+
+    print("Total number of not-best Merges records deleted =",sum(ndeleted_by_field.values()))
 
 
     # Code-timing benchmark.
@@ -506,21 +628,22 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Vacuum and analyze merges_<field> database tables for all fields.  Drop table if empty.
+    # Drop empty Merges_<field> database tables, and vacuum and analyze those from which
+    # records were deleted.
 
-    print("Vacuuming and analyzing merges_<field> database tables for all fields...")
+    print("Dropping empty Merges_<field> database tables and vacuuming pruned ones...")
 
     if num_cores > 1:
-        execute_parallel_vacuum_processes(fields_list,num_cores)
+        execute_parallel_vacuum_processes(fields_list,ndeleted_by_field,num_cores)
     else:
         thread_index = 0
-        run_single_core_vacuum_job(fields_list,thread_index)
+        run_single_core_vacuum_job(fields_list,ndeleted_by_field,thread_index)
 
 
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to vacuum and analyze all merges database tables =",
+    print("Elapsed time in seconds to drop and vacuum Merges database tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 

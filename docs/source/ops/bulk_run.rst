@@ -302,6 +302,14 @@ see :ref:`database prefilter <db-prefilter>`).  The loading stages also accept
 ``SKIPLOADING`` and ``DONTCHECKDONEFILE``, and alert production ``ALERTSMAXCHIPS`` and
 ``DONOTUPLOADPRODUCTS``, for testing; leave them unset for a normal run.
 
+The pruning stages (16 and 17) delete the ``Merges``/``XMerges`` records of sources whose
+difference image is no longer best.  By default they consider only the difference images of
+the request's own ``rid`` values that were superseded (``vbest = 0``), which is what reprocessing
+in the request does, and they finish at once if there are none.  ``PRUNEFULLSCAN=True`` instead
+scans the request's Sources/XSources child tables in full for sources of any not-best difference
+image, for example after setting ``vbest = 0`` by hand.  Either way they vacuum only the tables
+they deleted records from, and drop empty ones.
+
 
 Performance
 ********************************************
