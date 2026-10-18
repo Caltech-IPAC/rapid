@@ -10,17 +10,16 @@ This pipeline is a skeleton for later additional functions,
 such as copying products to other locations, such as MAST.
 
 Input the processing date of interest on the command line
-in the format YYYYMMDD.  The database is queried for
-science-pipeline jobs on that date that ran normally, using
-a query of the following form:
+in the format YYYYMMDD, and set PROCREQ to the reqid of the
+processing request.  The database is queried for the
+science-pipeline jobs of that processing request that ran
+normally, using a query of the following form:
 
-select * from jobs
-where ppid=15
-and ended >= '20250326'
-and ended < '20250326' + '1 day'
+select jid from jobs
+where ppid = 15
 and status > 0
 and exitcode <= 32
-order by ended;
+and reqid = 123;
 
 To indicate that post-processing pipeline ran normally, a done file
 is written to the S3 bucket at the location of the products for the job.

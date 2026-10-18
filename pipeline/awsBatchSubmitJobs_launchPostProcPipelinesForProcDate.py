@@ -4,16 +4,16 @@ It is assumed that many instances of the RAPID science pipeline for a
 given processing date have already been run, AND the metadata from these jobs
 have already been registered in the Jobs table of the operations database.
 
-Input the processing date for this script, and it will query the
-Jobs database table for all of those jobs that ran normally,
+Set JOBPROCDATE to the processing date and PROCREQ to the reqid of the
+processing request, and it will query the Jobs database table for all
+of the science-pipeline jobs of that processing request that ran normally,
 using a database query like the following:
 
-select * from jobs
+select jid from jobs
 where ppid = 15
-and ended >= '2025-03-26'
-and ended <= started + '1 day'
 and status > 0
-and exitcode <= 32;
+and exitcode <= 32
+and reqid = 123;
 """
 
 import os

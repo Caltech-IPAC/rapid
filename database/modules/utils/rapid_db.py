@@ -2800,16 +2800,17 @@ class RAPIDDB:
     def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self,proc_date,reqid=None):
 
         '''
-        Query database for science-pipeline Jobs records that both
-        ended on the given processing date and ran normally.
+        Query database for science-pipeline Jobs records that ran normally, either of the given
+        processing request or, without one, that ended on the given processing date.
 
         Parameters
         ----------
         proc_date : str
-            Processing date, e.g., "20261018".
+            Processing date, e.g., "20261018".  Used only if reqid is None.
         reqid : int or str, optional
-            If given, only Jobs records of this processing request (Jobs.reqid) are returned.
-            None (the default) returns those of all processing requests.
+            If given, the Jobs records of this processing request (Jobs.reqid) are returned,
+            whatever day they ended (a request can run past midnight).  None (the default)
+            returns those of all processing requests that ended on proc_date.
 
         Returns
         -------
@@ -2824,15 +2825,14 @@ class RAPIDDB:
 
         query = "select jid from Jobs " +\
                 "where ppid = 15 " +\
-                "and ended >= cast('" + proc_date + "' as timestamp) " +\
-                "and ended < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
                 "and status > 0 " +\
-                "and exitcode <= 32"
+                "and exitcode <= 32 "
 
         if reqid is not None:
-            query += " and reqid = " + str(int(reqid))
-
-        query += ";"
+            query += "and reqid = " + str(int(reqid)) + ";"
+        else:
+            query += "and ended >= cast('" + proc_date + "' as timestamp) " +\
+                     "and ended < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval);"
 
 
         # Query database.
@@ -2871,18 +2871,20 @@ class RAPIDDB:
     def get_unclosedout_jobs_for_processing_date(self,ppid,proc_date,reqid=None):
 
         '''
-        Query database for Jobs records that were launched on the given processing date,
-        but not yet closed out by finalizing started, ended, elapsed, exitcode and status.
+        Query database for Jobs records of the given processing request or, without one, that
+        were launched on the given processing date, but not yet closed out by finalizing
+        started, ended, elapsed, exitcode and status.
 
         Parameters
         ----------
         ppid : int
             Pipeline ID.
         proc_date : str
-            Processing date, e.g., "20261018".
+            Processing date, e.g., "20261018".  Used only if reqid is None.
         reqid : int or str, optional
-            If given, only Jobs records of this processing request (Jobs.reqid) are returned.
-            None (the default) returns those of all processing requests.
+            If given, the Jobs records of this processing request (Jobs.reqid) are returned,
+            whatever day they were launched (a request can run past midnight).  None (the
+            default) returns those of all processing requests launched on proc_date.
 
         Returns
         -------
@@ -2898,16 +2900,15 @@ class RAPIDDB:
 
         query = "select jid,awsbatchjobid from Jobs " +\
                 "where ppid = " + str(ppid) + " " +\
-                "and launched >= cast('" + proc_date + "' as timestamp) " +\
-                "and launched < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
                 "and status = 0 " +\
                 "and ended is null " +\
-                "and exitcode is null"
+                "and exitcode is null "
 
         if reqid is not None:
-            query += " and reqid = " + str(int(reqid))
-
-        query += ";"
+            query += "and reqid = " + str(int(reqid)) + ";"
+        else:
+            query += "and launched >= cast('" + proc_date + "' as timestamp) " +\
+                     "and launched < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval);"
 
 
         # Query database.

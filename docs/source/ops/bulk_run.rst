@@ -128,8 +128,8 @@ Inside the container, set the environment that all stages use:
 are filed; it is distinct from the observation dates of the data, and stages 3, 6 and 9 also
 take it as their command-line argument.  ``PROCREQ`` is the ``reqid`` of the processing request:
 every stage files its S3 objects under ``<processing date>/req<reqid>/``.  The launch stages
-record it in ``Jobs.reqid``, and the later stages select only the ``Jobs`` records of the
-processing date with that ``reqid``, so that they leave other processing requests on the same
+record it in ``Jobs.reqid``, and the later stages select only the ``Jobs`` records with that
+``reqid`` (whatever day they ran), so that they leave other processing requests on the same
 processing date alone.  The stages quit with exit code 64 if it is not set.  Use the same value
 in all stages, otherwise a later stage will not find the jobs and files of its launch stage.
 

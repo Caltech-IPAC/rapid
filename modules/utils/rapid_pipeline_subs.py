@@ -2937,8 +2937,9 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     exposure IDs are returned (used by the cross-matching scripts to limit the fields to the
     observation range).  None (the default) returns the fields of all records in the tables.
 
-    reqid, if given, limits the jobs to those of that processing request (Jobs.reqid);
-    None (the default) takes the jobs of all processing requests on the processing date.
+    reqid, if given, takes the jobs of that processing request (Jobs.reqid), whatever day
+    they ended; None (the default) takes the jobs of all processing requests that ended on
+    the processing date.
     '''
 
 
