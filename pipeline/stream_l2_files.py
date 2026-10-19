@@ -6,6 +6,9 @@ from astroquery.mast import MastMissions
 import asdf
 import numpy as np
 import datetime
+import boto3
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 """
 Download files from MAST given a program id and other optional parameters
@@ -36,6 +39,8 @@ p.add_argument("--dryrun", action='store_true',
                 help="query the archive but don't download the files")
 p.add_argument("--unguided", action='store_true',
                 help="include unguided images in archive query")
+p.add_argument("--workers", type=int, default=1,
+                help="number of files to transfer in parallel")
 
 args = p.parse_args()
 
@@ -50,6 +55,40 @@ mjdmax = args.mjdmax
 ingest_bucket = args.ingest_bucket
 dryrun = args.dryrun
 unguided = args.unguided
+workers = args.workers
+
+s3 = boto3.client('s3')
+
+def transfer_file(filename):
+    """
+    Stream one product from its MAST presigned S3 URL into the ingest bucket without decoding it.
+
+    Parameters
+    ----------
+    filename : str
+        Roman product filename, e.g. ``r0099..._cal.asdf``.
+
+    Returns
+    -------
+    filename : str
+        The filename that was transferred.
+    """
+    if ingest_bucket == 'local':
+        status, msg, _ = missions.download_file(filename, local_path=filename, verbose=False)
+        if status != 'COMPLETE':
+            raise RuntimeError(msg)
+        return filename
+
+    # MAST answers with a redirect to a short-lived presigned S3 URL; fetch it right before use
+    resp = requests.get(missions._get_download_url(filename),
+                        headers={"Authorization": f"token {token}"},
+                        allow_redirects=False, timeout=60)
+    resp.raise_for_status()
+    with requests.get(resp.headers["Location"], stream=True, timeout=60) as src:
+        src.raise_for_status()
+        s3.upload_fileobj(src.raw, ingest_bucket, filename)
+    return filename
+
 
 start = datetime.datetime.now()
 
@@ -100,23 +139,31 @@ if mjdmax is not None:
 results = missions.query_criteria(
     **search,
     select_cols=col_list,
+    limit=50000
 )
 
 products = missions.get_unique_product_list(results)
 filtered_products = missions.filter_products(products, file_suffix='_cal')
 print(f"{len(filtered_products)} to download")
 
-for filename in filtered_products['filename']:
-    if dryrun is True:
+if dryrun is True:
+    for filename in filtered_products['filename']:
         print(filename)
+else:
+    if ingest_bucket=='local':
+        missions.download_products(filtered_products)
     else:
-        af = missions.read_product(filename, lazy_load=False, memmap=False)
-        if ingest_bucket=='local':
-            af.write_to(filename)
-        else:
-            s3_url = f"s3://{ingest_bucket}/{filename}"
-            with fsspec.open(s3_url, "wb") as f:
-                af.write_to(f)
+        failed = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(transfer_file, ifile): ifile for ifile in filtered_products['filename']}
+            for fut in as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as err:
+                    failed.append(futures[fut])
+                    print(f"FAILED {futures[fut]}: {err}")
+        if failed:
+            print(f"{len(failed)} files failed: {failed}")
 end = datetime.datetime.now()
 elapsed_min = (end - start).total_seconds() / 60
 print(f"Elapsed: {elapsed_min:.2f} min")

@@ -116,6 +116,8 @@ RAPIDL2INPUTBUCKET      Input S3 bucket holding the ASDF files.  Required.
 RAPIDL2OUTPUTBUCKET     Output S3 bucket for the FITS files.  Required.
 RAPIDL2INPUTPREFIX      Optional key prefix, to ingest one subdirectory of the
                         input bucket rather than all of it.
+RAPIDDATASOURCE         OnOrbit, SOCSIMS, OpenUniverse or RimTimSims.  Required.
+                        Simulations register a fixed negative program_id.
 RAPID_WORK              Local work directory.  Defaults to /work.
 NUM_CORES               Number of parallel processes.  Defaults to the number
                         of CPUs.
@@ -334,6 +336,21 @@ print("bucket_name_output =",bucket_name_output)
 print("input_prefix =",input_prefix)
 
 
+# Source of the data.  Simulations are registered with a fixed negative program_id, matching
+# database/schema/rapidOpsSurveysInserts.sql, instead of the program in the file.
+
+sim_program_ids = {"SOCSIMS": -1, "OpenUniverse": -2, "RimTimSims": -3}
+
+data_source = os.getenv('RAPIDDATASOURCE')
+
+if data_source != "OnOrbit" and data_source not in sim_program_ids:
+    print(f"*** Error: Env. var. RAPIDDATASOURCE = {data_source} is not OnOrbit, SOCSIMS, OpenUniverse or RimTimSims; quitting...")
+    print("terminating_exitcode =",exit_code_config)
+    exit(exit_code_config)
+
+print("data_source =",data_source)
+
+
 # Local work directory.
 
 subdir_work = os.getenv('RAPID_WORK')
@@ -509,6 +526,19 @@ dq_masked_node_names = ("data","err","var_poisson","var_rnoise","var_flat")
 # BUNIT is deliberately absent: build_image_hdus gives every array the unit that array
 # actually has, and copying the primary's BUNIT here would label the data-quality array DN.
 
+# The Roman observation identifiers registered in the Exposures table: (FITS keyword,
+# ASDF meta.observation attribute).
+
+observation_id_keywords = [("PROGRAM","program"),
+                           ("EXECPLAN","execution_plan"),
+                           ("PASS","pass"),
+                           ("SEGMENT","segment"),
+                           ("OBSERVTN","observation"),
+                           ("VISIT","visit"),
+                           ("EXPOSURE","exposure"),
+                           ("VISIT_ID","visit_id"),
+                           ("OBS_ID","observation_id")]
+
 science_image_keywords = ["FILTER",
                           "EXPTIME",
                           "DATE-OBS",
@@ -521,6 +551,7 @@ science_image_keywords = ["FILTER",
                           "TARGAPER",
                           "TARGRA",
                           "TARGDEC",
+                          *[keyword for keyword,attribute in observation_id_keywords],
                           "ZPTMAG",
                           "ORIGFILE",
                           "SWNAME",
@@ -983,6 +1014,9 @@ def build_primary_header(dm,asdf_tree,input_asdf_file):
 
     if targ_dec is not None:
         hdr["TARGDEC"] = (float(targ_dec),"[deg] declination of target aperture")
+
+    for keyword,attribute in observation_id_keywords:
+        hdr[keyword] = getattr(dm.meta.observation,attribute)
 
 
     # Photometric zeropoint.
@@ -1463,6 +1497,11 @@ def compute_corner_sky_positions(header,wcs):
     return sky1,sky2,sky3,sky4
 
 
+# The program_ids this process has already looked up in the Surveys table.
+
+checked_program_ids = set()
+
+
 def register_exposure(dbh,roman_tessellation_db,header,wcs):
 
     '''
@@ -1534,7 +1573,19 @@ def register_exposure(dbh,roman_tessellation_db,header,wcs):
     print("dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status = ",\
         dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status)
 
-    dbh.add_exposure(dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status)
+    observation_ids = [header[keyword] for keyword,attribute in observation_id_keywords]
+
+    if data_source != "OnOrbit":
+        observation_ids[0] = sim_program_ids[data_source]
+
+    program_id = observation_ids[0]
+
+    if program_id not in checked_program_ids:
+        checked_program_ids.add(program_id)
+        if not dbh.is_program_in_surveys(program_id):
+            print(f"*** Warning: program_id = {program_id} is not in the Surveys table")
+
+    dbh.add_exposure(dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status,*observation_ids)
 
     expid = dbh.expid
     fid = dbh.fid
