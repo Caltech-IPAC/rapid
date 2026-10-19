@@ -158,3 +158,83 @@ def test_prefilter_only_fits_just_the_sources_that_pass(tmp_path):
         got = np.array(pre_cols[name])
         assert np.array_equal(got[keep], np.array(all_cols[name])[keep])
         assert np.all(got[~keep] == FILL)
+
+
+def test_prefilter_only_missing_values_are_not_cut(tmp_path):
+
+    # Missing values are not cut, as in prefilter_database_records: a source within 2 pixels of
+    # the edge, whose 5x5 sumrat stamp does not fit (SUMRAT = -999), is fitted if its aperture
+    # SNR passes, and a source with FLUX_APER_1 = -999 (SNR missing) is fitted if its sumrat
+    # passes.  The controls, with the other quantity failing, are not fitted.
+
+    image, xy = star_field()
+    yy, xx = np.mgrid[:image.shape[0], :image.shape[1]]
+    edge_stars = [(1.0, 80.0), (1.0, 120.0)]                      # Zero-based x = 1: 1 pixel from the edge.
+    for x0, y0 in edge_stars:
+        image += 200.0 * np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * SIGMA ** 2))
+    path = write_fits(tmp_path / "diff.fits", image)
+    unc = write_fits(tmp_path / "unc.fits", np.ones_like(image))
+    psf = write_psf(tmp_path / "psf.fits")
+
+    # Rows: the field stars (SNR 100), then
+    #   n:   edge star, SNR 100        -> sumrat missing, SNR passes  -> fitted
+    #   n+1: edge star, SNR 1          -> sumrat missing, SNR fails   -> not fitted
+    #   n+2: field star 0, FLUX_APER_1 = -999 -> SNR missing          -> fitted if its sumrat passes
+    #   n+3: noise spot, FLUX_APER_1 = -999   -> SNR missing, sumrat fails -> not fitted
+
+    n = len(xy)
+    noise_spot = (80.0, 150.0)
+    positions = np.vstack((xy, edge_stars, xy[:1], [noise_spot]))
+    flux = np.concatenate((np.full(n, 100.0), [100.0, 1.0, -999.0, -999.0]))
+    catalog = write_sextractor_catalog(tmp_path / "cat.txt", positions + 1.0, flux, np.ones(len(positions)))
+
+    extra_cols_dict = {"extra_cols": "sumrat, nneg, nbad",
+                       "sextractor_x_col": "XWIN_IMAGE", "sextractor_y_col": "YWIN_IMAGE",
+                       "sxtractor_photutils_cols": "flux_fit, x_fit",
+                       "photutils_cols_fit_shape": "(5, 5)", "photutils_cols_fill_value": str(FILL),
+                       "photutils_cols_format": ".4f",
+                       "pixel_cols_bkg_box": "None"}
+    sumrat_dict = {"stamp_size": "5", "filter_size": "3", "lower_median": "False",
+                   "fill_value": str(FILL), "col_format": ".4f"}
+    psfcat_dict = {"fwhm": "2.0", "fit_shape": "(17, 17)", "aperture_radius": "4.0"}
+    common = dict(diff_psf_filename=psf, diff_unc_filename=unc, psfcat_dict=psfcat_dict,
+                  prefilter_sumrat_threshold=0.4, prefilter_snr_threshold=5.0)
+
+    all_cols = util.compute_extra_cols_sxtractor(path, catalog, dict(extra_cols_dict), sumrat_dict,
+                                                 str(tmp_path / "all.txt"), **common)
+    pre_cols = util.compute_extra_cols_sxtractor(path, catalog,
+                                                 dict(extra_cols_dict, photutils_cols_prefilter_only="True"),
+                                                 sumrat_dict, str(tmp_path / "pre.txt"), **common)
+
+    sumrat = np.array(pre_cols["sumrat"])
+    flux_fit_all = np.array(all_cols["flux_fit"])
+    flux_fit_pre = np.array(pre_cols["flux_fit"])
+
+    edge_ok, edge_low_snr, aper_fill_star, aper_fill_noise = n, n + 1, n + 2, n + 3
+
+    # The edge sources have no sumrat, and the -999 aperture fluxes are in the catalog.
+    assert sumrat[edge_ok] == FILL and sumrat[edge_low_snr] == FILL
+    assert sumrat[aper_fill_star] > 0.4 and sumrat[aper_fill_noise] <= 0.4
+
+    # Fitted, with the same values as when all sources are fitted.
+    for i in (edge_ok, aper_fill_star):
+        assert flux_fit_all[i] != FILL
+        assert flux_fit_pre[i] == flux_fit_all[i]
+        assert pre_cols["x_fit"][i] == all_cols["x_fit"][i]
+
+    # Not fitted.
+    for i in (edge_low_snr, aper_fill_noise):
+        assert flux_fit_pre[i] == FILL and pre_cols["x_fit"][i] == FILL
+
+    # The same decision as the XSources loader's prefilter makes from the written catalog.
+    from astropy.io import ascii
+    table = ascii.read(str(tmp_path / "pre.txt"), format="sextractor")
+    fills = (FILL,)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        snr = util.catalog_float_values(table, "FLUX_APER_1", fills) / util.catalog_float_values(table, "FLUXERR_APER_1", fills)
+    keep = util.prefilter_database_records(len(table), util.catalog_float_values(table, "SUMRAT", fills), None,
+                                           0.4, None, snr=snr, snr_prefilter_threshold=5.0)
+    assert np.isnan(util.catalog_float_values(table, "SUMRAT", fills)[edge_ok])
+    assert np.isnan(snr[aper_fill_star])
+    assert list(keep[[edge_ok, edge_low_snr, aper_fill_star, aper_fill_noise]]) == [True, False, True, False]
+    assert np.array_equal(keep, flux_fit_pre != FILL)
