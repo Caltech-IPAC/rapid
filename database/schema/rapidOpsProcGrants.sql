@@ -16,7 +16,16 @@ grant EXECUTE on FUNCTION addExposure (
     filter_              character varying(16),
     exptime_             real,
     infobits_            integer,
-    status_              smallint
+    status_              smallint,
+    program_id_          integer,
+    execution_plan_      smallint,
+    pass_                smallint,
+    segment_             smallint,
+    observation_         smallint,
+    visit_               smallint,
+    exposure_            smallint,
+    visit_id_            character varying(19),
+    observation_id_      character varying(28)
 ) to rapidporole;
 
 

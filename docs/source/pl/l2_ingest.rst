@@ -297,6 +297,17 @@ tables, exactly as ``db_register_socsim_files.py`` did:
    ``TARGDEC``; if those are absent, it falls back on the image centre computed
    from the WCS.
 
+   It also holds the Roman observation identifiers from ``meta.observation``:
+   ``program_id``, ``execution_plan``, ``pass``, ``segment``, ``observation``,
+   ``visit``, ``exposure``, ``visit_id`` and ``observation_id``.  These are
+   written to the FITS headers as ``PROGRAM``, ``EXECPLAN``, ``PASS``,
+   ``SEGMENT``, ``OBSERVTN``, ``VISIT``, ``EXPOSURE``, ``VISIT_ID`` and
+   ``OBS_ID``, and registered from there.  For simulated data, ``program_id`` is
+   the fixed negative number of the simulation chosen by ``RAPIDDATASOURCE``,
+   not the value in the file.  The first time a process registers a
+   ``program_id`` that has no row in the hand-maintained ``Surveys`` table, it
+   prints a warning; ingest carries on regardless.
+
 ``L2Files``
    One row per L2 file, with its S3 name, checksum, WCS, full fifth-order SIP
    coefficient set, zeropoint, and the list of every sky tile the image
@@ -335,6 +346,10 @@ Variable                                             Meaning
 ``RAPIDL2INPUTBUCKET``                               Input S3 bucket holding the ASDF files.  **Required.**
 ``RAPIDL2OUTPUTBUCKET``                              Output S3 bucket for the FITS files.  **Required.**
 ``RAPIDL2INPUTPREFIX``                               Optional key prefix, to ingest one subdirectory of the input bucket.
+``RAPIDDATASOURCE``                                  ``OnOrbit``, ``SOCSIMS``, ``OpenUniverse`` or ``RimTimSims``.
+                                                     **Required.**  ``OnOrbit`` registers the program number from the
+                                                     file; a simulation registers its fixed ``program_id`` (-1, -2, -3
+                                                     respectively) instead.
 ``RAPID_WORK``                                       Local work directory.  Defaults to ``/work``.
 ``NUM_CORES``                                        Number of parallel processes.  Defaults to the number of CPUs.
 ``SIPDISTORTIONDEGREE``                              Degree of the SIP fit to the gWCS.  Defaults to 5, which is what
@@ -357,8 +372,9 @@ Variable                                             Meaning
                                                      the normal case.
 ==================================================   ==============================================================================
 
-The two required bucket names have no defaults, on purpose: a misconfigured run
-must not be able to silently write into, or re-ingest from, the wrong bucket.
+The required bucket names and data source have no defaults, on purpose: a
+misconfigured run must not be able to silently write into, or re-ingest from, the
+wrong bucket, or label real data as simulated (or the reverse).
 
 For example, to ingest the GBTDS socsims with fake sources injected:
 
@@ -366,6 +382,7 @@ For example, to ingest the GBTDS socsims with fake sources injected:
 
    export RAPIDL2INPUTBUCKET=socsims-fakesrc-asdf-20260807
    export RAPIDL2OUTPUTBUCKET=socsims-fakesrc-fits-20260807-lite
+   export RAPIDDATASOURCE=SOCSIMS
    export RAPID_WORK=/work
    export NUM_CORES=8
    python3 pipeline/ingestL2Files.py
@@ -471,6 +488,7 @@ up without anyone having to start a run by hand:
    export RAPID_SW=/code
    export RAPIDL2INPUTBUCKET=socsims-fakesrc-asdf-20260807
    export RAPIDL2OUTPUTBUCKET=socsims-fakesrc-fits-20260807-lite
+   export RAPIDDATASOURCE=SOCSIMS
    export RAPID_WORK=/work
    python3 pipeline/ingestL2FilesDaemon.py 300 >& $RAPID_WORK/ingestL2FilesDaemon.log &
 

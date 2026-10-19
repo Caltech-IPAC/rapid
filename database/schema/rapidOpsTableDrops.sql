@@ -45,6 +45,13 @@ DROP SEQUENCE exposures_expid_seq;
 
 
 -------------------
+-- Surveys table
+-------------------
+
+DROP TABLE surveys;
+
+
+-------------------
 -- Filters table
 -------------------
 
