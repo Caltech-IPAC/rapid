@@ -90,33 +90,6 @@ Join with ``left join`` so that exposures of unmapped programs are not lost, and
     left join surveys s using (program_id)
     where e.program_id is not null and s.program_id is null;
 
-
-Observation Identifiers and Surveys
-************************************
-
-The Exposures database table stores the Roman observation identifiers of each exposure, from the
-ASDF ``meta.observation`` of its L2 files: ``program_id``, ``execution_plan``, ``pass``, ``segment``,
-``observation``, ``visit``, ``exposure``, ``visit_id`` and ``observation_id``.
-Exposures registered before these columns existed have NULL in them.
-
-The Surveys database table maps ``program_id`` to ``program_title`` and ``category`` (the proposal type,
-as in ASDF ``meta.program.category``: CCS, GAS, GI, CAL, COM, ENG, ..., or SIM for simulations).
-Several program IDs may share one title, e.g., a multi-year survey that is given a new program number each year.
-Surveys is maintained by hand, in ``database/schema/rapidOpsSurveysInserts.sql``, and is never written by ingest.
-Simulations have fixed negative program IDs, which cannot collide with real Roman program numbers (1-18445):
--1 SOCSIMS, -2 OpenUniverse, -3 RimTimSims.
-
-``Exposures.program_id`` is deliberately not a foreign key to Surveys, so that a new program not yet added
-to Surveys does not stop ingest; ``pipeline/ingestL2Files.py`` prints a warning instead.
-Join with ``left join`` so that exposures of unmapped programs are not lost, and find those programs with
-
-.. code-block::
-
-    select distinct e.program_id from exposures e
-    left join surveys s using (program_id)
-    where e.program_id is not null and s.program_id is null;
-
-
 Record Versioning
 ************************************
 
