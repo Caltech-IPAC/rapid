@@ -73,6 +73,32 @@ def get_image_hdu_index(hdul):
 # calculation, or that are useful for bookkeeping alongside it.
 #####################################################################################################
 
+def get_image_shape(input_img_filename,hdu_index = None):
+
+    """
+    Return the shape of a FITS image from its header, without reading the data.
+
+    Parameters
+    ----------
+    input_img_filename : str
+        FITS file.
+    hdu_index : int or None, optional
+        HDU index of the image; if None, the first HDU holding two-dimensional image data.
+
+    Returns
+    -------
+    shape : tuple of int
+        (NAXIS2, NAXIS1).
+    """
+
+    with fits.open(input_img_filename) as hdul:
+        if hdu_index is None:
+            hdu_index = get_image_hdu_index(hdul)
+        header = hdul[hdu_index].header
+
+    return int(header["NAXIS2"]),int(header["NAXIS1"])
+
+
 def get_l2_image_metadata(input_img_filename,hdu_index = None):
 
     """

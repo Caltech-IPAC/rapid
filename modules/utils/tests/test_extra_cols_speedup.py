@@ -160,32 +160,34 @@ def test_prefilter_only_fits_just_the_sources_that_pass(tmp_path):
         assert np.all(got[~keep] == FILL)
 
 
-def test_prefilter_only_missing_values_are_not_cut(tmp_path):
+def test_prefilter_only_edge_and_missing_values(tmp_path):
 
-    # Missing values are not cut, as in prefilter_database_records: a source within 2 pixels of
-    # the edge, whose 5x5 sumrat stamp does not fit (SUMRAT = -999), is fitted if its aperture
-    # SNR passes, and a source with FLUX_APER_1 = -999 (SNR missing) is fitted if its sumrat
-    # passes.  The controls, with the other quantity failing, are not fitted.
+    # As in the XSources loader: a source whose nearest pixel is within 2 pixels of the edge is
+    # not fitted, even though its sumrat is missing (-999, its 5x5 stamp does not fit) and so
+    # passes the sumrat cut; one just inside (3 pixels from the edge) is fitted.  A missing
+    # aperture flux (FLUX_APER_1 = -999) is not cut: the source is fitted if its sumrat passes.
 
     image, xy = star_field()
     yy, xx = np.mgrid[:image.shape[0], :image.shape[1]]
-    edge_stars = [(1.0, 80.0), (1.0, 120.0)]                      # Zero-based x = 1: 1 pixel from the edge.
-    for x0, y0 in edge_stars:
+    edge_stars = [(1.0, 80.0), (1.0, 120.0)]                      # Zero-based x = 1: one-based pixel 2.
+    inside_star = (2.0, 140.0)                                    # Zero-based x = 2: one-based pixel 3.
+    for x0, y0 in edge_stars + [inside_star]:
         image += 200.0 * np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * SIGMA ** 2))
     path = write_fits(tmp_path / "diff.fits", image)
     unc = write_fits(tmp_path / "unc.fits", np.ones_like(image))
     psf = write_psf(tmp_path / "psf.fits")
 
     # Rows: the field stars (SNR 100), then
-    #   n:   edge star, SNR 100        -> sumrat missing, SNR passes  -> fitted
-    #   n+1: edge star, SNR 1          -> sumrat missing, SNR fails   -> not fitted
-    #   n+2: field star 0, FLUX_APER_1 = -999 -> SNR missing          -> fitted if its sumrat passes
-    #   n+3: noise spot, FLUX_APER_1 = -999   -> SNR missing, sumrat fails -> not fitted
+    #   n:   edge star, SNR 100              -> within 2 px of the edge             -> not fitted
+    #   n+1: edge star, SNR 1                -> within 2 px of the edge, SNR fails  -> not fitted
+    #   n+2: field star 0, FLUX_APER_1 = -999 -> SNR missing, sumrat passes        -> fitted
+    #   n+3: noise spot, FLUX_APER_1 = -999   -> SNR missing, sumrat fails         -> not fitted
+    #   n+4: star 3 px from the edge, SNR 100 -> sumrat computed and passes        -> fitted
 
     n = len(xy)
     noise_spot = (80.0, 150.0)
-    positions = np.vstack((xy, edge_stars, xy[:1], [noise_spot]))
-    flux = np.concatenate((np.full(n, 100.0), [100.0, 1.0, -999.0, -999.0]))
+    positions = np.vstack((xy, edge_stars, xy[:1], [noise_spot], [inside_star]))
+    flux = np.concatenate((np.full(n, 100.0), [100.0, 1.0, -999.0, -999.0, 100.0]))
     catalog = write_sextractor_catalog(tmp_path / "cat.txt", positions + 1.0, flux, np.ones(len(positions)))
 
     extra_cols_dict = {"extra_cols": "sumrat, nneg, nbad",
@@ -210,23 +212,26 @@ def test_prefilter_only_missing_values_are_not_cut(tmp_path):
     flux_fit_all = np.array(all_cols["flux_fit"])
     flux_fit_pre = np.array(pre_cols["flux_fit"])
 
-    edge_ok, edge_low_snr, aper_fill_star, aper_fill_noise = n, n + 1, n + 2, n + 3
+    edge_ok, edge_low_snr, aper_fill_star, aper_fill_noise, inside = n, n + 1, n + 2, n + 3, n + 4
 
-    # The edge sources have no sumrat, and the -999 aperture fluxes are in the catalog.
+    # The edge sources have no sumrat; the source 3 px from the edge has one.
     assert sumrat[edge_ok] == FILL and sumrat[edge_low_snr] == FILL
+    assert sumrat[inside] > 0.4
     assert sumrat[aper_fill_star] > 0.4 and sumrat[aper_fill_noise] <= 0.4
 
     # Fitted, with the same values as when all sources are fitted.
-    for i in (edge_ok, aper_fill_star):
+    for i in (aper_fill_star, inside):
         assert flux_fit_all[i] != FILL
         assert flux_fit_pre[i] == flux_fit_all[i]
         assert pre_cols["x_fit"][i] == all_cols["x_fit"][i]
 
-    # Not fitted.
-    for i in (edge_low_snr, aper_fill_noise):
+    # Not fitted (the edge stars could be: all_cols has a fit for them).
+    assert flux_fit_all[edge_ok] != FILL
+    for i in (edge_ok, edge_low_snr, aper_fill_noise):
         assert flux_fit_pre[i] == FILL and pre_cols["x_fit"][i] == FILL
 
-    # The same decision as the XSources loader's prefilter makes from the written catalog.
+    # The same decision as the XSources loader makes from the written catalog: its position
+    # cuts and its prefilter.
     from astropy.io import ascii
     table = ascii.read(str(tmp_path / "pre.txt"), format="sextractor")
     fills = (FILL,)
@@ -234,7 +239,9 @@ def test_prefilter_only_missing_values_are_not_cut(tmp_path):
         snr = util.catalog_float_values(table, "FLUX_APER_1", fills) / util.catalog_float_values(table, "FLUXERR_APER_1", fills)
     keep = util.prefilter_database_records(len(table), util.catalog_float_values(table, "SUMRAT", fills), None,
                                            0.4, None, snr=snr, snr_prefilter_threshold=5.0)
-    assert np.isnan(util.catalog_float_values(table, "SUMRAT", fills)[edge_ok])
+    keep &= util.sxtractor_positions_within_image(np.asarray(table["XWIN_IMAGE"], float),
+                                                  np.asarray(table["YWIN_IMAGE"], float),
+                                                  image.shape[1], image.shape[0])
     assert np.isnan(snr[aper_fill_star])
-    assert list(keep[[edge_ok, edge_low_snr, aper_fill_star, aper_fill_noise]]) == [True, False, True, False]
+    assert list(keep[[edge_ok, edge_low_snr, aper_fill_star, aper_fill_noise, inside]]) == [False, False, True, False, True]
     assert np.array_equal(keep, flux_fit_pre != FILL)

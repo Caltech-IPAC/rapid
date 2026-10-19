@@ -434,8 +434,8 @@ rejected (``prefilter rejected <n> of <m> sources`` or ``... xsources``).
 
 The science pipeline uses the same ``sumrat`` and SNR thresholds when it adds the PhotUtils-style
 columns to the SExtractor catalogs.  With ``[EXTRA_CATALOG_COLS] photutils_cols_prefilter_only =
-True``, only the sources that pass those two cuts are PSF-fitted, since only those can be loaded
-into XSources.  The PhotUtils-style columns of the other sources (``FLUX_FIT``, ``SNR_FIT``,
+True``, only the sources that pass those two cuts and the XSources position cuts above are PSF-fitted,
+since only those can be loaded into XSources.  The PhotUtils-style columns of the other sources (``FLUX_FIT``, ``SNR_FIT``,
 ``REDUCED_CHI2`` and so on) are written as the fill value (-999.0) in the catalog files, and their
 real/bogus columns are not scored (``RB_LABEL = -1``).  ``photutils_cols_num_processes`` splits
 the PSF fits among processes, without changing their results.

@@ -3859,6 +3859,61 @@ def append_sxtractor_cols(header_lines,
 #-------------------------------------------------------------------
 # Compute extra columns for a SExtractor ASCII_HEAD catalog and append them to it.
 
+# Position cuts of the XSources loader (pipeline/loadSECatIntoDBSourcesTable.py), also applied
+# before the PSF fits when photutils_cols_prefilter_only is set.  Sources with one-based image
+# positions outside [0.5, naxis + 0.5] (with a 1e-4 pixel tolerance) are rejected, and so are
+# sources whose nearest pixel is within XSOURCES_EDGE_MARGIN_PIXELS pixels of the image edge: the
+# 5x5 sumrat stamp does not fit there, so their sumrat is missing and the prefilter cannot cut
+# them, and the outermost row and column of the difference images are much noisier than the rest
+# (robust sigma ~3.5x on the socsims), which makes spurious detections along them.
+
+XSOURCES_EDGE_MARGIN_PIXELS = 2
+
+
+def sxtractor_positions_within_image(x,y,naxis1,naxis2):
+
+    """
+    Return which SExtractor sources pass the position cuts of the XSources loader: inside the
+    image, and with the nearest pixel more than XSOURCES_EDGE_MARGIN_PIXELS pixels from its edge.
+
+    Parameters
+    ----------
+    x, y : sequence of float
+        One-based image positions [pixels] (e.g., XWIN_IMAGE, YWIN_IMAGE); NaN is rejected.
+    naxis1, naxis2 : int
+        Image size [pixels].
+
+    Returns
+    -------
+    keep : numpy.ndarray of bool
+        True for each source that passes.
+    """
+
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+
+    tol = 0.0001
+    xy_min = 0.5 - tol
+    xy_max_offset = 0.5 + tol
+
+
+    # NaN positions compare False, and so are rejected.
+
+    keep = ((x >= xy_min) & (x <= naxis1 + xy_max_offset) &
+            (y >= xy_min) & (y <= naxis2 + xy_max_offset))
+
+    with np.errstate(invalid="ignore"):
+        xnear = np.floor(x + 0.5)
+        ynear = np.floor(y + 0.5)
+
+    margin = XSOURCES_EDGE_MARGIN_PIXELS
+
+    keep &= ((xnear >= 1 + margin) & (xnear <= naxis1 - margin) &
+             (ynear >= 1 + margin) & (ynear <= naxis2 - margin))
+
+    return keep
+
+
 def _select_sources_passing_prefilter(diff_image_filename,
                                      x_list,
                                      y_list,
@@ -3871,8 +3926,9 @@ def _select_sources_passing_prefilter(diff_image_filename,
                                      catalog_filename):
 
     """
-    Select the sources of a SExtractor catalog that pass the sumrat and aperture-SNR cuts of the
-    XSources database prefilter, as pipeline/loadSECatIntoDBSourcesTable.py applies them.
+    Select the sources of a SExtractor catalog that the XSources loader
+    (pipeline/loadSECatIntoDBSourcesTable.py) would keep: those that pass its position cuts
+    (sxtractor_positions_within_image) and the sumrat and aperture-SNR cuts of its prefilter.
 
     Parameters
     ----------
@@ -3894,7 +3950,7 @@ def _select_sources_passing_prefilter(diff_image_filename,
     Returns
     -------
     fit_index : list of int
-        Row indices of the sources that pass.
+        Row indices of the sources that pass all the cuts.
     pixel_cols : dict of str to list of float
         The pixel columns computed for the cut (sumrat, and nneg and nbad if extra_cols lists
         them), for all rows, for reuse by _compute_extra_catalog_cols.
@@ -3954,10 +4010,21 @@ def _select_sources_passing_prefilter(diff_image_filename,
                                       snr = snr,
                                       snr_prefilter_threshold = snr_threshold)
 
-    fit_index = [int(i) for i in np.flatnonzero(keep)]
+
+    # Position cuts, against the size of the difference image itself (the SFFT difference
+    # images have an extra row and column, which the loader allows for).
+
+    naxis2,naxis1 = rda.get_image_shape(diff_image_filename)
+
+    in_image = sxtractor_positions_within_image(x_list,y_list,naxis1,naxis2)
+
+    fit_index = [int(i) for i in np.flatnonzero(keep & in_image)]
 
     print(f"_select_sources_passing_prefilter: {len(fit_index)} of {len(x_list)} sources pass "
-          f"sumrat > {sumrat_threshold} and aperture SNR > {snr_threshold}")
+          f"sumrat > {sumrat_threshold} and aperture SNR > {snr_threshold} "
+          f"({int(np.count_nonzero(keep))} pass), and are inside the {naxis1}x{naxis2} image, "
+          f"more than {XSOURCES_EDGE_MARGIN_PIXELS} pixels from its edge "
+          f"({int(np.count_nonzero(in_image))} are)")
 
     return fit_index,pixel_cols
 
