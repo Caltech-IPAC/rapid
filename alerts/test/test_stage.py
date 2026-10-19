@@ -69,11 +69,12 @@ def test_settings_are_read_from_the_alerts_section():
     assert s["diff_flavor"] == "sfft"
     assert s["refcat_match"] is True and s["ned_match"] is False
     assert s["lvs_match"] is True                  # absent -> on, like refcat
+    assert s["gaia_match"] is True and s["gaia_source"]   # absent -> on, default prefix
     assert s["kona_file"] is None                  # blank -> association off
     assert s["upload_to_s3_bucket"] is False
     assert s["archive_codec"] == "deflate"
     # ned_source: absent -> the pipeline's default copy; blank -> None (off)
-    from alerts.ned_reader import DEFAULT_NED_SOURCE
+    from alerts.catalog_readers import DEFAULT_NED_SOURCE
     assert s["ned_source"] == DEFAULT_NED_SOURCE
     assert _settings(ned_source="s3://other/ned")["ned_source"] == "s3://other/ned"
     assert _settings(ned_source="")["ned_source"] is None
@@ -81,7 +82,7 @@ def test_settings_are_read_from_the_alerts_section():
 
 def test_build_ned_reader_opens_a_copy_or_degrades(tmp_path, caplog):
     from alerts.cli import build_ned_reader
-    from alerts.ned_reader import Hp6NedReader
+    from alerts.catalog_readers import Hp6NedReader
     assert build_ned_reader(None) is None
     assert build_ned_reader(str(tmp_path), enabled=False) is None
     reader = build_ned_reader(str(tmp_path))              # a (bare) local copy opens
@@ -228,13 +229,14 @@ def fake_make_provider(monkeypatch, chip_data):
     made = []
 
     def _make(diff_flavor="sfft", kona_file=None, refcat=True, ned=True,
-              ned_source=None, lvs=True, forced_phot=True,
-              forced_window_days=None, forced_store=None):
+              ned_source=None, lvs=True, gaia=True, gaia_source=None,
+              forced_phot=True, forced_window_days=None, forced_store=None):
         # forced photometry stays on, as in production: the fake chip has
         # no searchable images, so the provider's degrade-to-null path runs
         provider = AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor,
                                      kona_lookup=None, refcat=refcat,
                                      ned_reader=None, lvs_reader=None,
+                                     gaia_reader=None,
                                      forced_phot=forced_phot,
                                      forced_window_days=forced_window_days,
                                      forced_store=forced_store)

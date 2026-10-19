@@ -20,7 +20,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "pruneNotBestXMerges.py"
-swvers = "1.0"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -65,6 +65,21 @@ if proc_date is None:
 print("proc_date =",proc_date)
 
 
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates.  Only the Jobs records of this processing request
+# (Jobs.reqid) are processed, so that other processing requests for the same
+# processing date are left alone.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+print("proc_req =",proc_req)
+
+
 # Other required environment variables.
 
 rapid_sw = os.getenv('RAPID_SW')
@@ -102,6 +117,8 @@ naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 
 # Open database connections for parallel access.
@@ -115,6 +132,24 @@ else:
     num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
+
+
+# PRUNEFULLSCAN=True finds the not-best XSources by scanning the processing request's XSources child
+# tables in full, which also finds those of difference images set to vbest = 0 by hand or by
+# another processing request.  By default (unset or False), only the difference images of the
+# request's own rids are considered (see collect_notbest_xsids), which is much faster.
+
+full_scan_str = os.getenv('PRUNEFULLSCAN')
+
+if full_scan_str is None or full_scan_str == "False":
+    full_scan = False
+elif full_scan_str == "True":
+    full_scan = True
+else:
+    print(f"*** Error: Env. var. PRUNEFULLSCAN must be True or False (PRUNEFULLSCAN={full_scan_str}); quitting...")
+    exit(64)
+
+print("full_scan =",full_scan)
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -148,11 +183,110 @@ def execute_or_raise(dbh,sql_queries,thread_debug,fh,context):
     return records
 
 
-def run_single_core_job(fields,xsources_child_tables,index_thread):
+def collect_notbest_xsids(dbh,xsources_child_tables,rids,full_scan):
 
     '''
-    Remove records from XMerges_<field> database tables associated with xsources that are no longer best
-    (vbest=0 in associated Diffimages table).
+    Return the xsids of the XSources records that are no longer best (vbest = 0 in the associated
+    DiffImages record), from the given XSources child tables.
+
+    Parameters
+    ----------
+    dbh : database.modules.utils.rapid_db.RAPIDDB
+        Open database connection.
+    xsources_child_tables : list of str
+        Names of the existing xsources_<obs_date>_<sca> child tables of the processing request.
+    rids : list of int
+        L2Files rids of the processing request's science-pipeline jobs.
+    full_scan : bool
+        False (the default mode): only the DiffImages records of the request's rids are
+        considered.  A DiffImages record is set to vbest = 0 by the updateDiffImage stored
+        function when a newer version for the same rid is registered, which happens when this
+        processing request reprocesses the rid, so these are the records this request has made
+        not best.  Their xsids are read through the pid index of the child tables that hold them.
+        True: every XSources record in the child tables whose DiffImages record has vbest = 0 is
+        found, whichever processing request (or manual change) set vbest = 0.  This scans the
+        child tables in full.
+
+    Returns
+    -------
+    xsids : list of int
+        Distinct not-best xsids, in ascending order (empty if none).  Raises RuntimeError on a
+        database error.
+    '''
+
+    thread_debug = 0
+
+    xsids = set()
+
+    if full_scan:
+
+        for xsources_tablename in xsources_child_tables:
+
+            query = f"SELECT a.xsid FROM {xsources_tablename} AS a " +\
+                    f"JOIN diffimages AS b ON a.pid = b.pid " +\
+                    f"WHERE b.vbest = 0;"
+
+            records = execute_or_raise(dbh,[query],thread_debug,None,
+                                       f"full scan of {xsources_tablename} for not-best xsids")
+
+            xsids.update(int(record[0]) for record in records)
+
+        return sorted(xsids)
+
+    if len(rids) == 0:
+        return []
+
+
+    # Not-best difference images of the request's rids, and the child table that holds the
+    # XSources of each (xsources_<obs_date>_<sca>, from the L2Files record).
+
+    rids_str = ",".join(str(int(rid)) for rid in sorted(set(rids)))
+
+    query = f"SELECT d.pid,cast(l.dateobs as date),l.sca " +\
+            f"FROM diffimages AS d " +\
+            f"JOIN l2files AS l ON d.rid = l.rid " +\
+            f"WHERE d.ppid = {ppid} " +\
+            f"AND d.vbest = 0 " +\
+            f"AND d.rid IN ({rids_str});"
+
+    records = execute_or_raise(dbh,[query],thread_debug,None,"lookup of not-best difference images")
+
+    print(f"Number of not-best difference images of the processing request's rids = {len(records)}")
+
+    pids_by_table = {}
+
+    for record in records:
+        pid = int(record[0])
+        obs_date = str(record[1]).replace("-","")
+        xsources_tablename = f"xsources_{obs_date}_{record[2]}"
+        pids_by_table.setdefault(xsources_tablename,[]).append(pid)
+
+    existing_tables = set(xsources_child_tables)
+
+    for xsources_tablename,pids in pids_by_table.items():
+
+        if xsources_tablename not in existing_tables:
+            print(f"{xsources_tablename} database table is not a child table of this request; skipping...")
+            continue
+
+        pids_str = ",".join(str(pid) for pid in sorted(set(pids)))
+
+        query = f"SELECT xsid FROM {xsources_tablename} WHERE pid IN ({pids_str});"
+
+        records = execute_or_raise(dbh,[query],thread_debug,None,
+                                   f"lookup of not-best xsids in {xsources_tablename}")
+
+        xsids.update(int(record[0]) for record in records)
+
+    return sorted(xsids)
+
+
+def run_single_core_job(fields,notbest_xsids,index_thread):
+
+    '''
+    Remove records from XMerges_<field> database tables associated with XSources that are no longer best
+    (vbest=0 in associated Diffimages table).  Returns a dictionary of the number of records deleted
+    from each XMerges_<field> table (absent tables are left out).
     '''
 
 
@@ -178,6 +312,17 @@ def run_single_core_job(fields,xsources_child_tables,index_thread):
         print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
         exit(64)
 
+    ndeleted_by_field = {}
+
+    my_fields = list(range(index_thread, nfields, num_cores))
+
+    if len(my_fields) == 0:
+
+        fh.write(f"No fields assigned to index_thread={index_thread}; nothing to do.\n")
+        fh.close()
+
+        return ndeleted_by_field
+
 
     # Open database connection.
 
@@ -192,105 +337,70 @@ def run_single_core_job(fields,xsources_child_tables,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
-    # Prune not-best xmerges for all fields associated with this thread:
-    # 1. Collect, once per thread, the xsids of all xsources that are no longer best
-    #    (vbest=0 in the associated DiffImages record) into a temporary table.
-    # 2. Delete from each XMerges_<field> table the records having those xsids.
-    #
-    # The set of not-best xsids does not depend on field, so it is computed once instead
-    # of being re-derived inside the per-field DELETE, which would rescan every XSources
-    # child table and rejoin DiffImages nfields times.
+    # Prune not-best merges for all fields associated with this thread:
+    # 1. Load the not-best xsids, which the main process collected once, into a temporary table.
+    # 2. Delete from each XMerges_<field> table the records having those xsids, through its
+    #    xsid index.
 
-    my_fields = list(range(index_thread, nfields, num_cores))
+    xsids_str = ",".join(str(xsid) for xsid in notbest_xsids)
 
-    if len(my_fields) == 0:
+    sql_queries = [
+        "CREATE TEMP TABLE notbest_xsids (xsid bigint PRIMARY KEY);",
+        f"INSERT INTO notbest_xsids (xsid) SELECT unnest(ARRAY[{xsids_str}]::bigint[]);",
+        "ANALYZE notbest_xsids;",
+    ]
 
-        fh.write(f"No fields assigned to index_thread={index_thread}; nothing to do.\n")
+    execute_or_raise(dbh,sql_queries,thread_debug,fh,"building notbest_xsids temporary table")
 
-    else:
+    fh.write(f"Loaded {len(notbest_xsids)} not-best xsids into temporary table notbest_xsids.\n")
+    fh.flush()
 
-        union_parts = []
-        for xsources_tablename in xsources_child_tables:
-            union_parts.append(
-                f"SELECT a.xsid FROM {xsources_tablename} AS a "
-                f"JOIN diffimages AS b ON a.pid = b.pid "
-                f"WHERE b.vbest = 0"
-            )
+    for index_field in my_fields:
+
+        field = fields[index_field]
+
+        fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
+
+        xmerges_tablename = f"xmerges_{field}"
 
 
-        # UNION, not UNION ALL, so that a xsid occurring in more than one XSources child
-        # table does not violate the primary key of the temporary table.
+        # An empty XMerges_<field> table is dropped by the vacuum phase of this script,
+        # so it may be absent.
 
-        sql_queries = [
-            "CREATE TEMP TABLE notbest_xsids (xsid bigint PRIMARY KEY);",
-            "INSERT INTO notbest_xsids (xsid) " + " UNION ".join(union_parts) + ";",
-            "ANALYZE notbest_xsids;",
-        ]
+        sql_queries = [f"SELECT to_regclass('public.{xmerges_tablename}') IS NOT NULL;"]
+        records = execute_or_raise(dbh,sql_queries,thread_debug,fh,
+                                   f"existence check for {xmerges_tablename}")
 
-        fh.write(f"Collecting not-best xsids from {len(xsources_child_tables)} XSources child table(s)...\n")
-        fh.flush()
+        if not records or not records[0][0]:
 
-        execute_or_raise(dbh,sql_queries,thread_debug,fh,"building notbest_xsids temporary table")
+            fh.write(f"{xmerges_tablename} database table does not exist; skipping...\n")
+            fh.flush()
+
+            continue
+
+        query = f"WITH deleted AS (DELETE FROM {xmerges_tablename} AS m USING notbest_xsids AS n " +\
+                f"WHERE m.xsid = n.xsid RETURNING 1) SELECT count(*) FROM deleted;"
+
+        records = execute_or_raise(dbh,[query],thread_debug,fh,
+                                   f"delete of not-best records from {xmerges_tablename}")
+
+        ndeleted = int(records[0][0])
+        ndeleted_by_field[field] = ndeleted
 
 
         # Code-timing benchmark.
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to build notbest_xsids temporary table = {diff_time_benchmark}\n")
+        fh.write(f"Deleted {ndeleted} not-best record(s) from {xmerges_tablename} database table " +
+                 f"in {diff_time_benchmark} seconds\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
-        for index_field in my_fields:
-
-            field = fields[index_field]
-
-            fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
-
-            xmerges_tablename = f"xmerges_{field}"
+        fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
+        fh.flush()
 
 
-            # An empty XMerges_<field> table is dropped by the vacuum phase of this script,
-            # so it may be absent when this script is rerun for the same processing date.
-
-            sql_queries = [f"SELECT to_regclass('public.{xmerges_tablename}') IS NOT NULL;"]
-            records = execute_or_raise(dbh,sql_queries,thread_debug,fh,
-                                       f"existence check for {xmerges_tablename}")
-
-            if not records or not records[0][0]:
-
-                fh.write(f"{xmerges_tablename} database table does not exist; skipping...\n")
-                fh.flush()
-
-                continue
-
-            query = f"DELETE FROM {xmerges_tablename} WHERE xsid IN (SELECT xsid FROM notbest_xsids);"
-
-            fh.write(f"Deleting not-best records in {xmerges_tablename} database table...\n")
-            fh.flush()
-
-            execute_or_raise(dbh,[query],thread_debug,fh,
-                             f"delete of not-best records from {xmerges_tablename}")
-
-
-            # Code-timing benchmark.
-
-            thread_end_time_benchmark = time.time()
-            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-            fh.write(f"Elapsed time in seconds to delete not-best record(s) from {xmerges_tablename} database table = {diff_time_benchmark}\n")
-            thread_start_time_benchmark = thread_end_time_benchmark
-
-
-            # End of loop over fields.
-
-            fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
-
-
-            # Flush write buffer.
-
-            fh.flush()
-
-
-    # Close database connection.
+    # Close database connection (which drops the temporary table).
 
     dbh.close()
 
@@ -305,29 +415,34 @@ def run_single_core_job(fields,xsources_child_tables,index_thread):
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
-
-    return message
+    return ndeleted_by_field
 
 
-def execute_parallel_processes(fields_list,xsources_child_tables,num_cores):
+def execute_parallel_processes(fields_list,notbest_xsids,num_cores):
+
+    '''
+    Run run_single_core_job in num_cores processes, and return the combined dictionary of
+    the number of records deleted from each XMerges_<field> table.
+    '''
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,fields_list,xsources_child_tables,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,fields_list,notbest_xsids,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    ndeleted_by_field = {}
     failures = []
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            ndeleted_by_field.update(future.result())
+            print(f"Finish normally for index_thread = {index}")
         except Exception as e:
             failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
@@ -336,11 +451,14 @@ def execute_parallel_processes(fields_list,xsources_child_tables,num_cores):
         print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
         exit(64)
 
+    return ndeleted_by_field
 
-def run_single_core_vacuum_job(fields,index_thread):
+
+def run_single_core_vacuum_job(fields,ndeleted_by_field,index_thread):
 
     '''
-    Vacuum/analyze or drop empty xmerges_<field> database tables.
+    Drop empty XMerges_<field> database tables, and vacuum/analyze those from which records were
+    deleted.
     '''
 
     thread_debug = 0
@@ -376,9 +494,11 @@ def run_single_core_vacuum_job(fields,index_thread):
             print(f"Dropping {tablename} database table...")
             execute_or_raise(dbh,[f"DROP TABLE {tablename};"],thread_debug,None,
                              f"drop of {tablename}")
-        else:
+        elif ndeleted_by_field.get(field,0) > 0:
             print(f"Vacuuming and analyzing {tablename} database table...")
             dbh.vacuum_analyze_table(tablename)
+        else:
+            print(f"No records deleted from {tablename} database table; not vacuuming...")
 
     dbh.close()
 
@@ -390,12 +510,12 @@ def run_single_core_vacuum_job(fields,index_thread):
     return message
 
 
-def execute_parallel_vacuum_processes(fields_list,num_cores):
+def execute_parallel_vacuum_processes(fields_list,ndeleted_by_field,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
-        futures = [executor.submit(run_single_core_vacuum_job,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_vacuum_job,fields_list,ndeleted_by_field,thread_index) for thread_index in range(num_cores)]
 
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)
@@ -423,8 +543,8 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to delete all not-best XMerges_<field> database records
-    for fields that are associated with the given processing date.
+    Delete all not-best XMerges_<field> database records for the fields of the given
+    processing request.
     '''
 
 
@@ -436,12 +556,13 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Look up for the given processing date the XSources child table names
-    # that were cross-matched and a distinct list of the fields covered by the xsources.
+    # Look up for the given processing request the XSources child table names
+    # that were cross-matched, the fields covered by its XSources, and its jobs.
 
-    xsource_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
-                                                                   table_prefix="xsources")
+    xsource_tables_to_crossmatch_tuples_list,fields_list,_,meta_list = \
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="xsources",
+                                                                    reqid=proc_req,
+                                                                    naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
     xsources_child_tables = []
     for table_to_crossmatch_tuple in xsource_tables_to_crossmatch_tuples_list:
@@ -451,12 +572,25 @@ if __name__ == '__main__':
 
         xsources_tablename = f"xsources_{obs_date}_{sca}"
 
-        xsources_child_tables.append(xsources_tablename)
+        sql_queries = [f"SELECT to_regclass('public.{xsources_tablename}') IS NOT NULL;"]
+        records = execute_or_raise(dbh,sql_queries,0,None,f"existence check for {xsources_tablename}")
+
+        if records[0][0]:
+            xsources_child_tables.append(xsources_tablename)
 
     if len(xsources_child_tables) == 0:
         print("*** Error: No XSources child tables found;  quitting...")
         dbh.close()
         exit(7)
+
+
+    # Collect, once, the xsids of the XSources that are no longer best.
+
+    rids = [meta_dict["rid"] for meta_dict in meta_list]
+
+    notbest_xsids = collect_notbest_xsids(dbh,xsources_child_tables,rids,full_scan)
+
+    print(f"Number of not-best xsids to prune (full_scan={full_scan}) = {len(notbest_xsids)}")
 
 
     # Close the main database connection before the parallel phases, rather than leaving
@@ -471,21 +605,27 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to collect inputs =",
+    print("Elapsed time in seconds to collect inputs and not-best xsids =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
 
     ################################################################################
-    # Execute tasks for fields in parallel, with the number of parallel threads
-    # equal to the number of cores on the job-launcher machine.
+    # Delete the not-best records for fields in parallel, with the number of parallel
+    # threads equal to the number of cores on the job-launcher machine.  Skipped if
+    # there is nothing to prune.
     ################################################################################
 
-    if num_cores > 1:
-        execute_parallel_processes(fields_list,xsources_child_tables,num_cores)
+    if len(notbest_xsids) == 0:
+        print("No not-best xsids; nothing to prune.")
+        ndeleted_by_field = {}
+    elif num_cores > 1:
+        ndeleted_by_field = execute_parallel_processes(fields_list,notbest_xsids,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(fields_list,xsources_child_tables,thread_index)
+        ndeleted_by_field = run_single_core_job(fields_list,notbest_xsids,thread_index)
+
+    print("Total number of not-best XMerges records deleted =",sum(ndeleted_by_field.values()))
 
 
     # Code-timing benchmark.
@@ -496,21 +636,22 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Vacuum and analyze xmerges_<field> database tables for all fields.  Drop table if empty.
+    # Drop empty XMerges_<field> database tables, and vacuum and analyze those from which
+    # records were deleted.
 
-    print("Vacuuming and analyzing xmerges_<field> database tables for all fields...")
+    print("Dropping empty XMerges_<field> database tables and vacuuming pruned ones...")
 
     if num_cores > 1:
-        execute_parallel_vacuum_processes(fields_list,num_cores)
+        execute_parallel_vacuum_processes(fields_list,ndeleted_by_field,num_cores)
     else:
         thread_index = 0
-        run_single_core_vacuum_job(fields_list,thread_index)
+        run_single_core_vacuum_job(fields_list,ndeleted_by_field,thread_index)
 
 
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to vacuum and analyze all xmerges database tables =",
+    print("Elapsed time in seconds to drop and vacuum XMerges database tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -518,7 +659,7 @@ if __name__ == '__main__':
     # Code-timing benchmark overall.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to delete all not-best xmerges =",
+    print("Elapsed time in seconds to delete all not-best merges =",
         end_time_benchmark - start_time_benchmark_at_start)
 
 

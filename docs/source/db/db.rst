@@ -54,6 +54,42 @@ The L2Files database table has the ``overlapfields`` int[] column for a storing 
 Roman SCA image, with its unique orientation on the sky, for fields that it overlaps.  The algorithm that computes
 the overlapping fields omits fields with less than 25 pixels of overlap.
 
+Because of that 25-pixel threshold, ``overlapfields`` is not used on its own to find the fields
+of an image's sources: a source loaded from within 25 pixels of the image edge can lie in a
+field the column omits (about 8% of SCA images have such a sliver, a few hundred to a few
+thousand pixels in area).  The database post-processing stages instead compute the fields with
+``util.source_footprint_fields`` in ``modules/utils/rapid_pipeline_subs.py``, from the
+``L2Files`` WCS with the image grown by 5 pixels, and the lightcurve-statistics stages find a
+field's Sources and XSources child tables with ``util.lookup_child_tables_for_field``: the
+images whose ``overlapfields`` holds the field or one of its neighbors, kept if their source
+footprint includes the field.
+
+
+Observation Identifiers and Surveys
+************************************
+
+The Exposures database table stores the Roman observation identifiers of each exposure, from the
+ASDF ``meta.observation`` of its L2 files: ``program_id``, ``execution_plan``, ``pass``, ``segment``,
+``observation``, ``visit``, ``exposure``, ``visit_id`` and ``observation_id``.
+Exposures registered before these columns existed have NULL in them.
+
+The Surveys database table maps ``program_id`` to ``program_title`` and ``category`` (the proposal type,
+as in ASDF ``meta.program.category``: CCS, GAS, GI, CAL, COM, ENG, ..., or SIM for simulations).
+Several program IDs may share one title, e.g., a multi-year survey that is given a new program number each year.
+Surveys is maintained by hand, in ``database/schema/rapidOpsSurveysInserts.sql``, and is never written by ingest.
+Simulations have fixed negative program IDs, which cannot collide with real Roman program numbers (1-18445):
+-1 SOCSIMS, -2 OpenUniverse, -3 RimTimSims.
+
+``Exposures.program_id`` is deliberately not a foreign key to Surveys, so that a new program not yet added
+to Surveys does not stop ingest; ``pipeline/ingestL2Files.py`` prints a warning instead.
+Join with ``left join`` so that exposures of unmapped programs are not lost, and find those programs with
+
+.. code-block::
+
+    select distinct e.program_id from exposures e
+    left join surveys s using (program_id)
+    where e.program_id is not null and s.program_id is null;
+
 
 Observation Identifiers and Surveys
 ************************************
@@ -389,3 +425,61 @@ in order to aid in prefiltering records that are loaded into the database (and f
 +--------------------+-----------------------------------------------------------------------------------+
 | CFIT               | PSF-fit residual in central pixel divided by fit flux (null = not computed)       |
 +--------------------+-----------------------------------------------------------------------------------+
+
+
+.. _db-prefilter:
+
+Prefiltering Records Loaded Into Sources and XSources
+******************************************************
+
+Not every difference-image catalog record is loaded into the database.  When stage 10
+(``pipeline/loadPSFCatIntoDBSourcesTable.py``) loads the PhotUtils PSF-fit catalogs into the
+Sources child tables, and stage 11 (``pipeline/loadSECatIntoDBSourcesTable.py``) loads the
+SExtractor catalogs into the XSources child tables, each record must pass a prefilter, which is
+applied to the catalogs of both the positive and the negative difference images.  Rejected
+records are not loaded into any database table, so they are not cross-matched and do not appear
+in the lightcurves; they remain in the catalog files in S3.
+
+The cuts are set in the ``[DATABASE_PREFILTER]`` section of
+``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``, and are applied by
+``prefilter_database_records`` in ``modules/utils/rapid_pipeline_subs.py``:
+
++--------------------------------+---------+-------------+--------------------------------------------------------------+
+| Parameter                      | Value   | Applies to  | A record is loaded only if                                   |
++================================+=========+=============+==============================================================+
+| ``sumrat_prefilter_threshold`` | 0.4     | Both        | ``sumrat`` (``SUMRAT``) > 0.4                                |
++--------------------------------+---------+-------------+--------------------------------------------------------------+
+| ``rb_prefilter_threshold``     | 0.0     | Both        | real-bogus score ``rb_score`` (``RB_SCORE``) > 0.0           |
++--------------------------------+---------+-------------+--------------------------------------------------------------+
+| ``snr_prefilter_threshold``    | 5.0     | XSources    | ``FLUX_APER_1 / FLUXERR_APER_1`` > 5.0                       |
++--------------------------------+---------+-------------+--------------------------------------------------------------+
+
+The rules are:
+
+* A record must pass every cut to be loaded.  The comparisons are strict, so a record whose
+  value equals its threshold is rejected.
+* A cut applies only where its value was computed.  A record is not rejected for a value that
+  is missing: the catalog column is absent (e.g., the real-bogus classifier was not run), or
+  the value is the catalog fill value (-999.0), NaN or infinite.  For example, ``sumrat`` is
+  missing when the 5x5 stamp does not fit within the image.
+* The SNR cut uses the 3-pixel-diameter SExtractor aperture (``FLUX_APER_1``, the second
+  aperture of ``sextractor_PHOT_APERTURES``) and applies to XSources only.  Set
+  ``snr_prefilter_threshold = None``, or omit it, for no SNR cut.
+* If the ``[DATABASE_PREFILTER]`` section is missing, the loading scripts print a warning and
+  load every record (apart from the position cuts below).  If the section is present,
+  ``sumrat_prefilter_threshold`` and ``rb_prefilter_threshold`` must both be given.
+* The ``rb`` cut is a loose one, independent of the threshold that sets the real-bogus label
+  (0.5134 for the current model): with ``rb_prefilter_threshold = 0.0``, it rejects only
+  records scored exactly 0.0.  Records labeled bogus (``rblabel = 0``) can therefore be loaded.
+
+Before the prefilter, each loading script also rejects records by position:
+
+* Sources: a PSF-fit position (``x_fit``, ``y_fit``, zero-based) outside
+  [-0.5, ``naxis`` - 0.5], or NaN.
+* XSources: a position (``XWIN_IMAGE``, ``YWIN_IMAGE``, one-based) outside
+  [0.5, ``naxis`` + 0.5], or NaN, or whose nearest pixel is within 2 pixels of the image edge.
+  There the 5x5 ``sumrat`` stamp does not fit, so the prefilter could not cut them, and the
+  outermost rows and columns of the difference images are noisy.
+
+For each catalog, the loading scripts log the thresholds used and the number of records
+rejected (``prefilter rejected <n> of <m> sources`` or ``... xsources``).

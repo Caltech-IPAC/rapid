@@ -34,6 +34,12 @@ nside9 = 2**level9
 # are rejected (in pixel units, for x against naxis1 and y against naxis2).
 # Remember, SExtractor pixels are one-based.
 
+# Sources whose nearest pixel is within edge_margin pixels of the image edge are rejected too:
+# the 5x5 sumrat stamp does not fit there, so their sumrat is missing and the prefilter cannot
+# cut them, and the outermost row and column of the difference images are much noisier than
+# the rest (robust sigma ~3.5x on the socsims), which makes spurious detections along them.
+edge_margin = 2                 # Pixels
+
 tol = 0.0001                    # Fractional pixels
 xy_fit_min = 0.5 - tol
 xy_fit_max_offset = 0.5 + tol
@@ -177,6 +183,8 @@ naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage']) + 1
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage']) + 1
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 
 # Prefilter thresholds for the records loaded into the xsources tables, and the fill values of
@@ -186,6 +194,12 @@ sumrat_prefilter_threshold,rb_prefilter_threshold,catalog_fill_values = util.get
 
 print("sumrat_prefilter_threshold =",sumrat_prefilter_threshold)
 print("rb_prefilter_threshold =",rb_prefilter_threshold)
+
+# SNR cut on FLUX_APER_1 / FLUXERR_APER_1 (the 3-pixel-diameter aperture).
+
+snr_prefilter_threshold = util.get_snr_prefilter_threshold(config_input)
+
+print("snr_prefilter_threshold =",snr_prefilter_threshold)
 print("catalog_fill_values =",catalog_fill_values)
 
 
@@ -404,10 +418,18 @@ def write_secat_qtable_to_csv_file(isdiffpos,
     keep = ((XWIN_IMAGE_arr >= xy_fit_min) & (XWIN_IMAGE_arr <= naxis1 + xy_fit_max_offset) &
             (YWIN_IMAGE_arr >= xy_fit_min) & (YWIN_IMAGE_arr <= naxis2 + xy_fit_max_offset))
 
+    with np.errstate(invalid="ignore"):
+        xnear = np.floor(XWIN_IMAGE_arr + 0.5)
+        ynear = np.floor(YWIN_IMAGE_arr + 0.5)
+
+    keep &= ((xnear >= 1 + edge_margin) & (xnear <= naxis1 - edge_margin) &
+             (ynear >= 1 + edge_margin) & (ynear <= naxis2 - edge_margin))
+
     nkeep = int(np.count_nonzero(keep))
 
     print(f"write_secat_qtable_to_csv_file: isdiffpos={isdiffpos}, "
-          f"rejected {nrows - nkeep} of {nrows} xsources with out-of-range xfit,yfit")
+          f"rejected {nrows - nkeep} of {nrows} xsources with out-of-range xfit,yfit or within "
+          f"{edge_margin} pixels of the image edge")
 
     if nkeep == 0:
         return
@@ -419,13 +441,19 @@ def write_secat_qtable_to_csv_file(isdiffpos,
         nrows = nkeep
 
 
-    # Prefilter: reject xsources with sumrat or rb at or below its threshold, where computed.
+    # Prefilter: reject xsources with sumrat, rb, or SNR at or below its threshold, where computed.
+
+    with np.errstate(divide="ignore",invalid="ignore"):
+        snr_aper = util.catalog_float_values(secat_qtable,"FLUX_APER_1",catalog_fill_values) / \
+                   util.catalog_float_values(secat_qtable,"FLUXERR_APER_1",catalog_fill_values)
 
     keep = util.prefilter_database_records(nrows,
                                            util.catalog_float_values(secat_qtable,"SUMRAT",catalog_fill_values),
                                            util.catalog_float_values(secat_qtable,"RB_SCORE",catalog_fill_values),
                                            sumrat_prefilter_threshold,
-                                           rb_prefilter_threshold)
+                                           rb_prefilter_threshold,
+                                           snr = snr_aper,
+                                           snr_prefilter_threshold = snr_prefilter_threshold)
 
     nkeep = int(np.count_nonzero(keep))
 
@@ -797,7 +825,9 @@ if __name__ == '__main__':
 
     xsources_tables_to_load_tuples_list,_,jid_list,meta_list = \
         util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
-                                                                   table_prefix="xsources")
+                                                                   table_prefix="xsources",
+                                                                   reqid=proc_req,
+                                                                   naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
     if len(xsources_tables_to_load_tuples_list) == 0:
         print(f"*** Error: No XSources child tables to be loaded;  quitting...")

@@ -127,9 +127,11 @@ Inside the container, set the environment that all stages use:
 ``JOBPROCDATE`` is the *processing date*, under which the ``Jobs`` records and the S3 products
 are filed; it is distinct from the observation dates of the data, and stages 3, 6 and 9 also
 take it as their command-line argument.  ``PROCREQ`` is the ``reqid`` of the processing request:
-every stage files its S3 objects under ``<processing date>/req<reqid>/``, and the stages that
-need it quit with exit code 64 if it is not set.  Use the same value in all stages, otherwise a
-registration stage will not find the files its launch stage wrote.
+every stage files its S3 objects under ``<processing date>/req<reqid>/``.  The launch stages
+record it in ``Jobs.reqid``, and the later stages select only the ``Jobs`` records with that
+``reqid`` (whatever day they ran), so that they leave other processing requests on the same
+processing date alone.  The stages quit with exit code 64 if it is not set.  Use the same value
+in all stages, otherwise a later stage will not find the jobs and files of its launch stage.
 
 The VPO creates a ``ProcReqs`` record for each request; run by hand, create one yourself, so that
 the ``reqid`` comes from the same sequence and no other request (in particular, none the VPO
@@ -267,8 +269,15 @@ Stage 9: register post-processing pipelines
 Stages 10 to 18: database post-processing and alerts
 =======================================================
 
-These take no command-line arguments; they work on the processing date ``JOBPROCDATE`` (and the
-processing request ``PROCREQ``, where they read S3 products).
+These take no command-line arguments; they work on the jobs of the processing date
+``JOBPROCDATE`` and the processing request ``PROCREQ``.  The cross-matching stages (12
+and 13) also require ``STARTDATETIME`` and ``ENDDATETIME``, with the same values as in stage 4:
+they cross-match only the sources of exposures with ``dateobs >= STARTDATETIME`` and
+``dateobs < ENDDATETIME`` in ``L2Files``.  The Sources and XSources child tables hold a whole
+observation date, so they can also hold the sources of other processing requests, which must not
+be cross-matched again.  The cross-matching stages quit with exit code 64 if either variable is
+unset, cannot be parsed as a datetime, or if ``STARTDATETIME`` is not before ``ENDDATETIME``, and
+exit with code 0 without cross-matching anything if no exposure is in the range.
 
 .. code-block::
 
@@ -287,10 +296,19 @@ code 0 (``echo $?``) before starting the next, since an exit code of 64 or highe
 Alert production (stage 18) only reads what the previous stages wrote, so it can be rerun on
 its own.
 
-The loading stages (10 and 11) prefilter the records they load, by ``sumrat`` and the real/bogus
-score (``[DATABASE_PREFILTER]`` of the configuration file).  The loading stages also accept
+The loading stages (10 and 11) prefilter the records they load, by ``sumrat``, the real/bogus
+score and, for XSources, the aperture SNR (``[DATABASE_PREFILTER]`` of the configuration file;
+see :ref:`database prefilter <db-prefilter>`).  The loading stages also accept
 ``SKIPLOADING`` and ``DONTCHECKDONEFILE``, and alert production ``ALERTSMAXCHIPS`` and
 ``DONOTUPLOADPRODUCTS``, for testing; leave them unset for a normal run.
+
+The pruning stages (16 and 17) delete the ``Merges``/``XMerges`` records of sources whose
+difference image is no longer best.  By default they consider only the difference images of
+the request's own ``rid`` values that were superseded (``vbest = 0``), which is what reprocessing
+in the request does, and they finish at once if there are none.  ``PRUNEFULLSCAN=True`` instead
+scans the request's Sources/XSources child tables in full for sources of any not-best difference
+image, for example after setting ``vbest = 0`` by hand.  Either way they vacuum only the tables
+they deleted records from, and drop empty ones.
 
 
 Performance

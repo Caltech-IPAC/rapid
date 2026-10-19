@@ -1,5 +1,5 @@
 """
-Tests for alerts/ned_catalog.py: mirroring the NED HATS collection into a
+Tests for alerts/catalog_store.py: mirroring the NED HATS collection into a
 store without local staging, verifying it, re-cutting leaves into order-6
 files, and describing the result.
 
@@ -20,7 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from alerts import ned_catalog as nc
+from alerts import catalog_store as nc
 
 
 # ---------------------------------------------------------------------------
@@ -291,3 +291,151 @@ def test_cli_verify_and_manifest(served, tmp_path, capsys):
     assert nc.main(["manifest", "--dest", str(dest)]) == 0
     out = capsys.readouterr().out
     assert "NED_TEST_1.0" in out and "0 missing or mismatched" in out
+
+
+# ---------------------------------------------------------------------------
+# Gaia: a synthetic LINCC-shaped catalog (all columns + extras), projected
+# ---------------------------------------------------------------------------
+
+GAIA_LEAVES = [(2, 5), (6, 28823)]
+
+
+def _gaia_leaf_table(order, npix, n=500, seed=0):
+    """Rows inside (order, npix) with every GAIA_COLUMNS column, in the real
+    types, plus two columns the projection must drop."""
+    rng = np.random.default_rng(seed)
+    lo, hi = npix << (2 * (29 - order)), (npix + 1) << (2 * (29 - order))
+    f32 = lambda: pa.array(rng.random(n).astype(np.float32))
+    cols = {
+        "_healpix_29": pa.array(np.sort(rng.integers(lo, hi, n, dtype=np.int64))),
+        "solution_id": pa.array(np.full(n, 1636148068921376768, dtype=np.int64)),
+        "ref_epoch": pa.array(np.full(n, 2016.0)),
+        "designation": [f"Gaia DR3 {i}" for i in range(n)],
+        "source_id": pa.array(rng.integers(1, 2**62, n, dtype=np.int64)),
+        "ra": rng.uniform(0, 360, n), "dec": rng.uniform(-90, 90, n),
+        "ra_error": f32(), "dec_error": f32(),
+        "pmra": rng.normal(0, 5, n), "pmdec": rng.normal(0, 5, n),
+        "pmra_error": f32(), "pmdec_error": f32(),
+        "parallax": rng.normal(1, 1, n), "parallax_error": f32(),
+        "ruwe": f32(), "astrometric_excess_noise": f32(),
+        "ipd_frac_multi_peak": pa.array(rng.integers(0, 100, n).astype(np.int8)),
+        "duplicated_source": pa.array(rng.random(n) < 0.1),
+        "phot_g_mean_mag": f32(), "phot_bp_mean_mag": f32(), "phot_rp_mean_mag": f32(),
+        "bp_rp": f32(), "phot_g_mean_flux_over_error": f32(),
+        "phot_variable_flag": pa.array(rng.choice(["NOT_AVAILABLE", "VARIABLE"], n).tolist()),
+        "non_single_star": pa.array(rng.integers(0, 4, n).astype(np.int16)),
+        "in_qso_candidates": pa.array(rng.random(n) < 0.01),
+        "in_galaxy_candidates": pa.array(rng.random(n) < 0.01),
+        "classprob_dsc_combmod_star": f32(), "classprob_dsc_combmod_galaxy": f32(),
+        "classprob_dsc_combmod_quasar": f32(),
+    }
+    return pa.table(cols)
+
+
+@pytest.fixture()
+def gaia_collection(tmp_path):
+    """A LINCC-shaped Gaia catalog directory: Npix=<p>.parquet leaves with
+    several row groups, plus the two metadata files."""
+    root = tmp_path / "gaia_src"
+    for order, npix in GAIA_LEAVES:
+        path = root / nc.gaia_leaf_rel(order, npix)
+        path.parent.mkdir(parents=True)
+        pq.write_table(_gaia_leaf_table(order, npix, seed=npix), path, row_group_size=200)
+    (root / "partition_info.csv").write_text(
+        "Norder,Npix\n" + "".join(f"{o},{p}\n" for o, p in GAIA_LEAVES))
+    (root / "hats.properties").write_text(
+        "#HATS catalog\nobs_collection=gaia_test\nhats_nrows=1000\n"
+        "hats_npix_suffix=.parquet\nhats_release_date=2024-09-18\n")
+    return root
+
+
+@pytest.fixture()
+def gaia_served(gaia_collection):
+    """`gaia_collection` over HTTP with Range support (SimpleHTTPRequestHandler
+    has none), which is what the ingest's HTTP reader relies on."""
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k):
+            super().__init__(*a, directory=str(gaia_collection), **k)
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            path = Path(self.translate_path(self.path))
+            spec = self.headers.get("Range")
+            if not spec or not path.is_file():
+                return super().do_GET()
+            lo, _, hi = spec.removeprefix("bytes=").partition("-")
+            size = path.stat().st_size
+            lo, hi = int(lo), min(int(hi) if hi else size - 1, size - 1)
+            with open(path, "rb") as f:
+                f.seek(lo)
+                body = f.read(hi - lo + 1)
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {lo}-{hi}/{size}")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/"
+    finally:
+        server.shutdown()
+
+
+def test_http_range_file_reads_like_a_file(gaia_served, gaia_collection):
+    rel = nc.gaia_leaf_rel(*GAIA_LEAVES[1])
+    raw = (gaia_collection / rel).read_bytes()
+    f = nc._HttpRangeFile(gaia_served + rel, nc.requests.Session())
+    assert f.size == len(raw)
+    f.seek(-8, 2)
+    assert f.read(4) == raw[-8:-4] and f.tell() == len(raw) - 4
+    f.seek(10)
+    assert f.read(100) == raw[10:110]
+    assert f.read(0) == b""
+    f.seek(0, 2)
+    assert f.read(1) == b""
+
+
+def test_ingest_gaia_projects_resumes_and_verifies(gaia_served, tmp_path):
+    dest = tmp_path / "store"
+    info = nc.ingest_gaia(str(dest), gaia_served, jobs=2)
+    assert info["counts"] == {"skipped": 0, "done": 2, "failed": 0}
+    assert info["complete"] and info["rows_match_hats_nrows"] is True
+    assert info["rows"] == 1000 and info["leaves_done"] == 2
+    assert info["ref_epoch"] == 2016.0                           # from the source's statistics
+    for order, npix in GAIA_LEAVES:
+        t = pq.read_table(dest / nc.gaia_leaf_rel(order, npix))
+        assert t.column_names == list(nc.GAIA_COLUMNS)           # dropped the extras
+        assert t.num_rows == 500
+        assert t["phot_g_mean_mag"].type == pa.float32()         # types preserved
+        assert t["ipd_frac_multi_peak"].type == pa.int8()
+        meta = pq.ParquetFile(dest / nc.gaia_leaf_rel(order, npix)).metadata
+        assert meta.row_group(0).column(0).compression == "ZSTD"
+        assert meta.num_row_groups == 3                          # row groups kept
+    assert (dest / "hats.properties").exists()
+    assert (dest / "partition_info.csv").exists()
+    # resumable: a leaf without its marker is redone, the other skipped
+    (dest / nc.gaia_done_marker(*GAIA_LEAVES[0])).unlink()
+    again = nc.ingest_gaia(str(dest), gaia_served, jobs=1)
+    assert again["counts"] == {"skipped": 1, "done": 1, "failed": 0}
+    # a subset run only touches named leaves, and names must exist
+    sub = nc.ingest_gaia(str(dest), gaia_served, leaves=[GAIA_LEAVES[1]], force=True)
+    assert sub["counts"] == {"skipped": 0, "done": 1, "failed": 0}
+    with pytest.raises(ValueError, match="not in partition_info"):
+        nc.ingest_gaia(str(dest), gaia_served, leaves=[(6, 1)])
+
+
+def test_ingest_gaia_from_a_local_directory_and_cli(gaia_collection, tmp_path, capsys):
+    dest = tmp_path / "store"
+    assert nc.main(["ingest-gaia", "--url", str(gaia_collection), "--dest", str(dest),
+                    "--leaves", "6/28823", "--jobs", "1"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["leaves_done"] == 1 and out["leaves_total"] == 2 and out["complete"] is False
+    assert out["rows_match_hats_nrows"] is None               # unknown until complete
+    assert pq.read_table(dest / nc.gaia_leaf_rel(6, 28823)).num_rows == 500
+    record = json.loads((dest / nc.GAIA_INFO).read_text())
+    assert record["release"] == "gaia_test" and record["columns"] == list(nc.GAIA_COLUMNS)

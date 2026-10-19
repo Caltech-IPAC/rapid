@@ -603,10 +603,12 @@ def test_max_sources_zero_disables_the_cap(chip_data):
 
 import numpy as np
 
-from alerts.forced_phot import PrevImage, forced_measurement_id
+from alerts.forced_phot import (PrevImage, forced_measurement_id,
+                                list_object_periods, period_key,
+                                read_object_history, write_object_history)
 from alerts.produce import assemble_alert
 from alerts.providers import FORCED_WINDOW_DAYS
-from conftest import CHIP_MJDOBS, CHIP_PPID
+from conftest import CHIP_FIELD, CHIP_MJDOBS, CHIP_PPID
 
 
 class FakeSearch:
@@ -627,13 +629,16 @@ class FakeSearch:
         if self.fail:
             raise RuntimeError("no database")
         idx = np.arange(len(positions))
+        lo, hi = kw.get("mjd_lo"), kw.get("mjd_hi")
+        epochs = [(rid, mjd) for rid, mjd in ((13, CHIP_MJDOBS - 50.0), (12, CHIP_MJDOBS - 1.0), (11, CHIP_MJDOBS))
+                  if (lo is None or mjd >= lo) and (hi is None or mjd <= hi)]     # honor the window
         return [PrevImage(rid=rid, pid=rid * 10, diff_filename=self.image_path,
                           sci_filename=self.image_path, diff_psf=self.psf_path,
                           sci_psf=self.sci_psf, diff_uncert="/nonexistent/unc.fits",
                           sci_uncert="/nonexistent/unc.fits", l2_filename="l2.fits.gz", mjdobs=mjd,
                           fid=8, band="W146", expid=1, sca=7, corners=(0,) * 8,
                           position_index=idx)
-                for rid, mjd in ((13, CHIP_MJDOBS - 50.0), (12, CHIP_MJDOBS - 1.0), (11, CHIP_MJDOBS))]
+                for rid, mjd in epochs]
 
 
 def forced_provider(chip_data, search, **kw):
@@ -662,7 +667,6 @@ def test_forced_photometry_reaches_the_alert(chip_data, synthetic_chip, tmp_path
     search = FakeSearch(synthetic_chip, tmp_path)
     store = tmp_path / "store"
     with forced_provider(chip_data, search, forced_store=str(store)) as provider:
-        provider.forced_prefix = "20260916/req77/jid5/"
         sources = list(provider.iter_sources(CHIP_PID))
         # the search got the chip's geometry and the default window
         (kw,) = search.calls
@@ -688,8 +692,11 @@ def test_forced_photometry_reaches_the_alert(chip_data, synthetic_chip, tmp_path
                                                                      CHIP_MJDOBS - 1.0: 12,
                                                                      CHIP_MJDOBS: 11}[f.mjdobs],
                                                         obj.aid, obj.ra0, obj.dec0)
-        # the parquet landed under the stage-style prefix
-        assert (store / "20260916" / "req77" / "jid5" / f"forced_phot_pid{CHIP_PID}.parquet").exists()
+        # one month file per object, under its field; the 50-day-old epoch
+        # was outside the window so only one month was touched
+        month = period_key(CHIP_MJDOBS)
+        for aid in chip_data.objects:
+            assert list_object_periods(str(store), CHIP_FIELD, aid) == [month]
         # and the alert carries the records
         alert = assemble_alert(provider, source.sid)
         assert len(alert["prvDiaForcedSources"]) == 2
@@ -705,25 +712,63 @@ def test_forced_photometry_window_limits_search_and_lookup(chip_data, synthetic_
         assert abs(search.calls[0]["mjd_lo"] - (CHIP_MJDOBS - 2.0)) < 1e-9
         source = sources[0]
         forced = provider.get_forced_photometry(source, provider.get_object_for_source(source))
-        # the stub returned the 50-day-old epoch anyway; the lookup drops it
+        # the search was windowed to 2 days; the 50-day-old epoch is absent
         assert [f.mjdobs for f in forced] == [CHIP_MJDOBS - 1.0, CHIP_MJDOBS]
 
 
-def test_forced_photometry_rereads_the_parquet_instead_of_recomputing(chip_data, synthetic_chip, tmp_path, objects_on_chip):
+def run_chip(chip_data, search, store, caplog, **kw):
+    """One chip run; returns (forced records of the first source, log text)."""
+    with forced_provider(chip_data, search, forced_store=store, **kw) as provider:
+        with caplog.at_level("INFO"):
+            caplog.clear()
+            sources = list(provider.iter_sources(CHIP_PID))
+        src = sources[0]
+        return provider.get_forced_photometry(src, provider.get_object_for_source(src)), caplog.text
+
+
+def test_second_run_measures_only_the_missing_epochs(chip_data, synthetic_chip, tmp_path, objects_on_chip, caplog):
     store = str(tmp_path / "store")
-    first = FakeSearch(synthetic_chip, tmp_path)
-    with forced_provider(chip_data, first, forced_store=store) as provider:
-        sources = list(provider.iter_sources(CHIP_PID))
-        src = sources[0]; obj = provider.get_object_for_source(src)
-        before = provider.get_forced_photometry(src, obj)
-    second = FakeSearch(synthetic_chip, tmp_path, fail=True)       # would raise if consulted
-    with forced_provider(chip_data, second, forced_store=store) as provider:
-        sources = list(provider.iter_sources(CHIP_PID))
-        src = sources[0]; obj = provider.get_object_for_source(src)
-        after = provider.get_forced_photometry(src, obj)
-    assert second.calls == []
+    search = FakeSearch(synthetic_chip, tmp_path)
+    before, log = run_chip(chip_data, search, store, caplog)
+    assert "measured 2 of 2 images" in log                       # first run: both in-window epochs
+    # second run on the same chip: everything is stored, nothing is measured
+    after, log = run_chip(chip_data, search, store, caplog)
+    assert "measured 0 of 2 images" in log and "(0 new rows)" in log
     assert [(f.forced_id, f.flux, f.science_flux, f.flags) for f in after] == \
         [(f.forced_id, f.flux, f.science_flux, f.flags) for f in before]
+    # a hole (e.g. a lost write race): drop one epoch from one object's
+    # file, and the next run refills exactly that pair
+    aid = sorted(chip_data.objects)[0]
+    hist, _ = read_object_history(store, CHIP_FIELD, aid)
+    write_object_history(store, CHIP_FIELD, aid, hist[hist["rid"] != 12], [period_key(CHIP_MJDOBS)])
+    assert read_object_history(store, CHIP_FIELD, aid)[0]["rid"].tolist() == [11]
+    after, log = run_chip(chip_data, search, store, caplog)
+    assert "measured 1 of 2 images" in log and "(1 new rows)" in log
+    assert read_object_history(store, CHIP_FIELD, aid)[0]["rid"].tolist() == [12, 11]   # by mjdobs
+
+
+def test_history_at_another_position_is_discarded_and_recomputed(chip_data, synthetic_chip, tmp_path, objects_on_chip, caplog):
+    store = str(tmp_path / "store")
+    search = FakeSearch(synthetic_chip, tmp_path)
+    run_chip(chip_data, search, store, caplog)
+    # pretend one object's stored history was forced 0.5 px away
+    aid = sorted(chip_data.objects)[0]
+    hist, _ = read_object_history(store, CHIP_FIELD, aid)
+    hist["ra"] += 0.5 * 0.11 / 3600.0
+    write_object_history(store, CHIP_FIELD, aid, hist, [period_key(CHIP_MJDOBS)])
+    after, log = run_chip(chip_data, search, store, caplog)
+    assert f"aid={aid}: stored forced photometry was measured at a different position" in log
+    assert "measured 2 of 2 images" in log and "(2 new rows)" in log      # that object: both epochs again
+    hist, _ = read_object_history(store, CHIP_FIELD, aid)
+    assert len(hist) == 2 and np.allclose(hist["ra"], chip_data.objects[aid]["ra0"])
+
+
+def test_forced_photometry_without_a_store_recomputes_every_run(chip_data, synthetic_chip, tmp_path, objects_on_chip, caplog):
+    search = FakeSearch(synthetic_chip, tmp_path)
+    forced, log = run_chip(chip_data, search, None, caplog)
+    assert len(forced) == 2 and "0 month files written" in log
+    forced, log = run_chip(chip_data, search, None, caplog)
+    assert "measured 2 of 2 images" in log
 
 
 def test_forced_photometry_failure_degrades_to_null(chip_data, synthetic_chip, tmp_path, caplog):

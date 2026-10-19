@@ -121,11 +121,13 @@ MAX_SOURCES_PER_CHIP = 2000
 # ---------------------------------------------------------------------------
 # Forced photometry (alerts.forced_phot), run per chip at alert time
 # ---------------------------------------------------------------------------
-# Interim arrangement while no database table exists: every chip run forces
-# photometry at its objects' positions over the previous images and keeps
-# the result as one parquet file per chip in a store (local directory or
-# s3://bucket/prefix), re-read instead of recomputed when present. The
-# parquet layout is the future table's.
+# Interim arrangement while no database table exists: results live in a
+# per-object parquet store (forced_phot's object store: one file per object
+# per month under its field, in a local directory or s3://bucket/prefix).
+# A chip run reads its objects' stored histories, measures only the epochs
+# they are missing (normally just the chip's own; a new object gets the
+# full look-back), and rewrites the touched month files. The table layout
+# is the future database table's.
 
 #: Look-back window (days) of the per-chip forced-photometry run; None
 #: means no window, every previous image of the chip's footprint.
@@ -145,11 +147,15 @@ FORCED_PRODUCTS = ("diff", "science")
 #: provider's diff_flavor (DIFF_FLAVORS[self.diff_flavor]) instead of this
 #: constant, once forced photometry on the zogy products is validated.
 FORCED_DIFF_BASENAME = "sfftdiffimage_masked.fits"
-#: Per-chip parquet file name in the store, under the caller's prefix. The
-#: table layout, the measurement id and the parquet I/O live in
-#: alerts.forced_phot (FORCED_TABLE_DTYPE, forced_measurement_id,
-#: write_table, read_table).
-FORCED_PARQUET_BASENAME = "forced_phot_pid{pid}.parquet"
+#: A stored history whose position differs from the object's forced
+#: position by more than this (degrees; 0.1 px at 0.11"/px) was measured
+#: somewhere else and is discarded and recomputed rather than extended --
+#: a flux bias that steps mid-history is worse than a recompute. Cannot
+#: trigger today (the forced position is the fixed initial ra0/dec0); it
+#: is the guard for the re-baseline policy, see _prefetch_forced.
+FORCED_POSITION_TOL_DEG = 0.1 * 0.11 / 3600.0
+#: Threads for the per-object store round trips (latency-bound).
+FORCED_STORE_WORKERS = 16
 
 
 def _finite_or_none(value: Any) -> float | None:
@@ -494,6 +500,46 @@ class LvsMatch:
     SFR_hybrid_unc: float | None = None
     Mstar: float | None = None      # stellar mass from W1 [Msun]
     Mstar_unc: float | None = None
+
+
+@dataclass
+class GaiaMatch:
+    """One Gaia DR3 source near a detection.
+
+    Built by match_gaiacat() from the local Gaia copy (see the Gaia
+    cross-match section below); becomes one entry of the alert's
+    gaiaMatches array. Gaia answers "is this a known star, and is it
+    variable, moving or a known non-single system" -- it reaches G ~ 21,
+    far shallower than Roman, so most detections match nothing, and that
+    is the expected answer. `ra`/`dec` are the catalog position
+    PROPAGATED by proper motion to the detection's epoch (see
+    propagate_positions); sep/pa are measured against that. Attribute
+    names follow the Gaia DR3 gaia_source columns.
+    """
+    source_id: int       # Gaia DR3 source_id
+    ra: float            # position at the detection epoch, ICRS [deg]
+    dec: float
+    sep: float           # angular separation from the detection [arcsec]
+    pa: float            # position angle detection -> source, E of N [deg]
+    pmra: float | None = None       # proper motion in RA*cos(dec) [mas/yr]
+    pmdec: float | None = None      # proper motion in Dec [mas/yr]
+    parallax: float | None = None   # [mas]
+    parallax_error: float | None = None
+    ruwe: float | None = None       # renormalised unit weight error (>1.4: poor fit / binary)
+    phot_g_mean_mag: float | None = None    # G [mag, Vega]
+    phot_bp_mean_mag: float | None = None   # BP
+    phot_rp_mean_mag: float | None = None   # RP
+    bp_rp: float | None = None              # BP - RP colour [mag]
+    phot_g_mean_flux_over_error: float | None = None  # G flux S/N; low = variable
+    phot_variable_flag: bool = False        # Gaia's "VARIABLE" flag
+    non_single_star: int = 0                # 0 = none; bit flags for astrometric/spectroscopic/eclipsing binary
+    in_qso_candidates: bool = False
+    in_galaxy_candidates: bool = False
+    classprob_dsc_combmod_star: float | None = None     # DSC class probabilities
+    classprob_dsc_combmod_galaxy: float | None = None
+    classprob_dsc_combmod_quasar: float | None = None
+    duplicated_source: bool = False         # another source within ~2" was removed
+    ipd_frac_multi_peak: int = 0            # % of windows with >1 peak (blend)
 
 
 @dataclass
@@ -1039,7 +1085,7 @@ def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
 #
 # Catalog access is behind the NedSliceReader callable rather than wired to
 # one backend: production reads the local copy of the object directory
-# (alerts/ned_reader.py, one cone per chip); v1 used the NED web service,
+# (alerts/catalog_readers.py, one cone per chip); v1 used the NED web service,
 # removed 2026-09-23. The matcher only ever sees column arrays. Geometry is
 # identical to the reference-catalog match.
 # ---------------------------------------------------------------------------
@@ -1419,8 +1465,8 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
 
 
 # -- NED backend ------------------------------------------------------------
-# alerts/ned_reader.py: Hp6NedReader over the local copy of the object
-# directory (order-6 HEALPix parquet built by alerts/ned_catalog.py). The
+# alerts/catalog_readers.py: Hp6NedReader over the local copy of the object
+# directory (order-6 HEALPix parquet built by alerts/catalog_store.py). The
 # web-service reader (astroquery) was removed 2026-09-23: 3-24 s per chip
 # and hours-long timeouts, and it could never supply zunc.
 
@@ -1431,8 +1477,8 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
 # The nearest NED-LVS galaxies to each detection. NED-LVS is NED's vetted
 # local-volume sample (D < 1000 Mpc, ~2.1 M galaxies) and carries what the
 # object directory lacks: adopted distances, angular diameters, photometry,
-# SFR and stellar mass. Ingested by alerts/ned_catalog.py (ingest-lvs) into
-# <prefix>/lvs/nedlvs.parquet and read by alerts/ned_reader.py LvsReader,
+# SFR and stellar mass. Ingested by alerts/catalog_store.py (ingest-lvs) into
+# <prefix>/lvs/nedlvs.parquet and read by alerts/catalog_readers.py LvsReader,
 # which holds the whole table in memory and answers the NED reader's cone
 # contract (NedSliceReader). The geometry (_nearest_within), the per-chip
 # cone (chip_cone) and the three-state null/[]/populated contract are the
@@ -1592,6 +1638,207 @@ def match_lvscat(ra: Any, dec: Any, catalog: NedCatalog,
 
 
 # ---------------------------------------------------------------------------
+# Gaia cross-match
+#
+# The nearest Gaia DR3 sources to each detection: a star veto / variable-
+# star tag for the bulge, where NED has nothing. The local copy is the
+# 28-column projection of LINCC's HATS catalog that alerts/catalog_store.py
+# (ingest-gaia) writes, read per chip by alerts/catalog_readers.py
+# GaiaReader under the NED reader's cone contract (NedSliceReader). The
+# geometry (_nearest_within), the per-chip cone (chip_cone) and the three-
+# state null/[]/populated contract are the NED cross-match's.
+#
+# What differs is the epoch. Gaia positions are given at the catalog's
+# reference epoch (J2016.0 for DR3) and bulge stars move; by Roman's first
+# season that is 11 years of drift. So, once per chip, every Gaia row in
+# the cone is moved to the exposure's epoch by its proper motion BEFORE the
+# tree is built (propagate_positions), and the fetched cone is widened by
+# the largest drift any Gaia star can have over that interval so a star
+# that moves INTO the chip's cone is not missed (GAIA_PM_MAX_ARCSEC_PER_YEAR).
+# A new Gaia release resets the clock: the reference epoch comes from the
+# copy's ingest record, not from here.
+# ---------------------------------------------------------------------------
+
+# Maximum separation for a reported match. Gaia's astrometry is ~mas and
+# Roman's ~0.1", so a true counterpart sits well inside 1"; the radius is
+# generous for unmodelled motion. In the bulge (1.27 M Gaia sources per
+# deg^2) the chance-coincidence rate rho*pi*r^2 at 1" is ~0.3 per
+# detection -- consumers must cut on `sep`.
+GAIA_MATCH_RADIUS_ARCSEC = 1.0
+
+# Keep at most this many matches, nearest first.
+GAIA_MATCH_NMAX = 3
+
+# Largest proper motion in Gaia: Barnard's star, 10.4"/yr. The chip cone
+# is widened by this times the epoch offset so any star that could drift
+# into the cone is fetched; ~120" for an 11-year offset, which roughly
+# doubles the bulge cone's rows (still one parquet row group).
+GAIA_PM_MAX_ARCSEC_PER_YEAR = 11.0
+
+# Reference epoch used when the reader does not state one (a bare
+# callable in tests). Gaia DR3 positions are at J2016.0.
+GAIA_DEFAULT_REF_EPOCH = 2016.0
+
+# Columns the matcher works in -- the Gaia DR3 gaia_source names, as the
+# local copy keeps them and the GaiaMatch attributes are spelled. The
+# reader delivers exactly these: missing numerics as NaN, ints as 0,
+# bools as False, the variability flag as its string. The copy also holds
+# the position/proper-motion errors and astrometric_excess_noise, which
+# nothing reads yet.
+GAIA_INT_COLUMNS = ("source_id", "non_single_star", "ipd_frac_multi_peak")
+GAIA_BOOL_COLUMNS = ("duplicated_source", "in_qso_candidates", "in_galaxy_candidates")
+GAIA_STRING_COLUMNS = ("phot_variable_flag",)
+GAIA_NUMERIC_COLUMNS = ("ra", "dec", "pmra", "pmdec", "parallax", "parallax_error",
+                        "ruwe", "phot_g_mean_mag", "phot_bp_mean_mag",
+                        "phot_rp_mean_mag", "bp_rp", "phot_g_mean_flux_over_error",
+                        "classprob_dsc_combmod_star", "classprob_dsc_combmod_galaxy",
+                        "classprob_dsc_combmod_quasar")
+GAIA_COLUMNS = GAIA_INT_COLUMNS + GAIA_BOOL_COLUMNS + GAIA_STRING_COLUMNS + GAIA_NUMERIC_COLUMNS
+GAIA_REQUIRED_COLUMNS = ("source_id", "ra", "dec")
+
+# Gaia's phot_variable_flag value meaning "classified variable" (the other
+# value is "NOT_AVAILABLE": not analysed, which is most sources).
+GAIA_VARIABLE_FLAG = "VARIABLE"
+
+
+def epoch_offset_years(mjd: float, ref_epoch: float) -> float:
+    """Years from the Julian epoch `ref_epoch` (e.g. 2016.0) to `mjd`."""
+    ref_mjd = 51544.5 + (ref_epoch - 2000.0) * 365.25     # J2000.0 = MJD 51544.5
+    return (mjd - ref_mjd) / 365.25
+
+
+def propagate_positions(ra: np.ndarray, dec: np.ndarray, pmra: np.ndarray,
+                        pmdec: np.ndarray, dt_years: float,
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Move catalog positions by proper motion over `dt_years`.
+
+    Linear in time: ``dec += pmdec * dt`` and ``ra += pmra * dt / cos(dec)``,
+    with Gaia's `pmra` already including the cos(dec) factor and both in
+    mas/yr. A missing proper motion (NaN) moves nothing. Parallactic
+    motion is ignored (< 1 mas for all but the nearest stars; a Roman
+    pixel is 110 mas). Accurate to well under 0.1" for any Gaia star over
+    decades, except the handful within a few parsecs, which a 1" match
+    radius still absorbs.
+    """
+    ra = np.asarray(ra, dtype=float)
+    dec = np.asarray(dec, dtype=float)
+    dra = np.nan_to_num(np.asarray(pmra, dtype=float)) * dt_years / 3.6e6
+    ddec = np.nan_to_num(np.asarray(pmdec, dtype=float)) * dt_years / 3.6e6
+    new_dec = np.clip(dec + ddec, -90.0, 90.0)
+    new_ra = (ra + dra / np.cos(np.radians(dec))) % 360.0
+    return new_ra, new_dec
+
+
+def build_gaiacat(table: dict[str, Any], dt_years: float = 0.0) -> NedCatalog | None:
+    """Propagate a Gaia slice to the detection epoch and build its tree.
+
+    Parameters
+    ----------
+    table : dict
+        Column arrays keyed by GAIA_COLUMNS. source_id/ra/dec required; the
+        rest filled with nulls (NaN / 0 / False / None) when absent.
+    dt_years : float, optional
+        Years from the catalog's reference epoch to the exposure; the
+        slice's `ra`/`dec` are replaced by the propagated positions.
+
+    Returns
+    -------
+    NedCatalog or None
+        The tree-built slice (the container shared with NED); None (with a
+        logged warning) when required columns are missing -- the cross-
+        match then degrades to "not run". An empty slice has coords=None
+        and matches to [].
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    missing = [c for c in GAIA_REQUIRED_COLUMNS if c not in table]
+    if missing:
+        logger.warning("Gaia slice is missing required columns %s; "
+                       "cross-match skipped", missing)
+        return None
+
+    n = len(np.asarray(table["source_id"]))
+    columns: dict[str, np.ndarray] = {}
+    for name in GAIA_COLUMNS:
+        if name in GAIA_NUMERIC_COLUMNS:
+            dtype, fill = float, np.nan
+        elif name in GAIA_INT_COLUMNS:
+            dtype, fill = np.int64, 0
+        elif name in GAIA_BOOL_COLUMNS:
+            dtype, fill = bool, False
+        else:
+            dtype, fill = object, None
+        values = table[name] if name in table else np.full(n, fill, dtype=dtype)
+        columns[name] = np.asarray(values, dtype=dtype)
+    if n and dt_years:
+        columns["ra"], columns["dec"] = propagate_positions(
+            columns["ra"], columns["dec"], columns["pmra"], columns["pmdec"], dt_years)
+    logger.debug("Gaia slice: %d rows, propagated %.2f yr", n, dt_years)
+
+    coords = (SkyCoord(columns["ra"] * u.deg, columns["dec"] * u.deg)
+              if n else None)
+    return NedCatalog(columns=columns, coords=coords, n_input=n)
+
+
+def _gaia_match_from_row(columns: dict[str, np.ndarray], row: int,
+                         sep: float, pa: float) -> GaiaMatch:
+    """Build one GaiaMatch from slice row `row` at the given sep/PA.
+
+    Absent numerics become None (the schema types them as nullable
+    unions); ints and bools keep their fill values; the variability flag
+    string becomes the boolean "is VARIABLE".
+    """
+    def number(name: str) -> float | None:
+        value = float(columns[name][row])
+        return value if np.isfinite(value) else None
+
+    optional: dict[str, Any] = {}
+    optional.update({name: int(columns[name][row]) for name in GAIA_INT_COLUMNS
+                     if name != "source_id"})
+    optional.update({name: bool(columns[name][row]) for name in GAIA_BOOL_COLUMNS})
+    optional.update({name: number(name) for name in GAIA_NUMERIC_COLUMNS
+                     if name not in ("ra", "dec")})
+    flag = columns["phot_variable_flag"][row]
+    optional["phot_variable_flag"] = (flag is not None
+                                      and str(flag).strip() == GAIA_VARIABLE_FLAG)
+    return GaiaMatch(source_id=int(columns["source_id"][row]),
+                     ra=float(columns["ra"][row]), dec=float(columns["dec"][row]),
+                     sep=sep, pa=pa, **optional)
+
+
+def match_gaiacat(ra: Any, dec: Any, catalog: NedCatalog,
+                  radius_arcsec: float = GAIA_MATCH_RADIUS_ARCSEC,
+                  n_max: int = GAIA_MATCH_NMAX,
+                  ) -> list[list[GaiaMatch]]:
+    """Match detection positions against a (propagated) Gaia slice.
+
+    match_nedcat() with the Gaia row builder: one KD-tree query for the
+    n_max nearest sources of every detection within `radius_arcsec` (see
+    _nearest_within). Per detection, in input order, nearest first and at
+    most `n_max` long; an empty list means "no Gaia source within the
+    radius"; "could not run" is signalled by the provider, not here.
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    ra = np.atleast_1d(np.asarray(ra, dtype=float))
+    dec = np.atleast_1d(np.asarray(dec, dtype=float))
+    results: list[list[GaiaMatch]] = [[] for _ in range(ra.size)]
+
+    coords = catalog.coords
+    if coords is None:
+        return results  # no Gaia sources in this slice
+
+    src = SkyCoord(ra * u.deg, dec * u.deg)
+    for i, cat_idx, sep_arcsec, pa_deg in _nearest_within(src, coords,
+                                                          radius_arcsec, n_max):
+        results[i].append(_gaia_match_from_row(catalog.columns, cat_idx,
+                                               sep_arcsec, pa_deg))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # The alert data provider
 #
 # One provider. The RAPID database is effectively a fast index over the
@@ -1618,6 +1865,7 @@ class AlertDataProvider:
                  kona_lookup: Any = None, refcat: bool = True,
                  ned_reader: "NedSliceReader | None" = None,
                  lvs_reader: "NedSliceReader | None" = None,
+                 gaia_reader: "NedSliceReader | None" = None,
                  max_sources: int = MAX_SOURCES_PER_CHIP,
                  forced_phot: bool = True,
                  forced_window_days: float | None = FORCED_WINDOW_DAYS,
@@ -1642,9 +1890,9 @@ class AlertDataProvider:
             Look-back window of the run, ending at the chip's own epoch;
             None (default) measures every previous image.
         forced_store : str, optional
-            Where the per-chip parquet files live: ``s3://bucket/prefix``
-            or a local directory, under the prefix set by
-            set_forced_prefix(). None keeps results in memory only.
+            The per-object parquet store (forced_phot's object store):
+            ``s3://bucket/prefix`` or a local directory. None keeps
+            results in memory only, recomputed every run.
         forced_products : sequence of str, optional
             Which image of each epoch to measure (FORCED_PRODUCTS).
         forced_search : callable, optional
@@ -1673,6 +1921,12 @@ class AlertDataProvider:
             The same contract over the NED-LVS table (columns LVS_COLUMNS;
             see the NED-LVS cross-match section). While None,
             get_lvs_matches() reports "not run" and lvsMatches stays null.
+        gaia_reader : NedSliceReader, optional
+            The same contract over the local Gaia copy (columns
+            GAIA_COLUMNS; see the Gaia cross-match section). A reader may
+            carry a ``ref_epoch`` attribute (Julian year of its positions;
+            GAIA_DEFAULT_REF_EPOCH otherwise). While None,
+            get_gaia_matches() reports "not run" and gaiaMatches stays null.
 
         Raises
         ------
@@ -1692,9 +1946,6 @@ class AlertDataProvider:
         self.forced_store = forced_store.rstrip("/") if forced_store else None
         self.forced_products = tuple(forced_products)
         self._forced_search = forced_search
-        #: key prefix under forced_store for the next chips' parquet files,
-        #: e.g. "<proc_date>/req<reqid>/jid<N>/" set by the alert stage
-        self.forced_prefix = ""
         # per-chip forced-photometry table (forced_phot.FORCED_TABLE_DTYPE,
         # sorted by aid then mjdobs) and the pid it covers; see
         # _prefetch_forced()
@@ -1758,6 +2009,15 @@ class AlertDataProvider:
         self._lvs_pid: int | None = None
         self._lvs: NedCatalog | None = None
         self._chip_lvsmatches: dict[int, list[LvsMatch]] = {}
+        # Gaia cross-match state, the same shape again (see _match_chip_gaia);
+        # the slice is cached per pid AND propagated to that chip's epoch.
+        self.gaia_reader = gaia_reader
+        self.gaia_enabled = gaia_reader is not None
+        self.gaia_ref_epoch = float(getattr(gaia_reader, "ref_epoch", None)
+                                    or GAIA_DEFAULT_REF_EPOCH)
+        self._gaia_pid: int | None = None
+        self._gaia: NedCatalog | None = None
+        self._chip_gaiamatches: dict[int, list[GaiaMatch]] = {}
 
     def close(self) -> None:
         """Remove locally staged S3 products.
@@ -1773,6 +2033,8 @@ class AlertDataProvider:
         self._chip_nedmatches.clear()
         self._lvs = None
         self._chip_lvsmatches.clear()
+        self._gaia = None
+        self._chip_gaiamatches.clear()
         self._chip_forced = None
         self._chip_forced_pid = None
         self._staging_tmp.cleanup()
@@ -2040,6 +2302,7 @@ class AlertDataProvider:
         self._match_chip_refcat(pid, sources)
         self._match_chip_ned(pid, sources)
         self._match_chip_lvs(pid, sources)
+        self._match_chip_gaia(pid, sources)
         yield from sources
 
     def _cut_to_max_sources(self, pid: int,
@@ -2291,15 +2554,21 @@ class AlertDataProvider:
 
         One position per associated object: astroobjects (ra0, dec0), the
         object's initial sky position (its first detection), which does
-        not change between runs. Reads the chip's parquet from the store
-        when it already exists, otherwise runs the search and photometry
-        (_run_forced) and writes it. A failure anywhere is logged and
-        leaves the cache empty: the chip's alerts still ship, with null
-        prvDiaForcedSources, rather than aborting.
+        not change between runs. With a store, each object's stored
+        history inside the window is read first and only the epochs it is
+        missing are measured (normally the chip's own; everything, for a
+        new object), then the touched month files are rewritten. Without
+        a store everything in the window is measured. A failure anywhere
+        is logged and leaves the cache empty: the chip's alerts still
+        ship, with null prvDiaForcedSources, rather than aborting.
 
+        A stored history measured at a different position than the
+        object's forced position (by more than FORCED_POSITION_TOL_DEG) is
+        discarded and recomputed, never extended.
         TODO: the re-baseline policy (when, if ever, to move the forced
         position to the object's mean, astroobjectsmeta meanra/meandec,
-        and recompute the set) is not decided or implemented.
+        and recompute the set) is not decided or implemented; that guard
+        is where it would act.
         """
         from alerts import forced_phot as fp
 
@@ -2309,63 +2578,123 @@ class AlertDataProvider:
             return
         t0 = time.time()
         try:
-            objects: dict[int, Any] = {}
+            objects: dict[int, tuple[Any, int]] = {}          # aid -> (Position, field)
             for source in sources:
                 row = self._chip_objects.get(source.sid)
                 if row is not None and row.get("aid") is not None:
-                    objects.setdefault(int(row["aid"]), fp.Position(
-                        int(row["aid"]), float(row["ra0"]), float(row["dec0"])))
-            positions = [objects[aid] for aid in sorted(objects)]
-            if not positions:
+                    objects.setdefault(int(row["aid"]), (fp.Position(
+                        int(row["aid"]), float(row["ra0"]), float(row["dec0"])), int(source.field)))
+            if not objects:
                 logger.info("pid=%s: forced photometry: no associated objects", pid)
                 return
-            store_path = None
+            aids = sorted(objects)
+            positions = [objects[aid][0] for aid in aids]
+            (chip,) = self._query("""
+                SELECT d.ra0, d.dec0, d.ppid, l.mjdobs
+                FROM diffimages d JOIN l2files l ON l.rid = d.rid
+                WHERE d.pid = %s
+            """, (pid,))
+            mjd_hi = float(chip["mjdobs"]) + 1e-6
+            mjd_lo = (None if self.forced_window_days is None
+                      else float(chip["mjdobs"]) - self.forced_window_days)
+
+            # 1. stored histories inside the window, one read per object
+            histories: dict[int, np.ndarray] = {}
+            etags: dict[int, dict] = {}
             if self.forced_store is not None:
-                store_path = (f"{self.forced_store}/{self.forced_prefix}"
-                              f"{FORCED_PARQUET_BASENAME.format(pid=int(pid))}")
-            table = fp.read_table(store_path) if store_path else None
-            if table is not None:
-                logger.info("pid=%s: forced photometry: read %d rows for %d objects from %s "
-                            "in %.1f s", pid, len(table), len(np.unique(table["aid"])),
-                            store_path, time.time() - t0)
+                read = lambda aid: fp.read_object_history(            # noqa: E731
+                    self.forced_store, objects[aid][1], aid, mjd_lo, mjd_hi)
+                for aid, (table, tags) in zip(aids, fp.run_parallel(read, aids, FORCED_STORE_WORKERS)):
+                    pos = objects[aid][0]
+                    if len(table) and (np.abs(table["ra"] - pos.ra).max() > FORCED_POSITION_TOL_DEG
+                                       or np.abs(table["dec"] - pos.dec).max() > FORCED_POSITION_TOL_DEG):
+                        logger.warning("pid=%s aid=%d: stored forced photometry was measured at a "
+                                       "different position; discarding %d rows and recomputing",
+                                       pid, aid, len(table))
+                        table = table[:0]
+                    histories[aid], etags[aid] = table, tags
+            t_read = time.time() - t0
+
+            # 2. the images holding the positions, then only the missing pairs
+            search = self._forced_search or fp.find_prev_images
+            images = search(self._query, positions, float(chip["ra0"]), float(chip["dec0"]),
+                            ppid=int(chip["ppid"]), mjd_lo=mjd_lo, mjd_hi=mjd_hi,
+                            diff_basename=FORCED_DIFF_BASENAME)
+            n_candidates = len(images)
+            have = {aid: set(histories[aid]["rid"].tolist()) if aid in histories else set()
+                    for aid in aids}
+            for image in images:
+                image.position_index = np.array(
+                    [i for i in image.position_index if image.rid not in have[aids[i]]], dtype=int)
+            images = [image for image in images if len(image.position_index)]
+            t_search = time.time() - t0
+
+            # 3. measure the missing pairs
+            new_rows = self._run_forced(pid, images, positions)
+            t_fit = time.time() - t0
+
+            # 4. merge, write back the touched months, cache
+            merged = {aid: (histories.get(aid, new_rows[:0]), new_rows[new_rows["aid"] == aid])
+                      for aid in aids}
+            tables = {aid: fp.merge_rows(hist, new) for aid, (hist, new) in merged.items()}
+            if self.forced_store is not None:
+                def write(aid):
+                    new = merged[aid][1]
+                    if not len(new):
+                        return 0
+                    periods = sorted(set(fp.period_key(new["mjdobs"]).tolist()))
+                    field = objects[aid][1]
+                    try:
+                        fp.write_object_history(self.forced_store, field, aid, tables[aid], periods, etags.get(aid))
+                    except fp.StaleWriteError:
+                        # another worker wrote this object meanwhile: take its
+                        # rows, add ours, and try once more
+                        latest, tags = fp.read_object_history(self.forced_store, field, aid, mjd_lo, mjd_hi)
+                        tables[aid] = fp.merge_rows(latest, new)
+                        fp.write_object_history(self.forced_store, field, aid, tables[aid], periods, tags)
+                    return len(periods)
+                n_files = sum(fp.run_parallel(write, aids, FORCED_STORE_WORKERS))
             else:
-                table = self._run_forced(pid, positions, t0)
-                if store_path:
-                    fp.write_table(table, store_path)
+                n_files = 0
+            table = np.concatenate([tables[aid] for aid in aids]) if aids else new_rows
             self._chip_forced = np.sort(table, order=["aid", "mjdobs"])
+            t_total = time.time() - t0
+            logger.info("pid=%s: forced photometry: %d objects, %d stored rows read; measured "
+                        "%d of %d images in the window (%d new rows); %d month files written; "
+                        "read %.1f s, search %.1f s, stage+fit %.1f s, write %.1f s, total %.1f s",
+                        pid, len(aids), sum(len(h) for h in histories.values()), len(images),
+                        n_candidates, len(new_rows), n_files, t_read, t_search - t_read,
+                        t_fit - t_search, t_total - t_fit, t_total)
         except Exception:
             logger.exception("pid=%s: forced photometry failed after %.1f s; alerts will "
                              "carry null prvDiaForcedSources", pid, time.time() - t0)
             self._chip_forced = None
 
-    def _run_forced(self, pid: int, positions: list, t0: float) -> np.ndarray:
-        """Search, stage, measure and tabulate one chip's forced photometry:
-        the chip's previous images holding its objects' positions, both
-        products of every epoch merged into one row per object and epoch."""
+    def _run_forced(self, pid: int, images: list, positions: list) -> np.ndarray:
+        """Stage and measure the (position, image) pairs named by the
+        images' ``position_index``, both products of every epoch merged
+        into one row per object and epoch. The alerting chip's own images,
+        already staged for the cutouts, are reused rather than re-staged."""
         from astropy.time import Time
 
         from alerts import forced_phot as fp
 
-        (chip,) = self._query("""
-            SELECT d.ra0, d.dec0, d.ppid, l.mjdobs
-            FROM diffimages d JOIN l2files l ON l.rid = d.rid
-            WHERE d.pid = %s
-        """, (pid,))
-        search = self._forced_search or fp.find_prev_images
-        mjd_lo = (None if self.forced_window_days is None
-                  else float(chip["mjdobs"]) - self.forced_window_days)
-        images = search(self._query, positions, float(chip["ra0"]), float(chip["dec0"]),
-                        ppid=int(chip["ppid"]), mjd_lo=mjd_lo,
-                        mjd_hi=float(chip["mjdobs"]) + 1e-6,
-                        diff_basename=FORCED_DIFF_BASENAME)
-        t_search = time.time() - t0
+        # the chip's own images are the cutout sources: stage them once
+        # (if not already) and hand the driver the local copies
+        staged_here: dict[str, str] = {}
+        for image in images:
+            if image.pid == pid:
+                for url in (image.diff_filename, image.sci_filename):
+                    local = os.path.join(self._staging_dir, os.path.basename(url))
+                    if os.path.exists(local) or url == local:
+                        staged_here[url] = local
+        stage = (lambda url: staged_here.get(url) or self._stage(url)) if staged_here else self._stage
         time_proc = float(Time.now().mjd)  # pyright: ignore[reportArgumentType]
         rows: dict[tuple[int, int], dict[str, Any]] = {}
-        n_pairs = 0
         for image, product, measurements in fp.run_prev_images(
-                images, positions, self._stage, products=self.forced_products):
+                images, positions, stage, products=self.forced_products,
+                keep_staged=set(staged_here.values())):
             for m in measurements:
-                n_pairs += 1
                 rec = rows.setdefault((m.pos_id, m.rid), {
                     "aid": m.pos_id, "rid": m.rid, "pid": image.pid, "expid": image.expid,
                     "sca": image.sca, "fid": image.fid, "band": image.band or "",
@@ -2385,11 +2714,6 @@ class AlertDataProvider:
             rec["forced_id"] = fp.forced_measurement_id(rec["rid"], rec["aid"], p.ra, p.dec)
             for name in fp.FORCED_TABLE_DTYPE.names:
                 table[name][i] = rec[name]
-        t_total = time.time() - t0
-        logger.info("pid=%s: forced photometry: %d objects x %d images (window %s d) -> "
-                    "%d rows, %d measurements; search %.1f s, stage+fit %.1f s, total %.1f s",
-                    pid, len(positions), len(images), self.forced_window_days, len(table),
-                    n_pairs, t_search, t_total - t_search, t_total)
         return table
 
     def get_forced_photometry(self, detection: Source,
@@ -3030,3 +3354,111 @@ class AlertDataProvider:
         if catalog is None:
             return None
         return match_lvscat(detection.ra, detection.dec, catalog)[0]
+
+    # -- Gaia cross-match ---------------------------------------------------
+    # The NED methods again, over the Gaia reader, radius, builder and
+    # matcher, plus the epoch handling described in the Gaia cross-match
+    # section: the cone is widened by the largest possible proper-motion
+    # drift and the slice is propagated to the exposure's epoch.
+
+    def _gaia_pad_arcsec(self, dt_years: float) -> float:
+        """Cone padding: match radius, slack, and the largest drift over dt."""
+        return (GAIA_MATCH_RADIUS_ARCSEC + NED_CONE_SLACK_ARCSEC
+                + GAIA_PM_MAX_ARCSEC_PER_YEAR * abs(dt_years))
+
+    def _fetch_gaiacat(self, ra0: float, dec0: float, radius: float,
+                       dt_years: float) -> NedCatalog | None:
+        """Fetch the Gaia slice for one query cone, propagate it by
+        `dt_years` and build its tree.
+
+        None (with a logged warning) when the reader returned None or
+        raised -- the cross-match then reports "not run"; an empty slice
+        is a NedCatalog with coords=None, which matches to [].
+        """
+        assert self.gaia_reader is not None
+        try:
+            table = self.gaia_reader(ra0, dec0, radius)
+        except Exception as exc:
+            logger.warning("Gaia query failed for cone (%.5f, %.5f) r=%.1f\" "
+                           "(%s: %s); Gaia matching not run", ra0, dec0, radius,
+                           type(exc).__name__, str(exc).splitlines()[0] if str(exc) else "")
+            logger.debug("Gaia query failure traceback", exc_info=True)
+            return None
+        if table is None:
+            logger.warning("Gaia reader returned no slice for cone "
+                           "(%.5f, %.5f) r=%.1f\"; Gaia matching not run",
+                           ra0, dec0, radius)
+            return None
+        return build_gaiacat(table, dt_years)
+
+    def _gaiacat_for_chip(self, pid: int, ra0: float, dec0: float,
+                          radius: float, dt_years: float) -> NedCatalog | None:
+        """The (cached per pid) Gaia slice for a chip's query cone, at the
+        chip's epoch."""
+        if self._gaia_pid == pid:
+            return self._gaia
+        self._gaia = None
+        self._gaia_pid = pid
+        self._gaia = self._fetch_gaiacat(ra0, dec0, radius, dt_years)
+        return self._gaia
+
+    def _match_chip_gaia(self, pid: int, sources: list[Source]) -> None:
+        """Cross-match every chip detection against Gaia.
+
+        As _match_chip_ned: one slice fetch and one vectorized
+        match_gaiacat() pass, results per sid in _chip_gaiamatches. The
+        chip's epoch is its detections' mjdobs (one exposure, so one
+        value; the median guards against a stray row). The cone's clamp
+        (NED_CONE_MAX_ARCSEC) is raised by the proper-motion padding so
+        the padding itself can never trigger it. Off-chip detections are
+        excluded the same way as for NED and end up "not run".
+        """
+        self._chip_gaiamatches = {}
+        if not self.gaia_enabled or not sources:
+            return
+        ra = np.array([s.ra for s in sources])
+        dec = np.array([s.dec for s in sources])
+        dt_years = epoch_offset_years(float(np.median([s.mjdobs for s in sources])),
+                                      self.gaia_ref_epoch)
+        pad = self._gaia_pad_arcsec(dt_years)
+        ra0, dec0, radius, inliers = chip_cone(
+            ra, dec, pad, max_arcsec=NED_CONE_MAX_ARCSEC + pad)
+        n_out = int((~inliers).sum())
+        if n_out:
+            logger.debug("pid=%s: %d of %d detections excluded from the "
+                         "Gaia cone (off-chip positions)", pid, n_out, len(sources))
+            if not inliers.any():
+                return
+        catalog = self._gaiacat_for_chip(pid, ra0, dec0, radius, dt_years)
+        if catalog is None:
+            return
+        results = match_gaiacat(ra[inliers], dec[inliers], catalog)
+        sids = [s.sid for s, ok in zip(sources, inliers) if ok]
+        self._chip_gaiamatches = dict(zip(sids, results))
+
+    def get_gaia_matches(self, detection: Source) -> list[GaiaMatch] | None:
+        """The nearest Gaia sources to a detection, at the detection's epoch.
+
+        These become the alert's gaiaMatches array. In the batch flow the
+        whole chip was already matched in one pass (see _match_chip_gaia);
+        the single-alert flow fetches a slice around just this detection.
+
+        Returns
+        -------
+        list of GaiaMatch or None
+            Sources within GAIA_MATCH_RADIUS_ARCSEC (at most GAIA_MATCH_NMAX,
+            nearest first); an empty list when matching ran and found
+            nothing nearby; None when it could not run (disabled, or the
+            Gaia copy could not be read).
+        """
+        if not self.gaia_enabled:
+            return None
+        if self._chip_pid is not None and self._chip_pid == detection.pid:
+            return self._chip_gaiamatches.get(detection.sid)
+        dt_years = epoch_offset_years(detection.mjdobs, self.gaia_ref_epoch)
+        ra0, dec0, radius = bounding_cone(detection.ra, detection.dec,
+                                          self._gaia_pad_arcsec(dt_years))
+        catalog = self._fetch_gaiacat(ra0, dec0, radius, dt_years)
+        if catalog is None:
+            return None
+        return match_gaiacat(detection.ra, detection.dec, catalog)[0]

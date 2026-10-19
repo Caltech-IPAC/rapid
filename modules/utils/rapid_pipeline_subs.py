@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 from scipy.ndimage import zoom
 
 import modules.utils.rapid_data_analysis as rda
+import database.modules.utils.roman_tessellation as tess
 
 plot_flag = False
 
@@ -2855,12 +2856,219 @@ def index_to_radec(idx):
 
 
 ########################################
+# Look up the exposure IDs of the L2 files observed in the observation range
+# [startdatetime, enddatetime), the same range the science pipelines were launched for.
+########################################
+
+def get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime):
+
+    """
+    Return the exposure IDs of the L2Files records with dateobs >= startdatetime and
+    dateobs < enddatetime, the same selection the science-pipeline launch script makes.
+
+    Parameters
+    ----------
+    dbh : database.modules.utils.rapid_db.RAPIDDB
+        Open database connection.
+    startdatetime : str
+        Observation start datetime (UT), e.g., "2027-10-01 07:12:00" (inclusive).
+    enddatetime : str
+        Observation end datetime (UT), e.g., "2027-10-02 00:00:00" (exclusive).
+
+    Returns
+    -------
+    expids : list of int
+        Distinct exposure IDs in ascending order (empty if none).  Exits with code 64 if a
+        datetime cannot be parsed or is not before the other, or on a database error.
+    """
+
+    try:
+        start_dt = datetime.fromisoformat(str(startdatetime).strip())
+        end_dt = datetime.fromisoformat(str(enddatetime).strip())
+    except ValueError as e:
+        print(f"*** Error: STARTDATETIME,ENDDATETIME = {startdatetime},{enddatetime} " +
+              f"cannot be parsed as datetimes ({e}); quitting...")
+        dbh.close()
+        exit(64)
+
+    if start_dt >= end_dt:
+        print(f"*** Error: STARTDATETIME ({startdatetime}) is not before ENDDATETIME ({enddatetime}); quitting...")
+        dbh.close()
+        exit(64)
+
+    query = f"SELECT DISTINCT expid FROM l2files " +\
+            f"WHERE dateobs >= '{start_dt.isoformat(sep=' ')}' " +\
+            f"AND dateobs < '{end_dt.isoformat(sep=' ')}' ORDER BY expid;"
+
+    try:
+        records = dbh.execute_sql_queries([query],0)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+              f"(query={query},e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+        dbh.close()
+        exit(dbh.exit_code)
+
+    return [int(record[0]) for record in records]
+
+
+########################################
+# Sky tiles (fields) that the sources of a science image can be assigned to.
+########################################
+
+# Pixels by which the image rectangle is grown before its overlapping sky tiles are computed:
+# the loaders keep sources out to the image edge (positions 0.5 pixel beyond the outermost
+# pixel centres), and SIP distortion, which overlapping_fields ignores, can bow an edge by a
+# few pixels.  L2Files.overlapfields is computed with the image SHRUNK by 25 pixels
+# (DEFAULT_MIN_OVERLAP_PIXELS), so it can miss a field that sources near the edge fall in.
+
+SOURCE_FOOTPRINT_INSET_PIXELS = -5.0
+
+
+def source_footprint_fields(crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,naxis1,naxis2,field=None):
+
+    """
+    Return the sky tiles (fields) that a source in the given science image can be assigned to:
+    every tile overlapped by the image, grown by 5 pixels on each side.
+
+    Parameters
+    ----------
+    crval1, crval2 : float
+        WCS reference sky position (degrees), as in the L2Files table.
+    crpix1, crpix2 : float
+        WCS reference pixel (one-based), as in the L2Files table.
+    cd11, cd12, cd21, cd22 : float
+        WCS CD matrix (degrees per pixel), as in the L2Files table.
+    naxis1, naxis2 : int
+        Image size (pixels).
+    field : int, optional
+        Field of the image center, which is always included.
+
+    Returns
+    -------
+    fields : list of int
+        Ascending, distinct field numbers (Roman tessellation rtids).
+    """
+
+    # Imported here because overlapping_fields imports this module.
+
+    from database.modules.utils.overlapping_fields import overlapping_fields
+
+    return overlapping_fields(crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
+                              naxis1,naxis2,field=field,
+                              min_overlap_pixels=SOURCE_FOOTPRINT_INSET_PIXELS)
+
+
+def _wcs_pointing_key(wcs):
+
+    """
+    Return a hashable key for an image pointing, for caching source_footprint_fields.
+
+    Parameters
+    ----------
+    wcs : sequence of float
+        crval1, crval2, crpix1, crpix2, cd11, cd12, cd21, cd22.
+
+    Returns
+    -------
+    key : tuple of float
+        The values rounded to 1e-6 degree (crval), 1e-3 pixel (crpix) and 1e-12 degree per
+        pixel (CD matrix), far below the 5-pixel margin of source_footprint_fields.
+    """
+
+    return tuple(round(float(v),6) for v in wcs[0:2]) + tuple(round(float(v),3) for v in wcs[2:4]) + \
+           tuple(round(float(v),12) for v in wcs[4:8])
+
+
+def lookup_child_tables_for_field(dbh,field,naxis1,naxis2,table_prefix="sources",debug=0):
+
+    """
+    Return the names of the <table_prefix>_<obs_date>_<sca> child tables that can hold sources
+    of the given field: those of the best science images whose source footprint
+    (source_footprint_fields) includes the field.
+
+    Parameters
+    ----------
+    dbh : database.modules.utils.rapid_db.RAPIDDB
+        Open database connection.
+    field : int
+        Field number (Roman tessellation rtid).
+    naxis1, naxis2 : int
+        Science-image size (pixels).
+    table_prefix : str, optional
+        "sources" (default) or "xsources".
+    debug : int, optional
+        Passed to dbh.execute_sql_queries.
+
+    Returns
+    -------
+    tablenames : list of str
+        Candidate child-table names, which need not all exist.  Raises RuntimeError on a
+        database error.
+
+    Notes
+    -----
+    The candidates are the L2Files records whose overlapfields column holds the field or one
+    of its neighbors (GIN index).  overlapfields is computed with the image shrunk by 25 pixels,
+    so it can miss a field that the image only overlaps near its edge, but such an image
+    always overlaps one of the field's neighbors by more than that.  A record whose
+    overlapfields holds the field itself is kept as is; the others are kept only if their
+    source footprint, computed once per distinct pointing, includes the field.
+    """
+
+    field = int(field)
+    tiles = [field] + [int(rtid) for rtid in tess.neighbors_of(field)]
+    tiles_str = ",".join(str(tile) for tile in tiles)
+
+    query = f"SELECT cast(dateobs as date),sca,overlapfields @> ARRAY[{field}]," +\
+            f"crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,field " +\
+            f"FROM l2files " +\
+            f"WHERE vbest > 0 " +\
+            f"AND status > 0 " +\
+            f"AND overlapfields && ARRAY[{tiles_str}]::integer[];"
+
+    records = dbh.execute_sql_queries([query],debug)
+
+    if dbh.exit_code >= 64 or records is None:
+        raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+    tablenames = {}
+    footprint_has_field = {}            # Keyed by pointing, rounded to 1e-6 degree.
+
+    for record in records:
+
+        obs_date = str(record[0]).replace("-","")
+        tablename = f"{table_prefix}_{obs_date}_{record[1]}"
+
+        if tablename in tablenames:
+            continue
+
+        if not record[2]:
+            wcs = tuple(float(v) for v in record[3:11])
+            key = _wcs_pointing_key(wcs)
+            if key not in footprint_has_field:
+                footprint_has_field[key] = field in source_footprint_fields(*wcs,naxis1,naxis2,
+                                                                             field=record[11])
+            if not footprint_has_field[key]:
+                continue
+
+        tablenames[tablename] = 1
+
+    return list(tablenames.keys())
+
+
+########################################
 # Look up for the given processing date the Sources child table names
 # to cross-match and a distinct list of the fields covered by the
 # sources in those tables.
 ########################################
 
-def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources"):
+def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,table_prefix="sources",expids=None,reqid=None,
+                                                             *,naxis1,naxis2):
 
 
     '''
@@ -2871,6 +3079,20 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     the original behavior of this method) and "xsources" for the SExtractor catalogs.  The job
     and L2-file metadata that yields the (obs_date,sca) pairs is the same either way; only the
     child-table existence check and the distinct-field query depend on the prefix.
+
+    The fields are those that the sources of the jobs' science images can be assigned to:
+    the union of source_footprint_fields of each job's L2 file (naxis1 x naxis2 pixels) whose
+    child table exists.  They are computed from the L2Files WCS rather than by querying the
+    child tables, which is much faster, and can include a field none of whose sources has
+    flags = 0 (or that holds no source at all).
+
+    expids, if given, is a list of exposure IDs: only the fields of the jobs of those
+    exposures are returned (used by the cross-matching scripts to limit the fields to the
+    observation range).  None (the default) returns the fields of all the jobs.
+
+    reqid, if given, takes the jobs of that processing request (Jobs.reqid), whatever day
+    they ended; None (the default) takes the jobs of all processing requests that ended on
+    the processing date.
     '''
 
 
@@ -2880,7 +3102,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     # Returns a list of job IDs.
 
     try:
-        recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+        recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date,reqid)
     except Exception as e:
         print(f"*** Error: Exception raised in dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date " +
               f"(proc_date={proc_date},e={e});  quitting...")
@@ -2958,6 +3180,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
         meta_dict = {}
 
         meta_dict["jid"] = jid
+        meta_dict["rid"] = rid
         meta_dict["expid"] = expid
         meta_dict["sca"] = sca
         meta_dict["fid"] = fid
@@ -2967,6 +3190,7 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
         meta_dict["mjdobs"] = mjdobs
         meta_dict["dateobs"] = dateobs
         meta_dict["pid"] = pid
+        meta_dict["wcs"] = (crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22)
 
 
         # Append to lists.
@@ -3023,40 +3247,37 @@ def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,ta
     print(f"source_tables_to_create_list = {source_tables_to_create_list}")
 
 
-    # Find all distinct fields covered by the Sources child tables,
-    # only for records with flags=0.
+    # Find all fields that the sources of the jobs' science images can be assigned to,
+    # from the footprints of their L2 files, for the jobs whose child table exists
+    # (and, if expids is given, whose exposure is one of them).
+
+    expids_set = None if expids is None else set(int(expid) for expid in expids)
 
     fields_dict = {}
+    footprints = {}                     # Keyed by pointing (see _wcs_pointing_key).
 
-    for table_to_crossmatch_tuple in source_tables_to_crossmatch_list:
+    for jid,meta_dict in zip(jid_list,meta_list):
 
-        obs_date = table_to_crossmatch_tuple[0]
-        sca = table_to_crossmatch_tuple[1]
-        table_crossmatch_key = (obs_date,sca)
+        obs_date = str(meta_dict["dateobs"]).split()[0].replace("-","")
+        table_crossmatch_key = (obs_date,meta_dict["sca"])
 
-        if table_crossmatch_obs_date_sca_dict[table_crossmatch_key] == 1:
+        if table_crossmatch_obs_date_sca_dict[table_crossmatch_key] != 1:
+            continue
 
-            sources_tablename = f"{table_prefix}_{obs_date}_{sca}"
+        if expids_set is not None and int(meta_dict["expid"]) not in expids_set:
+            continue
 
-            sql_queries = []
-            sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
+        key = _wcs_pointing_key(meta_dict["wcs"])
 
-            try:
-                records = dbh.execute_sql_queries(sql_queries,debug)
-            except Exception as e:
-                print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                      f"(e={e});  quitting...")
-                dbh.close()
-                exit(64)
+        if key not in footprints:
+            crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22 = meta_dict["wcs"]
+            footprints[key] = source_footprint_fields(crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
+                                                      naxis1,naxis2)
 
-            if dbh.exit_code >= 64:
-                print("*** Error from {}; quitting ".format(swname))
-                dbh.close()
-                exit(dbh.exit_code)
+        fields_dict[meta_dict["field"]] = 1
 
-            for record in records:
-                field = record[0]
-                fields_dict[field] = 1
+        for field in footprints[key]:
+            fields_dict[field] = 1
 
 
     fields_list = list(fields_dict.keys())
@@ -3133,6 +3354,24 @@ sxtractor_photutils_int_col_names = ("x_dao_peak","y_dao_peak","dao_flags","n_pi
 # (FLAGS); the others keep their PhotUtils names.
 
 sxtractor_photutils_catalog_names = {"flags": "flags_fit"}
+
+
+#-------------------------------------------------------------------
+# Parse a PSFPhotometry fit_shape from its config-file string, "(ny, nx)" or "n" (a square box).
+# Sizes are in pixels.
+
+def parse_fit_shape(fit_shape_str):
+
+    values = [int(v) for v in fit_shape_str.replace("(","").replace(")","").replace(" ","").split(",")]
+
+    if len(values) == 1:
+        values = values * 2
+
+    if len(values) != 2:
+        raise ValueError(f"Method parse_fit_shape: cannot parse fit_shape = {fit_shape_str}; expected "
+                         "a number or a pair (ny, nx)")
+
+    return tuple(values)
 
 
 #-------------------------------------------------------------------
@@ -3238,6 +3477,39 @@ def _compute_extra_catalog_cols(diff_image_filename,
     rb_cols = None
     rb_skipped = False
 
+
+    # The pixel-based columns (sumrat, nneg, nbad) are measured on a background-subtracted copy of
+    # the difference image when pixel_cols_bkg_box is set (see
+    # rda.write_background_subtracted_diff_image); the other columns always use the image itself.
+    # Configs written before pixel_cols_bkg_box existed measure on the image itself.
+
+    pixel_image_filename = diff_image_filename
+    pixel_image_tmp = None
+
+    bkg_box_str = extra_cols_dict.get("pixel_cols_bkg_box","None").strip()
+
+    if bkg_box_str.lower() not in ("", "none", "0") and \
+            any(c in ("sumrat","nneg","nbad") for c in col_names):
+
+        pixel_image_tmp = os.path.splitext(diff_image_filename)[0] + "_pixcols_bkgsub.fits"
+
+        try:
+            median_bkg = rda.write_background_subtracted_diff_image(
+                diff_image_filename,
+                pixel_image_tmp,
+                box_size = int(bkg_box_str),
+                filter_size = int(extra_cols_dict.get("pixel_cols_bkg_filter_size","3")))
+
+        except Exception as e:
+            print(f"*** Warning: _compute_extra_catalog_cols: background subtraction for the pixel "
+                  f"columns failed ({e}); measuring them on {diff_image_filename} itself")
+            pixel_image_tmp = None
+
+        else:
+            pixel_image_filename = pixel_image_tmp
+            print(f"_compute_extra_catalog_cols: pixel columns measured after subtracting a "
+                  f"{bkg_box_str}-px background (median {median_bkg:.4f}) from {diff_image_filename}")
+
     for col_name in col_names:
 
         if col_name in rb_catalog_col_names:
@@ -3316,7 +3588,7 @@ def _compute_extra_catalog_cols(diff_image_filename,
         elif col_name == "sumrat":
 
             extra_cols[col_name] = rda.compute_sumrat_for_diff_image(
-                diff_image_filename,
+                pixel_image_filename,
                 xy_positions,
                 coord_base = coord_base,
                 stamp_size = int(sumrat_dict["stamp_size"]),
@@ -3334,7 +3606,7 @@ def _compute_extra_catalog_cols(diff_image_filename,
 
             if nneg_nbad is None:
                 nneg_nbad = dict(zip(("nneg","nbad"), rda.compute_nneg_nbad_for_diff_image(
-                    diff_image_filename,
+                    pixel_image_filename,
                     xy_positions,
                     coord_base = coord_base,
                     stamp_size = int(extra_cols_dict.get("nneg_nbad_stamp_size","5")),
@@ -3346,6 +3618,9 @@ def _compute_extra_catalog_cols(diff_image_filename,
         else:
             raise ValueError(f"Method _compute_extra_catalog_cols: unknown extra catalog column "
                              f"{col_name}")
+
+    if pixel_image_tmp is not None and os.path.exists(pixel_image_tmp):
+        os.remove(pixel_image_tmp)
 
     return extra_cols,extra_cols_format
 
@@ -3558,7 +3833,8 @@ def compute_extra_cols_sxtractor(diff_image_filename,
     psfcat_dict : dict-like of str or None, optional
         [PSFCAT_DIFFIMAGE] section of the config file, whose fwhm, fit_shape, and aperture_radius
         are used, so that the PhotUtils-style columns are computed as in the RAPID PhotUtils
-        catalogs.
+        catalogs.  photutils_cols_fit_shape in extra_cols_dict, if given and not None, replaces
+        its fit_shape for these columns only.
     sci_image_filename, ref_image_filename : str or None, optional
         FITS files containing the background-subtracted science image and the resampled,
         gain-matched reference image, on the pixel grid of the difference image.  The rb columns
@@ -3618,8 +3894,17 @@ def compute_extra_cols_sxtractor(diff_image_filename,
 
     elif photutils_col_names:
 
-        fit_shape = tuple(int(v) for v in
-                          psfcat_dict["fit_shape"].replace("(","").replace(")","").replace(" ","").split(","))
+        # The PSF-fit box: photutils_cols_fit_shape if set, otherwise the fit_shape of the RAPID
+        # PhotUtils catalogs ([PSFCAT_DIFFIMAGE]), which configs written before it existed get.
+
+        fit_shape_str = extra_cols_dict.get("photutils_cols_fit_shape","None").strip()
+
+        if fit_shape_str.lower() in ("", "none"):
+            fit_shape_str = psfcat_dict["fit_shape"]
+
+        fit_shape = parse_fit_shape(fit_shape_str)
+
+        print(f"compute_extra_cols_sxtractor: PhotUtils-style columns with fit_shape = {fit_shape}")
 
 
         # Configs written before photutils_cols_snap_radius and photutils_cols_xy_bounds existed
@@ -3942,7 +4227,10 @@ def prefilter_database_records(nrows,
                                sumrat,
                                rb,
                                sumrat_prefilter_threshold,
-                               rb_prefilter_threshold):
+                               rb_prefilter_threshold,
+                               *,
+                               snr = None,
+                               snr_prefilter_threshold = None):
 
     """
     Select the catalog records to be loaded into the Sources or XSources database child tables:
@@ -3963,6 +4251,10 @@ def prefilter_database_records(nrows,
         sumrat cut.
     rb_prefilter_threshold : float or None
         A record is rejected when its rb is less than or equal to this value.  None: no rb cut.
+    snr : numpy.ndarray of float or None, optional
+        Signal-to-noise ratio of each record, NaN where missing, or None for no SNR cut.
+    snr_prefilter_threshold : float or None, optional
+        A record is rejected when its snr is less than or equal to this value.  None: no SNR cut.
 
     Returns
     -------
@@ -3985,7 +4277,23 @@ def prefilter_database_records(nrows,
         if rb is not None and rb_prefilter_threshold is not None:
             keep &= ~(np.isfinite(rb) & (rb <= rb_prefilter_threshold))
 
+        if snr is not None and snr_prefilter_threshold is not None:
+            keep &= ~(np.isfinite(snr) & (snr <= snr_prefilter_threshold))
+
     return keep
+
+
+def get_snr_prefilter_threshold(config_input):
+
+    """
+    [DATABASE_PREFILTER] snr_prefilter_threshold as a float, or None (no SNR cut) if the section
+    or the key is missing or the key is None.
+    """
+
+    value = config_input.get("DATABASE_PREFILTER","snr_prefilter_threshold",fallback="None") \
+        if config_input.has_section("DATABASE_PREFILTER") else "None"
+
+    return None if value.strip().lower() in ("", "none") else float(value)
 
 
 def get_database_prefilter_params(config_input):

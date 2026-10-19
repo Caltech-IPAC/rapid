@@ -1,4 +1,4 @@
-"""Tests for the [SEXTRACTOR_DIFFIMAGE_SFFT] detection overrides.
+"""Tests for the [SEXTRACTOR_DIFFIMAGE_SFFT] and [SEXTRACTOR_DIFFIMAGE_NAIVE] detection overrides.
 
 Run with:  python -m pytest pipeline/test/test_sfft_detection.py
 """
@@ -22,17 +22,17 @@ BASE = {"sextractor_filter": "N", "sextractor_filter_name": "/cfg/rapidSexDiffIm
         "sextractor_detect_minarea": "5", "sextractor_detect_thresh": "2.5",
         "sextractor_analysis_thresh": "2.5", "sextractor_deblend_nthresh": "32"}
 OVERRIDES = {"sextractor_filter": "Y", "sextractor_filter_name": "rapidSexDiffImageSfftFilter.conv",
-             "sextractor_detect_minarea": "1", "sextractor_detect_thresh": "2.0",
-             "sextractor_analysis_thresh": "2.0"}
+             "sextractor_detect_minarea": "2", "sextractor_detect_thresh": "2.5",
+             "sextractor_analysis_thresh": "2.5"}
 
 
 def test_overrides_applied_and_filter_resolved_against_cfg_path():
     out = sfft_sextractor_dict(BASE, OVERRIDES, False, "/cfg")
     assert out["sextractor_filter"] == "Y"
     assert out["sextractor_filter_name"] == "/cfg/rapidSexDiffImageSfftFilter.conv"
-    assert out["sextractor_detect_minarea"] == "1"
-    assert out["sextractor_detect_thresh"] == "2.0"
-    assert out["sextractor_analysis_thresh"] == "2.0"
+    assert out["sextractor_detect_minarea"] == "2"
+    assert out["sextractor_detect_thresh"] == "2.5"
+    assert out["sextractor_analysis_thresh"] == "2.5"
     assert out["sextractor_deblend_nthresh"] == "32"
 
 
@@ -52,19 +52,17 @@ def test_no_block_or_crossconv_leaves_settings_unchanged(overrides, crossconv):
     assert sfft_sextractor_dict(BASE, overrides, crossconv, "/cfg") == BASE
 
 
-def test_ini_block_uncommented_parses_to_the_tested_settings():
-    text = open(INI).read()
-    start = text.index("#[SEXTRACTOR_DIFFIMAGE_SFFT]")
-    block = text[start:text.index("\n\n", start)]
-    cp = configparser.ConfigParser()
-    cp.read_string("\n".join(line[1:] for line in block.splitlines()))
-    assert dict(cp["SEXTRACTOR_DIFFIMAGE_SFFT"]) == OVERRIDES
-
-
-def test_ini_ships_with_the_block_disabled():
+@pytest.mark.parametrize("section", ["SEXTRACTOR_DIFFIMAGE_SFFT", "SEXTRACTOR_DIFFIMAGE_NAIVE"])
+def test_ini_blocks_ship_enabled_with_the_tested_settings(section):
     cp = configparser.ConfigParser()
     cp.read(INI)
-    assert not cp.has_section("SEXTRACTOR_DIFFIMAGE_SFFT")
+    assert dict(cp[section]) == OVERRIDES
+
+
+def test_naive_block_is_never_skipped_for_crossconv():
+    """The naive passes call sfft_sextractor_dict with crossconv_flag False."""
+    out = sfft_sextractor_dict(BASE, OVERRIDES, False, "/cfg")
+    assert out["sextractor_detect_minarea"] == "2"
 
 
 def test_conv_file_is_a_normalised_7x7_fwhm2_gaussian():

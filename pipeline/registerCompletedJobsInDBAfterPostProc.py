@@ -6,17 +6,16 @@ This pipeline is a skeleton for later additional functions,
 such as copying products to other locations, such as MAST.
 
 Input the processing date of interest on the command line
-in the format YYYYMMDD.  The database is queried for
-science-pipeline jobs on that date that ran normally, using
-a query of the following form:
+in the format YYYYMMDD, and set PROCREQ to the reqid of the
+processing request.  The database is queried for the
+science-pipeline jobs of that processing request that ran
+normally, using a query of the following form:
 
-select * from jobs
-where ppid=15
-and ended >= '20250326'
-and ended < '20250326' + '1 day'
+select jid from jobs
+where ppid = 15
 and status > 0
 and exitcode <= 32
-order by ended;
+and reqid = 123;
 
 To indicate that post-processing pipeline ran normally, a done file
 is written to the S3 bucket at the location of the products for the job.
@@ -43,8 +42,8 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 
 
-swname = "registerCompletedJobInDBAfterPostProc.py"
-swvers = "1.0"
+swname = "registerCompletedJobsInDBAfterPostProc.py"
+swvers = "1.1"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -77,9 +76,10 @@ print("datearg =",datearg)
 
 
 # PROCREQ of the processing request.  This is the reqid of the ProcReqs database
-# record that the VPO creates, and it subdivides the processing date in the S3
+# record that the VPO creates.  It subdivides the processing date in the S3
 # buckets, so that two processing requests for the same processing date do not
-# overwrite each other's files.
+# overwrite each other's files, and only the Jobs records of this processing
+# request (Jobs.reqid) are registered, whatever day they ran.
 
 proc_req = os.getenv('PROCREQ')
 
@@ -172,9 +172,9 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Query database for Jobs records that ended on the given processing date and ran normally.
+    # Query database for science-pipeline Jobs records of the processing request that ran normally.
 
-    db_jids = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(datearg)
+    db_jids = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(datearg,proc_req)
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)

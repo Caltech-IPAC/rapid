@@ -12,7 +12,7 @@ import database.modules.utils.roman_tessellation_db as sqlite
 
 
 swname = "crossMatchSources.py"
-swvers = "1.0"
+swvers = "1.3"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -55,6 +55,45 @@ if proc_date is None:
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
+
+
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates.  Only the Jobs records of this processing request
+# (Jobs.reqid) are processed, so that other processing requests for the same
+# processing date are left alone.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+print("proc_req =",proc_req)
+
+
+# Observation range of the processing request: only sources from exposures with L2Files
+# dateobs >= STARTDATETIME and dateobs < ENDDATETIME are cross-matched, the same exposures the
+# science pipelines were launched for.  The sources child tables are per observation date,
+# so they can also hold sources of other processing requests, which must not be
+# cross-matched again.
+
+startdatetime = os.getenv('STARTDATETIME')
+
+if startdatetime is None:
+
+    print("*** Error: Env. var. STARTDATETIME not set; quitting...")
+    exit(64)
+
+enddatetime = os.getenv('ENDDATETIME')
+
+if enddatetime is None:
+
+    print("*** Error: Env. var. ENDDATETIME not set; quitting...")
+    exit(64)
+
+print("startdatetime =",startdatetime)
+print("enddatetime =",enddatetime)
 
 
 # Ensure sqlite database that defines the Roman sky tessellation is available.
@@ -102,6 +141,8 @@ job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base'
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
@@ -148,7 +189,7 @@ print(f"Merges columns: {merges_cols_comma_separated_string}")
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields,index_thread):
+def run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields,expids_in_range,index_thread):
 
 
     '''
@@ -158,7 +199,8 @@ def run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples
     includes populating the pertinent AstroObjects_<field> and Merges_<field> database tables for
     the relevant field.  Cross-matching sources across adjacent field boundaries is done in stage 2.
 
-    Cross-match only sources with flags = 0.
+    Cross-match only sources with flags = 0, from the exposures in expids_in_range
+    (the observation range of the processing request).
 
     Cross-match one observation at a time for all SCAs in ascending time order.
     '''
@@ -176,6 +218,8 @@ def run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples
     newline_character = "\n"
 
     nfields = len(fields)
+
+    expids_str = ",".join(str(int(expid)) for expid in expids_in_range)
 
     print("index_thread,nfields =",index_thread,nfields)
 
@@ -226,7 +270,7 @@ def run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples
             sources_tablename = f"sources_{obs_date}_{sca}"
 
             query = f"SELECT distinct expid,mjdobs FROM {sources_tablename} " +\
-                f"WHERE field = {field} AND flags = 0;"
+                f"WHERE field = {field} AND flags = 0 AND expid IN ({expids_str});"
 
             sql_queries = []
             sql_queries.append(query)
@@ -578,7 +622,7 @@ def run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples
     return message
 
 
-def run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields,index_thread):
+def run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields,expids_in_range,index_thread):
 
 
     '''
@@ -589,7 +633,8 @@ def run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples
     within field boundaries).  Field boundaries are infinitesimally thin lines (no thickness),
     and the match radius can extend across them.
 
-    Cross-match only sources with flags = 0.
+    Cross-match only sources with flags = 0, from the exposures in expids_in_range
+    (the observation range of the processing request).
     '''
 
 
@@ -605,6 +650,8 @@ def run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples
     newline_character = "\n"
 
     nfields = len(fields)
+
+    expids_str = ",".join(str(int(expid)) for expid in expids_in_range)
 
     print("index_thread,nfields =",index_thread,nfields)
 
@@ -730,7 +777,7 @@ def run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples
                             f"{astroobjects_tablename} AS b " +\
                             f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
                             f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
-                            f"AND a.field = {adjacent_field} AND a.flags = 0;"
+                            f"AND a.field = {adjacent_field} AND a.flags = 0 AND a.expid IN ({expids_str});"
 
                     else:
 
@@ -738,7 +785,7 @@ def run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples
                             f"FROM {sources_tablename} AS a, " +\
                             f"{astroobjects_tablename} AS b " +\
                             f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
-                            f"AND a.field = {adjacent_field} AND a.flags = 0;"
+                            f"AND a.field = {adjacent_field} AND a.flags = 0 AND a.expid IN ({expids_str});"
 
                     sql_queries = []
                     sql_queries.append(query)
@@ -889,13 +936,13 @@ def run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples
     return message
 
 
-def execute_parallel_processes_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,num_cores):
+def execute_parallel_processes_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,expids_in_range,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job_stage_1_crossmatching,source_tables_to_crossmatch_tuples_list,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job_stage_1_crossmatching,source_tables_to_crossmatch_tuples_list,fields_list,expids_in_range,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -916,13 +963,13 @@ def execute_parallel_processes_stage_1_crossmatching(source_tables_to_crossmatch
         exit(64)
 
 
-def execute_parallel_processes_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,num_cores):
+def execute_parallel_processes_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,expids_in_range,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job_stage_2_crossmatching,source_tables_to_crossmatch_tuples_list,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job_stage_2_crossmatching,source_tables_to_crossmatch_tuples_list,fields_list,expids_in_range,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -965,11 +1012,24 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
+    # Look up the exposures in the observation range of the processing request.
+
+    expids_in_range = util.get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime)
+
+    print("Number of exposures in observation range =",len(expids_in_range))
+
+    if len(expids_in_range) == 0:
+        print(f"No exposures with dateobs >= {startdatetime} and < {enddatetime}; nothing to cross-match.")
+        dbh.close()
+        exit(0)
+
+
     # Look up for the given processing date the Sources child table names
     # to cross-match and a distinct list of the fields covered by the sources.
 
     source_tables_to_crossmatch_tuples_list,fields_list,_,_ = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid)
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,expids=expids_in_range,reqid=proc_req,
+                                                                    naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
 
     # Code-timing benchmark.
@@ -980,17 +1040,20 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Assume astroobjects_<field> and merges_<field> database tables are created in tandem,
-    # so we only need to test for the existence of the former table.
+    # Check the existence of the astroobjects_<field> and merges_<field> database tables
+    # separately: pruneNotBestMerges.py drops an empty merges_<field> table and leaves
+    # astroobjects_<field> in place, so either may be missing.
 
     already_made_dict = {}
 
     for field in fields_list:
 
         tablename1 = f"astroobjects_{field}"
+        tablename2 = f"merges_{field}"
 
         sql_queries = []
-        sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
+        sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL, " +
+                           f"to_regclass('public.{tablename2}') IS NOT NULL;")
 
         try:
             records = dbh.execute_sql_queries(sql_queries,debug)
@@ -1005,9 +1068,7 @@ if __name__ == '__main__':
             dbh.close()
             exit(dbh.exit_code)
 
-        table_exists_flag = records[0][0]
-
-        already_made_dict[field] = table_exists_flag
+        already_made_dict[field] = (records[0][0],records[0][1])
 
 
     # Create astroobjects and merges database tables for all fields associated with processing date.
@@ -1020,9 +1081,9 @@ if __name__ == '__main__':
 
     for field in fields_list:
 
-        table_exists_flag = already_made_dict[field]
+        table1_exists_flag,table2_exists_flag = already_made_dict[field]
 
-        if table_exists_flag:
+        if table1_exists_flag and table2_exists_flag:
             print(f"AstroObjects_<field> and Merges_<field> database tables have " +
                   f"already been made for field={field}; continuing...")
             continue
@@ -1031,10 +1092,13 @@ if __name__ == '__main__':
 
         tablename2 = f"merges_{field}"
 
-        sql_queries.append(f"CREATE TABLE {tablename1} (LIKE astroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-        sql_queries.append(f"ALTER TABLE {tablename1} OWNER TO rapidporole;")
-        sql_queries.append(f"CREATE TABLE {tablename2} (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-        sql_queries.append(f"ALTER TABLE {tablename2} OWNER TO rapidporole;")
+        if not table1_exists_flag:
+            sql_queries.append(f"CREATE TABLE {tablename1} (LIKE astroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+            sql_queries.append(f"ALTER TABLE {tablename1} OWNER TO rapidporole;")
+
+        if not table2_exists_flag:
+            sql_queries.append(f"CREATE TABLE {tablename2} (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+            sql_queries.append(f"ALTER TABLE {tablename2} OWNER TO rapidporole;")
 
     try:
         records = dbh.execute_sql_queries(sql_queries,debug)
@@ -1059,31 +1123,34 @@ if __name__ == '__main__':
 
     for field in fields_list:
 
-        table_exists_flag = already_made_dict[field]
+        table1_exists_flag,table2_exists_flag = already_made_dict[field]
 
         tablename1 = f"astroobjects_{field}"
         tablename2 = f"merges_{field}"
 
-        if not table_exists_flag:        # The following is done once, when the tables are created.
+        # The following is done once, when a table is created.
 
+        if not table1_exists_flag:
             sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
             sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
-            sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
-            sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
             sql_queries.append(f"GRANT SELECT ON TABLE {tablename1} TO GROUP rapidreadrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidreadrole;")
-            sql_queries.append(f"GRANT SELECT ON TABLE {tablename2} TO GROUP rapidreadrole;")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidadminrole;")
             sql_queries.append(f"GRANT ALL ON TABLE {tablename1} TO GROUP rapidadminrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidadminrole;")
-            sql_queries.append(f"GRANT ALL ON TABLE {tablename2} TO GROUP rapidadminrole;")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidporole;")
             sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename1} TO rapidporole;")
+
+        if not table2_exists_flag:
+            sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
+            sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidreadrole;")
+            sql_queries.append(f"GRANT SELECT ON TABLE {tablename2} TO GROUP rapidreadrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidadminrole;")
+            sql_queries.append(f"GRANT ALL ON TABLE {tablename2} TO GROUP rapidadminrole;")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidporole;")
             sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename2} TO rapidporole;")
 
-        else:
+        if table1_exists_flag and table2_exists_flag:
             print(f"AstroObjects_<field> and Merges_<field> database tables have " +
                   f"already been indexed for field={field}; continuing...")
 
@@ -1131,10 +1198,10 @@ if __name__ == '__main__':
     #########################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,num_cores)
+        execute_parallel_processes_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,expids_in_range,num_cores)
     else:
         thread_index = 0
-        run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,thread_index)
+        run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,expids_in_range,thread_index)
 
 
     # Code-timing benchmark.
@@ -1213,10 +1280,10 @@ if __name__ == '__main__':
     #####################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,num_cores)
+        execute_parallel_processes_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,expids_in_range,num_cores)
     else:
         thread_index = 0
-        run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,thread_index)
+        run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,expids_in_range,thread_index)
 
 
     # Code-timing benchmark.
