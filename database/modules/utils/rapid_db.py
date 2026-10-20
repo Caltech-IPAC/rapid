@@ -84,6 +84,7 @@ class RAPIDDB:
         self.exit_code = 0
         self.conn = None
         self.cur = None
+        self.defer_commit = False
 
 
         # Get database connection parameters from environment.
@@ -169,6 +170,57 @@ class RAPIDDB:
             if self.conn is not None:
                 self.conn.close()
                 print('Database connection closed.')
+
+########################################################################################################
+
+    def _commit(self):
+
+        '''
+        Commit the current database transaction, unless commits are deferred by
+        begin_deferred_commit(), in which case the caller commits or rolls back
+        the whole transaction with commit_deferred() or rollback_deferred().
+        '''
+
+        if not self.defer_commit:
+            self.conn.commit()
+
+
+    def begin_deferred_commit(self):
+
+        '''
+        Defer commits from all methods until commit_deferred() or rollback_deferred()
+        is called, so that a group of database changes is applied all together or not at all.
+        '''
+
+        self.defer_commit = True
+
+
+    def commit_deferred(self):
+
+        '''
+        Commit the database changes made since begin_deferred_commit(), and resume
+        committing after each method.
+        '''
+
+        self.defer_commit = False
+        self.conn.commit()
+
+
+    def rollback_deferred(self):
+
+        '''
+        Discard the database changes made since begin_deferred_commit(), and resume
+        committing after each method.  Guard the rollback itself, since a connection
+        that has been lost or closed will raise again here.
+        '''
+
+        self.defer_commit = False
+
+        try:
+            self.conn.rollback()
+        except Exception as e:
+            print(f"*** Warning: Database rollback failed ({e}); continuing...")
+
 
 ########################################################################################################
 
@@ -313,7 +365,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -464,7 +516,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 
@@ -613,7 +665,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -677,7 +729,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -770,7 +822,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -861,7 +913,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -953,7 +1005,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -996,7 +1048,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -1092,7 +1144,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -1190,7 +1242,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -1620,7 +1672,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
         return jid
 
@@ -1693,7 +1745,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
         return jid
 
@@ -1740,7 +1792,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -1809,7 +1861,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -1873,7 +1925,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -2080,7 +2132,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -2144,7 +2196,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -2200,7 +2252,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -2329,7 +2381,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -2426,7 +2478,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -2617,7 +2669,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -3278,7 +3330,7 @@ class RAPIDDB:
                 return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
         # Return records for the last query executed.  This is done for convenience and code is not generalized.
@@ -3315,7 +3367,7 @@ class RAPIDDB:
 
                 self.cur.copy_from(f, table_name, sep=separator, null=null_string, columns=columns)
 
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error bulk-loading data from file ({csv_file_path}) into specified database table ({table_name}); skipping...')
@@ -3351,7 +3403,7 @@ class RAPIDDB:
 
             self.cur.copy_from(csv_buffer, table_name, sep=separator, null=null_string, columns=columns)
 
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error bulk-loading data from buffer into specified database table ({table_name}); skipping...')
@@ -3406,7 +3458,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
         return aid
 
@@ -3444,7 +3496,7 @@ class RAPIDDB:
                 print(f"Nothing returned from database query ({query}); continuing...")
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -3477,7 +3529,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -3510,7 +3562,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -3682,7 +3734,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -3736,7 +3788,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -3775,7 +3827,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
         return n_rows_deleted
 
@@ -3815,7 +3867,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
         return n_rows_deleted
 
@@ -3935,7 +3987,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -3996,7 +4048,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -4060,7 +4112,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
@@ -4106,7 +4158,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
         return reqid
 
@@ -4169,7 +4221,7 @@ class RAPIDDB:
             return
 
         if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+            self._commit()               # Commit database transaction (unless deferred)
 
 
 ########################################################################################################
