@@ -17,6 +17,15 @@ filter hard-wired to fid 8, so every filter but W146 had no PSF at all.
 This version registers either family, takes the filter from the filename
 rather than a literal, and looks fid up in the Filters table.
 
+A third family, the phase-averaged empirical ePSF library built from
+commissioning data,
+
+    sciimage_psf_phavg_fidN_scann.fits
+
+names the fid directly, and lives in its own subdirectory (--s3-subdir,
+e.g. psfs/commissioning/f146_guided_1043) so it never mixes with the two
+families above.
+
 By default it registers only (fid, sca) pairs that have no PSF yet, so
 running it registers the missing filters without disturbing a pair that
 is already serving the pipeline.  `--force` re-registers in scope, which
@@ -88,24 +97,33 @@ psf_families = {
         "groups": ("filter", "sca"),
         "description": "the broader W146-only product registered by v1.0",
     },
+    "phavg": {
+        "pattern": re.compile(r"^sciimage_psf_phavg_fid(\d+)_sca(\d+)\.fits$"),
+        "groups": ("fid", "sca"),
+        "description": "phase-averaged empirical ePSF library from commissioning data",
+    },
 }
 
 
 def parse_psf_filename(filename, family):
 
-    """(sca, filter token) for a PSF filename, or (None, None) if it does
-    not belong to `family`."""
+    """(sca, filter token, fid) for a PSF filename, or (None, None, None) if
+    it does not belong to `family`.  A family names either the filter or the
+    fid; the other is None."""
 
     spec = psf_families[family]
 
     match = spec["pattern"].match(filename)
 
     if match is None:
-        return None, None
+        return None, None, None
 
     fields = dict(zip(spec["groups"], match.groups()))
 
-    return int(fields["sca"]), fields["filter"].upper()
+    psf_filter = fields["filter"].upper() if "filter" in fields else None
+    fid = int(fields["fid"]) if "fid" in fields else None
+
+    return int(fields["sca"]), psf_filter, fid
 
 
 def parse_args(argv=None):
@@ -132,6 +150,9 @@ def parse_args(argv=None):
                         "download nothing")
     p.add_argument("--keep-downloads", action="store_true",
                    help="do not delete each PSF after registering it")
+    p.add_argument("--s3-subdir", default="psfs",
+                   help="directory of the job-info S3 bucket holding the PSFs "
+                        "(default %(default)s)")
 
     return p.parse_args(argv)
 
@@ -245,7 +266,7 @@ def main(argv=None):
 
     s3_client = boto3.client('s3')
 
-    s3_subdir = 'psfs'
+    s3_subdir = args.s3_subdir.strip('/')
     s3_url = f"s3://{job_info_s3_bucket_base}/{s3_subdir}"
 
     print("s3_url =", s3_url)
@@ -272,6 +293,9 @@ def main(argv=None):
                          for fid, filter_name in filter_records}
 
         print("fid_of_filter =", fid_of_filter)
+
+        filter_of_fid = {fid: filter_name
+                         for filter_name, fid in fid_of_filter.items()}
 
 
         # (fid,sca) pairs that already have a PSF.  These are skipped unless
@@ -316,25 +340,36 @@ def main(argv=None):
 
             filename = cols[3]
 
-            sca, psf_filter = parse_psf_filename(filename, args.family)
+            sca, psf_filter, fid = parse_psf_filename(filename, args.family)
 
             if sca is None:
                 n_unparsed += 1
                 continue
 
-            filter_name = db_filter_name(psf_filter)
+            if fid is not None:
 
-            if filter_name is None:
-                print(f"*** Warning: {filename} has filter {psf_filter}, "
-                      f"which has no Filters-table counterpart; skipping")
-                continue
+                filter_name = filter_of_fid.get(fid)
 
-            fid = fid_of_filter.get(filter_name)
+                if filter_name is None:
+                    print(f"*** Warning: fid {fid} is not in the Filters "
+                          f"table; skipping {filename}")
+                    continue
 
-            if fid is None:
-                print(f"*** Warning: filter {filter_name} is not in the "
-                      f"Filters table; skipping {filename}")
-                continue
+            else:
+
+                filter_name = db_filter_name(psf_filter)
+
+                if filter_name is None:
+                    print(f"*** Warning: {filename} has filter {psf_filter}, "
+                          f"which has no Filters-table counterpart; skipping")
+                    continue
+
+                fid = fid_of_filter.get(filter_name)
+
+                if fid is None:
+                    print(f"*** Warning: filter {filter_name} is not in the "
+                          f"Filters table; skipping {filename}")
+                    continue
 
             if filters_in_scope is not None and filter_name not in filters_in_scope:
                 continue
