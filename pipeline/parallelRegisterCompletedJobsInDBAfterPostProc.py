@@ -187,8 +187,9 @@ def run_single_core_job(jids,log_fnames,index_thread):
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        error_msg = f"*** Error: Could not open output file {thread_work_file}; quitting..."
+        print(error_msg)
+        raise Exception(error_msg)
 
     dbh = dbh_list[index_thread]
 
@@ -227,7 +228,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                                               s3_full_name_science_pipeline_done_file)
 
         if not downloaded_from_bucket:
-            fh.write("*** Warning: Science-pipeline done file does NOT exist ({}); skipping...\n".format(done_filename))
+            fh.write("*** Warning: Science-pipeline done file does NOT exist ({}); skipping...\n".format(science_pipeline_done_filename))
             continue
 
 
@@ -246,17 +247,27 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
 
         # Download log file from S3 bucket.
+        # Skip to next job if the log file does not exist (e.g., the AWS Batch job never ran),
+        # rather than letting the exception terminate this thread's entire loop over jobs.
 
         s3_bucket_object_name = proc_subdir + '/' + log_fname
 
         fh.write("Downloading s3://{}/{} into {}...\n".format(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname))
 
-        response = s3_client.download_file(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname)
+        try:
+            response = s3_client.download_file(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname)
+
+        except ClientError as e:
+            fh.write("*** Warning: Failed to download {} from s3://{}/{} ({}); skipping...\n"\
+                .format(log_fname,job_logs_s3_bucket_base,s3_bucket_object_name,e))
+            fh.flush()
+            continue
 
         fh.write(f"response = {response}\n")
 
 
         # Download job config file, in order to harvest some of its metadata.
+        # Skip to next job if the job config file does not exist.
 
         job_config_ini_filename = postproc_job_config_filename_base + str(jid) + ".ini"
 
@@ -264,7 +275,14 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         fh.write("Downloading s3://{}/{} into {}...\n".format(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename))
 
-        response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
+        try:
+            response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
+
+        except ClientError as e:
+            fh.write("*** Warning: Failed to download {} from s3://{}/{} ({}); skipping...\n"\
+                .format(job_config_ini_filename,job_info_s3_bucket_base,s3_bucket_object_name,e))
+            fh.flush()
+            continue
 
         fh.write(f"response = {response}\n")
 
@@ -345,8 +363,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 fh.write("started = {} {}\n".format(started_date,started_time))
 
             except:
-                fh.write("*** Error: Could not parse job_started; quitting...\n")
-                exit(64)
+                error_msg = f"*** Error: Could not parse job_started ({job_started}) for jid={jid}; quitting..."
+                fh.write(error_msg + "\n")
+                fh.flush()
+                print(error_msg)
+                raise Exception(error_msg)
 
             started = started_date + " " + started_time
 
@@ -358,8 +379,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 fh.write("ended = {} {}\n".format(ended_date,ended_time))
 
             except:
-                fh.write("*** Error: Could not parse job_ended; quitting...\n")
-                exit(64)
+                error_msg = f"*** Error: Could not parse job_ended ({job_ended}) for jid={jid}; quitting..."
+                fh.write(error_msg + "\n")
+                fh.flush()
+                print(error_msg)
+                raise Exception(error_msg)
 
             ended = ended_date + " " + ended_time
 
@@ -387,7 +411,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 dbh.update_refimage(rfid,refimage_filename,refimage_file_checksum,refimage_status,refimage_file_version)
 
                 if dbh.exit_code >= 64:
-                    exit(dbh.exit_code)
+                    error_msg = f"*** Error: dbh.update_refimage returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                    fh.write(error_msg + "\n")
+                    fh.flush()
+                    print(error_msg)
+                    raise Exception(error_msg)
 
 
             # Read in difference-image metadata to update checksums.
@@ -414,12 +442,23 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 dbh.update_diffimage(pid,diffimage_filename,diffimage_file_checksum,diffimage_status,diffimage_file_version)
 
                 if dbh.exit_code >= 64:
-                    exit(dbh.exit_code)
+                    error_msg = f"*** Error: dbh.update_diffimage returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                    fh.write(error_msg + "\n")
+                    fh.flush()
+                    print(error_msg)
+                    raise Exception(error_msg)
 
         except ClientError as e:
-            fh.write("*** Warning: Failed to download {} from s3://{}/{}\n"\
-                .format(product_config_ini_filename,product_s3_bucket_base,s3_bucket_object_name))
-            downloaded_from_bucket = False
+            fh.write("*** Warning: Failed to download {} from s3://{}/{} ({}); skipping...\n"\
+                .format(product_config_ini_filename,product_s3_bucket_base,s3_bucket_object_name,e))
+            fh.flush()
+
+
+            # Skip to next job, since jid_post_proc, started, and ended are only available
+            # from the product config file (otherwise end_job would be called with values
+            # left over from the previous job).
+
+            continue
 
 
         # Update Jobs record.
@@ -430,7 +469,12 @@ def run_single_core_job(jids,log_fnames,index_thread):
         dbh.end_job(jid_post_proc,job_exitcode,aws_batch_job_id,started,ended)
 
         if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
+            error_msg = f"*** Error: dbh.end_job returned exit code {dbh.exit_code} " +\
+                        f"(jid={jid},jid_post_proc={jid_post_proc},job_exitcode={job_exitcode},aws_batch_job_id={aws_batch_job_id},ended={ended}); quitting..."
+            fh.write(error_msg + "\n")
+            fh.flush()
+            print(error_msg)
+            raise Exception(error_msg)
 
 
         # Touch done file.  Upload done file to S3 bucket.
@@ -474,12 +518,19 @@ def execute_parallel_processes(jids,log_filenames,num_cores=None):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    # Return the number of threads that terminated with an exception.
+
+    nfailed = 0
+
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            nfailed += 1
+
+    return nfailed
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -537,7 +588,11 @@ if __name__ == '__main__':
     # taking advantage of multiple cores on the job-launcher machine.
     ############################################################################
 
-    execute_parallel_processes(jids,log_filenames)
+    nfailed = execute_parallel_processes(jids,log_filenames)
+
+    if nfailed > 0:
+        print(f"*** Error: {nfailed} of {num_cores} threads failed; setting exitcode = 64")
+        exitcode = 64
 
 
     # Close database connection.
