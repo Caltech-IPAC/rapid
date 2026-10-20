@@ -104,7 +104,8 @@ Date              Software modification
 8/5/2026          Made correction to ``data_unc`` formula (line 64 of ``pipeline/differenceImageSubs.py``).
 8/5/2026          Modified to feed ``dfis.compute_diffimage_uncertainty method`` background-subtracted ``filename_bkg_subbed_science_image`` instead of ``reformatted_science_image_filename`` (with background).
 8/5/2026          Set ``min_separation = 1.0`` pixels for PhotUtils catalog generation.
-10/14/2026        * New ``ProcReqs`` database table that reserves a unique ``reqid`` for each VPO processing episode.
+10/14/2026        * Changed reference-image size from 7Kx7K to 9.1Kx9.1K.
+                  * New ``ProcReqs`` database table that reserves a unique ``reqid`` for each VPO processing episode.
                   * Req ID included in S3 pathnames (stored in ``ProcReqs`` database table, and referenced in DB via ``Jobs.reqid`` column).
                   * Extra columns added to SExtractor and PhotUtils catalogs.
                   * VPO loads both Sources and XSources child database tables.
