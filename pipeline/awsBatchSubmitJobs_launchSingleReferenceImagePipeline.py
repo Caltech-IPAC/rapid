@@ -170,6 +170,11 @@ dry_run = ast.literal_eval(dry_run_str)
 print(f"dry_run = {dry_run}")
 
 
+# If RUNPROGRAMIDS is set, then coadd only the exposures of the specified programs.
+
+run_program_ids = util.get_run_program_ids()
+
+
 # Read input parameters from .ini file.
 
 config_input_filename = cfg_path + "/" + cfg_filename_only
@@ -540,7 +545,8 @@ if __name__ == '__main__':
                                                      fid,
                                                      field,
                                                      ra0_field,dec0_field,
-                                                     mjdobs)
+                                                     mjdobs,
+                                                     program_ids=run_program_ids)
 
     if dbh.exit_code >= 64:
         print(f"*** Error from dbh.get_overlapping_l2files (dbh.exit_code = {dbh.exit_code}); quitting...")

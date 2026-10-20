@@ -202,6 +202,35 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    @staticmethod
+    def program_ids_clause(program_ids):
+
+        '''
+        Build the SQL qualifier that restricts an L2Files query to exposures of the given programs
+        (Exposures.program_id), for the RUNPROGRAMIDS selection.
+
+        Parameters
+        ----------
+        program_ids : list of int or None
+            Program IDs to keep.  None means no restriction.
+
+        Returns
+        -------
+        clause : str
+            "and expid in (select expid from Exposures where program_id in (...)) ",
+            or "" if program_ids is None.
+        '''
+
+        if program_ids is None:
+            return ""
+
+        program_ids_str = ",".join(str(int(program_id)) for program_id in program_ids)
+
+        return f"and expid in (select expid from Exposures where program_id in ({program_ids_str})) "
+
+
+########################################################################################################
+
     def vacuum_analyze_table(self,tablename):
         old_isolation_level = self.conn.isolation_level
         self.conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
@@ -1270,12 +1299,14 @@ class RAPIDDB:
                                 fid,
                                 field,
                                 field_ra0,field_dec0,
-                                mjdobs):
+                                mjdobs,
+                                program_ids=None):
 
         '''
         Query database for RIDs and distances from tile center for all science images that
         overlap the sky tile associated with the input science image and its filter
         in the mjdobs range of interest (STARTREFIMMJDOBS and ENDREFIMMJDOBS override the default range).
+        If program_ids is given, only science images of exposures in those programs are returned.
 
         Returned list is ordered by mjdobs and distance from tile center.
         '''
@@ -1295,7 +1326,8 @@ class RAPIDDB:
             "and b.vbest > 0 " +\
             "and b.overlapfields @> ARRAY[cast(TEMPLATE_FIELD as integer)] " +\
             "and b.mjdobs >= TEMPLATE_STARTMJDOBS " +\
-            "and b.mjdobs < TEMPLATE_ENDMJDOBS "
+            "and b.mjdobs < TEMPLATE_ENDMJDOBS " +\
+            self.program_ids_clause(program_ids)
 
         # An rid of 'null' means no science image is to be excluded (the reference-image
         # pipeline queries for a sky tile, rather than for a specific input science image).
@@ -3044,11 +3076,13 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_field_fid_nframes_records_for_mjdobs_range(self,start_refimage_mjdobs,end_refimage_mjdobs,min_refimage_nframes,fid=None):
+    def get_field_fid_nframes_records_for_mjdobs_range(self,start_refimage_mjdobs,end_refimage_mjdobs,min_refimage_nframes,fid=None,
+                                                       program_ids=None):
 
         '''
         Query database for all field/filter/nframes combinations in reference-image window with
-        minimum number of frames in coadd stack.
+        minimum number of frames in coadd stack.  If program_ids is given, only exposures in
+        those programs are counted.
         '''
 
         self.exit_code = 0
@@ -3063,6 +3097,7 @@ class RAPIDDB:
                 f"where mjdobs >= {start_refimage_mjdobs} " +\
                 f"and mjdobs < {end_refimage_mjdobs} " +\
                 f"and vbest > 0 " +\
+                f"{self.program_ids_clause(program_ids)}" +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\
                 f"order by field,fid;"
@@ -3074,6 +3109,7 @@ class RAPIDDB:
                 f"where mjdobs >= {start_refimage_mjdobs} " +\
                 f"and mjdobs < {end_refimage_mjdobs} " +\
                 f"and vbest > 0 " +\
+                f"{self.program_ids_clause(program_ids)}" +\
                 f"and fid = {fid} " +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\
@@ -3110,10 +3146,11 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_l2files_records_for_datetime_range_field_fid(self,startdatetime,enddatetime,field,fid):
+    def get_l2files_records_for_datetime_range_field_fid(self,startdatetime,enddatetime,field,fid,program_ids=None):
 
         '''
         Query database for all L2Files records associated with the given observation datetime range.
+        If program_ids is given, only L2Files of exposures in those programs are returned.
         '''
 
         self.exit_code = 0
@@ -3128,6 +3165,7 @@ class RAPIDDB:
             f"and field = {field} " +\
             f"and fid = {fid} " +\
             f"and vbest > 0 " +\
+            f"{self.program_ids_clause(program_ids)}" +\
             f"order by mjdobs,sca;"
 
 
@@ -3822,11 +3860,12 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_field_fid_nframes_records(self,min_refimage_nframes,fid=None):
+    def get_field_fid_nframes_records(self,min_refimage_nframes,fid=None,program_ids=None):
 
         '''
         Query database for all field/filter/nframes combinations with
-        minimum number of frames in coadd stack.
+        minimum number of frames in coadd stack.  If program_ids is given, only exposures in
+        those programs are counted.
         '''
 
         self.exit_code = 0
@@ -3839,6 +3878,7 @@ class RAPIDDB:
             query =\
                 f"select field,fid,count(*) from l2files " +\
                 f"where vbest > 0 " +\
+                f"{self.program_ids_clause(program_ids)}" +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\
                 f"order by field,fid;"
@@ -3848,6 +3888,7 @@ class RAPIDDB:
             query =\
                 f"select field,fid,count(*) from l2files " +\
                 f"where vbest > 0 " +\
+                f"{self.program_ids_clause(program_ids)}" +\
                 f"and fid = {fid} " +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\

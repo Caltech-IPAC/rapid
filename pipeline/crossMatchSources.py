@@ -96,6 +96,13 @@ print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 
 
+# If RUNPROGRAMIDS is set, the processing request was restricted to the exposures of the
+# specified programs, so only those are cross-matched; the other programs' exposures in the
+# observation range may belong to other processing requests.
+
+run_program_ids = util.get_run_program_ids()
+
+
 # Ensure sqlite database that defines the Roman sky tessellation is available.
 
 roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
@@ -1014,7 +1021,8 @@ if __name__ == '__main__':
 
     # Look up the exposures in the observation range of the processing request.
 
-    expids_in_range = util.get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime)
+    expids_in_range = util.get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime,
+                                                             program_ids=run_program_ids)
 
     print("Number of exposures in observation range =",len(expids_in_range))
 

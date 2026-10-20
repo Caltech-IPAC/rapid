@@ -2856,11 +2856,75 @@ def index_to_radec(idx):
 
 
 ########################################
+# Parse environment variable RUNPROGRAMIDS, which restricts reference-image and science
+# processing to the exposures of the given programs (Exposures.program_id).
+########################################
+
+def parse_program_ids(program_ids_str):
+
+    """
+    Parse a comma-separated list of program IDs, as given in environment variable RUNPROGRAMIDS.
+
+    Parameters
+    ----------
+    program_ids_str : str or None
+        Comma-separated integers, e.g., "-2" or "994,1094".
+
+    Returns
+    -------
+    program_ids : list of int or None
+        Program IDs in the order given, without duplicates, or None (no restriction) if
+        program_ids_str is None, empty, or only whitespace.  Raises ValueError if an
+        element is not an integer.
+    """
+
+    if program_ids_str is None or program_ids_str.strip() == "":
+        return None
+
+    program_ids = []
+
+    for element in program_ids_str.split(","):
+        program_id = int(element.strip())
+        if program_id not in program_ids:
+            program_ids.append(program_id)
+
+    return program_ids
+
+
+def get_run_program_ids():
+
+    """
+    Read and report environment variable RUNPROGRAMIDS; exit with code 64 if it cannot be parsed.
+
+    Returns
+    -------
+    program_ids : list of int or None
+        Program IDs to restrict processing to, or None for all programs.
+    """
+
+    run_program_ids_str = os.getenv('RUNPROGRAMIDS')
+
+    try:
+        program_ids = parse_program_ids(run_program_ids_str)
+    except ValueError:
+        print(f"*** Error: RUNPROGRAMIDS is not a comma-separated list of integers " +
+              f"(RUNPROGRAMIDS={run_program_ids_str}); quitting...")
+        exit(64)
+
+    if program_ids is None:
+        print("*** Message: Will process all programs...")
+    else:
+        print(f"*** Message: Will process only program_ids={program_ids}...")
+
+    return program_ids
+
+
+########################################
 # Look up the exposure IDs of the L2 files observed in the observation range
 # [startdatetime, enddatetime), the same range the science pipelines were launched for.
 ########################################
 
-def get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime):
+def get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime,program_ids=None):
 
     """
     Return the exposure IDs of the L2Files records with dateobs >= startdatetime and
@@ -2874,6 +2938,8 @@ def get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime):
         Observation start datetime (UT), e.g., "2027-10-01 07:12:00" (inclusive).
     enddatetime : str
         Observation end datetime (UT), e.g., "2027-10-02 00:00:00" (exclusive).
+    program_ids : list of int or None, optional
+        Keep only exposures of these programs (RUNPROGRAMIDS).  None: all programs.
 
     Returns
     -------
@@ -2898,7 +2964,9 @@ def get_expids_for_obs_datetime_range(dbh,startdatetime,enddatetime):
 
     query = f"SELECT DISTINCT expid FROM l2files " +\
             f"WHERE dateobs >= '{start_dt.isoformat(sep=' ')}' " +\
-            f"AND dateobs < '{end_dt.isoformat(sep=' ')}' ORDER BY expid;"
+            f"AND dateobs < '{end_dt.isoformat(sep=' ')}' " +\
+            dbh.program_ids_clause(program_ids) +\
+            f"ORDER BY expid;"
 
     try:
         records = dbh.execute_sql_queries([query],0)

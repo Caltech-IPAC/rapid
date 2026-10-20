@@ -62,6 +62,11 @@ else:
     print(f"*** Message: Will process only fid={run_fid}...")
 
 
+# If RUNPROGRAMIDS is set, then use only the exposures of the specified programs.
+
+run_program_ids = util.get_run_program_ids()
+
+
 # Get optional DRYRUN.
 
 dry_run_str = os.getenv('DRYRUN')
@@ -269,7 +274,7 @@ if __name__ == '__main__':
                 print(f"*** Message: Skipping fid={fid}; continuing...")
                 continue
 
-        recs = dbh.get_field_fid_nframes_records(min_n_images_to_coadd,fid)
+        recs = dbh.get_field_fid_nframes_records(min_n_images_to_coadd,fid,program_ids=run_program_ids)
 
         if dbh.exit_code >= 64:
             print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))
