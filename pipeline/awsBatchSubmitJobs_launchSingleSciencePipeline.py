@@ -376,6 +376,7 @@ fake_sources_dict = config_input['FAKE_SOURCES']
 extra_catalog_cols_dict = config_input['EXTRA_CATALOG_COLS']
 sumrat_dict = config_input['SUMRAT']
 rubrat_dict = config_input['RUBRAT'] if config_input.has_section('RUBRAT') else None
+database_prefilter_dict = config_input['DATABASE_PREFILTER'] if config_input.has_section('DATABASE_PREFILTER') else None
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -972,6 +973,8 @@ if __name__ == '__main__':
     job_config['SUMRAT'] = sumrat_dict
     if rubrat_dict is not None:
         job_config['RUBRAT'] = rubrat_dict
+    if database_prefilter_dict is not None:
+        job_config['DATABASE_PREFILTER'] = database_prefilter_dict    # For photutils_cols_prefilter_only.
 
     job_config['SEXTRACTOR_GAINMATCH'] = {}
     for key in sextractor_gainmatch_dict.keys():

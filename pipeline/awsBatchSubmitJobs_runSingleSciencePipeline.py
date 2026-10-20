@@ -390,6 +390,20 @@ if __name__ == '__main__':
         else:
             print("*** Warning: rb columns requested in EXTRA_CATALOG_COLS but RUBRAT section missing from job config; real/bogus columns will not be added")
 
+
+    # sumrat and aperture-SNR thresholds of the XSources database prefilter, for
+    # [EXTRA_CATALOG_COLS] photutils_cols_prefilter_only, which PSF-fits only the SExtractor
+    # sources that would be loaded into the database.  None (no cut) without the section.
+
+    if config_input.has_section('DATABASE_PREFILTER'):
+        prefilter_sumrat_threshold,_,_ = util.get_database_prefilter_params(config_input)
+        prefilter_snr_threshold = util.get_snr_prefilter_threshold(config_input)
+    else:
+        prefilter_sumrat_threshold = None
+        prefilter_snr_threshold = None
+
+    print("prefilter_sumrat_threshold,prefilter_snr_threshold =",prefilter_sumrat_threshold,prefilter_snr_threshold)
+
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
     inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
@@ -2337,7 +2351,9 @@ if __name__ == '__main__':
                                                     sci_image_filename=filename_bkg_subbed_science_image,
                                                     ref_image_filename=output_resampled_gainmatched_reference_image,
                                                     rb_dict=rubrat_dict,
-                                                    l2_image_filename=science_image_filename)
+                                                    l2_image_filename=science_image_filename,
+                                                    prefilter_sumrat_threshold=prefilter_sumrat_threshold,
+                                                    prefilter_snr_threshold=prefilter_snr_threshold)
                 except Exception as e:
                     print(f"*** Warning: Could not add extra columns to {filename_sfftdiffimage_sextractor_catalog} ({e}); continuing...")
 
@@ -2414,7 +2430,9 @@ if __name__ == '__main__':
                                                     sci_image_filename=filename_bkg_subbed_science_image,
                                                     ref_image_filename=output_resampled_gainmatched_reference_image,
                                                     rb_dict=rubrat_dict,
-                                                    l2_image_filename=science_image_filename)
+                                                    l2_image_filename=science_image_filename,
+                                                    prefilter_sumrat_threshold=prefilter_sumrat_threshold,
+                                                    prefilter_snr_threshold=prefilter_snr_threshold)
                 except Exception as e:
                     print(f"*** Warning: Could not add extra columns to {filename_sfftdiffimage_sextractor_catalog_negative} ({e}); continuing...")
 

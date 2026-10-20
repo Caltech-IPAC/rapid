@@ -3417,6 +3417,116 @@ rb_catalog_col_names = ("rb_score","rb_label")
 rb_catalog_col_formats = {"rb_label": "d"}
 
 
+pixel_catalog_col_names = ("sumrat","nneg","nbad")
+
+
+def _compute_pixel_catalog_cols(diff_image_filename,
+                                x_list,
+                                y_list,
+                                coord_base,
+                                extra_cols_dict,
+                                sumrat_dict,
+                                col_names):
+
+    """
+    Compute the pixel-based extra catalog columns (sumrat, nneg, nbad) named in col_names, measured
+    on a background-subtracted copy of the difference image when pixel_cols_bkg_box is set.
+
+    Parameters
+    ----------
+    diff_image_filename : str
+        FITS file containing the difference image the sources were found in.
+    x_list, y_list : sequence of float
+        Source positions [pixels], with x along NAXIS1 and y along NAXIS2.
+    coord_base : int
+        0 if the positions are zero-based (PhotUtils), 1 if one-based (SExtractor).
+    extra_cols_dict : mapping of str to str
+        [EXTRA_CATALOG_COLS] section of the config file (pixel_cols_bkg_box,
+        pixel_cols_bkg_filter_size, nneg_nbad_stamp_size, nneg_nbad_fill_value).
+    sumrat_dict : mapping of str to str
+        [SUMRAT] section of the config file.
+    col_names : sequence of str
+        Columns to compute, among pixel_catalog_col_names.
+
+    Returns
+    -------
+    pixel_cols : dict of str to list of float
+        Each requested column's values, one per position.
+    """
+
+    xy_positions = list(zip(x_list,y_list))
+
+    pixel_cols = {}
+
+
+    # The pixel-based columns are measured on a background-subtracted copy of the difference
+    # image when pixel_cols_bkg_box is set (see rda.write_background_subtracted_diff_image); the
+    # other columns always use the image itself.  Configs written before pixel_cols_bkg_box
+    # existed measure on the image itself.
+
+    pixel_image_filename = diff_image_filename
+    pixel_image_tmp = None
+
+    bkg_box_str = extra_cols_dict.get("pixel_cols_bkg_box","None").strip()
+
+    if bkg_box_str.lower() not in ("", "none", "0") and len(col_names) > 0:
+
+        pixel_image_tmp = os.path.splitext(diff_image_filename)[0] + "_pixcols_bkgsub.fits"
+
+        try:
+            median_bkg = rda.write_background_subtracted_diff_image(
+                diff_image_filename,
+                pixel_image_tmp,
+                box_size = int(bkg_box_str),
+                filter_size = int(extra_cols_dict.get("pixel_cols_bkg_filter_size","3")))
+        except Exception as e:
+            print(f"*** Warning: _compute_pixel_catalog_cols: background subtraction for the pixel "
+                  f"columns failed ({e}); measuring them on {diff_image_filename} itself")
+            pixel_image_tmp = None
+        else:
+            pixel_image_filename = pixel_image_tmp
+            print(f"_compute_pixel_catalog_cols: pixel columns measured after subtracting a "
+                  f"{bkg_box_str}-px background (median {median_bkg:.4f}) from {diff_image_filename}")
+
+    try:
+
+        if "sumrat" in col_names:
+
+            pixel_cols["sumrat"] = rda.compute_sumrat_for_diff_image(
+                pixel_image_filename,
+                xy_positions,
+                coord_base = coord_base,
+                stamp_size = int(sumrat_dict["stamp_size"]),
+                filter_size = int(sumrat_dict["filter_size"]),
+                lower_median = sumrat_dict["lower_median"].strip().lower() == "true",
+                fill_value = float(sumrat_dict["fill_value"]))
+
+
+        # nneg and nbad come from one pass over the stamps.  Configs written before the nneg_nbad
+        # parameters existed get the ZTF stamp size and the usual fill value.
+
+        if "nneg" in col_names or "nbad" in col_names:
+
+            nneg,nbad = rda.compute_nneg_nbad_for_diff_image(
+                pixel_image_filename,
+                xy_positions,
+                coord_base = coord_base,
+                stamp_size = int(extra_cols_dict.get("nneg_nbad_stamp_size","5")),
+                fill_value = float(extra_cols_dict.get("nneg_nbad_fill_value","-999.0")))
+
+            if "nneg" in col_names:
+                pixel_cols["nneg"] = nneg
+            if "nbad" in col_names:
+                pixel_cols["nbad"] = nbad
+
+    finally:
+
+        if pixel_image_tmp is not None and os.path.exists(pixel_image_tmp):
+            os.remove(pixel_image_tmp)
+
+    return pixel_cols
+
+
 def _compute_extra_catalog_cols(diff_image_filename,
                                 x_list,
                                 y_list,
@@ -3428,7 +3538,8 @@ def _compute_extra_catalog_cols(diff_image_filename,
                                 sci_image_filename = None,
                                 ref_image_filename = None,
                                 rb_dict = None,
-                                l2_image_filename = None):
+                                l2_image_filename = None,
+                                pixel_cols = None):
 
     """
     Method _compute_extra_catalog_cols
@@ -3455,6 +3566,10 @@ def _compute_extra_catalog_cols(diff_image_filename,
                             already downloaded; survey_id; batch_size; sentinel_values;
                             fill_value; col_format).
     l2_image_filename       For rb: L2 science image whose FILTER header keyword gives the filter.
+    pixel_cols              Pixel columns (sumrat, nneg, nbad) already computed by
+                            _compute_pixel_catalog_cols for these positions, as a dictionary of
+                            column name to list of values, which are used instead of being
+                            computed again.
 
     Returns:
     extra_cols                Dictionary, in the order of extra_cols_dict["extra_cols"], mapping each
@@ -3473,42 +3588,25 @@ def _compute_extra_catalog_cols(diff_image_filename,
 
     extra_cols = {}
     extra_cols_format = {}
-    nneg_nbad = None
     rb_cols = None
     rb_skipped = False
 
 
-    # The pixel-based columns (sumrat, nneg, nbad) are measured on a background-subtracted copy of
-    # the difference image when pixel_cols_bkg_box is set (see
-    # rda.write_background_subtracted_diff_image); the other columns always use the image itself.
-    # Configs written before pixel_cols_bkg_box existed measure on the image itself.
+    # The pixel-based columns (sumrat, nneg, nbad) not given in pixel_cols are computed together.
 
-    pixel_image_filename = diff_image_filename
-    pixel_image_tmp = None
+    all_pixel_cols = dict(pixel_cols) if pixel_cols is not None else {}
 
-    bkg_box_str = extra_cols_dict.get("pixel_cols_bkg_box","None").strip()
+    pixel_col_names = [c for c in col_names if c in pixel_catalog_col_names and c not in all_pixel_cols]
 
-    if bkg_box_str.lower() not in ("", "none", "0") and \
-            any(c in ("sumrat","nneg","nbad") for c in col_names):
+    if pixel_col_names:
+        all_pixel_cols.update(_compute_pixel_catalog_cols(diff_image_filename,
+                                                          x_list,
+                                                          y_list,
+                                                          coord_base,
+                                                          extra_cols_dict,
+                                                          sumrat_dict,
+                                                          pixel_col_names))
 
-        pixel_image_tmp = os.path.splitext(diff_image_filename)[0] + "_pixcols_bkgsub.fits"
-
-        try:
-            median_bkg = rda.write_background_subtracted_diff_image(
-                diff_image_filename,
-                pixel_image_tmp,
-                box_size = int(bkg_box_str),
-                filter_size = int(extra_cols_dict.get("pixel_cols_bkg_filter_size","3")))
-
-        except Exception as e:
-            print(f"*** Warning: _compute_extra_catalog_cols: background subtraction for the pixel "
-                  f"columns failed ({e}); measuring them on {diff_image_filename} itself")
-            pixel_image_tmp = None
-
-        else:
-            pixel_image_filename = pixel_image_tmp
-            print(f"_compute_extra_catalog_cols: pixel columns measured after subtracting a "
-                  f"{bkg_box_str}-px background (median {median_bkg:.4f}) from {diff_image_filename}")
 
     for col_name in col_names:
 
@@ -3585,42 +3683,14 @@ def _compute_extra_catalog_cols(diff_image_filename,
             extra_cols[col_name] = rb_cols[col_name]
             extra_cols_format[col_name] = rb_catalog_col_formats.get(col_name,rb_dict["col_format"])
 
-        elif col_name == "sumrat":
+        elif col_name in pixel_catalog_col_names:
 
-            extra_cols[col_name] = rda.compute_sumrat_for_diff_image(
-                pixel_image_filename,
-                xy_positions,
-                coord_base = coord_base,
-                stamp_size = int(sumrat_dict["stamp_size"]),
-                filter_size = int(sumrat_dict["filter_size"]),
-                lower_median = sumrat_dict["lower_median"].strip().lower() == "true",
-                fill_value = float(sumrat_dict["fill_value"]))
-
-            extra_cols_format[col_name] = sumrat_dict["col_format"]
-
-        elif col_name in ("nneg","nbad"):
-
-            # Both come from one pass over the stamps, made the first time either is requested.
-            # Configs written before the nneg_nbad parameters existed get the ZTF stamp size and
-            # the usual fill value.
-
-            if nneg_nbad is None:
-                nneg_nbad = dict(zip(("nneg","nbad"), rda.compute_nneg_nbad_for_diff_image(
-                    pixel_image_filename,
-                    xy_positions,
-                    coord_base = coord_base,
-                    stamp_size = int(extra_cols_dict.get("nneg_nbad_stamp_size","5")),
-                    fill_value = float(extra_cols_dict.get("nneg_nbad_fill_value","-999.0")))))
-
-            extra_cols[col_name] = nneg_nbad[col_name]
-            extra_cols_format[col_name] = ".0f"
+            extra_cols[col_name] = all_pixel_cols[col_name]
+            extra_cols_format[col_name] = sumrat_dict["col_format"] if col_name == "sumrat" else ".0f"
 
         else:
             raise ValueError(f"Method _compute_extra_catalog_cols: unknown extra catalog column "
                              f"{col_name}")
-
-    if pixel_image_tmp is not None and os.path.exists(pixel_image_tmp):
-        os.remove(pixel_image_tmp)
 
     return extra_cols,extra_cols_format
 
@@ -3789,6 +3859,176 @@ def append_sxtractor_cols(header_lines,
 #-------------------------------------------------------------------
 # Compute extra columns for a SExtractor ASCII_HEAD catalog and append them to it.
 
+# Position cuts of the XSources loader (pipeline/loadSECatIntoDBSourcesTable.py), also applied
+# before the PSF fits when photutils_cols_prefilter_only is set.  Sources with one-based image
+# positions outside [0.5, naxis + 0.5] (with a 1e-4 pixel tolerance) are rejected, and so are
+# sources whose nearest pixel is within XSOURCES_EDGE_MARGIN_PIXELS pixels of the image edge: the
+# 5x5 sumrat stamp does not fit there, so their sumrat is missing and the prefilter cannot cut
+# them, and the outermost row and column of the difference images are much noisier than the rest
+# (robust sigma ~3.5x on the socsims), which makes spurious detections along them.
+
+XSOURCES_EDGE_MARGIN_PIXELS = 2
+
+
+def sxtractor_positions_within_image(x,y,naxis1,naxis2):
+
+    """
+    Return which SExtractor sources pass the position cuts of the XSources loader: inside the
+    image, and with the nearest pixel more than XSOURCES_EDGE_MARGIN_PIXELS pixels from its edge.
+
+    Parameters
+    ----------
+    x, y : sequence of float
+        One-based image positions [pixels] (e.g., XWIN_IMAGE, YWIN_IMAGE); NaN is rejected.
+    naxis1, naxis2 : int
+        Image size [pixels].
+
+    Returns
+    -------
+    keep : numpy.ndarray of bool
+        True for each source that passes.
+    """
+
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+
+    tol = 0.0001
+    xy_min = 0.5 - tol
+    xy_max_offset = 0.5 + tol
+
+
+    # NaN positions compare False, and so are rejected.
+
+    keep = ((x >= xy_min) & (x <= naxis1 + xy_max_offset) &
+            (y >= xy_min) & (y <= naxis2 + xy_max_offset))
+
+    with np.errstate(invalid="ignore"):
+        xnear = np.floor(x + 0.5)
+        ynear = np.floor(y + 0.5)
+
+    margin = XSOURCES_EDGE_MARGIN_PIXELS
+
+    keep &= ((xnear >= 1 + margin) & (xnear <= naxis1 - margin) &
+             (ynear >= 1 + margin) & (ynear <= naxis2 - margin))
+
+    return keep
+
+
+def _select_sources_passing_prefilter(diff_image_filename,
+                                     x_list,
+                                     y_list,
+                                     data_lines,
+                                     col_numbers,
+                                     extra_cols_dict,
+                                     sumrat_dict,
+                                     sumrat_threshold,
+                                     snr_threshold,
+                                     catalog_filename):
+
+    """
+    Select the sources of a SExtractor catalog that the XSources loader
+    (pipeline/loadSECatIntoDBSourcesTable.py) would keep: those that pass its position cuts
+    (sxtractor_positions_within_image) and the sumrat and aperture-SNR cuts of its prefilter.
+
+    Parameters
+    ----------
+    diff_image_filename : str
+        FITS file containing the difference image the catalog sources were measured on.
+    x_list, y_list : sequence of float
+        One-based source positions [pixels].
+    data_lines, col_numbers : list of str, dict of str to int
+        As returned by read_sxtractor_ascii_head for catalog_filename.
+    extra_cols_dict, sumrat_dict : mapping of str to str
+        [EXTRA_CATALOG_COLS] and [SUMRAT] sections of the config file.
+    sumrat_threshold, snr_threshold : float or None
+        A source is rejected when its sumrat, or FLUX_APER_1 / FLUXERR_APER_1, is less than or
+        equal to the threshold; a source whose value is missing is not rejected for it.  None:
+        no cut.
+    catalog_filename : str
+        Catalog file name, for messages.
+
+    Returns
+    -------
+    fit_index : list of int
+        Row indices of the sources that pass all the cuts.
+    pixel_cols : dict of str to list of float
+        The pixel columns computed for the cut (sumrat, and nneg and nbad if extra_cols lists
+        them), for all rows, for reuse by _compute_extra_catalog_cols.
+    """
+
+    col_names = [c.strip().lower() for c in extra_cols_dict["extra_cols"].split(",") if c.strip()]
+    pixel_col_names = sorted(set(c for c in col_names if c in pixel_catalog_col_names) | {"sumrat"})
+
+    pixel_cols = _compute_pixel_catalog_cols(diff_image_filename,
+                                             x_list,
+                                             y_list,
+                                             1,
+                                             extra_cols_dict,
+                                             sumrat_dict,
+                                             pixel_col_names)
+
+    fill_values = (float(sumrat_dict["fill_value"]),)
+
+    sumrat = np.array(pixel_cols["sumrat"], dtype=np.float64)
+
+    for fill_value in fill_values:
+        sumrat[sumrat == fill_value] = np.nan
+
+
+    # Aperture SNR from the second SExtractor aperture, FLUX_APER_1 / FLUXERR_APER_1 in the column
+    # names astropy gives the vector columns, as the XSources loader computes it.  col_numbers
+    # holds the one-based column number of each vector's first element.
+
+    snr = None
+
+    if snr_threshold is not None:
+
+        if "FLUX_APER" in col_numbers and "FLUXERR_APER" in col_numbers:
+
+            iflux = col_numbers["FLUX_APER"]
+            ierr = col_numbers["FLUXERR_APER"]
+
+            flux = np.array([float(line.split()[iflux]) for line in data_lines], dtype=np.float64)
+            err = np.array([float(line.split()[ierr]) for line in data_lines], dtype=np.float64)
+
+            for fill_value in fill_values:
+                flux[flux == fill_value] = np.nan
+                err[err == fill_value] = np.nan
+
+            with np.errstate(divide="ignore", invalid="ignore"):
+                snr = flux / err
+
+        else:
+            print(f"*** Warning: _select_sources_passing_prefilter: FLUX_APER or FLUXERR_APER not in "
+                  f"{catalog_filename}; no aperture-SNR cut")
+
+    keep = prefilter_database_records(len(x_list),
+                                      sumrat,
+                                      None,
+                                      sumrat_threshold,
+                                      None,
+                                      snr = snr,
+                                      snr_prefilter_threshold = snr_threshold)
+
+
+    # Position cuts, against the size of the difference image itself (the SFFT difference
+    # images have an extra row and column, which the loader allows for).
+
+    naxis2,naxis1 = rda.get_image_shape(diff_image_filename)
+
+    in_image = sxtractor_positions_within_image(x_list,y_list,naxis1,naxis2)
+
+    fit_index = [int(i) for i in np.flatnonzero(keep & in_image)]
+
+    print(f"_select_sources_passing_prefilter: {len(fit_index)} of {len(x_list)} sources pass "
+          f"sumrat > {sumrat_threshold} and aperture SNR > {snr_threshold} "
+          f"({int(np.count_nonzero(keep))} pass), and are inside the {naxis1}x{naxis2} image, "
+          f"more than {XSOURCES_EDGE_MARGIN_PIXELS} pixels from its edge "
+          f"({int(np.count_nonzero(in_image))} are)")
+
+    return fit_index,pixel_cols
+
+
 def compute_extra_cols_sxtractor(diff_image_filename,
                                catalog_filename,
                                extra_cols_dict,
@@ -3801,7 +4041,9 @@ def compute_extra_cols_sxtractor(diff_image_filename,
                                sci_image_filename = None,
                                ref_image_filename = None,
                                rb_dict = None,
-                               l2_image_filename = None):
+                               l2_image_filename = None,
+                               prefilter_sumrat_threshold = None,
+                               prefilter_snr_threshold = None):
 
     """
     Compute extra columns, such as sumrat, PhotUtils-style columns like sharpness and flux_fit,
@@ -3845,6 +4087,14 @@ def compute_extra_cols_sxtractor(diff_image_filename,
         [RUBRAT] section of the config file, with the model files already downloaded.
     l2_image_filename : str or None, optional
         L2 science image whose FILTER header keyword gives the filter for the rb columns.
+    prefilter_sumrat_threshold, prefilter_snr_threshold : float or None, optional
+        [DATABASE_PREFILTER] sumrat_prefilter_threshold and snr_prefilter_threshold.  When
+        photutils_cols_prefilter_only in extra_cols_dict is True, only the sources that pass these
+        cuts of the XSources database prefilter (sumrat > its threshold, FLUX_APER_1 /
+        FLUXERR_APER_1 > its threshold, where computed; see prefilter_database_records) are
+        PSF-fitted.  The PhotUtils-style columns of the other sources are written as the fill
+        value, and so they are not scored for rb either; they would not be loaded into the
+        database anyway.  None: no cut on that quantity.
 
     Returns
     -------
@@ -3858,6 +4108,9 @@ def compute_extra_cols_sxtractor(diff_image_filename,
     The extra columns are appended after the last column of every row, and a header line in the
     SExtractor style ("# 116 SUMRAT  description") is added for each, numbered on from the last
     existing column.  The column names are written in upper case, as SExtractor's are.
+
+    photutils_cols_num_processes in extra_cols_dict (default 1) is the number of processes the
+    PSF fits are split among; it does not change the results.
     """
 
     print("compute_extra_cols_sxtractor: diff_image_filename =",diff_image_filename)
@@ -3877,6 +4130,7 @@ def compute_extra_cols_sxtractor(diff_image_filename,
 
     extra_cols = {}
     extra_cols_format = {}
+    pixel_cols = None
 
     photutils_col_names = [c.strip().lower()
                            for c in (extra_cols_dict.get("sxtractor_photutils_cols") or "").split(",")
@@ -3913,10 +4167,40 @@ def compute_extra_cols_sxtractor(diff_image_filename,
         snap_radius = int(extra_cols_dict.get("photutils_cols_snap_radius","1"))
         xy_bounds = parse_xy_bounds(extra_cols_dict.get("photutils_cols_xy_bounds","None"))
 
-        photutils_cols = rda.compute_photutils_cols_for_diff_image(
+        photutils_fill_value = float(extra_cols_dict["photutils_cols_fill_value"])
+        num_processes = int(extra_cols_dict.get("photutils_cols_num_processes","1"))
+
+
+        # With photutils_cols_prefilter_only, PSF-fit only the sources that pass the sumrat and
+        # aperture-SNR cuts of the XSources database prefilter.  The pixel columns are then
+        # computed first, and passed on to _compute_extra_catalog_cols rather than computed again.
+
+        fit_index = list(range(len(x_list)))
+
+        prefilter_only = extra_cols_dict.get("photutils_cols_prefilter_only","False").strip().lower() == "true"
+
+        if prefilter_only and prefilter_sumrat_threshold is None and prefilter_snr_threshold is None:
+            print("compute_extra_cols_sxtractor: photutils_cols_prefilter_only is True but no prefilter "
+                  "thresholds were given; PSF-fitting all sources")
+        elif prefilter_only:
+            fit_index,pixel_cols = _select_sources_passing_prefilter(diff_image_filename,
+                                                                    x_list,
+                                                                    y_list,
+                                                                    data_lines,
+                                                                    col_numbers,
+                                                                    extra_cols_dict,
+                                                                    sumrat_dict,
+                                                                    prefilter_sumrat_threshold,
+                                                                    prefilter_snr_threshold,
+                                                                    catalog_filename)
+
+        print(f"compute_extra_cols_sxtractor: PSF-fitting {len(fit_index)} of {len(x_list)} sources "
+              f"in {num_processes} process(es)")
+
+        photutils_cols_fitted = rda.compute_photutils_cols_for_diff_image(
             diff_image_filename,
             diff_psf_filename,
-            list(zip(x_list,y_list)),
+            [(x_list[i],y_list[i]) for i in fit_index],
             coord_base = 1,
             fwhm = float(psfcat_dict["fwhm"]),
             fit_shape = fit_shape,
@@ -3924,7 +4208,15 @@ def compute_extra_cols_sxtractor(diff_image_filename,
             input_unc_filename = diff_unc_filename,
             snap_radius = snap_radius,
             xy_bounds = xy_bounds,
-            fill_value = float(extra_cols_dict["photutils_cols_fill_value"]))
+            fill_value = photutils_fill_value,
+            num_processes = num_processes)
+
+
+        photutils_cols = {name: [photutils_fill_value] * len(x_list) for name in photutils_cols_fitted}
+
+        for name,values in photutils_cols_fitted.items():
+            for i,value in zip(fit_index,values):
+                photutils_cols[name][i] = value
 
         for col_name in photutils_col_names:
             catalog_col_name = sxtractor_photutils_catalog_names.get(col_name,col_name)
@@ -3951,7 +4243,8 @@ def compute_extra_cols_sxtractor(diff_image_filename,
                                                                sci_image_filename = sci_image_filename,
                                                                ref_image_filename = ref_image_filename,
                                                                rb_dict = rb_dict,
-                                                               l2_image_filename = l2_image_filename)
+                                                               l2_image_filename = l2_image_filename,
+                                                               pixel_cols = pixel_cols)
 
     extra_cols.update(other_cols)
     extra_cols_format.update(other_cols_format)
