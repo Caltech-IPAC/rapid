@@ -109,6 +109,11 @@ else:
         exit(64)
 
 
+# If RUNPROGRAMIDS is set, then process only the exposures of the specified programs.
+
+run_program_ids = util.get_run_program_ids()
+
+
 # Determine number of parallel processes.
 
 num_cores_str = os.getenv('NUM_CORES')
@@ -132,6 +137,7 @@ print("enddatetime =",enddatetime)
 print("start_refimage_mjdobs =",start_refimage_mjdobs)
 print("end_refimage_mjdobs =",end_refimage_mjdobs)
 print("run_fid =",run_fid)
+print("run_program_ids =",run_program_ids)
 print("dry_run =",dry_run)
 print("num_cores =",num_cores)
 
@@ -302,7 +308,8 @@ if __name__ == '__main__':
         recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,
                                                                   end_refimage_mjdobs,
                                                                   min_n_images_to_coadd,
-                                                                  fid)
+                                                                  fid,
+                                                                  program_ids=run_program_ids)
 
         if dbh.exit_code >= 64:
             print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))
@@ -339,7 +346,8 @@ if __name__ == '__main__':
         # Query database for all L2Files records associated with input observation datetime range,
         # for a given field and filter.  Return a time-ordered,SCA-ordered list.
 
-        recs = dbh.get_l2files_records_for_datetime_range_field_fid(startdatetime,enddatetime,field,fid)
+        recs = dbh.get_l2files_records_for_datetime_range_field_fid(startdatetime,enddatetime,field,fid,
+                                                                  program_ids=run_program_ids)
 
         if dbh.exit_code >= 64:
             print("*** Error from query for L2Files records {}; quitting...".format(swname))
