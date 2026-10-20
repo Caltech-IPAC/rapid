@@ -90,7 +90,7 @@ postproc_job_config_jid90828.done                               Indicates metada
 sfftdiffimage_masked.fits                                       SFFT positive difference image (when SFFT is not run with the ``--crossconv`` flag), with NaNs in zero-coverage pixels
 sfftdiffimage_dconv_masked.fits                                 SFFT decorrelated positive difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY positive difference image.
 sfftdiffimage_cconv_masked.fits                                 SFFT cross-convolved positive difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY SCORR image.
-sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT positive difference image
+sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT positive difference image, with extra columns (``SUMRAT``, PhotUtils-style PSF-fit and real/bogus columns; see :doc:`../db/db`)
 sfftdiffimage_uncert_masked.fits                                Uncertainty image for SFFT positive difference image with NaNs in zero-coverage pixels
 sfftsoln.fits                                                   SFFT matching-kernel solution file
 sfftdiffimage_masked_psfcat.txt                                 PhotUtils PSF-fit photometry catalog from SFFT positive difference image (noniterative)

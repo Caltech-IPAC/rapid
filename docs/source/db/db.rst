@@ -400,6 +400,13 @@ in order to aid in prefiltering records that are loaded into the database (and f
 | CFIT               | PSF-fit residual in central pixel divided by fit flux (null = not computed)       |
 +--------------------+-----------------------------------------------------------------------------------+
 
+In the catalog files, a value that could not be computed is written as the fill value -999.0,
+which the loading script stores as null; ``RB_LABEL`` is -1 (not scored), which is stored as is.
+The PhotUtils-style columns (from
+``SHARPNESS`` on) and the real/bogus columns are also the fill value for the SExtractor sources
+that cannot be loaded into XSources, which are not PSF-fitted (see
+:ref:`prefilter-only PSF fitting <sxtractor-prefilter-only>`).
+
 
 .. _db-prefilter:
 
@@ -458,10 +465,17 @@ Before the prefilter, each loading script also rejects records by position:
 For each catalog, the loading scripts log the thresholds used and the number of records
 rejected (``prefilter rejected <n> of <m> sources`` or ``... xsources``).
 
-The science pipeline uses the same ``sumrat`` and SNR thresholds when it adds the PhotUtils-style
-columns to the SExtractor catalogs.  With ``[EXTRA_CATALOG_COLS] photutils_cols_prefilter_only =
-True``, only the sources that pass those two cuts and the XSources position cuts above are PSF-fitted,
-since only those can be loaded into XSources.  The PhotUtils-style columns of the other sources (``FLUX_FIT``, ``SNR_FIT``,
-``REDUCED_CHI2`` and so on) are written as the fill value (-999.0) in the catalog files, and their
-real/bogus columns are not scored (``RB_LABEL = -1``).  ``photutils_cols_num_processes`` splits
-the PSF fits among processes, without changing their results.
+.. _sxtractor-prefilter-only:
+
+The science pipeline uses the same cuts when it adds the PhotUtils-style columns to the SFFT
+SExtractor catalogs.  With ``[EXTRA_CATALOG_COLS] photutils_cols_prefilter_only = True`` (the
+default), only the sources that can be loaded into XSources are PSF-fitted: those that pass the
+XSources position cuts above and the ``sumrat`` and SNR cuts of the prefilter (the real/bogus cut
+cannot be applied, since the real/bogus score is computed from the PSF-fit columns).  In the
+catalog files, the PhotUtils-style columns of the other sources (``FLUX_FIT``, ``SNR_FIT``,
+``REDUCED_CHI2`` and so on) are the fill value (-999.0), and their real/bogus columns are not
+scored (``RB_SCORE = -999``, ``RB_LABEL = -1``).  ``SUMRAT``, ``NNEG`` and ``NBAD`` are computed
+for every source.  With ``photutils_cols_prefilter_only = False``, every source is PSF-fitted.
+
+``[EXTRA_CATALOG_COLS] photutils_cols_num_processes`` (2, for the 2-vCPU AWS Batch machines) is
+the number of processes the PSF fits are split among; it does not change their results.
