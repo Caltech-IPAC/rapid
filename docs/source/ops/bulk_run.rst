@@ -183,9 +183,9 @@ Stages 2, 5 and 8: wait for the AWS Batch jobs
 
 After each launch stage, wait until every AWS Batch job of that stage has reached ``SUCCEEDED``
 or ``FAILED``, in the AWS Batch console or with ``aws batch list-jobs``.  The registration stage
-that follows closes out the ``Jobs`` records of its pipeline (``PIPEID``) launched on the
-processing date that are still open, so it must not run while jobs of its stage are still
-queued or running.
+that follows closes out the ``Jobs`` records of its pipeline (``PIPEID``) and processing request
+(``PROCREQ``) that are still open, so it must not run while jobs of its stage are still queued
+or running.
 
 The VPO does this waiting itself, and also resubmits jobs that failed for infrastructure reasons
 such as ``CannotPullContainerError`` (see :doc:`vpo`).  Run by hand, such a job must be
@@ -205,6 +205,14 @@ Stage 3: register reference-image pipelines
 ``parallelRegisterCompletedJobsInDB.py`` registers both reference-image and science jobs, the
 kind given by ``PIPEID``.  ``MAKEREFIMAGESFLAG`` is required; it only names the per-thread log
 files (the VPO leaves it ``True`` for stage 6 as well).
+
+Each job is registered in one database transaction, which is rolled back if any part of it
+fails; a job with a missing input file in S3 is skipped and left open; and a registered job gets
+a done file, so that rerunning a registration stage (3, 6 or 9) with the same ``JOBPROCDATE`` and
+``PROCREQ`` registers only the jobs not yet registered.  The stage exits with code 64 if any
+job's registration failed.  See :ref:`registering pipeline results <vpo-registration>`.
+``registerCompletedJobsInDB.py`` and ``registerCompletedJobsInDBAfterPostProc.py`` are
+single-process versions of the registration scripts that behave the same way.
 
 
 Stage 4: launch science pipelines
