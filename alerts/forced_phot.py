@@ -18,8 +18,9 @@ Layout (top to bottom, each section depends only on the ones above it)::
     geometry     contains_positions()      -- the one geometric predicate
     search       q3c_search()              -- coarse: Q3C cone on diffimages
                  find_prev_images()        -- parent: cone + predicate
-                 (science image and both PSFs are named by convention in
-                  the job directory: sci_psf_basename, diff_psf_basename)
+                 (science image and difference PSF are named by convention
+                  in the job directory; the science PSF from the psfs
+                  table: sci_psf_basename, diff_psf_basename)
     photometry   open_image()              -- FITS -> data, header, WCS
                  error_array()             -- stopgap per-pixel uncertainty
                  project_positions()       -- sky -> pixel, on-chip mask
@@ -127,8 +128,9 @@ class PrevImage:
     ``diff_filename`` comes from the database; ``sci_filename``,
     ``diff_psf``, ``sci_psf``, ``diff_uncert`` and ``sci_uncert`` are the
     job-directory products named by convention (see the ``*_basename``
-    helpers); ``l2_filename`` is the raw L2 file the science image was
-    made from.
+    helpers); ``sci_psf`` is None when the psfs table has no good PSF for
+    the (fid, SCA); ``l2_filename`` is the raw L2 file the science image
+    was made from.
 
     ``position_index`` is filled by :func:`find_prev_images`: indices into
     the caller's position list of the positions this image contains.
@@ -138,7 +140,7 @@ class PrevImage:
     diff_filename: str
     sci_filename: str
     diff_psf: str
-    sci_psf: str
+    sci_psf: str | None
     diff_uncert: str
     sci_uncert: str
     l2_filename: str
@@ -275,22 +277,14 @@ DIFF_UNCERT_BASENAMES = {
 #: <l2 basename>_reformatted_unc.fits (e.g. r0034..._f146_cal_lite_reformatted_unc.fits).
 SCI_UNCERT_SUFFIX = "_reformatted_unc.fits"
 
-#: Science-image PSF in the job directory: the psfs-table file for the
-#: (filter, SCA), normalized by the science pipeline, e.g.
-#: sciimage_psf_f146_sca09_normalized.fits (socsim jid145793). The filter
-#: token is the Roman designation in lower case, not the RAPID name the
-#: filters table uses. The WebbPSF-library family (WFI_SCA<nn>_F<nnn>_
-#: PSF_DET_DIST) found in older job directories is no longer used
-#: (team decision, 2026-10-06): a job directory without this file simply
-#: has no science-image forced photometry for that epoch.
-SCI_PSF_PATTERN = "sciimage_psf_{roman_lower}_sca{sca:02d}_normalized.fits"
-
-#: RAPID filter name (filters.filter) -> Roman designation used in PSF
-#: filenames. Same table as database/scripts/db_register_sciimg_psfs.py.
-ROMAN_FILTER_TOKENS = {
-    "R062": "F062", "Z087": "F087", "Y106": "F106", "J129": "F129",
-    "W146": "F146", "H158": "F158", "F184": "F184", "K213": "F213",
-}
+#: Science-image PSF in the job directory: the best psfs-table file for the
+#: (fid, SCA), as the science pipeline picks it (rapid_db.get_best_psf:
+#: vbest > 0, status > 0), downloaded into the job directory and written
+#: back with "_normalized" before ".fits"
+#: (awsBatchSubmitJobs_runSingleSciencePipeline.py), e.g.
+#: sciimage_psf_phavg_fid5_sca11_normalized.fits. An image with no such
+#: psfs row has no science-image forced photometry.
+SCI_PSF_SUFFIX = "_normalized.fits"
 
 # Also present in those job directories, not yet used here:
 #   sfftdiffimage_uncert_masked.fits, zogy_diffimage_uncert_masked.fits,
@@ -301,19 +295,24 @@ ROMAN_FILTER_TOKENS = {
 _CORNER_COLUMNS = "ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4"
 
 
-def sci_psf_basename(band, sca):
-    """Job-directory basename of the normalized science-image PSF for a
-    RAPID filter name (e.g. ``"W146"``) and SCA number.
+def sci_psf_basename(psf_filename):
+    """Job-directory basename of the normalized science-image PSF, from the
+    psfs-table filename the science pipeline downloaded.
 
-    Raises ``ValueError`` for a filter name the table does not know: a
-    wrong guess here would stage a missing file, so fail before staging.
+    Parameters
+    ----------
+    psf_filename : str
+        ``psfs.filename``, a full path or S3 URL ending in ``.fits``.
+
+    Returns
+    -------
+    str
+        The basename with ``.fits`` replaced by ``_normalized.fits``.
     """
-    try:
-        roman = ROMAN_FILTER_TOKENS[str(band)]
-    except KeyError:
-        raise ValueError(f"no Roman filter token for RAPID filter {band!r}; "
-                         f"known: {sorted(ROMAN_FILTER_TOKENS)}") from None
-    return SCI_PSF_PATTERN.format(sca=int(sca), roman_lower=roman.lower())
+    base = str(psf_filename).rsplit("/", 1)[-1]
+    if not base.endswith(".fits"):
+        raise ValueError(f"science PSF filename does not end in .fits: {psf_filename!r}")
+    return base[:-len(".fits")] + SCI_PSF_SUFFIX
 
 
 def diff_psf_basename(diff_basename):
@@ -373,7 +372,8 @@ def q3c_search(query, ra0, dec0, radius_deg=CONE_RADIUS_DEG, fid=None, ppid=None
     -------
     list of PrevImage
         Ordered by ``mjdobs``, with the science image and both PSFs named
-        by convention; ``position_index`` is empty (see
+        (the science PSF from the psfs table, None if it has no good
+        row); ``position_index`` is empty (see
         :func:`find_prev_images`).
 
     Notes
@@ -397,10 +397,17 @@ def q3c_search(query, ra0, dec0, radius_deg=CONE_RADIUS_DEG, fid=None, ppid=None
     sql = f"""
         SELECT d.pid, d.rid, d.expid, d.sca, d.fid, f.filter AS band,
                l.mjdobs, d.filename AS diff_filename, l.filename AS l2_filename,
+               p.filename AS sci_psf_filename,
                {', '.join('d.' + c.strip() for c in _CORNER_COLUMNS.split(','))}
         FROM diffimages d
         JOIN l2files l ON l.rid = d.rid
         JOIN filters f ON f.fid = d.fid
+        LEFT JOIN LATERAL (
+            SELECT filename FROM psfs
+            WHERE psfs.fid = d.fid AND psfs.sca = d.sca
+              AND psfs.vbest > 0 AND psfs.status > 0
+            ORDER BY psfs.version DESC LIMIT 1
+        ) p ON true
         WHERE {' AND '.join(conditions)}
         ORDER BY l.mjdobs, d.pid
     """
@@ -416,12 +423,13 @@ def _row_to_prev_image(row, diff_basename=None):
     basename = diff_basename or db_basename
     band = None if row.get("band") is None else str(row["band"])
     sca = int(row["sca"])
+    psf_filename = row.get("sci_psf_filename")
     return PrevImage(
         rid=int(row["rid"]), pid=int(row["pid"]),
         diff_filename=f"{job_dir}/{basename}",
         sci_filename=f"{job_dir}/{SCI_BASENAME}",
         diff_psf=f"{job_dir}/{diff_psf_basename(basename)}",
-        sci_psf=f"{job_dir}/{sci_psf_basename(band, sca)}",
+        sci_psf=None if psf_filename is None else f"{job_dir}/{sci_psf_basename(psf_filename)}",
         diff_uncert=f"{job_dir}/{diff_uncert_basename(basename)}",
         sci_uncert=f"{job_dir}/{sci_uncert_basename(str(row['l2_filename']))}",
         l2_filename=str(row["l2_filename"]),
@@ -868,6 +876,11 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
         for product in products:
             file_attr, psf_attr, unc_attr = IMAGE_PRODUCTS[product]
             url, psf_url = getattr(image, file_attr), getattr(image, psf_attr)
+            if psf_url is None:
+                logger.warning("run_prev_images: rid=%s pid=%s product=%s has no PSF "
+                               "(no good psfs row for fid=%s sca=%s); skipping",
+                               image.rid, image.pid, product, image.fid, image.sca)
+                continue
             staged = []
             try:
                 local = stage(url); staged.append((url, local))
