@@ -26,7 +26,8 @@ Usage::
 
     python scripts/read_packets.py [--job N ...] [--out report.md]
 
-with ``PG*`` naming the database. The report is Markdown: one table row
+with the database named as for every rapidpipe command
+(``rapidpipe.db.connection``: the ``PG*`` variables, else ``RAPID_PARAMETER_PATH``). The report is Markdown: one table row
 per packet set with the counts, then every failure, one per line.
 """
 
@@ -42,10 +43,10 @@ from pathlib import Path
 import fastavro
 import fastavro.validation
 import numpy as np
-import psycopg2
 import psycopg2.extras
 from astropy.io import fits
 
+from rapidpipe.db.connection import connect
 from rapidpipe.foundation.prefix import get
 from rapidpipe.science.alerts.assemble import load_schema
 from rapidpipe.science.alerts.cutouts import STAMP_FILL_VALUE
@@ -214,21 +215,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write the report here as well as to stdout")
     args = parser.parse_args(argv)
 
-    conn = psycopg2.connect()
-    jobs = args.job or [r["job"] for r in _query(
-        conn, "SELECT DISTINCT job FROM packets_official ORDER BY job")]
     columns = ("job", "key", "index_rows", "records", "avro_bytes", "cutouts", "edge_cutouts",
                "prv_sources", "forced_values", "forced_rows")
     lines = ["| " + " | ".join(columns) + " | failures |", "|" + "---|" * (len(columns) + 1)]
     all_failures: list[str] = []
-    for job in jobs:
-        if not _query(conn, "SELECT 1 FROM packets_official WHERE job = %s LIMIT 1", (job,)):
-            all_failures.append(f"job {job}: no packets_official rows")
-            continue
-        counts, failures = read_set(conn, job)
-        lines.append("| " + " | ".join(str(counts.get(c, 0)) for c in columns)
-                     + f" | {len(failures)} |")
-        all_failures += failures
+    with connect(application_name="read_packets") as conn:
+        jobs = args.job or [r["job"] for r in _query(
+            conn, "SELECT DISTINCT job FROM packets_official ORDER BY job")]
+        for job in jobs:
+            if not _query(conn, "SELECT 1 FROM packets_official WHERE job = %s LIMIT 1", (job,)):
+                all_failures.append(f"job {job}: no packets_official rows")
+                continue
+            counts, failures = read_set(conn, job)
+            lines.append("| " + " | ".join(str(counts.get(c, 0)) for c in columns)
+                         + f" | {len(failures)} |")
+            all_failures += failures
     verdict = "CLEAN" if not all_failures else f"{len(all_failures)} FAILURES"
     report = "\n".join([f"Packet reader: {len(jobs)} set(s), {verdict}", "", *lines, "",
                         *(f"- {f}" for f in all_failures)]) + "\n"
