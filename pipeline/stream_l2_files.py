@@ -1,21 +1,17 @@
 import argparse
 import os
-import fsspec
 from astropy.time import Time
+from astropy.table import Table
 from astroquery.mast import MastMissions
-import asdf
 import numpy as np
 import datetime
 import boto3
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-"""
-Download files from MAST given a program id and other optional parameters
-"""
 
 p = argparse.ArgumentParser(
-    description="<One-line description of what the script does.>")
+    description="Download files from MAST given a program id and other optional parameters")
 
 p.add_argument("program", type=int,
                 help="Roman program ID, e.g. 999 for the HLTDS")
@@ -73,12 +69,6 @@ def transfer_file(filename):
     filename : str
         The filename that was transferred.
     """
-    if ingest_bucket == 'local':
-        status, msg, _ = missions.download_file(filename, local_path=filename, verbose=False)
-        if status != 'COMPLETE':
-            raise RuntimeError(msg)
-        return filename
-
     # MAST answers with a redirect to a short-lived presigned S3 URL; fetch it right before use
     resp = requests.get(missions._get_download_url(filename),
                         headers={"Authorization": f"token {token}"},
@@ -139,23 +129,28 @@ if mjdmax is not None:
 results = missions.query_criteria(
     **search,
     select_cols=col_list,
-    limit=50000
+    limit=50000,
+    productLevel=2
 )
 
-products = missions.get_unique_product_list(results)
-filtered_products = missions.filter_products(products, file_suffix='_cal')
-print(f"{len(filtered_products)} to download")
+# Build L2 filenames directly from the dataset IDs instead of fetching every product
+# from MAST; assumes each Roman L2 file is named <fileSetName>_cal.asdf
+filesets = np.unique(results['fileSetName'])
+l2_filenames = [f"{fs}_cal.asdf" for fs in filesets]
+#l2_filenames = [f"{fs}_cal.asdf" for fs in filesets]
+print(f"{len(l2_filenames)} to download")
 
 if dryrun is True:
-    for filename in filtered_products['filename']:
+    for filename in l2_filenames:
         print(filename)
 else:
     if ingest_bucket=='local':
-        missions.download_products(filtered_products)
+        missions.download_products(Table({'filename': l2_filenames}),
+                                      download_dir='.', flat=True)
     else:
         failed = []
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(transfer_file, ifile): ifile for ifile in filtered_products['filename']}
+            futures = {pool.submit(transfer_file, ifile): ifile for ifile in l2_filenames}
             for fut in as_completed(futures):
                 try:
                     fut.result()
@@ -167,4 +162,5 @@ else:
 end = datetime.datetime.now()
 elapsed_min = (end - start).total_seconds() / 60
 print(f"Elapsed: {elapsed_min:.2f} min")
-print(f'{elapsed_min/len(filtered_products)} min per file')
+if len(l2_filenames)>0:
+    print(f'{elapsed_min/len(l2_filenames)} min per file')
