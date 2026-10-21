@@ -18,7 +18,7 @@
 --   l2files, diffimages, sources,
 --   packets                            dataset, expid, sca, fid
 --   refimages                          dataset, field, fid
---   psfs                               dataset, fid, sca
+--   psfs                               dataset, fid, sca, kind
 --   objects                            dataset, survey, field
 --   catalogs                           name, version
 --
@@ -322,11 +322,12 @@ CREATE TABLE psfs (
     dataset text NOT NULL,
     fid smallint NOT NULL REFERENCES filters (fid),
     sca smallint NOT NULL REFERENCES scas (sca),
+    kind text NOT NULL CHECK (kind IN ('science', 'reference')), -- a science image's PSF or a reference's
     filename character varying(255) NOT NULL,
     checksum character varying(32) NOT NULL,
     status smallint DEFAULT 0 NOT NULL,
     created timestamp without time zone DEFAULT now() NOT NULL,
-    UNIQUE (dataset, fid, sca, job)
+    UNIQUE (dataset, fid, sca, kind, job)
 );
 
 CREATE INDEX psfs_job_idx ON psfs (job);
@@ -522,7 +523,7 @@ CREATE VIEW psfs_official AS
 SELECT t.*, o.id AS binding, j.run
 FROM psfs t
 JOIN official o ON o.closed_at IS NULL AND o.product = 'psfs' AND o.job = t.job
-    AND o.key = jsonb_build_object('dataset', t.dataset, 'fid', t.fid, 'sca', t.sca)
+    AND o.key = jsonb_build_object('dataset', t.dataset, 'fid', t.fid, 'sca', t.sca, 'kind', t.kind)
 JOIN jobs j ON j.id = t.job;
 
 CREATE VIEW sources_official AS

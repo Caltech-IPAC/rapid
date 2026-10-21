@@ -81,10 +81,10 @@ EPOCHS = {
         "difference": "jid144961"},
 }
 SHARED = {"reference": {"rfid": 90011, "dir": "jid129279"},
-          "psf": {"psfid": 153, "path": "psf/sciimage_psf_f146_sca08.fits"},
+          "psf": {"psfid": 153, "kind": "science", "path": "psf/sciimage_psf_f146_sca08.fits"},
           "gaia": {"name": "gaia", "version": "DR3",
                    "path": "gaia/gaia-dr3-field-4658155-r0.12deg.parquet"}}
-PSF_KEY = {"dataset": DATASET, "fid": FID, "sca": SCA}
+PSF_KEY = {"dataset": DATASET, "fid": FID, "sca": SCA, "kind": "science"}
 REF_KEY = {"dataset": DATASET, "field": FIELD, "fid": FID}
 GAIA_KEY = {"name": "gaia", "version": "DR3"}
 REIMPORT_ID_OFFSET = 10 ** 9

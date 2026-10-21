@@ -9,7 +9,7 @@ order with the reference background subtracted by bkgest; ``max_sources``
 caps the source set (its choice is ``source_set``'s, tested with the load
 science); the reference
 zero point is the reference's ``MAGZP`` unless overridden; the two PSFs are
-told apart by ``PSFKIND``; SFFT and naive catalogs take their detection
+told apart by their keys' kind, one of each; SFFT and naive catalogs take their detection
 overrides and the SFFT image is coverage-masked; every bad input fails the
 job before a manifest is written; the shipped ``[difference]`` table is
 valid.
@@ -84,8 +84,8 @@ def fake_connect(files: dict[str, Path], queries: list):
             elif "FROM refimcatalogs" in statement:
                 self.row = (files["catalog"].as_uri(),)
             elif "FROM psfs" in statement:
-                self.row = ((files["science_psf"] if params[0] == 20 else files["reference_psf"])
-                            .as_uri(),)
+                self.row = ((files["science_psf"] if params[-1] == "science"
+                             else files["reference_psf"]).as_uri(),)
             else:
                 assert "nextval" in statement
                 self.row = (PID,)
@@ -110,10 +110,10 @@ def named_inputs(**changes) -> list[dict]:
         "refimages": {"kind": "input", "product": "refimages",
                       "key": {"dataset": "D", "field": 5321, "fid": 1}, "source_job": 8,
                       "binding": None},
-        "psf": {"kind": "input", "product": "psfs", "key": {"dataset": "D", "fid": 1, "sca": 7},
-                "source_job": 20, "binding": None},
-        "refpsf": {"kind": "input", "product": "psfs", "key": {"dataset": "D", "fid": 1, "sca": 7},
-                   "source_job": 21, "binding": None},
+        "psf": {"kind": "input", "product": "psfs", "source_job": 20, "binding": None,
+                "key": {"dataset": "D", "fid": 1, "sca": 7, "kind": "science"}},
+        "refpsf": {"kind": "input", "product": "psfs", "source_job": 21, "binding": None,
+                   "key": {"dataset": "D", "fid": 1, "sca": 7, "kind": "reference"}},
     }
     inputs.update(changes)
     return [i for i in inputs.values() if i is not None]
@@ -206,7 +206,7 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
         "awaicgen_output_mosaic_image_resampled_bkgest_input.fits")
 
 
-def test_zogy_gets_both_psfs_told_apart_by_psfkind(tmp_path, files, fakes):
+def test_zogy_gets_both_psfs_told_apart_by_key_kind_in_either_order(tmp_path, files, fakes):
     runner, _ = fakes
     run_difference(tmp_path, files, inputs=list(reversed(named_inputs())))
     zogy = next(a for a in runner.calls if a[1].endswith("py_zogy.py"))
@@ -277,9 +277,12 @@ def test_inputs_the_stage_does_not_take_fail(tmp_path, files, fakes, inputs, mes
 
 
 def test_two_psfs_of_one_kind_fail(tmp_path, files, fakes):
-    fits.setval(files["reference_psf"], "PSFKIND", value="sciimage_psf")
-    with pytest.raises(ValueError, match="PSFKIND"):
-        run_difference(tmp_path, files)
+    science_twice = named_inputs(refpsf={
+        "kind": "input", "product": "psfs", "source_job": 21, "binding": None,
+        "key": {"dataset": "D", "fid": 1, "sca": 7, "kind": "science"}})
+    with pytest.raises(ValueError, match="one of each key kind"):
+        run_difference(tmp_path, files, inputs=science_twice)
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
 def test_the_shipped_difference_table_is_valid_and_refuses_fake_sources():

@@ -23,7 +23,7 @@ dataset (the run's). Recorded inputs, every one an ``input`` row:
   launcher names; the trigger's own image is among them and is the
   cutouts' source. Images outside ``[trigger - forced_window_days,
   trigger]`` are not measured.
-- ``psfs``: exactly one, the science-image PSF.
+- ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``).
 - ``packets``: the predecessor packet sets, none for a first epoch;
   their ``forced`` rows are reused, never re-measured.
 - ``catalogs``: exactly one, the Gaia product (name ``gaia``).

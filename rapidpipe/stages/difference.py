@@ -34,10 +34,10 @@ fetched with :func:`rapidpipe.foundation.prefix.get`:
   which). Its coverage and uncertainty maps sit beside the mosaic, and
   its mosaic SExtractor catalog (``refimcatalogs`` cattype 1) gives the
   reference FWHM.
-- ``psfs``: exactly two, the science-image PSF and the reference-image
-  PSF, each of the scope's filter and SCA, told apart by the file's own
-  ``PSFKIND`` keyword (``sciimage_psf``, ``refimage_psf``): the PSF key
-  (dataset, filter, SCA) does not separate them.
+- ``psfs``: exactly one of each kind, the science-image PSF (key ``kind``
+  ``science``) and the reference-image PSF (``reference``), each of the
+  scope's filter and SCA. The kind is the key's, read from the row; the
+  file's header is not consulted.
 
 Outputs under ``job.path``. ``[paths] work_subdirectory`` holds every
 working file `dev` uploads for diagnosis, the inputs' copies removed; the
@@ -118,8 +118,8 @@ logger = logging.getLogger(__name__)
 REFERENCE_CATALOG_TYPE = 1
 #: The status of a difference image the stage finished.
 STATUS_GOOD = 1
-#: ``PSFKIND`` of the two PSFs the job names.
-SCIENCE_PSF, REFERENCE_PSF = "sciimage_psf", "refimage_psf"
+#: The two ``psfs`` key kinds the job names, one of each.
+PSF_KINDS = ("science", "reference")
 
 DIFFIMAGES_SCHEMA = pa.schema([
     ("pid", pa.int32()), ("dataset", pa.string()), ("expid", pa.int32()), ("sca", pa.int16()),
@@ -242,10 +242,6 @@ def _beside(url: str, name: str) -> Path:
     return get(url.rsplit("/", 1)[0] + "/" + name)
 
 
-def _psf_kind(path: Path) -> str | None:
-    return fits.getheader(path, 0).get("PSFKIND")
-
-
 def read_inputs(job: JobContext) -> Inputs:
     """Read the named rows in one short transaction, fetch their files and draw a ``pid``."""
     key = {"dataset": job.dataset, "expid": int(job.scope["expid"]),
@@ -257,10 +253,12 @@ def read_inputs(job: JobContext) -> Inputs:
     others = sorted(set(by_product) - {"l2files", "refimages", "psfs"})
     if others:
         raise ValueError(f"job {job.job}: difference reads l2files, refimages and psfs, not {others}")
-    counts = {p: len(by_product.get(p, [])) for p in ("l2files", "refimages", "psfs")}
-    if counts != {"l2files": 1, "refimages": 1, "psfs": 2}:
+    counts = {p: len(by_product.get(p, [])) for p in ("l2files", "refimages")}
+    psf_kinds = sorted((i["key"].get("kind") for i in by_product.get("psfs", [])), key=str)
+    if counts != {"l2files": 1, "refimages": 1} or psf_kinds != sorted(PSF_KINDS):
         raise ValueError(f"job {job.job}: difference names one l2files, one refimages and two "
-                         f"psfs inputs, got {counts}")
+                         f"psfs inputs, one of each key kind {PSF_KINDS}, got {counts} and psfs "
+                         f"kinds {psf_kinds}")
     (l2_in,), (ref_in,) = by_product["l2files"], by_product["refimages"]
     if l2_in["key"] != key:
         raise ValueError(f"job {job.job}: l2files input {l2_in['key']} is not the epoch {key}")
@@ -289,32 +287,25 @@ def read_inputs(job: JobContext) -> Inputs:
         if refcat is None:
             raise ValueError(f"job {job.job}: reference rfid {ref[0]} has no mosaic catalog "
                              f"(refimcatalogs cattype {REFERENCE_CATALOG_TYPE})")
-        psf_urls = []
+        psf_urls = {}
         for item in by_product["psfs"]:
             psf_key = item["key"]
             if (int(psf_key["fid"]), int(psf_key["sca"])) != (key["fid"], key["sca"]):
                 raise ValueError(f"job {job.job}: psfs input {psf_key} is not the scope's fid "
                                  f"and sca")
             cur.execute("SELECT filename FROM psfs WHERE job = %s AND dataset = %s AND fid = %s"
-                        " AND sca = %s", (item["source_job"], psf_key["dataset"],
-                                          psf_key["fid"], psf_key["sca"]))
+                        " AND sca = %s AND kind = %s",
+                        (item["source_job"], psf_key["dataset"], psf_key["fid"], psf_key["sca"],
+                         psf_key["kind"]))
             row = cur.fetchone()
             if row is None:
                 raise ValueError(f"job {job.job}: no psfs row {psf_key} in job "
                                  f"{item['source_job']}")
-            psf_urls.append(row[0])
+            psf_urls[psf_key["kind"]] = row[0]
         cur.execute("SELECT nextval(pg_get_serial_sequence('diffimages', 'pid'))")
         pid = int(cur.fetchone()[0])
         conn.commit()
 
-    psfs = {}
-    for url in psf_urls:
-        path = get(url)
-        psfs.setdefault(_psf_kind(path), []).append(path)
-    if sorted(psfs) != [REFERENCE_PSF, SCIENCE_PSF] or any(len(v) != 1 for v in psfs.values()):
-        raise ValueError(f"job {job.job}: the two psfs inputs must be one {SCIENCE_PSF!r} and one "
-                         f"{REFERENCE_PSF!r} by their PSFKIND keyword, got "
-                         f"{sorted(map(str, psfs))}")
     ref_url = ref[1]
     image_name = ref_url.rsplit("/", 1)[-1]
     if not image_name.endswith("_image.fits"):
@@ -328,7 +319,7 @@ def read_inputs(job: JobContext) -> Inputs:
         reference_uncertainty=_beside(ref_url,
                                       image_name.replace("_image.fits", "_uncert_image.fits")),
         reference_catalog=get(refcat[0]),
-        science_psf=psfs[SCIENCE_PSF][0], reference_psf=psfs[REFERENCE_PSF][0], pid=pid)
+        science_psf=get(psf_urls["science"]), reference_psf=get(psf_urls["reference"]), pid=pid)
 
 
 def _stage_input(source: Path, work_dir: Path, taken: set[str]) -> str:

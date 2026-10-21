@@ -5,7 +5,9 @@ Contract: under a live run, a difference job whose inputs are a published
 ``psfs`` rows (science and reference, from two jobs) differences them
 (fake tools); its ``diffimages`` row and ``sources`` set bind to the job's
 expected keys, and the official views show the row and its sources under
-the one ``pid`` the database drew.
+the one ``pid`` the database drew. The two PSFs share dataset, filter and
+SCA and differ in kind, so both bind at once and ``psfs_official`` shows
+both.
 """
 
 from __future__ import annotations
@@ -29,8 +31,8 @@ from tests.unit.test_difference_stage import settings
 SURVEY, DATASET, FID, SCA, EXPID, FIELD = "S", "D", 1, 7, 84613, 5321
 
 
-def published(conn, run, tmp_path, name: str, tables: dict) -> int:
-    job = create_job(conn, run, "import", {})
+def published(conn, run, tmp_path, name: str, tables: dict, expects=()) -> int:
+    job = create_job(conn, run, "import", {}, expects=list(expects))
     publish(conn, job, 1, write_attempt(tmp_path / name, tables))
     return job
 
@@ -63,9 +65,14 @@ def test_job_local_publishes_a_bound_difference_image_and_source_set(connect, tm
                        "status": 1, "infobits": 0}],
         "refimcatalogs": [{"rfid": 90011, "cattype": 1, "filename": files["catalog"].as_uri(),
                            "checksum": "0" * 32}]})
-    psf_jobs = [published(conn, run, tmp_path, role, {"psfs": [{
-        "dataset": DATASET, "fid": FID, "sca": SCA, "filename": files[role].as_uri(),
-        "checksum": "0" * 32, "status": 1}]}) for role in ("science_psf", "reference_psf")]
+    psf_keys = {kind: {"dataset": DATASET, "fid": FID, "sca": SCA, "kind": kind}
+                for kind in ("science", "reference")}
+    psf_jobs = {kind: published(conn, run, tmp_path, f"{kind}_psf", {"psfs": [{
+        **psf_keys[kind], "filename": files[f"{kind}_psf"].as_uri(), "checksum": "0" * 32,
+        "status": 1}]}, expects=[{"product": "psfs", "key": psf_keys[kind], "binding": None}])
+        for kind in ("science", "reference")}
+    assert sorted(query(conn, "SELECT kind, job FROM psfs_official")) == sorted(
+        (kind, job) for kind, job in psf_jobs.items())
 
     runner, catalog = FakeToolRunner(), FakePsfCatalog()
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
@@ -75,8 +82,8 @@ def test_job_local_publishes_a_bound_difference_image_and_source_set(connect, tm
     inputs = [{"product": "l2files", "key": key, "source_job": l2_job},
               {"product": "refimages", "key": {"dataset": DATASET, "field": FIELD, "fid": FID},
                "source_job": ref_job},
-              *({"product": "psfs", "key": {"dataset": DATASET, "fid": FID, "sca": SCA},
-                 "source_job": job} for job in psf_jobs)]
+              *({"product": "psfs", "key": psf_keys[kind], "source_job": job}
+                for kind, job in psf_jobs.items())]
     code = cli.main(["job", "local", "--run", str(run), "--stage", "difference",
                      "--scope", json.dumps({"expid": EXPID, "sca": SCA, "fid": FID}),
                      "--inputs", json.dumps(inputs),
