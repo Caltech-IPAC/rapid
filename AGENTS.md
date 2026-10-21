@@ -61,7 +61,7 @@ summary and README.md has the detail.
 | `cdf/` | SExtractor/SWarp configuration files the stages read at `/code/cdf`. |
 | `c/` | Vendored C tool source; the image takes the tools from the base image's RPMs instead. |
 | `containers/` | The pipeline image recipe (`rapid-pipeline/build.sh`, `Containerfile`). |
-| `tests/` | `unit/`, `db/` (with `db/proof/`, the procedure proof), `cli/` and `fixtures/<stage>/`. |
+| `tests/` | `unit/`, `db/` (with `db/proof/`, the procedure proof: synthetic steps in CI, and `thin_proof.py`, all thirteen steps on the thin field's real data, run by hand where the data is), `cli/` and `fixtures/<stage>/`. |
 | `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list, `read_packets.py` (the packet reader: a packet set's validation report, outside the pipeline). |
 | `docs/` | The Sphinx source of the readthedocs site. |
 
