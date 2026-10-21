@@ -493,9 +493,11 @@ def run_single_core_job(fields,index_thread):
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # Delete astroobjects/astroobjectsmeta records for aids that have merges
+        # Delete astroobjects and merges records for aids that have merges
         # but no best sources (all associated diffimages have vbest=0).
-        # Uses a single batched DELETE instead of one DELETE per aid.
+        # The merges records are deleted too, so that a later run cannot find them
+        # and write astroobjectsmeta records for aids that no longer have astroobjects records.
+        # Both DELETEs are committed in a single transaction.
 
         best_aids = set(ras_for_aid_dict.keys())
 
@@ -525,11 +527,12 @@ def run_single_core_job(fields,index_thread):
         if not_best_aids:
             not_best_aids_str = ",".join(not_best_aids)
             fh.write(f"Deleting {len(not_best_aids)} not-best-source aids from " +
-                     f"{astroobjects_tablename} database tables...\n")
+                     f"{astroobjects_tablename} and {merges_tablename} database tables...\n")
             fh.flush()
 
             sql_queries = [
-                f"DELETE FROM {astroobjects_tablename} WHERE aid IN ({not_best_aids_str});"
+                f"DELETE FROM {astroobjects_tablename} WHERE aid IN ({not_best_aids_str});",
+                f"DELETE FROM {merges_tablename} WHERE aid IN ({not_best_aids_str});"
             ]
 
             try:
@@ -550,11 +553,46 @@ def run_single_core_job(fields,index_thread):
                 raise RuntimeError(f"*** Error from dbh.execute_sql_queries (sql_queries={sql_queries}); quitting...")
 
 
+        # Write astroobjectsmeta records only for best aids that have astroobjects records.
+        # Merges records whose aid has no astroobjects record (e.g., one deleted by an
+        # earlier version of this script) are left alone, and counted here.
+
+        query = f"SELECT aid FROM {astroobjects_tablename};"
+
+        sql_queries = [query]
+
+        try:
+            astroobjects_aids_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+        astroobjects_aids = set(record[0] for record in astroobjects_aids_records)
+
+        n_best_aids_without_astroobjects = len(best_aids - astroobjects_aids)
+
+        if n_best_aids_without_astroobjects > 0:
+            fh.write(f"*** Warning: {n_best_aids_without_astroobjects} best aids in {merges_tablename} " +
+                     f"have no {astroobjects_tablename} record; not writing astroobjectsmeta records for them...\n")
+            fh.flush()
+
+
         # Loop over astroobjects for current field:
         # 1. Compute statistics using full sources history (no cumulative statistics).
         # 2. Prepare AstroObjectsMeta_<field> records for bulk copy.
 
-        aids_list = list(best_aids)
+        aids_list = list(best_aids & astroobjects_aids)
 
         astroobjectsmeta_table_file = f"astroobjectsmeta_{field}.csv"
 

@@ -501,9 +501,11 @@ def run_single_core_job(fields,index_thread):
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # Delete xastroobjects/xastroobjectsmeta records for xaids that have xmerges
+        # Delete xastroobjects and xmerges records for xaids that have xmerges
         # but no best xsources (all associated diffimages have vbest=0).
-        # Uses a single batched DELETE instead of one DELETE per xaid.
+        # The xmerges records are deleted too, so that a later run cannot find them
+        # and write xastroobjectsmeta records for xaids that no longer have xastroobjects records.
+        # Both DELETEs are committed in a single transaction.
 
         best_aids = set(ras_for_aid_dict.keys())
 
@@ -533,11 +535,12 @@ def run_single_core_job(fields,index_thread):
         if not_best_aids:
             not_best_aids_str = ",".join(not_best_aids)
             fh.write(f"Deleting {len(not_best_aids)} not-best-xsource xaids from " +
-                     f"{xastroobjects_tablename} database tables...\n")
+                     f"{xastroobjects_tablename} and {xmerges_tablename} database tables...\n")
             fh.flush()
 
             sql_queries = [
-                f"DELETE FROM {xastroobjects_tablename} WHERE xaid IN ({not_best_aids_str});"
+                f"DELETE FROM {xastroobjects_tablename} WHERE xaid IN ({not_best_aids_str});",
+                f"DELETE FROM {xmerges_tablename} WHERE xaid IN ({not_best_aids_str});"
             ]
 
             try:
@@ -558,11 +561,46 @@ def run_single_core_job(fields,index_thread):
                 raise RuntimeError(f"*** Error from dbh.execute_sql_queries (sql_queries={sql_queries}); quitting...")
 
 
+        # Write xastroobjectsmeta records only for best xaids that have xastroobjects records.
+        # Xmerges records whose xaid has no xastroobjects record (e.g., one deleted by an
+        # earlier version of this script) are left alone, and counted here.
+
+        query = f"SELECT xaid FROM {xastroobjects_tablename};"
+
+        sql_queries = [query]
+
+        try:
+            xastroobjects_aids_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
+        xastroobjects_aids = set(record[0] for record in xastroobjects_aids_records)
+
+        n_best_aids_without_xastroobjects = len(best_aids - xastroobjects_aids)
+
+        if n_best_aids_without_xastroobjects > 0:
+            fh.write(f"*** Warning: {n_best_aids_without_xastroobjects} best xaids in {xmerges_tablename} " +
+                     f"have no {xastroobjects_tablename} record; not writing xastroobjectsmeta records for them...\n")
+            fh.flush()
+
+
         # Loop over xastroobjects for current field:
         # 1. Compute statistics using full xsources history (no cumulative statistics).
         # 2. Prepare XAstroObjectsMeta_<field> records for bulk copy.
 
-        xaids_list = list(best_aids)
+        xaids_list = list(best_aids & xastroobjects_aids)
 
         xastroobjectsmeta_table_file = f"xastroobjectsmeta_{field}.csv"
 
