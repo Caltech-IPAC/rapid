@@ -55,7 +55,7 @@ import boto3
 
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
-from alerts.cli import make_provider
+from alerts.cli import make_provider, read_rb_settings
 from alerts.catalog_readers import DEFAULT_GAIA_SOURCE, DEFAULT_NED_SOURCE
 from alerts.providers import FORCED_WINDOW_DAYS
 from alerts.produce import BatchStats, batch_produce, open_alert_archive
@@ -140,6 +140,10 @@ def read_alert_settings(config_input):
         'forced_phot': alerts.getboolean('forced_phot', fallback=True),
         'forced_window_days': parse_forced_window(alerts.get('forced_window_days', fallback='')),
         'forced_phot_s3_bucket_base': alerts.get('forced_phot_s3_bucket_base', fallback='').strip() or None,
+        # real/bogus threshold and model identifier carried in every alert
+        # ([ALERTS] rb_threshold / rb_version, else [RUBRAT] s3_prefix)
+        'rb_threshold': read_rb_settings(config_input)[0],
+        'rb_version': read_rb_settings(config_input)[1],
     }
 
     if settings['forced_phot'] and settings['upload_to_s3_bucket'] and not settings['forced_phot_s3_bucket_base']:
@@ -347,7 +351,9 @@ def run_single_core_job(chips, index_thread, num_cores, settings, proc_date, wor
                                      gaia_source=settings['gaia_source'],
                                      forced_phot=settings['forced_phot'],
                                      forced_window_days=settings['forced_window_days'],
-                                     forced_store=forced_store)
+                                     forced_store=forced_store,
+                                     rb_threshold=settings['rb_threshold'],
+                                     rb_version=settings['rb_version'])
         except SystemExit as e:
             raise RuntimeError(f"*** Error opening alert data provider in index_thread={index_thread}: {e}")
 

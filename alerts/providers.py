@@ -113,6 +113,21 @@ PRV_WINDOW_DAYS = 365.25  # default look-back window for previous detections
 # ===========================================================================
 ALERTABLE_FLAGS = 0   # the sources.flags value the cross-match associates
 
+# The columns every detection query returns, and the joins that supply
+# them: the sources row itself, the filter name, and from the exposure the
+# exposure time plus the Roman observation identifiers (migration
+# 20261015; null for exposures ingested before it), with the survey title
+# looked up through the program (LEFT JOIN: a program not yet in Surveys
+# must not drop the detection). Aliases name Source's fields: `pass` is a
+# Python keyword, so it travels as obs_pass.
+SOURCE_SELECT = """s.*, f.filter AS filter_name, e.exptime,
+                   e.program_id, e.execution_plan, e.pass AS obs_pass, e.segment,
+                   e.observation, e.visit, e.exposure, e.observation_id,
+                   sv.program_title AS survey"""
+SOURCE_JOINS = """JOIN filters f ON s.fid = f.fid
+            JOIN exposures e ON s.expid = e.expid
+            LEFT JOIN surveys sv ON sv.program_id = e.program_id"""
+
 #: TODO: TEMPORARY. Per-chip cap on alertable detections, highest
 #: signal-to-noise first (AlertDataProvider._cut_to_max_sources), until a
 #: real-bogus score exists to cut on. 0 = no cap.
@@ -252,13 +267,35 @@ class Source:
     roundness2: float | None = None
     peak: float | None = None
     exptime: float | None = None
+    # Roman observation identifiers, from the exposures row (migration
+    # 20261015; null for exposures ingested before it). `pass` is a Python
+    # keyword, hence obs_pass; the wire name is still "pass".
+    program_id: int | None = None
+    execution_plan: int | None = None
+    obs_pass: int | None = None
+    segment: int | None = None
+    observation: int | None = None
+    visit: int | None = None
+    exposure: int | None = None
+    observation_id: str | None = None
+    survey: str | None = None           # surveys.program_title, via program_id
+    # real/bogus: the score and label stored with the detection by the
+    # science pipeline (sources.rb / sources.rblabel; null = not scored)
+    rb: float | None = None
+    rblabel: int | None = None
     # solar-system candidate flag, set by get_ss_matches(); None = KONA
     # association not run for this detection (e.g. all prv sources)
     is_ss_candidate: bool | None = None
+    # real/bogus run-level facts, stamped at assembly from the provider's
+    # configuration (the threshold and model in force for this run); None
+    # on prior detections, whose scores may come from other model versions
+    rb_threshold: float | None = None
+    rb_version: str | None = None
 
     # fields filled after construction (association, assembly stamping,
     # KONA); never storage columns
-    FILLED_LATER = frozenset({"aid", "time_proc", "is_ss_candidate"})
+    FILLED_LATER = frozenset({"aid", "time_proc", "is_ss_candidate",
+                              "rb_threshold", "rb_version"})
 
     @property
     def snr(self) -> float | None:
@@ -1871,7 +1908,9 @@ class AlertDataProvider:
                  forced_window_days: float | None = FORCED_WINDOW_DAYS,
                  forced_store: str | None = None,
                  forced_products: Sequence[str] = FORCED_PRODUCTS,
-                 forced_search: Callable | None = None) -> None:
+                 forced_search: Callable | None = None,
+                 rb_threshold: float | None = None,
+                 rb_version: str | None = None) -> None:
         """
         Parameters
         ----------
@@ -1939,6 +1978,12 @@ class AlertDataProvider:
         self.db = db
         self.diff_flavor = diff_flavor
         self.kona_lookup = kona_lookup
+        # Real/bogus run-level facts stamped on every triggering detection
+        # at assembly (reliabilityThreshold / reliabilityVersion). The score
+        # itself comes with the sources row; these say which model and which
+        # cut were in force when the alert was produced. None = unknown.
+        self.rb_threshold = None if rb_threshold is None else float(rb_threshold)
+        self.rb_version = rb_version
         self.max_sources = int(max_sources)
         self.forced_phot = bool(forced_phot)
         self.forced_window_days = (None if forced_window_days is None
@@ -2233,11 +2278,10 @@ class AlertDataProvider:
             If the sources row is missing an expected column (renamed or
             dropped in storage).
         """
-        rows = self._query("""
-            SELECT s.*, f.filter AS filter_name, e.exptime
+        rows = self._query(f"""
+            SELECT {SOURCE_SELECT}
             FROM sources s
-            JOIN filters f ON s.fid = f.fid
-            JOIN exposures e ON s.expid = e.expid
+            {SOURCE_JOINS}
             WHERE s.sid = %s
         """, (sid,))
         if not rows:
@@ -2284,11 +2328,10 @@ class AlertDataProvider:
                 "pid=%s: %d flagged detections (flags <> %d) skipped -- not "
                 "associated by the cross-match, not alertable "
                 "(providers.ALERTABLE_FLAGS)", pid, n_skipped, ALERTABLE_FLAGS)
-        rows = self._query("""
-            SELECT s.*, f.filter AS filter_name, e.exptime
+        rows = self._query(f"""
+            SELECT {SOURCE_SELECT}
             FROM sources s
-            JOIN filters f ON s.fid = f.fid
-            JOIN exposures e ON s.expid = e.expid
+            {SOURCE_JOINS}
             WHERE s.pid = %s AND s.flags = %s
             ORDER BY s.sid
         """, (pid, ALERTABLE_FLAGS))
@@ -2395,11 +2438,10 @@ class AlertDataProvider:
             # get_prv_detections() call then tightens it to its own trigger.
             earliest_mjd = min(s.mjdobs for s in sources) - window_days
             history_rows = self._query(f"""
-                SELECT m.aid AS object_aid, s.*, f.filter AS filter_name, e.exptime
+                SELECT m.aid AS object_aid, {SOURCE_SELECT}
                 FROM sources s
                 JOIN merges_{int(field)} m ON s.sid = m.sid
-                JOIN filters f ON s.fid = f.fid
-                JOIN exposures e ON s.expid = e.expid
+                {SOURCE_JOINS}
                 WHERE m.aid = ANY(%s) AND s.mjdobs >= %s
                 ORDER BY s.mjdobs
             """, (aids, earliest_mjd))
@@ -2528,11 +2570,10 @@ class AlertDataProvider:
         # `obj` exists, so its field partitions do too -- no check needed.
         field = int(detection.field)
         rows = self._query(f"""
-            SELECT s.*, f.filter AS filter_name, e.exptime
+            SELECT {SOURCE_SELECT}
             FROM sources s
             JOIN merges_{field} m ON s.sid = m.sid
-            JOIN filters f ON s.fid = f.fid
-            JOIN exposures e ON s.expid = e.expid
+            {SOURCE_JOINS}
             WHERE m.aid = %s AND s.sid != %s
               AND s.mjdobs >= %s
             ORDER BY s.mjdobs

@@ -314,6 +314,49 @@ def test_failed_query_is_rolled_back_and_the_connection_stays_usable(
 
 
 # ---------------------------------------------------------------------------
+# Roman observation identifiers (exposures, migration 20261015) and the
+# real/bogus score ride in with every source row; the threshold and model
+# in force are stamped on the triggering detection only, from the provider.
+# ---------------------------------------------------------------------------
+
+def test_observation_ids_and_real_bogus_reach_the_alert(make_provider, chip_data):
+    provider = make_provider(rb_threshold=0.5134, rb_version="2026-10-06_canonical9_seed42")
+    schema = load_schema()
+    alert = fastavro.schemaless_reader(
+        io.BytesIO(produce_alert(provider, 9001, schema=schema)), schema)
+    src = alert["diaSource"]
+    assert (src["program"], src["plan"], src["pass"], src["segment"],
+            src["observation"], src["visit"], src["exposure"]) == (-1, 1, 2, 3, 4, 5, 6)
+    assert src["observation_id"] == "-1 1 2 3 4 5 6" and src["survey"] == "SOCSIMS"
+    assert src["reliability"] == pytest.approx(0.87)
+    assert src["reliabilityThreshold"] == pytest.approx(0.5134)
+    assert src["reliabilityVersion"] == "2026-10-06_canonical9_seed42"
+    # prior detections carry their own stored score but no run-level stamp
+    for prv in alert["prvDiaSources"]:
+        assert prv["reliability"] == pytest.approx(0.87)
+        assert prv["reliabilityThreshold"] is None and prv["reliabilityVersion"] is None
+        assert prv["program"] == -1 and prv["survey"] == "SOCSIMS"
+
+
+def test_observation_ids_null_before_migration_and_without_rb_config(make_provider,
+                                                                     chip_data):
+    # an exposure ingested before migration 20261015, a program not yet in
+    # Surveys, an unscored detection, and no RB configuration: all null
+    for row in chip_data.sources + chip_data.history:
+        for key in ("program_id", "execution_plan", "obs_pass", "segment", "observation",
+                    "visit", "exposure", "observation_id", "survey", "rb", "rblabel"):
+            row[key] = None
+    schema = load_schema()
+    alert = fastavro.schemaless_reader(
+        io.BytesIO(produce_alert(make_provider(), 9001, schema=schema)), schema)
+    src = alert["diaSource"]
+    assert all(src[k] is None for k in ("program", "plan", "pass", "segment", "observation",
+                                        "visit", "exposure", "observation_id", "survey",
+                                        "reliability", "reliabilityThreshold",
+                                        "reliabilityVersion"))
+
+
+# ---------------------------------------------------------------------------
 # flagged detections are not alertable. The cross-match associates only
 # flags = 0 sources (pipeline/crossMatchSources.py), so the alert path must
 # select the same population -- providers.ALERTABLE_FLAGS. Before this rule

@@ -125,6 +125,27 @@ def test_forced_photometry_settings(monkeypatch):
     assert stage.read_alert_settings(cfg)["forced_phot"] is True
 
 
+def test_rb_settings_come_from_the_ini():
+    from alerts.cli import read_rb_settings
+    # threshold from [ALERTS]; version falls back to the [RUBRAT] model prefix
+    cfg = _config(rb_threshold="0.5134", rb_version="")
+    cfg["RUBRAT"] = {"s3_prefix": "s3://rapid-pipeline-files/rubrat/2026-10-06_canonical9_seed42/"}
+    assert read_rb_settings(cfg) == (0.5134, "2026-10-06_canonical9_seed42")
+    # the stage settings: threshold parsed, no [RUBRAT] section -> version null
+    s = _settings(rb_threshold="0.5134", rb_version="")
+    assert s["rb_threshold"] == 0.5134 and s["rb_version"] is None
+    # an explicit rb_version wins; blanks mean null
+    cfg["ALERTS"]["rb_version"] = "retrained-2027"
+    assert read_rb_settings(cfg) == (0.5134, "retrained-2027")
+    cfg["ALERTS"]["rb_threshold"] = ""
+    del cfg["RUBRAT"]
+    cfg["ALERTS"]["rb_version"] = ""
+    assert read_rb_settings(cfg) == (None, None)
+    # and the stage settings carry both keys
+    s = stage.read_alert_settings(cfg)
+    assert s["rb_threshold"] is None and s["rb_version"] is None
+
+
 def test_kafka_publication_is_refused():
     with pytest.raises(NotImplementedError, match="publish_to_kafka"):
         _settings(publish_to_kafka="True")
@@ -150,7 +171,7 @@ class StubRAPIDDB:
         self.diffimages = {(11, 15): {"pid": 501}, (12, 15): {"pid": 502},
                            (13, 15): {}}
 
-    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self, d):
+    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self, d, reqid=None):
         if self.fail_on == "jids":
             self.exit_code = 67
             return None
@@ -230,7 +251,8 @@ def fake_make_provider(monkeypatch, chip_data):
 
     def _make(diff_flavor="sfft", kona_file=None, refcat=True, ned=True,
               ned_source=None, lvs=True, gaia=True, gaia_source=None,
-              forced_phot=True, forced_window_days=None, forced_store=None):
+              forced_phot=True, forced_window_days=None, forced_store=None,
+              rb_threshold=None, rb_version=None):
         # forced photometry stays on, as in production: the fake chip has
         # no searchable images, so the provider's degrade-to-null path runs
         provider = AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor,
