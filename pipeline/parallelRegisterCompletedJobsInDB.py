@@ -230,6 +230,26 @@ for i in range(num_cores):
 
 def run_single_core_job(jids,log_fnames,index_thread):
 
+    '''
+    Run the jobs for one thread.  If a job raises an exception partway through its
+    database registration, roll back that job's uncommitted database changes before
+    passing the exception on, so that no partial records (such as extra RefImages or
+    DiffImages versions) are left behind and the job is retried in full on the next run.
+    '''
+
+    try:
+        return _run_single_core_job(jids,log_fnames,index_thread)
+
+    except Exception:
+        dbh = dbh_list[index_thread]
+        if dbh.defer_commit:
+            print(f"*** Error in thread index {index_thread}: rolling back uncommitted database changes...")
+            dbh.rollback_deferred()
+        raise
+
+
+def _run_single_core_job(jids,log_fnames,index_thread):
+
     njobs = len(jids)
 
     print("index_thread,njobs =",index_thread,njobs)
@@ -239,8 +259,9 @@ def run_single_core_job(jids,log_fnames,index_thread):
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        error_msg = f"*** Error: Could not open output file {thread_work_file}; quitting..."
+        print(error_msg)
+        raise Exception(error_msg)
 
     dbh = dbh_list[index_thread]
 
@@ -274,17 +295,27 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
 
         # Download log file from S3 bucket.
+        # Skip to next job if the log file does not exist (e.g., the AWS Batch job never ran),
+        # rather than letting the exception terminate this thread's entire loop over jobs.
 
         s3_bucket_object_name = proc_subdir + '/' + log_fname
 
         fh.write("Downloading s3://{}/{} into {}...\n".format(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname))
 
-        response = s3_client.download_file(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname)
+        try:
+            response = s3_client.download_file(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname)
+
+        except ClientError as e:
+            fh.write("*** Warning: Failed to download {} from s3://{}/{} ({}); skipping...\n"\
+                .format(log_fname,job_logs_s3_bucket_base,s3_bucket_object_name,e))
+            fh.flush()
+            continue
 
         fh.write(f"response = {response}\n")
 
 
         # Download job config file, in order to harvest some of its metadata.
+        # Skip to next job if the job config file does not exist.
 
         job_config_ini_filename = job_config_filename_base + str(jid) + ".ini"
 
@@ -292,7 +323,14 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         fh.write("Downloading s3://{}/{} into {}...\n".format(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename))
 
-        response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
+        try:
+            response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
+
+        except ClientError as e:
+            fh.write("*** Warning: Failed to download {} from s3://{}/{} ({}); skipping...\n"\
+                .format(job_config_ini_filename,job_info_s3_bucket_base,s3_bucket_object_name,e))
+            fh.flush()
+            continue
 
         fh.write(f"response = {response}\n")
 
@@ -315,8 +353,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
             ra0 = float(job_config_input['REF_IMAGE']['ra0'])
             dec0 = float(job_config_input['REF_IMAGE']['dec0'])
         else:
-            fh.write(f"*** Error: Unexpected value of ppid ({ppid}); quitting...")
-            exit(64)
+            error_msg = f"*** Error: Unexpected value of ppid ({ppid}); quitting..."
+            fh.write(error_msg + "\n")
+            fh.flush()
+            print(error_msg)
+            raise Exception(error_msg)
 
         fh.write(f"rtid,ra0,dec0 = {rtid},{ra0},{dec0}\n")
 
@@ -403,8 +444,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 fh.write("started = {} {}\n".format(started_date,started_time))
 
             except:
-                fh.write("*** Error: Could not parse job_started; quitting...")
-                exit(64)
+                error_msg = f"*** Error: Could not parse job_started ({job_started}) for jid={jid}; quitting..."
+                fh.write(error_msg + "\n")
+                fh.flush()
+                print(error_msg)
+                raise Exception(error_msg)
 
             started = started_date + " " + started_time
 
@@ -416,8 +460,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 fh.write("ended = {} {}\n".format(ended_date,ended_time))
 
             except:
-                fh.write("*** Error: Could not parse job_ended; quitting...\n")
-                exit(64)
+                error_msg = f"*** Error: Could not parse job_ended ({job_ended}) for jid={jid}; quitting..."
+                fh.write(error_msg + "\n")
+                fh.flush()
+                print(error_msg)
+                raise Exception(error_msg)
 
             ended = ended_date + " " + ended_time
 
@@ -448,26 +495,70 @@ def run_single_core_job(jids,log_fnames,index_thread):
                  f"{jid},{job_exitcode},{aws_batch_job_id},{started},{ended}\n")
 
 
-        # Update Jobs record.
+        # A job that ran normally is registered from its product config file.  If that file is
+        # missing, skip to next job without touching the database, so that the job is retried
+        # on the next run, rather than registering its products with the metadata of another job.
 
-        dbh.end_job(jid,job_exitcode,aws_batch_job_id,started,ended)
+        if not downloaded_from_bucket and int(job_exitcode) != 33 and int(job_exitcode) < 64:
+            fh.write(f"*** Warning: Product config file of jid={jid} (job_exitcode={job_exitcode}) not found; skipping...\n")
+            fh.flush()
+            continue
 
-        if dbh.exit_code >= 64:
-            fh.write(f"*** Error: dbh.end_job returned exit code greater than or equal to 64" +\
-                   "(jid={jid},job_exitcode={job_exitcode},aws_batch_job_id={aws_batch_job_id},ended={ended}); quitting...")
-            exit(dbh.exit_code)
+
+        # For a job that generated a new reference image, make sure the reference-image
+        # input-images CSV file exists before registering anything, since it is needed later
+        # to register the RefImImages and RefImMeta records.  If it does not exist, skip to
+        # next job without touching the database, so that the job is retried on the next run.
+
+        if downloaded_from_bucket and int(job_exitcode) != 33 and int(job_exitcode) < 64:
+
+            try:
+                rfid_str_product = product_config_input['REF_IMAGE']['rfid']
+            except:
+                rfid_str_product = 'Not found'
+
+            if rfid_str_product == 'None':
+
+                input_images_csv_name_for_download = product_config_input['REF_IMAGE']['input_images_csv_name_for_download']
+
+                filename_match = re.match(r"s3://(.+?)/(.+)", input_images_csv_name_for_download)
+
+                if filename_match is not None:
+
+                    try:
+                        s3_client.head_object(Bucket=filename_match.group(1),Key=filename_match.group(2))
+
+                    except ClientError as e:
+                        fh.write("*** Warning: Reference-image input-images CSV file {} not found ({}); skipping...\n"\
+                            .format(input_images_csv_name_for_download,e))
+                        fh.flush()
+                        continue
 
 
         # If job failed, or not enough inputs to generate a reference image when required,
-        # then touch done file and skip to next job.
+        # then update Jobs record, touch done file, and skip to next job.
 
-        if int(job_exitcode) == 33:
+        if int(job_exitcode) == 33 or int(job_exitcode) >= 64:
+
+            dbh.end_job(jid,job_exitcode,aws_batch_job_id,started,ended)
+
+            if dbh.exit_code >= 64:
+                error_msg = f"*** Error: dbh.end_job returned exit code {dbh.exit_code} " +\
+                            f"(jid={jid},job_exitcode={job_exitcode},aws_batch_job_id={aws_batch_job_id},ended={ended}); quitting..."
+                fh.write(error_msg + "\n")
+                fh.flush()
+                print(error_msg)
+                raise Exception(error_msg)
+
             util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_subdir,jid,s3_client)
             continue
 
-        if int(job_exitcode) >= 64:
-            util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_subdir,jid,s3_client)
-            continue
+
+        # Register all of the job's products and close out its Jobs record in a single
+        # database transaction, committed below after end_job.  If anything fails before
+        # then, run_single_core_job rolls the transaction back.
+
+        dbh.begin_deferred_commit()
 
 
         # Compute level-6 healpix index (NESTED pixel ordering).
@@ -482,10 +573,14 @@ def run_single_core_job(jids,log_fnames,index_thread):
         fh.write(f"hp6,hp9 = {hp6},{hp9}\n")
 
 
-        # Inventory products associated with job.
+        # Inventory products associated with job.  A job usually generates either a reference
+        # image (reference-image pipeline) or a difference image (science pipeline, with an
+        # existing reference image), but not both.  rfid is set only if this job registers a new
+        # reference image, so that a difference image can never get the rfid of another job.
 
         difference_image_found = False
         reference_image_found = False
+        rfid = None
 
         product_bucket = s3_resource.Bucket(product_s3_bucket_base)
 
@@ -530,7 +625,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     dbh.add_refimage(ppid_refimage,field,fid,hp6,hp9,infobits_refimage,status_refimage,filename_refimage,checksum_refimage)
 
                     if dbh.exit_code >= 64:
-                        exit(dbh.exit_code)
+                        error_msg = f"*** Error: dbh.add_refimage returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                        fh.write(error_msg + "\n")
+                        fh.flush()
+                        print(error_msg)
+                        raise Exception(error_msg)
 
                     rfid = dbh.rfid
                     version_refimage = dbh.version
@@ -545,7 +644,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     dbh.update_refimage(rfid,filename_refimage,checksum_refimage,status_refimage,version_refimage)
 
                     if dbh.exit_code >= 64:
-                        exit(dbh.exit_code)
+                        error_msg = f"*** Error: dbh.update_refimage returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                        fh.write(error_msg + "\n")
+                        fh.flush()
+                        print(error_msg)
+                        raise Exception(error_msg)
 
 
                     # Parse metadata for reference-image SExtractor catalog.
@@ -570,7 +673,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                                               sextractor_refimage_catalog_checksum)
 
                     if dbh.exit_code >= 64:
-                        exit(dbh.exit_code)
+                        error_msg = f"*** Error: dbh.register_refimcatalog returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                        fh.write(error_msg + "\n")
+                        fh.flush()
+                        print(error_msg)
+                        raise Exception(error_msg)
 
                     rfcatid = dbh.rfcatid
                     svid = dbh.svid
@@ -605,7 +712,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                                                   photutils_refimage_catalog_checksum)
 
                         if dbh.exit_code >= 64:
-                            exit(dbh.exit_code)
+                            error_msg = f"*** Error: dbh.register_refimcatalog returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                            fh.write(error_msg + "\n")
+                            fh.flush()
+                            print(error_msg)
+                            raise Exception(error_msg)
 
                         rfcatid = dbh.rfcatid
                         svid = dbh.svid
@@ -650,8 +761,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                             format(input_images_csv_file_s3_bucket_name,input_images_csv_file_s3_bucket_object_name))
 
                     except:
-                        fh.write("*** Error: Could not parse input_images_csv_name_for_download; quitting...\n")
-                        exit(64)
+                        error_msg = f"*** Error: Could not parse input_images_csv_name_for_download ({input_images_csv_name_for_download}) for jid={jid}; quitting..."
+                        fh.write(error_msg + "\n")
+                        fh.flush()
+                        print(error_msg)
+                        raise Exception(error_msg)
 
                     input_images_csv_filename = os.path.basename(input_images_csv_file_s3_bucket_object_name)
 
@@ -679,6 +793,14 @@ def run_single_core_job(jids,log_fnames,index_thread):
                             # Insert record in RefImImages database table for each input image.
 
                             dbh.register_refimimage(rfid,refim_input_rid)
+
+                            if dbh.exit_code >= 64:
+                                error_msg = f"*** Error: dbh.register_refimimage returned exit code {dbh.exit_code} " +\
+                                            f"(jid={jid},rfid={rfid},rid={refim_input_rid}); quitting..."
+                                fh.write(error_msg + "\n")
+                                fh.flush()
+                                print(error_msg)
+                                raise Exception(error_msg)
 
 
 
@@ -718,7 +840,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                                            refimage_psf_catalog_nrows)
 
                     if dbh.exit_code >= 64:
-                        exit(dbh.exit_code)
+                        error_msg = f"*** Error: dbh.register_refimmeta returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                        fh.write(error_msg + "\n")
+                        fh.flush()
+                        print(error_msg)
+                        raise Exception(error_msg)
 
 
 
@@ -739,7 +865,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 try:
                     zogy_output_diffimage_file_checksum = product_config_input['ZOGY']['zogy_output_diffimage_file_checksum']
                 except:
-                    zogy_output_diffimage_file_checksum == 'Not found'
+                    zogy_output_diffimage_file_checksum = 'Not found'
 
                 if zogy_output_diffimage_file_checksum != 'Not found':
 
@@ -750,6 +876,18 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     rfid_diffimage = product_config_input['ZOGY']['rfid']
 
                     if rfid_diffimage == "None":
+
+                        # The difference image was made with a reference image generated by this
+                        # same job, which must then have been registered above.
+
+                        if rfid is None:
+                            error_msg = f"*** Error: Difference image of jid={jid} has rfid = None, but no reference image " +\
+                                        f"was registered for this job; quitting..."
+                            fh.write(error_msg + "\n")
+                            fh.flush()
+                            print(error_msg)
+                            raise Exception(error_msg)
+
                         rfid_diffimage = rfid
 
                     ra0_diffimage = product_config_input['ZOGY']['ra0']
@@ -802,7 +940,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                                       checksum_diffimage)
 
                     if dbh.exit_code >= 64:
-                        exit(dbh.exit_code)
+                        error_msg = f"*** Error: dbh.add_diffimage returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                        fh.write(error_msg + "\n")
+                        fh.flush()
+                        print(error_msg)
+                        raise Exception(error_msg)
 
                     pid = dbh.pid
                     version_diffimage = dbh.version
@@ -817,7 +959,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     dbh.update_diffimage(pid,filename_diffimage,checksum_diffimage,status_diffimage,version_diffimage)
 
                     if dbh.exit_code >= 64:
-                        exit(dbh.exit_code)
+                        error_msg = f"*** Error: dbh.update_diffimage returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                        fh.write(error_msg + "\n")
+                        fh.flush()
+                        print(error_msg)
+                        raise Exception(error_msg)
 
 
                     # Insert record in DiffImMeta database table.
@@ -836,7 +982,30 @@ def run_single_core_job(jids,log_fnames,index_thread):
                                             dymedianfin_diffimage)
 
                     if dbh.exit_code >= 64:
-                        exit(dbh.exit_code)
+                        error_msg = f"*** Error: dbh.register_diffimmeta returned exit code {dbh.exit_code} for jid={jid}; quitting..."
+                        fh.write(error_msg + "\n")
+                        fh.flush()
+                        print(error_msg)
+                        raise Exception(error_msg)
+
+
+        # Update Jobs record, only after all products are registered.  If registration
+        # fails above, the job is left unclosed so that it is retried on the next run.
+
+        dbh.end_job(jid,job_exitcode,aws_batch_job_id,started,ended)
+
+        if dbh.exit_code >= 64:
+            error_msg = f"*** Error: dbh.end_job returned exit code {dbh.exit_code} " +\
+                        f"(jid={jid},job_exitcode={job_exitcode},aws_batch_job_id={aws_batch_job_id},ended={ended}); quitting..."
+            fh.write(error_msg + "\n")
+            fh.flush()
+            print(error_msg)
+            raise Exception(error_msg)
+
+
+        # Commit the job's registered products and closed-out Jobs record together.
+
+        dbh.commit_deferred()
 
 
         # Touch done file.  Upload done file to S3 bucket.
@@ -877,12 +1046,19 @@ def execute_parallel_processes(jids,log_filenames,num_cores=None):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    # Return the number of threads that terminated with an exception.
+
+    nfailed = 0
+
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            nfailed += 1
+
+    return nfailed
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -951,9 +1127,18 @@ if __name__ == '__main__':
         ############################################################################
 
         if num_cores == 1:
-            run_single_core_job(jids,log_filenames,0)
+            try:
+                run_single_core_job(jids,log_filenames,0)
+                nfailed = 0
+            except Exception as e:
+                print(f"*** Error in thread index 0 = {e}")
+                nfailed = 1
         else:
-            execute_parallel_processes(jids,log_filenames,num_cores)
+            nfailed = execute_parallel_processes(jids,log_filenames,num_cores)
+
+        if nfailed > 0:
+            print(f"*** Error: {nfailed} of {num_cores} threads failed; setting exitcode = 64")
+            exitcode = 64
 
 
         # Close database connection.

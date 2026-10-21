@@ -73,6 +73,32 @@ def get_image_hdu_index(hdul):
 # calculation, or that are useful for bookkeeping alongside it.
 #####################################################################################################
 
+def get_image_shape(input_img_filename,hdu_index = None):
+
+    """
+    Return the shape of a FITS image from its header, without reading the data.
+
+    Parameters
+    ----------
+    input_img_filename : str
+        FITS file.
+    hdu_index : int or None, optional
+        HDU index of the image; if None, the first HDU holding two-dimensional image data.
+
+    Returns
+    -------
+    shape : tuple of int
+        (NAXIS2, NAXIS1).
+    """
+
+    with fits.open(input_img_filename) as hdul:
+        if hdu_index is None:
+            hdu_index = get_image_hdu_index(hdul)
+        header = hdul[hdu_index].header
+
+    return int(header["NAXIS2"]),int(header["NAXIS1"])
+
+
 def get_l2_image_metadata(input_img_filename,hdu_index = None):
 
     """
@@ -790,36 +816,64 @@ def median_filter_truncate(stamp,filter_size = 3,lower_median = False):
         raise ValueError(f"Method median_filter_truncate: filter_size = {filter_size} "
                          "must be a positive odd integer")
 
-    stamp = np.array(stamp, dtype=np.float64)
+    filtered = median_filter_truncate_stack(np.array(stamp, dtype=np.float64)[np.newaxis, :, :],
+                                            filter_size = filter_size,
+                                            lower_median = lower_median)
 
+    return filtered[0]
+
+
+def median_filter_truncate_stack(stamps,filter_size = 3,lower_median = False):
+
+    """
+    Apply median_filter_truncate to each stamp of a stack at once.
+
+    Parameters
+    ----------
+    stamps : numpy.ndarray of float, shape (n, ny, nx)
+        Stack of n stamps; NaN pixels are treated as bad.
+    filter_size : int, optional
+        Side length of the median-filter box [pixels]; a positive odd integer.
+    lower_median : bool, optional
+        As for median_filter_truncate.
+
+    Returns
+    -------
+    filtered : numpy.ndarray of float, shape (n, ny, nx)
+        The filtered stamps, NaN where a box holds no finite pixel.
+    """
+
+    if filter_size <= 0 or filter_size % 2 == 0:
+        raise ValueError(f"Method median_filter_truncate_stack: filter_size = {filter_size} "
+                         "must be a positive odd integer")
+
+    stamps = np.asarray(stamps, dtype=np.float64)
     h = filter_size // 2
-    ny,nx = stamp.shape
+    n,ny,nx = stamps.shape
 
 
-    # Pad with NaN, which stands in for the skipped out-of-stamp positions, and stack the
-    # filter_size^2 shifted copies of the stamp along a new leading axis.
+    # Pad with NaN, so that the box is truncated at the stamp edges, and stack the
+    # filter_size * filter_size shifted copies along axis 1.
 
-    padded = np.full((ny + 2 * h, nx + 2 * h), np.nan)
-    padded[h:h + ny, h:h + nx] = stamp
+    padded = np.full((n, ny + 2 * h, nx + 2 * h), np.nan)
+    padded[:, h:h + ny, h:h + nx] = stamps
 
-    neighbors = np.array([padded[dy:dy + ny, dx:dx + nx]
+    neighbors = np.stack([padded[:, dy:dy + ny, dx:dx + nx]
                           for dy in range(filter_size)
-                          for dx in range(filter_size)])
+                          for dx in range(filter_size)], axis=1)
 
 
-    # np.sort puts NaN last, so the finite values of each neighborhood come first in ascending
-    # order and the two middle ones are at indices (count-1)//2 and count//2 among them, which
-    # coincide when count is odd.
+    # np.sort puts NaN last, so the finite values of each box come first, in order.
 
-    neighbors = np.sort(neighbors, axis=0)
-    count = np.sum(np.isfinite(neighbors), axis=0)
+    neighbors = np.sort(neighbors, axis=1)
+    count = np.sum(np.isfinite(neighbors), axis=1)
 
     index_lo = np.maximum(count - 1, 0) // 2
-    filtered = np.take_along_axis(neighbors, index_lo[np.newaxis, :, :], axis=0)[0]
+    filtered = np.take_along_axis(neighbors, index_lo[:, np.newaxis, :, :], axis=1)[:, 0]
 
     if not lower_median:
         index_hi = np.minimum(count // 2, filter_size * filter_size - 1)
-        filtered_hi = np.take_along_axis(neighbors, index_hi[np.newaxis, :, :], axis=0)[0]
+        filtered_hi = np.take_along_axis(neighbors, index_hi[:, np.newaxis, :, :], axis=1)[:, 0]
         filtered = 0.5 * (filtered + filtered_hi)
 
     filtered[count == 0] = np.nan
@@ -907,10 +961,8 @@ def compute_sumrat_for_diff_image(input_diff_filename,
                          "must be a positive odd integer")
 
     with fits.open(input_diff_filename) as hdul:
-
         if hdu_index is None:
             hdu_index = get_image_hdu_index(hdul)
-
         data = np.array(hdul[hdu_index].data, dtype=np.float64)
 
     if negate:
@@ -918,41 +970,58 @@ def compute_sumrat_for_diff_image(input_diff_filename,
 
     ny,nx = data.shape
     h = stamp_size // 2
+    n = len(xy_positions)
 
-    sumrat_list = []
+    sumrat_list = [fill_value] * n
 
-    for x,y in xy_positions:
-
-        if not (np.isfinite(float(x)) and np.isfinite(float(y))):
-            sumrat_list.append(fill_value)
-            continue
+    if n == 0:
+        return sumrat_list
 
 
-        # Zero-based index of the pixel nearest to the position.
+    # Nearest pixel of each position, as a zero-based index; positions that are not finite or
+    # whose stamp does not fall entirely within the image keep fill_value.
 
-        xind = int(math.floor(float(x) + 0.5)) - coord_base
-        yind = int(math.floor(float(y) + 0.5)) - coord_base
+    x0 = np.array([float(x) for x,y in xy_positions], dtype=np.float64) - coord_base
+    y0 = np.array([float(y) for x,y in xy_positions], dtype=np.float64) - coord_base
 
-        if xind < h or xind > nx - h - 1 or yind < h or yind > ny - h - 1:
-            sumrat_list.append(fill_value)
-            continue
+    valid = np.isfinite(x0) & np.isfinite(y0)
 
-        stamp = data[yind - h:yind + h + 1, xind - h:xind + h + 1]
+    xind = np.zeros(n, dtype=int)
+    yind = np.zeros(n, dtype=int)
+    xind[valid] = np.floor(x0[valid] + 0.5).astype(int)
+    yind[valid] = np.floor(y0[valid] + 0.5).astype(int)
+
+    valid &= (xind >= h) & (xind <= nx - h - 1) & (yind >= h) & (yind <= ny - h - 1)
+
+    index_valid = np.flatnonzero(valid)
+    offsets = np.arange(-h, h + 1)
+
+
+    # Process the stamps in chunks, to bound the memory of the median-filter stack.
+
+    chunk_size = 20000
+
+    for start in range(0, len(index_valid), chunk_size):
+
+        index_chunk = index_valid[start:start + chunk_size]
+
+        stamps = data[yind[index_chunk, np.newaxis, np.newaxis] + offsets[np.newaxis, :, np.newaxis],
+                      xind[index_chunk, np.newaxis, np.newaxis] + offsets[np.newaxis, np.newaxis, :]]
 
         if filter_size > 1:
-            stamp = median_filter_truncate(stamp,
-                                           filter_size = filter_size,
-                                           lower_median = lower_median)
+            stamps = median_filter_truncate_stack(stamps,
+                                                  filter_size = filter_size,
+                                                  lower_median = lower_median)
 
-        good = np.isfinite(stamp)
+        good = np.isfinite(stamps)
+        stamp_sum = np.sum(np.where(good, stamps, 0.0), axis=(1, 2))
+        stamp_sum_abs = np.sum(np.where(good, np.abs(stamps), 0.0), axis=(1, 2))
 
-        stamp_sum = np.sum(stamp[good])
-        stamp_sum_abs = np.sum(np.abs(stamp[good]))
+        usable = np.any(good, axis=(1, 2)) & (stamp_sum_abs > 0.0)
 
-        if np.any(good) and stamp_sum_abs > 0.0:
-            sumrat_list.append(float(stamp_sum / stamp_sum_abs))
-        else:
-            sumrat_list.append(fill_value)
+        for i,ok,ssum,ssum_abs in zip(index_chunk,usable,stamp_sum,stamp_sum_abs):
+            if ok:
+                sumrat_list[i] = float(ssum / ssum_abs)
 
     return sumrat_list
 
@@ -1408,7 +1477,8 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
                                           xy_bounds = None,
                                           hdu_index = None,
                                           psf_hdu_index = 0,
-                                          fill_value = np.nan):
+                                          fill_value = np.nan,
+                                          num_processes = 1):
 
     """
     Compute DAOStarFinder sharpness, roundness1, and roundness2, and the PSFPhotometry fitted flux,
@@ -1451,6 +1521,9 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
     fill_value : float, optional
         Value returned for a source whose position is not finite or falls off the image, or
         whose quantity comes out not finite.
+    num_processes : int, optional
+        Number of processes the PSF fits are split among (forked, so on Linux or macOS); 1
+        (the default) fits in the calling process.  The results do not depend on it.
 
     Returns
     -------
@@ -1473,10 +1546,6 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
     the same way, and are masked in the PSF fit.  dao_flags records whether any of them, or pixels
     beyond the image edges, fell in the core of a source.
     """
-
-    import warnings
-    from astropy.table import QTable
-    from photutils.psf import PSFPhotometry, ImagePSF
 
     if coord_base not in (0, 1):
         raise ValueError(f"Method compute_photutils_cols_for_diff_image: coord_base = {coord_base} "
@@ -1584,64 +1653,134 @@ def compute_photutils_cols_for_diff_image(input_diff_filename,
 
     #------
     # PSFPhotometry fitted flux, with the PSF model set up as in compute_psf_catalog.
+    #
+    # PSF fits.  Each source is fitted on its own (PSFPhotometry with no grouper), so the
+    # sources can be split among num_processes forked processes, which share the image
+    # arrays (copy-on-write) through _psf_fit_inputs, and give the same results.
+
+    mask = ~np.isfinite(data)
+    if error is not None:
+        mask |= ~np.isfinite(error)
+
+    global _psf_fit_inputs
+
+    _psf_fit_inputs = {"data": np.where(mask, 0.0, data),
+                       "mask": mask,
+                       "error": None if error is None else np.where(mask, 1.0, error),
+                       "data_psf": data_psf,
+                       "fit_shape": tuple(fit_shape),
+                       "aperture_radius": aperture_radius,
+                       "xy_bounds": xy_bounds,
+                       "x0": x0,
+                       "y0": y0}
+
+    num_processes = max(1, min(int(num_processes), len(index_valid)))
+
+    try:
+        if num_processes > 1:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers = num_processes,
+                                     mp_context = multiprocessing.get_context("fork")) as executor:
+                chunks = list(executor.map(_fit_psf_chunk, np.array_split(index_valid, num_processes)))
+        else:
+            chunks = [_fit_psf_chunk(index_valid)]
+    finally:
+        _psf_fit_inputs = None
+
+    psf_fit_cols = {name: np.concatenate([chunk[name] for chunk in chunks])
+                    for name in chunks[0]}
+
+    source_ids = psf_fit_cols.pop("id")
+    flux_err = psf_fit_cols.pop("flux_err")
+
+    psf_fit_cols["x_fit"] = psf_fit_cols["x_fit"] + coord_base
+    psf_fit_cols["y_fit"] = psf_fit_cols["y_fit"] + coord_base
+
+    if error is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            psf_fit_cols["snr_fit"] = psf_fit_cols["flux_fit"] / flux_err
+
+    for name,values in psf_fit_cols.items():
+        for source_id,value in zip(source_ids,values):
+            if np.isfinite(value):
+                photutils_cols[name][int(source_id) - 1] = float(value)
+
+    return photutils_cols
+
+
+# Inputs of _fit_psf_chunk, set by compute_photutils_cols_for_diff_image for the duration of
+# its PSF fits, so that forked processes inherit them instead of receiving copies.
+
+_psf_fit_inputs = None
+
+
+def _fit_psf_chunk(index_chunk):
+
+    """
+    Fit the PSF to the sources of one chunk with PSFPhotometry, from the inputs in
+    _psf_fit_inputs; run in the calling process or in a forked one.
+
+    Parameters
+    ----------
+    index_chunk : numpy.ndarray of int
+        Indices of the sources to fit, into _psf_fit_inputs["x0"] and ["y0"] (zero-based
+        positions).
+
+    Returns
+    -------
+    cols : dict of numpy.ndarray of float
+        "id" (index + 1) and the PSF-fit columns x_fit, y_fit (zero-based), x_err, y_err,
+        flux_fit, flux_err, reduced_chi2 (NaN if photutils does not give it), n_pixels_fit,
+        flags and cfit, one value per fitted source.
+    """
+
+    import warnings
+    from astropy.table import QTable
+    from photutils.psf import PSFPhotometry, ImagePSF
+
+    inputs = _psf_fit_inputs
+    data_psf = inputs["data_psf"]
 
     psf_ny,psf_nx = data_psf.shape
-
     psf_model = ImagePSF(data_psf,
                          flux = np.sum(data_psf),
                          x_0 = (psf_nx - 1) / 2,
                          y_0 = (psf_ny - 1) / 2)
 
     psfphot = PSFPhotometry(psf_model = psf_model,
-                            fit_shape = tuple(fit_shape),
-                            aperture_radius = aperture_radius,
-                            xy_bounds = xy_bounds)
+                            fit_shape = inputs["fit_shape"],
+                            aperture_radius = inputs["aperture_radius"],
+                            xy_bounds = inputs["xy_bounds"])
+
+    index_chunk = np.asarray(index_chunk, dtype=int)
 
     init_params = QTable()
-    init_params["id"] = index_valid + 1
-    init_params["x"] = x0[index_valid]
-    init_params["y"] = y0[index_valid]
-
-    mask = ~np.isfinite(data)
-
-    if error is not None:
-        mask |= ~np.isfinite(error)
+    init_params["id"] = index_chunk + 1
+    init_params["x"] = inputs["x0"][index_chunk]
+    init_params["y"] = inputs["y0"][index_chunk]
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-
-        phot = psfphot(np.where(mask, 0.0, data),
-                       mask = mask,
-                       error = None if error is None else np.where(mask, 1.0, error),
+        phot = psfphot(inputs["data"],
+                       mask = inputs["mask"],
+                       error = inputs["error"],
                        init_params = init_params)
-
-    # PSFPhotometry results, matched back to the input positions through id.  photutils < 3.0
-    # names n_pixels_fit npixfit.
 
     n_pixels_fit_name = "n_pixels_fit" if "n_pixels_fit" in phot.colnames else "npixfit"
 
-    psf_fit_cols = {"flux_fit": np.asarray(phot["flux_fit"], dtype=np.float64),
-                    "reduced_chi2": np.asarray(phot["reduced_chi2"], dtype=np.float64)
-                                    if "reduced_chi2" in phot.colnames else np.full(len(phot), np.nan),
-                    "n_pixels_fit": np.asarray(phot[n_pixels_fit_name], dtype=np.float64),
-                    "flags": np.asarray(phot["flags"], dtype=np.float64),
-                    "cfit": np.asarray(phot["cfit"], dtype=np.float64),
-                    "x_fit": np.asarray(phot["x_fit"], dtype=np.float64) + coord_base,
-                    "y_fit": np.asarray(phot["y_fit"], dtype=np.float64) + coord_base,
-                    "x_err": np.asarray(phot["x_err"], dtype=np.float64),
-                    "y_err": np.asarray(phot["y_err"], dtype=np.float64)
-                    }
+    cols = {"id": np.asarray(phot["id"], dtype=np.int64)}
 
-    if error is not None:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            psf_fit_cols["snr_fit"] = psf_fit_cols["flux_fit"] / np.asarray(phot["flux_err"], dtype=np.float64)
+    for name,phot_name in (("x_fit","x_fit"),("y_fit","y_fit"),("x_err","x_err"),("y_err","y_err"),
+                           ("flux_fit","flux_fit"),("flux_err","flux_err"),
+                           ("reduced_chi2","reduced_chi2"),("n_pixels_fit",n_pixels_fit_name),
+                           ("flags","flags"),("cfit","cfit")):
+        if phot_name in phot.colnames:
+            cols[name] = np.asarray(phot[phot_name], dtype=np.float64)
+        else:
+            cols[name] = np.full(len(phot), np.nan)
 
-    for name,values in psf_fit_cols.items():
-        for source_id,value in zip(phot["id"],values):
-            if np.isfinite(value):
-                photutils_cols[name][int(source_id) - 1] = float(value)
-
-    return photutils_cols
+    return cols
 
 
 #####################################################################################################

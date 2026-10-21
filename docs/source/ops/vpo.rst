@@ -332,7 +332,8 @@ Waiting for AWS Batch jobs
 ************************************
 
 After launching each set of pipelines, the VPO queries the operations database for the
-``Jobs`` records of that pipeline number and processing date that have not been closed out,
+``Jobs`` records of that pipeline number and processing request (``reqid``) that have not been
+closed out,
 and counts only those with an AWS Batch job ID.  It then calls ``describe_jobs`` on each
 one, sleeping 60 seconds between passes, until every job has reached ``SUCCEEDED`` or
 ``FAILED``.
@@ -341,6 +342,49 @@ A job that has failed does not stop the VPO; the wait ends when no job is still 
 failures are counted and the run moves on to registering whatever did succeed.  An
 unrecognized job status, or an AWS Batch job ID that is no longer known to AWS, does stop
 the run.
+
+
+.. _vpo-registration:
+
+Registering pipeline results
+************************************
+
+The registration stages (3, 6 and 9) close out the ``Jobs`` records of the processing request
+that are still open and record the jobs' products in the operations database.  Stages 3 and 6
+(``parallelRegisterCompletedJobsInDB.py``) register, for each job, the products it made, from
+its log file, its job config file and its product config file in S3.  A job usually makes
+either a reference image (reference-image pipeline: ``RefImages``, ``RefImCatalogs``,
+``RefImImages`` and ``RefImMeta`` records) or a difference image with an existing reference
+image (science pipeline: ``DiffImages`` and ``DiffImMeta`` records), but not both.  Stage 9
+(``parallelRegisterCompletedJobsInDBAfterPostProc.py``) updates the checksums of the reference
+image or difference image a post-processing job made.
+
+**One transaction per job.**  In stages 3 and 6, a job's product records and the closing out
+of its ``Jobs`` record are committed together, after all of them have been made.  If anything
+fails partway, all of the job's changes are rolled back, so that no partial records (such as an
+extra ``RefImages`` or ``DiffImages`` version) are left behind; the job's ``Jobs`` record stays
+open and the job is registered in full when the stage is run again.  A difference image whose
+reference image is to come from the same job (``rfid = None`` in its product config) but
+without a reference image registered for that job is such a failure.
+
+**Skipped jobs.**  A job is skipped, with a warning in the stage's log and without any change
+to the database, when its log file or job config file is not in S3 (e.g., the AWS Batch job
+never ran), when it ended normally but its product config file is not in S3, or when it made
+a new reference image whose input-images CSV file is not in S3.  Its ``Jobs`` record stays
+open and it has no done file.  A job that failed (exit code 64 or higher), or that had too few
+inputs for a reference image (exit code 33), is closed out without product records.
+
+**Done files.**  A job that has been registered gets a done file in S3
+(``job_config_jid<jid>.done``, or ``postproc_job_config_jid<jid>.done`` after stage 9; see
+:doc:`../prod/products`), and is skipped by later runs of the stage.  A registration stage can
+therefore be run again for the same processing request, by hand with the same ``JOBPROCDATE``
+and ``PROCREQ`` (see :doc:`bulk_run`), to register the jobs that were skipped or rolled back,
+once the cause is fixed.
+
+**Exit code.**  A registration stage exits with code 64 if any job's registration failed,
+which stops the VPO (see `Error handling`_).  The process that hits the failure stops there, so
+the jobs after the failed one in that process are left open as well, for the next run; the other
+parallel processes register theirs.  Skipped jobs do not change the exit code.
 
 
 Resubmitting failed AWS Batch jobs

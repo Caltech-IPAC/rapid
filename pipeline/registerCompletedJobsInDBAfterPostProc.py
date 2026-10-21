@@ -43,7 +43,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "registerCompletedJobsInDBAfterPostProc.py"
-swvers = "1.1"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -205,240 +205,275 @@ if __name__ == '__main__':
     # Loop over jobs for a given processing date.
     #####################################################################
 
-    for jid,log_fname in zip(jids,log_filenames):
+    # A job whose registration fails raises an exception, which ends the loop over jobs; the
+    # jobs not yet registered are retried on the next run, and this script exits with code 64.
 
-        print("\nStart of loop: jid, log_fname =",jid,log_fname)
+    try:
 
-        job_exitcode = 64
-        aws_batch_job_id = 'not_found'
+        for jid,log_fname in zip(jids,log_filenames):
 
+            print("\nStart of loop: jid, log_fname =",jid,log_fname)
 
-        # Check whether science-pipeline done file exists in S3 bucket for job, and skip if it does NOT exist.
-        # This is done by attempting to download the done file.  Regardless the sub
-        # always returns the filename and subdirs by parsing the s3_full_name.
-
-        s3_full_name_science_pipeline_done_file = \
-            "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" + \
-            job_config_filename_base +  str(jid)  + ".done"
-        science_pipeline_done_filename,subdirs_done,downloaded_from_bucket = \
-            util.download_file_from_s3_bucket(s3_client,
-                                              s3_full_name_science_pipeline_done_file)
-
-        if not downloaded_from_bucket:
-            print("*** Warning: Science-pipeline done file does NOT exist ({}); skipping...".format(done_filename))
-            continue
+            job_exitcode = 64
+            aws_batch_job_id = 'not_found'
 
 
-        # Check whether post-processing done file exists in S3 bucket for job, and skip if it exists.
-        # This is done by attempting to download the done file.  Regardless the sub
-        # always returns the filename and subdirs by parsing the s3_full_name.
+            # Check whether science-pipeline done file exists in S3 bucket for job, and skip if it does NOT exist.
+            # This is done by attempting to download the done file.  Regardless the sub
+            # always returns the filename and subdirs by parsing the s3_full_name.
 
-        s3_full_name_done_file = \
-            "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" + \
-            postproc_job_config_filename_base +  str(jid)  + ".done"
-        done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+            s3_full_name_science_pipeline_done_file = \
+                "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" + \
+                job_config_filename_base +  str(jid)  + ".done"
+            science_pipeline_done_filename,subdirs_done,downloaded_from_bucket = \
+                util.download_file_from_s3_bucket(s3_client,
+                                                  s3_full_name_science_pipeline_done_file)
 
-        if downloaded_from_bucket:
-            print("*** Warning: Done file exists ({}); skipping...".format(done_filename))
-            continue
-
-
-        # Download log file from S3 bucket.
-
-        s3_bucket_object_name = proc_subdir + '/' + log_fname
-
-        print("Downloading s3://{}/{} into {}...".format(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname))
-
-        response = s3_client.download_file(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname)
-
-        print("response =",response)
+            if not downloaded_from_bucket:
+                print("*** Warning: Science-pipeline done file does NOT exist ({}); skipping...".format(science_pipeline_done_filename))
+                continue
 
 
-        # Download job config file, in order to harvest some of its metadata.
+            # Check whether post-processing done file exists in S3 bucket for job, and skip if it exists.
+            # This is done by attempting to download the done file.  Regardless the sub
+            # always returns the filename and subdirs by parsing the s3_full_name.
 
-        job_config_ini_filename = postproc_job_config_filename_base + str(jid) + ".ini"
+            s3_full_name_done_file = \
+                "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/" + \
+                postproc_job_config_filename_base +  str(jid)  + ".done"
+            done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
-        s3_bucket_object_name = proc_subdir + '/' + job_config_ini_filename
-
-        print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename))
-
-        response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
-
-        print("response =",response)
-
-
-        # Harvest job metadata from job config file
-
-        job_config_input = configparser.ConfigParser()
-        job_config_input.read(job_config_ini_filename)
-
-        infobitssci = int(job_config_input['DIFF_IMAGE']['infobitssci'])
-
-        infobits = int(job_config_input['REF_IMAGE']['infobits'])
-
-        print("infobitssci,infobits =",infobitssci,infobits)
+            if downloaded_from_bucket:
+                print("*** Warning: Done file exists ({}); skipping...".format(done_filename))
+                continue
 
 
-        # Grep log file for aws_batch_job_id and terminating_exitcode.
+            # Download log file from S3 bucket.
 
-        file = open(log_fname, "r")
-        search_string1 = "aws_batch_job_id"
-        search_string2 = "terminating_exitcode"
+            s3_bucket_object_name = proc_subdir + '/' + log_fname
 
-        for line in file:
-            if re.search(search_string1, line):
-                line = line.rstrip("\n")
-                print(line)
-                tokens = re.split(r'\s*=\s*',line)
-                aws_batch_job_id = tokens[1]
-            elif re.search(search_string2, line):
-                line = line.rstrip("\n")
-                print(line)
-                tokens = re.split(r'\s*=\s*',line)
-                job_exitcode = tokens[1]
+            print("Downloading s3://{}/{} into {}...".format(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname))
 
-        file.close()
+            # Skip to next job if the log file does not exist (e.g., the AWS Batch job never ran).
 
+            try:
+                response = s3_client.download_file(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname)
 
-        # Try to download product config file, in order to harvest some of its metadata.
-        # This may be unsuccessful if the pipeline failed.
-
-        product_config_ini_filename = postproc_product_config_filename_base + str(jid) + ".ini"
-
-        s3_bucket_object_name = proc_subdir + '/' + product_config_ini_filename
-
-        print("Try downloading s3://{}/{} into {}...".format(product_s3_bucket_base,
-                                                             s3_bucket_object_name,
-                                                             product_config_ini_filename))
-
-        try:
-            response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
+            except ClientError as e:
+                print("*** Warning: Failed to download {} from s3://{}/{} ({}); skipping...".\
+                    format(log_fname,job_logs_s3_bucket_base,s3_bucket_object_name,e))
+                continue
 
             print("response =",response)
-            downloaded_from_bucket = True
 
 
-            # Read input parameters from product config *.ini file.
+            # Download job config file, in order to harvest some of its metadata.
 
-            product_config_input_filename = product_config_ini_filename
-            product_config_input = configparser.ConfigParser()
-            product_config_input.read(product_config_input_filename)
+            job_config_ini_filename = postproc_job_config_filename_base + str(jid) + ".ini"
 
+            s3_bucket_object_name = proc_subdir + '/' + job_config_ini_filename
 
-            # Get the timestamps of when the job started and ended on the AWS Batch machine,
-            # which have already been converted to Pacific Time.
+            print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename))
 
-            jid_post_proc = product_config_input['JOB_PARAMS']['jid_postproc']
-            job_started = product_config_input['JOB_PARAMS']['job_started']
-            job_ended = product_config_input['JOB_PARAMS']['job_ended']
-
-            print("jid_post_proc =",jid_post_proc)
-            print("job_started =",job_started)
-            print("job_ended =",job_ended)
-
-            string_match = re.match(r"(.+?)T(.+?) PT", job_started)
+            # Skip to next job if the job config file does not exist.
 
             try:
-                started_date = string_match.group(1)
-                started_time = string_match.group(2)
-                print("started = {} {}".format(started_date,started_time))
+                response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
 
-            except:
-                print("*** Error: Could not parse job_started; quitting...")
-                exit(64)
+            except ClientError as e:
+                print("*** Warning: Failed to download {} from s3://{}/{} ({}); skipping...".\
+                    format(job_config_ini_filename,job_info_s3_bucket_base,s3_bucket_object_name,e))
+                continue
 
-            started = started_date + " " + started_time
+            print("response =",response)
 
-            string_match = re.match(r"(.+?)T(.+?) PT", job_ended)
+
+            # Harvest job metadata from job config file
+
+            job_config_input = configparser.ConfigParser()
+            job_config_input.read(job_config_ini_filename)
+
+            infobitssci = int(job_config_input['DIFF_IMAGE']['infobitssci'])
+
+            infobits = int(job_config_input['REF_IMAGE']['infobits'])
+
+            print("infobitssci,infobits =",infobitssci,infobits)
+
+
+            # Grep log file for aws_batch_job_id and terminating_exitcode.
+
+            file = open(log_fname, "r")
+            search_string1 = "aws_batch_job_id"
+            search_string2 = "terminating_exitcode"
+
+            for line in file:
+                if re.search(search_string1, line):
+                    line = line.rstrip("\n")
+                    print(line)
+                    tokens = re.split(r'\s*=\s*',line)
+                    aws_batch_job_id = tokens[1]
+                elif re.search(search_string2, line):
+                    line = line.rstrip("\n")
+                    print(line)
+                    tokens = re.split(r'\s*=\s*',line)
+                    job_exitcode = tokens[1]
+
+            file.close()
+
+
+            # Try to download product config file, in order to harvest some of its metadata.
+            # This may be unsuccessful if the pipeline failed.
+
+            product_config_ini_filename = postproc_product_config_filename_base + str(jid) + ".ini"
+
+            s3_bucket_object_name = proc_subdir + '/' + product_config_ini_filename
+
+            print("Try downloading s3://{}/{} into {}...".format(product_s3_bucket_base,
+                                                                 s3_bucket_object_name,
+                                                                 product_config_ini_filename))
 
             try:
-                ended_date = string_match.group(1)
-                ended_time = string_match.group(2)
-                print("ended = {} {}".format(ended_date,ended_time))
+                response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
 
-            except:
-                print("*** Error: Could not parse job_ended; quitting...")
-                exit(64)
-
-            ended = ended_date + " " + ended_time
+                print("response =",response)
+                downloaded_from_bucket = True
 
 
-            # Read in reference-image metadata to update checksums.
-            # Only update record if rfid is not equal to "None".
+                # Read input parameters from product config *.ini file.
 
-            rfid = product_config_input['REF_IMAGE']['rfid']
-
-            print("rfid =",rfid)
-
-            if rfid != "None":
-
-                refimage_filename = product_config_input['REF_IMAGE']['refimage_filename']
-                refimage_file_version = product_config_input['REF_IMAGE']['refimage_file_version']
-                refimage_file_checksum = product_config_input['REF_IMAGE']['refimage_file_checksum']
-                print("refimage_filename =",refimage_filename)
-                print("refimage_file_version =",refimage_file_version)
-                print("refimage_file_checksum =",refimage_file_checksum)
+                product_config_input_filename = product_config_ini_filename
+                product_config_input = configparser.ConfigParser()
+                product_config_input.read(product_config_input_filename)
 
 
-                # Update record in RefImages database table.
+                # Get the timestamps of when the job started and ended on the AWS Batch machine,
+                # which have already been converted to Pacific Time.
 
-                refimage_status = 1
-                dbh.update_refimage(rfid,refimage_filename,refimage_file_checksum,refimage_status,refimage_file_version)
+                jid_post_proc = product_config_input['JOB_PARAMS']['jid_postproc']
+                job_started = product_config_input['JOB_PARAMS']['job_started']
+                job_ended = product_config_input['JOB_PARAMS']['job_ended']
 
-                if dbh.exit_code >= 64:
-                    exit(dbh.exit_code)
+                print("jid_post_proc =",jid_post_proc)
+                print("job_started =",job_started)
+                print("job_ended =",job_ended)
 
+                string_match = re.match(r"(.+?)T(.+?) PT", job_started)
 
-            # Read in difference-image metadata to update checksums.
-            # Only update record if pid is not equal to "None".
+                try:
+                    started_date = string_match.group(1)
+                    started_time = string_match.group(2)
+                    print("started = {} {}".format(started_date,started_time))
 
-            pid = product_config_input['DIFF_IMAGE']['pid']
+                except:
+                    raise Exception(f"*** Error: Could not parse job_started ({job_started}) for jid={jid}; quitting...")
 
-            print("pid =",pid)
+                started = started_date + " " + started_time
 
-            if pid != "None":
+                string_match = re.match(r"(.+?)T(.+?) PT", job_ended)
 
+                try:
+                    ended_date = string_match.group(1)
+                    ended_time = string_match.group(2)
+                    print("ended = {} {}".format(ended_date,ended_time))
 
-                diffimage_filename = product_config_input['DIFF_IMAGE']['diffimage_filename']
-                diffimage_file_version = product_config_input['DIFF_IMAGE']['diffimage_file_version']
-                diffimage_file_checksum = product_config_input['DIFF_IMAGE']['diffimage_file_checksum']
-                print("diffimage_filename =",diffimage_filename)
-                print("diffimage_file_version =",diffimage_file_version)
-                print("diffimage_file_checksum =",diffimage_file_checksum)
+                except:
+                    raise Exception(f"*** Error: Could not parse job_ended ({job_ended}) for jid={jid}; quitting...")
 
-
-                # Update record in DiffImages database table.
-
-                diffimage_status = 1
-                dbh.update_diffimage(pid,diffimage_filename,diffimage_file_checksum,diffimage_status,diffimage_file_version)
-
-                if dbh.exit_code >= 64:
-                    exit(dbh.exit_code)
-
-        except ClientError as e:
-            print("*** Warning: Failed to download {} from s3://{}/{}"\
-                .format(product_config_ini_filename,product_s3_bucket_base,s3_bucket_object_name))
-            downloaded_from_bucket = False
+                ended = ended_date + " " + ended_time
 
 
-        # Update Jobs record.
+                # Read in reference-image metadata to update checksums.
+                # Only update record if rfid is not equal to "None".
 
-        print("For Jobs record: started,ended =",started,ended)
+                rfid = product_config_input['REF_IMAGE']['rfid']
 
-        dbh.end_job(jid_post_proc,job_exitcode,aws_batch_job_id,started,ended)
+                print("rfid =",rfid)
 
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
+                if rfid != "None":
+
+                    refimage_filename = product_config_input['REF_IMAGE']['refimage_filename']
+                    refimage_file_version = product_config_input['REF_IMAGE']['refimage_file_version']
+                    refimage_file_checksum = product_config_input['REF_IMAGE']['refimage_file_checksum']
+                    print("refimage_filename =",refimage_filename)
+                    print("refimage_file_version =",refimage_file_version)
+                    print("refimage_file_checksum =",refimage_file_checksum)
 
 
-        # Touch done file.  Upload done file to S3 bucket.
+                    # Update record in RefImages database table.
 
-        util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_subdir,jid,s3_client)
+                    refimage_status = 1
+                    dbh.update_refimage(rfid,refimage_filename,refimage_file_checksum,refimage_status,refimage_file_version)
+
+                    if dbh.exit_code >= 64:
+                        raise Exception(f"*** Error: dbh.update_refimage returned exit code {dbh.exit_code} for jid={jid}; quitting...")
 
 
-        #####################################################################
-        # End of loop over jobs for a given processing date.
-        #####################################################################
+                # Read in difference-image metadata to update checksums.
+                # Only update record if pid is not equal to "None".
+
+                pid = product_config_input['DIFF_IMAGE']['pid']
+
+                print("pid =",pid)
+
+                if pid != "None":
+
+
+                    diffimage_filename = product_config_input['DIFF_IMAGE']['diffimage_filename']
+                    diffimage_file_version = product_config_input['DIFF_IMAGE']['diffimage_file_version']
+                    diffimage_file_checksum = product_config_input['DIFF_IMAGE']['diffimage_file_checksum']
+                    print("diffimage_filename =",diffimage_filename)
+                    print("diffimage_file_version =",diffimage_file_version)
+                    print("diffimage_file_checksum =",diffimage_file_checksum)
+
+
+                    # Update record in DiffImages database table.
+
+                    diffimage_status = 1
+                    dbh.update_diffimage(pid,diffimage_filename,diffimage_file_checksum,diffimage_status,diffimage_file_version)
+
+                    if dbh.exit_code >= 64:
+                        raise Exception(f"*** Error: dbh.update_diffimage returned exit code {dbh.exit_code} for jid={jid}; quitting...")
+
+            except ClientError as e:
+                print("*** Warning: Failed to download {} from s3://{}/{} ({}); skipping...".\
+                    format(product_config_ini_filename,product_s3_bucket_base,s3_bucket_object_name,e))
+
+
+                # Skip to next job, since jid_post_proc, started, and ended are only available
+                # from the product config file (otherwise end_job would be called with values
+                # left over from the previous job).
+
+                continue
+
+
+            # Update Jobs record.
+
+            print("For Jobs record: started,ended =",started,ended)
+
+            dbh.end_job(jid_post_proc,job_exitcode,aws_batch_job_id,started,ended)
+
+            if dbh.exit_code >= 64:
+                raise Exception(f"*** Error: dbh.end_job returned exit code {dbh.exit_code} for jid={jid}; quitting...")
+
+
+            # Touch done file.  Upload done file to S3 bucket.
+
+            util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_subdir,jid,s3_client)
+
+
+            #####################################################################
+            # End of loop over jobs for a given processing date.
+            #####################################################################
+
+    except Exception as e:
+        print(f"*** Error: {e}")
+        exitcode = 64
+
+        # The failed job's database error has been handled; reset it, so that it is not taken
+        # for a failure to close the database connection below.
+
+        dbh.exit_code = 0
+
 
 
     # Close database connection.
