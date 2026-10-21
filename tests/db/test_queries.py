@@ -33,7 +33,9 @@ QUERIES = Path(__file__).resolve().parents[2] / "database" / "queries.sql"
 Q3C = {
     "diffimages_in_cone": {"diffimages_radec_idx"},
     "l2files_in_cone_overlapping_field": {"l2files_radec_idx", "l2files_overlapfields_idx"},
-    "diffimages_in_cone_with_reference": {"diffimages_radec_idx"},
+    # Driven from the cone, or from the reference through its field (the
+    # tessellation tile) when the planner finds that narrower.
+    "diffimages_in_cone_with_reference": {"diffimages_radec_idx", "diffimages_field_idx"},
     "objects_in_cone": {"objects_radec_idx"},
 }
 #: Spatial statements that need no q3c, and the index each must reach.
@@ -81,7 +83,7 @@ def _l2file(epoch: int, sca: int, mjd: float, ra: float | None = None, dec: floa
 
 
 def _background(w: World, run: int) -> None:
-    """One job of BACKGROUND L2 and difference images, one of BACKGROUND objects, all bound."""
+    """BACKGROUND L2 and difference images, their fields' references and BACKGROUND objects, bound."""
     l2, diff, expects = [], [], []
     for i in range(BACKGROUND):
         expid, field, ra, dec = 1000 + i, 1000 + i // 10, 100.0 + 0.1 * i, 40.0
@@ -93,6 +95,13 @@ def _background(w: World, run: int) -> None:
                     for p in ("l2files", "diffimages")]
     w.job(run, "import", {"background": BACKGROUND}, {"l2files": l2, "diffimages": diff},
           expects=expects)
+    fields = sorted({row["field"] for row in l2})
+    w.job(run, "import", {"background": "references"}, {"refimages": [
+        {"dataset": DATASET, "field": field, "fid": FID, "filename": "r.fits",
+         "checksum": "0" * 32, "status": 1, "nframes": 10, "cov5percent": 50.0}
+        for field in fields]}, expects=[
+        {"product": "refimages", "key": {"dataset": DATASET, "field": field, "fid": FID},
+         "binding": None} for field in fields])
     key = {**FIELD_KEY, "field": FIELD + 1}
     w.job(run, "associate", {"field": FIELD + 1}, {"objects": [
         {"aid": i, "dataset": DATASET, "survey": SURVEY, "field": FIELD + 1,
@@ -215,17 +224,24 @@ def test_q3c_statements_return_their_columns_and_reach_their_index(world, capsys
     if not q3c_present(w.conn):
         pytest.skip("q3c is required only in CI; a developer's container may lack it")
     queries = load_queries()
-    times = {}
+    report, missed = [], []
     for name, expected in Q3C.items():
         columns, statement = queries[name]
         _assert_shape(w, params, name, columns, statement)
-        assert _indexes(w, params, statement) & expected, (name, w.last_plan)
+        used = _indexes(w, params, statement)
+        if not used & expected:
+            missed.append(name)
+        with w.conn.cursor() as cur:
+            cur.execute("EXPLAIN " + statement, params)
+            plan = "\n".join(row[0] for row in cur.fetchall())
+        w.conn.rollback()
         t0 = time.perf_counter()
         with w.conn.cursor() as cur:
             cur.execute(statement, params)
             cur.fetchall()
         w.conn.commit()
-        times[name] = time.perf_counter() - t0
+        report.append(f"QUERY-TIME q3c {name} {(time.perf_counter() - t0) * 1000:.2f} ms"
+                      f" (proof world, CI); indexes {sorted(used)}\n{plan}")
     with capsys.disabled():
-        for name, seconds in times.items():
-            print(f"\nQUERY-TIME q3c {name} {seconds * 1000:.2f} ms (proof world, CI)")
+        print("\n" + "\n".join(report))
+    assert not missed, f"no expected index in the plans of {missed}"
