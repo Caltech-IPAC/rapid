@@ -84,7 +84,8 @@ below it in this order:
 
 Leaf modules
 (`exitcodes`, `log`, `revision`, `seams`: no `rapidpipe` import) <
-`products` < `db` and `science` (which do not import each other) <
+`products` < `db`, `science` and `foundation` (which do not import one
+another) <
 `checks` < `runs` < `stages` < `launch` < `selftest` < `cli`. `release`
 imports only the leaves and `db`, and only `cli` imports it. Stage modules
 never import other stage modules.
@@ -98,6 +99,7 @@ is a design question for the stage-contract page, not a test to relax.
 | `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `finalize`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
 | `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), per-kind modules (`l2image`, `refimage`, `diffimage`, `psf`, `alertcontainer`, `catalogexport`), `units.py` (`register`'s producer-keyed unit id), and `spatial` (the pure HEALPix and tessellation derivations `db` needs; `science.spatial` re-exports them). |
 | `db/` | Persistence: `connection.py`, per-table modules (`l2files`, `refimages`, `diffimages`, `sources`, `objects`, `psfs`, `alerts`, `ids`), and the migrations applier (`database/apply-migrations.sh`, not itself under `rapidpipe/`). |
+| `foundation/` | The foundation plan's operations over `database/schema.sql`: `bookkeeping.py` (`create_run`, `create_job`, `run_show`, `job_show`), `official.py` (`change`, `undo`, `apply`, `Refused`), `publish.py` (`publish`, the manifest format, `PublishError`). Library functions only; no verb calls them yet. |
 | `runs/` | `repository.py` (runs, units, attempts, instances, promotion by slot: each instance's `slot` and `identity` are derived from its `logical_key` in SQL by `product_identity_fill()`, migration `20260926-02-product-slots.sql`, never in Python), `create.py` (recording a run: `run create`, `--seed --only-failed`), `slots.py` (promotion selectors and the frozen plans of `run promote-plan`), `local.py` (subprocess execution of one attempt), `cleanup.py` (deletion guard and blocking-reference checks), `inputs.py` (binding a unit's inputs from its input-set manifest), `binding.py` (`bind_input_set`, the one path by which both composers admit, bind and write an input set), `checking.py` (running and recording candidate checks, automatic promotion). |
 | `launch/` | `batch.py` (turning a run into Batch jobs, reading results back), `walk.py` (the run walk: `run start`, the loop's per-unit walk), `loop.py` (the processing-date loop) and `discovery.py` (the loop's inbox discovery and delivery classification). |
 | `release/` | `core.py` (`cut`/`show`/`list`/`verify`), `hooks.py` (the account-specific hook contract), `__main__.py`. |

@@ -6,10 +6,11 @@ sit in layers, and a unit may import only units strictly below its own
 (stage-contract.md §The package):
 
     leaves (exitcodes, log, revision, seams: no rapidpipe import)
-    < products < {db, science} < checks < runs < stages < launch
-    < selftest < cli
+    < products < {db, science, foundation} < checks < runs < stages
+    < launch < selftest < cli
 
-``db`` and ``science`` share a layer and may not import each other.
+``db``, ``science`` and ``foundation`` share a layer and may not import
+one another.
 ``release`` sits beside the stack: it may import only the leaves and
 ``db``, and only ``cli`` imports it. :data:`ALLOWED` is that rule as one
 table. ``rapidpipe/__init__.py`` belongs to no unit but is scanned too,
@@ -46,14 +47,16 @@ ALLOWED: dict[str, frozenset[str]] = {
     "products": LEAVES,
     "db": LEAVES | {"products"},
     "science": LEAVES | {"products"},
-    "checks": LEAVES | {"products", "db", "science"},
-    "runs": LEAVES | {"products", "db", "science", "checks"},
-    "stages": LEAVES | {"products", "db", "science", "checks", "runs"},
-    "launch": LEAVES | {"products", "db", "science", "checks", "runs", "stages"},
-    "selftest": LEAVES | {"products", "db", "science", "checks", "runs", "stages",
-                          "launch"},
-    "cli": LEAVES | {"products", "db", "science", "checks", "runs", "stages",
-                     "launch", "selftest", "release"},
+    "foundation": LEAVES | {"products"},
+    "checks": LEAVES | {"products", "db", "science", "foundation"},
+    "runs": LEAVES | {"products", "db", "science", "foundation", "checks"},
+    "stages": LEAVES | {"products", "db", "science", "foundation", "checks", "runs"},
+    "launch": LEAVES | {"products", "db", "science", "foundation", "checks", "runs",
+                        "stages"},
+    "selftest": LEAVES | {"products", "db", "science", "foundation", "checks", "runs",
+                          "stages", "launch"},
+    "cli": LEAVES | {"products", "db", "science", "foundation", "checks", "runs",
+                     "stages", "launch", "selftest", "release"},
     "release": LEAVES | {"db"},
 }
 

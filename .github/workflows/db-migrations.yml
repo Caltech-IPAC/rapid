@@ -132,7 +132,7 @@ jobs:
         env:
           PGDATABASE: rapid
         run: |
-          python -m pytest tests/db -q --ignore=tests/db/test_schema.py
+          python -m pytest tests/db -q --ignore=tests/db/test_schema.py --ignore=tests/db/test_publish.py --ignore=tests/db/test_change.py
 
       - name: drift check — a modified already-applied file must be refused
         env:

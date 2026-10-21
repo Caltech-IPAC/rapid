@@ -87,4 +87,4 @@ jobs:
         env:
           PGDATABASE: rapid
         run: |
-          python -m pytest tests/db/test_schema.py -q -rs
+          python -m pytest tests/db/test_schema.py tests/db/test_publish.py tests/db/test_change.py -q -rs
