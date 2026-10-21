@@ -82,6 +82,20 @@ def build_sfft_command_args(python_cmd,
     sfft_cmd.append("--bsmaskradius")
     sfft_cmd.append(str(sfft_bsmask_radius))
 
+    # Optional, absent from older configuration files (the command is then unchanged): size-scaled
+    # catalog masking of large sources and the exclusion of zero-filled (formerly NaN) pixels.
+
+    if 'sfft_bsmask_isoarea' in sfft_dict:
+        sfft_cmd.append("--bsmaskisoarea")
+        sfft_cmd.append(str(sfft_dict['sfft_bsmask_isoarea']))
+        if 'sfft_bsmask_isofactor' in sfft_dict:
+            sfft_cmd.append("--bsmaskisofactor")
+            sfft_cmd.append(str(sfft_dict['sfft_bsmask_isofactor']))
+
+    if 'sfft_zero_margin' in sfft_dict:
+        sfft_cmd.append("--zeromargin")
+        sfft_cmd.append(str(sfft_dict['sfft_zero_margin']))
+
 
     # If crossconv_flag = False, then the SFFT diffimage PSF is just the science-image PSF.
 
