@@ -115,6 +115,30 @@ def test_a_product_row_without_a_job_is_refused(conn):
     assert refused.value.diag.column_name == "job"
 
 
+def test_the_psf_key_carries_its_kind(conn):
+    """A science and a reference PSF of one dataset, filter and SCA are two
+    keys, both official at once; a binding whose key lacks the kind shows
+    no row; a kind other than the two is refused."""
+    with conn.cursor() as cur:
+        run, science = _run_and_job(cur)
+        reference = _job(cur, run)
+        for job, kind in ((science, "science"), (reference, "reference")):
+            cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, filename, checksum)"
+                        " VALUES (%s, 'D', 1, 1, %s, 'psf.fits', 'x')", (job, kind))
+            _open(cur, job, f'{{"dataset": "D", "fid": 1, "sca": 1, "kind": "{kind}"}}', "psfs")
+        cur.execute("SELECT kind, job FROM psfs_official ORDER BY kind")
+        assert cur.fetchall() == [("reference", reference), ("science", science)]
+
+        cur.execute("UPDATE official SET key = key - 'kind' WHERE product = 'psfs' AND job = %s",
+                    (reference,))
+        cur.execute("SELECT kind FROM psfs_official")
+        assert cur.fetchall() == [("science",)]
+
+        with pytest.raises(errors.CheckViolation):
+            cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, filename, checksum)"
+                        " VALUES (%s, 'D', 1, 1, 'difference', 'psf.fits', 'x')", (science,))
+
+
 def test_members_official_follows_the_chain_and_omits_excluded_source_sets(conn):
     """Sets A <- B <- C, C official. A recorded members from source sets S1
     and S2, B from S3, C from S4; C excludes S2. The view returns S1, S3 and

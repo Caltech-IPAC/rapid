@@ -6,7 +6,8 @@ Contracts: each output Parquet file has exactly its table's columns from
 source set is the ``max_sources`` brightest by flux over flux error inside
 the fit-position bounds; overlapping fields and sky indices are computed
 from the image's WCS; the manifest declares every table and the
-provenance line.
+provenance line; a PSF imports under its declared kind, which `dev`'s
+``PSFKIND`` keyword must not contradict.
 """
 
 from __future__ import annotations
@@ -180,7 +181,8 @@ def test_the_source_set_is_the_brightest_inside_the_bounds(tmp_path, source):
 
 def test_reference_psf_and_gaia_write_their_tables(tmp_path, source):
     prefix = run_import(tmp_path, source, {
-        "reference": {"rfid": 55, "dir": "ref"}, "psf": {"psfid": 3, "path": "psf.fits"},
+        "reference": {"rfid": 55, "dir": "ref"},
+        "psf": {"psfid": 3, "kind": "science", "path": "psf.fits"},
         "gaia": {"name": "gaia", "version": "DR3", "path": "gaia.parquet"}}, "shared")
     for table in ("refimages", "refimcatalogs", "psfs", "catalogs"):
         assert set(pq.read_schema(prefix / f"{table}.parquet").names) == (
@@ -188,7 +190,11 @@ def test_reference_psf_and_gaia_write_their_tables(tmp_path, source):
     (ref,), (cat,) = read(prefix, "refimages"), read(prefix, "refimcatalogs")
     assert (ref["rfid"], ref["field"], ref["fid"], ref["nframes"]) == (55, 4658155, 8, 25)
     assert (cat["rfid"], cat["cattype"]) == (55, import_products.REFERENCE_CATALOG_TYPE)
-    assert [(p["psfid"], p["fid"], p["sca"]) for p in read(prefix, "psfs")] == [(3, 8, 8)]
+    assert [(p["psfid"], p["fid"], p["sca"], p["kind"]) for p in read(prefix, "psfs")] == [
+        (3, 8, 8, "science")]
+    # The file has no PSFKIND: imported under the declared kind, the absence recorded.
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["psf"] == {"kind": "science", "PSFKIND": None}
     (gaia,) = read(prefix, "catalogs")
     assert (gaia["name"], gaia["version"]) == ("gaia", "DR3")
     assert Path(gaia["location"][7:]).is_file()
@@ -198,3 +204,24 @@ def test_reference_psf_and_gaia_write_their_tables(tmp_path, source):
 def test_an_import_job_takes_at_most_one_epoch(tmp_path, source):
     with pytest.raises(ValueError, match="at most one epoch"):
         run_import(tmp_path, source, {"epochs": EPOCHS}, "both")
+
+
+# dev's two PSF files on the 20260821 night carry PSFKIND 'sciimage_psf'
+# (sciimage_psf_f146_sca08.fits) and 'refimage_psf' (refimage_psf_f146_sca08.fits).
+@pytest.mark.parametrize("keyword, kind", [("sciimage_psf", "science"), ("refimage_psf", "reference")])
+def test_a_psf_whose_keyword_matches_its_declared_kind_imports_under_it(
+        tmp_path, source, keyword, kind):
+    fits.setval(source / "psf.fits", "PSFKIND", value=keyword)
+    prefix = run_import(tmp_path, source, {"psf": {"kind": kind, "path": "psf.fits"}}, kind)
+    assert [p["kind"] for p in read(prefix, "psfs")] == [kind]
+    assert json.loads((prefix / "manifest.json").read_text())["psf"] == {
+        "kind": kind, "PSFKIND": keyword}
+
+
+@pytest.mark.parametrize("keyword, kind", [("refimage_psf", "science"), ("sciimage_psf", "reference")])
+def test_a_psf_whose_keyword_names_the_other_kind_fails_before_a_manifest(
+        tmp_path, source, keyword, kind):
+    fits.setval(source / "psf.fits", "PSFKIND", value=keyword)
+    with pytest.raises(ValueError, match="PSFKIND"):
+        run_import(tmp_path, source, {"psf": {"kind": kind, "path": "psf.fits"}}, kind)
+    assert not (tmp_path / "outputs" / kind / "manifest.json").exists()

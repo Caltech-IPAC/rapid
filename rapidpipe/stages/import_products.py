@@ -15,7 +15,7 @@ The job's scope names what to import, relative to ``source_dir``::
      "epochs": [{"expid": 1, "rid": 2, "pid": 3, "rfid": 4,
                  "l2": "<L2 FITS>", "difference": "<difference job directory>"}],
      "reference": {"rfid": 4, "dir": "<reference job directory>"},
-     "psf": {"psfid": 5, "path": "<science-image PSF>"},
+     "psf": {"psfid": 5, "kind": "science", "path": "<science-image PSF>"},
      "gaia": {"name": "gaia", "version": "DR3", "path": "<Gaia Parquet>"}}
 
 Every key is optional. ``epochs`` holds at most one exposure, because a
@@ -26,16 +26,23 @@ An epoch writes ``exposures``, ``l2files``, ``diffimages`` and ``sources``
 and copies the L2 file and the difference job's images (difference image,
 its uncertainty, its PSF, the background-subtracted science image and the
 resampled gain-matched reference: the packet stage's cutout inputs). Its
-L2 row's ``limmag`` is measured with the science-image PSF of the
-``psfs`` row the job names as an input. ``sources`` holds the
+L2 row's ``limmag`` is measured with the science PSF (``kind``
+``science``) of the ``psfs`` set the job names as an input. ``sources`` holds the
 ``max_sources`` brightest rows of the difference job's PSF-fit catalog by
 ``flux_fit / flux_err`` (0 keeps every row), inside `dev`'s fit-position
 bounds, mapped as :func:`rapidpipe.science.load.catalogs.source_set` maps
 them, as the difference stage does. ``reference`` writes
 ``refimages`` and ``refimcatalogs`` (the mosaic SExtractor catalog, type
-1); ``psf`` writes ``psfs`` (a science-image PSF, or the reference-image
-PSF the difference stage also reads; ``psfid`` may be omitted, for a PSF
-the source system never registered); ``gaia`` writes ``catalogs``.
+1); ``psf`` writes ``psfs`` (a science-image PSF, ``kind`` ``science``, or
+the reference-image PSF the difference stage also reads, ``kind``
+``reference``; ``psfid`` may be omitted, for a PSF the source system never
+registered); ``gaia`` writes ``catalogs``.
+
+The kind is declared in the scope and is part of the PSF's key. `dev`'s
+PSF files carry it as ``PSFKIND`` (:data:`PSFKIND`): a file whose keyword
+names the other kind fails the job before a manifest; a file with no
+keyword imports under the declared kind, and the manifest records the
+keyword as it was (``psf.PSFKIND``, null when absent).
 """
 
 from __future__ import annotations
@@ -85,6 +92,9 @@ REFERENCE_CATALOG, REFERENCE_CATALOG_TYPE = "awaicgen_output_mosaic_refimsexcat.
 #: Rows of an imported image are good: the source system finished them.
 STATUS_GOOD = 1
 
+#: `dev`'s ``PSFKIND`` keyword value for each ``psfs.kind``.
+PSFKIND = {"science": "sciimage_psf", "reference": "refimage_psf"}
+
 
 def run(job: JobContext) -> None:
     settings = job.settings["import"]
@@ -94,12 +104,15 @@ def run(job: JobContext) -> None:
     if len(epochs) > 1:
         raise ValueError("an import job imports at most one epoch: a source set's job binds one key")
     tables: dict[str, list[dict] | pa.Table] = {}
+    recorded = {"provenance": PROVENANCE}
     for epoch in epochs:
         tables.update(_epoch(job, settings, source, epoch))
     if "reference" in scope:
         tables.update(_reference(job, source, scope["reference"]))
     if "psf" in scope:
-        tables["psfs"] = [_psf(job, source, scope["psf"])]
+        row, keyword = _psf(job, source, scope["psf"])
+        tables["psfs"] = [row]
+        recorded["psf"] = {"kind": row["kind"], "PSFKIND": keyword}
     if "gaia" in scope:
         gaia = scope["gaia"]
         tables["catalogs"] = [{"name": gaia["name"], "version": gaia["version"],
@@ -109,7 +122,7 @@ def run(job: JobContext) -> None:
         data = rows if isinstance(rows, pa.Table) else pa.Table.from_pylist(rows)
         pq.write_table(data, job.path / f"{table}.parquet")
         outputs.append((table, f"{table}.parquet"))
-    job.write_manifest(outputs, provenance=PROVENANCE)
+    job.write_manifest(outputs, **recorded)
 
 
 def _copy(job: JobContext, path: Path) -> tuple[str, str]:
@@ -137,16 +150,16 @@ def _footprint(header) -> dict:
 
 
 def _science_psf(job: JobContext, fid: int, sca: int) -> Path:
-    """The science-image PSF file of the ``psfs`` set the job names as an input."""
+    """The science PSF file of the ``psfs`` set the job names as an input."""
     psf_jobs = [i["source_job"] for i in job.inputs if i["kind"] == "input" and i["product"] == "psfs"]
     if not psf_jobs:
         raise ValueError("an epoch's import names its science-image PSF as a psfs input")
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT filename FROM psfs WHERE job = ANY(%s) AND fid = %s AND sca = %s",
-                    (psf_jobs, fid, sca))
+        cur.execute("SELECT filename FROM psfs WHERE job = ANY(%s) AND fid = %s AND sca = %s"
+                    " AND kind = 'science'", (psf_jobs, fid, sca))
         row = cur.fetchone()
     if row is None:
-        raise ValueError(f"no psfs row for fid {fid} sca {sca} in jobs {psf_jobs}")
+        raise ValueError(f"no science psfs row for fid {fid} sca {sca} in jobs {psf_jobs}")
     return get(row[0])
 
 
@@ -231,12 +244,17 @@ def _reference(job: JobContext, source: Path, reference: dict) -> dict:
                                "filename": catalog_url, "checksum": catalog_md5}]}
 
 
-def _psf(job: JobContext, source: Path, psf: dict) -> dict:
+def _psf(job: JobContext, source: Path, psf: dict) -> tuple[dict, str | None]:
+    """The ``psfs`` row of the declared kind, and the file's ``PSFKIND`` as it was."""
+    kind = psf["kind"]
     path = source / psf["path"]
     with fits.open(path) as hdul:
         header = hdul[0].header
         sca, fid = int(header["SCA"]), _fid(header["FILTER"])
+        keyword = header.get("PSFKIND")
+    if keyword is not None and keyword != PSFKIND.get(kind):
+        raise ValueError(f"{path.name}: PSFKIND {keyword!r} is not a {kind} PSF ({PSFKIND.get(kind)!r})")
     url, md5 = _copy(job, path)
     ids = {"psfid": psf["psfid"]} if "psfid" in psf else {}  # none: the table's identity draws one
-    return {**ids, "dataset": job.dataset, "fid": fid, "sca": sca,
-            "filename": url, "checksum": md5, "status": STATUS_GOOD}
+    return {**ids, "dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind,
+            "filename": url, "checksum": md5, "status": STATUS_GOOD}, keyword
