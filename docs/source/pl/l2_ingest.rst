@@ -359,6 +359,10 @@ Variable                                             Meaning
                                                      A lower degree is allowed, and its higher coefficients are
                                                      registered as the zeros they are.
 ``MAXFILESTOINGEST``                                 Stop after this many files, for short tests.
+``L2GZIPLEVEL``                                      gzip compression level (0-9) of the FITS files uploaded to the
+                                                     output bucket.  Defaults to 1, which is about 30 times faster
+                                                     than gzip's own default, 9, for a file about 4% larger (see
+                                                     `Timing`_).
 ``DONTCHECKALREADYINGESTED``                         Set to skip the ``L2Files`` query and re-ingest everything in the
                                                      input bucket.
 ``IGNOREASDFTIMESTAMPS``                             Set to ignore the S3 last-modified times of the ASDF files, so that
@@ -439,6 +443,22 @@ Step                                      Reported for
 
 These steps partition the file's time between them, so they sum to the
 ``ingest L2 file`` total.
+
+``gzip FITS file`` used to take most of each file's time, at gzip's default compression level,
+9: for a 389 MB SOC L2 FITS file, 117 s on a laptop, against 2.8 s for the conversion.  Since
+10/21/2026 the level is ``L2GZIPLEVEL``, by default 1, which takes 3.9 s for that file:
+
+=====  ========  ===========
+Level  Time [s]  Size [MB]
+=====  ========  ===========
+1      3.9       198.7
+3      8.0       197.3
+6      20.0      194.8
+9      117.3     191.6
+=====  ========  ===========
+
+The decompressed file is the same at every level; only the gzipped file and its checksum in
+``L2Files`` differ.
 
 Two further steps are reported from *inside* ``register L2 file in database``,
 that step having turned out to hold the two things whose cost is least
