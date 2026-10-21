@@ -125,7 +125,8 @@ class World:
         self._pids += 1
         pid = self._pids
         diffimage = {"pid": pid, **key, "field": FIELD, "jd": 2460000.5 + epoch,
-                     "infobitssci": 0, "infobitsref": 0, "filename": f"diff-{epoch}-{sca}.fits",
+                     "infobitssci": 0, "infobitsref": 0, "status": 1,
+                     "filename": f"diff-{epoch}-{sca}.fits",
                      **{f"{c}{n}": v for n in range(5)
                         for c, v in (("ra", position(sca, 0)[0]), ("dec", position(sca, 0)[1]))}}
         sources = []
