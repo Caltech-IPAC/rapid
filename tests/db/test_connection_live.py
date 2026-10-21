@@ -1,10 +1,9 @@
 """CI-only: opens a real connection through rapidpipe.db.connection.
 
-Runs only when PGHOST is set (the ``conn`` fixture's own skip in
-conftest.py is not reused here since this test exercises connect()
-itself, not a pre-opened connection) -- see tests/db/conftest.py
-for why this directory is separate from tests/unit/ and skips
-rather than being ignored at collection.
+Fails when PGHOST is unset, like the ``conn`` fixture in conftest.py,
+which is not reused here because this test exercises connect() itself,
+not a pre-opened connection; see tests/db/conftest.py for why a missing
+database is a failure and not a skip.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ def _pg_configured() -> bool:
 
 def test_connect_opens_a_real_connection_and_runs_select_1():
     if not _pg_configured():
-        pytest.skip("PGHOST is not set; database tests are skipped")
+        pytest.fail("PGHOST is not set; database tests need a database")
 
     with connect(application_name="rapidpipe-test-connection-live") as conn:
         with conn.cursor() as cur:

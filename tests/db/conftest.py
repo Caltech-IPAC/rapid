@@ -1,8 +1,7 @@
 """Fixtures for the database-backed rapidpipe.runs.repository tests.
 
 Separate from tests/unit/ so the plain unit-test job
-(.github/workflows/unit-tests.yml) stays database-free: nothing here is
-collected or imported unless PGHOST is set, and even collection of this
+(.github/workflows/unit-tests.yml) stays database-free: collection of this
 directory does no I/O until a fixture is actually used.
 
 Every test gets a fresh connection whose whole body runs inside one
@@ -14,12 +13,10 @@ connection they are given, so running each test inside one already-open,
 never-committed transaction is exactly the isolation psycopg2 gives for
 free, no per-test schema reset required.
 
-Skipping (not ignoring collection): the ``conn`` fixture calls
-``pytest.skip`` when ``PGHOST`` is unset, rather than a module-level
-``collect_ignore``. A directory with nothing collected makes a bare
-``pytest tests/db`` exit 5 ("no tests ran"), which is not a
-clean skip if anything ever invokes this directory on its own; every
-test showing as skipped, with the suite still exiting 0, is.
+Failing, not skipping: the ``conn`` fixture fails with "PGHOST is not
+set; database tests need a database" when ``PGHOST`` is unset. A skip is
+never a pass: a suite that silently skips every database test reports
+green while proving nothing (foundation plan, Part 5 item 1).
 """
 
 from __future__ import annotations
@@ -38,7 +35,7 @@ def _pg_configured() -> bool:
 @pytest.fixture()
 def conn():
     if not _pg_configured():
-        pytest.skip("PGHOST is not set; database tests are skipped")
+        pytest.fail("PGHOST is not set; database tests need a database")
     import psycopg2
 
     connection = psycopg2.connect(

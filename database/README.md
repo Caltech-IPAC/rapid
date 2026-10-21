@@ -3,6 +3,21 @@
 The `rapid` PostgreSQL database schema, its migrations, the tool that
 applies them, and the sky-tessellation helpers the pipeline imports.
 
+- [`schema.sql`](schema.sql): the foundation schema (foundation plan v5,
+  Part 1): the scientific tables with a job on every row, `runs`, `jobs`,
+  `job_inputs`, `official` and the `<table>_official` views. It is applied
+  to an empty PostgreSQL 18 database in one run, by CI
+  (`foundation.yml`) and by hand:
+
+  ```
+  psql -v ON_ERROR_STOP=1 -f database/schema.sql
+  ```
+
+  It creates the Q3C extension and its indexes when Q3C is installed and
+  says so in a NOTICE when it is not, as on a developer's container. It
+  replaces `migrations/` when the old verbs are retired; until then both
+  exist and CI tests each.
+
 - [`migrations/`](migrations/README.md): the schema, as versioned SQL
   applied in filename order. See that README for the rules and how to run
   the applier locally.
