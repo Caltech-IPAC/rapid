@@ -11,11 +11,9 @@ then the HDU rewritten as a float32 ``PrimaryHDU`` with astropy's
 The WCS awaicgen wrote is kept as is (the header is rewritten, never
 re-derived): no PV or SIP is added.
 
-Departures (reference page): ``FID`` is not stamped (a database id; `register`
-derives it from the filter name); the run model's identifiers are added
-with the names the finalize stamp uses -- ``RPRUN``, ``RPATTMPT``,
-``RPINST`` (the reference-image instance) and ``RPSTAGE``
-(``reference``).
+Departures (reference page): ``FID`` is not stamped (a database id; the
+``refimages`` row carries ``fid``); the foundation's identifiers are added
+-- ``RPRUN``, ``RPJOB``, ``RPATTMPT`` and ``RPSTAGE`` (``reference``).
 """
 
 from __future__ import annotations
@@ -43,9 +41,9 @@ class StampValues:
     jdend: float
     zprefimg: float
     total_refimage_exptime: float
-    run: str
-    attempt: str
-    instance: str
+    run: int
+    job: int
+    attempt: int
 
 
 def infile_keyword(i: int) -> str:
@@ -59,7 +57,7 @@ def infile_keyword(i: int) -> str:
 
 
 def stamp_cards(values: StampValues) -> list[tuple[str, Any, str | None]]:
-    """The ``(keyword, value, comment)`` cards in `dev`'s order, then the run model's."""
+    """The ``(keyword, value, comment)`` cards in `dev`'s order, then the foundation's."""
     cards: list[tuple[str, Any, str | None]] = [
         ("BUNIT", "DN/s", None),
         ("FIELD", values.field, "Roman sky-tile number"),
@@ -75,8 +73,8 @@ def stamp_cards(values: StampValues) -> list[tuple[str, Any, str | None]]:
         cards.append((infile_keyword(i), fn, None))
     cards += [
         ("RPRUN", values.run, "RAPID run id"),
-        ("RPATTMPT", values.attempt, "RAPID reference attempt id"),
-        ("RPINST", values.instance, "RAPID reference-image instance id"),
+        ("RPJOB", values.job, "RAPID job id"),
+        ("RPATTMPT", values.attempt, "RAPID job attempt"),
         ("RPSTAGE", STAGE_NAME, "RAPID stage that wrote this file"),
     ]
     return cards

@@ -15,23 +15,17 @@ stage's (:class:`rapidpipe.selftest.support.fakedifftools.FakeToolRunner`):
 The outputs are shaped like the tools' (same files, headers, catalog
 columns), not their science. Every call is recorded.
 
-:func:`write_frames` writes the fixture's three frames and input-set
-manifest (``rapidpipe/selftest/fixtures/reference/``): L2-shaped
+:func:`write_frames` writes three synthetic frames for the reference
+stage's tests: L2-shaped
 (an empty PRIMARY HDU and a ``SCI`` image HDU with a TAN WCS, ``EXPTIME``,
 ``ZPTMAG``, ``FILTER`` and ``MJD-OBS``), gzipped, dithered by a few pixels
 around the centre of Roman tessellation tile 4711398, the same stars in
-each. The committed files are its output; rerun it to regenerate them.
-
-Packaged under ``rapidpipe.selftest.support`` (not ``tests/``, which the
-pipeline image excludes) so ``rapidpipe selftest --stage reference`` can
-import it inside the image.
+each.
 """
 
 from __future__ import annotations
 
 import gzip
-import hashlib
-import json
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,18 +91,12 @@ def _frame_data(wcs_header: fits.Header, rng: np.random.Generator) -> np.ndarray
     return data.astype(np.float32)
 
 
-def _member(path: Path, base: Path) -> dict:
-    raw = path.read_bytes()
-    return {"role": "image", "path": path.relative_to(base).as_posix(), "bytes": len(raw),
-            "sha256": "sha256:" + hashlib.sha256(raw).hexdigest()}
-
-
-def write_frames(directory: Path) -> Path:
-    """Write the three gzipped frames under ``directory/l2/`` and the input-set manifest."""
+def write_frames(directory: Path) -> list[Path]:
+    """Write the three gzipped frames under ``directory`` and return their paths, in FRAMES order."""
     rng = np.random.default_rng(SEED)
-    (directory / "l2").mkdir(parents=True, exist_ok=True)
-    outputs = []
-    for instance, name, dither, zptmag, mjdobs in FRAMES:
+    directory.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for _instance, name, dither, zptmag, mjdobs in FRAMES:
         wcs_header = _frame_wcs(dither)
         sci = fits.ImageHDU(data=_frame_data(wcs_header, rng), header=wcs_header, name="SCI")
         sci.header["EXPTIME"] = (EXPTIME, "exposure time [s]")
@@ -119,30 +107,13 @@ def write_frames(directory: Path) -> Path:
         primary = fits.PrimaryHDU()
         primary.header["TELESCOP"] = "ROMAN"
         primary.header["FILTER"] = HEADER_FILTER
-        path = directory / "l2" / name
+        path = directory / name
         raw = path.with_suffix("")  # .fits
         fits.HDUList([primary, sci]).writeto(raw, overwrite=True)
         path.write_bytes(gzip.compress(raw.read_bytes(), mtime=0))
         raw.unlink()
-        member = _member(path, directory)
-        outputs.append({
-            "kind": "l2-image", "format_version": "1", "instance": instance,
-            "key": {"exposure": name.split("_")[0], "detector": "1", "version": "1"},
-            "primary": member["path"], "members": [member], "registration": {},
-        })
-    manifest = {
-        "schema_version": "1",
-        "run": "01K6AREF0000000000000000RN",
-        "unit": {"kind": "field", "id": f"{RTID}/{UNIT_FILTER}"},
-        "stage": "input-set",
-        "attempt": "01K6AREF0000000000000000AT",
-        "execution_record": "exec/input-set.json",
-        "inputs": {"manifest": "input-set", "products": {}},
-        "outputs": outputs,
-    }
-    path = directory / "manifest.json"
-    path.write_text(json.dumps(manifest, indent=2) + "\n")
-    return path
+        paths.append(path)
+    return paths
 
 
 # ----------------------------------------------------------------------
@@ -234,16 +205,8 @@ class FakeReferenceToolRunner:
 
 
 def fake_toolkit():
-    """Every external tool faked: the value ``RAPIDPIPE_REFERENCE_TOOLKIT`` names
-    (``rapidpipe.selftest.support.fakereftools:fake_toolkit``)."""
+    """Every external tool faked, in place of :func:`rapidpipe.stages.reference.toolkit`."""
     from rapidpipe.stages.reference import Toolkit
 
     return Toolkit(runner=FakeReferenceToolRunner())
 
-
-if __name__ == "__main__":  # pragma: no cover -- regenerates the committed fixture
-    import sys
-
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-        Path(__file__).resolve().parents[1] / "fixtures" / "reference")
-    print(write_frames(target))

@@ -2,7 +2,7 @@
 
 The stage fixtures become runnable inside the
 pipeline image on AWS Batch through the fixed entrypoint (``python -m
-rapidpipe.cli.main``), as ``rapidpipe selftest --stage reference|difference|finalize
+rapidpipe.cli.main``), as ``rapidpipe selftest --stage difference|finalize
 [--real-tools] [--work-dir DIR] [--output-location s3://... or path]``.
 The fixture gate then runs as a submitted Batch job whose execution
 record is the evidence -- no separate test harness needs installing
@@ -11,8 +11,8 @@ inside the image.
 :mod:`rapidpipe.selftest.runner` holds the prepare/run/check machinery
 shared with ``make stage-<name>`` (``tests/fixtures/<stage>/
 run_fixture.py``, now a thin CLI over the same code);
-:mod:`rapidpipe.selftest.reference`, :mod:`rapidpipe.selftest.difference`
-and :mod:`rapidpipe.selftest.finalize` supply each stage's own hooks and packaged fixture data
+:mod:`rapidpipe.selftest.difference` and
+:mod:`rapidpipe.selftest.finalize` supply each stage's own hooks and packaged fixture data
 (``rapidpipe/selftest/fixtures/<stage>/``, shipped inside the pipeline
 image, unlike ``tests/`` -- ``containers/rapid-pipeline/build.sh``).
 
@@ -41,9 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _fixture_module(stage: str):
-    if stage == "reference":
-        from rapidpipe.selftest import reference as module
-    elif stage == "difference":
+    if stage == "difference":
         from rapidpipe.selftest import difference as module
     elif stage == "finalize":
         from rapidpipe.selftest import finalize as module
