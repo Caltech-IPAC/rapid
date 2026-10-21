@@ -445,15 +445,15 @@ def run_single_core_job(fields,index_thread):
         # record(s) in the xmerges_<field> database table and XSources database table.
         # Query all xsource child tables in a single UNION ALL query instead of one
         # round trip per child table.
-        # The vbest > 0 filter is folded into the JOIN to avoid N+1 pid lookups.
+        # Each row comes with the vbest of its difference image: the best rows (vbest > 0) give
+        # the statistics, and all rows show which xmerges records' xsources were found at all.
 
         union_parts = []
         for xsources_tablename in xsources_child_tables:
             union_parts.append(
-                f"SELECT a.xaid,b.ra,b.dec,b.fluxap FROM {xmerges_tablename} AS a "
+                f"SELECT a.xaid,b.ra,b.dec,b.fluxap,d.vbest FROM {xmerges_tablename} AS a "
                 f"JOIN {xsources_tablename} AS b ON a.xsid = b.xsid "
-                f"JOIN diffimages AS d ON b.pid = d.pid "
-                f"WHERE d.vbest > 0"
+                f"JOIN diffimages AS d ON b.pid = d.pid"
             )
         query = " UNION ALL ".join(union_parts) + ";"
 
@@ -485,10 +485,14 @@ def run_single_core_job(fields,index_thread):
         decs_for_aid_dict = defaultdict(list)
         fluxes_for_aid_dict = defaultdict(list)
 
+        n_found_for_aid_dict = defaultdict(int)
+
         for record in all_records:
-            ras_for_aid_dict[record[0]].append(record[1])
-            decs_for_aid_dict[record[0]].append(record[2])
-            fluxes_for_aid_dict[record[0]].append(record[3])
+            n_found_for_aid_dict[record[0]] += 1
+            if record[4] > 0:
+                ras_for_aid_dict[record[0]].append(record[1])
+                decs_for_aid_dict[record[0]].append(record[2])
+                fluxes_for_aid_dict[record[0]].append(record[3])
 
 
         # Code-timing benchmark.
@@ -501,15 +505,18 @@ def run_single_core_job(fields,index_thread):
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # Delete xastroobjects and xmerges records for xaids that have xmerges
-        # but no best xsources (all associated diffimages have vbest=0).
-        # The xmerges records are deleted too, so that a later run cannot find them
-        # and write xastroobjectsmeta records for xaids that no longer have xastroobjects records.
-        # Both DELETEs are committed in a single transaction.
+        # Delete xastroobjects and xmerges records for xaids that have xmerges records but no
+        # best xsources: every one of their xmerges records' xsources was found in the xsources
+        # child tables above, and all of their difference images have vbest = 0.  An xaid with an
+        # xmerges record whose xsource was not found at all (e.g., in a child table that the lookup
+        # missed) is left alone and counted in a warning, rather than deleted, since its
+        # xsources may well be best.  The xmerges records are deleted too, so that a later run
+        # cannot find them and write xastroobjectsmeta records for xaids that no longer have
+        # xastroobjects records.  Both DELETEs are committed in a single transaction.
 
         best_aids = set(ras_for_aid_dict.keys())
 
-        query = f"SELECT DISTINCT xaid FROM {xmerges_tablename};"
+        query = f"SELECT xaid,count(*) FROM {xmerges_tablename} GROUP BY xaid;"
 
         sql_queries = [query]
 
@@ -530,7 +537,21 @@ def run_single_core_job(fields,index_thread):
             dbh.close()
             raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
-        not_best_aids = [str(record[0]) for record in all_aids_records if record[0] not in best_aids]
+        not_best_aids = []
+        n_unresolved_aids = 0
+
+        for record in all_aids_records:
+            if record[0] in best_aids:
+                continue
+            if n_found_for_aid_dict.get(record[0],0) == record[1]:
+                not_best_aids.append(str(record[0]))
+            else:
+                n_unresolved_aids += 1
+
+        if n_unresolved_aids > 0:
+            fh.write(f"*** Warning: {n_unresolved_aids} xaids in {xmerges_tablename} have no best xsources found, but " +
+                     f"some of their xsources were not found in the xsources child tables; not deleting them...\n")
+            fh.flush()
 
         if not_best_aids:
             not_best_aids_str = ",".join(not_best_aids)
