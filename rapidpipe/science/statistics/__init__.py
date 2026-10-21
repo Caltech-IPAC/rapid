@@ -10,6 +10,8 @@ improvements come later.
   per-object statistics `dev` computes from an object's sources (mean
   vector position, per-axis spread, flux mean and standard deviation,
   source count), and the ``astroobjectsmeta`` CSV line.
+- ``sums``: the same statistics from an object's sufficient sums, which the
+  ``associate`` stage carries from epoch to epoch.
 
 This subpackage imports nothing from ``rapidpipe.stages``, ``launch`` or
 ``cli`` (stage contract, dependency direction), and does no database I/O.
