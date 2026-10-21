@@ -622,8 +622,11 @@ zero. The downstream jobs found an instance already running.
   same two images (`zogy_diffimage_masked_psfcat.parquet`) hold 5,450 and
   5,586 rows. Part 4's capped run counted 5,703 and 5,539 before its cap: the
   same code on the same inputs gave 84624 five more sources this time.
-  The cause is not established (unverified: the difference stage is not
-  bit-reproducible run to run). The plan's "16 to 43 thousand sources per
+  The cause (foundation/determinism, below): the clipped statistics'
+  correction factor is a Monte Carlo draw `dev` makes unseeded, so every
+  clipped standard deviation moved by about 3e-4 between runs, and with it
+  the uncertainty images, S_corr and the PSF-fit threshold. The shipped
+  settings now seed it. The plan's "16 to 43 thousand sources per
   image" is the IMSS dump's figure for the field's epochs in general. It is
   not reproduced on these two images, by the port or by dev's own catalogs.
 - **Removing the cap changes nothing downstream on this field.** `associate`
@@ -738,6 +741,51 @@ being differenced. The latency decision needs these further measurements:
 - a reference built from frames other than the ones differenced.
 
 All of these need data this host does not have.
+
+## The difference stage's determinism (2026-10-21)
+
+Run on this host with `job local --stage difference` on epoch 84624, with
+part 5's inputs (import job 3's L2 row, part 4's reference job 11, import
+job 1's science PSF, job 9's reference PSF). The settings body was the shipped
+one, with the host's `/code` paths. Two non-live runs were used: run 6 at
+`0da94fa0` (`clip_correction_seed = -1`, `dev`'s unseeded draw) and run 7 at
+`7ea1a728` (the seed pinned at 0). Each run had two jobs, run side by side.
+
+| run | job | seed | sources before the cap | wall | peak RSS self / child |
+|---|---|---|---|---|---|
+| 6 | 24 | unseeded | 5,542 | 669 s | 1.32 / 14.74 GiB |
+| 6 | 25 | unseeded | 5,544 | 671 s | 1.35 / 14.50 GiB |
+| 7 | 26 | 0 | 5,539 | 666 s | 1.32 / 14.75 GiB |
+| 7 | 27 | 0 | 5,539 | 668 s | 1.26 / 14.75 GiB |
+
+With part 4's job 13 (5,539) and part 5's job 19 (5,544), four unseeded runs
+gave 5,539 to 5,544.
+
+- **The first file that differs** between jobs 24 and 25 is the reformatted
+  science uncertainty image. Its 5,388 NaN pixels are filled with the
+  science image's clipped standard deviation: 13.270568 in one job and
+  13.272371 in the other. The ratio, 1.000136, is the square root of the
+  ratio of the two Monte Carlo clipping-correction factors (`compute_clip_corr`,
+  ten draws of a million normals, unseeded in `dev`). The six factors drawn
+  on this host have a relative standard deviation of 3.3e-4 in their square root.
+- **What follows from it**: S_corr (91% of its pixels, by at most 0.13),
+  the difference uncertainty images (every pixel, by at most 0.0017), and
+  the PSF-fit catalogs. The PSF fit's detection threshold is 5 times the
+  image's clipped standard deviation, so a few sources at the threshold
+  cross it: 5,642 against 5,641 positive rows. Everything before it is
+  bit-identical, and so are the ZOGY, SFFT and naive difference images:
+  the resampled and gain-matched reference, the background-subtracted
+  science image, `scalefacref`, the registration residuals and both FWHMs.
+  The only other differences are FITS `DATE` and `CHECKSUM` cards and the
+  bkgest tables' time stamps.
+- **Seeded**, jobs 26 and 27 wrote the same pixels in every image and the
+  same rows in every catalog, NaN for NaN. That covers the 500 published
+  sources and the 5,637 rows of the PSF-fit catalog. The published rows
+  differ only in their drawn `pid`, and `diffimages.checksum` differs only
+  through the FITS `DATE` card.
+- The shipped `[difference.statistics] clip_correction_seed` is now 0. The
+  reference stage draws the same factor unseeded (`[reference.statistics]`)
+  and is unchanged.
 
 ## If a step fails
 
