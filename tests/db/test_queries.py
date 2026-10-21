@@ -137,6 +137,13 @@ def world(connect, tmp_path):
                             expects=first_set_binding)
     failed = w.job(run, "packet", {"epoch": 2, "sca": 1}, {}, published=False)
     w.rows("UPDATE jobs SET state = 'failed', exit_code = 70 WHERE id = %s RETURNING id", (failed,))
+    # The publisher analyses the product tables it loads; autovacuum analyses
+    # the rest on a running database. Here, at once, so the planner costs the
+    # views' bookkeeping joins from statistics rather than defaults.
+    w.conn.autocommit = True
+    with w.conn.cursor() as cur:
+        cur.execute("ANALYZE")
+    w.conn.autocommit = False
 
     ra, dec = position(SCAS[0], 0)
     params = {
@@ -146,7 +153,7 @@ def world(connect, tmp_path):
         "packet_job": made["packets"][(2, SCAS[0])],
         "rfid": w.rows("SELECT rfid FROM refimages WHERE job = %s", (reference,))[0][0],
         "group": w.rows("SELECT max(opened_group) FROM official")[0][0],
-        "ra": ra, "dec": dec, "radius": 1.0, "mjd_min": 59999.0, "mjd_max": 60010.0,
+        "ra": ra, "dec": dec, "radius": 0.1, "mjd_min": 59999.0, "mjd_max": 60010.0,
         "jd_min": 2459999.0, "jd_max": 2460010.0, "exclude_rid": -1, "fields": [FIELD],
         "min_frames": 1, "min_nframes": 5, "min_cov5percent": 10.0,
         "pid": w.rows("SELECT min(pid) FROM diffimages_official")[0][0],
@@ -170,6 +177,7 @@ def _indexes(world, params, statement) -> set[str]:
         cur.execute("EXPLAIN (FORMAT JSON) " + statement, params)
         plan = cur.fetchone()[0]
     world.conn.rollback()
+    world.last_plan = plan
     found = set()
 
     def walk(node):
@@ -199,7 +207,7 @@ def test_overlapfields_containment_reaches_the_gin_index(world):
     w, params = world
     queries = load_queries()
     for name, expected in GIN.items():
-        assert _indexes(w, params, queries[name][1]) & expected, name
+        assert _indexes(w, params, queries[name][1]) & expected, (name, w.last_plan)
 
 
 def test_q3c_statements_return_their_columns_and_reach_their_index(world, capsys):
@@ -211,7 +219,7 @@ def test_q3c_statements_return_their_columns_and_reach_their_index(world, capsys
     for name, expected in Q3C.items():
         columns, statement = queries[name]
         _assert_shape(w, params, name, columns, statement)
-        assert _indexes(w, params, statement) & expected, name
+        assert _indexes(w, params, statement) & expected, (name, w.last_plan)
         t0 = time.perf_counter()
         with w.conn.cursor() as cur:
             cur.execute(statement, params)
