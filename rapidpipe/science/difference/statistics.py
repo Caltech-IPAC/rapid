@@ -4,11 +4,13 @@
 `dev`: ``compute_clip_corr`` and ``fits_data_statistics_with_clipping``
 (``modules/utils/rapid_pipeline_subs.py``). The clipping-correction factor
 is a Monte Carlo estimate drawn from ``numpy.random`` with no seed, so in
-`dev` every call gives a slightly different factor. The port keeps that as
-the default (``seed=None``) and designs in a seed, off by default: the
-stage's ``[statistics] clip_correction_seed`` setting, where a
-non-negative value seeds a legacy ``RandomState`` with the same draw
-algorithm as ``numpy.random``'s global state.
+`dev` every call gives a slightly different factor. The functions keep that
+as their default (``seed=None``) and take a seed: the stage's
+``[statistics] clip_correction_seed`` setting, where a non-negative value
+seeds a legacy ``RandomState`` with the same draw algorithm as
+``numpy.random``'s global state. The difference stage's shipped settings
+pin it, since the unseeded draw was the stage's only run-to-run
+difference.
 """
 
 from __future__ import annotations
