@@ -96,7 +96,6 @@ class _FalsyFactory:
 
 @pytest.mark.parametrize("stage, loader, env_of", [
     ("difference", "toolkit", toolkit_env),
-    ("reference", "toolkit", toolkit_env),
 ])
 def test_every_stage_seam_calls_a_falsy_factory(monkeypatch, stage, loader, env_of):
     import importlib

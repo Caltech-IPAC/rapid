@@ -20,7 +20,6 @@ STAGES_DIR = REPO_ROOT / "rapidpipe" / "stages"
 PORTED_PRODUCTS_MODULES = (REPO_ROOT / "rapidpipe" / "products" / "spatial.py",)
 SETTINGS_TOMLS = (
     REPO_ROOT / "rapidpipe" / "settings" / "difference.toml",
-    REPO_ROOT / "rapidpipe" / "settings" / "reference.toml",
 )
 
 #: "# ported-from: none" or "# ported-from: <path>[, <path>...] @ <8-hex>".

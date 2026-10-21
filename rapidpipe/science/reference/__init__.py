@@ -16,7 +16,6 @@ functions, reused rather than copied.
 - :mod:`.catalog` -- SExtractor on the mosaic and the FWHM statistics.
 - :mod:`.measure` -- ``cov5percent`` and the refimmeta measurements.
 - :mod:`.header` -- the header stamp.
-- :mod:`.identity` -- the selection digest and the logical key.
 
 Imports nothing from ``rapidpipe`` outside ``rapidpipe.science`` (stage
 contract, dependency direction).

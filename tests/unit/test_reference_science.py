@@ -1,4 +1,4 @@
-"""Tests for rapidpipe.science.reference: dev's arithmetic, command lines, stamp, identity.
+"""Tests for rapidpipe.science.reference: dev's arithmetic, command lines, stamp.
 
 The expected values are recomputed here from `dev`'s formulas
 (``pipeline/referenceImageSubs.py`` and ``modules/utils/rapid_pipeline_subs.py``
@@ -8,7 +8,6 @@ on origin/dev), not read back from the code under test.
 from __future__ import annotations
 
 import gzip
-import hashlib
 import math
 import warnings
 from pathlib import Path
@@ -19,7 +18,7 @@ from astropy.io import fits
 from astropy.utils.exceptions import AstropyUserWarning
 
 from rapidpipe.products import filters as products_filters
-from rapidpipe.science.reference import awaicgen, catalog, header, identity, measure, prep
+from rapidpipe.science.reference import awaicgen, catalog, header, measure, prep
 
 AWAICGEN = {
     "awaicgen_input_images_list_file": "refimage_sci_inputs.txt",
@@ -293,7 +292,7 @@ def _values(n: int = 3) -> header.StampValues:
         field=4711398, exposure_filter="W146", cov5percent=33.75, nframes=n,
         refimage_input_filenames=tuple(f"frame{i}.fits.gz" for i in range(n)),
         jdstart=2461679.586, jdend=2461679.606, zprefimg=26.8630336165,
-        total_refimage_exptime=420.0, run="RUN", attempt="ATT", instance="INST")
+        total_refimage_exptime=420.0, run=11, job=12, attempt=2)
 
 
 def test_infile_keywords_are_devs():
@@ -303,7 +302,7 @@ def test_infile_keywords_are_devs():
     assert header.infile_keyword(100) == "INFIL100"
 
 
-def test_stamp_writes_devs_keywords_without_fid_plus_the_run_model(tmp_path):
+def test_stamp_writes_devs_keywords_without_fid_plus_the_foundations(tmp_path):
     path = tmp_path / "image.fits"
     data = np.arange(12, dtype=np.float64).reshape(3, 4)
     fits.PrimaryHDU(data=data).writeto(path)
@@ -322,32 +321,6 @@ def test_stamp_writes_devs_keywords_without_fid_plus_the_run_model(tmp_path):
     assert hdr["MAGZP"] == 26.8630336165 and hdr["TOTEXPTM"] == 420.0
     assert [hdr[f"INFIL00{i}"] for i in (1, 2, 3)] == \
         ["frame0.fits.gz", "frame1.fits.gz", "frame2.fits.gz"]
-    assert (hdr["RPRUN"], hdr["RPATTMPT"], hdr["RPINST"], hdr["RPSTAGE"]) == \
-        ("RUN", "ATT", "INST", "reference")
+    assert (hdr["RPRUN"], hdr["RPJOB"], hdr["RPATTMPT"], hdr["RPSTAGE"]) == \
+        (11, 12, 2, "reference")
     assert "CHECKSUM" in hdr and "DATASUM" in hdr
-
-
-# ----------------------------------------------------------------------
-# Identity
-# ----------------------------------------------------------------------
-
-
-def test_selection_digest_is_the_ruled_formula():
-    ids = ["01B", "01A", "01C"]
-    expected = hashlib.sha256(("01A\n01B\n01C\n" + "ab" * 32).encode()).hexdigest()
-    assert identity.selection_digest(ids, "ab" * 32) == expected
-    assert identity.selection_digest(ids, "sha256:" + "ab" * 32) == expected
-
-
-def test_selection_digest_ignores_order_but_not_membership_or_settings():
-    base = identity.selection_digest(["a", "b"], "s1")
-    assert identity.selection_digest(["b", "a"], "s1") == base
-    assert identity.selection_digest(["a", "c"], "s1") != base
-    assert identity.selection_digest(["a", "b"], "s2") != base
-    assert len(base) == 64 and int(base, 16) >= 0
-
-
-def test_logical_key():
-    assert identity.logical_key(field=4711398, filter_name="F146", digest="0123456789abcdef") == {
-        "field": "4711398", "filter": "F146", "recipe": "awaicgen",
-        "version": "0123456789abcdef"}
