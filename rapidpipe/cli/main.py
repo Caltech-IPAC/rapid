@@ -24,7 +24,10 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   [--excludes JSON]`` records a job and runs it; ``job run --job <id>``
   runs an existing job's next attempt. Both run the stage's ``run(job)``
   in this process under ``RAPIDPIPE_OUTPUTS_ROOT`` and publish it
-  (``rapidpipe.foundation.run_job``), printing the publisher's result.
+  (``rapidpipe.foundation.run_job``), printing the publisher's result;
+- ``job submit`` takes ``job local``'s arguments and ``--job-definition``,
+  records the job and submits one Batch job running ``job run --job <id>``
+  in the image (``rapidpipe.launch.submit``), printing both ids.
 
 A refused change group, or a job published but refused its automatic
 binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr; a run, job or group that does not exist, or an unreadable
@@ -48,7 +51,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from rapidpipe import __version__
-from rapidpipe import foundation
+from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
 from rapidpipe.cli import stagectl
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
@@ -121,14 +124,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "local", help="Record a job, run its stage here and publish it.",
         description="Record a job under a run with its inputs, run its stage in this "
                     "process under RAPIDPIPE_OUTPUTS_ROOT, publish it and print the result.")
-    job_local.add_argument("--run", required=True, type=int)
-    job_local.add_argument("--stage", required=True)
-    for name, meaning in (("scope", "the job's scope, a JSON object"),
-                          ("inputs", "a JSON list of {product, key, source_job}"),
-                          ("expects", "a JSON list of {product, key, binding}"),
-                          ("excludes", "a JSON list of {key, source_job}")):
-        job_local.add_argument(f"--{name}", required=name == "scope", type=_json_argument,
-                               default=[], metavar="JSON", help=meaning)
+    job_submit = job_subparsers.add_parser(
+        "submit", help="Record a job and submit it to Batch as 'job run'.",
+        description="Record a job under a run with its inputs and submit one Batch job "
+                    "running 'job run --job <id>' under RAPIDPIPE_BATCH_JOB_QUEUE, "
+                    "writing under RAPIDPIPE_OUTPUTS_ROOT; print the job and Batch job ids.")
+    job_submit.add_argument("--job-definition", required=True,
+                            help="The Batch job definition: name, name:revision or ARN.")
+    for verb in (job_local, job_submit):
+        verb.add_argument("--run", required=True, type=int)
+        verb.add_argument("--stage", required=True)
+        for name, meaning in (("scope", "the job's scope, a JSON object"),
+                              ("inputs", "a JSON list of {product, key, source_job}"),
+                              ("expects", "a JSON list of {product, key, binding}"),
+                              ("excludes", "a JSON list of {key, source_job}")):
+            verb.add_argument(f"--{name}", required=name == "scope", type=_json_argument,
+                              default=[], metavar="JSON", help=meaning)
     job_run = job_subparsers.add_parser(
         "run", help="Run an existing job's next attempt here and publish it.",
         description="Run an existing job's next attempt in this process and publish it; "
@@ -241,11 +252,18 @@ def _run_job(args: argparse.Namespace) -> int:
     def connect_job():
         return connect(application_name=f"rapidpipe-job-{args.verb}")
 
-    if args.verb == "local":
+    if args.verb in ("local", "submit"):
         stage_run = _stage_run(args.stage)
         with connect_job() as conn:
             job_id = foundation.create_job(conn, args.run, args.stage, args.scope, args.inputs,
                                            args.expects, args.excludes)
+        if args.verb == "submit":
+            try:
+                batch_job = launch.submit(job_id, args.stage, job_definition=args.job_definition)
+            except launch.LaunchError as exc:
+                raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
+            _print_json({"job": job_id, "batch_job": batch_job})
+            return int(ExitCode.SUCCESS)
     else:
         job_id = args.job
         with connect_job() as conn:
@@ -275,7 +293,7 @@ def _foundation_command(args: argparse.Namespace) -> int:
     elif command == ("run", "show"):
         with connect(application_name="rapidpipe-run-show") as conn:
             _print_json(foundation.run_show(conn, args.id))
-    elif command in (("job", "local"), ("job", "run")):
+    elif command in (("job", "local"), ("job", "run"), ("job", "submit")):
         return _run_job(args)
     elif command == ("job", "show"):
         with connect(application_name="rapidpipe-job-show") as conn:

@@ -11,7 +11,8 @@ prefix; ``checksum`` is the file's SHA-256 in the ``sha256:`` form of
 ``rapidpipe.products.manifest``. Each Parquet file's columns are the
 table's column names, without ``job``, which the publisher sets.
 
-The prefix is a URL; this milestone reads ``file://`` prefixes only.
+The prefix is a URL, ``file://`` or ``s3://``; each file is read through
+:func:`rapidpipe.foundation.prefix.get`.
 """
 
 from __future__ import annotations
@@ -20,13 +21,13 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
 
 import pyarrow.parquet as pq
 from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
 
 from rapidpipe.foundation.official import Refused, apply
+from rapidpipe.foundation.prefix import get
 
 #: The tables a manifest may declare outputs for.
 PRODUCT_TABLES = frozenset({
@@ -54,7 +55,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     ``published`` is whether this call published, ``group`` the automatic
     binding's change group or ``None``.
     """
-    root = _local_root(prefix)
+    root = prefix.rstrip("/") + "/"
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT state, run, published_attempt, refusal FROM jobs"
@@ -70,7 +71,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             manifest = _verified_manifest(root)
             tables = []
             for output in manifest["outputs"]:
-                _load(cur, output["table"], root / output["path"], job_id)
+                _load(cur, output["table"], get(root + output["path"]), job_id)
                 tables.append(output["table"])
             cur.execute("UPDATE jobs SET state = 'published', published_attempt = %s,"
                         " manifest = %s WHERE id = %s",
@@ -88,24 +89,20 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             "refusal": refusal}
 
 
-def _local_root(prefix: str) -> Path:
-    url = urlparse(prefix)
-    if url.scheme != "file":
-        raise ValueError(f"prefix {prefix!r}: only file:// prefixes are read in this milestone")
-    return Path(unquote(url.path))
-
-
-def _verified_manifest(root: Path) -> dict:
+def _verified_manifest(root: str) -> dict:
     try:
-        manifest = json.loads((root / "manifest.json").read_text())
+        manifest = json.loads(get(root + "manifest.json").read_text())
     except FileNotFoundError:
-        raise PublishError(f"{root / 'manifest.json'} does not exist") from None
+        raise PublishError(f"{root}manifest.json does not exist") from None
     for output in manifest["outputs"]:
         if output["table"] not in PRODUCT_TABLES:
             raise PublishError(f"{output['table']!r} is not a product table")
-        path = root / output["path"]
-        if not path.is_file():
-            raise PublishError(f"declared output {path} does not exist")
+        try:
+            path = get(root + output["path"])
+        except FileNotFoundError:
+            path = None
+        if path is None or not path.is_file():
+            raise PublishError(f"declared output {root}{output['path']} does not exist")
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             for block in iter(lambda: stream.read(1 << 20), b""):

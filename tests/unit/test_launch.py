@@ -1,4 +1,4 @@
-"""``rapidpipe.launch``: a job's stage submitted to Batch, or run locally."""
+"""``rapidpipe.launch``: a job submitted to Batch as ``job run``, or an old-contract stage run locally."""
 
 from __future__ import annotations
 
@@ -21,29 +21,43 @@ class _Batch:
 @pytest.fixture()
 def batch_env(monkeypatch):
     monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue")
-    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_DEFINITION", "definition")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://products/foundation")
+    monkeypatch.delenv("RAPID_DB_SECRET_ID", raising=False)
     monkeypatch.delenv("RAPIDPIPE_BATCH_JOB_NAME_PREFIX", raising=False)
 
 
-def test_submit_runs_the_stage_command_under_a_name_carrying_the_job(batch_env):
+def test_submit_runs_job_run_for_the_job_with_the_outputs_root(batch_env):
     batch = _Batch()
-    assert launch.submit(7, "difference", ["--inputs", "x"], client=batch) == "batch-1"
+    assert launch.submit(7, "difference", job_definition="definition:3", client=batch) == "batch-1"
     assert batch.submitted == [{
-        "jobName": "rapid-difference-7", "jobQueue": "queue", "jobDefinition": "definition",
-        "containerOverrides": {"command": ["rapidpipe", "stage", "difference", "--inputs", "x"]}}]
+        "jobName": "rapid-difference-7", "jobQueue": "queue", "jobDefinition": "definition:3",
+        "containerOverrides": {
+            "command": ["job", "run", "--job", "7"],
+            "environment": [{"name": "RAPIDPIPE_OUTPUTS_ROOT", "value": "s3://products/foundation"}]}}]
+
+
+def test_submit_passes_the_database_secret_when_the_submitter_names_one(batch_env, monkeypatch):
+    monkeypatch.setenv("RAPID_DB_SECRET_ID", "secret-name")
+    batch = _Batch()
+    launch.submit(7, "difference", job_definition="definition", client=batch)
+    assert {"name": "RAPID_DB_SECRET_ID", "value": "secret-name"} in \
+        batch.submitted[0]["containerOverrides"]["environment"]
 
 
 def test_submit_refuses_without_a_queue(batch_env, monkeypatch):
     monkeypatch.delenv("RAPIDPIPE_BATCH_JOB_QUEUE")
     batch = _Batch()
     with pytest.raises(launch.LaunchError, match="RAPIDPIPE_BATCH_JOB_QUEUE"):
-        launch.submit(7, "difference", [], client=batch)
+        launch.submit(7, "difference", job_definition="definition", client=batch)
     assert batch.submitted == []
 
 
-def test_submit_refuses_an_unknown_stage(batch_env):
-    with pytest.raises(launch.LaunchError, match="unknown stage"):
-        launch.submit(7, "crossmatch", [], client=_Batch())
+def test_submit_refuses_an_outputs_root_a_batch_job_cannot_write(batch_env, monkeypatch):
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "file:///home/someone/products")
+    batch = _Batch()
+    with pytest.raises(launch.LaunchError, match="s3://"):
+        launch.submit(7, "difference", job_definition="definition", client=batch)
+    assert batch.submitted == []
 
 
 def test_run_locally_returns_the_stages_exit_code():

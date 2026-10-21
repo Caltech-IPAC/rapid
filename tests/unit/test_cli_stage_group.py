@@ -12,7 +12,7 @@ from rapidpipe.cli import main as cli
 from rapidpipe.cli import stagectl
 from rapidpipe.exitcodes import ExitCode
 
-#: What a Batch job's command (``rapidpipe.launch.submit``) puts after the entrypoint.
+#: What the retired Batch launcher put after the entrypoint (the legacy ``stage <name>`` form).
 LAUNCHER_ARGV = [
     "stage", "difference",
     "--run", "RUN01", "--unit", "r0034/SCA01", "--attempt", "ATT01",

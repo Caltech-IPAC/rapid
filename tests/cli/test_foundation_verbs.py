@@ -1,4 +1,4 @@
-"""The five foundation verbs: each one's exit code and output on one success
+"""The foundation verbs: each one's exit code and output on one success
 and one refusal, against the foundation database (``database/schema.sql``).
 
 Each verb is run in-process through ``rapidpipe.cli.main.main``, which
@@ -136,3 +136,47 @@ def test_official_undo_refuses_when_a_binding_has_since_moved(capsys, conn, tmp_
     code, out, err = _run(capsys, "official", "undo", opened.strip(), *WHO_WHY)
     assert (code, out) == (ExitCode.FAILURE, "")
     assert f"refused: binding {binding} is no longer open" in err
+
+
+class _Batch:
+    def __init__(self):
+        self.submitted = []
+
+    def submit_job(self, **request):
+        self.submitted.append(request)
+        return {"jobId": "batch-1"}
+
+
+def test_job_submit_records_the_job_and_submits_job_run_for_it(capsys, conn, monkeypatch):
+    from rapidpipe import launch
+    from rapidpipe.cli import main as cli
+
+    batch = _Batch()
+    monkeypatch.setattr(launch, "batch_client", lambda: batch)
+    monkeypatch.setattr(cli, "_stage_run", lambda stage: None)
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://products/foundation")
+    run = new_run(conn, live=True)
+    code, out, err = _run(capsys, "job", "submit", "--run", str(run), "--stage", "difference",
+                          "--scope", "{}", "--job-definition", "rapid-rebuild:30")
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    printed = json.loads(out)
+    assert printed["batch_job"] == "batch-1"
+    assert batch.submitted[0]["containerOverrides"]["command"] == ["job", "run", "--job",
+                                                                    str(printed["job"])]
+    with conn.cursor() as cur:
+        cur.execute("SELECT run, stage, state FROM jobs WHERE id = %s", (printed["job"],))
+        assert cur.fetchone() == (run, "difference", "launched")
+
+
+def test_job_submit_refuses_without_a_queue_naming_the_recorded_job(capsys, conn, monkeypatch):
+    from rapidpipe.cli import main as cli
+
+    monkeypatch.setattr(cli, "_stage_run", lambda stage: None)
+    monkeypatch.delenv("RAPIDPIPE_BATCH_JOB_QUEUE", raising=False)
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://products/foundation")
+    run = new_run(conn, live=True)
+    code, out, err = _run(capsys, "job", "submit", "--run", str(run), "--stage", "difference",
+                          "--scope", "{}", "--job-definition", "rapid-rebuild")
+    assert code == ExitCode.USAGE and out == ""
+    assert "recorded, not submitted" in err and "RAPIDPIPE_BATCH_JOB_QUEUE" in err
