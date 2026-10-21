@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import resource
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -107,11 +109,15 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     ``connect()`` is a context manager yielding a connection
     (``rapidpipe.db.connection.connect``); the stage gets the same factory.
 
-    Returns :func:`~rapidpipe.foundation.publish.publish`'s result. A job
-    already published returns at once with ``published`` false and no file
-    touched. The job row records ``running`` and ``started`` before the
-    stage, ``ended`` and ``exit_code`` after it; a stage or publication
-    that raises leaves the job ``failed`` and the exception propagates.
+    Returns :func:`~rapidpipe.foundation.publish.publish`'s result with
+    ``peak_rss_kib``: the peak resident memory of this process (``self``)
+    and of its largest finished child process (``children``, the toolkit's
+    binaries), in KiB. A job already published returns at once with
+    ``published`` false and no file touched. The job row records
+    ``running``, ``started`` and the image digest (``RAPID_IMAGE_DIGEST``,
+    which the job definition sets; none for a checkout) before the stage,
+    ``ended`` and ``exit_code`` after it; a stage or publication that raises
+    leaves the job ``failed`` and the exception propagates.
     """
     with connect() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -138,7 +144,8 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             attempt = 1 + max(attempts(job_prefix), default=0)
             prefix = f"{job_prefix}/{attempt}/"
             workdir = Path(tempfile.mkdtemp(prefix=f"rapidpipe-job-{job_id}-{attempt}-"))
-        _record(conn, job_id, "state = 'running', started = now(), ended = NULL, exit_code = NULL")
+        _record(conn, job_id, "state = 'running', started = now(), ended = NULL, exit_code = NULL,"
+                " image_digest = %s", (os.environ.get("RAPID_IMAGE_DIGEST"),))
 
     context = JobContext(
         job=job_id, run=job["run"], stage=job["stage"], scope=job["scope"],
@@ -155,7 +162,9 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s",
                     (int(ExitCode.STAGE_ERROR),))
         raise
-    return result
+    peak = {who: resource.getrusage(scope).ru_maxrss for who, scope in
+            (("self", resource.RUSAGE_SELF), ("children", resource.RUSAGE_CHILDREN))}
+    return {**result, "peak_rss_kib": peak}
 
 
 def _record(conn, job_id: int, assignments: str, params: tuple = ()) -> None:
