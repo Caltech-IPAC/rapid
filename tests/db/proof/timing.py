@@ -7,7 +7,7 @@ point it at a throwaway database), using the ``PG*`` environment:
     python tests/db/proof/timing.py 10000
 
 builds, by SQL, two jobs, N ``catalogs`` rows for each and N open bindings
-to the first job's rows, then applies one change group that closes every
+to the first job's rows, analyses them, then applies one change group that closes every
 binding and opens the second job's row on the same key, through
 :func:`rapidpipe.foundation.change`, and prints N and the group's wall time.
 """
@@ -40,6 +40,11 @@ def main(n: int) -> None:
                     " %s, nextval('change_groups'), 'timing', 'setup'"
                     " FROM generate_series(1, %s) g RETURNING id, key", (tag, old, n))
         bindings = cur.fetchall()
+        # Bulk-loaded tables have no statistics until autovacuum reaches them; without
+        # them the planner answers the open-binding check by (product, job) and the
+        # group is quadratic in N. Measure the analysed state a live table is in.
+        cur.execute("ANALYZE official")
+        cur.execute("ANALYZE catalogs")
     conn.commit()
     group = [{"close": binding, "open": {"product": "catalogs", "key": key, "job": new}}
              for binding, key in bindings]
