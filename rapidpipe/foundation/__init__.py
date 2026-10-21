@@ -5,7 +5,8 @@ Foundation plan v5 (2026-10-20), Part 1: a run is a recipe
 recorded at launch (:func:`create_job`), the publisher loads one completed
 attempt's declared outputs and tries the automatic binding
 (:func:`publish`), and one operation changes official bindings in a
-recorded, reversible group (:func:`change`, :func:`undo`).
+recorded, reversible group (:func:`change`, :func:`undo`). :func:`run_job`
+runs one attempt of a job's stage in this process and publishes it.
 
 Each writing function is one transaction on the connection it is given and
 ends it: it commits, or rolls back and raises. :class:`Refused` is a change
@@ -14,10 +15,11 @@ declared outputs could not be verified.
 """
 
 from rapidpipe.foundation.bookkeeping import create_job, create_run, job_show, run_show
+from rapidpipe.foundation.local import JobContext, run_job
 from rapidpipe.foundation.official import Refused, apply, change, undo
 from rapidpipe.foundation.publish import PRODUCT_TABLES, PublishError, publish
 
 __all__ = [
-    "PRODUCT_TABLES", "PublishError", "Refused", "apply", "change", "create_job",
-    "create_run", "job_show", "publish", "run_show", "undo",
+    "JobContext", "PRODUCT_TABLES", "PublishError", "Refused", "apply", "change", "create_job",
+    "create_run", "job_show", "publish", "run_job", "run_show", "undo",
 ]

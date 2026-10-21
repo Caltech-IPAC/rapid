@@ -165,3 +165,34 @@ def compute_angular_separation(ra1: float, dec1: float, ra2: float, dec2: float)
     bx, by, bz = unit_vector(ra2, dec2)
     dx, dy, dz = bx - ax, by - ay, bz - az
     return math.degrees(2.0 * math.asin(0.5 * math.sqrt(dx * dx + dy * dy + dz * dz)))
+
+
+def image_centre_and_corners(wcs, naxis1: int, naxis2: int) -> tuple[dict[str, float], list[list[float]]]:
+    """An image's sky centre and four corners from its WCS, as `dev` registers them.
+
+    Legacy ``compute_center_sky_position``/``compute_corner_sky_positions``
+    (database/sims/db_register_socsim_files.py) use 1-based FITS pixel
+    coordinates shifted to the 0-based convention astropy's
+    ``pixel_to_world`` expects (``x = 0.5 * naxis + 0.5 - 1.0`` for the
+    centre; ``x = 0.5 - 1.0`` and ``x = naxis + 0.5 - 1.0`` for the outer
+    edges), i.e. ``origin=0``. Corner order is (bottom-left, bottom-right,
+    top-right, top-left) in that (x, y) pixel sense. ``admit`` and the
+    foundation's ``import`` stage both use it.
+    """
+    cx = 0.5 * naxis1 + 0.5 - 1.0
+    cy = 0.5 * naxis2 + 0.5 - 1.0
+    center = wcs.pixel_to_world(cx, cy)
+    corner_pixels = [
+        (0.5 - 1.0, 0.5 - 1.0),
+        (naxis1 + 0.5 - 1.0, 0.5 - 1.0),
+        (naxis1 + 0.5 - 1.0, naxis2 + 0.5 - 1.0),
+        (0.5 - 1.0, naxis2 + 0.5 - 1.0),
+    ]
+    corners = []
+    for x, y in corner_pixels:
+        sky = wcs.pixel_to_world(x, y)
+        corners.append([float(sky.ra.degree % 360.0), float(sky.dec.degree)])
+    return (
+        {"ra": float(center.ra.degree % 360.0), "dec": float(center.dec.degree)},
+        corners,
+    )
