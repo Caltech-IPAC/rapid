@@ -415,8 +415,12 @@ inject_fake_sources_flag = false
 
 [difference.statistics]
 # New: seed for the clipped-statistics correction factor's Monte Carlo
-# draw. Negative reproduces `dev`, which draws from numpy.random unseeded.
-clip_correction_seed = -1
+# draw. Negative reproduces `dev`, which draws from numpy.random unseeded,
+# so the clipped standard deviations move by about 3e-4 between runs, and
+# with them the uncertainty images, S_corr and the PSF-fit threshold: on
+# identical inputs epoch 84624 gave 5,539, 5,542 and 5,544 sources. Pinned
+# so the same inputs give the same rows (foundation/determinism).
+clip_correction_seed = 0
 
 # The SExtractor and SWarp tables below are `dev`'s [SEXTRACTOR_SCIIMAGE],
 # [SEXTRACTOR_GAINMATCH], [SEXTRACTOR_DIFFIMAGE], [SEXTRACTOR_DIFFIMAGE_SFFT],

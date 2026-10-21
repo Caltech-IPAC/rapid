@@ -53,6 +53,13 @@ and ``sources`` (the ZOGY positive PSF-fit catalog through
 as the import caps it). The manifest records `dev`'s gain-matching and
 catalog measurements under ``difference``.
 
+Determinism: on identical inputs the stage writes identical pixels and
+rows (FITS ``DATE`` cards and the bkgest tables' time stamps aside) when
+``[statistics] clip_correction_seed`` is non-negative, as the shipped
+settings have it. `dev`'s unseeded clipping-correction draw (negative)
+moves every clipped standard deviation by about 3e-4 and the source count
+by a few (foundation/determinism).
+
 Departures from `dev` (difference page): SFFT and naive files are not
 published as rows (a run has one differencer); a missing ZOGY PSF-fit
 catalog publishes an empty source set with its outcome bit set, where

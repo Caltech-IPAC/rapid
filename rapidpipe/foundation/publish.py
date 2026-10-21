@@ -48,8 +48,8 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     each into its table with ``job`` set; record the attempt, manifest and
     state; then, inside a savepoint, bind the job's ``expects`` keys if its
     run is live for its survey and dataset, recording a refusal on the job
-    instead when the binding is refused. ``ANALYZE`` the loaded tables
-    after commit.
+    instead when the binding is refused. ``ANALYZE`` every table it wrote
+    to after commit: the loaded tables, and ``official`` when it bound.
 
     Returns ``{"job", "attempt", "published", "group", "refusal"}``:
     ``published`` is whether this call published, ``group`` the automatic
@@ -82,7 +82,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
         conn.rollback()
         raise
     with conn.cursor() as cur:
-        for table in sorted(set(tables)):
+        for table in sorted(set(tables) | ({"official"} if group is not None else set())):
             cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(table)))
     conn.commit()
     return {"job": job_id, "attempt": attempt, "published": True, "group": group,
