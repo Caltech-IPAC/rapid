@@ -6,20 +6,17 @@ sit in layers, and a unit may import only units strictly below its own
 (stage-contract.md §The package):
 
     leaves (exitcodes, log, revision, seams: no rapidpipe import)
-    < products < {db, science, foundation} < checks < runs < stages
-    < launch < selftest < cli
+    < products < {db, science, foundation} < stages < launch
+    < selftest < cli
 
 ``db``, ``science`` and ``foundation`` share a layer and may not import
-one another.
-``release`` sits beside the stack: it may import only the leaves and
-``db``, and only ``cli`` imports it. :data:`ALLOWED` is that rule as one
-table. ``rapidpipe/__init__.py`` belongs to no unit but is scanned too,
+one another. :data:`ALLOWED` is that rule as one table. ``rapidpipe/__init__.py`` belongs to no unit but is scanned too,
 against :data:`PACKAGE_INIT_ALLOWED`.
 
 Every import counts: module-level and function-level (lazy) alike,
-absolute and relative (``from ..runs import x`` is resolved against the
-importing module's package), ``from rapidpipe import runs`` names
-the unit ``runs``, and ``importlib.import_module`` called with a constant
+absolute and relative (``from ..stages import x`` is resolved against the
+importing module's package), ``from rapidpipe import stages`` names
+the unit ``stages``, and ``importlib.import_module`` called with a constant
 string, or an f-string whose constant prefix is ``rapidpipe.<unit>.``,
 imports that unit. Third-party and standard-library imports are
 irrelevant here.
@@ -48,16 +45,11 @@ ALLOWED: dict[str, frozenset[str]] = {
     "db": LEAVES | {"products"},
     "science": LEAVES | {"products"},
     "foundation": LEAVES | {"products"},
-    "checks": LEAVES | {"products", "db", "science", "foundation"},
-    "runs": LEAVES | {"products", "db", "science", "foundation", "checks"},
-    "stages": LEAVES | {"products", "db", "science", "foundation", "checks", "runs"},
-    "launch": LEAVES | {"products", "db", "science", "foundation", "checks", "runs",
-                        "stages"},
-    "selftest": LEAVES | {"products", "db", "science", "foundation", "checks", "runs",
-                          "stages", "launch"},
-    "cli": LEAVES | {"products", "db", "science", "foundation", "checks", "runs",
-                     "stages", "launch", "selftest", "release"},
-    "release": LEAVES | {"db"},
+    "stages": LEAVES | {"products", "db", "science", "foundation"},
+    "launch": LEAVES | {"products", "db", "science", "foundation", "stages"},
+    "selftest": LEAVES | {"products", "db", "science", "foundation", "stages", "launch"},
+    "cli": LEAVES | {"products", "db", "science", "foundation", "stages", "launch",
+                     "selftest"},
 }
 
 #: The source name edges from ``rapidpipe/__init__.py`` carry, and what it
@@ -268,10 +260,6 @@ def test_nothing_imports_cli(edges):
     assert [e.where for e in edges if e.target == "cli"] == []
 
 
-def test_only_cli_imports_release(edges):
-    assert [e.where for e in edges if e.target == "release" and e.source != "cli"] == []
-
-
 def test_stage_modules_do_not_import_each_other():
     shared = {"rapidpipe.stages", "rapidpipe.stages.contract", "rapidpipe.stages.settings"}
     stage_modules = {p.stem for p in (PACKAGE_ROOT / "stages").glob("*.py")} - {
@@ -299,38 +287,38 @@ def _targets(source: str, module: str, is_package: bool = False) -> set[str]:
 
 
 def test_scanner_resolves_a_relative_import_to_another_unit():
-    assert _targets("from ..runs import repository\n", "rapidpipe.checks.x") == {"runs"}
-    assert _targets("from .. import runs\n", "rapidpipe.checks.x") == {"runs"}
-    assert _targets("from ...runs.repository import f\n", "rapidpipe.checks.sub.x") == {"runs"}
+    assert _targets("from ..stages import repository\n", "rapidpipe.launch.x") == {"stages"}
+    assert _targets("from .. import stages\n", "rapidpipe.launch.x") == {"stages"}
+    assert _targets("from ...stages.contract import f\n", "rapidpipe.launch.sub.x") == {"stages"}
 
 
 def test_scanner_resolves_a_relative_import_inside_a_package_init():
-    assert _targets("from . import policy\n", "rapidpipe.checks", True) == {"checks"}
-    assert _targets("from .. import runs\n", "rapidpipe.checks", True) == {"runs"}
+    assert _targets("from . import walk\n", "rapidpipe.launch", True) == {"launch"}
+    assert _targets("from .. import stages\n", "rapidpipe.launch", True) == {"stages"}
 
 
 def test_scanner_maps_from_rapidpipe_import_to_the_named_unit():
-    assert _targets("from rapidpipe import runs, log\n", "rapidpipe.cli.x") == {"runs", "log"}
+    assert _targets("from rapidpipe import stages, log\n", "rapidpipe.cli.x") == {"stages", "log"}
     assert _targets("from rapidpipe import __version__\n", "rapidpipe.cli.x") == set()
 
 
 def test_scanner_sees_lazy_and_plain_imports():
-    source = "import rapidpipe.db.connection\n\ndef f():\n    from rapidpipe.runs import x\n"
-    assert _targets(source, "rapidpipe.checks.x") == {"db", "runs"}
+    source = "import rapidpipe.db.connection\n\ndef f():\n    from rapidpipe.stages import x\n"
+    assert _targets(source, "rapidpipe.launch.x") == {"db", "stages"}
 
 
 def test_scanner_sees_import_module_with_a_constant_string():
     source = "import importlib\nimportlib.import_module('rapidpipe.cli.main')\n"
     assert _targets(source, "rapidpipe.products.x") == {"cli"}
-    source = "from importlib import import_module\nimport_module('rapidpipe.runs')\n"
-    assert _targets(source, "rapidpipe.products.x") == {"runs"}
+    source = "from importlib import import_module\nimport_module('rapidpipe.stages')\n"
+    assert _targets(source, "rapidpipe.products.x") == {"stages"}
 
 
 def test_scanner_sees_import_module_through_an_aliased_name():
     source = "import importlib as il\nil.import_module('rapidpipe.cli.main')\n"
     assert _targets(source, "rapidpipe.products.x") == {"cli"}
-    source = "from importlib import import_module as im\nim('rapidpipe.runs')\n"
-    assert _targets(source, "rapidpipe.products.x") == {"runs"}
+    source = "from importlib import import_module as im\nim('rapidpipe.stages')\n"
+    assert _targets(source, "rapidpipe.products.x") == {"stages"}
 
 
 def test_scanner_resolves_a_relative_import_module_call():

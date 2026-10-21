@@ -10,8 +10,7 @@
   "execution_record": "exec/input-set.json",
   "inputs": {
     "manifest": "input-set",
-    "products": {},
-    "result_sets": []
+    "products": {}
   },
   "outputs": [
     {

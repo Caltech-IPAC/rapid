@@ -1,7 +1,7 @@
-"""Persistence: typed repositories, the connection module, migrations.
+"""Persistence: the connection module and identifiers.
 
-Holds database access -- typed repositories over PostgreSQL/Q3C, the
-connection module, and the migrations applier. This subpackage may import
-``rapidpipe.products`` for identifiers and kinds, but provides persistence
-without importing ``rapidpipe.runs`` or any stage module.
+Holds ``connection`` (one connection from the ``PG*`` environment, a
+secret or a parameter tree) and ``ids`` (ULIDs). The foundation's
+operations over ``database/schema.sql`` are ``rapidpipe.foundation``. This
+subpackage imports no stage module.
 """

@@ -1,4 +1,4 @@
-"""One connection path to the run-model tables.
+"""One connection path to the foundation database.
 
 Environment contract, in order, when a caller passes neither ``endpoint=``
 nor ``credentials=`` (a caller holding either passes it explicitly instead
@@ -7,8 +7,8 @@ resolved a secret under its own role -- and it always wins over both
 steps below):
 
 1. The standard ``PG*`` variables -- ``PGHOST``, ``PGPORT``, ``PGDATABASE``,
-   ``PGUSER``, ``PGPASSWORD`` -- exactly as ``database/apply-migrations.sh``
-   reads them, whenever they are set (``RAPID_DB_SECRET_ID`` still takes
+   ``PGUSER``, ``PGPASSWORD`` -- exactly as ``psql`` reads them when it
+   applies ``database/schema.sql``, whenever they are set (``RAPID_DB_SECRET_ID`` still takes
    the credential from Secrets Manager instead of ``PGUSER``/``PGPASSWORD``
    when it is set).
 2. The Batch estate's ``RAPID_PARAMETER_PATH`` SSM parameter tree, when the
@@ -31,8 +31,7 @@ the specification's "Repositories" table). This module only ever asks
 the pooler's (or the database's) own listening port for one connection
 at a time.
 
-This module provides persistence only: it does not import ``rapidpipe.runs``
-or any stage module, matching ``rapidpipe.db``'s package contract.
+This module provides persistence only: it imports no stage module.
 
 Ported, trimmed and adapted from the smdc branch's
 ``database/modules/utils/rapid_db_connect.py`` (kept: explicit
@@ -67,7 +66,7 @@ _REQUIRED_VARS = ("PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD")
 # stage contract and the specification state the shape (timeout, bounded
 # retry, backoff) but not the numbers.
 DEFAULT_CONNECT_TIMEOUT_S = 10
-DEFAULT_CONNECT_ATTEMPTS = 5
+DEFAULT_CONNECT_TRIES = 5
 DEFAULT_BACKOFF_INITIAL_S = 0.5
 DEFAULT_BACKOFF_MULTIPLIER = 2.0
 DEFAULT_BACKOFF_CAP_S = 8.0
@@ -332,7 +331,7 @@ def _connect_with_retry(
     credentials: Credentials,
     application_name: str,
     connect_timeout: int,
-    attempts: int,
+    tries: int,
     backoff_initial: float,
     backoff_multiplier: float,
     backoff_cap: float,
@@ -346,8 +345,8 @@ def _connect_with_retry(
     connect_fn,
     random_func,
 ) -> psycopg2.extensions.connection:
-    if attempts < 1:
-        raise ValueError(f"attempts must be >= 1; got {attempts}")
+    if tries < 1:
+        raise ValueError(f"tries must be >= 1; got {tries}")
 
     # PostgreSQL truncates application_name at NAMEDATALEN-1 (63 bytes)
     # and would silently lose the tail of a long component name; trimmed
@@ -357,7 +356,7 @@ def _connect_with_retry(
 
     delay = backoff_initial
     last_exc: Exception | None = None
-    for attempt in range(1, attempts + 1):
+    for attempt in range(1, tries + 1):
         try:
             return connect_fn(
                 host=endpoint.host,
@@ -375,19 +374,19 @@ def _connect_with_retry(
             )
         except psycopg2.OperationalError as exc:
             last_exc = exc
-            if attempt == attempts:
+            if attempt == tries:
                 break
             wait = random_func(0, delay) if jitter else delay
             logger.warning(
                 "database connect attempt %d/%d failed (%s); retrying in %.1fs",
-                attempt, attempts, exc, wait)
+                attempt, tries, exc, wait)
             sleep(wait)
             delay = min(delay * backoff_multiplier, backoff_cap)
             continue
 
     raise ConnectionUnavailable(
         f"could not connect to {endpoint.host}:{endpoint.port}/{endpoint.dbname} "
-        f"as {credentials.user} after {attempts} attempt(s): {last_exc}"
+        f"as {credentials.user} after {tries} attempt(s): {last_exc}"
     ) from last_exc
 
 
@@ -398,7 +397,7 @@ def connect(
     credentials: Credentials | None = None,
     application_name: str = "rapidpipe",
     connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_S,
-    attempts: int = DEFAULT_CONNECT_ATTEMPTS,
+    tries: int = DEFAULT_CONNECT_TRIES,
     backoff_initial: float = DEFAULT_BACKOFF_INITIAL_S,
     backoff_multiplier: float = DEFAULT_BACKOFF_MULTIPLIER,
     backoff_cap: float = DEFAULT_BACKOFF_CAP_S,
@@ -420,8 +419,7 @@ def connect(
     psycopg2's default (off), so every statement runs inside an implicit
     transaction that the caller must commit or roll back --
     ``transaction()`` below is the common case of "one transaction per
-    call", which every ``rapidpipe.runs.repository`` function needs
-    (each is documented as a single transaction).
+    call".
 
     ``endpoint`` and ``credentials`` are the explicit parameter
     interface: a caller holding either passes it here, and an explicit
@@ -453,8 +451,8 @@ def connect(
     ``ssm_client`` is a test injection point (:func:`credentials_from_secret`
     already covers Secrets Manager); nothing in production passes it.
 
-    Connecting retries up to ``attempts`` times (default
-    :data:`DEFAULT_CONNECT_ATTEMPTS`) on ``psycopg2.OperationalError``,
+    Connecting retries up to ``tries`` times (default
+    :data:`DEFAULT_CONNECT_TRIES`) on ``psycopg2.OperationalError``,
     with exponential backoff from ``backoff_initial`` up to
     ``backoff_cap``, doubling by ``backoff_multiplier`` each time.
     ``jitter=True`` applies full jitter (a random duration in
@@ -483,7 +481,7 @@ def connect(
         credentials=resolved_credentials,
         application_name=application_name,
         connect_timeout=connect_timeout,
-        attempts=attempts,
+        tries=tries,
         backoff_initial=backoff_initial,
         backoff_multiplier=backoff_multiplier,
         backoff_cap=backoff_cap,

@@ -208,8 +208,7 @@ def build_difference_output(inputs: Path, *, differencer: str = "zogy",
         "stage": "difference", "attempt": ATTEMPT,
         "execution_record": f"exec/{ATTEMPT}.json",
         "inputs": {"manifest": "input-set/manifest.json",
-                   "products": {"l2-image": L2_INSTANCE, "reference-image": REFERENCE_INSTANCE},
-                   "result_sets": []},
+                   "products": {"l2-image": L2_INSTANCE, "reference-image": REFERENCE_INSTANCE}},
         "outputs": [difference_entry, *catalog_entries],
     }
     path = inputs / "manifest.json"

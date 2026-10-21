@@ -58,7 +58,7 @@ def aid_of(ra: float, dec: float) -> int:
 
 
 class World:
-    """The synthetic world on one connection, with a root directory for attempts."""
+    """The synthetic world on one connection, with a root directory for attempt prefixes."""
 
     def __init__(self, conn, root: Path):
         self.conn = conn

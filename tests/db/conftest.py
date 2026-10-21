@@ -1,17 +1,13 @@
-"""Fixtures for the database-backed rapidpipe.runs.repository tests.
+"""Fixtures for the database-backed tests, against ``database/schema.sql``.
 
 Separate from tests/unit/ so the plain unit-test job
 (.github/workflows/unit-tests.yml) stays database-free: collection of this
 directory does no I/O until a fixture is actually used.
 
-Every test gets a fresh connection whose whole body runs inside one
-outer transaction that is always rolled back at teardown -- tests never
-commit, so one test's rows never leak into the next test's queries. The
-repository functions themselves open no transactions of their own (see
-rapidpipe.runs.repository's module docstring): they operate on the
-connection they are given, so running each test inside one already-open,
-never-committed transaction is exactly the isolation psycopg2 gives for
-free, no per-test schema reset required.
+``conn`` is one connection whose whole test runs inside one transaction
+that is rolled back at teardown, for tests that never commit; ``connect``
+is a factory of connections for tests of the foundation's operations,
+which commit, and empties the bookkeeping tables before and after.
 
 Failing, not skipping: the ``conn`` and ``connect`` fixtures fail with "PGHOST is not
 set; database tests need a database" when ``PGHOST`` is unset. A skip is

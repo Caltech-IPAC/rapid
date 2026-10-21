@@ -3,7 +3,7 @@
 Foundation plan v5 (2026-10-20), Part 1: a run is a recipe
 (:func:`create_run`), a job is one execution under it with its inputs
 recorded at launch (:func:`create_job`), the publisher loads one completed
-attempt's declared outputs and attempts the automatic binding
+attempt's declared outputs and tries the automatic binding
 (:func:`publish`), and one operation changes official bindings in a
 recorded, reversible group (:func:`change`, :func:`undo`).
 

@@ -19,7 +19,6 @@ from astropy.io import fits
 from astropy.utils.exceptions import AstropyUserWarning
 
 from rapidpipe.products import filters as products_filters
-from rapidpipe.products import refimage
 from rapidpipe.science.reference import awaicgen, catalog, header, identity, measure, prep
 
 AWAICGEN = {
@@ -75,17 +74,11 @@ def test_rapid_filter_name_normalises_to_the_rapid_spelling():
     assert prep.rapid_filter_name("X999") == "X999"
 
 
-def test_both_former_filter_map_copies_resolve_to_the_one_in_products():
-    """`rapidpipe.science.reference.prep` and `rapidpipe.products.refimage`
-    each ported `dev`'s filter map separately; a later pass kept one
-    copy, in `rapidpipe.products.filters`, and re-exported it under both
-    former names. Both import paths must still resolve to that one function
-    and that one map, not merely equal copies of them.
-    """
+def test_the_filter_map_resolves_to_the_one_in_products():
+    """`rapidpipe.science.reference.prep` re-exports the one copy of `dev`'s
+    filter map, in `rapidpipe.products.filters`, not an equal copy of it."""
     assert prep.rapid_filter_name is products_filters.rapid_filter_name
-    assert refimage.rapid_filter_name is products_filters.rapid_filter_name
     assert prep.ROMAN_TO_RAPID_FILTER_NAMES is products_filters.ROMAN_TO_RAPID_FILTER_NAMES
-    assert refimage.ROMAN_TO_RAPID_FILTER_NAMES is products_filters.ROMAN_TO_RAPID_FILTER_NAMES
 
 
 def test_mjd_to_jd():

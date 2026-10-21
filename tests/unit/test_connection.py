@@ -176,7 +176,7 @@ def test_retry_happens_on_operational_error_and_succeeds_within_the_limit(monkey
     with conn_mod.connect(
         endpoint=conn_mod.Endpoint("h", "5432", "d"),
         credentials=conn_mod.Credentials("u", "p"),
-        attempts=5,
+        tries=5,
         backoff_initial=1.0,
         backoff_multiplier=2.0,
         backoff_cap=100.0,
@@ -198,7 +198,7 @@ def test_retry_stops_at_the_limit_and_raises_the_last_error(monkeypatch):
         with conn_mod.connect(
             endpoint=conn_mod.Endpoint("h", "5432", "d"),
             credentials=conn_mod.Credentials("u", "p"),
-            attempts=3,
+            tries=3,
             backoff_initial=0.1,
             backoff_cap=1.0,
             connect_fn=connect_fn,
@@ -206,7 +206,7 @@ def test_retry_stops_at_the_limit_and_raises_the_last_error(monkeypatch):
         ):
             pass
 
-    assert len(calls) == 3  # bounded at `attempts`, never a fourth try
+    assert len(calls) == 3  # bounded at `tries`, never a fourth try
     assert "simulated failure 3" in str(excinfo.value)
     assert excinfo.value.__cause__ is not None
 
@@ -220,7 +220,7 @@ def test_backoff_is_bounded_by_the_cap(monkeypatch):
     with conn_mod.connect(
         endpoint=conn_mod.Endpoint("h", "5432", "d"),
         credentials=conn_mod.Credentials("u", "p"),
-        attempts=6,
+        tries=6,
         backoff_initial=1.0,
         backoff_multiplier=3.0,
         backoff_cap=5.0,
@@ -243,7 +243,7 @@ def test_jitter_true_samples_within_zero_and_delay(monkeypatch):
     with conn_mod.connect(
         endpoint=conn_mod.Endpoint("h", "5432", "d"),
         credentials=conn_mod.Credentials("u", "p"),
-        attempts=2,
+        tries=2,
         backoff_initial=4.0,
         jitter=True,
         connect_fn=connect_fn,
@@ -267,7 +267,7 @@ def test_non_operational_error_is_not_retried(monkeypatch):
         with conn_mod.connect(
             endpoint=conn_mod.Endpoint("h", "5432", "d"),
             credentials=conn_mod.Credentials("u", "p"),
-            attempts=5,
+            tries=5,
             connect_fn=_connect,
             sleep=lambda _s: None,
         ):
@@ -276,13 +276,13 @@ def test_non_operational_error_is_not_retried(monkeypatch):
     assert len(calls) == 1  # never retried
 
 
-def test_attempts_less_than_one_is_rejected(monkeypatch):
+def test_tries_less_than_one_is_rejected(monkeypatch):
     _clear_pg_env(monkeypatch)
     with pytest.raises(ValueError):
         with conn_mod.connect(
             endpoint=conn_mod.Endpoint("h", "5432", "d"),
             credentials=conn_mod.Credentials("u", "p"),
-            attempts=0,
+            tries=0,
             connect_fn=_recording_connect_fn([]),
             sleep=lambda _s: None,
         ):
@@ -338,7 +338,7 @@ def test_application_name_is_truncated_at_63_bytes(monkeypatch):
 
 # ======================================================================
 # connect() / transaction() still work with no arguments, matching the
-# existing caller (rapidpipe.runs.repository) that calls transaction()
+# callers that pass none, the CLI's verbs among them
 # ======================================================================
 
 def test_connect_and_transaction_accept_no_arguments(monkeypatch):

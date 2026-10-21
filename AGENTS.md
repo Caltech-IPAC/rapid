@@ -18,7 +18,13 @@ install the hook with `git config core.hooksPath .githooks`.
 
 ## Design authority
 
-**Design authority** is the readthedocs system pages
+**For the foundation** (the schema, runs, jobs, the publisher, official
+bindings and the verbs), the design authority is the foundation plan,
+PLAN.md v5 (2026-10-20), held outside this repository until its
+`rapid_docs` page lands after milestone 3; it supersedes the `runs.md`,
+`products.md`, `checks.md` and `releases.md` pages for the foundation.
+
+Otherwise, **design authority** is the readthedocs system pages
 (https://roman-rapid.readthedocs.io/en/latest/system/), sourced from
 the `rapid_docs` repository's `system/` directory: `specification.md`
 (requirements), `stage-contract.md` (package layout and per-stage
@@ -32,7 +38,7 @@ patch code around a stale page. README.md gives a longer prose walkthrough
 of these rules and the CLI surface. Where they overlap, this file is the
 summary and README.md has the detail.
 
-## Branches, pull requests and releases
+## Branches and pull requests
 
 - `rebuild` is the rebuild's integration branch. All rebuild work lands
   on it by pull request; nobody pushes to it directly.
@@ -42,30 +48,20 @@ summary and README.md has the detail.
   `rapid_docs` page(s) the PR implements or corrects. Watch CI to green
   before handing back; CI green is the merge gate, never merge a red PR.
   Use rebase merge (squash only when the branch carries a merge commit).
-  Do not merge your own PR without permission from the person directing
-  the work.
-- Releases are annotated tags `rebuild-v0.<n>` cut from `rebuild`'s head
-  by `rapidpipe release cut` (`rapidpipe.release.core`), which tags,
-  migrates, records, builds, deploys and pins in one guarded sequence.
-  Once cut, the scheme becomes `v1.<n>` at the point the rebuild
-  replaces `main` (not yet).
-
-Cut a release with `python -m rapidpipe.release cut` (or
-`rapidpipe release cut`). It invokes `rapid_systems`-supplied hooks for
-the account-specific steps (migrate, build, deploy, pins); this repository
-names no account, host or bucket itself.
+  Agents merge their own PRs on `rebuild` once CI is green (Ben,
+  2026-09-23).
 
 ## Repository layout
 
 | Path | Holds |
 |---|---|
 | `rapidpipe/` | The pipeline package (map below). |
-| `database/` | `migrations/` and `apply-migrations.sh` (the schema), and `modules/utils/roman_tessellation{,_db}.py` (closed-form sky tessellation, imported by `rapidpipe.science`). |
+| `database/` | `schema.sql` (the whole schema, applied with one `psql -f`), and `modules/utils/roman_tessellation{,_db}.py` (closed-form sky tessellation, imported by `rapidpipe.science`). |
 | `modules/` | Helpers the stages use from `dev`: `sip_tpv/` (imported by `science/difference/resample.py`), `zogy/` and `sfft/` (scripts the difference stage runs from `/code/modules/...`). |
 | `cdf/` | SExtractor/SWarp configuration files the stages read at `/code/cdf`. |
 | `c/` | Vendored C tool source; the image takes the tools from the base image's RPMs instead. |
 | `containers/` | The pipeline image recipe (`rapid-pipeline/build.sh`, `Containerfile`). |
-| `tests/` | `unit/`, `db/`, `cli/` and `fixtures/<stage>/`. |
+| `tests/` | `unit/`, `db/` (with `db/proof/`, the procedure proof), `cli/` and `fixtures/<stage>/`. |
 | `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list. |
 | `docs/` | The Sphinx source of the readthedocs site. |
 
@@ -85,9 +81,7 @@ below it in this order:
 Leaf modules
 (`exitcodes`, `log`, `revision`, `seams`: no `rapidpipe` import) <
 `products` < `db`, `science` and `foundation` (which do not import one
-another) <
-`checks` < `runs` < `stages` < `launch` < `selftest` < `cli`. `release`
-imports only the leaves and `db`, and only `cli` imports it. Stage modules
+another) < `stages` < `launch` < `selftest` < `cli`. Stage modules
 never import other stage modules.
 
 A failure names the offending edge and file:line. A new edge up the order
@@ -95,45 +89,25 @@ is a design question for the stage-contract page, not a test to relax.
 
 | Subpackage | Holds |
 |---|---|
-| `stages/` | One module per stage (`admit`, `reference`, `difference`, `finalize`, `register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export`), plus the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (reserved: no stage in this build returns it), 70 unclassified error, 75 retryable transient failure. |
+| `stages/` | One module per stage (`admit`, `reference`, `difference`, `finalize`), plus the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (reserved: no stage in this build returns it), 70 unclassified error, 75 retryable transient failure. The run model's database stages (`register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export`) were retired with its schema; the foundation plan's Part 5 ports their science. |
 | `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `finalize`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
-| `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), per-kind modules (`l2image`, `refimage`, `diffimage`, `psf`, `alertcontainer`, `catalogexport`), `units.py` (`register`'s producer-keyed unit id), and `spatial` (the pure HEALPix and tessellation derivations `db` needs; `science.spatial` re-exports them). |
-| `db/` | Persistence: `connection.py`, per-table modules (`l2files`, `refimages`, `diffimages`, `sources`, `objects`, `psfs`, `alerts`, `ids`), and the migrations applier (`database/apply-migrations.sh`, not itself under `rapidpipe/`). |
-| `foundation/` | The foundation plan's operations over `database/schema.sql`: `bookkeeping.py` (`create_run`, `create_job`, `run_show`, `job_show`), `official.py` (`change`, `undo`, `apply`, `Refused`), `publish.py` (`publish`, the manifest format, `PublishError`). Library functions only; no verb calls them yet. |
-| `runs/` | `repository.py` (runs, units, attempts, instances, promotion by slot: each instance's `slot` and `identity` are derived from its `logical_key` in SQL by `product_identity_fill()`, migration `20260926-02-product-slots.sql`, never in Python), `create.py` (recording a run: `run create`, `--seed --only-failed`), `slots.py` (promotion selectors and the frozen plans of `run promote-plan`), `local.py` (subprocess execution of one attempt), `cleanup.py` (deletion guard and blocking-reference checks), `inputs.py` (binding a unit's inputs from its input-set manifest), `binding.py` (`bind_input_set`, the one path by which both composers admit, bind and write an input set), `checking.py` (running and recording candidate checks, automatic promotion). |
-| `launch/` | `batch.py` (turning a run into Batch jobs, reading results back), `walk.py` (the run walk: `run start`, the loop's per-unit walk), `loop.py` (the processing-date loop) and `discovery.py` (the loop's inbox discovery and delivery classification). |
-| `release/` | `core.py` (`cut`/`show`/`list`/`verify`), `hooks.py` (the account-specific hook contract), `__main__.py`. |
-| `checks/` | `registry.py`, `builtin.py`, `policy.py`, and the shipped policy under `policies/<name>@<version>.toml` (`rebuild-trial@1`; `rebuild-strict@1` is a test fixture in `tests/fixtures/checks/`). |
-| `cli/` | The `rapidpipe` command-line tool: `main.py` dispatches to `runctl.py` (`run ...`), `stagectl.py` (`stage ...`), `checkctl.py` (`check ...`), `loopctl.py` (`loop ...`); `release` dispatches into `rapidpipe.release`. |
-| `selftest/` | `runner.py` plus per-stage modules and `support/` fakes; drives `make stage-<name>` and `rapidpipe selftest --stage <name> [--real-tools]`. `fixtures/` ships each stage's packaged expected output. |
+| `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), per-kind modules (`l2image`, `diffimage`), `filters`, and `spatial` (the pure HEALPix and tessellation derivations; `science.spatial` re-exports them). |
+| `db/` | `connection.py` (one connection from the `PG*` environment, a secret or a parameter tree) and `ids.py` (ULIDs). |
+| `foundation/` | The foundation plan's operations over `database/schema.sql`: `bookkeeping.py` (`create_run`, `create_job`, `run_show`, `job_show`), `official.py` (`change`, `undo`, `apply`, `Refused`), `publish.py` (`publish`, the manifest format, `PublishError`). The verbs in `cli/main.py` wrap them. |
+| `launch/` | `__init__.py`: `submit` (a job's stage to AWS Batch) and `run_locally` (the same as a subprocess). No retry and no attempt bookkeeping. |
+| `cli/` | The `rapidpipe` command-line tool: `main.py` holds the five foundation verbs (`run create`, `run show`, `job show`, `official change`, `official undo`) and `selftest`, and dispatches `stage ...` to `stagectl.py`. |
+| `selftest/` | `runner.py` plus per-stage modules (`reference`, `difference`, `finalize`) and `support/` fakes; drives `make stage-<name>` and `rapidpipe selftest --stage <name> [--real-tools]`. `fixtures/` ships each stage's packaged expected output. |
 | `exitcodes.py` | A bare top-level module, not a subpackage: `ExitCode`, the one exit-code vocabulary, and `ArgumentParser` (parse failures exit 64). Stdlib-only, so every subpackage, `science` included, may import it. |
 | `settings/` | Per-stage default settings and schema, `<name>.toml`, merged recursively with a `--settings` overlay. |
 
-## Migrations
+## The schema
 
-`database/apply-migrations.sh` applies `database/migrations/*.sql` in
-filename order using `PG*` environment variables. It requires PostgreSQL
-16+ with the Q3C extension; CI uses PostgreSQL 18. Full rules are in
-`database/migrations/README.md`:
-
-- **New files only**, named `YYYYMMDD-NN-short-name.sql` (today's date,
-  next unused two-digit sequence for that date). Never edit a file applied
-  anywhere; the applier hashes each applied file and refuses changes.
-- **The migration number is claimed at merge, not at authorship**: if
-  another PR merges the same-date `NN` first, rebase and take the next
-  free number before your PR merges.
-- **One change per file.** A schema change and the code that needs it
-  land in the same pull request. CI (`db-migrations.yml`) applies the
-  whole stream to a fresh database, re-applies it to confirm idempotence,
-  and checks that changes to an already-applied file are refused.
-- **Additive only while an earlier release's runs are open** (no drop
-  or rename of a column or table a live release still reads): this is
-  a constraint of the release model (`releases.md`, ruling R7), not
-  only a migrations-file rule.
-- Grants to the `rapid_rebuild_pipeline` role follow the pattern of the
-  existing grant migrations (e.g. `20260923-01-rebuild-pipeline-grants.sql`,
-  `20260924-06-objects-grants.sql`); a new table or child-table set gets
-  its own grants migration alongside it.
+`database/schema.sql` is the whole schema, applied to an empty
+PostgreSQL 18 database with `psql -v ON_ERROR_STOP=1 -f
+database/schema.sql`; it creates the Q3C extension and its indexes when
+Q3C is installed and says so in a NOTICE when it is not. There is no
+migration machinery until the first change after real data (foundation
+plan, "Fresh schema, one file"); from then on changes are incremental SQL.
 
 ## Tests and CI
 
@@ -142,9 +116,9 @@ a `tests/db` test, not only a mocked `tests/unit` one.
 
 | Suite | Workflow | Runs against |
 |---|---|---|
-| `tests/unit` | `unit-tests.yml` | No database; `rapidpipe.db`/`rapidpipe.runs` import `psycopg2` but tests mock it. Run locally: `python -m pytest tests/unit -q` in any interpreter that has `pip install -r requirements.txt pytest`; requirements.txt is the one dependency authority (pyproject.toml reads it, the CI workflows install from it). No per-checkout venv is needed or assumed. |
-| `tests/db` | `db-migrations.yml` | Real PostgreSQL 18 + Q3C service container, migrations applied first. Needs a live PostgreSQL; there is none on the laptop, so this suite is CI-only for a laptop-based agent. |
-| `tests/cli` | `cli-behaviour.yml` | Real PostgreSQL 18 + Q3C, Batch and S3 faked (`tests/unit/fakebatch.py`, `fakes3.py`). Black-box: argv in, exit code/stdout/stderr/database state out. CI-only, same reason. |
+| `tests/unit` | `unit-tests.yml` | No database; `rapidpipe.db`/`rapidpipe.foundation` import `psycopg2` but tests never connect. Run locally: `python -m pytest tests/unit -q` in any interpreter that has `pip install -r requirements.txt pytest`; requirements.txt is the one dependency authority (pyproject.toml reads it, the CI workflows install from it). No per-checkout venv is needed or assumed. |
+| `tests/db` | `foundation.yml` | Real PostgreSQL 18 + Q3C service container, `schema.sql` applied first: the schema, the publisher, change groups and the procedure proof (`tests/db/proof/`). Fails, never skips, when `PGHOST` is unset; any throwaway PostgreSQL 18 serves locally. |
+| `tests/cli` | `foundation.yml` | The five verbs against the same database: argv in, exit code/stdout/stderr/database state out. |
 | n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version`, `stage admit --help`, the imports of the kept helpers outside `rapidpipe/` and the presence of the `/code` script and config files. Proves the build recipe only, not the production science environment. |
 | n/a | `public-safety.yml` | `scripts/check-public-safety.sh`, see above. |
 

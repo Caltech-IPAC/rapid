@@ -12,11 +12,7 @@
 # production science environment, which only rapid_systems can build.
 #
 # psycopg2-binary and numpy/astropy install from wheels on this stand-in
-# base without difficulty. healpy is not in requirements.txt yet (a
-# concurrent pull request adds it for the register stage); import-gate.py
-# only checks for healpy when requirements.txt names it, so this workflow
-# does not need to install it by hand and will pick it up automatically
-# once that pull request lands.
+# base without difficulty, as does healpy, which requirements.txt names.
 #
 # build.sh is told --engine docker explicitly: the runner has both podman
 # and docker, build.sh prefers podman when left to choose, and the two
@@ -73,7 +69,7 @@ jobs:
       - name: smoke test -- stage list matches the expected roster
         run: |
           actual="$(docker run --rm rapid-pipeline:ci stage list | cut -f1)"
-          expected="admit reference difference finalize register load maintain crossmatch statistics prune alerts export"
+          expected="admit reference difference finalize"
           actual_joined="$(echo "$actual" | tr '\n' ' ' | sed 's/ *$//')"
           if [ "$actual_joined" != "$expected" ]; then
             echo "stage list mismatch:"

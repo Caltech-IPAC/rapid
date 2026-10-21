@@ -18,7 +18,7 @@ registered product"), so it travels only inside the registration block,
 not as a `products_read` dependency edge.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
-``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
+``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli`` (stage contract, dependency
 direction; see ``tests/unit/test_dependency_direction.py``).
 """
@@ -95,7 +95,7 @@ DECLARATION = StageDeclaration(
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=(),
     produces=("l2-image",),
-    database_access="custody",
+    database_access="none",
 )
 
 
@@ -424,7 +424,7 @@ def _body(context: StageContext) -> StageResult:
         registration=registration.to_dict(),
     )
 
-    return StageResult(outputs=[output_entry], products_read={}, result_sets_read=())
+    return StageResult(outputs=[output_entry], products_read={})
 
 
 def main(argv: list[str]) -> int:

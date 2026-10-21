@@ -1,7 +1,7 @@
 # Database
 
-The `rapid` PostgreSQL database schema, its migrations, the tool that
-applies them, and the sky-tessellation helpers the pipeline imports.
+The `rapid` PostgreSQL database schema and the sky-tessellation helpers
+the pipeline imports.
 
 - [`schema.sql`](schema.sql): the foundation schema (foundation plan v5,
   Part 1): the scientific tables with a job on every row, `runs`, `jobs`,
@@ -14,17 +14,9 @@ applies them, and the sky-tessellation helpers the pipeline imports.
   ```
 
   It creates the Q3C extension and its indexes when Q3C is installed and
-  says so in a NOTICE when it is not, as on a developer's container. It
-  replaces `migrations/` when the old verbs are retired; until then both
-  exist and CI tests each.
-
-- [`migrations/`](migrations/README.md): the schema, as versioned SQL
-  applied in filename order. See that README for the rules and how to run
-  the applier locally.
-- [`apply-migrations.sh`](apply-migrations.sh): the applier, run by CI
-  (`db-migrations.yml`, `cli-behaviour.yml`) against a fresh PostgreSQL
-  with Q3C on every push and pull request, and by the release migrate
-  hook, which reads it and `migrations/` from the tagged git tree.
+  says so in a NOTICE when it is not, as on a developer's container. There
+  is no migration machinery until the first change after real data; from
+  then on changes are incremental SQL.
 - `modules/utils/roman_tessellation.py` and
   `modules/utils/roman_tessellation_db.py`: the closed-form Roman sky
   tessellation (`RomanTessellationClosedForm`), imported by
@@ -33,4 +25,4 @@ applies them, and the sky-tessellation helpers the pipeline imports.
 
 `dev`'s `schema/`, `scripts/` (including `buildDatabase.sh`), `sims/`,
 `config/` and `modules/utils/rapid_db.py` are not carried on this branch:
-`migrations/` supersedes the schema, and nothing here imports the rest.
+`schema.sql` supersedes the schema, and nothing here imports the rest.

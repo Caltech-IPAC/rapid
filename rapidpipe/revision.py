@@ -1,7 +1,6 @@
 """The source revision of the current git checkout.
 
-Shared by ``rapidpipe.cli.main``, ``rapidpipe.runs.local`` and
-``rapidpipe.stages.contract``, which each recorded a run's or an
+Shared by ``rapidpipe.cli.main`` and ``rapidpipe.stages.contract``, which each recorded a run's or an
 execution record's source revision with their own copy of this lookup
 before this module existed. Each caller applies its own fallback for
 when git yields nothing (a plain ``"unknown"`` string, or, in the
