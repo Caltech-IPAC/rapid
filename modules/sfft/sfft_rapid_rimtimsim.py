@@ -6,7 +6,7 @@ import numpy as np
 from astropy.io import fits, ascii
 from astropy.stats import sigma_clipped_stats
 from astropy.convolution import convolve_fft
-from scipy.ndimage import binary_dilation
+from scipy.ndimage import distance_transform_edt
 
 from sfft.utils.pyAstroMatic.PYSEx import PY_SEx
 from sfft.CustomizedPacket import Customized_Packet
@@ -26,7 +26,7 @@ nCPUthreads = 8  #number of CPU threads to use for SFFT
 verbose = 0  #verbosity level for SFFT (0=quiet, 1=normal, 2=full)
 
 #sfft functions
-def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=True, bsmask_cat=None, sat_value=1e6, satmask_radius1=30.0, satmask_radius2=45.0, npix_seg2=4000.0,  bsmask_value=1e6, bsmask_radius=100.0):
+def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=True, bsmask_cat=None, sat_value=1e6, satmask_radius1=30.0, satmask_radius2=45.0, npix_seg2=4000.0,  bsmask_value=1e6, bsmask_radius=100.0, bsmask_isoarea=None, bsmask_isofactor=2.0):
     """
     Create detection mask for sfft to mask background/noise pixels. By default this runs SExtractor using the wrapper within sfft to generate a segmentation image.
     To DO: could implement input Sextractor parameters.
@@ -45,6 +45,10 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
     npix_seg2 (float) : Area in pixels in segmentation image corresponding to sat_maskradius2, used for scaling.
     bsmask_value (float) : Value above which pixels are considered bright stars.
     bsmask_radius (float) : Radius around bright stars to mask.
+    bsmask_isoarea (float) : If set (catalog masking only), also mask sources with ISOAREA_IMAGE >= this, and give every
+        masked source the radius max(bsmask_radius, bsmask_isofactor * sqrt(ISOAREA_IMAGE / pi)).  For stars whose
+        saturated core is missing, FLUX_MAX does not reflect their brightness but their isophotal area does.
+    bsmask_isofactor (float) : Radius in units of the source's isophotal equivalent radius; see bsmask_isoarea.
 
     Returns
     -------
@@ -83,10 +87,8 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
     if bsmask:
         hdudata[bkg_mask] = 0.0
 
-        #build circular dilation footprint for bright pixel masking
-        r = int(np.ceil(bsmask_radius))
-        yy, xx = np.ogrid[-r:r+1, -r:r+1]
-        bs_footprint = xx**2 + yy**2 <= bsmask_radius**2
+        #bright pixels are grown into discs of radius bsmask_radius with a distance transform: the same disc as
+        #binary_dilation with a circular footprint, which at a 100 px radius takes hours on a 4088 x 4088 frame
 
         if bsmask_cat is not None:
             bscat = ascii.read(bsmask_cat)
@@ -100,15 +102,21 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
                 #scale based on "size" of source measured by sextrator
                 source_mask_radius = satmask_radius1 + (satmask_radius2 - satmask_radius1)/(np.sqrt(npix_seg2) - 1) * (np.sqrt(source['ISOAREA_IMAGE']) - 1)
                 #mask all pixels within radius
-                pix_dist =  np.sqrt((X - source[xcol] - 1)**2 + (Y - source[ycol] - 1)**2)
+                pix_dist =  np.sqrt((X - source[xcol] + 1)**2 + (Y - source[ycol] + 1)**2)
                 sat_mask = pix_dist <= source_mask_radius
                 bkg_mask[sat_mask] = 1
 
             #now mask addtional bright sources below saturation
-            bright_sources = bscat[(bscat['FLUX_MAX'] < sat_value) & (bscat['FLUX_MAX'] >= bsmask_value)]
+            bright = bscat['FLUX_MAX'] >= bsmask_value
+            if bsmask_isoarea is not None:
+                bright |= bscat['ISOAREA_IMAGE'] >= bsmask_isoarea
+            bright_sources = bscat[(bscat['FLUX_MAX'] < sat_value) & bright]
             for source in bright_sources:
-                pix_dist = np.sqrt((X - source[xcol] - 1)**2 + (Y - source[ycol] - 1)**2)
-                bs_mask = pix_dist <= bsmask_radius
+                pix_dist = np.sqrt((X - source[xcol] + 1)**2 + (Y - source[ycol] + 1)**2)
+                radius = bsmask_radius
+                if bsmask_isoarea is not None:
+                    radius = max(bsmask_radius, bsmask_isofactor * np.sqrt(source['ISOAREA_IMAGE'] / np.pi))
+                bs_mask = pix_dist <= radius
                 bkg_mask[bs_mask] = 1
 
             #final check: catch any bright pixels missed by catalog masking (e.g. saturated sources not well-characterised by sextractor)
@@ -116,13 +124,13 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
             hdudata[bkg_mask] = 0.0
             bright_pix_mask = hdudata >= bsmask_value
             if bright_pix_mask.any():
-                bkg_mask[binary_dilation(bright_pix_mask, structure=bs_footprint)] = 1
+                bkg_mask[distance_transform_edt(~bright_pix_mask) <= bsmask_radius] = 1
 
         else:
-            #mask bright pixels using binary dilation with circular footprint
+            #mask bright pixels, grown by bsmask_radius
             bright_pix_mask = hdudata >= bsmask_value
             if bright_pix_mask.any():
-                bkg_mask[binary_dilation(bright_pix_mask, structure=bs_footprint)] = 1
+                bkg_mask[distance_transform_edt(~bright_pix_mask) <= bsmask_radius] = 1
 
     return bkg_mask
 
@@ -325,6 +333,9 @@ if __name__ == "__main__":
     parser.add_argument('--npixseg2', help='area in pixels in segmentation image corresponding to larger satmask radius for scaling', type=float, default=4000.)
     parser.add_argument('--bsmaskvalue', help='bright source mask value for images, used to mask bright source pixels', type=float, default=1e6)
     parser.add_argument('--bsmaskradius', help='bright source mask radius (in pixels)', type=float, default=0.)
+    parser.add_argument('--bsmaskisoarea', help='with catalogs: also mask sources with ISOAREA_IMAGE >= this, with radius scaled by their isophotal size', type=float, default=None)
+    parser.add_argument('--bsmaskisofactor', help='masking radius in units of the isophotal equivalent radius (see --bsmaskisoarea)', type=float, default=2.0)
+    parser.add_argument('--zeromargin', help='leave out of the kernel fit pixels that are exactly 0 in either image (NaNs filled with 0 upstream) and those within this many pixels of one', type=float, default=None)
     parser.add_argument('--outlabel', help='label prefix for output file names', type=str, default='sfft')
 
     args = parser.parse_args()
@@ -345,6 +356,9 @@ if __name__ == "__main__":
     bsmask_value = args.bsmaskvalue
     bsmask_radius = args.bsmaskradius
     outlabel = args.outlabel
+    bsmask_isoarea = args.bsmaskisoarea
+    bsmask_isofactor = args.bsmaskisofactor
+    zero_margin = args.zeromargin
 
     if crossconv and (scipsf is None or refpsf is None):
         parser.error('--scipsf and --refpsf are required when --crossconv is used')
@@ -365,14 +379,16 @@ if __name__ == "__main__":
 
     sci_bkgmask = bkg_mask(sciim, use_segm=use_scisegm, run_sextractor=run_scisextractor, segm_image=scisegm, bsmask=True, bsmask_cat=scicat,
                            sat_value=sat_value, satmask_radius1=satmask_radius1, satmask_radius2=satmask_radius2, npix_seg2=npix_seg2,
-                           bsmask_value=bsmask_value, bsmask_radius=bsmask_radius)
+                           bsmask_value=bsmask_value, bsmask_radius=bsmask_radius,
+                           bsmask_isoarea=bsmask_isoarea, bsmask_isofactor=bsmask_isofactor)
 
     use_refsegm = refsegm is not None
     run_refsextractor = use_refsegm and not os.path.isfile(refsegm)
 
     ref_bkgmask = bkg_mask(refim, use_segm=use_refsegm, run_sextractor=run_refsextractor, segm_image=refsegm, bsmask=True, bsmask_cat=refcat,
                            sat_value=sat_value, satmask_radius1=satmask_radius1, satmask_radius2=satmask_radius2, npix_seg2=npix_seg2,
-                           bsmask_value=bsmask_value, bsmask_radius=bsmask_radius)
+                           bsmask_value=bsmask_value, bsmask_radius=bsmask_radius,
+                           bsmask_isoarea=bsmask_isoarea, bsmask_isofactor=bsmask_isofactor)
 
     if not skipcovmask:
         if (refcovmap is not None) and os.path.isfile(refcovmap):
@@ -387,6 +403,10 @@ if __name__ == "__main__":
 
     #make the combined mask
     _nanmask = np.isnan(scidata) | np.isnan(refdata)
+    #the pipeline fills NaNs (DQ-masked and saturated pixels) with 0 before SFFT, so they must be found as zeros;
+    #left in, a zeroed saturated core against real reference flux dominates the kernel fit
+    if zero_margin is not None:
+        _nanmask |= distance_transform_edt(~((scidata == 0) | (refdata == 0))) <= zero_margin
     _bkgmask = np.logical_or(sci_bkgmask,ref_bkgmask) #only include sources in both images
     bkgmask = np.logical_or(_nanmask, _bkgmask) #nans should be zeros for sfft masks
     bkgmaskim = sciim.replace('.fits','_bkgmask.fits')
