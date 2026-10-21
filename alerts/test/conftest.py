@@ -335,6 +335,13 @@ def make_source_row(sid, xfit, yfit, mjdobs, tpv_header, pid=CHIP_PID,
         "redchi": 1.2, "npixfit": 25, "sharpness": 0.4,
         "roundness1": 0.1, "roundness2": -0.05, "peak": 321.0,
         "exptime": 139.8,
+        # Roman observation identifiers from the exposures row (migration
+        # 20261015) and the survey title joined through the program
+        "program_id": -1, "execution_plan": 1, "obs_pass": 2, "segment": 3,
+        "observation": 4, "visit": 5, "exposure": 6,
+        "observation_id": "-1 1 2 3 4 5 6", "survey": "SOCSIMS",
+        # real/bogus score and label stored with the detection
+        "rb": 0.87, "rblabel": 1,
     }
 
 
@@ -640,7 +647,7 @@ def make_provider(chip_data):
 
     def _make(diff_flavor="sfft", kona_lookup=None, refcat=True,
               ned_reader=None, lvs_reader=None, gaia_reader=None,
-              forced_phot=False):
+              forced_phot=False, rb_threshold=None, rb_version=None):
         # forced photometry off by default: many tests take the single-alert
         # path, which raises NotImplementedError with it on; the forced
         # tests in test_provider.py build their own provider with it on
@@ -648,7 +655,8 @@ def make_provider(chip_data):
             FakeDB(chip_data), diff_flavor=diff_flavor,
             kona_lookup=kona_lookup, refcat=refcat, ned_reader=ned_reader,
             lvs_reader=lvs_reader, gaia_reader=gaia_reader,
-            forced_phot=forced_phot)
+            forced_phot=forced_phot,
+            rb_threshold=rb_threshold, rb_version=rb_version)
         providers.append(provider)
         return provider
 
