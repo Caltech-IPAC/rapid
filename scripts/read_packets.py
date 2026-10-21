@@ -46,7 +46,7 @@ import psycopg2
 import psycopg2.extras
 from astropy.io import fits
 
-from rapidpipe.foundation.local import local_path
+from rapidpipe.foundation.prefix import get
 from rapidpipe.science.alerts.assemble import load_schema
 from rapidpipe.science.alerts.cutouts import STAMP_FILL_VALUE
 
@@ -127,7 +127,7 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
         failures.append(f"job {job}: {len(chip_rows)} recorded trigger difference images, expected 1")
         chip = None
     else:
-        header = fits.getheader(local_path(chip_rows[0]["filename"]))
+        header = fits.getheader(get(chip_rows[0]["filename"]))
         chip = (int(header["NAXIS2"]), int(header["NAXIS1"]))
 
     containers: dict[str, tuple[bytes, int]] = {}
@@ -135,7 +135,7 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
         filename = row["filename"]
         where = f"job {job} sid {row['sid']}"
         if filename not in containers:
-            path: Path = local_path(filename)
+            path: Path = get(filename)
             data = path.read_bytes()
             schema = load_schema(row["schema_version"])
             records = list(fastavro.reader(io.BytesIO(data)))

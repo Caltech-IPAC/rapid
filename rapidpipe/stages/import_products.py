@@ -48,7 +48,8 @@ import pyarrow.parquet as pq
 from astropy.io import fits
 from astropy.wcs import WCS
 
-from rapidpipe.foundation.local import JobContext, local_path
+from rapidpipe.foundation.local import JobContext
+from rapidpipe.foundation.prefix import get
 from rapidpipe.products.filters import rapid_filter_name
 from rapidpipe.science.limmag import image_hdu_index, limiting_magnitude
 from rapidpipe.science.load.catalogs import CATALOG_COLUMNS, healpix_arrays, tessellation_ids
@@ -117,7 +118,7 @@ def _copy(job: JobContext, path: Path) -> tuple[str, str]:
     with target.open("rb") as stream:
         for block in iter(lambda: stream.read(1 << 20), b""):
             digest.update(block)
-    return target.as_uri(), digest.hexdigest()
+    return job.prefix + target.name, digest.hexdigest()
 
 
 def _header(path: Path):
@@ -144,7 +145,7 @@ def _science_psf(job: JobContext, fid: int, sca: int) -> Path:
         row = cur.fetchone()
     if row is None:
         raise ValueError(f"no psfs row for fid {fid} sca {sca} in jobs {psf_jobs}")
-    return local_path(row[0])
+    return get(row[0])
 
 
 def _epoch(job: JobContext, settings: dict, source: Path, epoch: dict) -> dict:

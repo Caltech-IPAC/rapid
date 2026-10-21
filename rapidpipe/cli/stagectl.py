@@ -4,8 +4,8 @@
 "Invocation" form: everything after ``<name>`` is forwarded unchanged to
 ``rapidpipe.stages.<name>.main(argv)``, including ``-h``, so ``rapidpipe
 stage run admit -h`` prints admit's own help. The launcher's older form
-``rapidpipe stage <name> ...`` (what ``rapidpipe.launch.submit``
-puts in every Batch job's command) keeps working byte for byte:
+``rapidpipe stage <name> ...`` (what the retired Batch launcher
+put in every Batch job's command) keeps working byte for byte:
 ``rapidpipe.cli.main.main`` rewrites it to ``stage run <name> ...`` before
 argparse sees it (:func:`rewrite_legacy_argv`).
 

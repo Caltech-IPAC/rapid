@@ -15,22 +15,31 @@ first and stops before touching a file if it is already published, then
 claims the next unused attempt directory under the job's prefix. Nothing
 retries by itself.
 
-The outputs root is a URL; ``file://`` is the one scheme read and written.
+The outputs root is a URL, ``file://`` or ``s3://``
+(:mod:`rapidpipe.foundation.prefix`). Under ``s3://`` the stage writes into
+a local working directory and :func:`run_job` uploads it to the attempt's
+prefix before publishing; the next attempt number is one more than the
+highest present, so two concurrent attempts of one job are not supported
+there (Batch runs one at a time).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 from psycopg2.extras import RealDictCursor
 
 from rapidpipe.exitcodes import ExitCode
+from rapidpipe.foundation.prefix import attempts, local_path, put
 from rapidpipe.foundation.publish import publish
+
+__all__ = ["JobContext", "local_path", "run_job"]
 
 
 @dataclass(frozen=True)
@@ -42,7 +51,8 @@ class JobContext:
     what the stage reads; ``settings`` is its run's settings body;
     ``connect()`` is a context manager yielding a connection for short
     reads, closed on exit. ``prefix`` is the
-    attempt's URL and ``path`` the same directory on this host.
+    attempt's URL and ``path`` the local directory the stage writes: the
+    prefix itself for ``file://``, ``workdir`` for ``s3://``.
     """
 
     job: int
@@ -56,10 +66,11 @@ class JobContext:
     attempt: int
     prefix: str
     connect: Callable[[], Any]
+    workdir: Path | None = None
 
     @property
     def path(self) -> Path:
-        return local_path(self.prefix)
+        return self.workdir if self.workdir is not None else local_path(self.prefix)
 
     def write_manifest(self, outputs: Iterable[tuple[str, str]], **fields: Any) -> None:
         """Write ``manifest.json`` declaring each ``(table, relative path)`` with its checksum.
@@ -75,14 +86,6 @@ class JobContext:
             declared.append({"table": table, "path": relative,
                              "checksum": f"sha256:{digest.hexdigest()}"})
         (self.path / "manifest.json").write_text(json.dumps({**fields, "outputs": declared}, indent=1))
-
-
-def local_path(url: str) -> Path:
-    """The directory or file a ``file://`` URL names on this host."""
-    parsed = urlparse(url)
-    if parsed.scheme != "file":
-        raise ValueError(f"{url!r}: only file:// outputs are written in this milestone")
-    return Path(unquote(parsed.path))
 
 
 def _claim_attempt(job_root: Path) -> int:
@@ -126,17 +129,24 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
                         " WHERE job = %s ORDER BY kind, product, source_job", (job_id,))
             inputs = [dict(r) for r in cur.fetchall()]
         conn.commit()
-        job_root = local_path(outputs_root.rstrip("/") + "/") / str(job["run"]) / job["stage"] / str(job_id)
-        attempt = _claim_attempt(job_root)
+        job_prefix = f"{outputs_root.rstrip('/')}/{job['run']}/{job['stage']}/{job_id}"
+        if urlparse(job_prefix).scheme == "file":
+            job_root = local_path(job_prefix)
+            attempt = _claim_attempt(job_root)
+            prefix, workdir = (job_root / str(attempt)).as_uri() + "/", None
+        else:
+            attempt = 1 + max(attempts(job_prefix), default=0)
+            prefix = f"{job_prefix}/{attempt}/"
+            workdir = Path(tempfile.mkdtemp(prefix=f"rapidpipe-job-{job_id}-{attempt}-"))
         _record(conn, job_id, "state = 'running', started = now(), ended = NULL, exit_code = NULL")
 
     context = JobContext(
         job=job_id, run=job["run"], stage=job["stage"], scope=job["scope"],
         survey=job["survey"], dataset=job["dataset"], settings=job["settings"],
-        inputs=inputs, attempt=attempt, prefix=(job_root / str(attempt)).as_uri() + "/",
-        connect=connect)
+        inputs=inputs, attempt=attempt, prefix=prefix, connect=connect, workdir=workdir)
     try:
         stage_run(context)  # no connection held while the stage computes
+        put(context.path, prefix)
         with connect() as conn:
             result = publish(conn, job_id, attempt, context.prefix)
             _record(conn, job_id, "ended = now(), exit_code = 0")

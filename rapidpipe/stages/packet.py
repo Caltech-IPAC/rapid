@@ -86,7 +86,8 @@ import pyarrow.parquet as pq
 from astropy.time import Time
 from psycopg2.extras import RealDictCursor
 
-from rapidpipe.foundation.local import JobContext, local_path
+from rapidpipe.foundation.local import JobContext
+from rapidpipe.foundation.prefix import get
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
     VERSION, AlertContainer, assemble_alert, load_schema, sync_marker_for)
@@ -250,7 +251,7 @@ def _read(job: JobContext) -> Read:
         cur.execute("SELECT filename FROM psfs WHERE job = %s AND "
                     + _key_where(psf_in["key"], "psfs")[0],
                     (psf_in["source_job"], *_key_where(psf_in["key"], "psfs")[1]))
-        sci_psf = local_path(cur.fetchone()["filename"])
+        sci_psf = get(cur.fetchone()["filename"])
 
         images = []
         for d_in in (i for i in inputs if i["product"] == "diffimages"):
@@ -268,16 +269,19 @@ def _read(job: JobContext) -> Read:
             if l2 is None:
                 raise ValueError(f"job {job.job}: difference image {d['pid']} has no named"
                                  f" l2files input for rid {d['rid']}")
-            diff = local_path(d["filename"])
+            diff = get(d["filename"])
             uncert = fp.DIFF_UNCERT_BASENAMES.get(diff.name)
+            if (d["expid"], d["sca"], d["fid"]) == (key["expid"], key["sca"], key["fid"]):
+                for name in CUTOUT_FILES.values():  # write_set finds them beside the trigger
+                    _beside(d["filename"], name)
             images.append(WindowImage(
                 pid=d["pid"], rid=d["rid"], expid=d["expid"], sca=d["sca"], fid=d["fid"],
                 band=d["filter"], mjdobs=l2["mjdobs"],
                 corners=tuple(d[c] for c in ("ra1", "dec1", "ra2", "dec2",
                                              "ra3", "dec3", "ra4", "dec4")),
-                diff=diff, diff_psf=diff.with_name(fp.DIFF_PSF_BASENAMES[diff.name]),
-                diff_uncert=diff.with_name(uncert) if uncert else None,
-                sci=diff.with_name(fp.SCI_BASENAME), sci_psf=sci_psf))
+                diff=diff, diff_psf=_beside(d["filename"], fp.DIFF_PSF_BASENAMES[diff.name]),
+                diff_uncert=_beside(d["filename"], uncert) if uncert else None,
+                sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf))
 
         reuse: dict[int, dict] = {}
         if predecessors:
@@ -288,7 +292,7 @@ def _read(job: JobContext) -> Read:
 
         cur.execute("SELECT location FROM catalogs WHERE job = %s AND name = %s AND version = %s",
                     (gaia_in["source_job"], gaia_in["key"]["name"], gaia_in["key"]["version"]))
-        gaia_path = local_path(cur.fetchone()["location"])
+        gaia_path = get(cur.fetchone()["location"])
         cur.execute("SELECT c.filename FROM refimcatalogs c JOIN refimages r"
                     " ON r.job = c.job AND r.rfid = c.rfid"
                     " WHERE c.job = %s AND c.cattype = %s AND "
@@ -305,7 +309,12 @@ def _read(job: JobContext) -> Read:
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
                 gaia_job=gaia_in["source_job"], gaia_path=gaia_path,
-                refcat_path=local_path(ref["filename"]) if ref else None)
+                refcat_path=get(ref["filename"]) if ref else None)
+
+
+def _beside(url: str, name: str) -> Path:
+    """The file ``name`` in the same directory as the file ``url``, fetched like it."""
+    return get(url.rsplit("/", 1)[0] + "/" + name)
 
 
 def measure_forced(images: list[WindowImage], positions: list[fp.Position],
