@@ -1,4 +1,4 @@
-# The SMDC step of the foundation (milestones 1 to 4)
+# The SMDC step of the foundation (milestones 1 to 6)
 
 Milestones 1 to 3 of the foundation plan (v5, 2026-10-20) ran against a
 throwaway PostgreSQL 18 and `file://` prefixes on one host. This runbook takes
@@ -7,7 +7,7 @@ difference images (part 4, milestone 4). Every step is one command followed by
 its check, and nothing goes on to the next step until the check holds. Parts 1
 to 3 were run unattended on 2026-10-21 from a fleet host in the same security
 group as the database's pooler, and are written here as run, with their
-results; part 4 followed the same day, run the same way. Four parts, in order:
+results; parts 4 and 5 followed the same day, run the same way. Five parts, in order:
 
 1. **Schema**: the SMDC `rapid` database's `public` schema becomes `database/schema.sql`.
 2. **Inputs**: the field's directory is copied to the inputs bucket under `foundation/`.
@@ -16,6 +16,8 @@ results; part 4 followed the same day, run the same way. Four parts, in order:
 4. **Batch**: `reference` and `difference` on Batch under a run for the field's L2 inputs,
    the chain downstream of them, also on Batch, then one change group that replaces the
    imported reference, difference images, sources, objects and packets together, and its undo.
+5. **Uncapped**: the same chain on Batch with no source cap, measured per stage per epoch, with
+   its change group and undo timed (milestones 5 and 6 as far as this field's two epochs reach).
 
 Part 4 needs the `reference` and `difference` stages on the `run(job)` contract
 (`rapidpipe/foundation/local.py`), the difference stage refreshed from `dev`
@@ -543,6 +545,199 @@ epochs cancels by half. Dev's reference is 25 other frames. With two epochs
 this is a proof that the chain runs end to end on Batch, not a science
 result; a reference made from frames other than the ones differenced needs
 epochs this field's data on the host do not have.
+
+## Part 5: the field uncapped on Batch (milestones 5 and 6)
+
+Run unattended on 2026-10-21 from the same host, after part 4. This part runs
+the same chain as part 4 with no source cap, against part 4's Batch
+reference (no new reference). Every job runs on Batch, and every step is
+measured. Then one change group binds the uncapped products, and its undo
+restores them. The measurements are observations, not gates.
+
+`job run` reports each job's peak memory in its log, as `peak_rss_kib` in the
+result it prints: `self` is the stage's Python process and `children` its
+largest finished child process. It also records the job definition's image
+digest on the job row. Both came in with PR 290: Batch's `describe-jobs`
+gives no memory figure, and part 4's jobs record neither.
+
+17. **The image and the revision** for the commit carrying PR 290, as step 10.
+
+    Check: as step 10. Then `DEF=rapid-rebuild:<rev>`.
+
+18. **The uncapped run**, not live: the shipped settings body with
+    `max_sources = 0` in `[import]` and `[difference]` (0 keeps every source).
+
+    ```sh
+    sed 's/^max_sources = 500$/max_sources = 0/' "$RAPID/rapidpipe/settings/foundation-thin.toml" > uncapped.toml
+    rp run create --who "$USER" --why "milestones 5 and 6: field 4658155 uncapped on Batch" \
+      --revision $C --settings uncapped.toml --survey GBTDS --dataset $D
+    ```
+
+    Check: prints the run id `$U`. `rp run show $U` shows `"live": null`,
+    the revision `$C`, and `max_sources` 0 in both tables.
+
+19. **Difference** on Batch for both epochs, as step 13, under `$U` and
+    naming part 4's reference job `<r>`. Check: as step 13. Each manifest's
+    `sources_kept` equals its `sources_before_cap`.
+
+20. **The chain downstream** on Batch, as step 14, under `$U`. The packets
+    name `<r>` as their reference. Check: as step 14.
+
+21. **One change group and its undo**, as steps 15 and 16. The group closes
+    the bindings that step 16's undo opened (the imported reference,
+    difference images, source sets, object set and packet sets) and opens
+    `<r>` and `$U`'s six products. Check: as steps 15 and 16.
+
+## Results of part 5 (2026-10-21)
+
+Run from `rebuild` at `5030ba4d` (PR 290). The image was built on this host
+with `build-rebuild.sh` (20 s, layers cached) and registered with `deploy`
+(74 s). `rapid-rebuild:32` and `rapid-rebuild-production:23` pin
+`rebuild-5030ba4d7552365a3e4e425902d609943abafa0f`, with digest
+`sha256:00f2841dd17df9a75e08652e84a6878e00616f5c978e8568c7410256130bad09`,
+which equals ECR's for the tag. Run 5 is not live. Its jobs ran under
+`rapid-rebuild:32` (1 vCPU, 15 GiB). Each exited 0, published attempt 1 and
+recorded the digest in `jobs.image_digest`.
+
+**Per stage per epoch on Batch.** Both runs used the same queue and
+job definition shape. Run 4 had cap 500 (part 4) and run 5 had no cap. "In
+container" is Batch's `startedAt` to `stoppedAt`. Peak memory is
+`peak_rss_kib` from run 5's logs, which run 4 does not have.
+
+| stage | epoch | run 4 job, in container | run 5 job | queued | in container | peak RSS, self / largest child | outputs |
+|---|---|---|---|---|---|---|---|
+| reference | both | 11, 36.8 s | (run 4's 11) | | | | 3 × 196 MB images, 8.3 MB catalog |
+| difference | 84613 | 12, 1,348 s | 18 | 126 s | 1,368.5 s (22 min 49 s) | 1.37 GiB / 14.35 GiB | 72 files, 2.82 GB |
+| difference | 84624 | 13, 1,324 s | 19 | 124 s | 1,352.6 s (22 min 33 s) | 1.31 GiB / 14.35 GiB | 72 files, 2.82 GB |
+| associate | 1 | 14, 2.8 s | 20 | 5 s | 3.2 s | 227 MiB / none | 10.3 KB |
+| associate | 2 | 15, 2.7 s | 21 | 6 s | 2.9 s | 228 MiB / none | 13.5 KB |
+| packet | 84613 | 16, 21.5 s | 22 | 3 s | 14.1 s | 844 MiB / none | 15.7 MB |
+| packet | 84624 | 17, 17.8 s | 23 | 7 s | 18.5 s | 845 MiB / none | 14.1 MB |
+
+The difference jobs' queue time is the compute environment scaling up from
+zero. The downstream jobs found an instance already running.
+
+- **Sources per image before the cap** (what `difference` writes uncapped):
+  5,703 for 84613 and 5,544 for 84624. Dev's own ZOGY PSF catalogs for the
+  same two images (`zogy_diffimage_masked_psfcat.parquet`) hold 5,450 and
+  5,586 rows. Part 4's capped run counted 5,703 and 5,539 before its cap: the
+  same code on the same inputs gave 84624 five more sources this time.
+  The cause is not established (unverified: the difference stage is not
+  bit-reproducible run to run). The plan's "16 to 43 thousand sources per
+  image" is the IMSS dump's figure for the field's epochs in general. It is
+  not reproduced on these two images, by the port or by dev's own catalogs.
+- **Removing the cap changes nothing downstream on this field.** `associate`
+  accepts sources with `flags = 0` and `fluxfit / fluxerr >= 5`: 199 for
+  epoch 1 and 158 for epoch 2, all inside the brightest 500 by the same
+  ratio. So the objects (82 new, then 73 new, 155 in all), the memberships
+  (82 and 73, no pass-2 memberships) and the packets match part 4's.
+  Part 4's epoch 1 accepted 200, one more.
+- **Packets per chip, uncapped:** 82 for 84613 and 73 for 84624, from 2,586
+  and 2,496 `flags = 0` sources in the set. The reader reads both CLEAN: 246
+  and 219 cutouts, 82 and 146 forced rows, 11 and 18 Gaia matches. The
+  stage's own split for the two sets was forced photometry 3.8 s and 7.1 s,
+  cutouts 2.0 s and 1.8 s, matching 0.7 s and 0.6 s, and assembly 0.5 s each.
+  Forced photometry grows with the window's image count (one image, then
+  two), as PR 281 measured.
+- **The matcher at full density** for this field is `associate`'s 1.0 s and
+  1.1 s from the job row's start to its end, with 227 MiB peak, matching 199
+  and 158 sources. **Data-limited** for a dense field: the S/N cut leaves
+  under 200 sources per image on these two epochs. The host holds no image
+  that would give the matcher tens of thousands. PR 280's synthetic curve
+  (linear, about 1 KB per object) is the only figure for that load.
+- **The member chain's read depth and its cost.** On this field the depth
+  is 2 (job 21 names job 20). With depth 2 the cost cannot be told apart from
+  the 1.0 s job. A synthetic chain was therefore measured on a throwaway
+  PostgreSQL 18 container on this host. Each object set names the previous
+  one and records 1,000 memberships, and the packet stage's own reads were
+  timed at each depth, best of three, after `ANALYZE`:
+
+  | depth (object sets) | memberships | chain (`CHAIN_SQL`) | trigger lookup | history of 500 objects (rows) | `members_official`, one object | `members_official`, whole |
+  |---|---|---|---|---|---|---|
+  | 10 | 10 thousand | 0.1 ms | 0.4 ms | 1.4 ms (1,389) | 0.2 ms | 1.2 ms |
+  | 100 | 100 thousand | 0.7 ms | 0.5 ms | 5.9 ms (1,586) | 1.0 ms | 11 ms |
+  | 1,000 | 1 million | 55 ms | 1.0 ms | 42 ms (18,366) | 57 ms | 0.22 s |
+  | 3,000 | 3 million | 2.9 ms | 2.4 ms | 0.17 s (144,919) | 9.0 ms | 0.39 s |
+  | 10,000 | 10 million | 9.9 ms | 12 ms | 0.92 s (1.58 million) | 52 ms | 1.33 s |
+
+  The chain walk and the trigger lookup stay linear and small at ten
+  thousand sets. The history read grows with the member rows it returns, not
+  with the depth. The 1,000-set row is slower than the 3,000-set row, and the
+  cause was not probed (unverified: a plan chosen before the statistics
+  settled). On these figures the plan's compaction remedy is not needed
+  at ten thousand sets. The rows were inserted directly, not through the
+  publisher, so this measures the reads only.
+- **Change-group wall time at this key count.** Group 11 closed and opened 8
+  keys: 19.3 ms for the operation, through the pooler from this host. Undo
+  group 12 took 15.3 ms. Each `rp` process took 0.40 s, almost all of it
+  Python start-up and the connection (0.24 s with the connection, 0.41 s for
+  `rp job show`). PR 277's curve (0.14 ms per key, local container) predicts
+  1.1 ms for 8 keys. The difference is about three round trips per key to
+  the pooler over the network, which the set-based remedy in PR 277
+  would remove. At this key count it is negligible either way.
+- **Change group and undo.** Group 11 closed bindings 25 to 32 and opened 33
+  to 40 on job 11 and jobs 18 to 23. The official views then returned run 5's
+  jobs: `diffimages_official` {18: 1, 19: 1}; `sources_official`
+  {18: 5,703, 19: 5,544}; `objects_official` {21: 155}; `members_official`
+  {20: 82, 21: 73}; `packets_official` {22: 82, 23: 73}; `forced_official`
+  {22: 82, 23: 146}; `external_official` {22: 11, 23: 18}; and the
+  reference's three views on job 11. Exposures, L2 files, PSF and Gaia stayed
+  on jobs 1 to 3. `read_packets.py --job 22` and `--job 23` each exited 0
+  with "CLEAN". Undo group 12 closed 33 to 40 and opened 41 to 48 on the
+  imported jobs. Every view then matched its state before group 11. Every
+  table's row count was unchanged except `official` (32, then 40, then 48).
+
+**Not measured, and why:**
+
+- **The other epochs and a second field: data-limited.** The host holds two
+  epochs of one field and one chip. The other epochs of field 4658155 (about
+  68 in the 20260821 night) and a second field (OpenUniverse or SOC HLWAS)
+  are on IMSS. Bringing them over is the laptop copy under both accounts'
+  profiles (the plan's milestone 1 recipe).
+- **rubrat: data-limited.** Dev's `compute_rb` (`modules/utils/rapid_data_analysis.py`)
+  runs the RuBR-AT Keras classifier on three image stamps and catalog
+  columns. The images are here. The model (`rubrat/2026-10-06_canonical9_seed42/`:
+  `best.keras`, `canonical_9.json`, `threshold.json`) is in dev's pipeline-files
+  bucket, which this account cannot read (AccessDenied under the
+  administrator profile). It is not on this host. No stage on `rebuild`
+  computes it yet. sumrat, which needs only the difference image and the
+  source positions, is not data-limited. It is not ported (no code on
+  `rebuild`).
+- **NED: data-limited.** Dev's `match_nedcat` reads a HATS copy of NED
+  (release 36.1_20260527_v2) under the same bucket's `ned/` prefix, which is
+  unreadable from this account and not on this host. `rebuild` has the
+  matcher and an astroquery reader, off by default, but not dev's local
+  HATS reader.
+- **NED-LVS: data-limited.** Dev's `nedlvs.parquet` (about 2.1 million
+  rows, under the same bucket's `ned/lvs/`) is likewise unreadable and
+  absent. `rebuild` has the `lvsMatches` record but no LVS matcher or
+  reader.
+- **Completeness against the injected sources: data-limited.** The injected
+  source list for the 20260821 run is not among the field's files.
+
+**Against the hour-per-image statement.** The provisional requirement is an
+alert current within an hour of an image's delivery (rapid_docs,
+`decisions.md`). On two epochs of one chip, every stage on Batch with one
+vCPU each, one image's chain took about 25 minutes. That is 2 minutes of
+cold queue, 22.5 to 23 minutes of difference, and under 30 seconds of
+associate and packet with their queue waits. About 35 minutes are left
+inside the hour. The difference stage is 95% of it, and the cap does not
+change it (1,348 s capped, 1,369 s uncapped for 84613): the cap selects
+output sources and is not a cost. Its largest child process peaked at
+14.35 GiB of the definition's 15 GiB, a margin of 0.65 GiB. These figures
+cover two epochs and one chip, with a reference that coadds the two images
+being differenced. The latency decision needs these further measurements:
+
+- the difference stage on images at the plan's stated density of 16 to 43
+  thousand sources, where dev's runs took about 58 minutes (`decisions.md`);
+- its peak memory there, against the 15 GiB definition;
+- a night's fan-out of about 68 epochs per field across 18 chips, on the
+  queue's real concurrency and cold-start behaviour;
+- packet cost with a thirty-day window, where forced photometry adds about
+  3.5 s per window image;
+- a reference built from frames other than the ones differenced.
+
+All of these need data this host does not have.
 
 ## If a step fails
 
