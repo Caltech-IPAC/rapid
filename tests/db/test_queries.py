@@ -1,0 +1,223 @@
+"""database/queries.sql against the procedure proof's synthetic world (foundation plan v5, Part 2).
+
+Contract, per statement: it runs against the official views of a world
+built the way the stages build theirs (``tests/db/proof/fixture.py`` plus
+the L2, exposure and reference rows it lacks), returns at least one row,
+and its columns are the ones its ``-- returns:`` line documents. For the
+spatial shapes, ``EXPLAIN`` shows the planner choosing the base table's
+q3c or GIN index through the view, on cost: the world carries
+:data:`BACKGROUND` official images and objects in other fields, so a cone
+or a containment selects a few rows of thousands, as on the real sky.
+
+The q3c statements need q3c: asserted under ``CI=true``, skipped with that
+reason otherwise. Their execution times print to the CI log.
+"""
+
+from __future__ import annotations
+
+import datetime
+import os
+import re
+import time
+from pathlib import Path
+
+import pytest
+
+from tests.db.proof.fixture import (
+    CURRENT, DATASET, FID, FIELD, FIELD_KEY, SCAS, SURVEY, World, aid_of, image_key, position,
+)
+
+QUERIES = Path(__file__).resolve().parents[2] / "database" / "queries.sql"
+
+#: The statements that call q3c, and the index each must reach.
+Q3C = {
+    "diffimages_in_cone": {"diffimages_radec_idx"},
+    "l2files_in_cone_overlapping_field": {"l2files_radec_idx", "l2files_overlapfields_idx"},
+    "diffimages_in_cone_with_reference": {"diffimages_radec_idx"},
+    "objects_in_cone": {"objects_radec_idx"},
+}
+#: Spatial statements that need no q3c, and the index each must reach.
+GIN = {"l2files_overlapping_fields": {"l2files_overlapfields_idx"}}
+
+
+def load_queries(path: Path = QUERIES) -> dict[str, tuple[list[str], str]]:
+    """``{name: (documented columns, statement)}`` from a queries file, in file order."""
+    queries = {}
+    for block in re.split(r"^-- name: ", path.read_text(), flags=re.M)[1:]:
+        name, _, rest = block.partition("\n")
+        returns = re.search(r"^-- returns: (.+)$", rest, flags=re.M).group(1)
+        statement = "\n".join(line for line in rest.splitlines()
+                              if not line.startswith("--")).strip()
+        queries[name.strip()] = ([c.strip() for c in returns.split(",")], statement)
+    return queries
+
+
+def q3c_present(conn) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'q3c'")
+        present = cur.fetchone() is not None
+    conn.commit()
+    if not present and os.environ.get("CI") == "true":
+        pytest.fail("q3c is not installed in CI")
+    return present
+
+
+#: Official images and objects elsewhere on the sky, in other fields: enough rows
+#: that the planner chooses an index on cost rather than scanning everything.
+BACKGROUND = 2000
+
+
+def _l2file(epoch: int, sca: int, mjd: float, ra: float | None = None, dec: float | None = None,
+            field: int = FIELD) -> dict:
+    if ra is None:
+        ra, dec = position(sca, 0)
+    return {**image_key(epoch, sca), "field": field, "hp6": 0, "hp9": 0,
+            "dateobs": datetime.datetime(2023, 2, 25) + datetime.timedelta(days=epoch),
+            "mjdobs": mjd, "exptime": 60.0, "filename": f"l2-{epoch}-{sca}.fits",
+            "checksum": "0" * 32, "status": 1, "crval1": ra, "crval2": dec, "crpix1": 1.0,
+            "crpix2": 1.0, "cd11": 1e-5, "cd12": 0.0, "cd21": 0.0, "cd22": 1e-5, "ra": ra,
+            "dec": dec, "overlapfields": [field, field + 1],
+            **{f"{c}{n}": v for n in range(5) for c, v in (("ra", ra), ("dec", dec))}}
+
+
+def _background(w: World, run: int) -> None:
+    """One job of BACKGROUND L2 and difference images, one of BACKGROUND objects, all bound."""
+    l2, diff, expects = [], [], []
+    for i in range(BACKGROUND):
+        expid, field, ra, dec = 1000 + i, 1000 + i // 10, 100.0 + 0.1 * i, 40.0
+        l2.append(_l2file(expid, 1, 60000.0, ra, dec, field))
+        diff.append({**image_key(expid, 1), "pid": 100000 + i, "field": field, "jd": 2460000.5,
+                     "infobitssci": 0, "infobitsref": 0, "status": 1, "filename": "d.fits",
+                     **{f"{c}{n}": v for n in range(5) for c, v in (("ra", ra), ("dec", dec))}})
+        expects += [{"product": p, "key": image_key(expid, 1), "binding": None}
+                    for p in ("l2files", "diffimages")]
+    w.job(run, "import", {"background": BACKGROUND}, {"l2files": l2, "diffimages": diff},
+          expects=expects)
+    key = {**FIELD_KEY, "field": FIELD + 1}
+    w.job(run, "associate", {"field": FIELD + 1}, {"objects": [
+        {"aid": i, "dataset": DATASET, "survey": SURVEY, "field": FIELD + 1,
+         "ra0": 100.0 + 0.1 * i, "dec0": 40.0, "nsources": 1, "sumra": 0.0, "sumra2": 0.0,
+         "sumdec": 0.0, "sumdec2": 0.0, "sumflux": 0.0, "sumflux2": 0.0}
+        for i in range(BACKGROUND)]}, expects=[{"product": "objects", "key": key, "binding": None}])
+
+
+@pytest.fixture()
+def world(connect, tmp_path):
+    """The proof's two recipes' first one, plus L2, exposures, a reference, a candidate and a failure.
+
+    Returns ``(world, params)``: the parameters every statement takes.
+    """
+    w = World(connect(), tmp_path)
+    run = w.run("queries", live=True)
+    _background(w, run)
+    reference = w.job(run, "import", {"reference": FIELD}, {"refimages": [{
+        "dataset": DATASET, "field": FIELD, "fid": FID, "filename": "ref.fits",
+        "checksum": "0" * 32, "status": 1, "nframes": 10, "cov5percent": 50.0}]},
+        expects=[{"product": "refimages", "key": {"dataset": DATASET, "field": FIELD, "fid": FID},
+                  "binding": CURRENT}])
+    ref_input = [{"product": "refimages", "key": {"dataset": DATASET, "field": FIELD, "fid": FID},
+                  "source_job": reference}]
+    # Epoch 3 has an L2 file and no difference image: the work list's row.
+    for epoch in (1, 2, 3):
+        for sca in (SCAS if epoch < 3 else SCAS[:1]):
+            outputs = {"l2files": [_l2file(epoch, sca, 60000.0 + epoch)]}
+            expects = [{"product": "l2files", "key": image_key(epoch, sca), "binding": CURRENT}]
+            if sca == SCAS[0]:
+                outputs["exposures"] = [{"dataset": DATASET, "expid": epoch, "exptime": 60.0,
+                                         "dateobs": datetime.datetime(2023, 2, 25)}]
+                expects.append({"product": "exposures",
+                                "key": {"dataset": DATASET, "expid": epoch}, "binding": CURRENT})
+            w.job(run, "import", {"epoch": epoch, "sca": sca}, outputs, inputs=ref_input,
+                  expects=expects)
+    sets = w.import_epochs(run)
+    made = w.recipe(run, sets)
+    first_set_binding = w.rows("SELECT id FROM official WHERE product = 'objects' AND job = %s",
+                               (made["objects"][1],))[0][0]
+    candidate = w.associate(run, 2, [sets[(2, s)] for s in SCAS], made["objects"][1],
+                            expects=first_set_binding)
+    failed = w.job(run, "packet", {"epoch": 2, "sca": 1}, {}, published=False)
+    w.rows("UPDATE jobs SET state = 'failed', exit_code = 70 WHERE id = %s RETURNING id", (failed,))
+
+    ra, dec = position(SCAS[0], 0)
+    params = {
+        "dataset": DATASET, "survey": SURVEY, "field": FIELD, "fid": FID, "expid": 1,
+        "sca": SCAS[0], "object_set": made["objects"][2], "aid": aid_of(ra, dec),
+        "source_job": sets[(1, SCAS[0])], "sid": 0, "candidate": candidate,
+        "packet_job": made["packets"][(2, SCAS[0])],
+        "rfid": w.rows("SELECT rfid FROM refimages WHERE job = %s", (reference,))[0][0],
+        "group": w.rows("SELECT max(opened_group) FROM official")[0][0],
+        "ra": ra, "dec": dec, "radius": 1.0, "mjd_min": 59999.0, "mjd_max": 60010.0,
+        "jd_min": 2459999.0, "jd_max": 2460010.0, "exclude_rid": -1, "fields": [FIELD],
+        "min_frames": 1, "min_nframes": 5, "min_cov5percent": 10.0,
+        "pid": w.rows("SELECT min(pid) FROM diffimages_official")[0][0],
+    }
+    return w, params
+
+
+def _assert_shape(world, params, name, columns, statement):
+    with world.conn.cursor() as cur:
+        cur.execute(statement, params)
+        rows = cur.fetchall()
+        got = [d.name for d in cur.description]
+    world.conn.commit()
+    assert got == columns, f"{name}: columns {got}, documented {columns}"
+    assert rows, f"{name}: no rows"
+
+
+def _indexes(world, params, statement) -> set[str]:
+    """The index names in the planner's plan of ``statement``."""
+    with world.conn.cursor() as cur:
+        cur.execute("EXPLAIN (FORMAT JSON) " + statement, params)
+        plan = cur.fetchone()[0]
+    world.conn.rollback()
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if "Index Name" in node:
+                found.add(node["Index Name"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(plan)
+    return found
+
+
+def test_each_plain_statement_returns_its_documented_columns(world):
+    w, params = world
+    queries = load_queries()
+    assert set(Q3C) | set(GIN) <= set(queries)
+    for name, (columns, statement) in queries.items():
+        if name not in Q3C:
+            _assert_shape(w, params, name, columns, statement)
+
+
+def test_overlapfields_containment_reaches_the_gin_index(world):
+    w, params = world
+    queries = load_queries()
+    for name, expected in GIN.items():
+        assert _indexes(w, params, queries[name][1]) & expected, name
+
+
+def test_q3c_statements_return_their_columns_and_reach_their_index(world, capsys):
+    w, params = world
+    if not q3c_present(w.conn):
+        pytest.skip("q3c is required only in CI; a developer's container may lack it")
+    queries = load_queries()
+    times = {}
+    for name, expected in Q3C.items():
+        columns, statement = queries[name]
+        _assert_shape(w, params, name, columns, statement)
+        assert _indexes(w, params, statement) & expected, name
+        t0 = time.perf_counter()
+        with w.conn.cursor() as cur:
+            cur.execute(statement, params)
+            cur.fetchall()
+        w.conn.commit()
+        times[name] = time.perf_counter() - t0
+    with capsys.disabled():
+        for name, seconds in times.items():
+            print(f"\nQUERY-TIME q3c {name} {seconds * 1000:.2f} ms (proof world, CI)")

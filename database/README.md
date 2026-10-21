@@ -17,6 +17,13 @@ the pipeline imports.
   says so in a NOTICE when it is not, as on a developer's container. There
   is no migration machinery until the first change after real data; from
   then on changes are incremental SQL.
+- [`queries.sql`](queries.sql): the read queries the official views
+  answer (foundation plan v5, Part 2): the plan's eight (as eleven
+  statements: packet history three ways, lineage up and down) and the
+  team's twelve spatial and status shapes, each one named statement with
+  its documented columns, psycopg2 `%(name)s` parameters.
+  `tests/db/test_queries.py` runs every one and checks the spatial ones
+  reach their q3c or GIN index.
 - `modules/utils/roman_tessellation.py` and
   `modules/utils/roman_tessellation_db.py`: the closed-form Roman sky
   tessellation (`RomanTessellationClosedForm`), imported by

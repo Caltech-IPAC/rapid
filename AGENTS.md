@@ -56,13 +56,13 @@ summary and README.md has the detail.
 | Path | Holds |
 |---|---|
 | `rapidpipe/` | The pipeline package (map below). |
-| `database/` | `schema.sql` (the whole schema, applied with one `psql -f`), and `modules/utils/roman_tessellation{,_db}.py` (closed-form sky tessellation, imported by `rapidpipe.science`). |
+| `database/` | `schema.sql` (the whole schema, applied with one `psql -f`), `queries.sql` (the read queries the official views answer, each named, run by `tests/db/test_queries.py`), and `modules/utils/roman_tessellation{,_db}.py` (closed-form sky tessellation, imported by `rapidpipe.science`). |
 | `modules/` | Helpers the stages use from `dev`: `sip_tpv/` (imported by `science/difference/resample.py`), `zogy/` and `sfft/` (scripts the difference stage runs from `/code/modules/...`). |
 | `cdf/` | SExtractor/SWarp configuration files the stages read at `/code/cdf`. |
 | `c/` | Vendored C tool source; the image takes the tools from the base image's RPMs instead. |
 | `containers/` | The pipeline image recipe (`rapid-pipeline/build.sh`, `Containerfile`). |
 | `tests/` | `unit/`, `db/` (with `db/proof/`, the procedure proof), `cli/` and `fixtures/<stage>/`. |
-| `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list. |
+| `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list, `read_packets.py` (the packet reader: a packet set's validation report, outside the pipeline). |
 | `docs/` | The Sphinx source of the readthedocs site. |
 
 `dev`'s `pipeline/`, `alerts/`, `aws/`, `soc/`, `sims/`, `docker/`,
