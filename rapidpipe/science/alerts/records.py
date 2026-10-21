@@ -1,4 +1,4 @@
-# ported-from: alerts/providers.py @ c740f3e3
+# ported-from: alerts/providers.py @ 54fd7ea8
 """The alert's normalized records, ported from `dev`'s ``alerts/providers.py``.
 
 `dev`'s provider translates database rows into these dataclasses and the
@@ -195,10 +195,15 @@ class ObjectRecord:
 
 @dataclass
 class ForcedPhot:
-    """One forced-photometry measurement at an object position.
+    """One forced-photometry epoch at an object position: the PSF flux on
+    the difference image and on the science image of the same exposure,
+    both at the same fixed (ra, dec).
 
-    Staged for the diaForcedSource record; no provider fills it yet
-    (RAPID forced photometry writes lightcurve files, not DB rows).
+    Filled by AlertDataProvider from the per-chip forced-photometry run
+    (alerts.forced_phot), cached per chip as a table and expanded per
+    object. Fluxes are instrumental (image units), like diaSource.psfFlux;
+    the nJy calibration is pending for both. ``flags`` ORs the difference-
+    and science-image fit flags (photutils bits plus forced_phot.FLAG_*).
     """
     forced_id: int
     aid: int
@@ -211,6 +216,9 @@ class ForcedPhot:
     band: str | None = None
     flux: float | None = None
     fluxerr: float | None = None
+    science_flux: float | None = None
+    science_fluxerr: float | None = None
+    flags: int = 0
 
 
 @dataclass
@@ -278,6 +286,90 @@ class NedMatch:
     z: float | None = None      # preferred redshift (frame as published)
     zunc: float | None = None   # None when NED gives no uncertainty
     zflag: str | None = None    # e.g. "SLS"; see select_host_candidates
+
+
+@dataclass
+class LvsMatch:
+    """One NED-LVS galaxy near a detection.
+
+    Built by match_lvscat() from the local NED-LVS table (see the NED-LVS
+    cross-match section below); becomes one entry of the alert's
+    lvsMatches array. NED-LVS is NED's vetted local-volume galaxy sample
+    (D < 1000 Mpc) carrying the distances, angular diameters, photometry,
+    SFR and stellar mass the object directory lacks. The NED-LVS `objname`
+    column is the object directory's `prefname`, so it is stored as
+    `prefname` here and emitted as `prefName`, both exactly as in NedMatch,
+    and the two arrays join by it. Every other attribute is named after its
+    NED-LVS FITS column (Cook et al. 2023).
+    """
+    prefname: str        # NED preferred name (NED-LVS `objname`; == NedMatch.prefname)
+    ra: float            # NED position, ICRS [deg]
+    dec: float
+    sep: float           # angular separation from the detection [arcsec]
+    pa: float            # position angle detection -> galaxy, E of N [deg]
+    objtype: str | None = None      # NED preferred type (G, GPair, ...)
+    z: float | None = None          # fiducial heliocentric redshift
+    z_unc: float | None = None
+    z_tech: str | None = None       # SPEC, PHOT, UNKN, INFD, MOD
+    z_qual: bool = False            # True = redshift flagged unreliable
+    DistMpc: float | None = None    # the distance NED-LVS adopts [Mpc]
+    DistMpc_unc: float | None = None
+    DistMpc_method: str | None = None   # "Redshift" or "zIndependent"
+    Diam: float | None = None       # major-axis angular diameter 2a [arcsec]
+    Diam_ba: float | None = None    # minor/major axis ratio
+    Diam_pa: float | None = None    # ellipse position angle, E of N [deg]
+    Diam_qual: bool = False         # True = diameter flagged highly uncertain
+    ebv: float | None = None        # foreground E(B-V) [mag]
+    m_Ks: float | None = None       # 2MASS Ks, Vega [mag]
+    m_Ks_unc: float | None = None
+    m_W1: float | None = None       # WISE W1, Vega [mag]
+    m_W1_unc: float | None = None
+    m_NUV: float | None = None      # GALEX NUV, AB [mag]
+    m_NUV_unc: float | None = None
+    SFR_hybrid: float | None = None     # FUV+W4 star-formation rate [Msun/yr]
+    SFR_hybrid_unc: float | None = None
+    Mstar: float | None = None      # stellar mass from W1 [Msun]
+    Mstar_unc: float | None = None
+
+
+@dataclass
+class GaiaMatch:
+    """One Gaia DR3 source near a detection.
+
+    Built by match_gaiacat() from the local Gaia copy (see the Gaia
+    cross-match section below); becomes one entry of the alert's
+    gaiaMatches array. Gaia answers "is this a known star, and is it
+    variable, moving or a known non-single system" -- it reaches G ~ 21,
+    far shallower than Roman, so most detections match nothing, and that
+    is the expected answer. `ra`/`dec` are the catalog position
+    PROPAGATED by proper motion to the detection's epoch (see
+    propagate_positions); sep/pa are measured against that. Attribute
+    names follow the Gaia DR3 gaia_source columns.
+    """
+    source_id: int       # Gaia DR3 source_id
+    ra: float            # position at the detection epoch, ICRS [deg]
+    dec: float
+    sep: float           # angular separation from the detection [arcsec]
+    pa: float            # position angle detection -> source, E of N [deg]
+    pmra: float | None = None       # proper motion in RA*cos(dec) [mas/yr]
+    pmdec: float | None = None      # proper motion in Dec [mas/yr]
+    parallax: float | None = None   # [mas]
+    parallax_error: float | None = None
+    ruwe: float | None = None       # renormalised unit weight error (>1.4: poor fit / binary)
+    phot_g_mean_mag: float | None = None    # G [mag, Vega]
+    phot_bp_mean_mag: float | None = None   # BP
+    phot_rp_mean_mag: float | None = None   # RP
+    bp_rp: float | None = None              # BP - RP colour [mag]
+    phot_g_mean_flux_over_error: float | None = None  # G flux S/N; low = variable
+    phot_variable_flag: bool = False        # Gaia's "VARIABLE" flag
+    non_single_star: int = 0                # 0 = none; bit flags for astrometric/spectroscopic/eclipsing binary
+    in_qso_candidates: bool = False
+    in_galaxy_candidates: bool = False
+    classprob_dsc_combmod_star: float | None = None     # DSC class probabilities
+    classprob_dsc_combmod_galaxy: float | None = None
+    classprob_dsc_combmod_quasar: float | None = None
+    duplicated_source: bool = False         # another source within ~2" was removed
+    ipd_frac_multi_peak: int = 0            # % of windows with >1 peak (blend)
 
 
 @dataclass

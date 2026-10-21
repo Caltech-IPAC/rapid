@@ -39,9 +39,9 @@ def _object_row(object_id, sid, **overrides):
 
 def test_packaged_schema_matches_the_registry():
     assert assemble.schema_problems() == []
-    assert assemble.SCHEMA_VERSION == VERSION == "00.04"
+    assert assemble.SCHEMA_VERSION == VERSION == "00.06"
     schema = assemble.load_schema()
-    assert schema["name"] == "rapid.v00_04.alert"
+    assert schema["name"] == "rapid.v00_06.alert"
 
 
 def test_schema_problems_names_a_drifted_file(tmp_path):
@@ -50,7 +50,7 @@ def test_schema_problems_names_a_drifted_file(tmp_path):
         target = root / path.relative_to(assemble.SCHEMA_ROOT)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(path.read_text())
-    alert = root / "00" / "04" / "rapid.v00_04.alert.avsc"
+    alert = root / "00" / "06" / "rapid.v00_06.alert.avsc"
     data = json.loads(alert.read_text())
     data["fields"] = data["fields"][:-1]
     alert.write_text(json.dumps(data))
@@ -109,7 +109,7 @@ def test_assemble_alert_is_devs_packet():
     earlier = _source(2, mjdobs=61200.0, aid=900)
     alert = _alert(prv=[earlier], cutout=b"FITS")
     assert set(alert) == {p.name for p in ALERT_PARAMS if p.status is not NOT_USED}
-    assert alert["schemaVersion"] == "00.04"
+    assert alert["schemaVersion"] == "00.06"
     assert alert["diaSource"]["diaObjectId"] == 900
     assert alert["diaSource"]["isNegative"] is False
     assert alert["diaSource"]["isSSCandidate"] is None

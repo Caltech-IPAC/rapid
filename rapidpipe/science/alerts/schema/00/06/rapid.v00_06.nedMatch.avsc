@@ -1,8 +1,8 @@
 {
-    "namespace": "rapid.v00_04",
+    "namespace": "rapid.v00_06",
     "name": "nedMatch",
     "doc": "NED candidate host galaxy near the triggering source",
-    "version": "00.04",
+    "version": "00.06",
     "type": "record",
     "fields": [
         {
@@ -37,7 +37,7 @@
                 "string"
             ],
             "default": null,
-            "doc": "NED preferred object type (G, GPair, QSO, ...); null when NED has not classified the entry. The host-candidate selection applied at match time is providers.select_host_candidates, recorded here so consumers can re-cut"
+            "doc": "NED preferred object type (G, GPair, QSO, ...); null when NED has not classified the entry."
         },
         {
             "name": "z",

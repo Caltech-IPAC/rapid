@@ -1,4 +1,4 @@
-# ported-from: alerts/produce.py, alerts/providers.py @ c740f3e3
+# ported-from: alerts/produce.py, alerts/providers.py @ 54fd7ea8
 """Alert assembly and the Avro container, ported from `dev`'s ``alerts/produce.py``.
 
 `origin/dev`'s ``alerts/produce.py`` (Emily Everetts, 07/26), as pure
@@ -72,11 +72,11 @@ from rapidpipe.science.alerts.crossmatch import associate_ss
 from rapidpipe.science.alerts.cutouts import STAMP_HALF_WIDTH, extract_stamp
 from rapidpipe.science.alerts.param_registry import (
     ALERT_PARAMS, DIA_FORCED_SOURCE_PARAMS, DIA_OBJECT_PARAMS, DIA_SOURCE_PARAMS,
-    NED_MATCH_PARAMS, NOT_USED, RECORDS, REF_MATCH_PARAMS, SS_MATCH_PARAMS, VERSION,
-    Param, Status, is_nullable)
+    GAIA_MATCH_PARAMS, LVS_MATCH_PARAMS, NED_MATCH_PARAMS, NOT_USED, RECORDS,
+    REF_MATCH_PARAMS, SS_MATCH_PARAMS, VERSION, Param, Status, is_nullable)
 from rapidpipe.science.alerts.records import (
-    AssociationError, Cutouts, ForcedPhot, NedMatch, ObjectRecord, RefMatch, Source,
-    SSMatch)
+    AssociationError, Cutouts, ForcedPhot, GaiaMatch, LvsMatch, NedMatch, ObjectRecord,
+    RefMatch, Source, SSMatch)
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +99,15 @@ BUILDER_DATA_CLASSES = {
     "ssMatch": SSMatch,
     "refMatch": RefMatch,
     "nedMatch": NedMatch,
+    "lvsMatch": LvsMatch,
+    "gaiaMatch": GaiaMatch,
 }
 
-# Every match record must open with this envelope after its leading string
-# identifier. Enforced by _validate_registry().
+# Every match record must open with this envelope after its leading
+# identifier -- a string (names) or a long (Gaia source_id). Enforced by
+# _validate_registry().
 MATCH_ENVELOPE = ("ra", "dec", "sep", "pa")
+MATCH_ID_TYPES = ("string", "long")
 
 
 # ---------------------------------------------------------------------------
@@ -138,10 +142,10 @@ def _validate_registry() -> None:
         if record.name.endswith("Match"):
             names = tuple(p.name for p in record.params)
             if (len(names) < 5 or names[1:5] != MATCH_ENVELOPE
-                    or record.params[0].avro != "string"):
+                    or record.params[0].avro not in MATCH_ID_TYPES):
                 problems.append(
                     f"{record.name} must open with the match-record "
-                    f"envelope: a string identifier, then "
+                    f"envelope: a {' or '.join(MATCH_ID_TYPES)} identifier, then "
                     f"{'/'.join(MATCH_ENVELOPE)} (got {names[:5]})")
     if problems:
         raise ValueError("param_registry.py is inconsistent:\n  "
@@ -206,6 +210,14 @@ def build_ned_match(match: NedMatch) -> dict[str, Any]:
     return build_record(NED_MATCH_PARAMS, match)
 
 
+def build_lvs_match(match: LvsMatch) -> dict[str, Any]:
+    return build_record(LVS_MATCH_PARAMS, match)
+
+
+def build_gaia_match(match: GaiaMatch) -> dict[str, Any]:
+    return build_record(GAIA_MATCH_PARAMS, match)
+
+
 # ---------------------------------------------------------------------------
 # Alert assembly
 # ---------------------------------------------------------------------------
@@ -215,13 +227,16 @@ def assemble_alert(source: Source, obj: ObjectRecord, prv: list[Source], *,
                    ref_matches: tuple[list[RefMatch], list[RefMatch]] | None,
                    ned_matches: list[NedMatch] | None,
                    cutouts: Cutouts,
+                   lvs_matches: list[LvsMatch] | None = None,
+                   gaia_matches: list[GaiaMatch] | None = None,
                    forced: list[ForcedPhot] | None = None,
                    time_proc: float | None = None) -> dict[str, Any]:
     """`dev`'s ``assemble_alert_for_source``, with the provider's answers passed in.
 
     ``ss_matches`` must come from :func:`~rapidpipe.science.alerts.crossmatch.associate_ss`
     (it sets ``source.is_ss_candidate``, which the diaSource record reads).
-    ``time_proc`` defaults to now, as `dev` stamps it.
+    ``time_proc`` defaults to now, as `dev` stamps it. Each match list is
+    None when that cross-match did not run, as in `dev`.
     """
     source.aid = obj.aid
     if time_proc is None:
@@ -259,6 +274,10 @@ def assemble_alert(source: Source, obj: ObjectRecord, prv: list[Source], *,
         "refGalaxyMatches": ref_galaxy_matches,
         "nedMatches": (None if ned_matches is None
                        else [build_ned_match(m) for m in ned_matches]),
+        "lvsMatches": (None if lvs_matches is None
+                       else [build_lvs_match(m) for m in lvs_matches]),
+        "gaiaMatches": (None if gaia_matches is None
+                        else [build_gaia_match(m) for m in gaia_matches]),
         "cutoutDifference": cutouts.difference,
         "cutoutScience": cutouts.science,
         "cutoutReference": cutouts.template,
@@ -408,7 +427,8 @@ def locate_records(fo: BinaryIO) -> list[Locator]:
 # The alert-level lists whose three states (null = could not run, empty =
 # ran and found nothing, populated) BatchStats tallies, and the cutouts it
 # counts as present.
-MATCH_FIELDS = ("ssMatches", "refStarMatches", "refGalaxyMatches", "nedMatches")
+MATCH_FIELDS = ("ssMatches", "refStarMatches", "refGalaxyMatches",
+                "nedMatches", "lvsMatches", "gaiaMatches")
 CUTOUT_FIELDS = ("cutoutDifference", "cutoutScience", "cutoutReference")
 
 

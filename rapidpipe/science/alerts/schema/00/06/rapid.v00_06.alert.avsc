@@ -1,8 +1,8 @@
 {
-    "namespace": "rapid.v00_04",
+    "namespace": "rapid.v00_06",
     "name": "alert",
     "doc": "Top-level alert record",
-    "version": "00.04",
+    "version": "00.06",
     "type": "record",
     "fields": [
         {
@@ -30,7 +30,7 @@
         },
         {
             "name": "diaSource",
-            "type": "rapid.v00_04.diaSource",
+            "type": "rapid.v00_06.diaSource",
             "doc": "Triggering source detection"
         },
         {
@@ -39,17 +39,17 @@
                 "null",
                 {
                     "type": "array",
-                    "items": "rapid.v00_04.diaSource"
+                    "items": "rapid.v00_06.diaSource"
                 }
             ],
             "default": null,
-            "doc": "Previous detections of the same object within 12 months"
+            "doc": "Previous detections of the same object"
         },
         {
             "name": "diaObject",
             "type": [
                 "null",
-                "rapid.v00_04.diaObject"
+                "rapid.v00_06.diaObject"
             ],
             "default": null,
             "doc": "Summary object record"
@@ -60,7 +60,7 @@
                 "null",
                 {
                     "type": "array",
-                    "items": "rapid.v00_04.diaForcedSource"
+                    "items": "rapid.v00_06.diaForcedSource"
                 }
             ],
             "default": null,
@@ -72,7 +72,7 @@
                 "null",
                 {
                     "type": "array",
-                    "items": "rapid.v00_04.ssMatch"
+                    "items": "rapid.v00_06.ssMatch"
                 }
             ],
             "default": null,
@@ -84,7 +84,7 @@
                 "null",
                 {
                     "type": "array",
-                    "items": "rapid.v00_04.refMatch"
+                    "items": "rapid.v00_06.refMatch"
                 }
             ],
             "default": null,
@@ -96,7 +96,7 @@
                 "null",
                 {
                     "type": "array",
-                    "items": "rapid.v00_04.refMatch"
+                    "items": "rapid.v00_06.refMatch"
                 }
             ],
             "default": null,
@@ -108,11 +108,35 @@
                 "null",
                 {
                     "type": "array",
-                    "items": "rapid.v00_04.nedMatch"
+                    "items": "rapid.v00_06.nedMatch"
                 }
             ],
             "default": null,
             "doc": "Nearest NED candidate host galaxies (max 3, nearest first) within NED_MATCH_RADIUS_ARCSEC of the triggering source; null if matching was not run (disabled, or NED unavailable/unreachable), empty if none within the radius; a full array (3) means the neighborhood may extend beyond what is reported. Restricted to host candidates by providers.select_host_candidates -- an unrestricted NED match is ~98% non-galaxy at this depth"
+        },
+        {
+            "name": "lvsMatches",
+            "type": [
+                "null",
+                {
+                    "type": "array",
+                    "items": "rapid.v00_06.lvsMatch"
+                }
+            ],
+            "default": null,
+            "doc": "Nearest NED-LVS galaxies (max 3, nearest first) within LVS_MATCH_RADIUS_ARCSEC (30 arcsec) of the triggering source -- NED's vetted local-volume sample (D < 1000 Mpc) with distances, angular diameters, photometry, SFR and stellar mass; null if matching was not run (disabled, or the table unavailable), empty if none within the radius; a full array (3) means the neighborhood may extend beyond what is reported. Joins to nedMatches by prefName"
+        },
+        {
+            "name": "gaiaMatches",
+            "type": [
+                "null",
+                {
+                    "type": "array",
+                    "items": "rapid.v00_06.gaiaMatch"
+                }
+            ],
+            "default": null,
+            "doc": "Nearest Gaia DR3 sources (max 3, nearest first) within GAIA_MATCH_RADIUS_ARCSEC (1 arcsec) of the triggering source, with catalog positions propagated by proper motion to its epoch -- a known-star veto and variable/non-single-star tag (Gaia reaches G ~ 21, so most detections match nothing); null if matching was not run (disabled, or the copy unavailable), empty if none within the radius. In the bulge the chance-coincidence rate at 1 arcsec is ~0.3 per detection: cut on sep"
         },
         {
             "name": "cutoutDifference",
