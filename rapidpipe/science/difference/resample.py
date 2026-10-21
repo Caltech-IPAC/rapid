@@ -1,4 +1,4 @@
-# ported-from: modules/utils/rapid_pipeline_subs.py @ c740f3e3
+# ported-from: modules/utils/rapid_pipeline_subs.py @ d6aac515
 """SIP to PV, and SWarp of the reference bundle onto the science grid.
 
 `dev`: ``convert_from_sip_to_pv``, ``build_swarp_command_line_args`` and

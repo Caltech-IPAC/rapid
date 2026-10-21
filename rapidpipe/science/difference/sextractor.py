@@ -1,4 +1,4 @@
-# ported-from: modules/utils/rapid_pipeline_subs.py, pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
+# ported-from: modules/utils/rapid_pipeline_subs.py, pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py, pipeline/sfftDetectionSubs.py @ d6aac515
 """SExtractor: the command line, the catalogs the stage makes, parsing.
 
 `dev`: ``build_sextractor_command_line_args``,
@@ -26,6 +26,7 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
+from rapidpipe.science.difference import fwhm
 from rapidpipe.science.difference.tools import ToolRunner
 
 logger = logging.getLogger(__name__)
@@ -111,30 +112,27 @@ def parse_ascii_text_sextractor_catalog(
 
 
 def fwhm_from_catalog(catalog_filename, params_filename, label: str) -> tuple[float, int]:
-    """FWHM_IMAGE median of a catalog, with `dev`'s fallback of 2.0 pixels.
+    """The image FWHM in arcseconds from its catalog, with `dev`'s fallback of 2 pixels.
 
     `dev` computes this inline twice (science and reference image): the
-    nan-median of ``FWHM_IMAGE``, replaced by 2.0 when it is NaN or
-    negative. Returns ``(fwhm, nsources)``. An empty catalog makes
-    ``nanmin`` raise, as it does in `dev`.
+    point-source FWHM of :func:`rapidpipe.science.difference.fwhm.catalog_fwhm_stats`
+    in pixels (dev 1822789e), times the WFI plate scale (dev 095c45d8,
+    46fc651a), replaced by 2 pixels' worth when it is NaN or negative.
+    Returns ``(fwhm_arcsec, nsources)``.
     """
     vals = parse_ascii_text_sextractor_catalog(
-        catalog_filename, params_filename, ["FWHM_IMAGE"])
+        catalog_filename, params_filename, fwhm.POINT_SOURCE_CATALOG_PARAMS)
     nsources = len(vals)
-    np_vals = np.array([float(val[0]) for val in vals])
-
-    fwhm_minpix = np.nanmin(np_vals)
-    fwhm_maxpix = np.nanmax(np_vals)
-    fwhm_medpix = np.nanmedian(np_vals)
+    fwhm_minpix, fwhm_maxpix, fwhm_medpix = fwhm.catalog_fwhm_stats(vals, label=label)
     logger.info(
         "fwhm_%s_medpix,fwhm_%s_minpix,fwhm_%s_maxpix = %s %s %s",
         label, label, label, fwhm_medpix, fwhm_minpix, fwhm_maxpix)
 
-    fwhm = fwhm_medpix
-    if np.isnan(fwhm) or fwhm < 0.0:
-        fwhm = 2.0
-    logger.info("fwhm_%s = %s", label, fwhm)
-    return float(fwhm), nsources
+    value = fwhm_medpix * fwhm.ROMAN_WFI_PLATESCALE
+    if np.isnan(value) or value < 0.0:
+        value = 2.0 * fwhm.ROMAN_WFI_PLATESCALE
+    logger.info("fwhm_%s = %s", label, value)
+    return float(value), nsources
 
 
 def generate_science_image_catalog(
@@ -174,6 +172,7 @@ def difference_image_catalog(
     weight_image: str,
     catalog_name: str,
     override_weight_type_and_filter: bool,
+    overrides: Mapping[str, str] | None = None,
     executable: str = "sex",
 ) -> int:
     """One `dev` difference-image SExtractor block; returns the source count.
@@ -182,6 +181,9 @@ def difference_image_catalog(
     ``FILTER`` to ``N`` for the call; the naive catalogs do not, and run
     with the table's own values (`dev` reverts the overrides after each
     ZOGY/SFFT call, so the naive calls see the configured ones).
+    ``overrides`` (`dev`'s ``[SEXTRACTOR_DIFFIMAGE_SFFT]`` or
+    ``[SEXTRACTOR_DIFFIMAGE_NAIVE]``, as :func:`detection_overrides` gives
+    them) are laid over last.
     """
     params_file = cfg_path + "/rapidSexParamsDiffImage.inp"
     d = dict(sextractor_diffimage_dict)
@@ -196,8 +198,29 @@ def difference_image_catalog(
     d["sextractor_filter_name"] = cfg_path + "/rapidSexDiffImageFilter.conv"
     d["sextractor_starnnw_name"] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
     d["sextractor_catalog_name"] = catalog_name
+    d.update(overrides or {})
     runner.run(build_sextractor_command_line_args(d, executable), cwd=work_dir)
 
     vals = parse_ascii_text_sextractor_catalog(
         work_dir / catalog_name, params_file, list(DIFFIMAGE_PARAMS))
     return len(vals)
+
+
+def detection_overrides(override_table: Mapping[str, str] | None, crossconv_flag: bool,
+                        cfg_path: str) -> dict[str, str]:
+    """`dev` ``sfftDetectionSubs.sfft_sextractor_dict``'s overrides, as a dictionary.
+
+    The keys of ``override_table`` to lay over ``[sextractor_diffimage]`` for
+    the SFFT (or naive) passes: none when the table is empty, or when SFFT
+    cross-convolution is on (detection then runs on an image that is
+    already matched-filtered). A relative ``sextractor_filter_name`` is a
+    file in ``cfg_path``.
+    """
+    if not override_table or crossconv_flag:
+        return {}
+    merged = {}
+    for key, value in override_table.items():
+        if key == "sextractor_filter_name" and not value.startswith("/"):
+            value = cfg_path + "/" + value
+        merged[key] = value
+    return merged

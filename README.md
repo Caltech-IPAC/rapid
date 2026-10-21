@@ -39,7 +39,7 @@ The database is built by `psql -v ON_ERROR_STOP=1 -f database/schema.sql` on an 
 
 A change group refused because a binding it names is no longer open, or because a key it opens already has an open binding, and a job published but refused its automatic binding, exit 1 with the binding named on stderr; a run, job or group that does not exist, or a file that cannot be read, exits 64.
 
-`rapidpipe stage run <name> ...` (also `rapidpipe stage <name> ...`), `rapidpipe stage list` and `rapidpipe stage describe <name>` run, list and describe stages; `rapidpipe selftest --stage difference|finalize` runs a stage's packaged fixture.
+`rapidpipe stage run <name> ...` (also `rapidpipe stage <name> ...`), `rapidpipe stage list` and `rapidpipe stage describe <name>` run, list and describe stages; `rapidpipe selftest --stage finalize` runs a stage's packaged fixture.
 
 ## Running a stage under a job
 
@@ -57,7 +57,6 @@ A change group refused because a binding it names is no longer open, or because 
 - `RAPIDPIPE_IMAGE_DIGEST`, else `RAPID_IMAGE_DIGEST` -- the image digest a stage's execution record carries (`rapidpipe.stages.contract`); `RAPIDPIPE_IMAGE_DIGEST` wins when both are set.
 - `RAPIDPIPE_RELEASE`, else `RAPID_RELEASE_IDENTITY` -- the release identity a stage's execution record carries; `RAPIDPIPE_RELEASE` wins when both are set.
 - `RAPID_SOURCE_REVISION` -- the source revision a stage's execution record carries when `git rev-parse HEAD` fails in the container (no `.git` checkout there).
-- `RAPIDPIPE_DIFFERENCE_TOOLKIT` -- names a `module:factory` that returns an alternate `Toolkit` for the `difference` stage in place of the real tools; unset in every deployment, read only by that stage's own fixture.
 
 ## Logging and profiling
 

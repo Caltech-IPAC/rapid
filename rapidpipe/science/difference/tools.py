@@ -1,4 +1,4 @@
-# ported-from: modules/utils/rapid_pipeline_subs.py @ c740f3e3
+# ported-from: modules/utils/rapid_pipeline_subs.py @ d6aac515
 """Running external tools: a thin, injectable wrapper around subprocess.
 
 `dev`'s ``execute_command`` and ``execute_command_in_shell``

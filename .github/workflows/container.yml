@@ -69,7 +69,7 @@ jobs:
       - name: smoke test -- stage list matches the expected roster
         run: |
           actual="$(docker run --rm rapid-pipeline:ci stage list | cut -f1)"
-          expected="admit difference finalize"
+          expected="admit finalize"
           actual_joined="$(echo "$actual" | tr '\n' ' ' | sed 's/ *$//')"
           if [ "$actual_joined" != "$expected" ]; then
             echo "stage list mismatch:"

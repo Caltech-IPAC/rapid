@@ -5,7 +5,7 @@ The units are every subpackage and every top-level module under
 sit in layers, and a unit may import only units strictly below its own
 (stage-contract.md §The package):
 
-    leaves (exitcodes, log, revision, seams: no rapidpipe import)
+    leaves (exitcodes, log, revision: no rapidpipe import)
     < products < {db, science, foundation} < stages < launch
     < selftest < cli
 
@@ -33,14 +33,13 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "rapidpipe"
 
-LEAVES = frozenset({"exitcodes", "log", "revision", "seams"})
+LEAVES = frozenset({"exitcodes", "log", "revision"})
 
 #: The layer order as a table: unit -> the units it may import.
 ALLOWED: dict[str, frozenset[str]] = {
     "exitcodes": frozenset(),
     "log": frozenset(),
     "revision": frozenset(),
-    "seams": frozenset(),
     "products": LEAVES,
     "db": LEAVES | {"products"},
     "science": LEAVES | {"products"},
@@ -338,7 +337,7 @@ def test_scanner_sees_import_module_with_an_f_string_unit_prefix():
 
 def test_scanner_ignores_import_module_of_a_non_constant():
     source = "import importlib, os\nimportlib.import_module(os.environ['M'])\n"
-    assert _targets(source, "rapidpipe.seams") == set()
+    assert _targets(source, "rapidpipe.log") == set()
 
 
 def test_package_init_may_import_no_unit(tmp_path):

@@ -1,10 +1,12 @@
-# ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py, pipeline/differenceImageSubs.py, pipeline/zogyNoiseSubs.py, pipeline/artifactRepairSubs.py, pipeline/sfftCommandSubs.py, modules/utils/rapid_pipeline_subs.py @ c740f3e3
+# ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py, pipeline/differenceImageSubs.py, pipeline/zogyNoiseSubs.py, pipeline/artifactRepairSubs.py, pipeline/sfftCommandSubs.py, modules/utils/rapid_pipeline_subs.py @ d6aac515
 """The difference stage's science, one module per step, ported from `dev`.
 
 Source: `origin/dev`'s ``pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py``
 and the modules it calls (``pipeline/differenceImageSubs.py``,
 ``pipeline/zogyNoiseSubs.py``, ``pipeline/artifactRepairSubs.py``,
-``pipeline/sfftCommandSubs.py``, ``modules/utils/rapid_pipeline_subs.py``).
+``pipeline/sfftCommandSubs.py``, ``pipeline/sfftDetectionSubs.py``,
+``pipeline/psfFwhmSubs.py``, ``pipeline/referenceBackgroundSubs.py``,
+``modules/utils/rapid_pipeline_subs.py``), refreshed to dev d6aac515.
 The port principle (lead, 2026-09-22): minimise differences to `dev`;
 improvements come later. Each function here keeps its `dev` counterpart's
 maths, file conventions and quirks; where a quirk looks wrong it is
@@ -22,9 +24,10 @@ The step modules, in `dev`'s science order:
 
 - ``statistics``: clipped image statistics (``fits_data_statistics_with_clipping``).
 - ``reformat``: reformat the delivered image and its simple-model uncertainty.
-- ``sextractor``: SExtractor command line, catalog parsing, FWHM.
+- ``sextractor``: SExtractor command line, catalog parsing, FWHM, SFFT detection overrides.
+- ``fwhm``: the point-source FWHM of a SExtractor catalog.
 - ``resample``: SIP to PV, and SWarp of the reference bundle onto the science grid.
-- ``background``: bkgest background subtraction of the science image.
+- ``background``: bkgest background subtraction of the science image and the resampled reference.
 - ``gainmatch``: gain matching and the reference-to-science offsets.
 - ``repair``: NaN replacement and restoration, extreme-artifact repair.
 - ``offsets``: the subpixel offset applied to the reference.

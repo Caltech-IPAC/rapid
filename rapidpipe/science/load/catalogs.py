@@ -168,3 +168,43 @@ def write_joined_table_inner_to_csv_file(
 
     np.savetxt(csv_fh, data, delimiter=",", fmt="%s")
     return nrows
+
+
+def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2: int, *,
+               max_sources: int | None, xy_fit_min: float = XY_FIT_MIN,
+               xy_fit_max_offset: float = XY_FIT_MAX_OFFSET):
+    """A foundation ``sources`` set from a joined PSF-fit catalog (a ``pyarrow.Table``).
+
+    `dev`'s fit-position bounds, then the brightest ``max_sources`` by
+    ``flux_fit / flux_err`` (0 or ``None`` keeps every source), mapped as
+    :data:`CATALOG_COLUMNS` maps them. ``key`` is the set's ``{dataset,
+    expid, sca, fid}``; every source is positive (``isdiffpos``), as the
+    positive catalog is the one read. Returns ``(table, candidates)``, the
+    candidates being the sources inside the bounds with a finite ratio,
+    before the cap.
+    """
+    import pyarrow as pa
+
+    def column(name):  # a null float (pandas' NaN on write) reads back as NaN, as dev's text has it
+        return catalog.column(name).to_numpy()
+
+    x, y, flux, err = (column(n).astype(float) for n in ("x_fit", "y_fit", "flux_fit", "flux_err"))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        snr = np.where(err > 0, flux / err, np.nan)
+    keep = ((x >= xy_fit_min) & (x <= naxis1 - xy_fit_max_offset) & (y >= xy_fit_min)
+            & (y <= naxis2 - xy_fit_max_offset) & np.isfinite(snr))
+    candidates = np.flatnonzero(keep)
+    chosen = candidates[np.argsort(-snr[candidates], kind="stable")][:max_sources or None]
+
+    columns = {db: column(name)[chosen] for name, db in CATALOG_COLUMNS if db != "npix"}
+    ra, dec = columns["ra"].astype(float), columns["dec"].astype(float)
+    hp6, hp9 = healpix_arrays({"ra": ra, "dec": dec})
+    n = len(chosen)
+    return pa.table({
+        "sid": columns["id"].astype(np.int64),
+        "dataset": [key["dataset"]] * n, "expid": np.full(n, key["expid"]),
+        "sca": np.full(n, key["sca"]), "fid": np.full(n, key["fid"]), "pid": np.full(n, pid),
+        "isdiffpos": np.full(n, True), "field": tessellation_ids(ra, dec).astype(np.int64),
+        "hp6": hp6.astype(np.int64), "hp9": hp9.astype(np.int64), "mjdobs": np.full(n, mjdobs),
+        **columns,
+    }), len(candidates)

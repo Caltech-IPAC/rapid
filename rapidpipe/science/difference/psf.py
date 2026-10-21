@@ -1,4 +1,4 @@
-# ported-from: modules/utils/rapid_pipeline_subs.py @ c740f3e3
+# ported-from: modules/utils/rapid_pipeline_subs.py @ d6aac515
 """PSF normalisation and transposition.
 
 `dev`: ``normalize_image`` and ``transpose_image_data``

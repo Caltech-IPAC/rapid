@@ -1,6 +1,6 @@
 """The `ported-from` guard: every module under ``rapidpipe/science`` and
-``rapidpipe/stages``, plus ``rapidpipe/products/spatial.py`` and the two
-settings tomls that mirror dev's science .ini, must carry a well-formed
+``rapidpipe/stages``, plus ``rapidpipe/products/spatial.py`` and the run
+settings toml that mirrors dev's science .ini, must carry a well-formed
 ``# ported-from: ...`` header within its first 5 lines (AGENTS.md), so a
 new module cannot land unpinned. ``scripts/science-drift.sh`` reads the same headers to build
 its drift report; this test only checks their shape, never git.
@@ -19,7 +19,7 @@ STAGES_DIR = REPO_ROOT / "rapidpipe" / "stages"
 #: Ported science outside science/: the register derivations rapidpipe.db uses.
 PORTED_PRODUCTS_MODULES = (REPO_ROOT / "rapidpipe" / "products" / "spatial.py",)
 SETTINGS_TOMLS = (
-    REPO_ROOT / "rapidpipe" / "settings" / "difference.toml",
+    REPO_ROOT / "rapidpipe" / "settings" / "foundation-thin.toml",
 )
 
 #: "# ported-from: none" or "# ported-from: <path>[, <path>...] @ <8-hex>".

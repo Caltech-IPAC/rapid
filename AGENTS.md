@@ -79,7 +79,7 @@ including lazy and relative imports. A unit imports only units strictly
 below it in this order:
 
 Leaf modules
-(`exitcodes`, `log`, `revision`, `seams`: no `rapidpipe` import) <
+(`exitcodes`, `log`, `revision`: no `rapidpipe` import) <
 `products` < `db`, `science` and `foundation` (which do not import one
 another) < `stages` < `launch` < `selftest` < `cli`. Stage modules
 never import other stage modules.
@@ -89,14 +89,14 @@ is a design question for the stage-contract page, not a test to relax.
 
 | Subpackage | Holds |
 |---|---|
-| `stages/` | One module per stage. The foundation's stages are one function, `run(job: JobContext) -> None`, run by `rapidpipe job local`/`job run`/`job submit`: `import_products` (stage `import`), `associate` (crossmatch, statistics, prune and maintain as one stage, matched in memory), `packet` (`dev`'s alerts package at schema 00.06: Avro packets with three cutouts, forced photometry and Gaia matches from named inputs, and the packet index) and `reference` (`dev`'s awaicgen coadd of the named `l2files`, with its SExtractor catalog: `refimages`, `refimimages`, `refimcatalogs`). `admit`, `difference` and `finalize` keep the older contract until their port, with the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (reserved: no stage in this build returns it), 70 unclassified error, 75 retryable transient failure. The run model's database stages (`register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export`) were retired with its schema; the foundation plan's Part 5 ports their science (`associate` and `packet` so far). |
+| `stages/` | One module per stage. The foundation's stages are one function, `run(job: JobContext) -> None`, run by `rapidpipe job local`/`job run`/`job submit`: `import_products` (stage `import`), `associate` (crossmatch, statistics, prune and maintain as one stage, matched in memory), `packet` (`dev`'s alerts package at schema 00.06: Avro packets with three cutouts, forced photometry and Gaia matches from named inputs, and the packet index) `reference` (`dev`'s awaicgen coadd of the named `l2files`, with its SExtractor catalog: `refimages`, `refimimages`, `refimcatalogs`) and `difference` (`dev`'s ZOGY subtraction of the named `l2files` row against the named `refimages` row with the science and reference PSFs, SFFT and naive beside it as `dev` runs them: `diffimages` and the capped `sources` set). `admit` and `finalize` keep the older contract until their port, with the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (reserved: no stage in this build returns it), 70 unclassified error, 75 retryable transient failure. The run model's database stages (`register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export`) were retired with its schema; the foundation plan's Part 5 ports their science (`associate` and `packet` so far). |
 | `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `finalize`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
 | `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), per-kind modules (`l2image`, `diffimage`), `filters`, and `spatial` (the pure HEALPix and tessellation derivations; `science.spatial` re-exports them). |
 | `db/` | `connection.py` (one connection from the `PG*` environment, a secret or a parameter tree) and `ids.py` (ULIDs). |
 | `foundation/` | The foundation plan's operations over `database/schema.sql`: `bookkeeping.py` (`create_run`, `create_job`, `run_show`, `job_show`), `official.py` (`change`, `undo`, `apply`, `Refused`), `publish.py` (`publish`, the manifest format, `PublishError`), `local.py` (`JobContext`, the foundation's stage contract, and `run_job`, one attempt run here and published), `prefix.py` (`get` and `put` for `file://` and `s3://` URLs). The verbs in `cli/main.py` wrap them. |
 | `launch/` | `__init__.py`: `submit` (a recorded job to AWS Batch as `job run --job <id>`) and `run_locally` (an old-contract stage as a subprocess). No retry and no attempt bookkeeping. |
 | `cli/` | The `rapidpipe` command-line tool: `main.py` holds the foundation verbs (`run create`, `run show`, `job show`, `job local`, `job run`, `job submit`, `official change`, `official undo`) and `selftest`, and dispatches `stage ...` to `stagectl.py`. |
-| `selftest/` | `runner.py` plus per-stage modules (`difference`, `finalize`) and `support/` fakes (`fakereftools.py` serves the reference stage's unit tests); drives `make stage-<name>` and `rapidpipe selftest --stage <name> [--real-tools]`. `fixtures/` ships each stage's packaged expected output. |
+| `selftest/` | `runner.py` plus the `finalize` module and `support/` fakes (`fakereftools.py` and `fakedifftools.py` serve the reference and difference stages' unit tests); drives `make stage-<name>` and `rapidpipe selftest --stage <name> [--real-tools]`. `fixtures/` ships each stage's packaged expected output. |
 | `exitcodes.py` | A bare top-level module, not a subpackage: `ExitCode`, the one exit-code vocabulary, and `ArgumentParser` (parse failures exit 64). Stdlib-only, so every subpackage, `science` included, may import it. |
 | `settings/` | Per-stage default settings and schema, `<name>.toml`, merged recursively with a `--settings` overlay; and `foundation-thin.toml`, a foundation run's whole settings body (`run create --settings`), one table per stage (the reference stage's as subtables, one per `dev` ini section). |
 
@@ -182,7 +182,8 @@ not invent a new code or a second list.
 
 Every module under `rapidpipe/science` and `rapidpipe/stages`, plus
 `rapidpipe/products/spatial.py` and
-`rapidpipe/settings/difference.toml`, carries a
+`rapidpipe/settings/foundation-thin.toml` (pinned to `dev`'s science
+.ini), carries a
 line 1 comment `# ported-from: <dev path>[, <dev path>...] @ <8-hex dev
 commit>`, or `# ported-from: none` for rebuild-only code.
 `tests/unit/test_ported_from.py` fails the build if a module lacks one.

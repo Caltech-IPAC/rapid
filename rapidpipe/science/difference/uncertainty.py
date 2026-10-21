@@ -1,4 +1,4 @@
-# ported-from: pipeline/differenceImageSubs.py @ c740f3e3
+# ported-from: pipeline/differenceImageSubs.py @ d6aac515
 """The difference-image uncertainty image.
 
 `dev`: ``compute_diffimage_uncertainty`` (``pipeline/differenceImageSubs.py``).

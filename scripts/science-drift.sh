@@ -6,7 +6,7 @@
 #
 # Every module under rapidpipe/science and rapidpipe/stages, plus
 # rapidpipe/products/spatial.py (the register derivations db uses),
-# rapidpipe/settings/difference.toml, carries a
+# rapidpipe/settings/foundation-thin.toml, carries a
 # "# ported-from: ..." header (line 1) naming the dev path(s) it was
 # copied from and the dev commit it was pinned at, or "# ported-from:
 # none" for rebuild-only code (see AGENTS.md). This script reads those
@@ -139,7 +139,7 @@ all_files="$tmpdir/all_files.txt"
 {
   find rapidpipe/science rapidpipe/stages -name '*.py' 2>/dev/null
   [ -f rapidpipe/products/spatial.py ] && echo rapidpipe/products/spatial.py
-  [ -f rapidpipe/settings/difference.toml ] && echo rapidpipe/settings/difference.toml
+  [ -f rapidpipe/settings/foundation-thin.toml ] && echo rapidpipe/settings/foundation-thin.toml
 } | sort > "$all_files"
 
 while IFS= read -r f; do

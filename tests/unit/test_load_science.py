@@ -143,3 +143,22 @@ def test_tessellation_ids_match_the_per_row_lookup():
     dec = np.array([0.0, 45.0, -28.77, -89.9])
     closed = RomanTessellationClosedForm()
     assert list(catalogs.tessellation_ids(ra, dec)) == [closed.get_rtid(r, d) for r, d in zip(ra, dec)]
+
+
+def test_source_set_keeps_the_brightest_inside_the_bounds_and_zero_keeps_all():
+    import pyarrow as pa
+
+    from rapidpipe.science.load.catalogs import source_set
+
+    names = [name for name, _ in catalogs.CATALOG_COLUMNS]
+    rows = {name: [1.0, 1.0, 1.0, 1.0] for name in names}
+    rows.update(id=[1, 2, 3, 4], ra=[10.0] * 4, dec=[-5.0] * 4,
+                x_fit=[5.0, 6.0, 7.0, 99.9],        # the fourth is off a 10-pixel image
+                flux_fit=[10.0, 50.0, 30.0, 500.0], flux_err=[1.0, 1.0, 1.0, 1.0])
+    key = {"dataset": "D", "expid": 1, "sca": 2, "fid": 3}
+    table, candidates = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=2)
+    assert candidates == 3
+    assert table.column("sid").to_pylist() == [2, 3]
+    assert set(table.column("pid").to_pylist()) == {7}
+    everything, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
+    assert sorted(everything.column("sid").to_pylist()) == [1, 2, 3]

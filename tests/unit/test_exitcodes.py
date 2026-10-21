@@ -269,6 +269,6 @@ def test_selftest_an_existing_work_dir_is_a_usage_error(monkeypatch, tmp_path, c
         raise FileExistsError(f"{tmp_path} already exists")
 
     monkeypatch.setattr(selftest, "run_fixture", exists)
-    rc = selftest.run(stage="difference", real_tools=False, work_dir=str(tmp_path),
+    rc = selftest.run(stage="finalize", real_tools=False, work_dir=str(tmp_path),
                       output_location=None)
     assert rc == int(ExitCode.USAGE)
