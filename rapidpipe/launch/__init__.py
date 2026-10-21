@@ -19,7 +19,7 @@ database otherwise, ``rapidpipe.db.connection``), and optionally
 imported only by :func:`batch_client`, the one indirection a test replaces.
 
 :func:`run_locally` runs a stage still on the old ``--run/--unit/--attempt``
-contract (``admit``, ``difference``, ``finalize``) as a
+contract (``admit``, ``finalize``) as a
 subprocess, until its port to ``run(job)``.
 
 This subpackage may import ``rapidpipe.stages`` and the layers below it,

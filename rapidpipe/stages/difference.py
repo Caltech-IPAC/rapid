@@ -1,45 +1,62 @@
-# ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
-"""`difference`: an l2 image minus its reference, ZOGY first, as `dev` does it.
+# ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ d6aac515
+"""``difference``: one epoch's L2 image minus its reference, ZOGY first, as `dev` does it.
 
 Ported from `origin/dev`'s ``pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py``
 (its science only: the S3 transfers, the job-config parsing and the
-reference-image generation branch are not the stage's job). The steps run
-in `dev`'s order, each one a function in ``rapidpipe.science.difference``:
+reference-image generation branch are not the stage's job), refreshed to
+dev d6aac515. It runs as ``rapidpipe job local|run|submit --stage
+difference`` under :class:`rapidpipe.foundation.local.JobContext`:
+``run(job)`` reads what its job's recorded inputs name, writes the files
+and ``manifest.json`` under ``job.path`` and returns; the caller
+publishes. The steps run in `dev`'s order, each one a function in
+``rapidpipe.science.difference``:
 
 reformat and simple-model uncertainty -> SExtractor science catalog and
-FWHM -> SIP to PV and three SWarp resamplings of the reference bundle ->
-PSF normalisation -> bkgest -> gain matching (``scalefacref``, x/y RMS and
+point-source FWHM -> SIP to PV and three SWarp resamplings of the
+reference bundle -> PSF normalisation -> bkgest on the science image and
+on the resampled reference -> gain matching (``scalefacref``, x/y RMS and
 medians) -> NaN replacement and artifact repair -> subpixel offset of the
-reference by the medians -> ZOGY -> coverage mask, NaN restore, negation ->
-difference uncertainty -> SExtractor and Photutils catalogs, positive and
-negative. SFFT and the naive subtraction follow ZOGY and run as `dev`
+reference by the medians -> ZOGY -> coverage mask, NaN restore, negation
+-> difference uncertainty -> SExtractor and Photutils catalogs, positive
+and negative. SFFT and the naive subtraction follow ZOGY and run as `dev`
 runs them (``[sfft] run_sfft``, ``[naive_diffimage] naive_diffimage_flag``).
 
-Inputs. The stage's ``--inputs`` manifest is an input set: its
-``outputs`` list the products this attempt consumes, each with its member
-files beside the manifest --
+Scope: ``{"expid", "sca", "fid"}``, the epoch's key without the dataset
+(the run's). Settings: the run's ``[difference]`` table, whose subtables
+are `dev`'s ini sections (``rapidpipe/settings/foundation-thin.toml``).
 
-- one ``l2-image`` entry (``admit``'s, with its registration block),
-- one ``reference-image`` entry, members ``image``, ``coverage``,
-  ``uncertainty``; registration ``{"infobits": int, "rfid": int|null}``,
-  ``rfid`` naming the legacy ``refimages`` row of a reference registered
-  by `dev` (no instance),
-- one ``reference-catalog`` entry (the reference's SExtractor catalog,
-  role ``catalog``; `dev` reads its FWHM column),
-- two ``psf`` entries, keys carrying ``"applies_to": "science"`` or
-  ``"reference"`` (role ``psf``).
+Inputs, every one an ``input`` row, read in one short transaction and
+fetched with :func:`rapidpipe.foundation.prefix.get`:
 
-Outputs. One ``difference-image`` instance for ZOGY, registered as in
-`dev`; an SFFT instance when ``[sfft] register_sfft`` is on (the
-default) and SFFT succeeded (never a partial
-bundle). Both instances register under their own `pipelines` row (ZOGY
-ppid 15, SFFT ppid 16); which one consumers see is an official binding choice
-downstream, not this stage's job. ``source-catalog`` entries for each
-registered instance's catalogs. Every working file stays in
-``[paths] work_subdirectory`` of the attempt's output location, as `dev`
-uploads its intermediates for diagnosis; the naive subtraction's files
-are among them and are never registered. A non-fatal SFFT failure is noted
-in the execution record.
+- ``l2files``: exactly one, the epoch's key.
+- ``refimages``: exactly one, of the scope's filter (an imported
+  reference or one the reference stage made; the stage never cares
+  which). Its coverage and uncertainty maps sit beside the mosaic, and
+  its mosaic SExtractor catalog (``refimcatalogs`` cattype 1) gives the
+  reference FWHM.
+- ``psfs``: exactly two, the science-image PSF and the reference-image
+  PSF, each of the scope's filter and SCA, told apart by the file's own
+  ``PSFKIND`` keyword (``sciimage_psf``, ``refimage_psf``): the PSF key
+  (dataset, filter, SCA) does not separate them.
+
+Outputs under ``job.path``. ``[paths] work_subdirectory`` holds every
+working file `dev` uploads for diagnosis, the inputs' copies removed; the
+packet stage reads the ZOGY difference image's neighbours there
+(``zogy_diffimage_uncert_masked.fits``, ``diffpsf.fits``,
+``bkg_subbed_science_image.fits``,
+``awaicgen_output_mosaic_image_resampled_gainmatched.fits``). Declared
+tables: ``diffimages`` (one row, the ZOGY image; ``pid`` is drawn from the
+table's identity sequence so the sources can carry it; ``infobitssci`` is
+`dev`'s catalog-outcome mask, ``infobitsref`` the reference's infobits)
+and ``sources`` (the ZOGY positive PSF-fit catalog through
+:func:`rapidpipe.science.load.catalogs.source_set`, capped at ``max_sources``
+as the import caps it). The manifest records `dev`'s gain-matching and
+catalog measurements under ``difference``.
+
+Departures from `dev` (difference page): SFFT and naive files are not
+published as rows (a run has one differencer); a missing ZOGY PSF-fit
+catalog publishes an empty source set with its outcome bit set, where
+`dev`'s loader skips the job.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
@@ -50,6 +67,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import logging
 import math
 import shutil
 import sys
@@ -57,23 +75,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from astropy.io import fits
+from astropy.wcs import WCS
 
-from rapidpipe.db.ids import new_ulid
-from rapidpipe.products.diffimage import (
-    DIFFERENCERS,
-    DifferenceImageRegistration,
-    DifferenceImageRegistrationError,
-    catalog_outcome_bit,
-)
-from rapidpipe.products.l2image import L2ImageRegistration, L2ImageRegistrationError
-from rapidpipe.products.manifest import (
-    Manifest,
-    Member,
-    OutputEntry,
-    member_for_file,
-    sha256_of_file,
-)
+from rapidpipe.foundation.local import JobContext
+from rapidpipe.foundation.prefix import get
+from rapidpipe.products.diffimage import catalog_outcome_bit
 from rapidpipe.science.difference import (
     background,
     gainmatch,
@@ -93,36 +102,31 @@ from rapidpipe.science.difference import (
 )
 from rapidpipe.science.difference.fitsops import scale_image_data
 from rapidpipe.science.difference.tools import ToolRunner
-from rapidpipe.seams import load_factory, toolkit_env
-from rapidpipe.stages.contract import (
-    InputRejected,
-    StageContext,
-    StageDeclaration,
-    StageResult,
-    UsageError,
-    run_stage,
-)
+from rapidpipe.science.load.catalogs import source_set
+from rapidpipe.science.spatial import image_centre_and_corners, tessellation_field
 
-_SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings" / "difference.toml"
+logger = logging.getLogger(__name__)
 
-DECLARATION = StageDeclaration(
-    name="difference",
-    unit="detector-image",
-    settings_schema_path=str(_SETTINGS_PATH),
-    consumes=("l2-image", "reference-image", "reference-catalog", "psf"),
-    produces=("difference-image", "source-catalog"),
-    database_access="none",
-)
+#: `refimcatalogs.cattype` of the reference mosaic's SExtractor catalog.
+REFERENCE_CATALOG_TYPE = 1
+#: The status of a difference image the stage finished.
+STATUS_GOOD = 1
+#: ``PSFKIND`` of the two PSFs the job names.
+SCIENCE_PSF, REFERENCE_PSF = "sciimage_psf", "refimage_psf"
 
-
-# ----------------------------------------------------------------------
-# Injectable tools
-# ----------------------------------------------------------------------
+DIFFIMAGES_SCHEMA = pa.schema([
+    ("pid", pa.int32()), ("dataset", pa.string()), ("expid", pa.int32()), ("sca", pa.int16()),
+    ("fid", pa.int16()), ("rid", pa.int32()), ("rfid", pa.int32()), ("field", pa.int32()),
+    ("jd", pa.float64()),
+    *((f"{c}{n}", pa.float64()) for n in range(5) for c in ("ra", "dec")),
+    ("infobitssci", pa.int32()), ("infobitsref", pa.int32()), ("filename", pa.string()),
+    ("checksum", pa.string()), ("status", pa.int16()),
+])
 
 
 @dataclass
 class Toolkit:
-    """The stage's boundary with external software, replaceable in tests.
+    """The stage's boundary with external software; a test replaces :func:`toolkit`.
 
     ``runner`` runs SExtractor, SWarp, bkgest, py_zogy.py and SFFT;
     ``sip_to_pv`` rewrites a FITS header's SIP distortion as PV in place;
@@ -136,152 +140,7 @@ class Toolkit:
 
 
 def toolkit() -> Toolkit:
-    """The real tools, unless ``RAPIDPIPE_DIFFERENCE_TOOLKIT`` names others.
-
-    In-process tests monkeypatch this name instead.
-    """
-    factory = load_factory(toolkit_env("difference"), UsageError)
-    return factory() if factory is not None else Toolkit()
-
-
-# ----------------------------------------------------------------------
-# Inputs
-# ----------------------------------------------------------------------
-
-
-@dataclass
-class _InputSet:
-    l2: OutputEntry
-    l2_registration: L2ImageRegistration
-    reference: OutputEntry
-    reference_infobits: int
-    reference_rfid: int | None
-    science_image: str          # file names in the work directory
-    reference_image: str
-    reference_coverage: str
-    reference_uncertainty: str
-    reference_catalog: str
-    science_psf: str
-    reference_psf: str
-
-
-def _md5_of_file(path: Path) -> str:
-    digest = hashlib.md5()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _verified_member_path(inputs_dir: Path, member: Member) -> Path:
-    path = inputs_dir / member.path
-    if not path.exists():
-        raise InputRejected(f"input member file not found: {path}")
-    if path.stat().st_size != member.bytes:
-        raise InputRejected(
-            f"input member {member.path!r}: manifest declares {member.bytes} bytes, "
-            f"file is {path.stat().st_size} bytes")
-    if sha256_of_file(path) != member.sha256.removeprefix("sha256:"):
-        raise InputRejected(f"input member {member.path!r}: SHA-256 mismatch")
-    return path
-
-
-def _one(manifest: Manifest, kind: str) -> OutputEntry:
-    entries = [e for e in manifest.outputs if e.kind == kind]
-    if len(entries) != 1:
-        raise InputRejected(
-            f"input manifest has {len(entries)} {kind!r} entries, expected exactly one")
-    return entries[0]
-
-
-def _member(entry: OutputEntry, role: str) -> Member:
-    members = [m for m in entry.members if m.role == role]
-    if len(members) != 1:
-        raise InputRejected(
-            f"{entry.kind} entry {entry.instance!r} has {len(members)} members "
-            f"with role {role!r}, expected exactly one")
-    return members[0]
-
-
-def _stage_input(context: StageContext, member: Member, work_dir: Path,
-                 taken: set[str]) -> str:
-    """Verify one input member and copy it into the work directory by base name."""
-    source = _verified_member_path(context.inputs_dir, member)
-    name = Path(member.path).name
-    if name in taken:
-        raise InputRejected(f"two input members share the file name {name!r}")
-    taken.add(name)
-    shutil.copyfile(source, work_dir / name)
-    return name
-
-
-def _read_input_set(context: StageContext, work_dir: Path) -> _InputSet:
-    manifest = context.input_manifest
-    if manifest.unit.kind != "detector-image":
-        raise InputRejected(
-            f"input manifest unit kind is {manifest.unit.kind!r}, expected 'detector-image'")
-
-    l2 = _one(manifest, "l2-image")
-    try:
-        l2_registration = L2ImageRegistration.from_dict(l2.registration)
-        l2_registration.validate()
-    except (L2ImageRegistrationError, TypeError) as exc:
-        raise InputRejected(f"l2-image registration block: {exc}") from exc
-
-    reference = _one(manifest, "reference-image")
-    ref_registration = reference.registration
-    infobits = ref_registration.get("infobits")
-    rfid = ref_registration.get("rfid")
-    if not isinstance(infobits, int) or isinstance(infobits, bool) or infobits < 0:
-        raise InputRejected(
-            f"reference-image registration 'infobits' must be a non-negative integer, "
-            f"got {infobits!r}")
-    if rfid is not None and (not isinstance(rfid, int) or isinstance(rfid, bool) or rfid <= 0):
-        raise InputRejected(
-            f"reference-image registration 'rfid' must be a positive integer or null, got {rfid!r}")
-
-    reference_catalog = _one(manifest, "reference-catalog")
-
-    psfs = [e for e in manifest.outputs if e.kind == "psf"]
-    by_use = {e.key.get("applies_to"): e for e in psfs}
-    if len(psfs) != 2 or set(by_use) != {"science", "reference"}:
-        raise InputRejected(
-            "input manifest must carry exactly two psf entries, keyed applies_to "
-            f"'science' and 'reference'; got {sorted(str(k) for k in by_use)}")
-
-    taken: set[str] = set()
-    science_image = _stage_input(context, _member(l2, "image"), work_dir, taken)
-    if l2.primary != _member(l2, "image").path:
-        raise InputRejected("the l2-image entry's primary member is not its 'image' role")
-
-    return _InputSet(
-        l2=l2,
-        l2_registration=l2_registration,
-        reference=reference,
-        reference_infobits=infobits,
-        reference_rfid=rfid,
-        science_image=science_image,
-        reference_image=_stage_input(context, _member(reference, "image"), work_dir, taken),
-        reference_coverage=_stage_input(context, _member(reference, "coverage"), work_dir, taken),
-        reference_uncertainty=_stage_input(
-            context, _member(reference, "uncertainty"), work_dir, taken),
-        reference_catalog=_stage_input(
-            context, _member(reference_catalog, "catalog"), work_dir, taken),
-        science_psf=_stage_input(context, _member(by_use["science"], "psf"), work_dir, taken),
-        reference_psf=_stage_input(context, _member(by_use["reference"], "psf"), work_dir, taken),
-    )
-
-
-def _unzip_science_image(work_dir: Path, name: str) -> str:
-    """`dev` gunzips a ``.fits.gz`` delivery unless the ``.fits`` already exists."""
-    if not name.endswith(".fits.gz"):
-        return name
-    unzipped = name.replace(".fits.gz", ".fits")
-    if not (work_dir / unzipped).exists():
-        with gzip.open(work_dir / name, "rb") as src, (work_dir / unzipped).open("wb") as dst:
-            shutil.copyfileobj(src, dst)
-        (work_dir / name).unlink()
-    return unzipped
+    return Toolkit()
 
 
 # ----------------------------------------------------------------------
@@ -289,18 +148,16 @@ def _unzip_science_image(work_dir: Path, name: str) -> str:
 # ----------------------------------------------------------------------
 
 
-def _check_settings(settings: dict[str, Any]) -> None:
+def check_settings(settings: dict[str, Any]) -> None:
+    """Validate the ``[difference]`` table; every problem is a ``ValueError``."""
     if settings["fake_sources"]["inject_fake_sources_flag"]:
-        raise UsageError(
-            "[fake_sources] inject_fake_sources_flag = true is not supported: "
+        raise ValueError(
+            "[difference.fake_sources] inject_fake_sources_flag = true is not supported: "
             "fake-source injection is not ported to the rebuild")
     _zero_point_override(settings)
-    for differencer, table in (("zogy", "zogy"), ("sfft", "sfft")):
-        role = settings[table]["detection_role"]
-        if role not in DIFFERENCERS[differencer].declared:
-            raise UsageError(
-                f"[{table}] detection_role {role!r} is not a {differencer} bundle role; "
-                f"declared: {list(DIFFERENCERS[differencer].declared)}")
+    cap = settings.get("max_sources", 0)
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+        raise ValueError(f"[difference] max_sources must be a non-negative integer, got {cap!r}")
 
 
 def _seed(settings: dict[str, Any]) -> int | None:
@@ -317,78 +174,176 @@ def _zero_point_override(settings: dict[str, Any]) -> float | None:
     if value == "":
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise UsageError(f"[awaicgen] zprefimg must be empty or a number, got {value!r}")
+        raise ValueError(f"[difference.awaicgen] zprefimg must be empty or a number, got {value!r}")
     return float(value)
 
 
-def _reference_header_magzp(work_dir: Path, reference_image: str) -> float | None:
-    """The reference image's own ``MAGZP``, read from its primary header.
-
-    Reads the original reference input file (as delivered, before SWarp
-    resamples it onto the science grid): the resampled copy's header is
-    the science image's, carried through by SWarp, and ``[swarp]
-    swarp_copy_keywords`` never names ``MAGZP``, so the resampled file
-    never carries it.
-
-    Raises ``ValueError`` or ``TypeError`` if the keyword is present but
-    cannot be read as a number (non-numeric, or FITS-undefined); callers
-    decide how that maps to an exit code.
-    """
-    with fits.open(work_dir / reference_image) as hdul:
-        header = hdul[0].header
-        if "MAGZP" not in header:
-            return None
-        return float(header["MAGZP"])
-
-
-def _resolve_zero_point(
-    settings: dict[str, Any], work_dir: Path, reference_image: str, log: Any,
-) -> tuple[float, str]:
+def _resolve_zero_point(settings: dict[str, Any], reference_image: Path) -> tuple[float, str]:
     """The reference zero point gain matching uses, and where it came from.
 
-    An explicit ``[awaicgen] zprefimg`` override always wins, and is
-    applied without depending on the reference header at all: a
-    malformed ``MAGZP`` (non-numeric, undefined, or non-finite) never
-    matters when an override is set. The header is still opened, best
-    effort, only to make the log message more informative; any failure
-    reading it there is swallowed.
-
-    Absent an override, the reference image's ``MAGZP`` header keyword is
-    read. Missing, non-numeric, undefined, or non-finite is an input
-    rejection (65): the stage was given a reference image with no usable
-    recorded zero point and no override to fall back on.
+    An explicit ``[awaicgen] zprefimg`` override always wins. Otherwise the
+    reference image's ``MAGZP`` (the file as named, not the resampled copy,
+    whose header is the science image's): the value the reference was
+    built on, which is what `dev`'s per-filter ``zprefimg_<filter>`` lookup
+    (a2825eba) must resolve to. Missing or not a finite number fails.
     """
     override = _zero_point_override(settings)
     if override is not None:
-        try:
-            header_value = _reference_header_magzp(work_dir, reference_image)
-        except (ValueError, TypeError):
-            header_value = None
-        if header_value is not None:
-            log.info(
-                "zero point source=override; value=%s (overrides reference header MAGZP=%s)",
-                override, header_value)
-        else:
-            log.info(
-                "zero point source=override; value=%s (reference header has no MAGZP)", override)
+        logger.info("zero point source=override; value=%s", override)
         return override, "override"
+    header = fits.getheader(reference_image, 0)
+    if "MAGZP" not in header:
+        raise ValueError("reference image header has no MAGZP keyword and [awaicgen] zprefimg "
+                         "is not set")
     try:
-        header_value = _reference_header_magzp(work_dir, reference_image)
-    except (ValueError, TypeError) as exc:
-        raise InputRejected(
-            f"reference image header MAGZP is not a usable number: {exc}") from exc
-    if header_value is None:
-        raise InputRejected(
-            "reference image header has no MAGZP keyword and [awaicgen] zprefimg is not set: "
-            "either set [awaicgen] zprefimg as an explicit override, or supply a reference "
-            "image whose header carries MAGZP (the reference stage stamps it on every coadd "
-            "it produces)")
-    if not math.isfinite(header_value):
-        raise InputRejected(
-            f"reference image header MAGZP is not finite ({header_value!r}) and "
-            "[awaicgen] zprefimg is not set")
-    log.info("zero point source=header; value=%s", header_value)
-    return header_value, "header"
+        value = float(header["MAGZP"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"reference image header MAGZP is not a number: {exc}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"reference image header MAGZP is not finite ({value!r})")
+    logger.info("zero point source=header; value=%s", value)
+    return value, "header"
+
+
+# ----------------------------------------------------------------------
+# Inputs
+# ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Inputs:
+    """What the job's inputs name, with local copies of their files."""
+
+    rid: int
+    exptime: float
+    mjdobs: float
+    infobits_science: int
+    rfid: int
+    infobits_reference: int
+    science_image: Path
+    reference_image: Path
+    reference_coverage: Path
+    reference_uncertainty: Path
+    reference_catalog: Path
+    science_psf: Path
+    reference_psf: Path
+    pid: int
+
+
+def _beside(url: str, name: str) -> Path:
+    """The file ``name`` in the same directory as the file ``url``, fetched like it."""
+    return get(url.rsplit("/", 1)[0] + "/" + name)
+
+
+def _psf_kind(path: Path) -> str | None:
+    return fits.getheader(path, 0).get("PSFKIND")
+
+
+def read_inputs(job: JobContext) -> Inputs:
+    """Read the named rows in one short transaction, fetch their files and draw a ``pid``."""
+    key = {"dataset": job.dataset, "expid": int(job.scope["expid"]),
+           "sca": int(job.scope["sca"]), "fid": int(job.scope["fid"])}
+    named = [i for i in job.inputs if i["kind"] == "input"]
+    by_product: dict[str, list[dict]] = {}
+    for item in named:
+        by_product.setdefault(item["product"], []).append(item)
+    others = sorted(set(by_product) - {"l2files", "refimages", "psfs"})
+    if others:
+        raise ValueError(f"job {job.job}: difference reads l2files, refimages and psfs, not {others}")
+    counts = {p: len(by_product.get(p, [])) for p in ("l2files", "refimages", "psfs")}
+    if counts != {"l2files": 1, "refimages": 1, "psfs": 2}:
+        raise ValueError(f"job {job.job}: difference names one l2files, one refimages and two "
+                         f"psfs inputs, got {counts}")
+    (l2_in,), (ref_in,) = by_product["l2files"], by_product["refimages"]
+    if l2_in["key"] != key:
+        raise ValueError(f"job {job.job}: l2files input {l2_in['key']} is not the epoch {key}")
+    if int(ref_in["key"]["fid"]) != key["fid"]:
+        raise ValueError(f"job {job.job}: refimages input {ref_in['key']} is not the scope's fid")
+
+    with job.connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT rid, filename, exptime, mjdobs, infobits FROM l2files WHERE job = %s"
+                    " AND dataset = %s AND expid = %s AND sca = %s AND fid = %s",
+                    (l2_in["source_job"], key["dataset"], key["expid"], key["sca"], key["fid"]))
+        l2 = cur.fetchone()
+        if l2 is None:
+            raise ValueError(f"job {job.job}: no l2files row {key} in job {l2_in['source_job']}")
+        ref_key = ref_in["key"]
+        cur.execute("SELECT rfid, filename, infobits FROM refimages WHERE job = %s"
+                    " AND dataset = %s AND field = %s AND fid = %s",
+                    (ref_in["source_job"], ref_key["dataset"], ref_key["field"], ref_key["fid"]))
+        ref = cur.fetchone()
+        if ref is None:
+            raise ValueError(f"job {job.job}: no refimages row {ref_key} in job "
+                             f"{ref_in['source_job']}")
+        cur.execute("SELECT filename FROM refimcatalogs WHERE job = %s AND rfid = %s"
+                    " AND cattype = %s ORDER BY rfcatid DESC LIMIT 1",
+                    (ref_in["source_job"], ref[0], REFERENCE_CATALOG_TYPE))
+        refcat = cur.fetchone()
+        if refcat is None:
+            raise ValueError(f"job {job.job}: reference rfid {ref[0]} has no mosaic catalog "
+                             f"(refimcatalogs cattype {REFERENCE_CATALOG_TYPE})")
+        psf_urls = []
+        for item in by_product["psfs"]:
+            psf_key = item["key"]
+            if (int(psf_key["fid"]), int(psf_key["sca"])) != (key["fid"], key["sca"]):
+                raise ValueError(f"job {job.job}: psfs input {psf_key} is not the scope's fid "
+                                 f"and sca")
+            cur.execute("SELECT filename FROM psfs WHERE job = %s AND dataset = %s AND fid = %s"
+                        " AND sca = %s", (item["source_job"], psf_key["dataset"],
+                                          psf_key["fid"], psf_key["sca"]))
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"job {job.job}: no psfs row {psf_key} in job "
+                                 f"{item['source_job']}")
+            psf_urls.append(row[0])
+        cur.execute("SELECT nextval(pg_get_serial_sequence('diffimages', 'pid'))")
+        pid = int(cur.fetchone()[0])
+        conn.commit()
+
+    psfs = {}
+    for url in psf_urls:
+        path = get(url)
+        psfs.setdefault(_psf_kind(path), []).append(path)
+    if sorted(psfs) != [REFERENCE_PSF, SCIENCE_PSF] or any(len(v) != 1 for v in psfs.values()):
+        raise ValueError(f"job {job.job}: the two psfs inputs must be one {SCIENCE_PSF!r} and one "
+                         f"{REFERENCE_PSF!r} by their PSFKIND keyword, got "
+                         f"{sorted(map(str, psfs))}")
+    ref_url = ref[1]
+    image_name = ref_url.rsplit("/", 1)[-1]
+    if not image_name.endswith("_image.fits"):
+        raise ValueError(f"job {job.job}: reference mosaic {image_name} is not awaicgen's "
+                         f"*_image.fits")
+    return Inputs(
+        rid=int(l2[0]), exptime=float(l2[2]), mjdobs=float(l2[3]), infobits_science=int(l2[4] or 0),
+        rfid=int(ref[0]), infobits_reference=int(ref[2] or 0),
+        science_image=get(l2[1]), reference_image=get(ref_url),
+        reference_coverage=_beside(ref_url, image_name.replace("_image.fits", "_cov_map.fits")),
+        reference_uncertainty=_beside(ref_url,
+                                      image_name.replace("_image.fits", "_uncert_image.fits")),
+        reference_catalog=get(refcat[0]),
+        science_psf=psfs[SCIENCE_PSF][0], reference_psf=psfs[REFERENCE_PSF][0], pid=pid)
+
+
+def _stage_input(source: Path, work_dir: Path, taken: set[str]) -> str:
+    """Copy one input file into the work directory by base name; return the name."""
+    name = source.name
+    if name in taken:
+        raise ValueError(f"two input files share the name {name!r}")
+    taken.add(name)
+    shutil.copyfile(source, work_dir / name)
+    return name
+
+
+def _unzip_science_image(work_dir: Path, name: str) -> str:
+    """`dev` gunzips a ``.fits.gz`` delivery unless the ``.fits`` already exists."""
+    if not name.endswith(".fits.gz"):
+        return name
+    unzipped = name.replace(".fits.gz", ".fits")
+    if not (work_dir / unzipped).exists():
+        with gzip.open(work_dir / name, "rb") as src, (work_dir / unzipped).open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+        (work_dir / name).unlink()
+    return unzipped
 
 
 # ----------------------------------------------------------------------
@@ -401,32 +356,16 @@ class _Catalogs:
     """One differencer's catalog outcome: counts, files, and the mask bits it set."""
 
     sextractor: dict[str, int] = field(default_factory=dict)
-    sextractor_files: dict[str, str] = field(default_factory=dict)
     photutils: dict[str, int | None] = field(default_factory=dict)
-    photutils_files: dict[str, dict[str, str | None]] = field(default_factory=dict)
+    parquet: dict[str, str | None] = field(default_factory=dict)
     bits: int = 0
 
 
-def _photutils_files(catalog: str, finder: str, residual: str, parquet: str | None) -> dict:
-    return {"catalog": catalog, "finder": finder, "residual": residual, "parquet": parquet}
-
-
-def _run_catalogs(
-    *,
-    differencer: str,
-    kit: Toolkit,
-    work_dir: Path,
-    settings: dict[str, Any],
-    positive: dict[str, str],
-    negative: dict[str, str],
-    weight_image: str,
-    psf_image: str,
-    sky_coords_image: str,
-    psfcat_names: dict[str, str],
-    override_weight_type_and_filter: bool,
-    write_parquet: bool,
-    seed: int | None,
-) -> _Catalogs:
+def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: dict[str, Any],
+                  positive: dict[str, str], negative: dict[str, str], weight_image: str,
+                  psf_image: str, sky_coords_image: str, psfcat_names: dict[str, str],
+                  override_weight_type_and_filter: bool, write_parquet: bool,
+                  overrides: dict[str, str] | None, seed: int | None) -> _Catalogs:
     """`dev`'s SExtractor then Photutils blocks, positive then negative.
 
     ``positive``/``negative`` map ``detection``, ``input`` and ``catalog``
@@ -438,13 +377,10 @@ def _run_catalogs(
     for sign, names in (("positive", positive), ("negative", negative)):
         result.sextractor[sign] = sextractor.difference_image_catalog(
             kit.runner, work_dir, settings["sextractor_diffimage"], paths["cfg_path"],
-            detection_image=names["detection"],
-            input_image=names["input"],
-            weight_image=weight_image,
-            catalog_name=names["catalog"],
+            detection_image=names["detection"], input_image=names["input"],
+            weight_image=weight_image, catalog_name=names["catalog"],
             override_weight_type_and_filter=override_weight_type_and_filter,
-            executable=paths["sextractor"])
-        result.sextractor_files[sign] = names["catalog"]
+            overrides=overrides, executable=paths["sextractor"])
 
     psfcat_settings = psfcat.PsfCatalogSettings.from_table(settings["psfcat_diffimage"])
     for sign, names in (("positive", positive), ("negative", negative)):
@@ -457,21 +393,16 @@ def _run_catalogs(
             residual = residual.replace(".fits", "_negative.fits")
         parquet = catalog.replace(".txt", ".parquet") if write_parquet else None
         outcome = kit.psf_catalog(
-            psfcat_settings,
-            image=str(work_dir / names["input"]),
-            uncertainty=str(work_dir / weight_image),
-            psf=str(work_dir / psf_image),
-            sky_coords_image=str(work_dir / sky_coords_image),
-            catalog=str(work_dir / catalog),
-            finder=str(work_dir / finder),
-            residual=str(work_dir / residual),
+            psfcat_settings, image=str(work_dir / names["input"]),
+            uncertainty=str(work_dir / weight_image), psf=str(work_dir / psf_image),
+            sky_coords_image=str(work_dir / sky_coords_image), catalog=str(work_dir / catalog),
+            finder=str(work_dir / finder), residual=str(work_dir / residual),
             parquet=str(work_dir / parquet) if parquet else None,
-            label=f"{sign} {differencer} difference image",
-            seed=seed)
+            label=f"{sign} {differencer} difference image", seed=seed)
         if not outcome.produced:
             result.bits |= catalog_outcome_bit(differencer, sign)
         result.photutils[sign] = outcome.nsources
-        result.photutils_files[sign] = _photutils_files(catalog, finder, residual, parquet)
+        result.parquet[sign] = parquet if outcome.produced else None
     return result
 
 
@@ -480,11 +411,11 @@ def _run_catalogs(
 # ----------------------------------------------------------------------
 
 
-def _body(context: StageContext) -> StageResult:
-    settings = context.settings
-    _check_settings(settings)
+def run(job: JobContext) -> None:
+    settings = job.settings["difference"]
+    check_settings(settings)
+    inputs = read_inputs(job)
     kit = toolkit()
-    log = context.logger
     seed = _seed(settings)
 
     paths = settings["paths"]
@@ -497,12 +428,15 @@ def _body(context: StageContext) -> StageResult:
     zogy_settings = settings["zogy"]
     thresh = float(zogy_settings["post_zogy_keep_diffimg_lower_cov_map_thresh"])
 
-    work_dir = context.outputs_dir / paths["work_subdirectory"]
+    work_dir = job.path / paths["work_subdirectory"]
     work_dir.mkdir(parents=True, exist_ok=True)
-
-    inputs = _read_input_set(context, work_dir)
-    exptime_sciimage = float(inputs.l2_registration.exptime)
-    science_image_filename = _unzip_science_image(work_dir, inputs.science_image)
+    taken: set[str] = set()
+    staged = {name: _stage_input(path, work_dir, taken) for name, path in (
+        ("science", inputs.science_image), ("reference", inputs.reference_image),
+        ("coverage", inputs.reference_coverage), ("uncertainty", inputs.reference_uncertainty),
+        ("catalog", inputs.reference_catalog), ("science_psf", inputs.science_psf),
+        ("reference_psf", inputs.reference_psf))}
+    science_image_filename = _unzip_science_image(work_dir, staged["science"])
 
     def w(name: str) -> Path:
         return work_dir / name
@@ -512,7 +446,8 @@ def _body(context: StageContext) -> StageResult:
         w(science_image_filename), 3.0, 1, saturation_level_sciimage, seed=seed)
     avg_sci_img = stats_sci_img["clippedavg"]
 
-    # Reformat and simple-model uncertainty.
+    # Reformat and simple-model uncertainty (dev's OpenUniverse ZPTMAG fix is
+    # off by default and not ported).
     reformatted_science_image_filename = science_image_filename.replace(".fits", "_reformatted.fits")
     reformatted_science_uncert_image_filename = science_image_filename.replace(
         ".fits", "_reformatted_unc.fits")
@@ -520,7 +455,7 @@ def _body(context: StageContext) -> StageResult:
         w(science_image_filename), sca_gain, sca_readout_noise, avg_sci_img,
         w(reformatted_science_image_filename), w(reformatted_science_uncert_image_filename))
 
-    # Science-image catalog and FWHM; reference FWHM from its catalog.
+    # Science-image catalog and point-source FWHM; reference FWHM from its catalog.
     filename_sciimage_catalog = reformatted_science_image_filename.replace(".fits", "_secat.txt")
     sextractor.generate_science_image_catalog(
         kit.runner, work_dir, reformatted_science_image_filename,
@@ -529,7 +464,7 @@ def _body(context: StageContext) -> StageResult:
     fwhm_sci, _ = sextractor.fwhm_from_catalog(
         w(filename_sciimage_catalog), cfg_path + "/rapidSexParamsSciImage.inp", "sci")
     fwhm_ref, _ = sextractor.fwhm_from_catalog(
-        w(inputs.reference_catalog), cfg_path + "/rapidSexParamsRefImage.inp", "ref")
+        w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", "ref")
 
     # SWarp the reference bundle into the science image's distortion frame.
     # The reference (an awaicgen coadd) has no distortion: no PV conversion.
@@ -539,7 +474,7 @@ def _body(context: StageContext) -> StageResult:
      output_resampled_reference_uncert_image) = \
         resample.resample_reference_image_to_science_image_with_pv_distortion(
             kit.runner, work_dir, reformatted_science_image_filename, 0,
-            inputs.reference_image, inputs.reference_coverage, inputs.reference_uncertainty,
+            staged["reference"], staged["coverage"], staged["uncertainty"],
             0, False, settings["swarp"], executable=paths["swarp"], sip_to_pv=kit.sip_to_pv)
     for output in (output_resampled_reference_image, output_resampled_reference_cov_map,
                    output_resampled_reference_uncert_image):
@@ -547,19 +482,27 @@ def _body(context: StageContext) -> StageResult:
         w(output.replace(".fits", ".head")).unlink(missing_ok=True)
 
     # Normalise the science PSF (the reference PSF is already normalised).
-    filename_sciimage_psf_normalized = inputs.science_psf.replace(".fits", "_normalized.fits")
-    psf.normalize_image(w(inputs.science_psf), 0, w(filename_sciimage_psf_normalized))
+    filename_sciimage_psf_normalized = staged["science_psf"].replace(".fits", "_normalized.fits")
+    psf.normalize_image(w(staged["science_psf"]), 0, w(filename_sciimage_psf_normalized))
 
-    # Background-subtract the science image.
+    # Background-subtract the science image and, with [bkgest]
+    # subtract_from_reference, the resampled reference with the same bkgest.
+    bkgest = settings["bkgest"]
+    swarp_subtracts = settings["swarp"]["swarp_subtract_back"].strip().upper() != "N"
     filename_bkg_subbed_science_image = background.subtract_background(
         kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
-        sci_fits_file_with_pv, settings["bkgest"])
+        sci_fits_file_with_pv, bkgest)
+    if not bkgest["subtract_from_reference"] and not swarp_subtracts:
+        logger.warning("neither SWarp nor bkgest subtracts the reference-image background")
+    if bkgest["subtract_from_reference"]:
+        if swarp_subtracts:
+            logger.warning("SWarp SUBTRACT_BACK is on, so bkgest only removes what SWarp left behind")
+        background.subtract_reference_background(
+            kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
+            output_resampled_reference_image, output_resampled_reference_cov_map, bkgest)
 
-    # Gain matching. The reference zero point is read from the reference
-    # image's own MAGZP header (the file as delivered, not the resampled
-    # copy), unless [awaicgen] zprefimg overrides it (the lead, 2026-09-26).
-    zero_point, zero_point_source = _resolve_zero_point(
-        settings, work_dir, inputs.reference_image, log)
+    # Gain matching, with the reference zero point the reference was built on.
+    zero_point, zero_point_source = _resolve_zero_point(settings, w(staged["reference"]))
     filename_scigainmatchsexcat_catalog = filename_bkg_subbed_science_image.replace(
         ".fits", "_scigainmatchsexcat.txt")
     filename_refgainmatchsexcat_catalog = output_resampled_reference_image.replace(
@@ -576,8 +519,8 @@ def _body(context: StageContext) -> StageResult:
             float(zogy_settings["astrometric_uncert_x"]),
             float(zogy_settings["astrometric_uncert_y"]),
             cfg_path, executable=paths["sextractor"])
-    log.info("scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin = %s %s %s %s %s",
-             scalefac, dxrmsfin_measured, dyrmsfin_measured, dxmedianfin, dymedianfin)
+    logger.info("scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin = %s %s %s %s %s",
+                scalefac, dxrmsfin_measured, dyrmsfin_measured, dxmedianfin, dymedianfin)
     scalefacref = 1. / scalefac
 
     output_resampled_gainmatched_reference_image = output_resampled_reference_image.replace(
@@ -595,8 +538,8 @@ def _body(context: StageContext) -> StageResult:
         n_artifacts_repaired = repair.repair_extreme_artifact_pixels(
             w(filename_bkg_subbed_science_image),
             float(settings["sci_image"]["extreme_artifact_threshold"]))
-        log.info("Number of extreme artifact pixels repaired in science image = %s",
-                 n_artifacts_repaired)
+        logger.info("Number of extreme artifact pixels repaired in science image = %s",
+                    n_artifacts_repaired)
     nan_indices_refimage = repair.replace_nans_with_value(
         w(output_resampled_gainmatched_reference_image), 0.0)
 
@@ -608,10 +551,6 @@ def _body(context: StageContext) -> StageResult:
     stats_ref_img = statistics.fits_data_statistics_with_clipping(
         w(output_resampled_reference_image), 3.0, 0, saturation_level_refimage, seed=seed)
     std_ref_img = stats_ref_img["clippedstd"]
-    log.info("avg_sci_img,std_sci_img,cnt_sci_img = %s %s %s",
-             stats_sci_img["clippedavg"], std_sci_img, stats_sci_img["nkept"])
-    log.info("avg_ref_img,std_ref_img,cnt_ref_img = %s %s %s",
-             stats_ref_img["clippedavg"], std_ref_img, stats_ref_img["nkept"])
 
     repair.replace_nans_with_value(w(reformatted_science_uncert_image_filename), std_sci_img)
     repair.replace_nans_with_value(w(output_resampled_gainmatched_reference_uncert_image), std_ref_img)
@@ -623,37 +562,25 @@ def _body(context: StageContext) -> StageResult:
     if "rimtimsim" in science_image_filename:
         psf.transpose_image_data(w(filename_sciimage_psf_normalized))
 
-    # ZOGY.
+    # ZOGY. dev feeds it a fixed astrometric uncertainty (0.0 by default),
+    # not the measured RMS, which the manifest records.
     filename_diffimage = zogy_settings["zogy_output_diffimage_file"]
     filename_diffpsf = zogy_settings["zogy_output_diffpsf_file"]
     filename_scorrimage = zogy_settings["zogy_output_scorrimage_file"]
-
-    # dev feeds ZOGY a fixed astrometric uncertainty (0.0 by default), not
-    # the measured RMS; the setting reproduces that override exactly. The
-    # measured RMS (dxrmsfin_measured/dyrmsfin_measured) is what gets
-    # recorded as dxrmsfin/dyrmsfin (see `residual` below) — production's
-    # dxrmsfin/dyrmsfin columns hold the measured value, not this override.
-    zogy_astrometric_sigma_x = float(zogy_settings["astrometric_sigma"])
-    zogy_astrometric_sigma_y = float(zogy_settings["astrometric_sigma"])
-    log.info("measured registration RMS dx,dy = %s %s; ZOGY astrometric_sigma dx,dy = %s %s",
-             dxrmsfin_measured, dyrmsfin_measured,
-             zogy_astrometric_sigma_x, zogy_astrometric_sigma_y)
-
+    zogy_astrometric_sigma = float(zogy_settings["astrometric_sigma"])
     zogy_sn, zogy_sr = zogy.zogy_background_sigmas(
         zogy_settings["zogy_sn_sr_from_uncertainty_maps"],
         w(reformatted_science_uncert_image_filename),
         w(output_resampled_gainmatched_reference_uncert_image),
         std_sci_img, std_ref_img, scalefacref)
-    log.info("zogy_sn,zogy_sr,ratio = %s %s %s", zogy_sn, zogy_sr,
-             zogy_sn / zogy_sr if zogy_sr else float("nan"))
-
+    logger.info("zogy_sn,zogy_sr = %s %s", zogy_sn, zogy_sr)
     kit.runner.run(zogy.build_zogy_command(
         python_cmd, paths["zogy_code"],
         filename_bkg_subbed_science_image, output_resampled_gainmatched_reference_image,
-        filename_sciimage_psf_normalized, inputs.reference_psf,
+        filename_sciimage_psf_normalized, staged["reference_psf"],
         reformatted_science_uncert_image_filename,
         output_resampled_gainmatched_reference_uncert_image,
-        zogy_sn, zogy_sr, zogy_astrometric_sigma_x, zogy_astrometric_sigma_y,
+        zogy_sn, zogy_sr, zogy_astrometric_sigma, zogy_astrometric_sigma,
         filename_diffimage, filename_diffpsf, filename_scorrimage), cwd=work_dir)
 
     # Mask with the resampled coverage map, restore NaNs, negate.
@@ -664,10 +591,7 @@ def _body(context: StageContext) -> StageResult:
         masking.mask_difference_image_with_resampled_reference_cov_map(
             w(source), w(output_resampled_reference_cov_map), w(target), thresh)
     for target in (filename_diffimage_masked, filename_scorrimage_masked):
-        if nan_indices_sciimage:
-            repair.restore_nans(w(target), nan_indices_sciimage)
-        if nan_indices_refimage:
-            repair.restore_nans(w(target), nan_indices_refimage)
+        _restore_nans(w(target), nan_indices_sciimage, nan_indices_refimage)
 
     filename_diffimage_masked_negative = filename_diffimage_masked.replace(".fits", "_negative.fits")
     scale_image_data(w(filename_diffimage_masked), -1.0, w(filename_diffimage_masked_negative))
@@ -677,125 +601,137 @@ def _body(context: StageContext) -> StageResult:
     # Difference uncertainty: the catalogs' weight and error image.
     filename_diffimage_unc_masked = filename_diffimage_masked.replace("masked.fits", "uncert_masked.fits")
     uncertainty.compute_diffimage_uncertainty(
-        sca_gain * exptime_sciimage,
+        sca_gain * inputs.exptime,
         w(filename_bkg_subbed_science_image),
         w(output_resampled_gainmatched_reference_image),
         w(output_resampled_reference_cov_map), thresh,
         w(filename_diffimage_masked), w(filename_diffimage_unc_masked), seed=seed)
 
-    zogy_files = {
-        "difference": filename_diffimage_masked,
-        "uncertainty": filename_diffimage_unc_masked,
-        "significance": filename_scorrimage_masked,
-        "psf": filename_diffpsf,
-    }
-    zogy_negative_files = {
-        "difference": filename_diffimage_masked_negative,
-        "significance": filename_scorrimage_masked_negative,
-    }
-    zogy_detection = zogy_settings["detection_role"]
+    # ZOGY's catalogs detect on S_corr, as dev's do.
     psfcat_table = settings["psfcat_diffimage"]
     zogy_catalogs = _run_catalogs(
         differencer="zogy", kit=kit, work_dir=work_dir, settings=settings,
-        positive={"detection": zogy_files[zogy_detection],
-                  "input": filename_diffimage_masked,
+        positive={"detection": filename_scorrimage_masked, "input": filename_diffimage_masked,
                   "catalog": filename_diffimage_masked.replace(".fits", ".txt")},
-        negative={"detection": zogy_negative_files.get(zogy_detection, zogy_files[zogy_detection]),
+        negative={"detection": filename_scorrimage_masked_negative,
                   "input": filename_diffimage_masked_negative,
                   "catalog": filename_diffimage_masked_negative.replace(".fits", ".txt")},
-        weight_image=filename_diffimage_unc_masked,
-        psf_image=filename_diffpsf,
+        weight_image=filename_diffimage_unc_masked, psf_image=filename_diffpsf,
         sky_coords_image=reformatted_science_image_filename,
         psfcat_names={"catalog": psfcat_table["output_zogy_psfcat_filename"],
                       "finder": psfcat_table["output_zogy_psfcat_finder_filename"],
                       "residual": psfcat_table["output_zogy_psfcat_residual_filename"]},
-        override_weight_type_and_filter=True, write_parquet=True, seed=seed)
-    output_diffimage_file_infobits = zogy_catalogs.bits
+        override_weight_type_and_filter=True, write_parquet=True, overrides=None, seed=seed)
+    infobits = zogy_catalogs.bits
 
-    # SFFT, as dev runs it.
-    notes: dict[str, Any] = {
-        "zogy_astrometric_sigma": {"x": zogy_astrometric_sigma_x,
-                                    "y": zogy_astrometric_sigma_y},
-        "zero_point": {"value": zero_point, "source": zero_point_source},
-    }
-    sfft_settings = settings["sfft"]
-    sfft_result = None
-    if sfft_settings["run_sfft"]:
-        sfft_result = _run_sfft(
-            kit=kit, work_dir=work_dir, settings=settings, seed=seed,
+    common = dict(kit=kit, work_dir=work_dir, settings=settings, seed=seed,
+                  filename_bkg_subbed_science_image=filename_bkg_subbed_science_image,
+                  gainmatched_reference=output_resampled_gainmatched_reference_image,
+                  resampled_cov_map=output_resampled_reference_cov_map,
+                  nan_indices=(nan_indices_sciimage, nan_indices_refimage),
+                  reformatted_science_image=reformatted_science_image_filename,
+                  gain_times_exptime=sca_gain * inputs.exptime, thresh=thresh)
+    sfft_note: dict[str, Any] = {"ran": False}
+    if settings["sfft"]["run_sfft"]:
+        exit_code, sfft_bits = _run_sfft(
             science_image_filename=science_image_filename,
-            filename_bkg_subbed_science_image=filename_bkg_subbed_science_image,
-            gainmatched_reference=output_resampled_gainmatched_reference_image,
-            resampled_cov_map=output_resampled_reference_cov_map,
             scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
             refgainmatch_catalog=filename_refgainmatchsexcat_catalog,
-            science_psf=filename_sciimage_psf_normalized,
-            reference_psf=inputs.reference_psf,
-            reformatted_science_image=reformatted_science_image_filename,
-            gain_times_exptime=sca_gain * exptime_sciimage, thresh=thresh)
-        notes["sfft"] = {"ran": True, "succeeded": sfft_result.succeeded,
-                         "exit_code": sfft_result.exit_code}
-        if sfft_result.succeeded:
-            output_diffimage_file_infobits |= sfft_result.catalogs.bits
+            science_psf=filename_sciimage_psf_normalized, reference_psf=staged["reference_psf"],
+            **common)
+        sfft_note = {"ran": True, "exit_code": exit_code}
+        if exit_code == 0:
+            infobits |= sfft_bits
         else:
-            log.warning("SFFT did not execute successfully (exit %s); continuing with ZOGY "
-                        "only, as dev does", sfft_result.exit_code)
-
-    # Naive subtraction, a diagnostic.
+            logger.warning("SFFT did not execute successfully (exit %s); continuing with ZOGY "
+                           "only, as dev does", exit_code)
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
-        output_diffimage_file_infobits |= _run_naive(
-            kit=kit, work_dir=work_dir, settings=settings, seed=seed,
-            filename_bkg_subbed_science_image=filename_bkg_subbed_science_image,
-            gainmatched_reference=output_resampled_gainmatched_reference_image,
-            resampled_cov_map=output_resampled_reference_cov_map,
-            nan_indices_sciimage=nan_indices_sciimage,
-            nan_indices_refimage=nan_indices_refimage,
-            reference_psf=inputs.reference_psf,
-            reformatted_science_image=reformatted_science_image_filename,
-            gain_times_exptime=sca_gain * exptime_sciimage, thresh=thresh)
+        infobits |= _run_naive(reference_psf=staged["reference_psf"], **common)
 
-    # Outputs.
-    common = dict(
-        inputs=inputs, settings_hash="sha256:" + context.settings_hash,
-        outputs_dir=context.outputs_dir, work_dir=work_dir,
-        catalog_outcome_bits=output_diffimage_file_infobits,
-        residual={"x_rms": dxrmsfin_measured, "y_rms": dyrmsfin_measured,
-                  "x_median": float(dxmedianfin), "y_median": float(dymedianfin)},
-        scalefacref=float(scalefacref))
-    outputs = _instance_outputs(
-        differencer="zogy", files=zogy_files, catalogs=zogy_catalogs,
-        detection_role=zogy_detection, **common)
-    if (sfft_result is not None and sfft_result.succeeded
-            and sfft_settings["register_sfft"]):
-        outputs += _instance_outputs(
-            differencer="sfft", files=sfft_result.files, catalogs=sfft_result.catalogs,
-            detection_role=sfft_settings["detection_role"], **common)
+    # The inputs' copies are not this job's products.
+    for name in (*staged.values(), science_image_filename):
+        w(name).unlink(missing_ok=True)
 
-    products_read = {"l2-image": inputs.l2.instance}
-    if inputs.reference_rfid is None:
-        # A reference registered by dev has no instance row to depend on.
-        products_read["reference-image"] = inputs.reference.instance
-    return StageResult(outputs=outputs, products_read=products_read, execution_notes=notes)
+    # Rows.
+    with fits.open(w(filename_diffimage_masked)) as hdul:
+        header = hdul[0].header.copy()
+    centre, corners = image_centre_and_corners(WCS(header), header["NAXIS1"], header["NAXIS2"])
+    footprint = {"ra0": centre["ra"], "dec0": centre["dec"]}
+    for n, (ra, dec) in enumerate(corners, start=1):
+        footprint[f"ra{n}"], footprint[f"dec{n}"] = ra, dec
+    key = {"dataset": job.dataset, "expid": int(job.scope["expid"]),
+           "sca": int(job.scope["sca"]), "fid": int(job.scope["fid"])}
+    diffimage = {
+        "pid": inputs.pid, **key, "rid": inputs.rid, "rfid": inputs.rfid,
+        "field": tessellation_field(centre["ra"], centre["dec"]),
+        "jd": inputs.mjdobs + 2400000.5, **footprint,
+        "infobitssci": infobits, "infobitsref": inputs.infobits_reference,
+        "filename": job.prefix + w(filename_diffimage_masked).relative_to(job.path).as_posix(),
+        "checksum": _md5_of_file(w(filename_diffimage_masked)), "status": STATUS_GOOD,
+    }
+    parquet = zogy_catalogs.parquet["positive"]
+    if parquet is None:
+        logger.warning("no ZOGY PSF-fit catalog: the source set is empty")
+    catalog = pq.read_table(w(parquet)) if parquet else _EMPTY_CATALOG
+    sources, candidates = source_set(
+        catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"],
+        max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
+        xy_fit_max_offset=settings["xy_fit_max_offset"])
+    pq.write_table(pa.Table.from_pylist([diffimage], schema=DIFFIMAGES_SCHEMA),
+                   job.path / "diffimages.parquet")
+    pq.write_table(sources, job.path / "sources.parquet")
+    logger.info("difference: expid %s -> pid %s, %d of %d sources kept", key["expid"],
+                inputs.pid, sources.num_rows, candidates)
+    job.write_manifest(
+        [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet")],
+        difference={
+            "pid": inputs.pid, "rid": inputs.rid, "rfid": inputs.rfid,
+            "zero_point": {"value": zero_point, "source": zero_point_source},
+            "fwhm_arcsec": {"science": fwhm_sci, "reference": fwhm_ref},
+            "scalefacref": float(scalefacref),
+            "registration_residual": {"x_rms": dxrmsfin_measured, "y_rms": dyrmsfin_measured,
+                                      "x_median": float(dxmedianfin),
+                                      "y_median": float(dymedianfin)},
+            "zogy_astrometric_sigma": zogy_astrometric_sigma,
+            "source_counts": {"sextractor": zogy_catalogs.sextractor,
+                              "photutils": zogy_catalogs.photutils},
+            "sources_before_cap": candidates, "sources_kept": sources.num_rows,
+            "infobits_science_l2": inputs.infobits_science, "sfft": sfft_note})
+
+
+#: A PSF-fit catalog with no rows, for an image whose catalog was not produced.
+_EMPTY_CATALOG = pa.table({name: pa.array([], pa.float64()) for name in (
+    "id", "ra", "dec", "x_fit", "y_fit", "flux_fit", "x_err", "y_err", "flux_err",
+    "n_pixels_fit", "qfit", "cfit", "reduced_chi2", "flags", "sharpness", "roundness1",
+    "roundness2", "n_pixels", "peak")})
+
+
+def _md5_of_file(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _restore_nans(path: Path, nan_indices_sciimage, nan_indices_refimage) -> None:
+    if nan_indices_sciimage:
+        repair.restore_nans(path, nan_indices_sciimage)
+    if nan_indices_refimage:
+        repair.restore_nans(path, nan_indices_refimage)
 
 
 # ----------------------------------------------------------------------
-# SFFT and naive
+# SFFT and naive, as dev runs them; their files stay under the prefix
 # ----------------------------------------------------------------------
-
-
-@dataclass
-class _SfftResult:
-    succeeded: bool
-    exit_code: int
-    files: dict[str, str] = field(default_factory=dict)
-    catalogs: _Catalogs = field(default_factory=_Catalogs)
 
 
 def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
               filename_bkg_subbed_science_image, gainmatched_reference, resampled_cov_map,
-              scigainmatch_catalog, refgainmatch_catalog, science_psf, reference_psf,
-              reformatted_science_image, gain_times_exptime, thresh) -> _SfftResult:
-    """SFFT's command, then its files and catalogs.
+              nan_indices, scigainmatch_catalog, refgainmatch_catalog, science_psf,
+              reference_psf, reformatted_science_image, gain_times_exptime,
+              thresh) -> tuple[int, int]:
+    """SFFT's command, then its masking, uncertainty and catalogs; ``(exit code, bits)``.
 
     Empty ``[sfft] python_cmd`` means the stage's own interpreter, the
     same convention ``[paths] python`` uses for ZOGY; empty
@@ -818,14 +754,22 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
     exit_code = int(kit.runner.run_shell(
         sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir))
     if exit_code != 0:
-        return _SfftResult(succeeded=False, exit_code=exit_code)
+        return exit_code, 0
 
     def w(name: str) -> Path:
         return work_dir / name
 
     diffimage = names["diffimage"]
     cconvdiff = names["cconvdiff"]
-    repair.replace_nans_with_value(w(diffimage), 0.0)
+    # dev 8107a083: mask SFFT's images with the resampled coverage map and
+    # restore the zeroed NaNs, as for ZOGY and naive. SFFT writes the final
+    # "_masked" names, so each is renamed "_unmasked" and masked back.
+    for name in [diffimage] + ([cconvdiff] if crossconv_flag else []):
+        unmasked = name.replace("_masked.fits", "_unmasked.fits")
+        w(name).replace(w(unmasked))
+        masking.mask_difference_image_with_resampled_reference_cov_map(
+            w(unmasked), w(resampled_cov_map), w(name), thresh)
+        _restore_nans(w(name), *nan_indices)
 
     diffimage_negative = diffimage.replace(".fits", "_negative.fits")
     scale_image_data(w(diffimage), -1.0, w(diffimage_negative))
@@ -838,41 +782,32 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         gain_times_exptime, w(filename_bkg_subbed_science_image), w(gainmatched_reference),
         w(resampled_cov_map), thresh, w(diffimage), w(diffimage_unc), seed=seed)
 
-    files = {"difference": diffimage, "uncertainty": diffimage_unc}
-    if w(names["diffpsf"]).exists():
-        files["psf"] = names["diffpsf"]
-    if w(names["soln"]).exists():
-        files["kernel"] = names["soln"]
-
-    # dev detects on the cross-convolved image when crossconv_flag is set.
-    detection_role = s["detection_role"]
-    if detection_role == "difference":
-        detection, detection_negative = (
-            (cconvdiff, cconvdiff_negative) if crossconv_flag else (diffimage, diffimage_negative))
-    else:
-        detection = detection_negative = files[detection_role]
-
+    # dev detects on the cross-convolved image when crossconv_flag is set,
+    # and names the negative catalog after its detection image (8f8ea43f).
+    detection, detection_negative = (
+        (cconvdiff, cconvdiff_negative) if crossconv_flag else (diffimage, diffimage_negative))
     psfcat_table = settings["psfcat_diffimage"]
     catalogs = _run_catalogs(
         differencer="sfft", kit=kit, work_dir=work_dir, settings=settings,
         positive={"detection": detection, "input": diffimage,
                   "catalog": detection.replace(".fits", ".txt")},
         negative={"detection": detection_negative, "input": diffimage_negative,
-                  "catalog": diffimage_negative.replace(".fits", ".txt")},
-        weight_image=diffimage_unc,
-        psf_image=names["diffpsf"],
+                  "catalog": detection_negative.replace(".fits", ".txt")},
+        weight_image=diffimage_unc, psf_image=names["diffpsf"],
         sky_coords_image=reformatted_science_image,
         psfcat_names={"catalog": psfcat_table["output_sfft_psfcat_filename"],
                       "finder": psfcat_table["output_sfft_psfcat_finder_filename"],
                       "residual": psfcat_table["output_sfft_psfcat_residual_filename"]},
-        override_weight_type_and_filter=True, write_parquet=True, seed=seed)
-    return _SfftResult(succeeded=True, exit_code=0, files=files, catalogs=catalogs)
+        override_weight_type_and_filter=True, write_parquet=True,
+        overrides=sextractor.detection_overrides(
+            settings["sextractor_diffimage_sfft"], crossconv_flag, settings["paths"]["cfg_path"]),
+        seed=seed)
+    return 0, catalogs.bits
 
 
 def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_image,
-               gainmatched_reference, resampled_cov_map, nan_indices_sciimage,
-               nan_indices_refimage, reference_psf, reformatted_science_image,
-               gain_times_exptime, thresh) -> int:
+               gainmatched_reference, resampled_cov_map, nan_indices, reference_psf,
+               reformatted_science_image, gain_times_exptime, thresh) -> int:
     """`dev`'s naive block; returns the catalog-outcome bits it set."""
     def w(name: str) -> Path:
         return work_dir / name
@@ -884,10 +819,7 @@ def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_ima
     masked = settings["naive_diffimage"]["naive_output_diffimage_file"]
     masking.mask_difference_image_with_resampled_reference_cov_map(
         w(filename_naive_diffimage), w(resampled_cov_map), w(masked), thresh)
-    if nan_indices_sciimage:
-        repair.restore_nans(w(masked), nan_indices_sciimage)
-    if nan_indices_refimage:
-        repair.restore_nans(w(masked), nan_indices_refimage)
+    _restore_nans(w(masked), *nan_indices)
 
     masked_negative = masked.replace(".fits", "_negative.fits")
     scale_image_data(w(masked), -1.0, w(masked_negative))
@@ -911,91 +843,8 @@ def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_ima
         psfcat_names={"catalog": psfcat_table["output_naive_psfcat_filename"],
                       "finder": psfcat_table["output_naive_psfcat_finder_filename"],
                       "residual": psfcat_table["output_naive_psfcat_residual_filename"]},
-        override_weight_type_and_filter=False, write_parquet=False, seed=seed)
+        override_weight_type_and_filter=False, write_parquet=False,
+        overrides=sextractor.detection_overrides(
+            settings["sextractor_diffimage_naive"], False, settings["paths"]["cfg_path"]),
+        seed=seed)
     return catalogs.bits
-
-
-# ----------------------------------------------------------------------
-# Manifest entries
-# ----------------------------------------------------------------------
-
-
-def _instance_outputs(*, differencer: str, files: dict[str, str], catalogs: _Catalogs,
-                      detection_role: str, inputs: _InputSet, settings_hash: str,
-                      outputs_dir: Path, work_dir: Path, catalog_outcome_bits: int,
-                      residual: dict[str, float], scalefacref: float) -> list[OutputEntry]:
-    """One difference-image entry and its source-catalog entries."""
-    members = tuple(
-        member_for_file(role=role, path=work_dir / name, relative_to=outputs_dir)
-        for role, name in files.items())
-    primary = next(m.path for m in members if m.role == "difference")
-
-    registration = DifferenceImageRegistration(
-        detection_role=detection_role,
-        centre=dict(inputs.l2_registration.centre),
-        corners=[list(c) for c in inputs.l2_registration.corners],
-        catalog_outcome_bits=int(catalog_outcome_bits),
-        infobits_science=int(inputs.l2_registration.infobits),
-        infobits_reference=int(inputs.reference_infobits),
-        source_counts={
-            "sextractor": {s: int(catalogs.sextractor[s]) for s in ("positive", "negative")},
-            "photutils": {s: (None if catalogs.photutils[s] is None else int(catalogs.photutils[s]))
-                          for s in ("positive", "negative")},
-        },
-        registration_residual=residual,
-        reference_scale_factor=scalefacref,
-        md5=_md5_of_file(work_dir / files["difference"]),
-        reference_rfid=inputs.reference_rfid,
-    )
-    try:
-        registration.validate(differencer)
-    except DifferenceImageRegistrationError as exc:
-        raise InputRejected(f"{differencer} registration block: {exc}") from exc
-
-    instance = new_ulid()
-    entries = [OutputEntry(
-        kind="difference-image",
-        format_version="1",
-        instance=instance,
-        key={"l2": inputs.l2.instance, "reference": inputs.reference.instance,
-             "differencer": differencer, "settings_hash": settings_hash},
-        members=members,
-        primary=primary,
-        registration=registration.to_dict(),
-    )]
-
-    for sign in ("positive", "negative"):
-        catalog_member = member_for_file(
-            role="catalog", path=work_dir / catalogs.sextractor_files[sign],
-            relative_to=outputs_dir)
-        entries.append(OutputEntry(
-            kind="source-catalog", format_version="1", instance=new_ulid(),
-            key={"difference": instance, "catalog_type": "sextractor", "sign": sign},
-            members=(catalog_member,), primary=catalog_member.path,
-            registration={"source_count": int(catalogs.sextractor[sign])}))
-
-    for sign in ("positive", "negative"):
-        names = catalogs.photutils_files[sign]
-        if catalogs.photutils[sign] is None or not (work_dir / names["catalog"]).exists():
-            continue
-        catalog_members = [member_for_file(
-            role="catalog", path=work_dir / names["catalog"], relative_to=outputs_dir)]
-        for role in ("finder", "residual", "parquet"):
-            name = names[role]
-            if name is not None and (work_dir / name).exists():
-                catalog_members.append(member_for_file(
-                    role=role, path=work_dir / name, relative_to=outputs_dir))
-        entries.append(OutputEntry(
-            kind="source-catalog", format_version="1", instance=new_ulid(),
-            key={"difference": instance, "catalog_type": "photutils", "sign": sign},
-            members=tuple(catalog_members), primary=catalog_members[0].path,
-            registration={"source_count": int(catalogs.photutils[sign])}))
-    return entries
-
-
-def main(argv: list[str]) -> int:
-    return run_stage(DECLARATION, _body, argv)
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

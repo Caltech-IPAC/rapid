@@ -50,7 +50,7 @@ def test_cdf_dir_last_candidate_is_hard_coded_code_cdf(monkeypatch, tmp_path):
     # not derived from REPO_ROOT, so it can't be relocated into tmp_path
     # for a positive test here. Confirm it is exactly the last candidate
     # tried, matching the image's own default cfg_path
-    # (rapidpipe/settings/difference.toml).
+    # (rapidpipe/settings/foundation-thin.toml).
     monkeypatch.setattr(fakedifftools, "REPO_ROOT", tmp_path / "no-such-repo")
     with pytest.raises(FileNotFoundError) as excinfo:
         fakedifftools.cdf_dir()

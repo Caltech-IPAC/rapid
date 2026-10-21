@@ -9,6 +9,7 @@ photutils is exercised for real where it is installed.
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,7 @@ from astropy.io import fits
 
 from rapidpipe.science.difference import (
     background,
+    fwhm,
     gainmatch,
     masking,
     naive,
@@ -113,8 +115,8 @@ def test_reformat_pads_normalises_and_models_uncertainty(tmp_path):
 def _sex_dict() -> dict:
     import tomllib
 
-    with open(Path(__file__).resolve().parents[2] / "rapidpipe/settings/difference.toml", "rb") as fh:
-        table = dict(tomllib.load(fh)["sextractor_diffimage"])
+    with open(Path(__file__).resolve().parents[2] / "rapidpipe/settings/foundation-thin.toml", "rb") as fh:
+        table = dict(tomllib.load(fh)["difference"]["sextractor_diffimage"])
     table["sextractor_detection_image"] = "None"
     return table
 
@@ -151,27 +153,53 @@ def test_parse_catalog_by_translated_parameter_names(tmp_path):
     assert rows == [["300", "1.5"], ["6", "4"]]
 
 
-@pytest.mark.parametrize("values,expected", [
-    (["2.5", "3.5", "3.0"], 3.0),
-    (["nan", "nan"], 2.0),
-    (["-1.0", "-3.0"], 2.0),
-])
-def test_fwhm_falls_back_to_two_pixels(tmp_path, values, expected):
+def _fwhm_catalog(tmp_path, rows) -> tuple[Path, Path]:
+    """A catalog of (FWHM_IMAGE, FLAGS, FLUX_AUTO, FLUXERR_AUTO, ELONGATION) rows."""
     params = tmp_path / "p.inp"
-    params.write_text("FWHM_IMAGE\n")
+    params.write_text("".join(p + "\n" for p in fwhm.POINT_SOURCE_CATALOG_PARAMS))
     catalog = tmp_path / "c.txt"
-    catalog.write_text("#   1 FWHM_IMAGE\n" + "".join(v + "\n" for v in values))
-    with np.errstate(all="ignore"), pytest.warns(RuntimeWarning) if "nan" in values else _null():
-        fwhm, n = sextractor.fwhm_from_catalog(catalog, params, "x")
-    assert fwhm == expected and n == len(values)
+    catalog.write_text("".join(f"#   {i + 1} {p}\n" for i, p in enumerate(fwhm.POINT_SOURCE_CATALOG_PARAMS))
+                       + "".join(" ".join(map(str, row)) + "\n" for row in rows))
+    return catalog, params
 
 
-class _null:
-    def __enter__(self):
-        return self
+def test_fwhm_is_the_point_source_mode_in_arcseconds(tmp_path):
+    # 60 round, bright, unflagged stars at 1.9 px; 200 galaxies spread wider,
+    # some flagged, faint or elongated, which the median over all would follow.
+    stars = [(1.9, 0, 1000.0, 10.0, 1.1)] * 60
+    galaxies = [(3.0 + 0.01 * i, i % 2, 1000.0, 10.0 if i % 3 else 100.0, 1.1 + 0.5 * (i % 2))
+                for i in range(200)]
+    catalog, params = _fwhm_catalog(tmp_path, stars + galaxies)
+    value, n = sextractor.fwhm_from_catalog(catalog, params, "x")
+    assert n == 260
+    assert value == pytest.approx(1.9 * fwhm.ROMAN_WFI_PLATESCALE, abs=0.05 * 0.11)
 
-    def __exit__(self, *exc):
-        return False
+
+def test_fwhm_falls_back_to_the_point_source_median_then_all_sources(tmp_path):
+    few = [(2.0, 0, 1000.0, 10.0, 1.0)] * 9 + [(2.4, 0, 1000.0, 10.0, 1.0)] * 11
+    catalog, params = _fwhm_catalog(tmp_path, few)
+    assert sextractor.fwhm_from_catalog(catalog, params, "x")[0] == pytest.approx(2.4 * 0.11)
+    faint = [(2.0, 0, 10.0, 10.0, 1.0), (3.0, 0, 10.0, 10.0, 1.0), (4.0, 0, 10.0, 10.0, 1.0)]
+    catalog, params = _fwhm_catalog(tmp_path, faint)
+    assert sextractor.fwhm_from_catalog(catalog, params, "x")[0] == pytest.approx(3.0 * 0.11)
+
+
+@pytest.mark.parametrize("value", ["nan", "-1.0"])
+def test_fwhm_falls_back_to_two_pixels(tmp_path, value):
+    catalog, params = _fwhm_catalog(tmp_path, [(value, 0, 10.0, 10.0, 1.0)] * 2)
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        assert sextractor.fwhm_from_catalog(catalog, params, "x")[0] == pytest.approx(0.22)
+
+
+def test_detection_overrides_lay_over_with_the_filter_in_cfg_path():
+    table = {"sextractor_filter": "Y", "sextractor_filter_name": "f.conv",
+             "sextractor_detect_minarea": "2"}
+    assert sextractor.detection_overrides(table, False, "/cfg") == {
+        "sextractor_filter": "Y", "sextractor_filter_name": "/cfg/f.conv",
+        "sextractor_detect_minarea": "2"}
+    assert sextractor.detection_overrides(table, True, "/cfg") == {}
+    assert sextractor.detection_overrides({}, False, "/cfg") == {}
 
 
 # ----------------------------------------------------------------------
@@ -182,8 +210,8 @@ class _null:
 def _swarp_dict() -> dict:
     import tomllib
 
-    with open(Path(__file__).resolve().parents[2] / "rapidpipe/settings/difference.toml", "rb") as fh:
-        return dict(tomllib.load(fh)["swarp"])
+    with open(Path(__file__).resolve().parents[2] / "rapidpipe/settings/foundation-thin.toml", "rb") as fh:
+        return dict(tomllib.load(fh)["difference"]["swarp"])
 
 
 def test_swarp_command_keeps_devs_spelling():
@@ -202,9 +230,10 @@ def test_resample_swarps_three_images_background_off_after_the_first(tmp_path):
     _write(tmp_path / "sci.fits", np.ones((n, n)), wcs_header(n, sip=True))
     for name in ("ref.fits", "cov.fits", "unc.fits"):
         _write(tmp_path / name, np.full((n, n), 3.0), wcs_header(n, sip=False))
+    swarp = {**_swarp_dict(), "swarp_subtract_back": "Y"}   # dev's setting before 4350bb5d
     names = resample.resample_reference_image_to_science_image_with_pv_distortion(
         runner, tmp_path, "sci.fits", 0, "ref.fits", "cov.fits", "unc.fits", 0, False,
-        _swarp_dict(), sip_to_pv=fake_sip_to_pv)
+        swarp, sip_to_pv=fake_sip_to_pv)
     assert names == ("sci_pv.fits", "ref_pv.fits", "cov_pv.fits", "unc_pv.fits",
                      "ref_resampled.fits", "cov_resampled.fits", "unc_resampled.fits")
     assert fits.getheader(tmp_path / "sci_pv.fits")["CTYPE1"] == "RA---TPV"
@@ -230,6 +259,45 @@ def test_bkgest_command_is_devs():
     assert background.build_bkgest_command("/code/c/bin/bkgest", "/code/c/include", "in.fits", table) == [
         "/code/c/bin/bkgest", "-i", "in.fits", "-f", "2", "-c", "3", "-g", "500", "-w", "501",
         "-a", "/code/c/include", "-ot", "g.tbl", "-o2", "bkg.fits"]
+
+
+def test_reference_background_subtracted_in_place_uncovered_pixels_kept(tmp_path):
+    table = {"output_image_type": "2", "clippedmean_calc_type": "3",
+             "local_clippedmean_grid_spacing": "500", "local_clippedmean_input_window": "501",
+             "filename_global_clippedmean_refimage_tbl": "r.tbl"}
+    data = np.full((6, 6), 10.0)
+    data[2, 2] = 50.0
+    data[:, 0] = 7.0                      # SWarp's value where there is no coverage
+    cov = np.ones((6, 6))
+    cov[:, 0] = 0.0
+    _write(tmp_path / "ref.fits", data, wcs_header(6, sip=False))
+    _write(tmp_path / "cov.fits", cov, wcs_header(6, sip=False))
+    runner = FakeToolRunner()
+    assert background.subtract_reference_background(
+        runner, tmp_path, "bkgest", "/inc", "ref.fits", "cov.fits", table) == 6
+    (call,) = runner.calls
+    assert call[call.index("-i") + 1] == "ref_bkgest_input.fits"
+    assert call[call.index("-ot") + 1] == "r.tbl"
+    assert np.isnan(fits.getdata(tmp_path / "ref_bkgest_input.fits")[:, 0]).all()
+    out = fits.getdata(tmp_path / "ref.fits")
+    assert (out[:, 0] == 7.0).all()                        # uncovered: SWarp's values back
+    assert out[3, 3] == pytest.approx(0.0) and out[2, 2] == pytest.approx(40.0)
+    assert fits.getheader(tmp_path / "ref.fits")["REFBKGSB"] is True
+
+
+def test_reference_background_fails_when_bkgest_writes_nothing(tmp_path):
+    class Silent:
+        def run(self, args, *, cwd):
+            return 3
+
+    table = {"output_image_type": "2", "clippedmean_calc_type": "3",
+             "local_clippedmean_grid_spacing": "500", "local_clippedmean_input_window": "501",
+             "filename_global_clippedmean_refimage_tbl": "r.tbl"}
+    _write(tmp_path / "ref.fits", np.ones((4, 4)), wcs_header(4, sip=False))
+    _write(tmp_path / "cov.fits", np.ones((4, 4)), wcs_header(4, sip=False))
+    with pytest.raises(RuntimeError, match="exit code 3"):
+        background.subtract_reference_background(
+            Silent(), tmp_path, "bkgest", "/inc", "ref.fits", "cov.fits", table)
 
 
 # ----------------------------------------------------------------------

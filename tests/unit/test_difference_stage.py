@@ -1,75 +1,155 @@
-"""Tests for rapidpipe.stages.difference, run end to end with fake tools.
+"""The difference stage under ``run(job)``, on a synthetic epoch with the fake tools.
 
-Every external tool is replaced by rapidpipe/selftest/support/fakedifftools.py's fakes
-(``Toolkit`` is monkeypatched), so these tests exercise the stage's own
-logic -- input validation, `dev`'s step order and command lines, the
-catalog-outcome mask, the SFFT and naive branches, and the manifest it
-publishes -- not the tools' science.
+Contracts: a job naming one ``l2files``, one ``refimages`` and two ``psfs``
+rows writes ``diffimages`` (one row) and ``sources`` with exactly their
+tables' columns from ``database/schema.sql``, sharing the ``pid`` drawn for
+the job; the ZOGY image's neighbours the packet stage reads sit beside it
+under the prefix and the inputs' copies do not; the tools run in `dev`'s
+order with the reference background subtracted by bkgest; ``max_sources``
+caps the source set (its choice is ``source_set``'s, tested with the load
+science); the reference
+zero point is the reference's ``MAGZP`` unless overridden; the two PSFs are
+told apart by ``PSFKIND``; SFFT and naive catalogs take their detection
+overrides and the SFFT image is coverage-masked; every bad input fails the
+job before a manifest is written; the shipped ``[difference]`` table is
+valid.
 """
 
 from __future__ import annotations
 
-import hashlib
+import contextlib
+import copy
 import json
-import shlex
-import sys
+import re
+import tomllib
+from pathlib import Path
 
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 from astropy.io import fits
 
 import rapidpipe.stages.difference as difference
-from rapidpipe.products.diffimage import validate_difference_entry, validate_source_catalog_entry
-from rapidpipe.products.manifest import Manifest
-from rapidpipe.stages.contract import ExitCode
-
+from rapidpipe.foundation.local import JobContext
 from rapidpipe.selftest.support.fakedifftools import (
-    CDF_DIR,
-    L2_INSTANCE,
-    REF_INSTANCE,
     FakePsfCatalog,
     FakeToolRunner,
-    _l2_registration,
-    build_input_set,
+    cdf_dir,
     fake_sip_to_pv,
+    write_epoch,
 )
+
+REPO = Path(__file__).resolve().parents[2]
+THIN = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
+PID, RID, RFID = 31, 7001, 4242
+KEY = {"dataset": "D", "expid": 84613, "sca": 7, "fid": 1}
+MJDOBS = 61273.0087
+
+
+def schema_columns(table: str) -> set[str]:
+    body = re.search(rf"CREATE TABLE {table} \((.*?)\n\);", (REPO / "database/schema.sql").read_text(),
+                     re.S).group(1)
+    names = {line.split()[0] for line in body.splitlines()
+             if line.strip() and not line.strip().startswith(("UNIQUE", "CHECK", "--"))}
+    return names - {"job", "created"}
+
+
+def settings(**tables) -> dict:
+    body = copy.deepcopy(THIN["difference"])
+    body["paths"]["cfg_path"] = str(cdf_dir())
+    body["statistics"]["clip_correction_seed"] = 1
+    for table, values in tables.items():
+        if isinstance(values, dict):
+            body[table].update(values)
+        else:
+            body[table] = values
+    return {"difference": body}
+
+
+def fake_connect(files: dict[str, Path], queries: list):
+    """A connection answering the named rows by table, and ``nextval``."""
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, statement, params=()):
+            queries.append((statement, params))
+            if "FROM l2files" in statement:
+                self.row = (RID, files["science"].as_uri(), 140.0, MJDOBS, 0)
+            elif "FROM refimages" in statement:
+                self.row = (RFID, files["reference"].as_uri(), 0)
+            elif "FROM refimcatalogs" in statement:
+                self.row = (files["catalog"].as_uri(),)
+            elif "FROM psfs" in statement:
+                self.row = ((files["science_psf"] if params[0] == 20 else files["reference_psf"])
+                            .as_uri(),)
+            else:
+                assert "nextval" in statement
+                self.row = (PID,)
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            pass
+
+    return lambda: contextlib.nullcontext(Connection())
+
+
+def named_inputs(**changes) -> list[dict]:
+    inputs = {
+        "l2files": {"kind": "input", "product": "l2files", "key": dict(KEY), "source_job": 2,
+                    "binding": None},
+        "refimages": {"kind": "input", "product": "refimages",
+                      "key": {"dataset": "D", "field": 5321, "fid": 1}, "source_job": 8,
+                      "binding": None},
+        "psf": {"kind": "input", "product": "psfs", "key": {"dataset": "D", "fid": 1, "sca": 7},
+                "source_job": 20, "binding": None},
+        "refpsf": {"kind": "input", "product": "psfs", "key": {"dataset": "D", "fid": 1, "sca": 7},
+                   "source_job": 21, "binding": None},
+    }
+    inputs.update(changes)
+    return [i for i in inputs.values() if i is not None]
 
 
 @pytest.fixture()
 def fakes(monkeypatch):
-    runner = FakeToolRunner()
-    catalog = FakePsfCatalog()
-    monkeypatch.setattr(
-        difference, "toolkit",
-        lambda: difference.Toolkit(runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog))
+    runner, catalog = FakeToolRunner(), FakePsfCatalog()
+    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
+        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog))
     return runner, catalog
 
 
-def _run(tmp_path, *, overlay: str = "", build_kwargs=None, argv_extra=()):
-    inputs = tmp_path / "inputs"
-    if not (inputs / "manifest.json").exists():
-        build_input_set(inputs, **(build_kwargs or {}))
-    settings = tmp_path / "overlay.toml"
-    settings.write_text(
-        f'[paths]\ncfg_path = "{CDF_DIR}"\n[statistics]\nclip_correction_seed = 1\n' + overlay)
-    outputs = tmp_path / "outputs"
-    code = difference.main([
-        "--run", "r1", "--unit", "e20260821001234/SCA07", "--attempt", "a1",
-        "--inputs", str(inputs), "--outputs", str(outputs), "--settings", str(settings),
-        *argv_extra])
-    return code, outputs
+@pytest.fixture()
+def files(tmp_path) -> dict[str, Path]:
+    return write_epoch(tmp_path / "inputs")
 
 
-def _manifest(outputs) -> Manifest:
-    return Manifest.read(outputs / "manifest.json")
+def run_difference(tmp_path: Path, files, *, body=None, inputs=None, queries=None) -> Path:
+    prefix = tmp_path / "prefix"
+    prefix.mkdir(exist_ok=True)
+    job = JobContext(job=9, run=3, stage="difference",
+                     scope={"expid": KEY["expid"], "sca": KEY["sca"], "fid": KEY["fid"]},
+                     survey="S", dataset="D", settings=body or settings(),
+                     inputs=inputs or named_inputs(), attempt=1, prefix=prefix.as_uri() + "/",
+                     connect=fake_connect(files, [] if queries is None else queries))
+    difference.run(job)
+    return prefix
 
 
-def _entries(manifest, kind):
-    return [e for e in manifest.outputs if e.kind == kind]
+def read(prefix: Path, table: str) -> list[dict]:
+    return pq.read_table(prefix / f"{table}.parquet").to_pylist()
 
 
-def _exec_record(outputs) -> dict:
-    return json.loads((outputs / "exec" / "a1.json").read_text())
+def manifest(prefix: Path) -> dict:
+    return json.loads((prefix / "manifest.json").read_text())
 
 
 # ----------------------------------------------------------------------
@@ -77,54 +157,41 @@ def _exec_record(outputs) -> dict:
 # ----------------------------------------------------------------------
 
 
-def test_full_run_publishes_a_valid_zogy_instance(tmp_path, fakes):
-    # SFFT registration off here to isolate ZOGY's instance; its own
-    # default-on behaviour is covered by test_sfft_is_registered_by_default.
-    code, outputs = _run(tmp_path, overlay="[sfft]\nregister_sfft = false\n")
-    assert code == ExitCode.SUCCESS
-    manifest = _manifest(outputs)
-    assert manifest.stage == "difference"
-
-    diffs = _entries(manifest, "difference-image")
-    assert len(diffs) == 1
-    entry = diffs[0]
-    registration = validate_difference_entry(entry.to_dict())
-    assert entry.key["differencer"] == "zogy"
-    assert entry.key["l2"] == L2_INSTANCE
-    assert entry.key["reference"] == REF_INSTANCE
-    assert entry.key["settings_hash"].startswith("sha256:")
-    assert {m.role for m in entry.members} == {"difference", "uncertainty", "significance", "psf"}
-    assert entry.primary == "diff/zogy_diffimage_masked.fits"
-    assert registration.detection_role == "significance"
-    assert registration.catalog_outcome_bits == 0
-    assert registration.centre == _l2_registration()["centre"]
-    assert registration.corners == _l2_registration()["corners"]
-    assert registration.reference_rfid is None
-    assert registration.source_counts["sextractor"]["positive"] >= 1  # the transient
-
-    catalogs = _entries(manifest, "source-catalog")
-    assert {(c.key["catalog_type"], c.key["sign"]) for c in catalogs} == {
-        ("sextractor", "positive"), ("sextractor", "negative"),
-        ("photutils", "positive"), ("photutils", "negative")}
-    for catalog in catalogs:
-        validate_source_catalog_entry(catalog.to_dict())
-        assert catalog.key["difference"] == entry.instance
-
-    assert manifest.inputs.products == {"l2-image": L2_INSTANCE, "reference-image": REF_INSTANCE}
-    assert _exec_record(outputs)["notes"] == {
-        "sfft": {"ran": True, "succeeded": True, "exit_code": 0},
-        "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0},
-        "zero_point": {"value": 17.0, "source": "header"},
-    }
+def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, fakes):
+    prefix = run_difference(tmp_path, files)
+    assert [o["table"] for o in manifest(prefix)["outputs"]] == ["diffimages", "sources"]
+    for table in ("diffimages", "sources"):
+        assert set(pq.read_schema(prefix / f"{table}.parquet").names) == schema_columns(table)
+    (row,) = read(prefix, "diffimages")
+    assert {k: row[k] for k in ("pid", "dataset", "expid", "sca", "fid", "rid", "rfid")} == {
+        "pid": PID, **KEY, "rid": RID, "rfid": RFID}
+    assert row["jd"] == pytest.approx(MJDOBS + 2400000.5)
+    assert row["filename"] == prefix.as_uri() + "/diff/zogy_diffimage_masked.fits"
+    sources = read(prefix, "sources")
+    assert sources and {s["pid"] for s in sources} == {PID}
+    assert {(s["dataset"], s["expid"], s["sca"], s["fid"]) for s in sources} == {
+        tuple(KEY.values())}
+    image = prefix / "diff" / "zogy_diffimage_masked.fits"
+    for name in ("zogy_diffimage_uncert_masked.fits", "diffpsf.fits",
+                 "bkg_subbed_science_image.fits",
+                 "awaicgen_output_mosaic_image_resampled_gainmatched.fits"):
+        assert (image.parent / name).is_file(), name   # the packet stage reads them beside it
+    for path in files.values():
+        assert not (image.parent / path.name).exists(), path.name   # inputs are not republished
+    assert not (image.parent / path.name.removesuffix(".gz")).exists()
+    recorded = manifest(prefix)["difference"]
+    assert (recorded["pid"], recorded["rfid"]) == (PID, RFID)
+    assert recorded["zero_point"] == {"value": 17.0, "source": "header"}
+    assert recorded["sources_kept"] == len(sources) <= recorded["sources_before_cap"]
 
 
-def test_tools_run_in_dev_order(tmp_path, fakes):
+def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_path, files, fakes):
     runner, _ = fakes
-    _run(tmp_path)
+    run_difference(tmp_path, files)
     assert runner.tools_called() == [
         "sextractor",                   # science-image catalog
         "swarp", "swarp", "swarp",      # reference image, coverage map, uncertainty
-        "bkgest",
+        "bkgest", "bkgest",             # science image, then the resampled reference
         "sextractor", "sextractor",     # gain-match catalogs, science then reference
         "zogy",
         "sextractor", "sextractor",     # ZOGY positive, negative
@@ -132,390 +199,93 @@ def test_tools_run_in_dev_order(tmp_path, fakes):
         "sextractor", "sextractor",     # naive positive, negative
         "sfft",
     ]
-    # (The fake records the SFFT shell call separately; it runs after the
-    # ZOGY catalogs and before the SFFT catalogs.)
+    swarp = [c for c in runner.calls if c[0].endswith("swarp")]
+    assert [c[c.index("-SUBTRACT_BACK") + 1] for c in swarp] == ["N", "N", "N"]
+    reference_bkgest = [c for c in runner.calls if c[0].endswith("bkgest")][1]
+    assert reference_bkgest[reference_bkgest.index("-i") + 1] == (
+        "awaicgen_output_mosaic_image_resampled_bkgest_input.fits")
 
 
-def test_zogy_command_is_devs(tmp_path, fakes):
+def test_zogy_gets_both_psfs_told_apart_by_psfkind(tmp_path, files, fakes):
     runner, _ = fakes
-    _run(tmp_path)
+    run_difference(tmp_path, files, inputs=list(reversed(named_inputs())))
     zogy = next(a for a in runner.calls if a[1].endswith("py_zogy.py"))
-    assert zogy[1] == "/code/modules/zogy/v21Aug2018/py_zogy.py"
-    assert zogy[2:8] == [
-        "bkg_subbed_science_image.fits",
-        "awaicgen_output_mosaic_image_resampled_gainmatched.fits",
-        "sciimage_psf_f184_sca07_normalized.fits",
-        "refimage_psf_f146_sca07.fits",
-        "Roman_WAS_simple_model_F184_1234_7_reformatted_unc.fits",
-        "awaicgen_output_mosaic_uncert_image_resampled_gainmatched.fits",
-    ]
-    assert zogy[10:12] == ["0.0", "0.0"]   # astrometric sigma, dev's override
-    assert zogy[12:] == ["zogy_diffimage.fits", "diffpsf.fits", "scorrimage.fits"]
+    assert zogy[4:6] == ["sciimage_psf_f184_sca07_normalized.fits", "refimage_psf_f184_sca07.fits"]
 
 
-def test_astrometric_sigma_setting_reaches_zogy_but_not_registration(tmp_path, fakes):
-    """``[zogy] astrometric_sigma`` only overrides ZOGY's input (`dev`'s
-    behaviour, recorded in the execution notes); it does not affect the
-    registered ``registration_residual``, which always holds the measured
-    gain-match RMS (production's ``dxrmsfin``/``dyrmsfin``), regardless of
-    this setting.
-    """
+def test_sfft_and_naive_catalogs_take_their_detection_overrides(tmp_path, files, fakes):
     runner, _ = fakes
-    code, outputs = _run(tmp_path, overlay="[zogy]\nastrometric_sigma = 0.3\n")
-    assert code == ExitCode.SUCCESS
-    zogy = next(a for a in runner.calls if a[1].endswith("py_zogy.py"))
-    assert zogy[10:12] == ["0.3", "0.3"]
-    residual = _entries(_manifest(outputs), "difference-image")[0].registration["registration_residual"]
-    assert residual["x_rms"] == 0.05 and residual["y_rms"] == 0.05
-    assert _exec_record(outputs)["notes"]["zogy_astrometric_sigma"] == {"x": 0.3, "y": 0.3}
+    run_difference(tmp_path, files)
+    catalogs = [c for c in runner.calls if c[0].endswith("sex")
+                and "rapidSexParamsDiffImage.inp" in c[c.index("-PARAMETERS_NAME") + 1]]
+    zogy, sfft_runs, naive_runs = catalogs[:2], catalogs[2:4], catalogs[4:]
+
+    def option(call, name):
+        return call[call.index(name) + 1]
+
+    assert {option(c, "-DETECT_MINAREA") for c in zogy} == {"5"}
+    assert {option(c, "-FILTER") for c in zogy} == {"N"}
+    for call in sfft_runs + naive_runs:
+        assert (option(call, "-FILTER"), option(call, "-DETECT_MINAREA")) == ("Y", "2")
+        assert option(call, "-FILTER_NAME") == f"{cdf_dir()}/rapidSexDiffImageSfftFilter.conv"
+    # dev 8f8ea43f: the negative SFFT catalog is named after its detection image.
+    assert option(sfft_runs[1], "-CATALOG_NAME") == "sfftdiffimage_masked_negative.txt"
+
+
+def test_the_sfft_image_is_masked_by_the_reference_coverage(tmp_path, files, fakes):
+    prefix = run_difference(tmp_path, files)
+    data = fits.getdata(prefix / "diff" / "sfftdiffimage_masked.fits")
+    assert np.isnan(data[:, :3]).all() and np.isfinite(data[:, 10:-10]).any()
+    assert (prefix / "diff" / "sfftdiffimage_unmasked.fits").is_file()
+
+
+def test_max_sources_caps_the_source_set_and_records_the_count_before_it(tmp_path, files, fakes):
+    prefix = run_difference(tmp_path, files, body=settings(max_sources=1))
+    recorded = manifest(prefix)["difference"]
+    assert len(read(prefix, "sources")) == recorded["sources_kept"] == 1
+    assert recorded["sources_before_cap"] >= 1
+
+
+def test_zero_point_override_wins_over_the_reference_header(tmp_path, files, fakes):
+    prefix = run_difference(tmp_path, files, body=settings(awaicgen={"zprefimg": 26.5}))
+    assert manifest(prefix)["difference"]["zero_point"] == {"value": 26.5, "source": "override"}
 
 
 # ----------------------------------------------------------------------
-# Reference zero point (the lead, 2026-09-26): header MAGZP by default,
-# [awaicgen] zprefimg as an explicit override, bad input if neither is set.
+# Refusals, each before a manifest
 # ----------------------------------------------------------------------
 
 
-def _strip_ref_magzp(tmp_path) -> None:
-    """Build the fixture's input set, then remove MAGZP from the reference
-    image's header, patching the manifest's declared bytes/sha256 for that
-    member so input verification still passes."""
-    inputs = tmp_path / "inputs"
-    build_input_set(inputs)
-    ref_path = inputs / "ref" / "awaicgen_output_mosaic_image.fits"
-    with fits.open(ref_path, mode="update") as hdul:
-        del hdul[0].header["MAGZP"]
-        hdul.flush()
-    manifest_path = inputs / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    member = manifest["outputs"][1]["members"][0]
-    assert member["role"] == "image"
-    member["bytes"] = ref_path.stat().st_size
-    member["sha256"] = "sha256:" + hashlib.sha256(ref_path.read_bytes()).hexdigest()
-    manifest_path.write_text(json.dumps(manifest))
+def test_a_reference_without_magzp_and_no_override_fails(tmp_path, fakes):
+    files = write_epoch(tmp_path / "inputs", magzp=None)
+    with pytest.raises(ValueError, match="no MAGZP"):
+        run_difference(tmp_path, files)
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
-def test_zero_point_read_from_reference_header_by_default(tmp_path, fakes, capsys):
-    code, outputs = _run(tmp_path)
-    assert code == ExitCode.SUCCESS
-    assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 17.0, "source": "header"}
-    # Log lines go to stderr (a command whose stdout carries data logs to
-    # stderr; rapidpipe.log's console handler default, direction/logging-timing).
-    assert "zero point source=header; value=17.0" in capsys.readouterr().err
-
-
-def test_zero_point_override_takes_precedence_over_header(tmp_path, fakes, capsys):
-    code, outputs = _run(tmp_path, overlay="[awaicgen]\nzprefimg = 18.5\n")
-    assert code == ExitCode.SUCCESS
-    assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 18.5, "source": "override"}
-    err = capsys.readouterr().err
-    assert "zero point source=override; value=18.5" in err
-    assert "overrides reference header MAGZP=17.0" in err
-
-
-def test_zero_point_override_without_a_header_value_is_still_used(tmp_path, fakes, capsys):
-    _strip_ref_magzp(tmp_path)
-    code, outputs = _run(tmp_path, overlay="[awaicgen]\nzprefimg = 18.5\n")
-    assert code == ExitCode.SUCCESS
-    assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 18.5, "source": "override"}
-    assert "reference header has no MAGZP" in capsys.readouterr().err
-
-
-def test_missing_header_and_no_override_is_input_rejected(tmp_path, fakes):
-    _strip_ref_magzp(tmp_path)
-    code, outputs = _run(tmp_path)
-    assert code == ExitCode.INPUT_REJECTED
-
-
-def _set_ref_magzp(tmp_path, value) -> None:
-    """Build the fixture's input set, then set the reference image's
-    ``MAGZP`` header to ``value`` (for example a non-numeric string, to
-    simulate a malformed keyword), patching the manifest's declared
-    bytes/sha256 for that member so input verification still passes."""
-    inputs = tmp_path / "inputs"
-    build_input_set(inputs)
-    ref_path = inputs / "ref" / "awaicgen_output_mosaic_image.fits"
-    with fits.open(ref_path, mode="update") as hdul:
-        hdul[0].header["MAGZP"] = value
-        hdul.flush()
-    manifest_path = inputs / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    member = manifest["outputs"][1]["members"][0]
-    assert member["role"] == "image"
-    member["bytes"] = ref_path.stat().st_size
-    member["sha256"] = "sha256:" + hashlib.sha256(ref_path.read_bytes()).hexdigest()
-    manifest_path.write_text(json.dumps(manifest))
-
-
-def test_malformed_header_and_no_override_is_input_rejected(tmp_path, fakes):
-    """A non-numeric MAGZP is caught and reported as bad input (65), not
-    left to raise an unhandled ValueError (which would surface as 70)."""
-    _set_ref_magzp(tmp_path, "not-a-number")
-    code, outputs = _run(tmp_path)
-    assert code == ExitCode.INPUT_REJECTED
-    assert not (outputs / "manifest.json").exists()
-
-
-def test_override_takes_precedence_over_a_malformed_header(tmp_path, fakes):
-    """The override is applied before the header is even parsed for its
-    value, so a malformed MAGZP never matters when an override is set."""
-    _set_ref_magzp(tmp_path, "not-a-number")
-    code, outputs = _run(tmp_path, overlay="[awaicgen]\nzprefimg = 18.5\n")
-    assert code == ExitCode.SUCCESS
-    assert _exec_record(outputs)["notes"]["zero_point"] == {"value": 18.5, "source": "override"}
-
-
-def test_resolve_zero_point_rejects_a_non_finite_header_value(tmp_path, monkeypatch):
-    """``math.isfinite`` guards against a header MAGZP astropy would
-    otherwise hand back as +/-inf (FITS itself refuses to store nan)."""
-    monkeypatch.setattr(difference, "_reference_header_magzp", lambda *a, **k: float("inf"))
-    settings = {"awaicgen": {"zprefimg": ""}}
-    with pytest.raises(difference.InputRejected):
-        difference._resolve_zero_point(settings, tmp_path, "ref.fits", log=_NullLog())
-
-
-def test_resolve_zero_point_override_ignores_a_header_read_failure(monkeypatch, tmp_path):
-    """An override is returned even if reading the header would raise:
-    the override path never depends on the header parsing successfully."""
-
-    def _boom(*a, **k):
-        raise ValueError("simulated malformed header")
-
-    monkeypatch.setattr(difference, "_reference_header_magzp", _boom)
-    settings = {"awaicgen": {"zprefimg": 18.5}}
-    value, source = difference._resolve_zero_point(settings, tmp_path, "ref.fits", log=_NullLog())
-    assert (value, source) == (18.5, "override")
-
-
-class _NullLog:
-    def info(self, *a, **k):
-        pass
-
-
-def test_zogy_catalogs_detect_on_scorr_with_devs_overrides(tmp_path, fakes):
-    runner, _ = fakes
-    _run(tmp_path)
-    sex = [a for a in runner.calls if a[0] == "sex"]
-    zogy_pos, zogy_neg = sex[3], sex[4]
-    assert zogy_pos[1] == "scorrimage_masked.fits,zogy_diffimage_masked.fits"
-    assert zogy_neg[1] == "scorrimage_masked_negative.fits,zogy_diffimage_masked_negative.fits"
-    for call in (zogy_pos, zogy_neg):
-        assert call[call.index("-WEIGHT_TYPE") + 1] == "NONE,MAP_RMS"
-        assert call[call.index("-FILTER") + 1] == "N"
-        assert call[call.index("-WEIGHT_IMAGE") + 1] == "zogy_diffimage_uncert_masked.fits"
-    naive_pos = sex[7]
-    assert naive_pos[1] == "naive_diffimage_masked.fits,naive_diffimage_masked.fits"
-    # dev reverts the overrides before the naive catalogs.
-    assert naive_pos[naive_pos.index("-WEIGHT_TYPE") + 1] == "MAP_RMS,MAP_RMS"
-    assert naive_pos[naive_pos.index("-FILTER") + 1] == "Y"
-
-
-def test_sfft_runs_in_the_stages_own_environment_by_default(tmp_path, fakes):
-    # New default: no activation, the stage's own interpreter -- sfft 1.7.3
-    # lives in the pipeline image's main conda environment, not a venv.
-    runner, _ = fakes
-    _run(tmp_path)
-    (command,) = runner.shell_calls
-    assert command == (
-        f"{sys.executable} /code/modules/sfft/sfft_rapid_rimtimsim.py "
-        "./bkg_subbed_science_image.fits ./awaicgen_output_mosaic_image_resampled_gainmatched.fits "
-        "--bsmaskvalue 20000.0 --bsmaskradius 30.0 --scipsf sciimage_psf_f184_sca07_normalized.fits")
-
-
-def test_sfft_command_can_select_devs_venv(tmp_path, fakes):
-    # dev's values remain selectable, e.g. for a venv-based image.
-    runner, _ = fakes
-    _run(tmp_path, overlay=(
-        '[sfft]\npython_cmd = "python3.11"\n'
-        'activate_cmd = "source /sfft_env/bin/activate"\n'))
-    (command,) = runner.shell_calls
-    assert command == (
-        "source /sfft_env/bin/activate && python3.11 /code/modules/sfft/sfft_rapid_rimtimsim.py "
-        "./bkg_subbed_science_image.fits ./awaicgen_output_mosaic_image_resampled_gainmatched.fits "
-        "--bsmaskvalue 20000.0 --bsmaskradius 30.0 --scipsf sciimage_psf_f184_sca07_normalized.fits "
-        "&& deactivate")
-
-
-def test_uncovered_reference_pixels_are_nan_in_the_difference(tmp_path, fakes):
-    _, outputs = _run(tmp_path)
-    data = fits.getdata(outputs / "diff" / "zogy_diffimage_masked.fits")
-    assert np.isnan(data[:, :3]).all()
-    assert np.isfinite(data[:, 3:]).all()
-
-
-# ----------------------------------------------------------------------
-# SFFT: runs as dev runs it; registration on by default (difference.md),
-# alongside ZOGY, each under its own `pipelines` row
-# ----------------------------------------------------------------------
-
-
-def test_sfft_failure_is_not_fatal_and_is_noted(tmp_path, fakes):
-    runner, _ = fakes
-    runner.sfft_exit_code = 1
-    code, outputs = _run(tmp_path, overlay="[sfft]\nregister_sfft = true\n")
-    assert code == ExitCode.SUCCESS
-    manifest = _manifest(outputs)
-    diffs = _entries(manifest, "difference-image")
-    assert [d.key["differencer"] for d in diffs] == ["zogy"]   # never a partial SFFT bundle
-    assert _exec_record(outputs)["notes"]["sfft"] == {"ran": True, "succeeded": False, "exit_code": 1}
-    assert not (outputs / "diff" / "sfftdiffimage_masked_negative.fits").exists()
-
-
-def test_sfft_is_registered_by_default(tmp_path, fakes):
-    _, outputs = _run(tmp_path)
-    assert sorted(d.key["differencer"] for d in _entries(_manifest(outputs), "difference-image")) == \
-        ["sfft", "zogy"]
-    assert (outputs / "diff" / "sfftdiffimage_masked.fits").exists()
-
-
-def test_register_sfft_off_registers_zogy_only(tmp_path, fakes):
-    _, outputs = _run(tmp_path, overlay="[sfft]\nregister_sfft = false\n")
-    assert [d.key["differencer"] for d in _entries(_manifest(outputs), "difference-image")] == ["zogy"]
-    assert (outputs / "diff" / "sfftdiffimage_masked.fits").exists()   # still a diagnostic
-
-
-def test_register_sfft_adds_its_own_instance(tmp_path, fakes):
-    code, outputs = _run(tmp_path, overlay="[sfft]\nregister_sfft = true\n")
-    assert code == ExitCode.SUCCESS
-    manifest = _manifest(outputs)
-    sfft = next(d for d in _entries(manifest, "difference-image") if d.key["differencer"] == "sfft")
-    registration = validate_difference_entry(sfft.to_dict())
-    assert {m.role for m in sfft.members} == {"difference", "uncertainty", "psf", "kernel"}
-    assert registration.detection_role == "difference"
-    sfft_catalogs = [c for c in _entries(manifest, "source-catalog")
-                     if c.key["difference"] == sfft.instance]
-    assert len(sfft_catalogs) == 4
-
-
-def test_run_sfft_off_runs_no_sfft(tmp_path, fakes):
-    runner, _ = fakes
-    code, outputs = _run(tmp_path, overlay="[sfft]\nrun_sfft = false\n")
-    assert code == ExitCode.SUCCESS
-    assert runner.shell_calls == []
-    # No "sfft" key with SFFT off, but the ZOGY-fed astrometric sigma note
-    # and the zero point note are unconditional.
-    assert _exec_record(outputs)["notes"] == {
-        "zogy_astrometric_sigma": {"x": 0.0, "y": 0.0},
-        "zero_point": {"value": 17.0, "source": "header"},
-    }
-
-
-# ----------------------------------------------------------------------
-# The catalog-outcome mask and the naive diagnostic
-# ----------------------------------------------------------------------
-
-
-def test_missing_photutils_catalog_sets_its_bit_and_a_null_count(tmp_path, fakes):
-    # SFFT registration off: this is about ZOGY's own catalog_outcome_bits
-    # and source-catalog entries, not the two-differencer case.
-    _, catalog = fakes
-    catalog.fail = ("positive zogy difference image", "negative naive difference image")
-    code, outputs = _run(tmp_path, overlay="[sfft]\nregister_sfft = false\n")
-    assert code == ExitCode.SUCCESS
-    manifest = _manifest(outputs)
-    registration = _entries(manifest, "difference-image")[0].registration
-    assert registration["catalog_outcome_bits"] == (1 << 0) | (1 << 5)
-    assert registration["source_counts"]["photutils"]["positive"] is None
-    assert {(c.key["catalog_type"], c.key["sign"]) for c in _entries(manifest, "source-catalog")} == {
-        ("sextractor", "positive"), ("sextractor", "negative"), ("photutils", "negative")}
-
-
-def test_sfft_catalog_bits_count_only_when_sfft_ran(tmp_path, fakes):
-    runner, catalog = fakes
-    catalog.fail = ("positive sfft difference image",)
-    _, outputs = _run(tmp_path)
-    assert _entries(_manifest(outputs), "difference-image")[0].registration[
-        "catalog_outcome_bits"] == 1 << 2
-
-
-def test_naive_is_never_registered_and_can_be_turned_off(tmp_path, fakes):
-    runner, _ = fakes
-    code, outputs = _run(tmp_path)
-    assert (outputs / "diff" / "naive_diffimage_masked.fits").exists()
-    assert all(d.key["differencer"] != "naive" for d in _entries(_manifest(outputs), "difference-image"))
-
-    other = tmp_path / "off"
-    other.mkdir()
-    code, outputs = _run(other, overlay="[naive_diffimage]\nnaive_diffimage_flag = false\n")
-    assert code == ExitCode.SUCCESS
-    assert not (outputs / "diff" / "naive_diffimage_masked.fits").exists()
-
-
-# ----------------------------------------------------------------------
-# References registered by dev
-# ----------------------------------------------------------------------
-
-
-def test_legacy_reference_carries_its_rfid_and_is_not_a_dependency(tmp_path, fakes):
-    code, outputs = _run(tmp_path, build_kwargs={"rfid": 4321, "ref_infobits": 8})
-    assert code == ExitCode.SUCCESS
-    manifest = _manifest(outputs)
-    registration = _entries(manifest, "difference-image")[0].registration
-    assert registration["reference_rfid"] == 4321
-    assert registration["infobits_reference"] == 8
-    assert manifest.inputs.products == {"l2-image": L2_INSTANCE}
-
-
-def test_uncompressed_science_image_is_accepted(tmp_path, fakes):
-    code, _ = _run(tmp_path, build_kwargs={"gzip_science": False})
-    assert code == ExitCode.SUCCESS
-
-
-# ----------------------------------------------------------------------
-# Refusals
-# ----------------------------------------------------------------------
-
-
-def _edit_manifest(tmp_path, edit):
-    inputs = tmp_path / "inputs"
-    build_input_set(inputs)
-    path = inputs / "manifest.json"
-    manifest = json.loads(path.read_text())
-    edit(manifest)
-    path.write_text(json.dumps(manifest))
-
-
-@pytest.mark.parametrize("edit", [
-    lambda m: m["outputs"].pop(1),                                        # no reference
-    lambda m: m["outputs"].pop(4),                                        # one psf only
-    lambda m: m["outputs"][3]["key"].update(applies_to="reference"),      # two reference psfs
-    lambda m: m["outputs"][0]["members"][0].update(sha256="sha256:" + "0" * 64),
-    lambda m: m["outputs"][1]["members"].pop(1),                          # no coverage map
-    lambda m: m["outputs"][1]["registration"].update(infobits=None),
-    lambda m: m["outputs"][0]["registration"].pop("exptime"),
+@pytest.mark.parametrize("inputs, message", [
+    (named_inputs(refpsf=None), "two psfs"),
+    (named_inputs(gaia={"kind": "input", "product": "catalogs", "key": {}, "source_job": 1,
+                        "binding": None}), "not \\['catalogs'\\]"),
+    (named_inputs(l2files={"kind": "input", "product": "l2files", "source_job": 2,
+                           "binding": None, "key": {**KEY, "expid": 1}}), "is not the epoch"),
 ])
-def test_bad_input_set_exits_65_and_publishes_nothing(tmp_path, fakes, edit):
-    _edit_manifest(tmp_path, edit)
-    code, outputs = _run(tmp_path)
-    assert code == ExitCode.INPUT_REJECTED
-    assert not (outputs / "manifest.json").exists()
+def test_inputs_the_stage_does_not_take_fail(tmp_path, files, fakes, inputs, message):
+    with pytest.raises(ValueError, match=message):
+        run_difference(tmp_path, files, inputs=inputs)
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
-@pytest.mark.parametrize("overlay", [
-    "[fake_sources]\ninject_fake_sources_flag = true\n",
-    '[zogy]\ndetection_role = "kernel"\n',
-    '[sfft]\ndetection_role = "significance"\n',
-    '[awaicgen]\nzprefimg = "not a number"\n',
-    "[awaicgen]\nzprefimg = true\n",
-])
-def test_bad_settings_exit_64(tmp_path, fakes, overlay):
-    code, outputs = _run(tmp_path, overlay=overlay)
-    assert code == ExitCode.USAGE
-    assert not (outputs / "manifest.json").exists()
+def test_two_psfs_of_one_kind_fail(tmp_path, files, fakes):
+    fits.setval(files["reference_psf"], "PSFKIND", value="sciimage_psf")
+    with pytest.raises(ValueError, match="PSFKIND"):
+        run_difference(tmp_path, files)
 
 
-def test_cli_dispatches_to_difference_stage(tmp_path, fakes):
-    from rapidpipe.cli.main import main as cli_main
-
-    build_input_set(tmp_path / "inputs")
-    code = cli_main(shlex.split(
-        f"stage difference --run r1 --unit u1 --attempt a1 --inputs {tmp_path / 'inputs'} "
-        f"--outputs {tmp_path / 'outputs'} --dry-run"))
-    assert code == ExitCode.SUCCESS
-
-
-def test_declaration():
-    d = difference.DECLARATION
-    d.validate()
-    assert d.database_access == "none"
-    assert d.produces == ("difference-image", "source-catalog")
+def test_the_shipped_difference_table_is_valid_and_refuses_fake_sources():
+    difference.check_settings(THIN["difference"])
+    assert THIN["difference"]["max_sources"] == 500
+    with pytest.raises(ValueError, match="fake-source"):
+        difference.check_settings(settings(fake_sources={"inject_fake_sources_flag": True})["difference"])
+    with pytest.raises(ValueError, match="max_sources"):
+        difference.check_settings(settings(max_sources=-1)["difference"])

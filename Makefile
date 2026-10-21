@@ -8,15 +8,6 @@
 
 PYTHON ?= python3
 
-# fake: every external tool replaced by rapidpipe/selftest/support/fakedifftools.py's
-# stand-ins; runs anywhere. real: SExtractor, SWarp, bkgest, ZOGY, SFFT,
-# photutils and the SIP-to-PV converter for real -- the pipeline image.
-DIFFERENCE_TOOLS ?= fake
-
-.PHONY: stage-difference
-stage-difference:
-	$(PYTHON) tests/fixtures/difference/run_fixture.py --tools $(DIFFERENCE_TOOLS)
-
 # The finalize stage's fixture: a synthetic difference attempt's products
 # republished with the stamped header (rapidpipe/selftest/support/
 # fakefinalize.py builds the inputs); no tools, no database, runs anywhere.

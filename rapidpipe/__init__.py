@@ -9,8 +9,8 @@ derivations), ``db`` (the connection and identifiers), ``science`` (the
 algorithms stages call), ``foundation`` (runs, jobs, the publisher and the
 official bindings over ``database/schema.sql``), ``launch`` (submitting a
 job to Batch or running it locally), ``selftest`` (stage fixtures) and
-``cli`` (the command-line tool) -- and four leaf modules, ``exitcodes``,
-``log``, ``revision`` and ``seams``, which import no other part of the
+``cli`` (the command-line tool) -- and three leaf modules, ``exitcodes``,
+``log`` and ``revision``, which import no other part of the
 package.
 
 Dependency direction is a fixed layer order, and a unit imports only units

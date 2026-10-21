@@ -75,7 +75,6 @@ def _fmt_phase(seconds: float | None) -> str:
 #: StageDeclaration naming anything else is rejected by validate().
 STAGE_NAMES = (
     "admit",
-    "difference",
     "finalize",
 )
 

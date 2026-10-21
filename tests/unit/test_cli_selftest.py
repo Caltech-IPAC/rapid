@@ -39,13 +39,13 @@ def test_selftest_rejects_an_unknown_stage():
 
 
 def test_selftest_accepts_every_known_stage():
-    for stage in ("difference", "finalize"):
+    for stage in ("finalize",):
         args = _parse(["selftest", "--stage", stage])
         assert args.stage == stage
 
 
 def test_selftest_defaults():
-    args = _parse(["selftest", "--stage", "difference"])
+    args = _parse(["selftest", "--stage", "finalize"])
     assert args.real_tools is False
     assert args.work_dir is None
     assert args.output_location is None
@@ -73,12 +73,12 @@ def test_run_selftest_command_forwards_argparse_to_run(monkeypatch):
 
     monkeypatch.setattr(cli_main, "run_selftest", fake_run)
     args = _parse([
-        "selftest", "--stage", "difference", "--real-tools",
+        "selftest", "--stage", "finalize", "--real-tools",
         "--work-dir", "/tmp/wd", "--output-location", "/tmp/out",
         "--python", "/usr/bin/python3"])
     assert cli_main._run_selftest_command(args) == 0
     assert captured == {
-        "stage": "difference", "real_tools": True, "work_dir": "/tmp/wd",
+        "stage": "finalize", "real_tools": True, "work_dir": "/tmp/wd",
         "output_location": "/tmp/out", "python": "/usr/bin/python3"}
 
 

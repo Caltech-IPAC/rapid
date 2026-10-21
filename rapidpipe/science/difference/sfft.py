@@ -1,4 +1,4 @@
-# ported-from: pipeline/sfftCommandSubs.py, pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ c740f3e3
+# ported-from: pipeline/sfftCommandSubs.py, pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ d6aac515
 """SFFT: the command line, run as `dev` runs it.
 
 `dev`: ``build_sfft_command_args`` (``pipeline/sfftCommandSubs.py``) and
@@ -18,7 +18,7 @@ into the main conda environment the stage itself runs under (see
 activation step, using the stage's own interpreter --- the same
 convention ``[paths] python`` uses for ZOGY. `dev`'s values remain
 selectable, e.g. for a venv-based image; see ``[sfft]`` in
-``rapidpipe/settings/difference.toml``.
+``rapidpipe/settings/foundation-thin.toml`` (``[difference.*]``).
 """
 
 from __future__ import annotations

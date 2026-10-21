@@ -29,10 +29,13 @@ resampled gain-matched reference: the packet stage's cutout inputs). Its
 L2 row's ``limmag`` is measured with the science-image PSF of the
 ``psfs`` row the job names as an input. ``sources`` holds the
 ``max_sources`` brightest rows of the difference job's PSF-fit catalog by
-``flux_fit / flux_err``, inside `dev`'s fit-position bounds, mapped as
-``rapidpipe.science.load.catalogs`` maps them. ``reference`` writes
+``flux_fit / flux_err`` (0 keeps every row), inside `dev`'s fit-position
+bounds, mapped as :func:`rapidpipe.science.load.catalogs.source_set` maps
+them, as the difference stage does. ``reference`` writes
 ``refimages`` and ``refimcatalogs`` (the mosaic SExtractor catalog, type
-1); ``psf`` writes ``psfs``; ``gaia`` writes ``catalogs``.
+1); ``psf`` writes ``psfs`` (a science-image PSF, or the reference-image
+PSF the difference stage also reads; ``psfid`` may be omitted, for a PSF
+the source system never registered); ``gaia`` writes ``catalogs``.
 """
 
 from __future__ import annotations
@@ -42,7 +45,6 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from astropy.io import fits
@@ -52,7 +54,7 @@ from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.products.filters import rapid_filter_name
 from rapidpipe.science.limmag import image_hdu_index, limiting_magnitude
-from rapidpipe.science.load.catalogs import CATALOG_COLUMNS, healpix_arrays, tessellation_ids
+from rapidpipe.science.load.catalogs import source_set
 from rapidpipe.science.spatial import (
     healpix_indexes, image_centre_and_corners, overlapping_fields, tessellation_field)
 
@@ -206,32 +208,11 @@ def _fid(filter_name: str) -> int:
 def _sources(settings: dict, catalog_path: Path, key: dict, pid: int, mjdobs: float,
              naxis1: int, naxis2: int) -> pa.Table:
     """The capped source set: dev's position bounds, then the brightest by flux_fit / flux_err."""
-    catalog = pq.read_table(catalog_path)
-
-    def column(name):  # a null float (pandas' NaN on write) reads back as NaN, as dev's text has it
-        return catalog.column(name).to_numpy()
-
-    x, y, flux, err = (column(n).astype(float) for n in ("x_fit", "y_fit", "flux_fit", "flux_err"))
-    lo, offset = settings["xy_fit_min"], settings["xy_fit_max_offset"]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        snr = np.where(err > 0, flux / err, np.nan)
-    keep = ((x >= lo) & (x <= naxis1 - offset) & (y >= lo) & (y <= naxis2 - offset)
-            & np.isfinite(snr))
-    candidates = np.flatnonzero(keep)
-    chosen = candidates[np.argsort(-snr[candidates], kind="stable")[:settings["max_sources"]]]
-
-    columns = {db: column(name)[chosen] for name, db in CATALOG_COLUMNS if db != "npix"}
-    ra, dec = columns["ra"].astype(float), columns["dec"].astype(float)
-    hp6, hp9 = healpix_arrays({"ra": ra, "dec": dec})
-    n = len(chosen)
-    return pa.table({
-        "sid": columns["id"].astype(np.int64),
-        "dataset": [key["dataset"]] * n, "expid": np.full(n, key["expid"]),
-        "sca": np.full(n, key["sca"]), "fid": np.full(n, key["fid"]), "pid": np.full(n, pid),
-        "isdiffpos": np.full(n, True), "field": tessellation_ids(ra, dec).astype(np.int64),
-        "hp6": hp6.astype(np.int64), "hp9": hp9.astype(np.int64), "mjdobs": np.full(n, mjdobs),
-        **columns,
-    })
+    table, _ = source_set(pq.read_table(catalog_path), key, pid, mjdobs, naxis1, naxis2,
+                          max_sources=settings.get("max_sources"),
+                          xy_fit_min=settings["xy_fit_min"],
+                          xy_fit_max_offset=settings["xy_fit_max_offset"])
+    return table
 
 
 def _reference(job: JobContext, source: Path, reference: dict) -> dict:
@@ -256,5 +237,6 @@ def _psf(job: JobContext, source: Path, psf: dict) -> dict:
         header = hdul[0].header
         sca, fid = int(header["SCA"]), _fid(header["FILTER"])
     url, md5 = _copy(job, path)
-    return {"psfid": psf["psfid"], "dataset": job.dataset, "fid": fid, "sca": sca,
+    ids = {"psfid": psf["psfid"]} if "psfid" in psf else {}  # none: the table's identity draws one
+    return {**ids, "dataset": job.dataset, "fid": fid, "sca": sca,
             "filename": url, "checksum": md5, "status": STATUS_GOOD}

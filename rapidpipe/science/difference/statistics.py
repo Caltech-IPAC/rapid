@@ -1,4 +1,4 @@
-# ported-from: modules/utils/rapid_pipeline_subs.py @ c740f3e3
+# ported-from: modules/utils/rapid_pipeline_subs.py @ d6aac515
 """Clipped image statistics, as `dev` computes them.
 
 `dev`: ``compute_clip_corr`` and ``fits_data_statistics_with_clipping``

@@ -58,7 +58,7 @@ SELFTEST_ENV = "RAPIDPIPE_SELFTEST"
 
 #: The stages a fixture exists for today (stage contract, "Local
 #: execution"; ``tests/fixtures/<stage>/``).
-STAGE_NAMES = ("difference", "finalize")
+STAGE_NAMES = ("finalize",)
 
 FIXTURES_ROOT = Path(__file__).resolve().parent / "fixtures"
 
