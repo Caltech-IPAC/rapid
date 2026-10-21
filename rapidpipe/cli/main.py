@@ -19,10 +19,15 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   takes them;
 - ``official undo <group-id> --who --why`` applies the inverse of a group
   and prints the new group's id;
-- ``run show <id>`` and ``job show <id>`` print the run or job as JSON.
+- ``run show <id>`` and ``job show <id>`` print the run or job as JSON;
+- ``job local --run --stage --scope JSON [--inputs JSON] [--expects JSON]
+  [--excludes JSON]`` records a job and runs it; ``job run --job <id>``
+  runs an existing job's next attempt. Both run the stage's ``run(job)``
+  in this process under ``RAPIDPIPE_OUTPUTS_ROOT`` and publish it
+  (``rapidpipe.foundation.run_job``), printing the publisher's result.
 
-A refused change group exits 1 (``ExitCode.FAILURE``) with the binding
-named on stderr; a run, job or group that does not exist, or an unreadable
+A refused change group, or a job published but refused its automatic
+binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr; a run, job or group that does not exist, or an unreadable
 file, exits 64. Data goes to stdout, everything else to stderr.
 
 Stage modules are resolved by ``importlib.import_module`` at call time, so
@@ -36,6 +41,7 @@ import argparse
 import importlib
 import json
 import logging
+import os
 import sys
 import tomllib
 from pathlib import Path
@@ -103,13 +109,31 @@ def _build_parser() -> argparse.ArgumentParser:
                                          description="Print one run, its live binding and its jobs as JSON.")
     run_show.add_argument("id", type=int)
 
-    job_parser = subparsers.add_parser("job", help="Show a job.", description="Show a job.")
+    job_parser = subparsers.add_parser("job", help="Show, launch or run a job.",
+                                       description="Show a job, or run one here and publish it.")
     job_parser.set_defaults(group_parser=job_parser)
     job_subparsers = job_parser.add_subparsers(dest="verb")
     job_show = job_subparsers.add_parser(
         "show", help="Print one job as JSON.",
         description="Print one job, its recorded inputs and its bindings as JSON.")
     job_show.add_argument("id", type=int)
+    job_local = job_subparsers.add_parser(
+        "local", help="Record a job, run its stage here and publish it.",
+        description="Record a job under a run with its inputs, run its stage in this "
+                    "process under RAPIDPIPE_OUTPUTS_ROOT, publish it and print the result.")
+    job_local.add_argument("--run", required=True, type=int)
+    job_local.add_argument("--stage", required=True)
+    for name, meaning in (("scope", "the job's scope, a JSON object"),
+                          ("inputs", "a JSON list of {product, key, source_job}"),
+                          ("expects", "a JSON list of {product, key, binding}"),
+                          ("excludes", "a JSON list of {key, source_job}")):
+        job_local.add_argument(f"--{name}", required=name == "scope", type=_json_argument,
+                               default=[], metavar="JSON", help=meaning)
+    job_run = job_subparsers.add_parser(
+        "run", help="Run an existing job's next attempt here and publish it.",
+        description="Run an existing job's next attempt in this process and publish it; "
+                    "a published job stops before touching a file.")
+    job_run.add_argument("--job", required=True, type=int)
 
     official_parser = subparsers.add_parser(
         "official", help="Change official bindings, or undo a change.",
@@ -186,6 +210,55 @@ def _read(path: Path, what: str) -> Any:
         raise CommandExit(int(ExitCode.USAGE), f"cannot read the {what} file {path}: {exc}") from exc
 
 
+def _json_argument(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not JSON: {exc}") from exc
+
+
+#: Stage names whose module name differs (``import`` is a Python keyword).
+_STAGE_MODULES = {"import": "import_products"}
+
+
+def _stage_run(stage: str):
+    """The stage's ``run(job)``, from ``rapidpipe.stages.<module>``."""
+    module_name = f"rapidpipe.stages.{_STAGE_MODULES.get(stage, stage.replace('-', '_'))}"
+    try:
+        stage_run = getattr(importlib.import_module(module_name), "run", None)
+    except ModuleNotFoundError:
+        stage_run = None
+    if stage_run is None:
+        raise CommandExit(int(ExitCode.USAGE), f"stage {stage!r} has no run(job) in {module_name}")
+    return stage_run
+
+
+def _run_job(args: argparse.Namespace) -> int:
+    root = os.environ.get("RAPIDPIPE_OUTPUTS_ROOT")
+    if not root:
+        raise CommandExit(int(ExitCode.USAGE), "RAPIDPIPE_OUTPUTS_ROOT is not set")
+
+    def connect_job():
+        return connect(application_name=f"rapidpipe-job-{args.verb}")
+
+    if args.verb == "local":
+        stage_run = _stage_run(args.stage)
+        with connect_job() as conn:
+            job_id = foundation.create_job(conn, args.run, args.stage, args.scope, args.inputs,
+                                           args.expects, args.excludes)
+    else:
+        job_id = args.job
+        with connect_job() as conn:
+            stage_run = _stage_run(foundation.job_show(conn, job_id)["stage"])
+    result = foundation.run_job(connect_job, job_id, root, stage_run)
+    _print_json(result)
+    if result["published"] and result["refusal"]:
+        sys.stderr.write(f"rapidpipe job {args.verb}: job {job_id} published, binding refused: "
+                         f"{result['refusal']}\n")
+        return int(ExitCode.FAILURE)
+    return int(ExitCode.SUCCESS)
+
+
 def _print_json(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True, default=str))
 
@@ -202,6 +275,8 @@ def _foundation_command(args: argparse.Namespace) -> int:
     elif command == ("run", "show"):
         with connect(application_name="rapidpipe-run-show") as conn:
             _print_json(foundation.run_show(conn, args.id))
+    elif command in (("job", "local"), ("job", "run")):
+        return _run_job(args)
     elif command == ("job", "show"):
         with connect(application_name="rapidpipe-job-show") as conn:
             _print_json(foundation.job_show(conn, args.id))

@@ -26,15 +26,16 @@ The distribution is `rapid-pipeline`; its import package is `rapidpipe`. The fou
 
 ## The command line
 
-The database is built by `psql -v ON_ERROR_STOP=1 -f database/schema.sql` on an empty PostgreSQL 18 ([`database/README.md`](database/README.md)). The five verbs:
+The database is built by `psql -v ON_ERROR_STOP=1 -f database/schema.sql` on an empty PostgreSQL 18 ([`database/README.md`](database/README.md)). The verbs:
 
 - `rapidpipe run create --who W --why Y --revision REV --settings FILE --survey S --dataset D` records a run (a recipe someone launched for a reason) and prints its id. `FILE` is the run's full settings body, TOML, or JSON when its name ends in `.json`.
 - `rapidpipe official change --group FILE --who W --why Y` applies one change group in one transaction and prints its id. `FILE` is a JSON list of items, each with `close` (the id of an open binding) and/or `open` (a product binding `{"product", "key", "job"}` or the live binding `{"survey", "dataset", "run"}`).
 - `rapidpipe official undo <group-id> --who W --why Y` applies the inverse of a change group (close what it opened, open as new rows what it closed) and prints the new group's id.
 - `rapidpipe run show <id>` prints the run, its live binding and its jobs as JSON.
 - `rapidpipe job show <id>` prints the job, its recorded inputs and every binding of its rows as JSON.
+- `rapidpipe job local --run R --stage NAME --scope JSON [--inputs JSON] [--expects JSON] [--excludes JSON]` records a job under run `R` with its inputs (the lists `rapidpipe.foundation.create_job` takes) and runs it here; `rapidpipe job run --job J` runs an existing job's next attempt. Running a job reads it first and stops at once if it is published; otherwise it calls the stage's `run(job)` in this process with a `rapidpipe.foundation.JobContext` (job, run, scope, the run's settings body, the recorded inputs, the attempt's prefix `<RAPIDPIPE_OUTPUTS_ROOT>/<run>/<stage>/<job>/<attempt>/`), then publishes the attempt and prints the publisher's result as JSON. The stage writes its files and `manifest.json` and never publishes. The outputs root is a `file://` URL. The foundation's stages are `import` (`rapidpipe.stages.import_products`) so far; `admit`, `reference`, `difference` and `finalize` keep the older contract until their port.
 
-A change group refused because a binding it names is no longer open, or because a key it opens already has an open binding, exits 1 with the binding named on stderr; a run, job or group that does not exist, or a file that cannot be read, exits 64.
+A change group refused because a binding it names is no longer open, or because a key it opens already has an open binding, and a job published but refused its automatic binding, exit 1 with the binding named on stderr; a run, job or group that does not exist, or a file that cannot be read, exits 64.
 
 `rapidpipe stage run <name> ...` (also `rapidpipe stage <name> ...`), `rapidpipe stage list` and `rapidpipe stage describe <name>` run, list and describe stages; `rapidpipe selftest --stage reference|difference|finalize` runs a stage's packaged fixture.
 

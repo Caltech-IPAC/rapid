@@ -1,0 +1,38 @@
+# The settings body of a foundation run over the thin field (foundation
+# plan v5, milestones 1 to 3): `rapidpipe run create --settings` stores it
+# whole on the run, and each stage reads its own table from the run. Values
+# are dev's, named where dev hard-codes them. Data locations are never
+# here: the import's source directory is its job's scope, the outputs root
+# is RAPIDPIPE_OUTPUTS_ROOT.
+
+[import]
+# The brightest sources kept per difference image, by fluxfit / fluxerr.
+max_sources = 500
+# dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
+xy_fit_min = -0.5
+xy_fit_max_offset = 0.5
+# dev's l2files.limmag backfill (db_backfill_l2files_limmag.py defaults).
+limmag_nsigma = 5.0
+limmag_clip_sigma = 3.0
+limmag_maxiters = 10
+
+[associate]
+# Degrees (dev's crossmatch match_radius).
+match_radius = 0.00001528
+# Sources matched: flags equal to this, and fluxfit / fluxerr at least min_snr.
+source_flags = 0
+min_snr = 5.0
+
+[packet]
+edge_pixels = 2
+# Cutouts are (2 * half width + 1) pixels square (dev providers.py STAMP_HALF_WIDTH).
+stamp_half_width = 64
+# Days before the trigger (dev PRV_WINDOW_DAYS, FORCED_WINDOW_DAYS).
+prv_window_days = 365.25
+forced_window_days = 30.0
+# Gaia DR3 matches (dev providers.py): radius in arcseconds, at most this many.
+gaia_radius_arcsec = 1.0
+gaia_max_matches = 3
+# Reference-catalog star and galaxy matches (dev providers.py), likewise.
+refcat_radius_arcsec = 5.0
+refcat_max_matches = 3

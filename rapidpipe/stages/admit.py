@@ -38,6 +38,7 @@ from astropy.wcs import WCS
 
 from rapidpipe.db.ids import new_ulid
 from rapidpipe.products.l2image import L2ImageRegistration
+from rapidpipe.science.spatial import image_centre_and_corners
 from rapidpipe.products.manifest import (
     Manifest,
     Member,
@@ -247,40 +248,6 @@ def _extract_sip_block(header: Any, prefix: str) -> tuple[int | None, dict[str, 
     return order, coeffs
 
 
-def _compute_center_and_corners(
-    wcs: WCS, naxis1: int, naxis2: int,
-) -> tuple[dict[str, float], list[list[float]]]:
-    """Reproduce the legacy script's pixel positions and corner order.
-
-    Legacy ``compute_center_sky_position``/``compute_corner_sky_positions``
-    (database/sims/db_register_socsim_files.py) use 1-based FITS pixel
-    coordinates shifted to the 0-based convention astropy's
-    ``pixel_to_world`` expects (``x = 0.5 * naxis + 0.5 - 1.0`` for the
-    centre; ``x = 0.5 - 1.0`` and ``x = naxis + 0.5 - 1.0`` for the outer
-    edges), i.e. ``origin=0``. Corner order is (bottom-left, bottom-right,
-    top-right, top-left) in that (x, y) pixel sense.
-    """
-    cx = 0.5 * naxis1 + 0.5 - 1.0
-    cy = 0.5 * naxis2 + 0.5 - 1.0
-    center = wcs.pixel_to_world(cx, cy)
-
-    corner_pixels = [
-        (0.5 - 1.0, 0.5 - 1.0),
-        (naxis1 + 0.5 - 1.0, 0.5 - 1.0),
-        (naxis1 + 0.5 - 1.0, naxis2 + 0.5 - 1.0),
-        (0.5 - 1.0, naxis2 + 0.5 - 1.0),
-    ]
-    corners = []
-    for x, y in corner_pixels:
-        sky = wcs.pixel_to_world(x, y)
-        corners.append([float(sky.ra.degree % 360.0), float(sky.dec.degree)])
-
-    return (
-        {"ra": float(center.ra.degree % 360.0), "dec": float(center.dec.degree)},
-        corners,
-    )
-
-
 def _body(context: StageContext) -> StageResult:
     header_settings = context.settings["header"]
     require_checksums = context.settings["verify"]["require_fits_checksums"]
@@ -340,7 +307,7 @@ def _body(context: StageContext) -> StageResult:
     naxis2 = int(header["NAXIS2"])
     a_order, a_coeffs = _extract_sip_block(header, "A")
     b_order, b_coeffs = _extract_sip_block(header, "B")
-    centre, corners = _compute_center_and_corners(wcs, naxis1, naxis2)
+    centre, corners = image_centre_and_corners(wcs, naxis1, naxis2)
 
     context.outputs_dir.mkdir(parents=True, exist_ok=True)
     copy_dir = context.outputs_dir / copy_subdirectory
