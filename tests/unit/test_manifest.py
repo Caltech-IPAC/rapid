@@ -43,8 +43,7 @@ PRODUCTS_PAGE_EXAMPLE = """
       "l2-image": "pi-l2-0000123456",
       "reference-image": "pi-ref-0000004321",
       "psf": "pi-psf-0000000789"
-    },
-    "result_sets": []
+    }
   },
   "outputs": [
     {
@@ -111,7 +110,7 @@ def _manifest(**overrides):
         attempt="a1",
         execution_record="exec/a1.json",
         inputs=Inputs(manifest="s3://bucket/inputs/manifest.json",
-                      products={"l2-image": "pi-l2-1"}, result_sets=()),
+                      products={"l2-image": "pi-l2-1"}),
         outputs=(
             OutputEntry(
                 kind="difference-image",
@@ -185,7 +184,7 @@ def test_each_contract_unit_kind_is_valid(kind):
 
 
 def test_missing_inputs_manifest_fails_validation():
-    manifest = _manifest(inputs=Inputs(manifest="", products={}, result_sets=()))
+    manifest = _manifest(inputs=Inputs(manifest="", products={}))
     with pytest.raises(ManifestError):
         manifest.validate()
 
@@ -193,7 +192,7 @@ def test_missing_inputs_manifest_fails_validation():
 def test_empty_inputs_products_value_fails_validation():
     manifest = _manifest(inputs=Inputs(
         manifest="s3://bucket/inputs/manifest.json",
-        products={"l2-image": ""}, result_sets=()))
+        products={"l2-image": ""}))
     with pytest.raises(ManifestError):
         manifest.validate()
 

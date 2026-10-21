@@ -39,8 +39,7 @@ def test_selftest_rejects_an_unknown_stage():
 
 
 def test_selftest_accepts_every_known_stage():
-    for stage in ("difference", "load", "maintain", "crossmatch", "alerts", "statistics",
-                 "prune"):
+    for stage in ("reference", "difference", "finalize"):
         args = _parse(["selftest", "--stage", stage])
         assert args.stage == stage
 
@@ -55,10 +54,10 @@ def test_selftest_defaults():
 
 def test_selftest_flags_parse():
     args = _parse([
-        "selftest", "--stage", "load", "--real-tools",
+        "selftest", "--stage", "finalize", "--real-tools",
         "--work-dir", "/tmp/wd", "--output-location", "s3://bucket/prefix",
         "--python", "/usr/bin/python3.11"])
-    assert args.stage == "load"
+    assert args.stage == "finalize"
     assert args.real_tools is True
     assert args.work_dir == "/tmp/wd"
     assert args.output_location == "s3://bucket/prefix"
@@ -85,7 +84,7 @@ def test_run_selftest_command_forwards_argparse_to_run(monkeypatch):
 
 def test_main_dispatches_selftest(monkeypatch):
     monkeypatch.setattr(cli_main, "run_selftest", lambda **kwargs: 0)
-    assert cli_main.main(["selftest", "--stage", "load"]) == 0
+    assert cli_main.main(["selftest", "--stage", "finalize"]) == 0
 
 
 def _result(exit_code: int, checks: Checks, tools: str = "fake") -> FixtureResult:

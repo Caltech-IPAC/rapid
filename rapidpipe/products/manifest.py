@@ -6,16 +6,15 @@ complete manifest" example, which is this module's authority:
 https://roman-rapid.readthedocs.io/en/latest/system/products.html
 
 The manifest records: its own schema version; the run, unit, stage and
-attempt identifiers; a reference to the execution record kept by
-``rapidpipe.runs``; the input manifest this attempt read and the upstream
-product and database-result-set instances it consumed; and each output's
+attempt identifiers; a reference to the execution record; the input
+manifest this attempt read and the upstream product instances it consumed; and each output's
 kind, format version, instance id, logical key, member files (with byte
 size and SHA-256 per file), and registration metadata. A database result
 set is an output with no members and no primary -- its members list is
 always empty (products page, "Database result sets": "rows, not files").
 
 This module imports only the standard library and ``rapidpipe.products.ids``:
-no ``rapidpipe.runs``, ``rapidpipe.db`` or stage module.
+no ``rapidpipe.db``, ``rapidpipe.foundation`` or stage module.
 """
 
 from __future__ import annotations
@@ -214,19 +213,15 @@ class Unit:
 
 @dataclass(frozen=True)
 class Inputs:
-    """What this attempt read: its input manifest, products, result sets.
+    """What this attempt read: its input manifest and products.
 
     ``products`` maps a consumed product kind to the upstream instance id
     the stage read (products page, "Identity": downstream stages reference
-    an instance id, never a bare logical key). ``result_sets`` lists the
-    database result-set instance ids read, for the stages the stage
-    contract names (``crossmatch``, ``statistics``, ``prune``); transform
-    stages that declare no database access leave it empty.
+    an instance id, never a bare logical key).
     """
 
     manifest: str
     products: dict[str, str] = field(default_factory=dict)
-    result_sets: tuple[str, ...] = field(default_factory=tuple)
 
     def validate(self) -> None:
         _require(bool(self.manifest), "inputs missing required field 'manifest'")
@@ -239,19 +234,17 @@ class Inputs:
         return {
             "manifest": self.manifest,
             "products": dict(self.products),
-            "result_sets": list(self.result_sets),
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Inputs":
         d = dict(d)
-        result_sets = tuple(d.pop("result_sets", []))
-        known = {f.name for f in fields(cls)} - {"result_sets"}
+        known = {f.name for f in fields(cls)}
         unknown = set(d) - known
         if unknown:
             raise ManifestError(f"inputs has unknown fields: {sorted(unknown)}")
         d.setdefault("products", {})
-        return cls(result_sets=result_sets, **d)
+        return cls(**d)
 
 
 @dataclass(frozen=True)
@@ -355,25 +348,6 @@ class Manifest:
 #: call this type "the manifest"; ``CompletionManifest`` was this module's
 #: working name before the shape was pinned to the products page.
 CompletionManifest = Manifest
-
-
-def register_unit_id(manifest: "Manifest") -> str:
-    """The unit id a ``register`` unit recording ``manifest`` must use.
-
-    A `register` unit is identified by what it registers (Ben, 2026-09-23):
-    ``<producing stage>/<producing unit id>``, e.g.
-    ``admit/r0034001002001001001/SCA01`` after `admit` and
-    ``difference/r0034001002001001001/SCA01`` after `difference`, derived
-    from the manifest register reads -- ``manifest.stage`` (the producing
-    stage) and ``manifest.unit.id`` (the producing unit) name both.
-    `register` is one stage that follows every producer, so this is the
-    single place that derivation happens; no occurrence counter, no new
-    column, and no hand-keyed suffix (the old ``<unit>/difference``
-    pattern a caller used to add by hand for a second `register` in one
-    run) is needed -- two different producing stages already yield two
-    distinct derived ids for the same nominal unit.
-    """
-    return f"{manifest.stage}/{manifest.unit.id}"
 
 
 def hash_file(path: str | Path) -> tuple[int, str]:

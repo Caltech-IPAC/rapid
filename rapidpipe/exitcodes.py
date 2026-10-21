@@ -1,8 +1,7 @@
 """The one exit-code vocabulary for every rapidpipe entrypoint.
 
 :class:`ExitCode` is the single set of process exit codes that the ``rapid``
-command line, the ``python -m rapidpipe.release`` hook runner, the selftest
-harness and every stage entrypoint return. Values 64 to 75 are the stage
+command line, the selftest harness and every stage entrypoint return. Values 64 to 75 are the stage
 contract's codes (sysexits-derived); 0, 1 and 2 are the operator-facing
 outcomes. A stage may return only the subset
 :data:`rapidpipe.stages.contract.STAGE_EXIT_CODES`; the command line may

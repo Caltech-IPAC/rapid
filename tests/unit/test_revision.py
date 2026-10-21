@@ -1,5 +1,5 @@
 """Tests for rapidpipe.revision.git_revision: the git-only lookup shared
-by rapidpipe.cli.main, rapidpipe.runs.local and rapidpipe.stages.contract,
+by rapidpipe.cli.main and rapidpipe.stages.contract,
 each of which applies its own fallback when this returns None."""
 
 from __future__ import annotations

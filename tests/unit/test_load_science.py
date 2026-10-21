@@ -3,15 +3,75 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 import math
 
 import healpy as hp
 import numpy as np
 
 from database.modules.utils.roman_tessellation_db import RomanTessellationClosedForm
-from rapidpipe.db import sources
+from astropy.io import ascii
+from astropy.table import Table
+
 from rapidpipe.science.load import catalogs
-from rapidpipe.selftest.support.fakeloaddb import finder_row, main_row, write_photutils_catalogs
+
+#: The columns of the CSV the loader writes: `dev`'s
+#: (loadPSFCatIntoDBSourcesTable.py L176-204), then the run columns.
+CSV_COLUMNS = (
+    "id", "ra", "dec", "xfit", "yfit", "fluxfit", "xerr", "yerr", "fluxerr",
+    "npixfit", "qfit", "cfit", "redchi", "flags", "sharpness", "roundness1",
+    "roundness2", "npix", "peak", "pid", "isdiffpos", "field", "hp6", "hp9",
+    "expid", "fid", "sca", "mjdobs", "run", "attempt", "result_set",
+)
+
+
+#: `dev`'s Photutils column names (loadPSFCatIntoDBSourcesTable.py L570-571).
+MAIN_COLUMNS = ("id", "group_id", "group_size", "local_bkg", "x_init", "y_init",
+                "flux_init", "x_fit", "y_fit", "flux_fit", "x_err", "y_err",
+                "flux_err", "n_pixels_fit", "qfit", "cfit", "reduced_chi2", "flags",
+                "ra", "dec")
+FINDER_COLUMNS = ("id", "x_centroid", "y_centroid", "sharpness", "roundness1",
+                  "roundness2", "n_pixels", "peak", "flux", "mag", "daofind_mag")
+
+_INT_COLUMNS = {"id", "group_id", "group_size", "n_pixels_fit", "flags", "n_pixels"}
+
+
+
+def main_row(id_: int, x_fit: float, y_fit: float, ra: float, dec: float, **overrides) -> dict:
+    """A PSF-fit catalog row; every column not given is a distinct, recognisable value."""
+    row = {"id": id_, "group_id": id_, "group_size": 1, "local_bkg": 0.25,
+           "x_init": x_fit, "y_init": y_fit, "flux_init": 100.0 + id_,
+           "x_fit": x_fit, "y_fit": y_fit, "flux_fit": 101.5 + id_,
+           "x_err": 0.0125, "y_err": 0.025, "flux_err": 1.5 + id_ / 10,
+           "n_pixels_fit": 25, "qfit": 0.0625, "cfit": 0.03125, "reduced_chi2": 1.25,
+           "flags": 0, "ra": ra, "dec": dec}
+    row.update(overrides)
+    return row
+
+
+def finder_row(id_: int, **overrides) -> dict:
+    row = {"id": id_, "x_centroid": 10.0, "y_centroid": 10.0, "sharpness": 0.5,
+           "roundness1": 0.015625, "roundness2": -0.03125, "n_pixels": 9,
+           "peak": 12.5 + id_, "flux": 50.0, "mag": -4.25, "daofind_mag": -1.75}
+    row.update(overrides)
+    return row
+
+
+def _table(rows: list[dict], columns: tuple[str, ...]) -> Table:
+    data = {}
+    for name in columns:
+        values = [r[name] for r in rows]
+        data[name] = np.array(values, dtype=np.int64 if name in _INT_COLUMNS else np.float64)
+    return Table(data, names=columns)
+
+
+def write_photutils_catalogs(catalog: Path, finder: Path, main_rows: list[dict],
+                             finder_rows: list[dict]) -> None:
+    """Write the two catalogs as `dev`'s ``ascii.write`` does (basic format)."""
+    ascii.write(_table(main_rows, MAIN_COLUMNS), catalog, overwrite=True)
+    ascii.write(_table(finder_rows, FINDER_COLUMNS), finder, overwrite=True)
+
+
 
 
 def _joined(tmp_path, main_rows, finder_rows):
@@ -25,7 +85,7 @@ def _csv(joined, *, naxis=65, run_columns=("RUN", "ATT", "SET")):
     n = catalogs.write_joined_table_inner_to_csv_file(
         "true", 1234, 7, 3, 61273.125, 4242, buf, joined, hp6, hp9,
         naxis1=naxis, naxis2=naxis, run_columns=run_columns)
-    rows = [dict(zip(sources.COLUMNS, line.split(","))) for line in buf.getvalue().splitlines()]
+    rows = [dict(zip(CSV_COLUMNS, line.split(","))) for line in buf.getvalue().splitlines()]
     return n, rows
 
 

@@ -35,9 +35,8 @@ N must be at least ``[selection] min_frames``, and at most
 ``[selection] max_frames`` are coadded, in manifest order; frames past
 that are named in the execution record's notes. Any other entry kind, a
 missing or corrupt member, or an unreadable frame is an input rejection
-(65). The stage reads the database only for the read guard's custody
-check (``database_access="custody"``) and does not check overlap with
-the field: selection is the launcher's.
+(65). The stage reads no database (``database_access="none"``) and does
+not check overlap with the field: selection is the launcher's.
 
 Outputs (products page, "File products" and "Registration metadata"). One
 ``reference-image`` entry: primary member ``image``
@@ -91,7 +90,7 @@ Departures from `dev` (reference page):
   difference stage cannot use such a reference.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
-``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
+``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli``.
 """
 
@@ -131,7 +130,7 @@ DECLARATION = StageDeclaration(
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("l2-image",),
     produces=("reference-image", "reference-catalog"),
-    database_access="custody",
+    database_access="none",
 )
 
 #: `dev`'s cattype for the SExtractor reference catalog (refimcatalogs).

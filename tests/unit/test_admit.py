@@ -113,7 +113,7 @@ def _build_delivery(tmp_path, *, fits_name="delivered.fits", **fits_kwargs):
         "stage": "delivery",
         "attempt": "delivery-0",
         "execution_record": "exec/delivery-0.json",
-        "inputs": {"manifest": "s3://bucket/root/manifest.json", "products": {}, "result_sets": []},
+        "inputs": {"manifest": "s3://bucket/root/manifest.json", "products": {}},
         "outputs": [
             {
                 "kind": "l2-image",

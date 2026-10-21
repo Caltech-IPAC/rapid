@@ -12,8 +12,9 @@ No database access: the stage module runs the SQL and hands rows here.
 - :func:`merges_line`, :func:`astroobjects_line`: `dev`'s CSV lines, the
   ``str()`` of each value joined by commas, no quoting, newline-terminated
   (lines 337-347 and 425-452), with the rebuild's run columns (``run``,
-  ``attempt``, ``result_set``) appended in
-  ``rapidpipe.db.objects.MERGES_COLUMNS``/``ASTROOBJECTS_COLUMNS`` order.
+  ``attempt``, ``result_set``) appended, in the column order of the run
+  model's per-field tables (retired with that schema; the associate port
+  writes Parquet instead).
 - :func:`new_object_id`: `dev`'s ``aid = util.radec_index(ra, dec)``
   (line 407), as a Python ``int``.
 - :func:`inclusion_cone_radius`, :func:`field_inclusion_cone`: stage 2's

@@ -1,8 +1,7 @@
 # foundation: applies database/schema.sql, the one foundation schema
 # (foundation plan v5, Part 1), to an empty PostgreSQL 18 with Q3C and runs
-# the tests written against it. Same service, Q3C install and client as
-# db-migrations.yml, which ignores these test modules so the two schemas
-# never collect each other's tests.
+# every test that needs a database against it: tests/db (the schema, the
+# operations and the procedure proof) and tests/cli (the five verbs).
 name: foundation
 
 on:
@@ -87,4 +86,4 @@ jobs:
         env:
           PGDATABASE: rapid
         run: |
-          python -m pytest tests/db/test_schema.py tests/db/test_publish.py tests/db/test_change.py tests/db/proof -q -rs
+          python -m pytest tests/db tests/cli -q -rs

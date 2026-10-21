@@ -12,7 +12,7 @@ from rapidpipe.cli import main as cli
 from rapidpipe.cli import stagectl
 from rapidpipe.exitcodes import ExitCode
 
-#: What ``rapidpipe.launch.batch.submit_unit`` puts after the entrypoint.
+#: What a Batch job's command (``rapidpipe.launch.submit``) puts after the entrypoint.
 LAUNCHER_ARGV = [
     "stage", "difference",
     "--run", "RUN01", "--unit", "r0034/SCA01", "--attempt", "ATT01",
@@ -145,7 +145,7 @@ def test_every_subcommand_has_help_and_description():
 
 def test_help_walk_every_subparser_exits_0(capsys):
     paths = [path for path, _ in _subcommand_paths(cli._build_parser())]
-    assert ("run", "start") in paths and ("stage", "describe") in paths
+    assert ("official", "undo") in paths and ("stage", "describe") in paths
     for path in [(), *paths]:
         with pytest.raises(SystemExit) as exc:
             cli.main([*path, "--help"])
@@ -157,4 +157,4 @@ def test_run_without_subcommand_prints_help_and_exits_64(capsys):
     assert cli.main(["run"]) == 64
     err = capsys.readouterr().err
     assert "usage:" in err
-    assert "start, status, inputs, compare, expire" in err
+    assert "create" in err and "show" in err

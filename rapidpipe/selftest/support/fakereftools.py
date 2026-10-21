@@ -137,7 +137,7 @@ def write_frames(directory: Path) -> Path:
         "stage": "input-set",
         "attempt": "01K6AREF0000000000000000AT",
         "execution_record": "exec/input-set.json",
-        "inputs": {"manifest": "input-set", "products": {}, "result_sets": []},
+        "inputs": {"manifest": "input-set", "products": {}},
         "outputs": outputs,
     }
     path = directory / "manifest.json"

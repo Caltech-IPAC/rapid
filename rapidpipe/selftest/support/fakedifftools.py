@@ -228,7 +228,7 @@ def build_input_set(inputs_dir: Path, *, seed: int = 20260922, rfid: int | None 
         "stage": "input-set",
         "attempt": "01J8Y6QZ3MA2B4C6D8E0F2G2AT",
         "execution_record": "exec/input-set.json",
-        "inputs": {"manifest": "input-set", "products": {}, "result_sets": []},
+        "inputs": {"manifest": "input-set", "products": {}},
         "outputs": [
             {"kind": "l2-image", "format_version": "1", "instance": L2_INSTANCE,
              "key": {"exposure": "e20260821001234", "detector": "7", "version": "1"},

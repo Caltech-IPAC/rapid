@@ -14,7 +14,7 @@ error (exit 64), the same as a bad local ``--settings`` path, not the
 errors map to -- the overlay is an argument, not a declared input. The
 manifest ``run_stage`` publishes follows the products page's shape
 (``rapidpipe.products.manifest.Manifest``); a stage's ``body`` supplies only
-what it alone knows -- its output entries and any result sets it read -- and
+what it alone knows -- its output entries and the products it read -- and
 ``run_stage`` wraps that into the enclosing manifest with the run, unit,
 stage and attempt identifiers from argv, an execution record it writes
 itself, and the input manifest location from ``--inputs``.
@@ -78,26 +78,14 @@ STAGE_NAMES = (
     "reference",
     "difference",
     "finalize",
-    "register",
-    "load",
-    "maintain",
-    "crossmatch",
-    "statistics",
-    "prune",
-    "alerts",
-    "export",
 )
 
 #: The five units of work a stage may declare (stage contract, "Declaration").
 UNIT_KINDS = ("exposure", "detector-image", "field", "processing-date", "detector-date")
 
-#: The four database access levels a stage may declare (stage contract,
-#: "Declaration"). ``none`` never connects: ``run_stage`` skips the read
-#: guard for it. ``custody`` connects only for the read guard, to judge the
-#: custody of the instances its input manifest names, and reads or writes
-#: nothing else; the transform stages declare it. ``read`` and
-#: ``read-write`` also pass through the guard.
-DB_ACCESS_LEVELS = ("none", "custody", "read", "read-write")
+#: The database access levels a stage may declare (stage contract,
+#: "Declaration"). ``none`` never connects; every shipped stage declares it.
+DB_ACCESS_LEVELS = ("none", "read", "read-write")
 
 
 #: The stage contract's permitted subset of :class:`ExitCode` (the
@@ -232,16 +220,12 @@ class StageResult:
     """What ``body(context)`` returns: its outputs, and what it read.
 
     ``outputs`` is the list of :class:`~rapidpipe.products.manifest.OutputEntry`
-    the stage wrote (file products, database result sets, or both).
+    the stage wrote.
     ``products_read`` maps each consumed product kind to the upstream
     instance id the stage actually used (products page, "A complete
     manifest": ``inputs.products``) -- ``body`` selects these from
     ``context.input_manifest``, since only the stage knows which of the
-    input manifest's declared products it read. ``result_sets_read`` names
-    the database result-set instance ids the stage read, for the stages
-    the stage contract names (``maintain``, ``crossmatch``, ``statistics``,
-    ``prune``);
-    transform stages leave both empty as appropriate. ``execution_notes``
+    input manifest's declared products it read. ``execution_notes``
     is anything the stage must record about how the attempt went that is
     not an output (the difference stage notes a non-fatal SFFT failure
     here); ``run_stage`` writes it into the execution record under
@@ -253,7 +237,6 @@ class StageResult:
 
     outputs: Sequence[OutputEntry]
     products_read: dict[str, str] = field(default_factory=dict)
-    result_sets_read: Sequence[str] = ()
     execution_notes: dict[str, Any] = field(default_factory=dict)
 
 
@@ -308,28 +291,6 @@ def _read_input_manifest_from(inputs_dir: Path, inputs_arg: str) -> Manifest:
         raise InputRejected(f"{manifest_path}: not valid JSON: {exc}") from exc
     except ManifestError as exc:
         raise InputRejected(f"{manifest_path}: invalid manifest: {exc}") from exc
-
-
-def _assert_inputs_readable(input_manifest: Manifest, run_id: str) -> None:
-    """Run the read guard and map its outcomes onto this module's exceptions.
-
-    ``rapidpipe.runs`` may not import this module (the fixed dependency
-    direction), so the guard raises its own exceptions and they are
-    translated here: not readable -> :class:`InputRejected` (65), no
-    database configured -> :class:`UsageError` (64), database unreachable
-    -> :class:`TransientFailure` (75). Looked up on the module at call
-    time, so a test can replace ``readguard.assert_inputs_readable``.
-    """
-    from rapidpipe.runs import readguard
-
-    try:
-        readguard.assert_inputs_readable(input_manifest, run_id)
-    except readguard.InputNotReadable as exc:
-        raise InputRejected(str(exc)) from exc
-    except readguard.ReadGuardNotConfigured as exc:
-        raise UsageError(str(exc)) from exc
-    except readguard.ReadGuardUnavailable as exc:
-        raise TransientFailure(str(exc)) from exc
 
 
 def _manifest_member_paths(manifest: Manifest) -> list[str]:
@@ -392,8 +353,7 @@ def _write_execution_record(
     manifest": "the source revision, working-copy changes if any, image
     digest when applicable, database schema version, and the resolved
     settings." Schema version and working-copy changes are not recorded
-    here: they belong to ``rapidpipe.runs``, which this module must not
-    import.
+    here.
 
     ``resolved_settings`` is the merged settings dict ``run_stage`` already
     resolved (``rapidpipe.stages.settings.resolve_settings``), written
@@ -460,28 +420,15 @@ def run_stage(
     by ``--dry-run`` too, not just a real run. This lets a stage whose
     ``body`` cannot itself run under ``--dry-run`` (most of the science
     stages just validate the generic manifest and stop there) still check
-    its own declared shape -- required product kinds present, a named
-    result set -- ahead of time. Most stages leave it unset: the generic
+    its own declared shape -- required product kinds present -- ahead of
+    time. Most stages leave it unset: the generic
     checks above (a parseable ``manifest.json``) already cover what
     ``--dry-run`` promises for them. Unset, ``run_stage`` behaves exactly
     as before.
 
-    The read guard (stage contract, "Invocation"): once the
-    input manifest is parsed -- on an S3 ``--inputs`` only
-    ``manifest.json`` has been fetched at that point; after the guard
-    passes, only the member files that manifest names are fetched, one
-    object at a time, never the whole prefix, and the manifest is not
-    fetched again, so forbidden bytes are never downloaded -- and before ``validate_inputs``, the ``--dry-run`` return
-    and ``body``, :func:`rapidpipe.runs.readguard.assert_inputs_readable`
-    checks that this run may read every instance the manifest names. A
-    direct ``rapidpipe stage run``, the local launcher's ``python -m`` and
-    a Batch job's ``rapidpipe stage`` command all pass through here, so
-    no path skips it. A refused instance exits 65; with instances named,
-    the guard needs the database: no database configured exits 64, and a
-    database that cannot be reached exits 75, dry run or not. A manifest
-    naming no instance makes no connection. A declaration of
-    ``database_access="none"`` skips the guard and never connects, so it
-    stays true; every shipped stage declares ``custody`` or more.
+    On an S3 ``--inputs``, ``manifest.json`` is fetched first and then
+    only the member files it names, one object at a time, never the whole
+    prefix.
 
     Also (additive, no manifest member): mirrors every log line to
     ``<outputs>/log/<stage>.log`` (skipped under ``--dry-run``, which
@@ -627,9 +574,7 @@ def run_stage(
 
             if inputs_location.is_s3():
                 inputs_dir.mkdir(parents=True, exist_ok=True)
-                # The manifest alone first: the read guard below judges it
-                # before any other object is fetched (stage contract,
-                # "Invocation").
+                # The manifest alone first: it names the objects to fetch.
                 try:
                     fetch_object(
                         inputs_location, "manifest.json",
@@ -641,13 +586,9 @@ def run_stage(
 
             input_manifest = _read_input_manifest_from(inputs_dir, args.inputs)
 
-            if declaration.database_access != "none":
-                _assert_inputs_readable(input_manifest, args.run_id)
-
             if inputs_location.is_s3() and not args.dry_run:
-                # Only the objects the guarded manifest names, one by one:
-                # never the whole prefix, and the manifest
-                # is not fetched again, so what was judged is what is read.
+                # Only the objects the manifest names, one by one: never
+                # the whole prefix, and the manifest is not fetched again.
                 for member_path in _manifest_member_paths(input_manifest):
                     try:
                         fetch_object(inputs_location, member_path,
@@ -693,13 +634,12 @@ def run_stage(
         if args.dry_run:
             planned_inputs = ", ".join(
                 f"{entry.kind}:{entry.instance}" for entry in input_manifest.outputs) or "(none)"
-            planned_result_sets = ", ".join(input_manifest.inputs.result_sets) or "(none)"
             logger.info(
                 "stage=%s run=%s unit=%s attempt=%s exit=%s dry-run validated; "
-                "planned inputs: [%s]; planned result sets: [%s]; outputs -> %s",
+                "planned inputs: [%s]; outputs -> %s",
                 declaration.name, context.run_id, context.unit_id,
                 context.attempt_id, int(ExitCode.SUCCESS),
-                planned_inputs, planned_result_sets, context.outputs_location)
+                planned_inputs, context.outputs_location)
             return int(ExitCode.SUCCESS)
 
         profile_enabled = os.environ.get(PROFILE_ENV_VAR) == "1"
@@ -759,7 +699,6 @@ def run_stage(
             inputs=Inputs(
                 manifest=join(inputs_location, "manifest.json"),
                 products=dict(result.products_read),
-                result_sets=tuple(result.result_sets_read),
             ),
             outputs=tuple(result.outputs),
         )

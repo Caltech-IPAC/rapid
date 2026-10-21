@@ -41,9 +41,8 @@
 #                            -- what `pip install --no-deps /code` reads.
 # Left out, among others: docs/, c/ (replaced at runtime by the base
 # image's rapid-* C-tool RPMs, rapid_systems/containers/rapid-base),
-# tests/, scripts/, .github/, and database/migrations with
-# apply-migrations.sh (the release migrate hook reads those from the
-# tagged git tree, not from the image).
+# tests/, scripts/, .github/, and database/schema.sql (applied with psql
+# from the git tree, not from the image).
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

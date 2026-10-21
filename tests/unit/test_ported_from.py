@@ -74,8 +74,8 @@ def test_the_guard_covers_every_file_on_disk():
     dropped the package's known shape, the parametrized tests above
     would just quietly stop running rather than fail."""
     py_files = list(_guarded_py_files())
-    assert len(py_files) >= 50, (
-        f"expected at least 50 science/stage modules, found {len(py_files)}; "
+    assert len(py_files) >= 40, (
+        f"expected at least 40 science/stage modules, found {len(py_files)}; "
         "the file discovery in this test may be broken")
     for path in SETTINGS_TOMLS:
         assert path.is_file(), f"{path} is missing"

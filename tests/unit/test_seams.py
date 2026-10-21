@@ -7,7 +7,7 @@ import types
 
 import pytest
 
-from rapidpipe.seams import database_env, load_factory, toolkit_env
+from rapidpipe.seams import load_factory, toolkit_env
 
 ENV = "RAPIDPIPE_TEST_SEAM"
 
@@ -17,7 +17,6 @@ class _Refused(Exception):
 
 
 def test_variable_names():
-    assert database_env("load") == "RAPIDPIPE_LOAD_DATABASE"
     assert toolkit_env("difference") == "RAPIDPIPE_DIFFERENCE_TOOLKIT"
 
 
@@ -96,9 +95,6 @@ class _FalsyFactory:
 
 
 @pytest.mark.parametrize("stage, loader, env_of", [
-    (stage, "open_database", database_env)
-    for stage in ("alerts", "crossmatch", "export", "load", "maintain", "prune", "statistics")
-] + [
     ("difference", "toolkit", toolkit_env),
     ("reference", "toolkit", toolkit_env),
 ])

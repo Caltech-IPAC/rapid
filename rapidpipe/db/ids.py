@@ -1,15 +1,11 @@
 """Time-ordered identifiers: a stdlib-only ULID generator.
 
-The runs page's "Identifiers" section: runs, attempts and product instances
-"receive globally unique, time-ordered identifiers (ULID) before execution
-or manifest publication, allocated by whoever creates the row, so the local
-runner and the Batch wrapper need no database to allocate; registration
-preserves them." The run-model migration's ``rapid_ulid`` domain enforces
-the shape this module emits: 26 characters, Crockford base32, uppercase.
+The stage contract's run, attempt and output instance ids in a stage
+manifest are ULIDs, allocated by whoever invokes the stage, so a stage
+needs no database to allocate one: 26 characters, Crockford base32,
+uppercase.
 
-This module imports only the standard library, matching ``rapidpipe.db``'s
-contract of providing persistence without importing ``rapidpipe.runs`` or
-any stage module -- a plain ID generator has no reason to import either.
+This module imports only the standard library.
 """
 
 from __future__ import annotations

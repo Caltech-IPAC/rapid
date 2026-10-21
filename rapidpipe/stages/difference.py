@@ -33,7 +33,7 @@ Outputs. One ``difference-image`` instance for ZOGY, registered as in
 `dev`; an SFFT instance when ``[sfft] register_sfft`` is on (the
 default) and SFFT succeeded (never a partial
 bundle). Both instances register under their own `pipelines` row (ZOGY
-ppid 15, SFFT ppid 16); which one consumers see is a promotion choice
+ppid 15, SFFT ppid 16); which one consumers see is an official binding choice
 downstream, not this stage's job. ``source-catalog`` entries for each
 registered instance's catalogs. Every working file stays in
 ``[paths] work_subdirectory`` of the attempt's output location, as `dev`
@@ -42,7 +42,7 @@ are among them and are never registered. A non-fatal SFFT failure is noted
 in the execution record.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
-``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
+``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli``.
 """
 
@@ -111,7 +111,7 @@ DECLARATION = StageDeclaration(
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("l2-image", "reference-image", "reference-catalog", "psf"),
     produces=("difference-image", "source-catalog"),
-    database_access="custody",
+    database_access="none",
 )
 
 

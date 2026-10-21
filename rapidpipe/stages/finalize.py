@@ -41,7 +41,7 @@ with ``copied_from`` added. Member paths are the input's, relative to this
 attempt's output location.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
-``rapidpipe.runs`` and ``rapidpipe.science``; never another stage,
+``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
 ``rapidpipe.launch`` or ``rapidpipe.cli``.
 """
 
@@ -88,7 +88,7 @@ DECLARATION = StageDeclaration(
     settings_schema_path=str(_SETTINGS_PATH),
     consumes=("difference-image", "source-catalog"),
     produces=("difference-image", "source-catalog"),
-    database_access="custody",
+    database_access="none",
 )
 
 #: The output revision of a finalized instance (products page: the

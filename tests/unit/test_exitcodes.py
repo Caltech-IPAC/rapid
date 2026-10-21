@@ -15,11 +15,10 @@ from pathlib import Path
 import pytest
 
 import rapidpipe.exitcodes as exitcodes
-from rapidpipe.cli import checkctl
 from rapidpipe.cli import main as cli
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
 from rapidpipe.exitcodes import ArgumentParser, ExitCode
-from rapidpipe.release import __main__ as release_main
+from rapidpipe import foundation
 from rapidpipe.selftest import _report
 from rapidpipe.selftest.runner import Checks, FixtureResult
 from rapidpipe.stages import contract
@@ -108,10 +107,8 @@ def _all_parsers(parser: argparse.ArgumentParser):
                 yield from _all_parsers(child)
 
 
-@pytest.mark.parametrize("build", [cli._build_parser, release_main.build_parser],
-                         ids=["rapidpipe", "python-m-rapidpipe.release"])
-def test_every_parser_in_the_tree_is_ours(build):
-    parsers = list(_all_parsers(build()))
+def test_every_parser_in_the_tree_is_ours():
+    parsers = list(_all_parsers(cli._build_parser()))
     assert len(parsers) > 1
     strays = [p.prog for p in parsers if not isinstance(p, ArgumentParser)]
     assert strays == []
@@ -133,23 +130,17 @@ def test_a_parse_failure_exits_64_in_argparse_shape(capsys):
     assert "demo: error: argument --n: invalid int value: 'x'" in err
 
 
-@pytest.mark.parametrize("argv", [["--help"], ["run", "--help"], ["check", "list", "--help"]])
+@pytest.mark.parametrize("argv", [["--help"], ["run", "--help"], ["official", "change", "--help"]])
 def test_help_still_exits_0(argv, capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(argv)
     assert exc.value.code == 0
 
 
-@pytest.mark.parametrize("argv", [["no-such-command"], ["run", "show"], ["check", "bogus"]])
+@pytest.mark.parametrize("argv", [["no-such-command"], ["run", "show"], ["official", "bogus"]])
 def test_parse_failures_exit_64_through_the_cli(argv, capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(argv)
-    assert exc.value.code == int(ExitCode.USAGE)
-
-
-def test_a_release_parse_failure_exits_64(capsys):
-    with pytest.raises(SystemExit) as exc:
-        release_main.main(["cut", "--no-such-flag"])
     assert exc.value.code == int(ExitCode.USAGE)
 
 
@@ -172,27 +163,11 @@ def _boom(*_a, **_k):
 
 
 def test_cli_maps_an_unexpected_exception_to_70(monkeypatch, capsys, fresh_logging):
-    monkeypatch.setattr(checkctl, "dispatch", _boom)
-    assert cli.main(["check", "list"]) == int(ExitCode.STAGE_ERROR)
+    monkeypatch.setattr(cli, "connect", lambda **_kw: contextlib.nullcontext(None))
+    monkeypatch.setattr(foundation, "run_show", _boom)
+    assert cli.main(["run", "show", "1"]) == int(ExitCode.STAGE_ERROR)
     err = capsys.readouterr().err
-    assert "rapidpipe check: unexpected error" in err
-    assert "Traceback (most recent call last)" in err
-    assert "RuntimeError: boom from a handler" in err
-
-
-@pytest.mark.parametrize("entry", ["release_main", "cli"])
-def test_release_maps_an_unexpected_exception_to_70(entry, monkeypatch, capsys,
-                                                    fresh_logging):
-    monkeypatch.setattr(release_main, "connect",
-                        lambda **_kw: contextlib.nullcontext(None))
-    monkeypatch.setattr(release_main, "_run", _boom)
-    if entry == "release_main":
-        rc = release_main.main(["list"])
-    else:
-        rc = cli.main(["release", "list"])
-    assert rc == int(ExitCode.STAGE_ERROR)
-    err = capsys.readouterr().err
-    assert "unexpected error" in err
+    assert "rapidpipe run show: unexpected error" in err
     assert "Traceback (most recent call last)" in err
     assert "RuntimeError: boom from a handler" in err
 
@@ -201,9 +176,10 @@ def test_the_boundary_never_swallows_keyboard_interrupt(monkeypatch):
     def interrupt(*_a, **_k):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(checkctl, "dispatch", interrupt)
+    monkeypatch.setattr(cli, "connect", lambda **_kw: contextlib.nullcontext(None))
+    monkeypatch.setattr(foundation, "run_show", interrupt)
     with pytest.raises(KeyboardInterrupt):
-        cli.main(["check", "list"])
+        cli.main(["run", "show", "1"])
 
 
 # ======================================================================
@@ -237,9 +213,9 @@ class _RaisingConnect:
     (ConnectionUnavailable, ExitCode.TRANSIENT_FAILURE, "unavailable"),
 ])
 @pytest.mark.parametrize("argv, command", [
-    (["run", "create", "--kind", "scratch", "--purpose", "p", "--stages", "admit"], "run"),
-    (["check", "show", "run-1"], "check"),
-    (["loop", "show", "schedule-1"], "loop"),
+    (["run", "show", "1"], "run show"),
+    (["job", "show", "1"], "job show"),
+    (["official", "undo", "1", "--who", "w", "--why", "y"], "official undo"),
 ])
 def test_cli_classifies_a_connection_error_at_the_boundary(
         monkeypatch, capsys, argv, command, exc_type, code, word):
@@ -248,24 +224,6 @@ def test_cli_classifies_a_connection_error_at_the_boundary(
     assert rc == int(code)
     err = capsys.readouterr().err
     assert f"rapidpipe {command}: database {word}: boom" in err
-    assert "Traceback" not in err
-
-
-@pytest.mark.parametrize("exc_type, code, word", [
-    (ConnectionConfigError, ExitCode.USAGE, "configuration error"),
-    (ConnectionUnavailable, ExitCode.TRANSIENT_FAILURE, "unavailable"),
-])
-@pytest.mark.parametrize("entry", ["release_main", "cli"])
-def test_release_classifies_a_connection_error_at_the_with_block(
-        entry, monkeypatch, capsys, exc_type, code, word):
-    monkeypatch.setattr(release_main, "connect", _RaisingConnect(exc_type("boom")))
-    if entry == "release_main":
-        rc = release_main.main(["list"])
-    else:
-        rc = cli.main(["release", "list"])
-    assert rc == int(code)
-    err = capsys.readouterr().err
-    assert f"rapidpipe release list: database {word}: boom" in err
     assert "Traceback" not in err
 
 
@@ -278,7 +236,7 @@ def _fixture_result(tmp_path, *, exit_code, failures):
     for label in failures:
         checks.check(False, label)
     return FixtureResult(
-        stage="export", tools="fake", exit_code=exit_code, checks=checks,
+        stage="difference", tools="fake", exit_code=exit_code, checks=checks,
         work_dir=tmp_path, output_location=str(tmp_path / "outputs"),
         output_is_local=True)
 
@@ -286,13 +244,13 @@ def _fixture_result(tmp_path, *, exit_code, failures):
 def test_selftest_a_stage_exiting_0_when_69_was_expected_is_a_failure(tmp_path, capsys):
     result = _fixture_result(
         tmp_path, exit_code=0, failures=["exit code: expected 69, got 0"])
-    assert _report("export", result) == int(ExitCode.FAILURE)
+    assert _report("difference", result) == int(ExitCode.FAILURE)
 
 
 def test_selftest_an_unexpected_nonzero_stage_exit_propagates(tmp_path, capsys):
     result = _fixture_result(
         tmp_path, exit_code=70, failures=["exit code: expected 0, got 70"])
-    assert _report("export", result) == int(ExitCode.STAGE_ERROR)
+    assert _report("difference", result) == int(ExitCode.STAGE_ERROR)
 
 
 @pytest.mark.parametrize("failures, expected", [
@@ -301,7 +259,7 @@ def test_selftest_an_unexpected_nonzero_stage_exit_propagates(tmp_path, capsys):
 ])
 def test_selftest_pass_and_fixture_mismatch(tmp_path, capsys, failures, expected):
     result = _fixture_result(tmp_path, exit_code=0, failures=failures)
-    assert _report("export", result) == int(expected)
+    assert _report("difference", result) == int(expected)
 
 
 def test_selftest_an_existing_work_dir_is_a_usage_error(monkeypatch, tmp_path, capsys):
@@ -311,6 +269,6 @@ def test_selftest_an_existing_work_dir_is_a_usage_error(monkeypatch, tmp_path, c
         raise FileExistsError(f"{tmp_path} already exists")
 
     monkeypatch.setattr(selftest, "run_fixture", exists)
-    rc = selftest.run(stage="export", real_tools=False, work_dir=str(tmp_path),
+    rc = selftest.run(stage="difference", real_tools=False, work_dir=str(tmp_path),
                       output_location=None)
     assert rc == int(ExitCode.USAGE)

@@ -2,19 +2,17 @@
 
 The stage fixtures become runnable inside the
 pipeline image on AWS Batch through the fixed entrypoint (``python -m
-rapidpipe.cli.main``), as ``rapidpipe selftest --stage difference|finalize|load|maintain|crossmatch|alerts|statistics|prune|export
+rapidpipe.cli.main``), as ``rapidpipe selftest --stage reference|difference|finalize
 [--real-tools] [--work-dir DIR] [--output-location s3://... or path]``.
 The fixture gate then runs as a submitted Batch job whose execution
 record is the evidence -- no separate test harness needs installing
 inside the image.
-``export`` (export page) runs hats-import for real either side of it,
-against a fake database.
 
 :mod:`rapidpipe.selftest.runner` holds the prepare/run/check machinery
 shared with ``make stage-<name>`` (``tests/fixtures/<stage>/
 run_fixture.py``, now a thin CLI over the same code);
-:mod:`rapidpipe.selftest.difference` and :mod:`rapidpipe.selftest.load`
-supply each stage's own hooks and packaged fixture data
+:mod:`rapidpipe.selftest.reference`, :mod:`rapidpipe.selftest.difference`
+and :mod:`rapidpipe.selftest.finalize` supply each stage's own hooks and packaged fixture data
 (``rapidpipe/selftest/fixtures/<stage>/``, shipped inside the pipeline
 image, unlike ``tests/`` -- ``containers/rapid-pipeline/build.sh``).
 
@@ -49,20 +47,6 @@ def _fixture_module(stage: str):
         from rapidpipe.selftest import difference as module
     elif stage == "finalize":
         from rapidpipe.selftest import finalize as module
-    elif stage == "load":
-        from rapidpipe.selftest import load as module
-    elif stage == "maintain":
-        from rapidpipe.selftest import maintain as module
-    elif stage == "crossmatch":
-        from rapidpipe.selftest import crossmatch as module
-    elif stage == "alerts":
-        from rapidpipe.selftest import alerts as module
-    elif stage == "statistics":
-        from rapidpipe.selftest import statistics as module
-    elif stage == "prune":
-        from rapidpipe.selftest import prune as module
-    elif stage == "export":
-        from rapidpipe.selftest import export as module
     else:
         raise ValueError(f"no such stage fixture: {stage!r}; known: {', '.join(STAGE_NAMES)}")
     return module

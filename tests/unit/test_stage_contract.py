@@ -130,7 +130,7 @@ def test_execution_record_carries_the_resolved_settings(inputs_dir, tmp_path):
     assert canonical_hash(record["resolved_settings"]) == record["settings_hash"]
 
 
-def test_products_read_and_result_sets_read_reach_the_manifest(inputs_dir, tmp_path):
+def test_products_read_reaches_the_manifest(inputs_dir, tmp_path):
     def body(context):
         return StageResult(
             outputs=(
@@ -139,7 +139,6 @@ def test_products_read_and_result_sets_read_reach_the_manifest(inputs_dir, tmp_p
                     instance="pi-assoc-1", key={"field": "f1"}),
             ),
             products_read={"l2-image": "pi-l2-9"},
-            result_sets_read=("pi-source-1", "pi-source-2"),
         )
 
     outputs_dir = tmp_path / "outputs"
@@ -147,7 +146,6 @@ def test_products_read_and_result_sets_read_reach_the_manifest(inputs_dir, tmp_p
     assert rc == int(ExitCode.SUCCESS)
     restored = Manifest.read(outputs_dir / "manifest.json")
     assert restored.inputs.products == {"l2-image": "pi-l2-9"}
-    assert restored.inputs.result_sets == ("pi-source-1", "pi-source-2")
     assert restored.outputs[0].is_result_set()
 
 
