@@ -199,10 +199,11 @@ def test_cone_radius_catches_every_footprint_holding_a_chip_position():
 JOB_DIR = "s3://bucket/20271001/jid42"
 
 
-def db_row(pid, rid, corners, band="W146", mjdobs=61680.5, fid=8, expid=100, sca=7):
+def db_row(pid, rid, corners, band="W146", mjdobs=61680.5, fid=8, expid=100, sca=7,
+           sci_psf_filename="s3://psfs/sciimage_psf_phavg_fid8_sca07.fits"):
     row = {"pid": pid, "rid": rid, "expid": expid, "sca": sca, "fid": fid, "band": band,
            "mjdobs": mjdobs, "diff_filename": f"{JOB_DIR}/sfftdiffimage_masked.fits",
-           "l2_filename": f"s3://l2/r{rid}.fits.gz"}
+           "l2_filename": f"s3://l2/r{rid}.fits.gz", "sci_psf_filename": sci_psf_filename}
     for name, value in zip(("ra1", "dec1", "ra2", "dec2", "ra3", "dec3", "ra4", "dec4"), corners):
         row[name] = value
     return row
@@ -227,6 +228,9 @@ def test_q3c_search_query_shape_and_row_mapping():
     assert "q3c_radial_query(d.ra0, d.dec0, %s, %s, %s)" in sql
     assert "JOIN l2files l ON l.rid = d.rid" in sql and "JOIN filters f" in sql
     assert "d.status > 0" in sql and "d.vbest > 0" in sql
+    # science PSF: same selection as rapid_db.get_best_psf
+    assert "LEFT JOIN LATERAL" in sql and "psfs.fid = d.fid AND psfs.sca = d.sca" in sql
+    assert "psfs.vbest > 0 AND psfs.status > 0" in sql
     assert "d.fid = %s" in sql and "d.ppid = %s" in sql
     assert "l.mjdobs >= %s" in sql and "l.mjdobs < %s" in sql
     assert params == (REAL_RA0, REAL_DEC0, CONE_RADIUS_DEG, 1, 15, 61670.0, 61685.0)
@@ -237,8 +241,8 @@ def test_q3c_search_query_shape_and_row_mapping():
     assert img.diff_filename == f"{JOB_DIR}/sfftdiffimage_masked.fits"
     assert img.sci_filename == f"{JOB_DIR}/{SCI_BASENAME}"
     assert img.diff_psf == f"{JOB_DIR}/sfftdiffpsf.fits"
-    # as seen in real job dir 20260722/jid129264 (socsim, W146, SCA 7)
-    assert img.sci_psf == f"{JOB_DIR}/sciimage_psf_f146_sca07_normalized.fits"
+    # psfs.filename basename with "_normalized" (commissioning: phavg family)
+    assert img.sci_psf == f"{JOB_DIR}/sciimage_psf_phavg_fid8_sca07_normalized.fits"
     assert img.diff_uncert == f"{JOB_DIR}/sfftdiffimage_uncert_masked.fits"
     assert img.sci_uncert == f"{JOB_DIR}/r10_reformatted_unc.fits"
     assert img.l2_filename == "s3://l2/r10.fits.gz"
@@ -260,11 +264,18 @@ def test_q3c_search_diff_basename_override_switches_image_and_psf_together():
     assert img.diff_psf == f"{JOB_DIR}/diffpsf.fits"
 
 
+def test_q3c_search_without_psfs_row_has_no_science_psf():
+    q = RecordingQuery([db_row(1, 10, REAL_CORNERS, sci_psf_filename=None)])
+    (img,) = q3c_search(q, REAL_RA0, REAL_DEC0)
+    assert img.sci_psf is None
+    assert img.diff_psf == f"{JOB_DIR}/sfftdiffpsf.fits"
+
+
 def test_psf_basenames_follow_the_job_directory_convention():
-    # socsim jid145793: W146 on SCA 9 -> sciimage_psf_f146_sca09_normalized.fits
-    assert sci_psf_basename("W146", 9) == "sciimage_psf_f146_sca09_normalized.fits"
-    assert sci_psf_basename("Z087", 2) == "sciimage_psf_f087_sca02_normalized.fits"
-    assert sci_psf_basename("F184", 18) == "sciimage_psf_f184_sca18_normalized.fits"
+    # science PSF: psfs.filename basename, ".fits" -> "_normalized.fits"
+    assert sci_psf_basename("s3://b/psfs/sciimage_psf_phavg_fid5_sca11.fits") \
+        == "sciimage_psf_phavg_fid5_sca11_normalized.fits"
+    assert sci_psf_basename("sciimage_psf_f146_sca09.fits") == "sciimage_psf_f146_sca09_normalized.fits"
     assert diff_psf_basename("sfftdiffimage_dconv_masked.fits") == "sfftdiffpsf_dconv.fits"
     # uncertainty images: "uncert_" inserted; the sfft branch writes one name
     # for plain and dconv runs; the science one follows the L2 basename
@@ -276,9 +287,9 @@ def test_psf_basenames_follow_the_job_directory_convention():
     assert sci_uncert_basename("x.fits") == "x_reformatted_unc.fits"
     with pytest.raises(ValueError):
         diff_uncert_basename("naive_diffimage_masked.fits")
-    # an unknown filter or flavor must fail before anything is staged
+    # an unexpected name or flavor must fail before anything is staged
     with pytest.raises(ValueError):
-        sci_psf_basename("F146", 1)          # Roman token given where the RAPID name is expected
+        sci_psf_basename("s3://b/psfs/sciimage_psf_phavg_fid5_sca11.fits.gz")
     with pytest.raises(ValueError):
         diff_psf_basename("naive_diffimage_masked.fits")
 
@@ -487,6 +498,19 @@ def prev_image(rid, mjdobs, image_path, psf_path, corners=REAL_CORNERS, position
                      l2_filename="l2.fits.gz", mjdobs=mjdobs,
                      fid=8, band="W146", expid=1, sca=7, corners=corners,
                      position_index=np.array(position_index, dtype=int))
+
+
+def test_run_prev_images_skips_science_without_psf(synthetic_chip, tmp_path):
+    import dataclasses
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    positions = sky_positions(img.wcs, [(s[0], s[1]) for s in sources], first_id=1)
+    staging = tmp_path / "staging"; staging.mkdir(); stage = CopyingStage(str(staging))
+    image = dataclasses.replace(prev_image(11, 61680.1, image_path, psf_path, position_index=[0, 1]),
+                                sci_psf=None)
+    out = list(run_prev_images([image], positions, stage, strict=True))
+    assert [(i.rid, p, len(rows)) for i, p, rows in out] == [(11, "diff", 2)]
+    assert None not in stage.calls
 
 
 def test_run_prev_images_measures_products_stamps_rows_and_cleans_up(synthetic_chip, tmp_path):
