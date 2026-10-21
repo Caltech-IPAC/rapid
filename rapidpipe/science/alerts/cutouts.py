@@ -38,6 +38,19 @@ STAMP_HALF_WIDTH = 64  # stamps are 2*64+1 = 129x129 pixels
 # Value for stamp pixels that fall outside the chip (edge clips).
 STAMP_FILL_VALUE = 0.0
 
+# The three cutout images all come from the difference image's pipeline job
+# directory and share one pixel grid (the template is the mosaic already
+# resampled and gain-matched onto the science grid), so a source's fitted
+# pixel position is valid in all of them. (`dev`, providers.py, as of 54fd7ea8.)
+DIFF_FLAVORS = {
+    "sfft": "sfftdiffimage_masked.fits",
+    "zogy": "zogy_diffimage_masked.fits",
+}
+CUTOUT_FILES = {
+    "sci": "bkg_subbed_science_image.fits",
+    "ref": "awaicgen_output_mosaic_image_resampled_gainmatched.fits",
+}
+
 # Header cards copied from the parent image into each cutout, so every clip
 # is a self-describing FITS image with a valid WCS. CRPIX1/2 are shifted by
 # the stamp's corner offset; everything else copies unchanged. (`dev`,

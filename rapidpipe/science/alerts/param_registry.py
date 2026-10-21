@@ -1,10 +1,10 @@
-# ported-from: alerts/param_registry.py @ a5cfe62b
+# ported-from: alerts/param_registry.py @ 54fd7ea8
 """The alert schema's parameter registry, ported verbatim from `dev`.
 
 Source: `origin/dev`'s ``alerts/param_registry.py`` (Emily Everetts, 07/2026),
-byte-identical below this docstring apart from the module path in the usage
-line. The `.avsc` files it describes are copied verbatim from
-``alerts/schema/00/04/`` into this package's ``schema/00/04/``; `dev`'s
+schema 00.06, byte-identical below this docstring apart from the module path
+in the usage line. The `.avsc` files it describes are copied verbatim from
+``alerts/schema/00/06/`` into this package's ``schema/00/06/``; `dev`'s
 ``gen_schema.py`` (which writes them from this registry) is not ported --
 :func:`rapidpipe.science.alerts.assemble.schema_problems` checks the two
 agree instead.
@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeAlias
 
-VERSION = "00.04"
+VERSION = "00.06"
 
 # Keep for type checking and function hints
 AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
@@ -393,37 +393,51 @@ DIA_SOURCE_PARAMS = (
 DIA_FORCED_SOURCE_PARAMS = (
     # --- Identifiers & associations ---
     Param("diaForcedSourceId", "long",            "Unique identifier for this forced source measurement",
-                        STUB, _FP, attr="forced_id"), #TODO: separate ID for forced source?
+                        IMPLEMENTED, "forced_phot: 63-bit hash of (rid, aid, position used); "
+                                     "a re-run at a new position is a new measurement", attr="forced_id"),
     Param("diaObjectId",       "long",            "Associated diaObject identifier",
-                        STUB, _FP, attr="aid"), #TODO: already in diaSource?
+                        IMPLEMENTED, "astroobjects.aid (the position the photometry was forced at)", attr="aid"),
     Param("expId",             "long",            "RAPID-assigned exposure identifier",
-                        STUB, _FP, attr="expid"),
+                        IMPLEMENTED, "diffimages.expid of the measured epoch", attr="expid"),
     Param("detector",          "int",             "Detector (SCA) number",
-                        STUB, _FP, attr="sca"),
+                        IMPLEMENTED, "diffimages.sca of the measured epoch", attr="sca"),
 
     # --- Position ---
     Param("ra",                "double",          "Right ascension of forced measurement position; ICRS [deg]",
-                        STUB, _FP),
+                        IMPLEMENTED, "astroobjects.ra0, the object's initial sky position (first detection)"),
     Param("dec",               "double",          "Declination of forced measurement position; ICRS [deg]",
-                        STUB, _FP),
+                        IMPLEMENTED, "astroobjects.dec0, the object's initial sky position (first detection)"),
 
     # --- Photometry ---
     Param("band",              ["null", "string"], "Filter band name",
-                        STUB, _FP),
+                        IMPLEMENTED, "filters.filter of the measured epoch"),
     Param("psfFlux",           ["null", "float"], "Forced PSF flux on difference image [nJy]",
-                        STUB, _FP, attr="flux"),
+                        IMPLEMENTED, "forced_phot.psfphot on the difference image (instrumental; nJy calibration pending)",
+                        attr="flux"),
     Param("psfFluxErr",        ["null", "float"], "Uncertainty in psfFlux [nJy]",
-                        STUB, _FP, attr="fluxerr"),
+                        IMPLEMENTED, "forced_phot.psfphot (instrumental; nJy calibration pending)", attr="fluxerr"),
+    # TODO: drop "(stub)" from the two doc strings below at the next schema
+    # version bump; the wording is baked into the checked-in .avsc files.
     Param("scienceFlux",       ["null", "float"], "Forced PSF flux on science image (stub) [nJy]",
-                        STUB, _FP),
+                        IMPLEMENTED, "forced_phot.psfphot on the background-subtracted science image "
+                                     "(instrumental; nJy calibration pending)", attr="science_flux"),
     Param("scienceFluxErr",    ["null", "float"], "Uncertainty in scienceFlux (stub) [nJy]",
-                        STUB, _FP),
+                        IMPLEMENTED, "forced_phot.psfphot (instrumental; nJy calibration pending)",
+                        attr="science_fluxerr"),
+    # TODO (2026-09-29): decide where the forced-position reference flux lives.
+    # Not here for now. It is one number per object per band (per reference
+    # version), so the natural home is the diaObject record; the case for
+    # repeating it in every diaForcedSource is that consumers of forced
+    # photometry want difference, science and reference flux side by side
+    # (Rubin instead carries templateFlux on DiaSource, measured at the
+    # DiaObject position). Either way it must be measured at the frozen
+    # forced-photometry position, not the detection position.
 
     # --- Time ---
     Param("midpointMjd",    "double",          "Effective mid-observation time (UTC scale) [MJD]",
-                        STUB, _FP, attr="mjdobs"),
+                        IMPLEMENTED, "l2files.mjdobs of the measured epoch", attr="mjdobs"),
     Param("timeProcessedMjd", "double",        "Time measurement was processed (UTC scale) [MJD]",
-                        STUB, _FP, attr="time_proc"),
+                        IMPLEMENTED, "time the chip's forced-photometry run started", attr="time_proc"),
     Param("timeWithdrawnMjd", ["null", "double"], "Time measurement was withdrawn (UTC scale) [MJD]",
                         NOT_USED, "alert-withdrawal mechanism (not designed)"),
 )
@@ -612,9 +626,7 @@ NED_MATCH_PARAMS = (
                                                "East of North [deg]",
                         IMPLEMENTED, _NED_SRC),
     Param("type",          ["null", "string"], "NED preferred object type (G, GPair, QSO, ...); null when NED "
-                                               "has not classified the entry. The host-candidate selection "
-                                               "applied at match time is providers.select_host_candidates, "
-                                               "recorded here so consumers can re-cut",
+                                               "has not classified the entry.",
                         IMPLEMENTED, _NED_SRC, attr="ptype"),
     Param("z",             ["null", "float"],  "NED preferred redshift; null when NED has none. Frame is as "
                                                "published (assumed heliocentric, not CMB-corrected -- NED does "
@@ -627,6 +639,168 @@ NED_MATCH_PARAMS = (
                                                "(uncertain), e.g. 'SLS'. Require zFlag[0] == 'S' for a secure "
                                                "host redshift; without this z is not interpretable",
                         IMPLEMENTED, _NED_SRC, attr="zflag"),
+)
+
+
+# ---------------------------------------------------------------------------
+# lvsMatch -- NED-LVS (Local Volume Sample) galaxy near the triggering
+# source, built from providers.LvsMatch. Same *Match envelope as nedMatch;
+# prefName is the same NED preferred name, so the two arrays join by it.
+#
+# NED-LVS is NED's vetted galaxy sample within 1000 Mpc, carrying what the
+# object directory lacks: adopted distances, angular diameters, photometry,
+# SFR and stellar mass (Cook et al. 2023, DOI 10.26132/NED8). Every row is a
+# galaxy, so there is no host-candidate selection. Types follow the source
+# precision (E = float, D = double); every emitted measurement carries its
+# uncertainty; the two quality flags keep NED-LVS's polarity (True = bad).
+# ---------------------------------------------------------------------------
+
+_LVS_SRC = "computed at assembly from the local NED-LVS table (providers.match_lvscat)"
+
+LVS_MATCH_PARAMS = (
+    Param("prefName",      "string",           "NED preferred object name (NED-LVS objname); the same name as "
+                                               "nedMatch.prefName, so the two arrays join by it",
+                        IMPLEMENTED, _LVS_SRC, attr="prefname"),
+    Param("ra",            "double",           "Right ascension of the galaxy; ICRS [deg]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("dec",           "double",           "Declination of the galaxy; ICRS [deg]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("sep",           "float",            "Angular separation from the triggering source position [arcsec]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("pa",            "float",            "Position angle from the triggering source to the galaxy, "
+                                               "East of North [deg]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("objType",       ["null", "string"], "NED preferred object type (G, GPair, ...)",
+                        IMPLEMENTED, _LVS_SRC, attr="objtype"),
+    Param("z",             ["null", "float"],  "NED-LVS fiducial redshift, heliocentric; null when none",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("zUnc",          ["null", "float"],  "Uncertainty in z; null when unpublished",
+                        IMPLEMENTED, _LVS_SRC, attr="z_unc"),
+    Param("zTech",         ["null", "string"], "How z was measured: SPEC, PHOT, UNKN, INFD (inferred) or MOD "
+                                               "(modelled); the redshift-quality handle",
+                        IMPLEMENTED, _LVS_SRC, attr="z_tech"),
+    Param("zQual",         "boolean",          "NED-LVS redshift quality flag: True = flagged UNRELIABLE "
+                                               "(NED-LVS polarity, kept as published)",
+                        IMPLEMENTED, _LVS_SRC, attr="z_qual"),
+    Param("distMpc",       ["null", "float"],  "The distance NED-LVS adopts for this galaxy [Mpc]",
+                        IMPLEMENTED, _LVS_SRC, attr="DistMpc"),
+    Param("distMpcUnc",    ["null", "float"],  "Uncertainty in distMpc [Mpc]",
+                        IMPLEMENTED, _LVS_SRC, attr="DistMpc_unc"),
+    Param("distMethod",    ["null", "string"], "Which measurement distMpc came from: 'Redshift' (from z; 99% "
+                                               "of galaxies) or 'zIndependent' (a NED-D measurement -- "
+                                               "Cepheids, TRGB, SNe Ia, ...; distMpc is then that value)",
+                        IMPLEMENTED, _LVS_SRC, attr="DistMpc_method"),
+    Param("diam",          ["null", "float"],  "Angular major-axis diameter 2a; null when NED-LVS has no "
+                                               "fiducial diameter (~19% of galaxies) [arcsec]",
+                        IMPLEMENTED, _LVS_SRC, attr="Diam"),
+    Param("diamBA",        ["null", "float"],  "Minor-to-major axis ratio of the diameter ellipse",
+                        IMPLEMENTED, _LVS_SRC, attr="Diam_ba"),
+    Param("diamPA",        ["null", "float"],  "Position angle of the diameter ellipse, East of North [deg]",
+                        IMPLEMENTED, _LVS_SRC, attr="Diam_pa"),
+    Param("diamQual",      "boolean",          "NED-LVS diameter quality flag: True = flagged HIGHLY UNCERTAIN "
+                                               "(NED-LVS polarity, kept as published)",
+                        IMPLEMENTED, _LVS_SRC, attr="Diam_qual"),
+    Param("ebv",           ["null", "float"],  "Foreground Milky Way reddening E(B-V), Schlafly & Finkbeiner "
+                                               "2011 [mag]",
+                        IMPLEMENTED, _LVS_SRC),
+    Param("magKs",         ["null", "float"],  "2MASS Ks apparent magnitude, Vega system [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_Ks"),
+    Param("magKsUnc",      ["null", "float"],  "Uncertainty in magKs [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_Ks_unc"),
+    Param("magW1",         ["null", "float"],  "WISE W1 apparent magnitude, Vega system [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_W1"),
+    Param("magW1Unc",      ["null", "float"],  "Uncertainty in magW1 [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_W1_unc"),
+    Param("magNUV",        ["null", "float"],  "GALEX NUV apparent magnitude, AB system [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_NUV"),
+    Param("magNUVUnc",     ["null", "float"],  "Uncertainty in magNUV [mag]",
+                        IMPLEMENTED, _LVS_SRC, attr="m_NUV_unc"),
+    Param("sfr",           ["null", "double"], "Star-formation rate from the FUV+W4 hybrid scaling relation "
+                                               "[Msun/yr]",
+                        IMPLEMENTED, _LVS_SRC, attr="SFR_hybrid"),
+    Param("sfrUnc",        ["null", "double"], "Uncertainty in sfr [Msun/yr]",
+                        IMPLEMENTED, _LVS_SRC, attr="SFR_hybrid_unc"),
+    Param("mStar",         ["null", "double"], "Stellar mass from the W1 luminosity scaling relation [Msun]",
+                        IMPLEMENTED, _LVS_SRC, attr="Mstar"),
+    Param("mStarUnc",      ["null", "double"], "Uncertainty in mStar [Msun]",
+                        IMPLEMENTED, _LVS_SRC, attr="Mstar_unc"),
+)
+
+
+# ---------------------------------------------------------------------------
+# gaiaMatch -- one Gaia DR3 source near the triggering source
+#
+# Built from providers.GaiaMatch (match_gaiacat over the local 28-column
+# copy of LINCC's Gaia DR3 HATS catalog). Gaia reaches G ~ 21, so most
+# Roman detections match nothing; a match says "a known star (or quasar /
+# galaxy candidate) sits here", with its motion, brightness, variability
+# and non-single-star flags. Positions are PROPAGATED by proper motion to
+# the detection's epoch before matching, and ra/dec/sep/pa are at that
+# epoch. Types follow the source precision (float32 columns -> float;
+# ra/dec double).
+# ---------------------------------------------------------------------------
+
+_GAIA_SRC = "computed at assembly from the local Gaia DR3 copy (providers.match_gaiacat)"
+
+GAIA_MATCH_PARAMS = (
+    Param("sourceId",      "long",             "Gaia DR3 source_id (stable within DR3; changes between releases)",
+                        IMPLEMENTED, _GAIA_SRC, attr="source_id"),
+    Param("ra",            "double",           "Right ascension of the source PROPAGATED by proper motion to the "
+                                               "triggering source's epoch (mjdobs); ICRS [deg]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("dec",           "double",           "Declination of the source at the triggering source's epoch; "
+                                               "ICRS [deg]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("sep",           "float",            "Angular separation from the triggering source position, at its "
+                                               "epoch [arcsec]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("pa",            "float",            "Position angle from the triggering source to the Gaia source, "
+                                               "East of North [deg]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("pmRA",          ["null", "float"],  "Proper motion in right ascension, pmra*cos(dec) [mas/yr]",
+                        IMPLEMENTED, _GAIA_SRC, attr="pmra"),
+    Param("pmDec",         ["null", "float"],  "Proper motion in declination [mas/yr]",
+                        IMPLEMENTED, _GAIA_SRC, attr="pmdec"),
+    Param("parallax",      ["null", "float"],  "Parallax [mas]",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("parallaxUnc",   ["null", "float"],  "Uncertainty in parallax [mas]",
+                        IMPLEMENTED, _GAIA_SRC, attr="parallax_error"),
+    Param("ruwe",          ["null", "float"],  "Renormalised unit weight error of the astrometric fit; > 1.4 "
+                                               "suggests a poor single-star fit (binary, blend)",
+                        IMPLEMENTED, _GAIA_SRC),
+    Param("magG",          ["null", "float"],  "Mean G magnitude, Vega [mag]",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_g_mean_mag"),
+    Param("magBP",         ["null", "float"],  "Mean integrated BP magnitude, Vega [mag]",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_bp_mean_mag"),
+    Param("magRP",         ["null", "float"],  "Mean integrated RP magnitude, Vega [mag]",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_rp_mean_mag"),
+    Param("bpRp",          ["null", "float"],  "BP - RP colour [mag]",
+                        IMPLEMENTED, _GAIA_SRC, attr="bp_rp"),
+    Param("fluxOverErrG",  ["null", "float"],  "Mean G flux divided by its error; low values at a given "
+                                               "magnitude indicate variability",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_g_mean_flux_over_error"),
+    Param("variable",      "boolean",          "True if Gaia's variability analysis classified the source as "
+                                               "VARIABLE (phot_variable_flag); False also when not analysed",
+                        IMPLEMENTED, _GAIA_SRC, attr="phot_variable_flag"),
+    Param("nonSingleStar", "int",              "Gaia non_single_star bit flags: 0 none, 1 astrometric binary, "
+                                               "2 spectroscopic binary, 4 eclipsing binary",
+                        IMPLEMENTED, _GAIA_SRC, attr="non_single_star"),
+    Param("inQsoCandidates",    "boolean",     "True if the source is in Gaia's quasar-candidates table",
+                        IMPLEMENTED, _GAIA_SRC, attr="in_qso_candidates"),
+    Param("inGalaxyCandidates", "boolean",     "True if the source is in Gaia's galaxy-candidates table",
+                        IMPLEMENTED, _GAIA_SRC, attr="in_galaxy_candidates"),
+    Param("probStar",      ["null", "float"],  "DSC combined-model probability that the source is a star",
+                        IMPLEMENTED, _GAIA_SRC, attr="classprob_dsc_combmod_star"),
+    Param("probGalaxy",    ["null", "float"],  "DSC combined-model probability that the source is a galaxy",
+                        IMPLEMENTED, _GAIA_SRC, attr="classprob_dsc_combmod_galaxy"),
+    Param("probQuasar",    ["null", "float"],  "DSC combined-model probability that the source is a quasar",
+                        IMPLEMENTED, _GAIA_SRC, attr="classprob_dsc_combmod_quasar"),
+    Param("duplicatedSource", "boolean",       "True if Gaia removed another source within ~2 arcsec during "
+                                               "processing (possible blend or duplicate)",
+                        IMPLEMENTED, _GAIA_SRC, attr="duplicated_source"),
+    Param("ipdFracMultiPeak", "int",           "Percentage of Gaia image windows with more than one peak; high "
+                                               "values indicate a blend or resolved pair",
+                        IMPLEMENTED, _GAIA_SRC, attr="ipd_frac_multi_peak"),
 )
 
 
@@ -649,7 +823,7 @@ ALERT_PARAMS = (
 
     # --- Object history ------------------------------------------------------
     Param("prvDiaSources",      ["null", {"type": "array", "items": "@diaSource"}],
-                                "Previous detections of the same object within 12 months",
+                                "Previous detections of the same object",
                         IMPLEMENTED, "produce.assemble_alert()"),
     Param("diaObject",          ["null", "@diaObject"],  "Summary object record",
                         IMPLEMENTED, "produce.assemble_alert()"),
@@ -688,6 +862,25 @@ ALERT_PARAMS = (
                                 "providers.select_host_candidates -- an unrestricted NED match is "
                                 "~98% non-galaxy at this depth",
                         IMPLEMENTED, "produce.assemble_alert() via provider.get_ned_matches()"),
+    Param("lvsMatches",         ["null", {"type": "array", "items": "@lvsMatch"}],
+                                "Nearest NED-LVS galaxies (max 3, nearest first) within "
+                                "LVS_MATCH_RADIUS_ARCSEC (30 arcsec) of the triggering source -- NED's "
+                                "vetted local-volume sample (D < 1000 Mpc) with distances, angular "
+                                "diameters, photometry, SFR and stellar mass; null if matching was "
+                                "not run (disabled, or the table unavailable), empty if none within "
+                                "the radius; a full array (3) means the neighborhood may extend "
+                                "beyond what is reported. Joins to nedMatches by prefName",
+                        IMPLEMENTED, "produce.assemble_alert() via provider.get_lvs_matches()"),
+    Param("gaiaMatches",        ["null", {"type": "array", "items": "@gaiaMatch"}],
+                                "Nearest Gaia DR3 sources (max 3, nearest first) within "
+                                "GAIA_MATCH_RADIUS_ARCSEC (1 arcsec) of the triggering source, with "
+                                "catalog positions propagated by proper motion to its epoch -- a "
+                                "known-star veto and variable/non-single-star tag (Gaia reaches "
+                                "G ~ 21, so most detections match nothing); null if matching was "
+                                "not run (disabled, or the copy unavailable), empty if none within "
+                                "the radius. In the bulge the chance-coincidence rate at 1 arcsec is "
+                                "~0.3 per detection: cut on sep",
+                        IMPLEMENTED, "produce.assemble_alert() via provider.get_gaia_matches()"),
 
     # --- Image cutouts ----------------------------------------------------------
     Param("cutoutDifference",   ["null", "bytes"],   "FITS cutout of difference image",
@@ -716,6 +909,8 @@ RECORDS = (
     Record("ssMatch",         "Known solar system object predicted near the triggering source (stub)", SS_MATCH_PARAMS),
     Record("refMatch",        "Reference-image catalog source near the triggering source",             REF_MATCH_PARAMS),
     Record("nedMatch",        "NED candidate host galaxy near the triggering source",                  NED_MATCH_PARAMS),
+    Record("lvsMatch",        "NED-LVS local-volume galaxy near the triggering source",                LVS_MATCH_PARAMS),
+    Record("gaiaMatch",       "Gaia DR3 source near the triggering source, at its epoch",             GAIA_MATCH_PARAMS),
     Record("alert",           "Top-level alert record",                                  ALERT_PARAMS),
 )
 
@@ -758,8 +953,8 @@ def print_report(summary: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    from rapidpipe.exitcodes import ArgumentParser
-    parser = ArgumentParser(
+    import argparse
+    parser = argparse.ArgumentParser(
         description="Show implemented vs stub alert schema params")
     parser.add_argument("--summary", action="store_true",
                         help="per-record counts only")

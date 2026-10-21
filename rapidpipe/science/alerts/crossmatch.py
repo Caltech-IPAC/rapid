@@ -1,11 +1,15 @@
-# ported-from: alerts/providers.py @ 3c79337b
+# ported-from: alerts/providers.py @ 54fd7ea8
 """The alert's cross-matches, ported from `dev`'s ``alerts/providers.py``.
 
 Copied from `origin/dev` unchanged: the solar-system association against
-KONA predictions (``match_ss_predictions``, L578-647), the reference-catalog
-match (``load_refcat``/``match_refcat``, L668-855), and the NED matcher
-(``select_host_candidates`` to ``match_nedcat``, L881-1254). Pure functions
-over positions and column arrays; nothing here reaches a database.
+KONA predictions (``match_ss_predictions``), the reference-catalog match
+(``load_refcat``/``match_refcat``), the NED matcher
+(``select_host_candidates`` to ``match_nedcat``), the nearest-N geometry
+both use (``_nearest_within``, `dev`'s 2026-09-23 replacement of the
+``nthneighbor`` loop, which returned one row per rank at tied positions)
+and the Gaia DR3 matcher (``propagate_positions`` to ``match_gaiacat``,
+schema 00.06). Pure functions over positions and column arrays; nothing
+here reaches a database.
 
 NED access (off by default, when on "use astroquery as dev"; alerts
 page): :class:`AstroqueryNedReader` and
@@ -28,7 +32,7 @@ from typing import Any, Callable
 import numpy as np
 
 from rapidpipe.science.alerts.cutouts import STAMP_HALF_WIDTH
-from rapidpipe.science.alerts.records import NedMatch, RefMatch, SSMatch
+from rapidpipe.science.alerts.records import GaiaMatch, NedMatch, RefMatch, SSMatch
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +260,93 @@ def _ref_match_from_row(columns: dict[str, np.ndarray], row: int,
     )
 
 
+def _nearest_within(src: Any, coords: Any, radius_arcsec: float,
+                    n_max: int) -> list[tuple[int, int, float, float]]:
+    """The nearest `n_max` catalog rows within `radius_arcsec` of each source.
+
+    Shared by match_refcat() and match_nedcat(). One KD-tree query on
+    unit vectors for the ``n_max`` nearest rows per source with a chord
+    distance bound, then separation and position angle (astropy, on the
+    hits only) and the same ``sep <= radius`` mask as before.
+
+    This replaced a loop over ``match_to_catalog_sky(nthneighbor=n)`` on
+    2026-09-23. That call is the same KD-tree query keeping only rank n,
+    and when catalog rows share a position the ranks tie, so it returned
+    the SAME row for every rank (3C 273's 16 absorption-line rows came
+    back as one row three times; ~0.1% of rows in that pixel, none in
+    others). One query for k rows returns k distinct rows. Measured on a
+    chip's 20k detections vs 300-200k catalog rows: 1.3-3.7x faster than
+    the loop, identical indices wherever positions are not tied.
+
+    Parameters
+    ----------
+    src, coords : astropy.coordinates.SkyCoord
+        Detection positions (1-D) and catalog positions (1-D, non-empty).
+    radius_arcsec : float
+        Maximum separation to report.
+    n_max : int
+        Rows kept per source.
+
+    Returns
+    -------
+    list of (source index, catalog index, sep [arcsec], pa [deg E of N])
+        Grouped by source in input order, nearest first; ties in
+        separation are broken by catalog index, so the order is
+        deterministic.
+    """
+    from scipy.spatial import cKDTree
+
+    n_src, n_cat = len(src), len(coords)
+    if n_src == 0 or n_cat == 0 or n_max <= 0:
+        return []
+    k = min(n_max, n_cat)
+    # plain arrays from here on: indexing SkyCoord objects per hit pair
+    # cost more than the whole old loop (measured 2026-09-23)
+    src_ra, src_dec = np.radians(src.ra.deg), np.radians(src.dec.deg)
+    cat_ra, cat_dec = np.radians(coords.ra.deg), np.radians(coords.dec.deg)
+    cat_xyz = _unit_vectors(cat_ra, cat_dec)
+    src_xyz = _unit_vectors(src_ra, src_dec)
+    chord = 2.0 * np.sin(np.radians(radius_arcsec / 3600.0) / 2.0)
+    dist, idx = cKDTree(cat_xyz).query(src_xyz, k=k,
+                                       distance_upper_bound=chord * (1.0 + 1e-9))
+    dist = np.asarray(dist).reshape(n_src, k)
+    idx = np.asarray(idx).reshape(n_src, k)
+    ii, jj = np.nonzero(np.isfinite(dist))                  # misses are inf
+    if ii.size == 0:
+        return []
+    cat_idx = idx[ii, jj]
+    sep, pa = _sep_pa(src_ra[ii], src_dec[ii], cat_ra[cat_idx], cat_dec[cat_idx])
+    keep = sep <= radius_arcsec                             # exact angular test
+    ii, cat_idx, sep, pa = ii[keep], cat_idx[keep], sep[keep], pa[keep]
+    order = np.lexsort((cat_idx, sep, ii))
+    return [(int(ii[o]), int(cat_idx[o]), float(sep[o]), float(pa[o]))
+            for o in order]
+
+
+def _unit_vectors(ra_rad: np.ndarray, dec_rad: np.ndarray) -> np.ndarray:
+    """(N, 3) unit vectors for positions in radians."""
+    cos_dec = np.cos(dec_rad)
+    return np.column_stack((cos_dec * np.cos(ra_rad), cos_dec * np.sin(ra_rad),
+                            np.sin(dec_rad)))
+
+
+def _sep_pa(ra1: np.ndarray, dec1: np.ndarray, ra2: np.ndarray,
+            dec2: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Separation [arcsec] and position angle [deg, E of N] from 1 to 2,
+    all in radians in; the Vincenty and position-angle formulas astropy's
+    ``separation`` / ``position_angle`` use, so results agree to rounding."""
+    dra = ra2 - ra1
+    sin_dra, cos_dra = np.sin(dra), np.cos(dra)
+    sin_d1, cos_d1 = np.sin(dec1), np.cos(dec1)
+    sin_d2, cos_d2 = np.sin(dec2), np.cos(dec2)
+    num1 = cos_d2 * sin_dra
+    num2 = cos_d1 * sin_d2 - sin_d1 * cos_d2 * cos_dra
+    den = sin_d1 * sin_d2 + cos_d1 * cos_d2 * cos_dra
+    sep = np.degrees(np.arctan2(np.hypot(num1, num2), den)) * 3600.0
+    pa = np.degrees(np.arctan2(num1, num2)) % 360.0
+    return sep, pa
+
+
 def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
                  radius_arcsec: float = REF_MATCH_RADIUS_ARCSEC,
                  n_max: int = REF_MATCH_NMAX,
@@ -302,18 +393,11 @@ def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
         if coords is None:
             continue  # class has no catalog rows
         subset_to_row = catalog.rows[cls]
-        # ascending nthneighbor keeps each result list nearest-first
-        for n in range(1, min(n_max, len(subset_to_row)) + 1):
-            idx, sep2d, _ = src.match_to_catalog_sky(coords, nthneighbor=n)
-            pa = src.position_angle(coords[idx])
-            idx = np.atleast_1d(idx)
-            sep_arcsec = np.atleast_1d(sep2d.arcsec)
-            pa_deg = np.atleast_1d(pa.deg) % 360.0
-            for i in np.flatnonzero(sep_arcsec <= radius_arcsec):
-                row = int(subset_to_row[idx[i]])
-                results[i][slot].append(_ref_match_from_row(
-                    catalog.columns, row,
-                    float(sep_arcsec[i]), float(pa_deg[i])))
+        # nearest-first, distinct rows even at tied positions
+        for i, sub_idx, sep_arcsec, pa_deg in _nearest_within(
+                src, coords, radius_arcsec, n_max):
+            results[i][slot].append(_ref_match_from_row(
+                catalog.columns, int(subset_to_row[sub_idx]), sep_arcsec, pa_deg))
     return results
 
 
@@ -701,18 +785,213 @@ def match_nedcat(ra: Any, dec: Any, catalog: NedCatalog,
         return results  # no candidate hosts in this slice
 
     src = SkyCoord(ra * u.deg, dec * u.deg)
-    n_rows = len(catalog.columns["prefname"])
-    # ascending nthneighbor keeps each result list nearest-first
-    for n in range(1, min(n_max, n_rows) + 1):
-        idx, sep2d, _ = src.match_to_catalog_sky(coords, nthneighbor=n)
-        pa = src.position_angle(coords[idx])
-        idx = np.atleast_1d(idx)
-        sep_arcsec = np.atleast_1d(sep2d.arcsec)
-        pa_deg = np.atleast_1d(pa.deg) % 360.0
-        for i in np.flatnonzero(sep_arcsec <= radius_arcsec):
-            results[i].append(_ned_match_from_row(
-                catalog.columns, int(idx[i]),
-                float(sep_arcsec[i]), float(pa_deg[i])))
+    # nearest-first, distinct rows even at tied positions
+    for i, cat_idx, sep_arcsec, pa_deg in _nearest_within(src, coords,
+                                                          radius_arcsec, n_max):
+        results[i].append(_ned_match_from_row(catalog.columns, cat_idx,
+                                              sep_arcsec, pa_deg))
+    return results
+
+
+
+# ---------------------------------------------------------------------------
+# Gaia cross-match
+#
+# The nearest Gaia DR3 sources to each detection: a star veto / variable-
+# star tag for the bulge, where NED has nothing. The local copy is the
+# 28-column projection of LINCC's HATS catalog that alerts/catalog_store.py
+# (ingest-gaia) writes, read per chip by alerts/catalog_readers.py
+# GaiaReader under the NED reader's cone contract (NedSliceReader). The
+# geometry (_nearest_within), the per-chip cone (chip_cone) and the three-
+# state null/[]/populated contract are the NED cross-match's.
+#
+# What differs is the epoch. Gaia positions are given at the catalog's
+# reference epoch (J2016.0 for DR3) and bulge stars move; by Roman's first
+# season that is 11 years of drift. So, once per chip, every Gaia row in
+# the cone is moved to the exposure's epoch by its proper motion BEFORE the
+# tree is built (propagate_positions), and the fetched cone is widened by
+# the largest drift any Gaia star can have over that interval so a star
+# that moves INTO the chip's cone is not missed (GAIA_PM_MAX_ARCSEC_PER_YEAR).
+# A new Gaia release resets the clock: the reference epoch comes from the
+# copy's ingest record, not from here.
+# ---------------------------------------------------------------------------
+
+# Maximum separation for a reported match. Gaia's astrometry is ~mas and
+# Roman's ~0.1", so a true counterpart sits well inside 1"; the radius is
+# generous for unmodelled motion. In the bulge (1.27 M Gaia sources per
+# deg^2) the chance-coincidence rate rho*pi*r^2 at 1" is ~0.3 per
+# detection -- consumers must cut on `sep`.
+GAIA_MATCH_RADIUS_ARCSEC = 1.0
+
+# Keep at most this many matches, nearest first.
+GAIA_MATCH_NMAX = 3
+
+# Largest proper motion in Gaia: Barnard's star, 10.4"/yr. The chip cone
+# is widened by this times the epoch offset so any star that could drift
+# into the cone is fetched; ~120" for an 11-year offset, which roughly
+# doubles the bulge cone's rows (still one parquet row group).
+GAIA_PM_MAX_ARCSEC_PER_YEAR = 11.0
+
+# Reference epoch used when the reader does not state one (a bare
+# callable in tests). Gaia DR3 positions are at J2016.0.
+GAIA_DEFAULT_REF_EPOCH = 2016.0
+
+# Columns the matcher works in -- the Gaia DR3 gaia_source names, as the
+# local copy keeps them and the GaiaMatch attributes are spelled. The
+# reader delivers exactly these: missing numerics as NaN, ints as 0,
+# bools as False, the variability flag as its string. The copy also holds
+# the position/proper-motion errors and astrometric_excess_noise, which
+# nothing reads yet.
+GAIA_INT_COLUMNS = ("source_id", "non_single_star", "ipd_frac_multi_peak")
+GAIA_BOOL_COLUMNS = ("duplicated_source", "in_qso_candidates", "in_galaxy_candidates")
+GAIA_STRING_COLUMNS = ("phot_variable_flag",)
+GAIA_NUMERIC_COLUMNS = ("ra", "dec", "pmra", "pmdec", "parallax", "parallax_error",
+                        "ruwe", "phot_g_mean_mag", "phot_bp_mean_mag",
+                        "phot_rp_mean_mag", "bp_rp", "phot_g_mean_flux_over_error",
+                        "classprob_dsc_combmod_star", "classprob_dsc_combmod_galaxy",
+                        "classprob_dsc_combmod_quasar")
+GAIA_COLUMNS = GAIA_INT_COLUMNS + GAIA_BOOL_COLUMNS + GAIA_STRING_COLUMNS + GAIA_NUMERIC_COLUMNS
+GAIA_REQUIRED_COLUMNS = ("source_id", "ra", "dec")
+
+# Gaia's phot_variable_flag value meaning "classified variable" (the other
+# value is "NOT_AVAILABLE": not analysed, which is most sources).
+GAIA_VARIABLE_FLAG = "VARIABLE"
+
+
+def epoch_offset_years(mjd: float, ref_epoch: float) -> float:
+    """Years from the Julian epoch `ref_epoch` (e.g. 2016.0) to `mjd`."""
+    ref_mjd = 51544.5 + (ref_epoch - 2000.0) * 365.25     # J2000.0 = MJD 51544.5
+    return (mjd - ref_mjd) / 365.25
+
+
+def propagate_positions(ra: np.ndarray, dec: np.ndarray, pmra: np.ndarray,
+                        pmdec: np.ndarray, dt_years: float,
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Move catalog positions by proper motion over `dt_years`.
+
+    Linear in time: ``dec += pmdec * dt`` and ``ra += pmra * dt / cos(dec)``,
+    with Gaia's `pmra` already including the cos(dec) factor and both in
+    mas/yr. A missing proper motion (NaN) moves nothing. Parallactic
+    motion is ignored (< 1 mas for all but the nearest stars; a Roman
+    pixel is 110 mas). Accurate to well under 0.1" for any Gaia star over
+    decades, except the handful within a few parsecs, which a 1" match
+    radius still absorbs.
+    """
+    ra = np.asarray(ra, dtype=float)
+    dec = np.asarray(dec, dtype=float)
+    dra = np.nan_to_num(np.asarray(pmra, dtype=float)) * dt_years / 3.6e6
+    ddec = np.nan_to_num(np.asarray(pmdec, dtype=float)) * dt_years / 3.6e6
+    new_dec = np.clip(dec + ddec, -90.0, 90.0)
+    new_ra = (ra + dra / np.cos(np.radians(dec))) % 360.0
+    return new_ra, new_dec
+
+
+def build_gaiacat(table: dict[str, Any], dt_years: float = 0.0) -> NedCatalog | None:
+    """Propagate a Gaia slice to the detection epoch and build its tree.
+
+    Parameters
+    ----------
+    table : dict
+        Column arrays keyed by GAIA_COLUMNS. source_id/ra/dec required; the
+        rest filled with nulls (NaN / 0 / False / None) when absent.
+    dt_years : float, optional
+        Years from the catalog's reference epoch to the exposure; the
+        slice's `ra`/`dec` are replaced by the propagated positions.
+
+    Returns
+    -------
+    NedCatalog or None
+        The tree-built slice (the container shared with NED); None (with a
+        logged warning) when required columns are missing -- the cross-
+        match then degrades to "not run". An empty slice has coords=None
+        and matches to [].
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    missing = [c for c in GAIA_REQUIRED_COLUMNS if c not in table]
+    if missing:
+        logger.warning("Gaia slice is missing required columns %s; "
+                       "cross-match skipped", missing)
+        return None
+
+    n = len(np.asarray(table["source_id"]))
+    columns: dict[str, np.ndarray] = {}
+    for name in GAIA_COLUMNS:
+        if name in GAIA_NUMERIC_COLUMNS:
+            dtype, fill = float, np.nan
+        elif name in GAIA_INT_COLUMNS:
+            dtype, fill = np.int64, 0
+        elif name in GAIA_BOOL_COLUMNS:
+            dtype, fill = bool, False
+        else:
+            dtype, fill = object, None
+        values = table[name] if name in table else np.full(n, fill, dtype=dtype)
+        columns[name] = np.asarray(values, dtype=dtype)
+    if n and dt_years:
+        columns["ra"], columns["dec"] = propagate_positions(
+            columns["ra"], columns["dec"], columns["pmra"], columns["pmdec"], dt_years)
+    logger.debug("Gaia slice: %d rows, propagated %.2f yr", n, dt_years)
+
+    coords = (SkyCoord(columns["ra"] * u.deg, columns["dec"] * u.deg)
+              if n else None)
+    return NedCatalog(columns=columns, coords=coords, n_input=n)
+
+
+def _gaia_match_from_row(columns: dict[str, np.ndarray], row: int,
+                         sep: float, pa: float) -> GaiaMatch:
+    """Build one GaiaMatch from slice row `row` at the given sep/PA.
+
+    Absent numerics become None (the schema types them as nullable
+    unions); ints and bools keep their fill values; the variability flag
+    string becomes the boolean "is VARIABLE".
+    """
+    def number(name: str) -> float | None:
+        value = float(columns[name][row])
+        return value if np.isfinite(value) else None
+
+    optional: dict[str, Any] = {}
+    optional.update({name: int(columns[name][row]) for name in GAIA_INT_COLUMNS
+                     if name != "source_id"})
+    optional.update({name: bool(columns[name][row]) for name in GAIA_BOOL_COLUMNS})
+    optional.update({name: number(name) for name in GAIA_NUMERIC_COLUMNS
+                     if name not in ("ra", "dec")})
+    flag = columns["phot_variable_flag"][row]
+    optional["phot_variable_flag"] = (flag is not None
+                                      and str(flag).strip() == GAIA_VARIABLE_FLAG)
+    return GaiaMatch(source_id=int(columns["source_id"][row]),
+                     ra=float(columns["ra"][row]), dec=float(columns["dec"][row]),
+                     sep=sep, pa=pa, **optional)
+
+
+def match_gaiacat(ra: Any, dec: Any, catalog: NedCatalog,
+                  radius_arcsec: float = GAIA_MATCH_RADIUS_ARCSEC,
+                  n_max: int = GAIA_MATCH_NMAX,
+                  ) -> list[list[GaiaMatch]]:
+    """Match detection positions against a (propagated) Gaia slice.
+
+    match_nedcat() with the Gaia row builder: one KD-tree query for the
+    n_max nearest sources of every detection within `radius_arcsec` (see
+    _nearest_within). Per detection, in input order, nearest first and at
+    most `n_max` long; an empty list means "no Gaia source within the
+    radius"; "could not run" is signalled by the provider, not here.
+    """
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    ra = np.atleast_1d(np.asarray(ra, dtype=float))
+    dec = np.atleast_1d(np.asarray(dec, dtype=float))
+    results: list[list[GaiaMatch]] = [[] for _ in range(ra.size)]
+
+    coords = catalog.coords
+    if coords is None:
+        return results  # no Gaia sources in this slice
+
+    src = SkyCoord(ra * u.deg, dec * u.deg)
+    for i, cat_idx, sep_arcsec, pa_deg in _nearest_within(src, coords,
+                                                          radius_arcsec, n_max):
+        results[i].append(_gaia_match_from_row(catalog.columns, cat_idx,
+                                               sep_arcsec, pa_deg))
     return results
 
 
