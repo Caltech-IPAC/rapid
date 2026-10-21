@@ -121,3 +121,14 @@ def test_bright_source_masking_no_longer_depends_on_the_filename():
     a = build(SOCSIMS, False, SOCSIMS_CFG)
     b = build(OPENUNIVERSE, False, SOCSIMS_CFG)
     assert a == b
+
+
+def test_commissioning_masking_options_are_passed():
+
+    """The optional size-scaled and zero-pixel masking settings reach the command line."""
+
+    cfg = dict(OPENUNIVERSE_CFG, sfft_zero_margin='2', sfft_bsmask_isoarea='2000', sfft_bsmask_isofactor='2.0')
+    cmd = build(OPENUNIVERSE, False, cfg)
+    assert cmd[cmd.index("--zeromargin") + 1] == "2"
+    assert cmd[cmd.index("--bsmaskisoarea") + 1] == "2000"
+    assert cmd[cmd.index("--bsmaskisofactor") + 1] == "2.0"
