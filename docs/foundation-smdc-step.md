@@ -7,7 +7,8 @@ difference images (part 4, milestone 4). Every step is one command followed by
 its check, and nothing goes on to the next step until the check holds. Parts 1
 to 3 were run unattended on 2026-10-21 from a fleet host in the same security
 group as the database's pooler, and are written here as run, with their
-results; parts 4 and 5 followed the same day, run the same way. Five parts, in order:
+results; parts 4 and 5 followed the same day, run the same way, and part 6 is
+the night of the same field written by the tasks that ran it. Six parts, in order:
 
 1. **Schema**: the SMDC `rapid` database's `public` schema becomes `database/schema.sql`.
 2. **Inputs**: the field's directory is copied to the inputs bucket under `foundation/`.
@@ -18,6 +19,8 @@ results; parts 4 and 5 followed the same day, run the same way. Five parts, in o
    imported reference, difference images, sources, objects and packets together, and its undo.
 5. **Uncapped**: the same chain on Batch with no source cap, measured per stage per epoch, with
    its change group and undo timed (milestones 5 and 6 as far as this field's two epochs reach).
+6. **The night**: the PSF key gains its kind and the read role can select (step 1), then the
+   field's 69 epochs through the whole chain.
 
 Part 4 needs the `reference` and `difference` stages on the `run(job)` contract
 (`rapidpipe/foundation/local.py`), the difference stage refreshed from `dev`
@@ -133,7 +136,9 @@ port from the same parameter tree, and runs `psql -d rapid -v ON_ERROR_STOP=1
    is 0, and the same over `relkind = 'S'` with `has_sequence_privilege(...,
    'USAGE,SELECT,UPDATE')` is 0. (Counting `role_table_grants` against
    `pg_tables`, as an earlier draft did, counts the views too: 37 grants for
-   22 tables and 15 views.)
+   22 tables and 15 views.) Part 6 step 1 gave `rapid_read` `SELECT` on every
+   table and view and on those created later; a fresh apply runs its two
+   `GRANT` and `ALTER DEFAULT PRIVILEGES` lines with these.
 
 4. **The pipeline's path works**, with the job definition's parameter tree
    naming the pooler and the service secret (`rapidpipe.db.connection`):
@@ -179,14 +184,14 @@ extra, and the commands below that name ids must then be read against `rp run
 show 1`.
 
 ```sh
-SCOPE_SHARED='{"source_dir": "'$DATA'", "reference": {"rfid": 90011, "dir": "jid129279"}, "psf": {"psfid": 153, "path": "psf/sciimage_psf_f146_sca08.fits"}, "gaia": {"name": "gaia", "version": "DR3", "path": "gaia/gaia-dr3-field-4658155-r0.12deg.parquet"}}'
+SCOPE_SHARED='{"source_dir": "'$DATA'", "reference": {"rfid": 90011, "dir": "jid129279"}, "psf": {"psfid": 153, "kind": "science", "path": "psf/sciimage_psf_f146_sca08.fits"}, "gaia": {"name": "gaia", "version": "DR3", "path": "gaia/gaia-dr3-field-4658155-r0.12deg.parquet"}}'
 k() { echo '{"dataset": "'$D'", "expid": '$1', "sca": 8, "fid": 8}'; }
 OKEY='{"dataset": "'$D'", "survey": "GBTDS", "field": 4658155}'
 epoch() { # expid rid pid l2 difference-directory
   echo '{"source_dir": "'$DATA'", "epochs": [{"expid": '$1', "rid": '$2', "pid": '$3', "rfid": 90011, "l2": "l2/'$4'", "difference": "'$5'"}]}'; }
 expects() { # expid
   echo '[{"product": "exposures", "key": {"dataset": "'$D'", "expid": '$1'}, "binding": null}, {"product": "l2files", "key": '"$(k $1)"', "binding": null}, {"product": "diffimages", "key": '"$(k $1)"', "binding": null}, {"product": "sources", "key": '"$(k $1)"', "binding": null}]'; }
-PSF='{"product": "psfs", "key": {"dataset": "'$D'", "fid": 8, "sca": 8}, "source_job": 1}'
+PSF='{"product": "psfs", "key": {"dataset": "'$D'", "fid": 8, "sca": 8, "kind": "science"}, "source_job": 1}'
 SHARED_INPUTS='{"product": "catalogs", "key": {"name": "gaia", "version": "DR3"}, "source_job": 1}, {"product": "refimages", "key": {"dataset": "'$D'", "field": 4658155, "fid": 8}, "source_job": 1}, '"$PSF"
 image() { # expid job: its diffimages and l2files inputs
   echo '{"product": "diffimages", "key": '"$(k $1)"', "source_job": '$2'}, {"product": "l2files", "key": '"$(k $1)"', "source_job": '$2'}'; }
@@ -207,7 +212,7 @@ image() { # expid job: its diffimages and l2files inputs
 7. **Import** the shared products, then each epoch.
 
    ```sh
-   rp job local --run 1 --stage import --scope "$SCOPE_SHARED" --expects '[{"product": "refimages", "key": {"dataset": "'$D'", "field": 4658155, "fid": 8}, "binding": null}, {"product": "psfs", "key": {"dataset": "'$D'", "fid": 8, "sca": 8}, "binding": null}, {"product": "catalogs", "key": {"name": "gaia", "version": "DR3"}, "binding": null}]' \
+   rp job local --run 1 --stage import --scope "$SCOPE_SHARED" --expects '[{"product": "refimages", "key": {"dataset": "'$D'", "field": 4658155, "fid": 8}, "binding": null}, {"product": "psfs", "key": {"dataset": "'$D'", "fid": 8, "sca": 8, "kind": "science"}, "binding": null}, {"product": "catalogs", "key": {"name": "gaia", "version": "DR3"}, "binding": null}]' \
    && rp job local --run 1 --stage import --scope "$(epoch 84613 1832705 350875 r0034001004001029016_0001_wfi08_f146_cal_lite.fits.gz jid143931)" --expects "$(expects 84613)" --inputs "[$PSF]" \
    && rp job local --run 1 --stage import --scope "$(epoch 84624 1832552 351878 r0034001004001029022_0001_wfi08_f146_cal_lite.fits.gz jid144961)" --expects "$(expects 84624)" --inputs "[$PSF]"
    ```
@@ -319,7 +324,8 @@ substitute.
 export RAPIDPIPE_OUTPUTS_ROOT="s3://$SCRATCH_BUCKET/rapidpipe/foundation"
 export RAPIDPIPE_BATCH_JOB_QUEUE=rapid-queue-prompt
 C=$(git -C "$RAPID" rev-parse origin/rebuild)   # the commit that carries the ports
-PK='{"dataset": "'$D'", "fid": 8, "sca": 8}'
+PSK='{"dataset": "'$D'", "fid": 8, "sca": 8, "kind": "science"}'     # the science-image PSF's key
+PRK='{"dataset": "'$D'", "fid": 8, "sca": 8, "kind": "reference"}'   # the reference-image PSF's key
 RKEY='{"dataset": "'$D'", "field": 4658155, "fid": 8}'
 ```
 
@@ -371,12 +377,12 @@ RKEY='{"dataset": "'$D'", "field": 4658155, "fid": 8}'
 
 13. **Difference** on Batch, one job per epoch, each naming the Batch
     reference, the science PSF (import job 1) and the reference-image PSF
-    (PR 288's import job 9; the stage tells the two apart by `PSFKIND`).
+    (PR 288's import job 9; the stage tells the two apart by their keys' kind).
 
     ```sh
     din() { # expid l2-job
       echo '[{"product": "l2files", "key": '"$(k $1)"', "source_job": '$2'}, {"product": "refimages", "key": '"$RKEY"', "source_job": <r>},
-             {"product": "psfs", "key": '"$PK"', "source_job": 1}, {"product": "psfs", "key": '"$PK"', "source_job": 9}]'; }
+             {"product": "psfs", "key": '"$PSK"', "source_job": 1}, {"product": "psfs", "key": '"$PRK"', "source_job": 9}]'; }
     rp job submit --run $B --stage difference --job-definition $DEF --scope '{"expid": 84613, "sca": 8, "fid": 8}' --inputs "$(din 84613 2)" \
     && rp job submit --run $B --stage difference --job-definition $DEF --scope '{"expid": 84624, "sca": 8, "fid": 8}' --inputs "$(din 84624 3)"
     ```
@@ -786,6 +792,95 @@ gave 5,539 to 5,544.
 - The shipped `[difference.statistics] clip_correction_seed` is now 0. The
   reference stage draws the same factor unseeded (`[reference.statistics]`)
   and is unchanged.
+
+## Part 6: the night (2026-10-21)
+
+1. **The PSF key gains its kind; the read role can select.** The PSF key
+   becomes (dataset, fid, sca, kind), `kind` being `science` (a science
+   image's PSF) or `reference` (a reference image's), so the reference-image
+   PSF that the difference stage reads is its own key instead of colliding
+   with the science PSF's. This is the first change to SMDC's schema after
+   real data, so it is incremental SQL, run once as `postgres` in one
+   transaction. Each row's kind comes from its file's `PSFKIND` keyword:
+   `sciimage_psf` on job 1's file (psfid 153) gives `science`, and
+   `refimage_psf` on job 9's (psfid 1) gives `reference`.
+
+   ```sh
+   pg -1 -v kind1=science -v kind9=reference <<'SQL'
+   ALTER TABLE psfs ADD COLUMN kind text;
+   UPDATE psfs SET kind = :'kind1' WHERE job = 1 AND psfid = 153;
+   UPDATE psfs SET kind = :'kind9' WHERE job = 9;
+   ALTER TABLE psfs ALTER COLUMN kind SET NOT NULL;
+   ALTER TABLE psfs ADD CONSTRAINT psfs_kind_check CHECK (kind IN ('science', 'reference'));
+   ALTER TABLE psfs DROP CONSTRAINT psfs_dataset_fid_sca_job_key;
+   ALTER TABLE psfs ADD CONSTRAINT psfs_dataset_fid_sca_kind_job_key UNIQUE (dataset, fid, sca, kind, job);
+   DROP VIEW psfs_official;
+   CREATE VIEW psfs_official AS
+   SELECT t.*, o.id AS binding, j.run
+   FROM psfs t
+   JOIN official o ON o.closed_at IS NULL AND o.product = 'psfs' AND o.job = t.job
+       AND o.key = jsonb_build_object('dataset', t.dataset, 'fid', t.fid, 'sca', t.sca, 'kind', t.kind)
+   JOIN jobs j ON j.id = t.job;
+   UPDATE official o SET key = o.key || jsonb_build_object('kind', p.kind)
+   FROM psfs p WHERE o.product = 'psfs' AND p.job = o.job AND NOT o.key ? 'kind';
+   UPDATE job_inputs i SET key = i.key || jsonb_build_object('kind', p.kind)
+   FROM psfs p WHERE i.product = 'psfs' AND p.job = coalesce(i.source_job, i.job) AND NOT i.key ? 'kind';
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO rapid_read;
+   ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO rapid_read;
+   SQL
+   ```
+
+   The view is dropped and recreated rather than replaced because the new
+   column changes its column order. On SMDC `kind` is the table's last
+   column, whereas `schema.sql` puts it after `sca`. The publisher loads
+   by column name, so the order does not matter.
+
+   Stored keys: `official` and `job_inputs` compare a key as the whole
+   jsonb object, and the view builds the key with the kind, so a stored
+   PSF key without it would no longer match. The two `UPDATE`s backfill
+   it. That covers one `official` row (binding 3, job 1's) and 27
+   `job_inputs` rows (job 1's `expects`, and the inputs of jobs 2, 3, 6,
+   7, 10, 12, 13, 16 to 19 and 22 to 27). Each key takes the kind of the
+   `psfs` row of the job it names. Manifests record no keys, and the
+   published `psfs.parquet` files stay as they were.
+
+   Checks, in order, all held:
+   - `psfs` holds psfid 153 (job 1) `science` and psfid 1 (job 9) `reference`.
+   - `psfs_official` returns job 1's science row only (binding 3, run 1).
+   - Every `psfs` key in `job_inputs` (27 of 27) and `official` (1 of 1)
+     carries its kind.
+   - `rp job show 9` and `rp job show 10` exit 0, and job 10's output
+     differs from before only by the kind in its two PSF inputs.
+   - PR 282's statements (`database/queries.sql`, 23 statements, run with
+     SMDC's ids) return the same rows as before the change, by count and
+     digest. `read_packets.py --job 7` exits 0 with output identical to
+     before.
+   - As `rapid_rebuild_pipeline`, `has_table_privilege('rapid_read', <oid>,
+     'select')` is true for all 37 tables and views in `public`.
+     `packets_official` is among them; before the change it was false.
+
+   The statements took 8 ms on the server; the script took 0.27 s
+   with its connection.
+
+   Then the reference-image PSF binds. It was left unbound because its
+   key collided with the science PSF's:
+
+   ```sh
+   echo '[{"open": {"product": "psfs", "key": '"$PRK"', "job": 9}}]' > psf-ref.json \
+   && rp official change --group psf-ref.json --who "$USER" \
+        --why "foundation/psf-kind: the reference-image PSF binds now its key carries the kind"
+   ```
+
+   Check: group 13 opened binding 49, and `psfs_official` returns two rows,
+   job 1's `science` (binding 3) and job 9's `reference` (binding 49).
+   `official` holds 49 rows. The operation took 4.6 ms, through the pooler
+   from this host, and the process took 0.41 s. (It was applied through
+   `rapidpipe.foundation.official.change`, the function the verb calls,
+   so the operation could be timed apart from start-up.)
+
+   From here a difference job names `psfs` `$PSK` (job 1) and `$PRK`
+   (job 9). An import's `psf` scope declares `"kind"`, and a file whose
+   `PSFKIND` names the other kind fails before its manifest.
 
 ## If a step fails
 
