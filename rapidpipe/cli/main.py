@@ -28,6 +28,11 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
 - ``job submit`` takes ``job local``'s arguments and ``--job-definition``,
   records the job and submits one Batch job running ``job run --job <id>``
   in the image (``rapidpipe.launch.submit``), printing both ids;
+- ``loop --run --filters --scas --pointings --job-definition [--once]``
+  carries the selection one stage forward per pass on Batch and ends each
+  pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
+  summary line per pass, until a pass finds the selection drained (exit 0)
+  or a job of the run has failed (exit 2 after that pass);
 - ``publish --run [--settings FILE]`` produces the run's official packet
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
@@ -52,6 +57,7 @@ import json
 import logging
 import os
 import sys
+import time
 import tomllib
 from pathlib import Path
 from typing import Any, Sequence
@@ -61,7 +67,8 @@ from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
 from rapidpipe.cli import stagectl
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
-from rapidpipe.foundation import publish_kafka
+from rapidpipe.foundation import loop, publish_kafka
+from rapidpipe.products import storage
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
 from rapidpipe.selftest import run as run_selftest
 from rapidpipe.selftest.runner import STAGE_NAMES as SELFTEST_STAGE_NAMES
@@ -186,6 +193,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--settings", type=Path, metavar="FILE", default=_SHIPPED_SETTINGS,
         help="A TOML file whose [kafka] table names the SSM parameters "
              "(default: the shipped foundation-thin.toml).")
+
+    loop_parser = subparsers.add_parser(
+        "loop", help="Carry a selection one stage forward per pass, through Kafka.",
+        description="Admit what is new under the run's [intake] source_root for the selection "
+                    "and submit every ready job one stage forward on Batch, never waiting; end "
+                    "each pass by producing the run's newly official packet sets to the topic. "
+                    "Repeat every --interval seconds until a pass finds nothing new, pending or "
+                    "to submit (exit 0); a failed job of the run exits 2 after its pass.")
+    loop_parser.add_argument("--run", required=True, type=int)
+    loop_parser.add_argument("--filters", required=True, help="Comma-separated, e.g. F146.")
+    loop_parser.add_argument("--scas", required=True, help="Comma-separated SCA numbers.")
+    loop_parser.add_argument("--pointings", required=True,
+                             help="Comma-separated VVV_EEEE (visit, exposure), or 'all'.")
+    loop_parser.add_argument("--job-definition", required=True,
+                             help="The Batch job definition the run's revision is registered as.")
+    loop_parser.add_argument("--max-intake", type=int, default=100,
+                             help="At most this many intake jobs per pass (default 100).")
+    loop_parser.add_argument("--interval", type=float, default=120.0,
+                             help="Seconds between passes (default 120).")
+    loop_parser.add_argument("--once", action="store_true", help="Run one pass and exit 0.")
 
     return parser
 
@@ -319,6 +346,50 @@ def _publish(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _loop(args: argparse.Namespace) -> int:
+    def connect_loop():
+        return connect(application_name="rapidpipe-loop")
+
+    selection = loop.Selection.parse(args.filters, args.scas, args.pointings)
+    with connect_loop() as conn:
+        settings = foundation.run_show(conn, args.run)["settings"]
+    intake = settings["intake"]
+    s3 = storage.s3_client(unsigned=bool(intake.get("unsigned")))
+
+    def submit(item: dict) -> None:
+        with connect_loop() as conn:
+            job_id = foundation.create_job(conn, args.run, item["stage"], item["scope"],
+                                           item["inputs"], item["expects"])
+        launch.submit(job_id, item["stage"], job_definition=args.job_definition)
+
+    def publish() -> dict:
+        with connect_loop() as conn:
+            if not publish_kafka.unpublished_sets(conn, args.run):
+                return {"packets": 0, "sets": []}
+        endpoint = publish_kafka.endpoint(settings["kafka"])
+        producer = publish_kafka.producer(endpoint["bootstrap_servers"], endpoint["max_request_bytes"])
+        try:
+            return publish_kafka.publish(connect_loop, args.run, producer, endpoint["topic"])
+        finally:
+            producer.close()
+
+    while True:
+        started = time.monotonic()
+        stems = loop.list_stems(s3, intake["source_root"])
+        summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
+                                args.max_intake)
+        summary["seconds"] = round(time.monotonic() - started, 1)
+        summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        print(json.dumps(summary, sort_keys=True), flush=True)
+        if summary["failed"]:
+            sys.stderr.write(f"rapidpipe loop: failed jobs of run {args.run}: "
+                             f"{', '.join(str(f['job']) for f in summary['failed'])}\n")
+            return int(ExitCode.INCOMPLETE)
+        if args.once or summary["drained"]:
+            return int(ExitCode.SUCCESS)
+        time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
+
+
 def _foundation_command(args: argparse.Namespace) -> int:
     command = (args.command, getattr(args, "verb", None))
     if command == ("run", "create"):
@@ -338,6 +409,8 @@ def _foundation_command(args: argparse.Namespace) -> int:
             _print_json(foundation.job_show(conn, args.id))
     elif args.command == "publish":
         return _publish(args)
+    elif args.command == "loop":
+        return _loop(args)
     elif command == ("official", "change"):
         group = _read(args.group, "group")
         if not isinstance(group, list) or not all(isinstance(item, dict) for item in group):
@@ -379,7 +452,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return stagectl.dispatch(args, _run_stage_command)
         if args.command == "selftest":
             return _run_selftest_command(args)
-        if args.command in ("run", "job", "official", "publish"):
+        if args.command in ("run", "job", "official", "publish", "loop"):
             return _foundation_command(args)
     except CommandExit as exc:
         sys.stderr.write(f"rapidpipe {where}: {exc}\n")
