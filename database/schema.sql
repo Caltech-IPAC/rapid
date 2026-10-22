@@ -114,6 +114,7 @@ CREATE TABLE jobs (
     started timestamp with time zone,
     ended timestamp with time zone,
     exit_code integer,
+    kafka_published_at timestamp with time zone,      -- every packet of its set acknowledged by the topic
     CHECK ((state = 'published') = (published_attempt IS NOT NULL))
 );
 

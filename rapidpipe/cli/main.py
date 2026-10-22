@@ -27,7 +27,11 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   (``rapidpipe.foundation.run_job``), printing the publisher's result;
 - ``job submit`` takes ``job local``'s arguments and ``--job-definition``,
   records the job and submits one Batch job running ``job run --job <id>``
-  in the image (``rapidpipe.launch.submit``), printing both ids.
+  in the image (``rapidpipe.launch.submit``), printing both ids;
+- ``publish --run [--settings FILE]`` produces the run's official packet
+  sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
+  parameters name (``rapidpipe.foundation.publish_kafka``), printing the
+  counts; a producer error exits non-zero with the set unstamped.
 
 A refused change group, or a job published but refused its automatic
 binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr;
@@ -57,10 +61,15 @@ from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
 from rapidpipe.cli import stagectl
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
+from rapidpipe.foundation import publish_kafka
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
 from rapidpipe.selftest import run as run_selftest
 from rapidpipe.selftest.runner import STAGE_NAMES as SELFTEST_STAGE_NAMES
 from rapidpipe.stages.contract import STAGE_NAMES
+
+
+#: The shipped settings body; ``publish`` reads its ``[kafka]`` table by default.
+_SHIPPED_SETTINGS = Path(__file__).resolve().parents[1] / "settings" / "foundation-thin.toml"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -166,6 +175,17 @@ def _build_parser() -> argparse.ArgumentParser:
     undo.add_argument("group_id", type=int, metavar="group-id")
     undo.add_argument("--who", required=True)
     undo.add_argument("--why", required=True)
+
+    publish_parser = subparsers.add_parser(
+        "publish", help="Produce a run's official packet sets to the Kafka topic.",
+        description="Produce every official packet set of a run not yet stamped "
+                    "kafka_published_at to the Kafka topic, waiting for every "
+                    "acknowledgement before stamping the set; print the counts.")
+    publish_parser.add_argument("--run", required=True, type=int)
+    publish_parser.add_argument(
+        "--settings", type=Path, metavar="FILE", default=_SHIPPED_SETTINGS,
+        help="A TOML file whose [kafka] table names the SSM parameters "
+             "(default: the shipped foundation-thin.toml).")
 
     return parser
 
@@ -284,8 +304,23 @@ def _print_json(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True, default=str))
 
 
+def _publish(args: argparse.Namespace) -> int:
+    settings = _read(args.settings, "settings").get("kafka")
+    if not isinstance(settings, dict):
+        raise CommandExit(int(ExitCode.USAGE), f"the settings file {args.settings} has no [kafka] table")
+    endpoint = publish_kafka.endpoint(settings)
+    producer = publish_kafka.producer(endpoint["bootstrap_servers"], endpoint["max_request_bytes"])
+    try:
+        result = publish_kafka.publish(lambda: connect(application_name="rapidpipe-publish"),
+                                       args.run, producer, endpoint["topic"])
+    finally:
+        producer.close()
+    _print_json({**result, "max_request_bytes": endpoint["max_request_bytes"]})
+    return int(ExitCode.SUCCESS)
+
+
 def _foundation_command(args: argparse.Namespace) -> int:
-    command = (args.command, args.verb)
+    command = (args.command, getattr(args, "verb", None))
     if command == ("run", "create"):
         settings = _read(args.settings, "settings")
         if not isinstance(settings, dict):
@@ -301,6 +336,8 @@ def _foundation_command(args: argparse.Namespace) -> int:
     elif command == ("job", "show"):
         with connect(application_name="rapidpipe-job-show") as conn:
             _print_json(foundation.job_show(conn, args.id))
+    elif args.command == "publish":
+        return _publish(args)
     elif command == ("official", "change"):
         group = _read(args.group, "group")
         if not isinstance(group, list) or not all(isinstance(item, dict) for item in group):
@@ -342,7 +379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return stagectl.dispatch(args, _run_stage_command)
         if args.command == "selftest":
             return _run_selftest_command(args)
-        if args.command in ("run", "job", "official"):
+        if args.command in ("run", "job", "official", "publish"):
             return _foundation_command(args)
     except CommandExit as exc:
         sys.stderr.write(f"rapidpipe {where}: {exc}\n")
