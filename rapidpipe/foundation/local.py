@@ -18,7 +18,8 @@ retries by itself.
 The outputs root is a URL, ``file://`` or ``s3://``
 (:mod:`rapidpipe.foundation.prefix`). Under ``s3://`` the stage writes into
 a local working directory and :func:`run_job` uploads it to the attempt's
-prefix before publishing; the next attempt number is one more than the
+prefix before publishing and removes it once the upload has succeeded (a
+stage or upload that fails leaves it, for a person); the next attempt number is one more than the
 highest present, so two concurrent attempts of one job are not supported
 there (Batch runs one at a time).
 """
@@ -30,6 +31,7 @@ import json
 import logging
 import os
 import resource
+import shutil
 import tempfile
 import urllib.request
 from dataclasses import dataclass
@@ -158,6 +160,8 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     try:
         stage_run(context)  # no connection held while the stage computes
         put(context.path, prefix)
+        if workdir is not None:
+            shutil.rmtree(workdir)
         with connect() as conn:
             result = publish(conn, job_id, attempt, context.prefix)
             _record(conn, job_id, "ended = now(), exit_code = 0")
