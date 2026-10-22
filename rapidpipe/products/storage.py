@@ -87,8 +87,8 @@ def _key(location: Location, relative: str = "") -> str:
     return f"{location.prefix}/{relative}" if location.prefix else relative
 
 
-def s3_client() -> Any:
-    """Return a fresh ``boto3`` S3 client.
+def s3_client(unsigned: bool = False) -> Any:
+    """Return a fresh ``boto3`` S3 client; ``unsigned`` reads a public bucket anonymously.
 
     A module-level indirection point: ``rapidpipe.stages.contract`` calls
     this exactly once per :func:`~rapidpipe.stages.contract.run_stage`
@@ -97,6 +97,11 @@ def s3_client() -> Any:
     """
     import boto3
 
+    if unsigned:
+        from botocore import UNSIGNED
+        from botocore.config import Config
+
+        return boto3.client("s3", config=Config(signature_version=UNSIGNED))
     return boto3.client("s3")
 
 

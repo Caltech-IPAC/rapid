@@ -17,6 +17,35 @@ limmag_nsigma = 5.0
 limmag_clip_sigma = 3.0
 limmag_maxiters = 10
 
+[intake]
+# The source root (an s3:// or file:// prefix holding <stem>_cal.asdf) is the
+# run's: `source_root` in the overlay given at `run create`, never here.
+# Read the source root anonymously (a public bucket).
+unsigned = false
+# dev's ingestL2Files.py: SIPDISTORTIONDEGREE's default, to_fits_sip's
+# max_pix_error, L2GZIPLEVEL's default (PR 291).
+sip_degree = 5
+sip_max_pix_error = 0.1
+gzip_level = 1
+# dev's RAPIDDATASOURCE = SOCSIMS program_id (rapidOpsSurveysInserts.sql).
+program_id = -1
+# dev's l2files.limmag, as [import] has it.
+limmag_nsigma = 5.0
+limmag_clip_sigma = 3.0
+limmag_maxiters = 10
+
+[intake.nominal_zptmag]
+# dev's nominal WFI AB zeropoints [mag], used only when the file carries no
+# meta.photometry.
+F062 = 26.4
+F087 = 26.3
+F106 = 26.4
+F129 = 26.3
+F146 = 27.5
+F158 = 26.4
+F184 = 25.9
+F213 = 25.4
+
 [associate]
 # Degrees (dev's crossmatch match_radius).
 match_radius = 0.00001528

@@ -41,6 +41,10 @@ OPTIONAL_BY_REQUIREMENT = {
     "numpy": "numpy",
     "astropy": "astropy",
     "psycopg2-binary": "psycopg2",
+    "asdf": "asdf",
+    "roman_datamodels": "roman_datamodels",
+    "gwcs": "gwcs",
+    "sympy": "sympy",
 }
 
 
