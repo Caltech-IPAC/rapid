@@ -1268,6 +1268,367 @@ epoch; they are shown here as the commands they issued.
    size, not a finding. The database is 141 MB; its largest tables are
    `objects` and `forced` (18 MB each) and `sources` (11 MB).
 
+The night's steps 6 to 10 ran unattended on 2026-10-22 from the same host,
+under **run 10**: a campaign, not live, revision `8a49bf70` on
+`rapid-rebuild:33`, the shipped settings body with `max_sources = 0` in
+`[import]` and `[difference]` (every source; the body carries the
+difference stage's `clip_correction_seed = 0`). By Ben's ruling of
+2026-10-21 18:45 PDT, the chain downstream (step 9) covers the first five
+epochs by `mjdobs`, not 69: step 4 above showed the chain 69 deep, and the
+uncapped catalogs multiply the packet stage's forced-photometry cost. All
+69 differences stand. As in step 4, the loops were Python scripts outside
+the repository, calling the same `rp` verbs per epoch.
+
+**Every run-10 job that names `expects` shows `FAILED` in Batch with exit
+1 after publishing.** A non-live run refuses every automatic binding ("run
+10 is not live for its survey and dataset"), and `job run` exits 1
+(`ExitCode.FAILURE`) whenever a published job's binding is refused
+(`rapidpipe/cli/main.py`). Exit 1 is not retried. The reference and the 70
+differences named `expects` (refimages; diffimages and sources) with
+binding null, so each published attempt 1, recorded the refusal on its job
+row (`jobs.exit_code` 0, `refusal` set) and then left Batch with exit 1.
+The chain's jobs (step 9) name no `expects`, as part 4's non-live run did,
+and `SUCCEEDED`.
+
+6. **Run 10, not live.**
+
+   ```sh
+   sed 's/^max_sources = 500$/max_sources = 0/' "$RAPID/rapidpipe/settings/foundation-thin.toml" > uncapped.toml
+   rp run create --who "$USER" --why "foundation-night-2026-10-21 task 5 (night-batch): ..." \
+     --revision 8a49bf703f1b931406cb0b4af9c432b50db86983 --settings uncapped.toml --survey GBTDS --dataset $D
+   ```
+
+   Check, held: run **10**, `"live": null`, revision `8a49bf70…`,
+   `max_sources` 0 in both tables.
+
+7. **The reference.** Rfid 90011's header names its 25 frames
+   (`INFIL001` to `INFIL025`, basenames `r0034001002001001004…` to
+   `r0034001002001005004…`). **None of the 25 is in the night**, whose basenames
+   begin `r0034001004` and `r0034001005`. So the reference coadds the
+   night's first 25 epochs by `mjdobs` (84613 to 84778, 07:18 to 13:15
+   UTC): the `l2files` rows of run 1's import jobs 2 and 3 and run 9's 30
+   to 52. Dev's reference and the port's therefore share no frame, and
+   step 10 compares the 25 epochs inside the port's reference apart from
+   the 44 outside it. Dev's reference holds none of the night's epochs.
+
+   ```sh
+   rp job submit --run 10 --stage reference --job-definition $DEF --scope '{"field": 4658155, "fid": 8, "sca": 8}' \
+     --inputs '[{"product": "l2files", "key": '"$(k 84613)"', "source_job": 2}, ..., {"product": "l2files", "key": '"$(k 84778)"', "source_job": 52}]' \
+     --expects '[{"product": "refimages", "key": '"$RKEY"', "binding": null}]'
+   ```
+
+   Check, held: job **231** (Batch `f27f79f0-e94e-43d9-ab7f-61b49a4f4343`)
+   published attempt 1, unbound; **rfid 3** drawn; `nframes` 25 with 25
+   `refimimages` rows and none left uncoadded; `MAGZP` 26.863; catalog
+   **5,248** SExtractor sources (`refimcatalogs` cattype 1). Against
+   rfid 90011, measured as PR 287 did:
+
+   | measure | Batch reference (job 231) | rfid 90011 |
+   |---|---|---|
+   | grid, centre | 7000 × 7000, (267.97852, -28.71602) | the same |
+   | finite fraction | 0.32712 | 0.32711 |
+   | cov5percent | 32.682 | 32.683 |
+   | `MAGZP` | 26.863 | 17.0 |
+   | median pixel ratio | 8,933 (expected from the zero points: 8,815) | |
+   | clipped residual after rescaling by 8,815, over 16.03 M common pixels | median 3.2e-5, clipped σ 1.6e-5 | (its own clipped scatter 1.3e-3) |
+   | pixel correlation | 0.9962 | |
+
+   Twenty-five other frames of the same field give a mosaic that matches
+   dev's to a correlation of 0.996, against 0.982 for part 4's two-frame
+   reference. Queue wait 115 s (the compute environment scaling up from
+   zero), container 227 s, job row 224 s; peak RSS 1.35 GiB self and
+   1.41 GiB largest child; 595 MB under `10/reference/231/1/` (three 196 MB
+   maps and a 6.9 MB catalog).
+
+8. **Every epoch differenced on Batch**: 69 jobs, one per epoch, then a
+   second for 84624, all submitted without waiting on one another:
+
+   ```sh
+   # for each $EPOCHS row in mjdobs order, then 84624 once more; <s> the epoch's import job:
+   rp job submit --run 10 --stage difference --job-definition $DEF --scope '{"expid": '$expid', "sca": 8, "fid": 8}' \
+     --inputs '[{"product": "l2files", "key": '"$(k $expid)"', "source_job": <s>}, {"product": "refimages", "key": '"$RKEY"', "source_job": 231},
+               {"product": "psfs", "key": '"$PSK"', "source_job": 1}, {"product": "psfs", "key": '"$PRK"', "source_job": 9}]' \
+     --expects '[{"product": "diffimages", "key": '"$(k $expid)"', "binding": null}, {"product": "sources", "key": '"$(k $expid)"', "binding": null}]'
+   ```
+
+   Check, held: jobs **232 to 300** (one per epoch in `mjdobs` order) and
+   **301** (84624's second) all published attempt 1, every one unbound
+   (no `official` row names them) with the refusal recorded; every
+   `infobitssci` 0; each job wrote 72 objects, 2.81 to 2.83 GB. **The two
+   84624 executions, jobs 233 and 301, are identical**: 5,115 source rows
+   each, equal in every column, NaN for NaN, except `job`, `sid` and the
+   drawn `pid` (13 and 78). That makes two runs on different Batch
+   instances with task 1's pinned seed, against task 1's two on the host.
+
+   Sources per epoch (no cap) run from 4,708 to 5,748, 365,104 over the
+   night (per epoch in step 10's table). The fan-out:
+
+   | measure | figure |
+   |---|---|
+   | first submit to first container start | 2.4 s (an instance was still up from step 7) |
+   | containers running at the peak | **70**, all started within 240 s of the first |
+   | queue wait | 2.4 to 201 s, median 166 s |
+   | in container | 1,091 to 1,181 s, median 1,124 s (18 min 44 s) |
+   | first submit to last publish | **1,399 s (23 min 19 s)** |
+   | peak RSS, largest child | 14.536 to 14.540 GiB, against the 24 GiB definition (9.46 GiB spare) |
+   | peak RSS, the stage's own process | at most 1.39 GiB |
+   | output | 72 objects and 2.81 to 2.83 GB per job; 197.2 GB under `10/difference/` |
+
+   On the 25-frame reference each difference took about 1,124 s in its
+   container. Parts 4 and 5 took 1,324 to 1,369 s against the two-frame
+   reference, on the same one vCPU; the memory peak hardly moved (14.35
+   then, 14.54 GiB now). Per job:
+
+   | # | expid | job | Batch job | queue s | container s | peak RSS self / child GiB | sources | infobitssci | output GB |
+   |---|---|---|---|---|---|---|---|---|---|
+   | 1 | 84613 | 232 | `82e845d9-742d-4c18-beec-26fef8e148f6` | 2 | 1125 | 1.28 / 14.54 | 5,408 | 0 | 2.82 |
+   | 2 | 84624 | 233 | `289dcd0e-7e27-433b-b1c1-0f1e7da2370f` | 112 | 1124 | 1.33 / 14.54 | 5,115 | 0 | 2.81 |
+   | 2 | 84624 | 301 | `b1d56468-588e-48b9-845e-7a39a0dce3fd` | 162 | 1146 | 1.26 / 14.54 | 5,115 | 0 | 2.81 |
+   | 3 | 84635 | 234 | `6643df09-1b3c-437a-92b3-c91762f64773` | 111 | 1133 | 1.28 / 14.54 | 5,536 | 0 | 2.82 |
+   | 4 | 84640 | 235 | `1bb91776-1c0e-4989-83c5-e74d98f3c7fc` | 110 | 1114 | 1.25 / 14.54 | 5,318 | 0 | 2.82 |
+   | 5 | 84637 | 236 | `158dc121-cc1b-40bb-8318-3df6ccdb98c1` | 109 | 1110 | 1.29 / 14.54 | 5,606 | 0 | 2.83 |
+   | 6 | 84644 | 237 | `e276536f-2cb5-4c6a-a5cb-a4aa70c525a2` | 108 | 1101 | 1.33 / 14.54 | 5,321 | 0 | 2.82 |
+   | 7 | 84659 | 238 | `0d5c66ee-13e5-4643-8c5b-db1069aeec37` | 106 | 1113 | 1.29 / 14.54 | 5,217 | 0 | 2.82 |
+   | 8 | 84664 | 239 | `29ebd849-e11a-48d7-b90b-1796eef99613` | 107 | 1138 | 1.30 / 14.54 | 5,039 | 0 | 2.81 |
+   | 9 | 84662 | 240 | `316a428d-d5bb-4e1d-8f07-5fe2680aa4e5` | 104 | 1114 | 1.39 / 14.54 | 5,144 | 0 | 2.82 |
+   | 10 | 84668 | 241 | `03395ec8-8633-420f-a29c-2cef0c728468` | 103 | 1123 | 1.30 / 14.54 | 5,225 | 0 | 2.82 |
+   | 11 | 84684 | 242 | `0f59f7cd-149a-436d-832f-17a6bb5662a1` | 104 | 1148 | 1.25 / 14.54 | 5,322 | 0 | 2.82 |
+   | 12 | 84687 | 243 | `ed8fadd1-46bd-4f91-8b53-3b47c1e5007e` | 102 | 1172 | 1.25 / 14.54 | 4,992 | 0 | 2.81 |
+   | 13 | 84693 | 244 | `a1ebc2fd-a8f6-47d5-a1cf-49812f226f0e` | 101 | 1128 | 1.28 / 14.54 | 5,461 | 0 | 2.82 |
+   | 14 | 84701 | 245 | `a30bfebe-2300-4283-97e9-b79dc912f46c` | 98 | 1117 | 1.32 / 14.54 | 4,923 | 0 | 2.81 |
+   | 15 | 84713 | 246 | `0caa52af-7c7a-42ed-ad1c-4a98d5fad3d0` | 97 | 1122 | 1.26 / 14.54 | 5,329 | 0 | 2.82 |
+   | 16 | 84710 | 247 | `32eee1be-f231-45bf-9583-2bd3404d02f5` | 97 | 1133 | 1.31 / 14.54 | 5,278 | 0 | 2.82 |
+   | 17 | 84723 | 248 | `0883678c-3a39-41e1-8b81-2c06bb002b81` | 96 | 1181 | 1.25 / 14.54 | 5,518 | 0 | 2.83 |
+   | 18 | 84730 | 249 | `b8c6c9ca-1956-4e5b-b54e-fcb6b498a869` | 95 | 1141 | 1.32 / 14.54 | 5,072 | 0 | 2.81 |
+   | 19 | 84738 | 250 | `867a12c8-5841-4129-bebd-7420928d3c0f` | 94 | 1132 | 1.33 / 14.54 | 4,948 | 0 | 2.81 |
+   | 20 | 84737 | 251 | `70869a94-6478-4f2a-9a06-38e852fc8dce` | 92 | 1132 | 1.29 / 14.54 | 5,096 | 0 | 2.81 |
+   | 21 | 84747 | 252 | `d3be1b9f-1191-48b4-8f36-c69b0f9cf125` | 96 | 1107 | 1.33 / 14.54 | 5,382 | 0 | 2.82 |
+   | 22 | 84749 | 253 | `b21f3980-b28a-4c49-be59-84294692f0df` | 95 | 1118 | 1.31 / 14.54 | 5,288 | 0 | 2.82 |
+   | 23 | 84761 | 254 | `32dd00df-407b-423b-ab50-1b0d0c75c7ad` | 94 | 1099 | 1.32 / 14.54 | 5,748 | 0 | 2.83 |
+   | 24 | 84765 | 255 | `b7c87e39-98c2-41f8-83e5-8ffd2f06f115` | 93 | 1127 | 1.33 / 14.54 | 5,146 | 0 | 2.81 |
+   | 25 | 84778 | 256 | `4b3b7277-181d-41ef-bf94-ff917447a85b` | 87 | 1154 | 1.29 / 14.54 | 4,950 | 0 | 2.81 |
+   | 26 | 84787 | 257 | `5c67e120-5f96-4b4d-aa2d-e9c938634060` | 90 | 1106 | 1.31 / 14.54 | 5,351 | 0 | 2.82 |
+   | 27 | 84781 | 258 | `652273ae-8fa6-4879-9150-b083b4c44ff6` | 89 | 1110 | 1.30 / 14.54 | 5,162 | 0 | 2.82 |
+   | 28 | 84791 | 259 | `1a41339d-7a8a-4a24-8e46-f136fcf2aec6` | 89 | 1097 | 1.30 / 14.54 | 5,319 | 0 | 2.82 |
+   | 29 | 84800 | 260 | `6c75835b-09fd-43f3-8dd4-fde549339b6f` | 87 | 1119 | 1.25 / 14.54 | 5,418 | 0 | 2.82 |
+   | 30 | 84805 | 261 | `daa2b8a5-a2c4-4a78-86e3-767156f096d9` | 201 | 1143 | 1.26 / 14.54 | 5,476 | 0 | 2.82 |
+   | 31 | 84806 | 262 | `099bc50c-1e94-4de5-8854-d2c52110de13` | 84 | 1117 | 1.33 / 14.54 | 4,990 | 0 | 2.81 |
+   | 32 | 84816 | 263 | `4515a6d1-9b21-4b4b-935f-f7fb87af1771` | 84 | 1130 | 1.34 / 14.54 | 5,212 | 0 | 2.81 |
+   | 33 | 84822 | 264 | `1ed385c0-07ac-4754-8106-17292e161a99` | 198 | 1107 | 1.27 / 14.54 | 5,336 | 0 | 2.83 |
+   | 34 | 84828 | 265 | `8d43f47e-2d7e-44c8-ad44-549a127c133a` | 196 | 1095 | 1.32 / 14.54 | 5,084 | 0 | 2.81 |
+   | 35 | 84837 | 266 | `40b7bca7-b84b-4806-acac-e939517fa6ef` | 195 | 1126 | 1.25 / 14.54 | 5,450 | 0 | 2.82 |
+   | 36 | 84850 | 267 | `0c76b357-d511-4831-b2f0-062d394afebe` | 194 | 1121 | 1.30 / 14.54 | 5,430 | 0 | 2.82 |
+   | 37 | 84856 | 268 | `506fbe75-6b86-4ecf-8cdf-6cad90f42a13` | 193 | 1120 | 1.24 / 14.54 | 4,768 | 0 | 2.81 |
+   | 38 | 84852 | 269 | `2a254735-4da0-4407-9fc2-c63718210f3b` | 192 | 1099 | 1.32 / 14.54 | 4,917 | 0 | 2.81 |
+   | 39 | 84861 | 270 | `d04a9dc1-b872-416e-88c4-1bf1cbe04bef` | 190 | 1110 | 1.25 / 14.54 | 5,300 | 0 | 2.82 |
+   | 40 | 84871 | 271 | `fdffbd65-63bf-465a-bdec-ebad30a55f2d` | 189 | 1107 | 1.30 / 14.54 | 5,173 | 0 | 2.82 |
+   | 41 | 84878 | 272 | `2686ea09-00e7-4c41-8bc3-63882df10238` | 188 | 1117 | 1.29 / 14.54 | 5,598 | 0 | 2.83 |
+   | 42 | 84880 | 273 | `e5aa625c-db39-4edb-9054-5be1d47f62ae` | 187 | 1127 | 1.31 / 14.54 | 5,350 | 0 | 2.82 |
+   | 43 | 84884 | 274 | `d3428d79-d7b0-4218-95af-b8264d96a5d4` | 186 | 1125 | 1.32 / 14.54 | 5,028 | 0 | 2.82 |
+   | 44 | 84894 | 275 | `3113fcac-db5b-4fa7-971d-bfde340d5853` | 188 | 1131 | 1.32 / 14.54 | 4,903 | 0 | 2.81 |
+   | 45 | 84901 | 276 | `2a45b61e-40e3-42a3-b9fc-eca4232e9be2` | 187 | 1119 | 1.33 / 14.54 | 5,261 | 0 | 2.82 |
+   | 46 | 84905 | 277 | `2313592a-8967-4e15-b592-e05ae203780c` | 182 | 1132 | 1.32 / 14.54 | 5,205 | 0 | 2.82 |
+   | 47 | 84919 | 278 | `0acc7f89-408b-455d-b6d2-6f4876f4a713` | 181 | 1109 | 1.30 / 14.54 | 5,246 | 0 | 2.82 |
+   | 48 | 84925 | 279 | `42630036-49ad-49e3-b5e2-22d92151457c` | 180 | 1124 | 1.32 / 14.54 | 5,093 | 0 | 2.82 |
+   | 49 | 84926 | 280 | `48bc8524-094c-4283-b4c7-b987468616dc` | 179 | 1120 | 1.31 / 14.54 | 5,366 | 0 | 2.82 |
+   | 50 | 84935 | 281 | `baf3ae30-103a-496c-beff-360ac6abf7b8` | 177 | 1125 | 1.36 / 14.54 | 5,301 | 0 | 2.82 |
+   | 51 | 84946 | 282 | `2a73aca8-acb3-49fa-a8d7-576d0ba9f54f` | 176 | 1152 | 1.31 / 14.54 | 5,110 | 0 | 2.81 |
+   | 52 | 84950 | 283 | `5ec8a8e0-7e75-4930-9edd-aaf1f3f4ab94` | 175 | 1125 | 1.27 / 14.54 | 5,260 | 0 | 2.82 |
+   | 53 | 84948 | 284 | `2e3c38e4-b65f-4590-b69e-899c814c51dc` | 174 | 1105 | 1.29 / 14.54 | 4,822 | 0 | 2.81 |
+   | 54 | 84958 | 285 | `575fefbc-80ad-4854-a261-caa199a72a29` | 176 | 1117 | 1.29 / 14.54 | 5,101 | 0 | 2.81 |
+   | 55 | 84965 | 286 | `adc4271f-e685-473c-b9c9-4856bd68f34d` | 175 | 1111 | 1.29 / 14.54 | 5,136 | 0 | 2.82 |
+   | 56 | 84970 | 287 | `75329e1f-2684-43bd-81bd-6c757f1064e0` | 174 | 1129 | 1.29 / 14.54 | 5,254 | 0 | 2.82 |
+   | 57 | 84986 | 288 | `b047438c-64fd-4d2b-abb4-e8c08915d300` | 173 | 1143 | 1.24 / 14.54 | 5,573 | 0 | 2.83 |
+   | 58 | 84984 | 289 | `73aa0047-730b-4d1d-bf3a-9970fa21be5b` | 172 | 1131 | 1.30 / 14.54 | 5,402 | 0 | 2.82 |
+   | 59 | 84990 | 290 | `c2f4b72b-d5ef-4809-9de6-6dfe98c8ec94` | 171 | 1091 | 1.31 / 14.54 | 5,320 | 0 | 2.82 |
+   | 60 | 85009 | 291 | `715d057c-8b82-4c0f-b77c-0ca25798880c` | 170 | 1120 | 1.33 / 14.54 | 5,108 | 0 | 2.82 |
+   | 61 | 85006 | 292 | `fa18220b-8377-4a5a-ab26-4ffef0abde9f` | 168 | 1109 | 1.26 / 14.54 | 5,013 | 0 | 2.81 |
+   | 62 | 85019 | 293 | `9b9d69ac-093b-4d07-84ea-974bea972faa` | 171 | 1132 | 1.30 / 14.54 | 5,007 | 0 | 2.81 |
+   | 63 | 85012 | 294 | `8c9c2b3d-3b18-4da2-817c-1ba734231ead` | 170 | 1157 | 1.33 / 14.54 | 5,451 | 0 | 2.82 |
+   | 64 | 85032 | 295 | `1257a5b5-7668-4915-b5c7-6a5a7ca90105` | 169 | 1105 | 1.33 / 14.54 | 5,195 | 0 | 2.82 |
+   | 65 | 85030 | 296 | `de02bad1-9aa1-4e9e-89ce-6f58bac51a6e` | 167 | 1128 | 1.26 / 14.54 | 5,520 | 0 | 2.82 |
+   | 66 | 85043 | 297 | `db13767e-7408-48a7-83a8-e29fe202f5a5` | 166 | 1149 | 1.33 / 14.54 | 4,994 | 0 | 2.81 |
+   | 67 | 85037 | 298 | `45ba7ba8-4b39-4cfa-982a-2d3e7e66e21a` | 165 | 1129 | 1.37 / 14.54 | 4,708 | 0 | 2.81 |
+   | 68 | 85053 | 299 | `1abf8911-85e6-4a04-a626-6952617d62ce` | 164 | 1135 | 1.30 / 14.54 | 4,820 | 0 | 2.81 |
+   | 69 | 85052 | 300 | `3ecab830-eaf1-4408-9c96-0708869ce660` | 163 | 1113 | 1.28 / 14.54 | 5,076 | 0 | 2.82 |
+
+9. **The chain downstream, epochs 1 to 5**, under run 10 on Batch. Run 10
+   is a campaign and names its own previous sets: epoch 1's associate has
+   no predecessor, and each later one names run 10's previous object set.
+   Each epoch's source set is run 10's own (job 233 for 84624, the first of
+   the two). The packets follow step 4: each names the Gaia catalogue and
+   the science PSF (import job 1), the step 7 reference (job 231), the
+   epoch's object set, every epoch so far's run-10 difference image and
+   import L2 file, the epoch's run-10 source set, and every earlier run-10
+   packet set. There are no `expects`.
+
+   ```sh
+   rp job submit --run 10 --stage associate --job-definition $DEF --scope '{"field": 4658155}' \
+     --inputs '[{"product": "sources", "key": '"$(k 84613)"', "source_job": 232}]'
+   # epoch n > 1, once associate n-1 is published (<d> the epoch's difference job, <a> associate n-1):
+   rp job submit --run 10 --stage associate --job-definition $DEF --scope '{"field": 4658155}' \
+     --inputs '[{"product": "sources", "key": '"$(k $expid)"', "source_job": <d>}, {"product": "objects", "key": '"$OKEY"', "source_job": <a>}]'
+   # once associate n and packet n-1 are published:
+   rp job submit --run 10 --stage packet --job-definition $DEF --scope '{"expid": '$expid', "sca": 8, "fid": 8}' \
+     --inputs "[{gaia, job 1}, {refimages, job 231}, {psfs $PSK, job 1}, {objects, <a_n>},
+               {diffimages and l2files of epochs 1..n}, {sources of epoch n, <d>}, {packets of epochs 1..n-1}]"
+   ```
+
+   Check, held: associate jobs **302, 303, 305, 306, 308** and packet jobs
+   **304, 307, 309, 310, 311**, all `SUCCEEDED` on attempt 1 and
+   published, none bound. In each object set the `objects` and
+   `memberships` row counts equal its manifest (new objects, pass 1 plus
+   pass 2). In each packet set the `packets`, `forced` and `external` row
+   counts equal its manifest. The packet reader reads `packets_official`,
+   so it cannot see an unbound set. Its own `read_set` was therefore run
+   on each of the five sets, reading the tables `packets` and `forced` in
+   place of their views (the views add only the binding), through a
+   wrapper outside the repository that changes nothing in the reader.
+   Every record validates, every cutout opens with its edge fill, every
+   forced entry equals its row, every history detection precedes its
+   trigger, and every index row's locator decodes to its record: **CLEAN
+   on all five**. `read_packets.py --job` on these sets is task 6's check,
+   after its change group binds them.
+
+   First submit to last packet published: **415 s**. The first associate
+   waited 181 s for the compute environment to scale up again after the
+   difference fan-out, and its container took 34.9 s (the image pulled
+   onto a fresh instance).
+
+   | # | expid | assoc job | queue s | container s | peak RSS MiB | sources in | new objects | memberships | objects | packet job | queue s | container s | peak RSS MiB | window | packets | forced rows (measured / reused) | Avro MB | reader functions |
+   |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+   | 1 | 84613 | 302 | 181 | 34.9 | 224 | 114 | 50 | 50 | 50 | 304 | 10 | 12.7 | 844 | 1 | 50 | 50 (50 / 0) | 9.6 | CLEAN |
+   | 2 | 84624 | 303 | 6 | 2.7 | 230 | 141 | 59 | 62 | 109 | 307 | 4 | 18.2 | 845 | 2 | 62 | 124 (121 / 3) | 12.0 | CLEAN |
+   | 3 | 84635 | 305 | 16 | 2.8 | 228 | 144 | 75 | 77 | 184 | 309 | 5 | 25.6 | 847 | 3 | 77 | 231 (227 / 4) | 14.8 | CLEAN |
+   | 4 | 84640 | 306 | 27 | 3.0 | 228 | 132 | 52 | 54 | 236 | 310 | 7 | 30.0 | 848 | 4 | 54 | 216 (211 / 5) | 10.5 | CLEAN |
+   | 5 | 84637 | 308 | 34 | 3.0 | 230 | 157 | 64 | 72 | 300 | 311 | 8 | 37.8 | 848 | 5 | 71 | 355 (336 / 19) | 13.7 | CLEAN |
+
+   Over the five epochs, associate accepted 688 sources (`flags = 0`,
+   S/N at least 5, from the uncapped sets) into 300 objects and 315
+   memberships, none in pass 2. There were 314 packets and 976 forced
+   rows (945 measured, 31 reused), 60.8 MB in all under `10/packet/` and
+   72.5 KB under `10/associate/`. Run 9's capped chain accepted 71, 60 and
+   85 sources for epochs 3 to 5. Run 10's uncapped sets on the 25-frame
+   reference give 144, 132 and 157: about twice as many objects per epoch
+   (75, 52, 64 new, against 33, 30, 34). **The cap is not the cause**:
+   every source associate accepted from run 10's sets ranks within the
+   brightest 177 by `fluxfit / fluxerr` (133, 161, 162, 164 and 177 for
+   epochs 1 to 5), so a cap of 500 would have kept every one, as on part
+   5's two epochs. The difference is in the source sets: run 9's are
+   dev's imported 500, run 10's the port's own on its own reference, and
+   more of the port's pass `flags = 0` and S/N at least 5 (cause not
+   probed). Forced photometry grows with the window as before:
+   3.6 s for one image, 17.3 s for five, about 3.5 s per window image.
+
+10. **Against dev's night** (a comparison, not a gate). Per epoch: the
+    port's uncapped source count; dev's full ZOGY PSF-fit catalog
+    (`zogy_diffimage_masked_psfcat.parquet` in the epoch's directory); the
+    match fraction within `match_radius` (1.528e-5°, 0.055″) between the
+    port's brightest 500 by `fluxfit / fluxerr` (from the uncapped set) and
+    dev's imported 500, also at 0.5″; the fraction of all the port's
+    sources within 0.055″ of a source in dev's full catalog; and the two
+    ZOGY difference images' pixel correlation and MAD (1.4826 × the median
+    absolute deviation) over their common finite non-zero pixels. Dev's
+    500 are the import's selection, by the same ranking. "In port's
+    reference" marks the 25 epochs the step 7 reference coadds. Dev's
+    reference (rfid 90011) contains none of the night.
+
+    | group | epochs | port sources, mean | dev full, mean | match of the 500 at 0.055″, mean (range) | at 0.5″, mean | port within 0.055″ of dev full, mean | pixel correlation, mean (range) | MAD port / dev, mean |
+    |---|---|---|---|---|---|---|---|---|
+    | in the port's reference | 25 | 5,255 | 5,344 | 0.117 (0.094 to 0.158) | 0.220 | 0.211 | 0.9700 (0.9609 to 0.9779) | 4.78 / 4.87 |
+    | outside it | 44 | 5,196 | 5,398 | 0.124 (0.080 to 0.182) | 0.224 | 0.211 | 0.9698 (0.9632 to 0.9769) | 4.80 / 4.86 |
+
+    | # | expid | in port's reference | port sources | dev's full catalog | match, port's 500 to dev's 500 (0.055″ / 0.5″) | port sources within 0.055″ of dev's full | pixel correlation | MAD port / dev |
+    |---|---|---|---|---|---|---|---|---|
+    | 1 | 84613 | yes | 5,408 | 5,450 | 0.112 / 0.218 | 0.227 | 0.9779 | 4.742 / 4.825 |
+    | 2 | 84624 | yes | 5,115 | 5,586 | 0.136 / 0.224 | 0.205 | 0.9649 | 4.825 / 4.809 |
+    | 3 | 84635 | yes | 5,536 | 5,227 | 0.102 / 0.206 | 0.201 | 0.9724 | 4.745 / 4.914 |
+    | 4 | 84640 | yes | 5,318 | 5,175 | 0.100 / 0.188 | 0.226 | 0.9644 | 4.776 / 4.898 |
+    | 5 | 84637 | yes | 5,606 | 5,590 | 0.122 / 0.232 | 0.204 | 0.9701 | 4.694 / 4.798 |
+    | 6 | 84644 | yes | 5,321 | 5,330 | 0.156 / 0.246 | 0.230 | 0.9734 | 4.773 / 4.868 |
+    | 7 | 84659 | yes | 5,217 | 4,863 | 0.112 / 0.196 | 0.186 | 0.9699 | 4.734 / 4.914 |
+    | 8 | 84664 | yes | 5,039 | 5,721 | 0.108 / 0.196 | 0.202 | 0.9735 | 4.818 / 4.785 |
+    | 9 | 84662 | yes | 5,144 | 5,273 | 0.108 / 0.212 | 0.232 | 0.9689 | 4.834 / 4.892 |
+    | 10 | 84668 | yes | 5,225 | 5,408 | 0.130 / 0.226 | 0.224 | 0.9681 | 4.784 / 4.854 |
+    | 11 | 84684 | yes | 5,322 | 5,109 | 0.100 / 0.232 | 0.209 | 0.9739 | 4.734 / 4.881 |
+    | 12 | 84687 | yes | 4,992 | 5,342 | 0.102 / 0.214 | 0.235 | 0.9685 | 4.831 / 4.847 |
+    | 13 | 84693 | yes | 5,461 | 5,343 | 0.130 / 0.234 | 0.226 | 0.9753 | 4.747 / 4.877 |
+    | 14 | 84701 | yes | 4,923 | 4,629 | 0.094 / 0.216 | 0.204 | 0.9637 | 4.840 / 5.068 |
+    | 15 | 84713 | yes | 5,329 | 5,519 | 0.122 / 0.232 | 0.222 | 0.9707 | 4.755 / 4.813 |
+    | 16 | 84710 | yes | 5,278 | 5,428 | 0.134 / 0.232 | 0.224 | 0.9682 | 4.783 / 4.847 |
+    | 17 | 84723 | yes | 5,518 | 4,599 | 0.094 / 0.194 | 0.121 | 0.9609 | 4.699 / 5.043 |
+    | 18 | 84730 | yes | 5,072 | 4,943 | 0.102 / 0.230 | 0.229 | 0.9687 | 4.845 / 4.965 |
+    | 19 | 84738 | yes | 4,948 | 5,269 | 0.106 / 0.226 | 0.230 | 0.9729 | 4.864 / 4.908 |
+    | 20 | 84737 | yes | 5,096 | 6,024 | 0.122 / 0.200 | 0.175 | 0.9706 | 4.809 / 4.749 |
+    | 21 | 84747 | yes | 5,382 | 5,323 | 0.108 / 0.256 | 0.223 | 0.9682 | 4.748 / 4.848 |
+    | 22 | 84749 | yes | 5,288 | 6,427 | 0.158 / 0.200 | 0.160 | 0.9653 | 4.785 / 4.720 |
+    | 23 | 84761 | yes | 5,748 | 5,415 | 0.124 / 0.232 | 0.194 | 0.9731 | 4.683 / 4.843 |
+    | 24 | 84765 | yes | 5,146 | 5,411 | 0.126 / 0.230 | 0.242 | 0.9689 | 4.799 / 4.850 |
+    | 25 | 84778 | yes | 4,950 | 5,195 | 0.112 / 0.224 | 0.233 | 0.9767 | 4.834 / 4.883 |
+    | 26 | 84787 | no | 5,351 | 5,829 | 0.134 / 0.236 | 0.221 | 0.9658 | 4.753 / 4.773 |
+    | 27 | 84781 | no | 5,162 | 5,505 | 0.116 / 0.218 | 0.205 | 0.9707 | 4.801 / 4.829 |
+    | 28 | 84791 | no | 5,319 | 5,177 | 0.132 / 0.230 | 0.210 | 0.9641 | 4.766 / 4.893 |
+    | 29 | 84800 | no | 5,418 | 5,345 | 0.158 / 0.270 | 0.228 | 0.9691 | 4.744 / 4.818 |
+    | 30 | 84805 | no | 5,476 | 5,223 | 0.128 / 0.244 | 0.216 | 0.9722 | 4.781 / 4.912 |
+    | 31 | 84806 | no | 4,990 | 4,852 | 0.122 / 0.236 | 0.243 | 0.9716 | 4.846 / 4.970 |
+    | 32 | 84816 | no | 5,212 | 5,792 | 0.144 / 0.208 | 0.204 | 0.9721 | 4.802 / 4.772 |
+    | 33 | 84822 | no | 5,336 | 5,364 | 0.146 / 0.224 | 0.224 | 0.9690 | 4.767 / 4.856 |
+    | 34 | 84828 | no | 5,084 | 5,440 | 0.124 / 0.228 | 0.228 | 0.9688 | 4.844 / 4.865 |
+    | 35 | 84837 | no | 5,450 | 6,617 | 0.138 / 0.192 | 0.144 | 0.9679 | 4.748 / 4.689 |
+    | 36 | 84850 | no | 5,430 | 5,466 | 0.182 / 0.284 | 0.227 | 0.9712 | 4.751 / 4.839 |
+    | 37 | 84856 | no | 4,768 | 4,975 | 0.080 / 0.210 | 0.234 | 0.9769 | 4.886 / 4.927 |
+    | 38 | 84852 | no | 4,917 | 4,748 | 0.092 / 0.224 | 0.214 | 0.9667 | 4.908 / 5.101 |
+    | 39 | 84861 | no | 5,300 | 5,301 | 0.132 / 0.224 | 0.221 | 0.9725 | 4.763 / 4.860 |
+    | 40 | 84871 | no | 5,173 | 5,282 | 0.128 / 0.238 | 0.233 | 0.9644 | 4.798 / 4.877 |
+    | 41 | 84878 | no | 5,598 | 5,037 | 0.092 / 0.200 | 0.175 | 0.9679 | 4.732 / 4.951 |
+    | 42 | 84880 | no | 5,350 | 5,643 | 0.150 / 0.222 | 0.212 | 0.9728 | 4.778 / 4.799 |
+    | 43 | 84884 | no | 5,028 | 4,517 | 0.096 / 0.224 | 0.173 | 0.9661 | 4.813 / 5.099 |
+    | 44 | 84894 | no | 4,903 | 5,619 | 0.086 / 0.172 | 0.200 | 0.9729 | 4.868 / 4.810 |
+    | 45 | 84901 | no | 5,261 | 5,873 | 0.164 / 0.242 | 0.208 | 0.9665 | 4.795 / 4.799 |
+    | 46 | 84905 | no | 5,205 | 5,733 | 0.140 / 0.232 | 0.200 | 0.9696 | 4.779 / 4.784 |
+    | 47 | 84919 | no | 5,246 | 5,155 | 0.112 / 0.238 | 0.226 | 0.9761 | 4.780 / 4.875 |
+    | 48 | 84925 | no | 5,093 | 5,047 | 0.110 / 0.232 | 0.230 | 0.9639 | 4.817 / 4.907 |
+    | 49 | 84926 | no | 5,366 | 5,315 | 0.112 / 0.206 | 0.234 | 0.9753 | 4.786 / 4.874 |
+    | 50 | 84935 | no | 5,301 | 4,627 | 0.106 / 0.202 | 0.149 | 0.9632 | 4.763 / 5.102 |
+    | 51 | 84946 | no | 5,110 | 5,864 | 0.108 / 0.188 | 0.193 | 0.9673 | 4.860 / 4.780 |
+    | 52 | 84950 | no | 5,260 | 6,201 | 0.160 / 0.232 | 0.160 | 0.9647 | 4.789 / 4.745 |
+    | 53 | 84948 | no | 4,822 | 4,753 | 0.088 / 0.230 | 0.234 | 0.9710 | 4.835 / 4.937 |
+    | 54 | 84958 | no | 5,101 | 5,714 | 0.130 / 0.242 | 0.211 | 0.9720 | 4.831 / 4.793 |
+    | 55 | 84965 | no | 5,136 | 5,039 | 0.142 / 0.250 | 0.231 | 0.9742 | 4.785 / 4.885 |
+    | 56 | 84970 | no | 5,254 | 5,478 | 0.120 / 0.218 | 0.239 | 0.9735 | 4.783 / 4.841 |
+    | 57 | 84986 | no | 5,573 | 5,392 | 0.112 / 0.194 | 0.212 | 0.9682 | 4.725 / 4.842 |
+    | 58 | 84984 | no | 5,402 | 5,687 | 0.162 / 0.254 | 0.223 | 0.9679 | 4.769 / 4.813 |
+    | 59 | 84990 | no | 5,320 | 6,202 | 0.136 / 0.216 | 0.172 | 0.9707 | 4.764 / 4.714 |
+    | 60 | 85009 | no | 5,108 | 5,631 | 0.164 / 0.236 | 0.204 | 0.9651 | 4.822 / 4.801 |
+    | 61 | 85006 | no | 5,013 | 5,377 | 0.132 / 0.246 | 0.204 | 0.9764 | 4.836 / 4.853 |
+    | 62 | 85019 | no | 5,007 | 4,863 | 0.108 / 0.218 | 0.236 | 0.9675 | 4.835 / 4.928 |
+    | 63 | 85012 | no | 5,451 | 5,989 | 0.114 / 0.212 | 0.211 | 0.9708 | 4.787 / 4.790 |
+    | 64 | 85032 | no | 5,195 | 5,449 | 0.146 / 0.230 | 0.219 | 0.9679 | 4.806 / 4.850 |
+    | 65 | 85030 | no | 5,520 | 5,775 | 0.128 / 0.218 | 0.217 | 0.9696 | 4.735 / 4.783 |
+    | 66 | 85043 | no | 4,994 | 5,807 | 0.108 / 0.190 | 0.197 | 0.9717 | 4.835 / 4.788 |
+    | 67 | 85037 | no | 4,708 | 4,399 | 0.088 / 0.208 | 0.225 | 0.9728 | 4.892 / 5.151 |
+    | 68 | 85053 | no | 4,820 | 5,341 | 0.090 / 0.194 | 0.209 | 0.9729 | 4.895 / 4.834 |
+    | 69 | 85052 | no | 5,076 | 5,048 | 0.114 / 0.222 | 0.238 | 0.9699 | 4.825 / 4.923 |
+
+    **On parity.** The images agree: on every epoch the port's difference
+    image correlates with dev's at 0.961 to 0.978, and its scatter is
+    within 2% of dev's (4.79 against 4.87 on average). That is against
+    part 4's 0.71 to 0.73, whose two-frame reference was half the epoch
+    itself. The source counts agree in total, the port at 0.975 of dev's
+    on average (0.82 to 1.20 per epoch), but the sources themselves mostly
+    do not: about 21% of the port's sources lie within 0.055″ of one of
+    dev's, and the two brightest-500 lists share 12% (22% at 0.5″).
+    The epochs inside the port's reference behave as the 44 outside it, to
+    the precision of these figures. Coadding the epoch at 1/25 weight does
+    not show, unlike the two-frame case. Unverified, but consistent with
+    every figure here: the two references are 25 different frames, so
+    their noise differs. Most of a chip's 5,000 sources sit near the
+    5σ PSF-fit threshold, so which noise peaks cross it differs between
+    dev's subtraction and the port's, while the images themselves agree.
+    A source-level parity check therefore needs either the same reference
+    frames (rfid 90011's 25 are not in this night) or injected sources
+    with known positions (data-limited, part 5).
+
 ## If a step fails
 
 - Part 1: stop. Before step 2 nothing has changed. After it, there is no
