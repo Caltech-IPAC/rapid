@@ -10,7 +10,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "pruneNotBestMerges.py"
-swvers = "1.2"
+swvers = "1.3"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -130,7 +130,7 @@ print("num_cores =",num_cores)
 # PRUNEFULLSCAN=True finds the not-best Sources by scanning the processing request's Sources child
 # tables in full, which also finds those of difference images set to vbest = 0 by hand or by
 # another processing request.  By default (unset or False), only the difference images of the
-# request's own rids are considered (see collect_notbest_sids), which is much faster.
+# request's own rids are considered (see load_notbest_sids_table), which is much faster.
 
 full_scan_str = os.getenv('PRUNEFULLSCAN')
 
@@ -176,16 +176,37 @@ def execute_or_raise(dbh,sql_queries,thread_debug,fh,context):
     return records
 
 
-def collect_notbest_sids(dbh,sources_child_tables,rids,full_scan):
+def drop_notbest_sids_table(dbh,notbest_tablename):
 
     '''
-    Return the sids of the Sources records that are no longer best (vbest = 0 in the associated
-    DiffImages record), from the given Sources child tables.
+    Drop the given not-best-sids database table if it exists (it is left behind if an earlier
+    run of this script for the same processing request failed).  Raises RuntimeError on a
+    database error.
+    '''
+
+    execute_or_raise(dbh,[f"DROP TABLE IF EXISTS {notbest_tablename};"],0,None,
+                     f"drop of {notbest_tablename}")
+
+
+def load_notbest_sids_table(dbh,notbest_tablename,sources_child_tables,rids,full_scan):
+
+    '''
+    Create the given database table and load into it, on the database server, the sids of the
+    Sources records that are no longer best (vbest = 0 in the associated DiffImages record),
+    from the given Sources child tables.
+
+    The sids are selected and inserted by INSERT ... SELECT on the database server, rather than
+    being read into Python and sent back as a literal array: a processing request can make
+    ~100 million sids not best, and a query string that size exceeds the 1-GB limit of a
+    PostgreSQL memory allocation.  The table is a regular (unlogged) table rather than a
+    temporary table, so that all the parallel worker processes can read the one copy.
 
     Parameters
     ----------
     dbh : database.modules.utils.rapid_db.RAPIDDB
         Open database connection.
+    notbest_tablename : str
+        Name of the database table to create; it must not exist.
     sources_child_tables : list of str
         Names of the existing sources_<obs_date>_<sca> child tables of the processing request.
     rids : list of int
@@ -202,32 +223,39 @@ def collect_notbest_sids(dbh,sources_child_tables,rids,full_scan):
 
     Returns
     -------
-    sids : list of int
-        Distinct not-best sids, in ascending order (empty if none).  Raises RuntimeError on a
+    nsids : int
+        Number of not-best sids loaded into the table (0 if none).  Raises RuntimeError on a
         database error.
     '''
 
     thread_debug = 0
 
-    sids = set()
+
+    # Create the table without its primary key, which is added after the bulk insert (faster).
+
+    sql_queries = [
+        "SET default_tablespace = pipeline_data_01;",
+        f"CREATE UNLOGGED TABLE {notbest_tablename} (sid bigint NOT NULL);",
+    ]
+
+    execute_or_raise(dbh,sql_queries,thread_debug,None,f"creation of {notbest_tablename}")
 
     if full_scan:
 
         for sources_tablename in sources_child_tables:
 
-            query = f"SELECT a.sid FROM {sources_tablename} AS a " +\
+            query = f"INSERT INTO {notbest_tablename} (sid) " +\
+                    f"SELECT a.sid FROM {sources_tablename} AS a " +\
                     f"JOIN diffimages AS b ON a.pid = b.pid " +\
                     f"WHERE b.vbest = 0;"
 
-            records = execute_or_raise(dbh,[query],thread_debug,None,
-                                       f"full scan of {sources_tablename} for not-best sids")
+            execute_or_raise(dbh,[query],thread_debug,None,
+                             f"full scan of {sources_tablename} for not-best sids")
 
-            sids.update(int(record[0]) for record in records)
-
-        return sorted(sids)
+        return index_and_count_notbest_sids_table(dbh,notbest_tablename)
 
     if len(rids) == 0:
-        return []
+        return index_and_count_notbest_sids_table(dbh,notbest_tablename)
 
 
     # Not-best difference images of the request's rids, and the child table that holds the
@@ -264,17 +292,35 @@ def collect_notbest_sids(dbh,sources_child_tables,rids,full_scan):
 
         pids_str = ",".join(str(pid) for pid in sorted(set(pids)))
 
-        query = f"SELECT sid FROM {sources_tablename} WHERE pid IN ({pids_str});"
+        query = f"INSERT INTO {notbest_tablename} (sid) " +\
+                f"SELECT sid FROM {sources_tablename} WHERE pid IN ({pids_str});"
 
-        records = execute_or_raise(dbh,[query],thread_debug,None,
-                                   f"lookup of not-best sids in {sources_tablename}")
+        execute_or_raise(dbh,[query],thread_debug,None,
+                         f"lookup of not-best sids in {sources_tablename}")
 
-        sids.update(int(record[0]) for record in records)
-
-    return sorted(sids)
+    return index_and_count_notbest_sids_table(dbh,notbest_tablename)
 
 
-def run_single_core_job(fields,notbest_sids,index_thread):
+def index_and_count_notbest_sids_table(dbh,notbest_tablename):
+
+    '''
+    Add the primary key (sid) to the given not-best-sids database table, analyze it, and return
+    its number of records.  Raises RuntimeError on a database error (including a duplicate sid,
+    which the sid sequence of the Sources tables rules out).
+    '''
+
+    sql_queries = [
+        f"ALTER TABLE {notbest_tablename} ADD PRIMARY KEY (sid) USING INDEX TABLESPACE pipeline_indx_01;",
+        f"ANALYZE {notbest_tablename};",
+        f"SELECT count(*) FROM {notbest_tablename};",
+    ]
+
+    records = execute_or_raise(dbh,sql_queries,0,None,f"indexing and counting of {notbest_tablename}")
+
+    return int(records[0][0])
+
+
+def run_single_core_job(fields,notbest_tablename,index_thread):
 
     '''
     Remove records from Merges_<field> database tables associated with Sources that are no longer best
@@ -330,22 +376,11 @@ def run_single_core_job(fields,notbest_sids,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
-    # Prune not-best merges for all fields associated with this thread:
-    # 1. Load the not-best sids, which the main process collected once, into a temporary table.
-    # 2. Delete from each Merges_<field> table the records having those sids, through its
-    #    sid index.
+    # Prune not-best merges for all fields associated with this thread: delete from each
+    # Merges_<field> table the records having the not-best sids, which the main process loaded
+    # once into the shared notbest_tablename database table, through its sid index.
 
-    sids_str = ",".join(str(sid) for sid in notbest_sids)
-
-    sql_queries = [
-        "CREATE TEMP TABLE notbest_sids (sid bigint PRIMARY KEY);",
-        f"INSERT INTO notbest_sids (sid) SELECT unnest(ARRAY[{sids_str}]::bigint[]);",
-        "ANALYZE notbest_sids;",
-    ]
-
-    execute_or_raise(dbh,sql_queries,thread_debug,fh,"building notbest_sids temporary table")
-
-    fh.write(f"Loaded {len(notbest_sids)} not-best sids into temporary table notbest_sids.\n")
+    fh.write(f"Using not-best sids in database table {notbest_tablename}.\n")
     fh.flush()
 
     for index_field in my_fields:
@@ -371,7 +406,7 @@ def run_single_core_job(fields,notbest_sids,index_thread):
 
             continue
 
-        query = f"WITH deleted AS (DELETE FROM {merges_tablename} AS m USING notbest_sids AS n " +\
+        query = f"WITH deleted AS (DELETE FROM {merges_tablename} AS m USING {notbest_tablename} AS n " +\
                 f"WHERE m.sid = n.sid RETURNING 1) SELECT count(*) FROM deleted;"
 
         records = execute_or_raise(dbh,[query],thread_debug,fh,
@@ -393,7 +428,7 @@ def run_single_core_job(fields,notbest_sids,index_thread):
         fh.flush()
 
 
-    # Close database connection (which drops the temporary table).
+    # Close database connection.
 
     dbh.close()
 
@@ -411,7 +446,7 @@ def run_single_core_job(fields,notbest_sids,index_thread):
     return ndeleted_by_field
 
 
-def execute_parallel_processes(fields_list,notbest_sids,num_cores):
+def execute_parallel_processes(fields_list,notbest_tablename,num_cores):
 
     '''
     Run run_single_core_job in num_cores processes, and return the combined dictionary of
@@ -422,7 +457,7 @@ def execute_parallel_processes(fields_list,notbest_sids,num_cores):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,fields_list,notbest_sids,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,fields_list,notbest_tablename,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -576,13 +611,19 @@ if __name__ == '__main__':
         exit(7)
 
 
-    # Collect, once, the sids of the Sources that are no longer best.
+    # Load, once, the sids of the Sources that are no longer best into a database table that
+    # all the worker processes share.  The table is named for the processing request, and one
+    # left behind by an earlier failed run for the same request is dropped first.
 
     rids = [meta_dict["rid"] for meta_dict in meta_list]
 
-    notbest_sids = collect_notbest_sids(dbh,sources_child_tables,rids,full_scan)
+    notbest_tablename = f"notbest_sids_{proc_date}_req{int(proc_req)}"
 
-    print(f"Number of not-best sids to prune (full_scan={full_scan}) = {len(notbest_sids)}")
+    drop_notbest_sids_table(dbh,notbest_tablename)
+
+    nnotbest_sids = load_notbest_sids_table(dbh,notbest_tablename,sources_child_tables,rids,full_scan)
+
+    print(f"Number of not-best sids to prune (full_scan={full_scan}) = {nnotbest_sids}")
 
 
     # Close the main database connection before the parallel phases, rather than leaving
@@ -605,17 +646,28 @@ if __name__ == '__main__':
     ################################################################################
     # Delete the not-best records for fields in parallel, with the number of parallel
     # threads equal to the number of cores on the job-launcher machine.  Skipped if
-    # there is nothing to prune.
+    # there is nothing to prune.  The not-best-sids table is dropped afterwards, even
+    # if a worker fails.
     ################################################################################
 
-    if len(notbest_sids) == 0:
-        print("No not-best sids; nothing to prune.")
-        ndeleted_by_field = {}
-    elif num_cores > 1:
-        ndeleted_by_field = execute_parallel_processes(fields_list,notbest_sids,num_cores)
-    else:
-        thread_index = 0
-        ndeleted_by_field = run_single_core_job(fields_list,notbest_sids,thread_index)
+    try:
+        if nnotbest_sids == 0:
+            print("No not-best sids; nothing to prune.")
+            ndeleted_by_field = {}
+        elif num_cores > 1:
+            ndeleted_by_field = execute_parallel_processes(fields_list,notbest_tablename,num_cores)
+        else:
+            thread_index = 0
+            ndeleted_by_field = run_single_core_job(fields_list,notbest_tablename,thread_index)
+    finally:
+        dbh = db.RAPIDDB()
+
+        if dbh.exit_code < 64:
+            drop_notbest_sids_table(dbh,notbest_tablename)
+            dbh.close()
+        else:
+            print(f"*** Error: Could not open database connection to drop {notbest_tablename}; " +
+                  f"it will be dropped by the next run for this processing request...")
 
     print("Total number of not-best Merges records deleted =",sum(ndeleted_by_field.values()))
 
