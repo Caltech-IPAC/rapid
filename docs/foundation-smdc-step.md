@@ -2361,6 +2361,128 @@ Measurements:
     | consumer check | 41.4 s, 45.9 s process (1,139 messages read), peak RSS 644 MiB |
     | second `publish` | 0.09 s, nothing produced |
 
+11. **The loop verb.** `rapidpipe loop` (`rapidpipe/foundation/loop.py`)
+    is one verb: no daemon, no service. It takes the selection as
+    arguments: filters, SCAs and pointings (`VVV_EEEE`, a visit and
+    exposure, or `all`). The selection is the operator's instruction for
+    that invocation. It is printed in every pass's summary line and is not
+    written into the run's settings body.
+
+    Each pass does the following, in order:
+
+    1. **Listing.** It lists the run's `[intake] source_root` with the
+       `list_objects_v2` paginator, unsigned when the run says so.
+    2. **Snapshot.** It reads the tables once.
+    3. **Submit.** It submits on Batch and never waits:
+       - **intake**: one job per admitted `_cal.asdf` stem that no
+         published intake of the dataset and no intake job of this run
+         names;
+       - **reference**: one job per (field, filter, SCA) that has
+         `min_frames` official L2 rows, while no intake is pending;
+       - **difference**: one job per official L2 row whose field has an
+         official reference;
+       - **associate**: per field, the earliest unassociated official
+         source set, one at a time, while no earlier epoch of the field
+         is upstream and no intake is pending;
+       - **packet**: per field, the earliest associated epoch that has no
+         packet set, naming the inputs the night named.
+    4. **Kafka.** It ends with `publish` over the run's unstamped official
+       packet sets.
+
+    "Pending" means a job of the run in state `launched` or `running`. A
+    `failed` job is reported in the summary, is never resubmitted, and
+    makes the verb exit 2 after that pass. A pass that finds nothing new,
+    nothing pending and nothing to submit is drained, and the verb exits 0.
+
+    ```sh
+    rp loop --run 12 --filters F146 --scas 8 --pointings 001_0001,001_0002 \
+      --job-definition rapid-rebuild:35          # under timeout 3600
+    ```
+
+    Orchestration ran from a worktree of `foundation/loop` at `c935ff79`.
+    The jobs ran in run 12's image, revision `c81e17ae`, job definition
+    `rapid-rebuild:35`. The loop changes no stage code, so the run's record
+    of the code is still true and no new run or revision was needed.
+
+    Before the live run, a replay check: with job 378 removed from a
+    snapshot, the planner named the same 22 inputs that task 4's hand
+    script recorded for 378.
+
+12. **The second pointing, ASDF to the topic with no hand.** Pointing
+    (visit 1, exposure 2) of F146 on SCA 8, passes 1 to 6: expids 1040102,
+    2040102, 3040102, 4040102, 5040102 and 6010102. All six landed on
+    **field 5390959**. The first pointing (field 5387158) was already
+    complete. The loop saw that and submitted nothing for it. The summary
+    lines, abridged (every line also carries `listed 68040`, `admitted 12`,
+    the selection and `failed []`):
+
+    | pass | at (UTC) | pass s | new | submitted | pending | packets produced (set) |
+    |---|---|---|---|---|---|---|
+    | 1 | 06:53:38 | 32.8 | 6 | intake 6 | | |
+    | 2 | 06:55:36 | 30.2 | 0 | | intake 6 | |
+    | 3 | 06:57:39 | 33.7 | 0 | reference 1 | | |
+    | 4, 5 | 06:59:38, 07:01:37 | 32.8, 31.5 | 0 | | reference 1 | |
+    | 6 | 07:03:41 | 36.0 | 0 | difference 6 | | |
+    | 7 to 9 | 07:05:39 to 07:09:38 | 32.4 to 33.8 | 0 | | difference 6 | |
+    | 10 | 07:11:39 | 33.0 | 0 | associate 1 | | |
+    | 11 | 07:13:34 | 28.6 | 0 | | associate 1 | |
+    | 12 | 07:15:38 | 32.6 | 0 | associate 1, packet 1 | | |
+    | 13 | 07:17:42 | 36.5 | 0 | associate 1, packet 1 | | 127 (394) |
+    | 14 | 07:19:45 | 39.2 | 0 | associate 1, packet 1 | | 118 (396) |
+    | 15 | 07:21:43 | 37.6 | 0 | associate 1, packet 1 | | 112 (398) |
+    | 16 | 07:23:41 | 35.8 | 0 | associate 1, packet 1 | | 123 (400) |
+    | 17 | 07:25:45 | 39.5 | 0 | packet 1 | | 123 (402) |
+    | 18 | 07:27:44 | 38.2 | 0 | | | 106 (403), **drained**, exit 0 |
+
+    The jobs:
+    - intake 379 to 384;
+    - reference 385: **rfid 5**, `nframes` 6;
+    - difference 386 to 391;
+    - associate 392, 393, 395, 397, 399 and **401** (binding 1071; chain
+      depth 6, 474 objects, 714 members);
+    - packet 394, 396, 398, 400, 402 and **403**.
+
+    Every job published and was bound. The packet sets came to **709
+    packets**. The last change group is 312, and `official` holds 1,073
+    rows.
+
+    Checks, all held:
+    - `read_packets.py` on the six new sets: CLEAN.
+    - `validate_run.py --run 12`: 6/6 PASS in 50.3 s. It covered twelve
+      epochs, two fields, two references and two chains of depth 6, with
+      1,534 packets and 2,051 forced rows reused from a predecessor.
+    - `consume_packets.py --run 12`: `CLEAN; read 1848, kept 1534, valid
+      1534, byte-equal 1534, packets expected 1534 seen 1534; partitions
+      p0 73505..75352`, 72.4 s.
+
+    Two fields advancing in one pass is proven by the unit test only. In
+    this run the first field had nothing left to do. Task 6's ramp
+    exercises it at scale.
+
+    Measurements. Queue wait is Batch's created to started. Container is
+    started to stopped. Job is the attempt's own start to end.
+
+    | stage | jobs | instance | queue wait min / median / max | container | job |
+    |---|---|---|---|---|---|
+    | intake | 379 to 384 | r6i.4xlarge | 135.6 / 136.2 / 140.9 s | 17.3 to 18.8 s | 15.4 to 16.5 s |
+    | reference | 385 | m6a.2xlarge | 162.9 s | 79.8 s | 74.2 s |
+    | difference | 386 to 391 | r6i.4xlarge | 175.2 / 175.8 / 185.7 s | 232.3 to 257.8 s | 230.0 to 255.6 s |
+    | associate | six | m6a.2xlarge | 5.4 / 7.6 / 218.5 s (the first, 392, waited for a scale-up) | 2.8 to 3.0 s | 1.0 to 1.1 s |
+    | packet | six | m6a.2xlarge | 5.1 / 12.1 / 70.6 s | 15.7, 21.0, 24.9, 30.6, 35.0, 38.6 s | 13.2 to 36.0 s |
+
+    | what | figure |
+    |---|---|
+    | one pass | 28.6 to 39.5 s; the listing of 272,160 keys (68,040 `_cal.asdf`) is about 30 s of it, and a pass that publishes adds the produce |
+    | idle pass (nothing to submit or publish) | 28.6 to 33.8 s |
+    | loop start to drained | 34.7 min (06:53:04 to 07:27:44), 18 passes |
+    | first intake submitted to last packet published | 34.1 min (06:53:38 to 07:27:44) |
+    | stages before the chain (intake, reference, difference) | 18 min, about 9 of it Batch queue wait |
+    | associate holding the pointing | 07:11:39 (first associate) to 07:23:41 (last): 12 min for six epochs whose containers took 3 s each; then 4 min to the last packet |
+
+    The chain is serial within a field and moves one epoch per pass, so
+    its span is the pass interval times the depth, not the work. Packet
+    *n* goes out beside associate *n + 1*.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
