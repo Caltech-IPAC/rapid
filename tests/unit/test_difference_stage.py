@@ -3,8 +3,9 @@
 Contracts: a job naming one ``l2files``, one ``refimages`` and two ``psfs``
 rows writes ``diffimages`` (one row) and ``sources`` with exactly their
 tables' columns from ``database/schema.sql``, sharing the ``pid`` drawn for
-the job; the ZOGY image's neighbours the packet stage reads sit beside it
-under the prefix and the inputs' copies do not; the tools run in `dev`'s
+the job; the work subdirectory publishes exactly the kept set (the ZOGY
+image, its uncertainty, mask and PSF-fit catalog, and the neighbours the
+packet stage reads), every FITS gzipped, and nothing else; the tools run in `dev`'s
 order with the reference background subtracted by bkgest; ``max_sources``
 caps the source set (its choice is ``source_set``'s, tested with the load
 science); the reference
@@ -166,23 +167,29 @@ def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, f
     assert {k: row[k] for k in ("pid", "dataset", "expid", "sca", "fid", "rid", "rfid")} == {
         "pid": PID, **KEY, "rid": RID, "rfid": RFID}
     assert row["jd"] == pytest.approx(MJDOBS + 2400000.5)
-    assert row["filename"] == prefix.as_uri() + "/diff/zogy_diffimage_masked.fits"
+    assert row["filename"] == prefix.as_uri() + "/diff/zogy_diffimage_masked.fits.gz"
     sources = read(prefix, "sources")
     assert sources and {s["pid"] for s in sources} == {PID}
     assert {(s["dataset"], s["expid"], s["sca"], s["fid"]) for s in sources} == {
         tuple(KEY.values())}
-    image = prefix / "diff" / "zogy_diffimage_masked.fits"
-    for name in ("zogy_diffimage_uncert_masked.fits", "diffpsf.fits",
-                 "bkg_subbed_science_image.fits",
-                 "awaicgen_output_mosaic_image_resampled_gainmatched.fits"):
-        assert (image.parent / name).is_file(), name   # the packet stage reads them beside it
-    for path in files.values():
-        assert not (image.parent / path.name).exists(), path.name   # inputs are not republished
-    assert not (image.parent / path.name.removesuffix(".gz")).exists()
     recorded = manifest(prefix)["difference"]
     assert (recorded["pid"], recorded["rfid"]) == (PID, RFID)
     assert recorded["zero_point"] == {"value": 17.0, "source": "header"}
     assert recorded["sources_kept"] == len(sources) <= recorded["sources_before_cap"]
+
+
+def test_the_job_publishes_the_kept_set_gzipped_and_nothing_else(tmp_path, files, fakes):
+    work = run_difference(tmp_path, files) / "diff"
+    images = {"zogy_diffimage_masked.fits",                  # the difference
+              "zogy_diffimage_uncert_masked.fits",           # its uncertainty
+              "awaicgen_output_mosaic_cov_map_resampled.fits",  # its mask
+              "diffpsf.fits",                                # forced photometry
+              "bkg_subbed_science_image.fits",               # forced photometry, science cutout
+              "awaicgen_output_mosaic_image_resampled_gainmatched.fits"}  # template cutout
+    assert {p.name for p in work.iterdir()} == (
+        {name + ".gz" for name in images} | {"zogy_diffimage_masked_psfcat.parquet"})
+    for name in images:
+        assert fits.getdata(work / (name + ".gz")) is not None, name
 
 
 def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_path, files, fakes):
@@ -232,11 +239,19 @@ def test_sfft_and_naive_catalogs_take_their_detection_overrides(tmp_path, files,
     assert option(sfft_runs[1], "-CATALOG_NAME") == "sfftdiffimage_masked_negative.txt"
 
 
-def test_the_sfft_image_is_masked_by_the_reference_coverage(tmp_path, files, fakes):
-    prefix = run_difference(tmp_path, files)
-    data = fits.getdata(prefix / "diff" / "sfftdiffimage_masked.fits")
-    assert np.isnan(data[:, :3]).all() and np.isfinite(data[:, 10:-10]).any()
-    assert (prefix / "diff" / "sfftdiffimage_unmasked.fits").is_file()
+def test_the_sfft_image_is_masked_by_the_reference_coverage(tmp_path, files, fakes, monkeypatch):
+    seen = {}
+    trim = difference.trim
+
+    def look_then_trim(work_dir, **kept):   # SFFT's files are not published; read them first
+        seen["masked"] = fits.getdata(work_dir / "sfftdiffimage_masked.fits")
+        seen["unmasked"] = (work_dir / "sfftdiffimage_unmasked.fits").is_file()
+        return trim(work_dir, **kept)
+
+    monkeypatch.setattr(difference, "trim", look_then_trim)
+    run_difference(tmp_path, files)
+    assert np.isnan(seen["masked"][:, :3]).all() and np.isfinite(seen["masked"][:, 10:-10]).any()
+    assert seen["unmasked"]
 
 
 def test_max_sources_caps_the_source_set_and_records_the_count_before_it(tmp_path, files, fakes):

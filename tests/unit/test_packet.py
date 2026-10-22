@@ -5,11 +5,14 @@ trigger is not a previous detection and is not counted in nDiaSources;
 each index row's offset and length hold exactly its record; the three
 cutouts are (2 half width + 1) pixels square with off-chip pixels zero;
 a forced row a predecessor set holds is carried, not measured again,
-while a pair it lacks is measured.
+while a pair it lacks is measured; a difference image's neighbours are
+read under its own suffix, so a gzipped epoch gives the packets a plain
+one gives.
 """
 
 from __future__ import annotations
 
+import gzip
 import io
 
 import fastavro
@@ -26,7 +29,7 @@ from rapidpipe.science.alerts.assemble import load_schema
 from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS
 from rapidpipe.science.alerts.records import Source
 from rapidpipe.science.statistics.sums import Sums
-from rapidpipe.stages.packet import Read, WindowImage, write_set
+from rapidpipe.stages.packet import Read, WindowImage, neighbour, write_set
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
@@ -51,7 +54,7 @@ def gaussian(size: int, x: float, y: float, sigma: float = 1.2) -> np.ndarray:
     return np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma ** 2))
 
 
-def write_epoch(directory, stars: list[tuple[float, float, float]]) -> None:
+def write_epoch(directory, stars: list[tuple[float, float, float]], gzipped: bool = False) -> None:
     """An epoch's job directory: difference, uncertainty, PSF, science and reference images."""
     directory.mkdir()
     header = wcs().to_header()
@@ -66,6 +69,10 @@ def write_epoch(directory, stars: list[tuple[float, float, float]]) -> None:
         fits.PrimaryHDU(data.astype(np.float32), header=header).writeto(directory / name)
     psf = gaussian(21, 10, 10)
     fits.PrimaryHDU(psf / psf.sum()).writeto(directory / "diffpsf.fits")
+    if gzipped:   # as a difference job publishes them since the trim
+        for path in list(directory.iterdir()):
+            path.with_name(path.name + ".gz").write_bytes(gzip.compress(path.read_bytes()))
+            path.unlink()
 
 
 def corners() -> tuple[float, ...]:
@@ -80,20 +87,24 @@ def source(epoch: int, sid: int, x: float, y: float, aid: int) -> Source:
                   fluxfit=500.0, fluxerr=10.0, flags=0, field=1, pid=100 + epoch, exptime=60.0)
 
 
-def build(tmp_path, reuse_first_epoch: bool):
+def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False):
     """Two objects: A with members in epochs 1, 2 and 3; B (near the edge) only in epoch 2.
 
     The packet set is epoch 2's; epoch 3's detection of A is after the trigger.
     """
-    write_epoch(tmp_path / "e1", [(50, 50, 400.0)])
-    write_epoch(tmp_path / "e2", [(50, 50, 500.0), (20, 80, 300.0)])
-    sci_psf = tmp_path / "e1" / "diffpsf.fits"
+    write_epoch(tmp_path / "e1", [(50, 50, 400.0)], gzipped)
+    write_epoch(tmp_path / "e2", [(50, 50, 500.0), (20, 80, 300.0)], gzipped)
+    diff = "zogy_diffimage_masked.fits" + (".gz" if gzipped else "")
+
+    def beside(e, name):
+        return tmp_path / f"e{e}" / neighbour(name, diff)
+
+    sci_psf = beside(1, "diffpsf.fits")
     images = [WindowImage(pid=100 + e, rid=200 + e, expid=e, sca=8, fid=8, band="W146",
-                          mjdobs=MJD[e], corners=corners(),
-                          diff=tmp_path / f"e{e}" / "zogy_diffimage_masked.fits",
-                          diff_psf=tmp_path / f"e{e}" / "diffpsf.fits",
-                          diff_uncert=tmp_path / f"e{e}" / "zogy_diffimage_uncert_masked.fits",
-                          sci=tmp_path / f"e{e}" / "bkg_subbed_science_image.fits",
+                          mjdobs=MJD[e], corners=corners(), diff=tmp_path / f"e{e}" / diff,
+                          diff_psf=beside(e, "diffpsf.fits"),
+                          diff_uncert=beside(e, "zogy_diffimage_uncert_masked.fits"),
+                          sci=beside(e, "bkg_subbed_science_image.fits"),
                           sci_psf=sci_psf) for e in (1, 2)]
     a1, a2, a3 = (source(e, 1, 50, 50, aid=7) for e in (1, 2, 3))
     b2 = source(2, 2, 20, 80, aid=9)
@@ -187,3 +198,17 @@ def test_forced_rows_a_predecessor_holds_are_reused_not_measured(tmp_path):
     carried = {f["midpointMjd"]: f["psfFlux"] for f in records[1]["prvDiaForcedSources"]}
     # the record's psfFlux is an Avro float
     assert carried == {MJD[1]: 12345.0, MJD[2]: pytest.approx(forced[(7, 202)]["psf_flux"], rel=1e-6)}
+
+
+def test_a_gzipped_epoch_gives_the_packets_a_plain_one_gives(tmp_path):
+    assert neighbour("diffpsf.fits", "s3://b/p/zogy_diffimage_masked.fits.gz") == "diffpsf.fits.gz"
+    assert neighbour("diffpsf.fits", "s3://b/p/zogy_diffimage_masked.fits") == "diffpsf.fits"
+    (tmp_path / "plain").mkdir(), (tmp_path / "gzipped").mkdir()
+    _, _, plain = build(tmp_path / "plain", reuse_first_epoch=False)
+    _, _, gzipped = build(tmp_path / "gzipped", reuse_first_epoch=False, gzipped=True)
+    assert plain.keys() == gzipped.keys()
+    for sid, record in plain.items():
+        for name in ("cutoutDifference", "cutoutScience", "cutoutReference"):
+            assert gzipped[sid][name] == record[name]
+        assert [(f["psfFlux"], f["scienceFlux"]) for f in gzipped[sid]["prvDiaForcedSources"]] == [
+            (f["psfFlux"], f["scienceFlux"]) for f in record["prvDiaForcedSources"]]

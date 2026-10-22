@@ -63,6 +63,11 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   difference image, the background-subtracted science image and the
   resampled gain-matched reference beside it, off-chip pixels zero.
 
+A difference image's neighbours (its PSF, uncertainty, science image and
+template) are read under the difference image's own suffix
+(:func:`neighbour`): ``.fits.gz`` from a difference job that gzips its
+files, ``.fits`` from one before it (run 12's).
+
 Outputs under the prefix: ``packets/<expid>-<sca>-<fid>.avro`` (one Avro
 object container, deflate level 1, one record per block), declared tables
 ``packets`` (``packets.parquet``, the index: each record's block offset and
@@ -270,7 +275,8 @@ def _read(job: JobContext) -> Read:
                 raise ValueError(f"job {job.job}: difference image {d['pid']} has no named"
                                  f" l2files input for rid {d['rid']}")
             diff = get(d["filename"])
-            uncert = fp.DIFF_UNCERT_BASENAMES.get(diff.name)
+            plain = diff.name.removesuffix(".gz")
+            uncert = fp.DIFF_UNCERT_BASENAMES.get(plain)
             if (d["expid"], d["sca"], d["fid"]) == (key["expid"], key["sca"], key["fid"]):
                 for name in CUTOUT_FILES.values():  # write_set finds them beside the trigger
                     _beside(d["filename"], name)
@@ -279,7 +285,7 @@ def _read(job: JobContext) -> Read:
                 band=d["filter"], mjdobs=l2["mjdobs"],
                 corners=tuple(d[c] for c in ("ra1", "dec1", "ra2", "dec2",
                                              "ra3", "dec3", "ra4", "dec4")),
-                diff=diff, diff_psf=_beside(d["filename"], fp.DIFF_PSF_BASENAMES[diff.name]),
+                diff=diff, diff_psf=_beside(d["filename"], fp.DIFF_PSF_BASENAMES[plain]),
                 diff_uncert=_beside(d["filename"], uncert) if uncert else None,
                 sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf))
 
@@ -312,9 +318,14 @@ def _read(job: JobContext) -> Read:
                 refcat_path=get(ref["filename"]) if ref else None)
 
 
+def neighbour(name: str, diff: str) -> str:
+    """The published name of the difference image ``diff``'s neighbour ``name``: gzipped beside a gzipped image."""
+    return name + ".gz" if diff.endswith(".fits.gz") else name
+
+
 def _beside(url: str, name: str) -> Path:
-    """The file ``name`` in the same directory as the file ``url``, fetched like it."""
-    return get(url.rsplit("/", 1)[0] + "/" + name)
+    """The neighbour ``name`` of the difference image ``url``, in its directory, fetched like it."""
+    return get(url.rsplit("/", 1)[0] + "/" + neighbour(name, url))
 
 
 def measure_forced(images: list[WindowImage], positions: list[fp.Position],
@@ -459,8 +470,10 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
     half = int(settings["stamp_half_width"])
     stamps = {name: load_fits_image(path) for name, path in (
         ("difference", read.trigger_image.diff),
-        ("science", read.trigger_image.diff.with_name(CUTOUT_FILES["sci"])),
-        ("template", read.trigger_image.diff.with_name(CUTOUT_FILES["ref"])))}
+        ("science", read.trigger_image.diff.with_name(
+            neighbour(CUTOUT_FILES["sci"], read.trigger_image.diff.name))),
+        ("template", read.trigger_image.diff.with_name(
+            neighbour(CUTOUT_FILES["ref"], read.trigger_image.diff.name))))}
     timing["cutouts_s"] = time.perf_counter() - t0
 
     forced_by_aid: dict[int, list[dict]] = {}
