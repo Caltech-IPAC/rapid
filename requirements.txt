@@ -31,3 +31,8 @@ photutils>=2.0
 pyarrow>=14
 # rapidpipe.science.alerts.crossmatch matches catalogs with scipy.spatial.cKDTree (dev's _nearest_within).
 scipy>=1.11
+# rapidpipe publish (rapidpipe.foundation.publish_kafka) produces packets to
+# MSK with kafka-python and signs its IAM auth with the AWS MSK signer; both
+# are imported lazily, inside the producer's factory, so nothing else needs them.
+kafka-python>=3.0
+aws-msk-iam-sasl-signer-python>=1.0

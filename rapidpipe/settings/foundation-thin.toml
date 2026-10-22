@@ -38,6 +38,15 @@ gaia_max_matches = 3
 refcat_radius_arcsec = 5.0
 refcat_max_matches = 3
 
+[kafka]
+# New, not dev's: `rapidpipe publish` produces official packet sets to the
+# topic. The SSM parameter names, never their values: the deployment holds
+# the cluster's bootstrap servers (IAM auth), the topic and the largest
+# request the producer may send.
+bootstrap_servers_parameter = "/rapid/scratch/kafka/bootstrap-servers"
+topic_parameter = "/rapid/scratch/kafka/topic"
+max_request_bytes_parameter = "/rapid/scratch/kafka/max-request-bytes"
+
 # The reference stage (rapidpipe.stages.reference), one subtable per dev
 # ini section. Every value is the dev default the ported step reads, from
 # origin/dev's cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini at
