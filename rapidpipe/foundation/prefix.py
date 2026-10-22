@@ -46,8 +46,12 @@ def _bucket_key(url: str) -> tuple[str, str]:
     return parsed.netloc, parsed.path.lstrip("/")
 
 
-def get(url: str, *, client: Any = None) -> Path:
-    """A local path holding the file ``url`` names; ``FileNotFoundError`` when an S3 object is absent."""
+def get(url: str, *, client: Any = None, unsigned: bool = False) -> Path:
+    """A local path holding the file ``url`` names; ``FileNotFoundError`` when an S3 object is absent.
+
+    ``unsigned`` reads a public bucket anonymously (botocore's ``UNSIGNED``
+    signature), as the intake stage reads its source root.
+    """
     global _cache
     if urlparse(url).scheme == "file":
         return local_path(url)
@@ -59,7 +63,8 @@ def get(url: str, *, client: Any = None) -> Path:
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            (client or storage.s3_client()).download_file(bucket, key, str(path))
+            s3 = client or (storage.s3_client(unsigned=True) if unsigned else storage.s3_client())
+            s3.download_file(bucket, key, str(path))
         except Exception as exc:  # noqa: BLE001 - ClientError-shaped
             if storage.is_not_found(exc):
                 raise FileNotFoundError(url) from exc

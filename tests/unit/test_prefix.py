@@ -4,7 +4,8 @@ Contracts: ``get`` gives a ``file://`` URL's own path and downloads an
 ``s3://`` object once per process, raising ``FileNotFoundError`` for an
 absent one; ``put`` leaves a ``file://`` prefix alone and uploads a
 directory to an ``s3://`` prefix with ``manifest.json`` last; ``attempts``
-names the attempt directories present under an ``s3://`` job prefix; the
+names the attempt directories present under an ``s3://`` job prefix; an
+``unsigned`` get asks for an unsigned client; the
 download cache is made under ``TMPDIR`` and removed at process exit.
 """
 
@@ -83,3 +84,14 @@ def test_the_download_cache_is_made_under_tmpdir_and_removed_at_exit(monkeypatch
     (remove, *args), kwargs = registered[0]
     remove(*args, **kwargs)
     assert not cache.exists()
+
+
+def test_an_unsigned_get_reads_through_an_unsigned_client(monkeypatch, tmp_path):
+    fake = FakeS3(page_size=2)
+    fake.seed("public", "l2/a.asdf", b"asdf")
+    asked = []
+    monkeypatch.setattr("rapidpipe.products.storage.s3_client",
+                        lambda unsigned=False: asked.append(unsigned) or fake)
+    monkeypatch.setattr(prefix, "_cache", tmp_path / "cache")
+    assert prefix.get("s3://public/l2/a.asdf", unsigned=True).read_bytes() == b"asdf"
+    assert asked == [True]
