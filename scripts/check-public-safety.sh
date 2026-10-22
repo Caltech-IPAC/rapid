@@ -45,6 +45,8 @@ scripts/check-public-safety.sh	~/Claude
 .githooks/pre-push	/Users/laher
 .githooks/pre-push	~/Vault
 .githooks/pre-push	~/Claude
+docs/foundation-smdc-step.md	634500218910
+scripts/check-public-safety.sh	634500218910
 EOF
 )"
 

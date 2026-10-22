@@ -882,6 +882,392 @@ gave 5,539 to 5,544.
    (job 9). An import's `psf` scope declares `"kind"`, and a file whose
    `PSFKIND` names the other kind fails before its manifest.
 
+The night's steps 2 to 5 ran unattended on 2026-10-21 and 22 from the same
+host, from `rebuild` at `8a49bf70` (part 6 step 1), on `rapid-rebuild:33`
+(image `rebuild-8a49bf70…`, 1 vCPU, 24 GiB, Batch retrying exit 75 only).
+The night is 69 epochs of field 4658155, SCA 8, W146, one simulated night
+from 2027-10-07 07:18 to 23:58 UTC, every epoch differenced by `dev`
+against reference rfid 90011; its first two epochs by `mjdobs` (84613 and
+84624) are part 3's. `$EPOCHS` is the bucket's
+`EPOCHS-20260821-sca8.tsv`, one row per epoch. The loops of steps 3 and 4
+were Python scripts outside the repository calling the same `rp` verbs per
+epoch; they are shown here as the commands they issued.
+
+2. **The night's files, and the live run by cutover.**
+
+   ```sh
+   aws s3 cp --recursive "s3://$INPUTS_BUCKET/foundation/field-4658155-20260821/" "$DATA/" \
+   && (cd "$DATA" && sha256sum -c SHA256SUMS --quiet && sha256sum -c SHA256SUMS-epochs-20260821-sca8 --quiet)
+   rp run create --who "$USER" --why "foundation-night-2026-10-21 task 4 (night-baseline): ..." \
+     --revision "$(git -C "$RAPID" rev-parse HEAD)" --settings "$RAPID/rapidpipe/settings/foundation-thin.toml" \
+     --survey GBTDS --dataset $D
+   echo '[{"close": 1, "open": {"survey": "GBTDS", "dataset": "'$D'", "run": 9}}]' > cutover.json \
+   && rp official change --group cutover.json --who "$USER" --why "cutover: run 9 (the night's live loop) replaces run 1 as live"
+   ```
+
+   Check, all held: 566 files, 23,459,086,282 bytes, both checksum files
+   clean (the copy took 92 s, 255 MB/s; the two checks 14 s and 230 s).
+   The run is **run 9**, not live when created. **Group 14** closed live
+   binding 1 (run 1) and opened **live binding 50** (run 9), its only two
+   rows; `rp run show 9` shows `"live": 50` and `rp run show 1` `"live":
+   null`; the 15 open product bindings were the same before and after. The
+   operation took 4.1 ms through the pooler (0.49 s for the process). The
+   imported products stay bound to run 1's jobs: a cutover carries only
+   what it names.
+
+3. **Import the 67 new epochs** under run 9, one `job local` per epoch in
+   `mjdobs` order, with part 3's `epoch`, `expects` and `$PSF`:
+
+   ```sh
+   # for each $EPOCHS row after the first two, in mjdobs order:
+   rp job local --run 9 --stage import --scope "$(epoch $expid $rid $pid $(basename $l2) $jid)" \
+     --expects "$(expects $expid)" --inputs "[$PSF]"
+   ```
+
+   Check, all held: jobs 30 to 96 `published`, each bound automatically
+   (groups 15 to 81, four bindings each, no refusal); `exposures_official`,
+   `l2files_official` and `diffimages_official` 69 rows each;
+   `sources_official` 69 sets of 500 rows (34,500). The cap's contract
+   holds per epoch: dev's ZOGY PSF-fit catalog has 4,399 to 6,617 rows per
+   epoch and 4,336 to 6,518 inside the fit-position bounds with a finite
+   S/N, so every set keeps 500. (Sixteen epochs have fewer than 5,000
+   eligible rows; the least is 85037, the 67th, at 4,336.)
+
+   The job row (started to ended) took 5.90 to 7.14 s, mean 6.36 s; the
+   whole process 7.02 to 8.65 s, mean 7.51 s; the loop 8 min 23 s for 67
+   epochs. The imports wrote 21.9 GB (737 objects) under
+   `9/import/`, about 327 MB per epoch: the L2 file and the five
+   difference-job images the packet stage reads. Per epoch:
+
+   | # | expid | UTC | job | catalog rows | eligible | sources | job row s | process s |
+   |---|---|---|---|---|---|---|---|---|
+   | 3 | 84635 | 07:45 | 30 | 5,227 | 5,153 | 500 | 6.75 | 7.96 |
+   | 4 | 84640 | 07:59 | 31 | 5,175 | 5,098 | 500 | 6.26 | 7.42 |
+   | 5 | 84637 | 08:13 | 32 | 5,590 | 5,491 | 500 | 6.54 | 7.68 |
+   | 6 | 84644 | 08:26 | 33 | 5,330 | 5,250 | 500 | 6.36 | 7.52 |
+   | 7 | 84659 | 08:40 | 34 | 4,863 | 4,785 | 500 | 6.30 | 7.42 |
+   | 8 | 84664 | 08:54 | 35 | 5,721 | 5,648 | 500 | 6.13 | 7.26 |
+   | 9 | 84662 | 09:07 | 36 | 5,273 | 5,189 | 500 | 6.58 | 7.70 |
+   | 10 | 84668 | 09:21 | 37 | 5,408 | 5,343 | 500 | 6.33 | 7.50 |
+   | 11 | 84684 | 09:49 | 38 | 5,109 | 5,034 | 500 | 6.45 | 7.58 |
+   | 12 | 84687 | 10:03 | 39 | 5,342 | 5,274 | 500 | 6.37 | 7.51 |
+   | 13 | 84693 | 10:16 | 40 | 5,343 | 5,256 | 500 | 6.07 | 7.18 |
+   | 14 | 84701 | 10:30 | 41 | 4,629 | 4,566 | 500 | 6.10 | 7.20 |
+   | 15 | 84713 | 10:44 | 42 | 5,519 | 5,440 | 500 | 6.18 | 7.32 |
+   | 16 | 84710 | 10:57 | 43 | 5,428 | 5,349 | 500 | 6.23 | 7.38 |
+   | 17 | 84723 | 11:11 | 44 | 4,599 | 4,537 | 500 | 7.02 | 8.11 |
+   | 18 | 84730 | 11:25 | 45 | 4,943 | 4,878 | 500 | 6.50 | 7.61 |
+   | 19 | 84738 | 11:38 | 46 | 5,269 | 5,193 | 500 | 6.43 | 7.56 |
+   | 20 | 84737 | 11:52 | 47 | 6,024 | 5,932 | 500 | 6.14 | 7.25 |
+   | 21 | 84747 | 12:06 | 48 | 5,323 | 5,262 | 500 | 6.41 | 7.54 |
+   | 22 | 84749 | 12:20 | 49 | 6,427 | 6,350 | 500 | 6.32 | 7.44 |
+   | 23 | 84761 | 12:47 | 50 | 5,415 | 5,338 | 500 | 6.30 | 7.48 |
+   | 24 | 84765 | 13:01 | 51 | 5,411 | 5,351 | 500 | 6.47 | 7.60 |
+   | 25 | 84778 | 13:15 | 52 | 5,195 | 5,124 | 500 | 6.25 | 7.37 |
+   | 26 | 84787 | 13:28 | 53 | 5,829 | 5,730 | 500 | 6.26 | 7.38 |
+   | 27 | 84781 | 13:42 | 54 | 5,505 | 5,412 | 500 | 6.06 | 7.18 |
+   | 28 | 84791 | 13:56 | 55 | 5,177 | 5,103 | 500 | 6.23 | 7.36 |
+   | 29 | 84800 | 14:10 | 56 | 5,345 | 5,263 | 500 | 5.99 | 7.11 |
+   | 30 | 84805 | 14:23 | 57 | 5,223 | 5,156 | 500 | 6.43 | 7.57 |
+   | 31 | 84806 | 14:37 | 58 | 4,852 | 4,768 | 500 | 6.38 | 7.48 |
+   | 32 | 84816 | 14:51 | 59 | 5,792 | 5,711 | 500 | 6.23 | 7.35 |
+   | 33 | 84822 | 15:04 | 60 | 5,364 | 5,293 | 500 | 7.14 | 8.26 |
+   | 34 | 84828 | 15:18 | 61 | 5,440 | 5,360 | 500 | 6.20 | 7.30 |
+   | 35 | 84837 | 15:46 | 62 | 6,617 | 6,518 | 500 | 6.56 | 7.68 |
+   | 36 | 84850 | 15:59 | 63 | 5,466 | 5,394 | 500 | 6.20 | 7.32 |
+   | 37 | 84856 | 16:13 | 64 | 4,975 | 4,889 | 500 | 6.39 | 7.53 |
+   | 38 | 84852 | 16:27 | 65 | 4,748 | 4,673 | 500 | 6.15 | 8.65 |
+   | 39 | 84861 | 16:41 | 66 | 5,301 | 5,221 | 500 | 6.33 | 7.44 |
+   | 40 | 84871 | 16:54 | 67 | 5,282 | 5,210 | 500 | 6.30 | 7.41 |
+   | 41 | 84878 | 17:08 | 68 | 5,037 | 4,954 | 500 | 6.14 | 7.29 |
+   | 42 | 84880 | 17:22 | 69 | 5,643 | 5,560 | 500 | 6.31 | 7.41 |
+   | 43 | 84884 | 17:35 | 70 | 4,517 | 4,440 | 500 | 6.43 | 7.59 |
+   | 44 | 84894 | 17:49 | 71 | 5,619 | 5,544 | 500 | 6.37 | 7.49 |
+   | 45 | 84901 | 18:03 | 72 | 5,873 | 5,790 | 500 | 7.00 | 8.12 |
+   | 46 | 84905 | 18:16 | 73 | 5,733 | 5,643 | 500 | 6.23 | 7.37 |
+   | 47 | 84919 | 18:43 | 74 | 5,155 | 5,127 | 500 | 6.37 | 7.52 |
+   | 48 | 84925 | 18:57 | 75 | 5,047 | 4,985 | 500 | 6.35 | 7.46 |
+   | 49 | 84926 | 19:10 | 76 | 5,315 | 5,243 | 500 | 6.39 | 7.51 |
+   | 50 | 84935 | 19:24 | 77 | 4,627 | 4,559 | 500 | 5.90 | 7.02 |
+   | 51 | 84946 | 19:38 | 78 | 5,864 | 5,788 | 500 | 6.28 | 7.40 |
+   | 52 | 84950 | 19:51 | 79 | 6,201 | 6,106 | 500 | 6.34 | 7.48 |
+   | 53 | 84948 | 20:05 | 80 | 4,753 | 4,679 | 500 | 6.58 | 7.70 |
+   | 54 | 84958 | 20:19 | 81 | 5,714 | 5,641 | 500 | 6.51 | 7.63 |
+   | 55 | 84965 | 20:33 | 82 | 5,039 | 4,965 | 500 | 6.34 | 7.45 |
+   | 56 | 84970 | 20:46 | 83 | 5,478 | 5,386 | 500 | 6.26 | 7.39 |
+   | 57 | 84986 | 21:00 | 84 | 5,392 | 5,329 | 500 | 6.28 | 7.40 |
+   | 58 | 84984 | 21:14 | 85 | 5,687 | 5,608 | 500 | 6.88 | 8.01 |
+   | 59 | 84990 | 21:41 | 86 | 6,202 | 6,157 | 500 | 6.19 | 7.37 |
+   | 60 | 85009 | 21:55 | 87 | 5,631 | 5,564 | 500 | 6.49 | 7.60 |
+   | 61 | 85006 | 22:09 | 88 | 5,377 | 5,302 | 500 | 6.16 | 7.29 |
+   | 62 | 85019 | 22:22 | 89 | 4,863 | 4,786 | 500 | 6.08 | 7.21 |
+   | 63 | 85012 | 22:36 | 90 | 5,989 | 5,909 | 500 | 7.03 | 8.15 |
+   | 64 | 85032 | 22:50 | 91 | 5,449 | 5,369 | 500 | 6.47 | 7.60 |
+   | 65 | 85030 | 23:04 | 92 | 5,775 | 5,675 | 500 | 6.42 | 7.55 |
+   | 66 | 85043 | 23:17 | 93 | 5,807 | 5,726 | 500 | 6.28 | 7.40 |
+   | 67 | 85037 | 23:31 | 94 | 4,399 | 4,336 | 500 | 6.16 | 7.26 |
+   | 68 | 85053 | 23:45 | 95 | 5,341 | 5,253 | 500 | 6.39 | 7.53 |
+   | 69 | 85052 | 23:58 | 96 | 5,048 | 4,976 | 500 | 6.30 | 7.41 |
+
+4. **The chain on Batch, live.** For epochs 3 to 69 in `mjdobs` order: the
+   epoch's `associate` (its predecessor run 1's job 5 for epoch 3, then
+   run 9's previous set; expects the open object binding), then its
+   `packet` once the associate and the previous packet set are published.
+   Every packet job names the whole night so far: every earlier epoch's
+   difference image and L2 file (the 30-day forced window holds the
+   night), and every earlier packet set, so a forced measurement any of
+   them holds is reused. Associate ran ahead of packet:
+
+   ```sh
+   OKEY='{"dataset": "'$D'", "survey": "GBTDS", "field": 4658155}'
+   DEF=rapid-rebuild:33
+   # epoch n: <s> its import job, <a> the previous object set's job, <b> the open object binding
+   rp job submit --run 9 --stage associate --job-definition $DEF --scope '{"field": 4658155}' \
+     --inputs '[{"product": "sources", "key": '"$(k $expid)"', "source_job": <s>}, {"product": "objects", "key": '"$OKEY"', "source_job": <a>}]' \
+     --expects '[{"product": "objects", "key": '"$OKEY"', "binding": <b>}]'
+   # once that associate <a_n> and packet n-1 are published:
+   rp job submit --run 9 --stage packet --job-definition $DEF --scope '{"expid": '$expid', "sca": 8, "fid": 8}' \
+     --inputs "[$SHARED_INPUTS, {\"product\": \"objects\", \"key\": $OKEY, \"source_job\": <a_n>},
+               $(image <epoch 1> 2), ..., $(image $expid <s>), {\"product\": \"sources\", \"key\": $(k $expid), \"source_job\": <s>},
+               {\"product\": \"packets\", \"key\": <epoch 1's key>, \"source_job\": 6}, ..., <packet n-1>]" \
+     --expects '[{"product": "packets", "key": '"$(k $expid)"', "binding": null}]'
+   ```
+
+   Every one of the 134 Batch jobs `SUCCEEDED` on its first attempt and
+   published, each bound automatically with no refusal (groups 82 to
+   215).
+
+   Check, all held:
+   - `objects_official` is run 9's last set, job 179, with 1,504 objects,
+     every object of the night (`members_official` holds 1,504 distinct
+     `aid`s).
+   - `members_official` holds 2,547 rows, the sum of the `memberships`
+     rows over the chain (jobs 4, 5 and run 9's 67 associate jobs), and
+     each associate job's `memberships` count equals its manifest's
+     pass 1 plus pass 2.
+   - `packets_official` holds 69 sets (2,488 packets), `forced_official`
+     87,520 rows and `external_official` 530.
+   - `read_packets.py --job <id>` exits 0 with "CLEAN" for all 69 sets
+     (jobs 6 and 7 and run 9's 67), each in 1 to 3 s.
+   - `official` holds 452 rows: 49, the cutover's 1, 268 import bindings,
+     67 object bindings (66 of them since closed by the next set) and 67
+     packet bindings.
+
+   **Measurements.** First submit (21:27:59) to the last packet published
+   (01:20:47): **3 h 52 min 48 s** (13,963 s).
+
+   | stage | jobs | queue wait mean / median / max | in container mean / min / max | container time, sum | peak RSS (self) | child processes |
+   |---|---|---|---|---|---|---|
+   | associate | 67 | 17.3 / 6.9 / 214 s | 2.7 / 2.4 / 10.0 s | 184 s | 227 to 243 MiB | none |
+   | packet | 67 | 10.3 / 7.1 / 235 s | 189 / 28 / 362 s | 12,646 s | 844 to 1,036 MiB | none |
+
+   The associate chain finished 1,602 s after the first submit, so for
+   most of the night associate ran far ahead and the packet chain was the
+   critical path: an associate and a packet container ran at the same time
+   for only 152 s in all. The two largest queue waits are the compute
+   environment scaling up from zero (the first job) and once more mid-run.
+   The packet stage's time grows linearly with the window: its forced
+   photometry took 10 s for a 3-image window and 247 s for 69 (about
+   3.6 s per window image), 8,779 s of the 12,646 s in all (69%); cutouts
+   59 s, matching 32 s, assembly 19 s in all. The rest of each container
+   (about 110 s at the end) is fetching the window's images before the
+   stage starts: every named image is fetched whether or not its pairs are
+   reused. Peak memory never exceeded 1.04 GiB of the 24 GiB definition.
+
+   Over the night associate matched 5,216 sources (those with `flags = 0`
+   and S/N at least 5 among each epoch's 500) into 1,427 new objects and
+   2,470 memberships, none in pass 2; packets numbered 2,411, with 87,404
+   forced rows of which 62,427 were measured and 24,977 reused from
+   predecessor sets; the Avro totalled 469 MB. Run 9's prefixes hold
+   3.9 MB under `associate/` and 475 MB under `packet/`. Per epoch:
+
+   | # | expid | assoc job | queue s | container s | peak RSS MiB | sources in | new objects | memberships | objects | packet job | queue s | container s | peak RSS MiB | window | packets | forced rows (measured / reused) | Avro MB | reader |
+   |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+   | 3 | 84635 | 97 | 193 | 2.7 | 228 | 71 | 33 | 36 | 110 | 99 | 10 | 38 | 844 | 3 | 36 | 108 (103 / 5) | 6.9 | CLEAN |
+   | 4 | 84640 | 98 | 7 | 2.9 | 227 | 60 | 30 | 31 | 140 | 101 | 5 | 28 | 845 | 4 | 31 | 120 (118 / 2) | 5.9 | CLEAN |
+   | 5 | 84637 | 100 | 101 | 2.7 | 229 | 85 | 34 | 35 | 174 | 103 | 6 | 33 | 845 | 5 | 35 | 175 (173 / 2) | 6.8 | CLEAN |
+   | 6 | 84644 | 102 | 7 | 2.8 | 228 | 90 | 37 | 38 | 211 | 108 | 8 | 41 | 845 | 6 | 38 | 228 (225 / 3) | 7.3 | CLEAN |
+   | 7 | 84659 | 104 | 5 | 2.7 | 228 | 75 | 34 | 36 | 245 | 112 | 7 | 45 | 846 | 7 | 36 | 252 (246 / 6) | 7.0 | CLEAN |
+   | 8 | 84664 | 105 | 6 | 2.8 | 228 | 61 | 29 | 31 | 274 | 118 | 4 | 47 | 846 | 8 | 31 | 248 (240 / 8) | 6.0 | CLEAN |
+   | 9 | 84662 | 106 | 5 | 2.8 | 228 | 77 | 32 | 34 | 306 | 120 | 6 | 48 | 846 | 9 | 34 | 306 (296 / 10) | 6.6 | CLEAN |
+   | 10 | 84668 | 107 | 9 | 2.8 | 231 | 78 | 31 | 35 | 337 | 123 | 235 | 56 | 849 | 10 | 35 | 350 (337 / 13) | 6.8 | CLEAN |
+   | 11 | 84684 | 109 | 7 | 2.8 | 230 | 79 | 25 | 37 | 362 | 130 | 4 | 61 | 849 | 11 | 36 | 396 (342 / 54) | 7.0 | CLEAN |
+   | 12 | 84687 | 110 | 8 | 2.7 | 230 | 71 | 30 | 35 | 392 | 135 | 3 | 65 | 849 | 12 | 35 | 420 (383 / 37) | 6.8 | CLEAN |
+   | 13 | 84693 | 111 | 8 | 2.7 | 231 | 73 | 23 | 30 | 415 | 140 | 7 | 70 | 850 | 13 | 30 | 390 (365 / 25) | 5.8 | CLEAN |
+   | 14 | 84701 | 113 | 6 | 2.9 | 231 | 40 | 13 | 16 | 428 | 147 | 5 | 74 | 849 | 14 | 16 | 224 (214 / 10) | 3.1 | CLEAN |
+   | 15 | 84713 | 114 | 6 | 2.9 | 231 | 79 | 29 | 36 | 457 | 153 | 9 | 80 | 850 | 15 | 35 | 525 (493 / 32) | 6.8 | CLEAN |
+   | 16 | 84710 | 115 | 7 | 2.8 | 230 | 74 | 35 | 42 | 492 | 159 | 2 | 87 | 852 | 16 | 42 | 672 (619 / 53) | 8.1 | CLEAN |
+   | 17 | 84723 | 116 | 6 | 2.8 | 231 | 58 | 19 | 25 | 511 | 166 | 6 | 89 | 852 | 17 | 25 | 408 (352 / 56) | 4.8 | CLEAN |
+   | 18 | 84730 | 117 | 6 | 3.0 | 233 | 51 | 24 | 28 | 535 | 173 | 8 | 93 | 852 | 18 | 28 | 504 (457 / 47) | 5.4 | CLEAN |
+   | 19 | 84738 | 119 | 42 | 2.9 | 233 | 82 | 20 | 38 | 555 | 180 | 8 | 99 | 856 | 19 | 36 | 646 (506 / 140) | 6.9 | CLEAN |
+   | 20 | 84737 | 121 | 47 | 2.8 | 233 | 95 | 39 | 46 | 594 | 181 | 7 | 105 | 857 | 20 | 46 | 920 (838 / 82) | 8.9 | CLEAN |
+   | 21 | 84747 | 122 | 10 | 2.8 | 233 | 77 | 21 | 30 | 615 | 182 | 8 | 108 | 858 | 21 | 29 | 609 (526 / 83) | 5.6 | CLEAN |
+   | 22 | 84749 | 124 | 214 | 2.7 | 238 | 132 | 51 | 68 | 666 | 183 | 6 | 119 | 860 | 22 | 67 | 1474 (1305 / 169) | 13.0 | CLEAN |
+   | 23 | 84761 | 125 | 17 | 2.4 | 234 | 76 | 27 | 36 | 693 | 184 | 6 | 121 | 860 | 23 | 35 | 805 (698 / 107) | 6.8 | CLEAN |
+   | 24 | 84765 | 126 | 5 | 2.5 | 234 | 76 | 18 | 33 | 711 | 185 | 7 | 125 | 863 | 24 | 33 | 792 (613 / 179) | 6.4 | CLEAN |
+   | 25 | 84778 | 127 | 5 | 2.5 | 234 | 77 | 22 | 36 | 733 | 186 | 8 | 132 | 865 | 25 | 36 | 900 (759 / 141) | 6.9 | CLEAN |
+   | 26 | 84787 | 128 | 6 | 2.6 | 233 | 79 | 22 | 29 | 755 | 187 | 10 | 137 | 866 | 26 | 28 | 728 (654 / 74) | 5.4 | CLEAN |
+   | 27 | 84781 | 129 | 5 | 2.6 | 233 | 80 | 28 | 37 | 783 | 188 | 9 | 143 | 870 | 27 | 37 | 999 (863 / 136) | 7.2 | CLEAN |
+   | 28 | 84791 | 131 | 21 | 2.5 | 234 | 80 | 20 | 31 | 803 | 189 | 11 | 148 | 873 | 28 | 31 | 868 (749 / 119) | 6.0 | CLEAN |
+   | 29 | 84800 | 132 | 5 | 2.5 | 234 | 95 | 33 | 47 | 836 | 190 | 4 | 154 | 875 | 29 | 46 | 1334 (1142 / 192) | 8.9 | CLEAN |
+   | 30 | 84805 | 133 | 4 | 2.5 | 234 | 73 | 21 | 34 | 857 | 191 | 4 | 154 | 871 | 30 | 33 | 990 (745 / 245) | 6.4 | CLEAN |
+   | 31 | 84806 | 134 | 5 | 2.9 | 233 | 62 | 13 | 25 | 870 | 192 | 6 | 156 | 872 | 31 | 24 | 744 (542 / 202) | 4.7 | CLEAN |
+   | 32 | 84816 | 136 | 21 | 2.5 | 236 | 74 | 24 | 36 | 894 | 193 | 9 | 166 | 875 | 32 | 35 | 1120 (916 / 204) | 6.8 | CLEAN |
+   | 33 | 84822 | 137 | 4 | 2.6 | 236 | 87 | 28 | 36 | 922 | 194 | 8 | 172 | 875 | 33 | 35 | 1155 (996 / 159) | 6.8 | CLEAN |
+   | 34 | 84828 | 138 | 9 | 2.6 | 234 | 83 | 30 | 49 | 952 | 195 | 6 | 183 | 878 | 34 | 49 | 1666 (1242 / 424) | 9.5 | CLEAN |
+   | 35 | 84837 | 139 | 9 | 2.7 | 236 | 112 | 30 | 53 | 982 | 196 | 8 | 181 | 881 | 35 | 51 | 1785 (1378 / 407) | 9.9 | CLEAN |
+   | 36 | 84850 | 141 | 27 | 2.5 | 234 | 115 | 40 | 68 | 1022 | 197 | 8 | 188 | 884 | 36 | 66 | 2376 (1875 / 501) | 12.8 | CLEAN |
+   | 37 | 84856 | 142 | 8 | 2.5 | 237 | 64 | 10 | 37 | 1032 | 198 | 9 | 191 | 888 | 37 | 35 | 1295 (823 / 472) | 6.8 | CLEAN |
+   | 38 | 84852 | 143 | 7 | 2.5 | 237 | 52 | 11 | 24 | 1043 | 199 | 6 | 191 | 893 | 38 | 23 | 874 (672 / 202) | 4.5 | CLEAN |
+   | 39 | 84861 | 144 | 7 | 2.5 | 234 | 83 | 18 | 38 | 1061 | 200 | 9 | 198 | 896 | 39 | 36 | 1404 (1076 / 328) | 7.0 | CLEAN |
+   | 40 | 84871 | 145 | 7 | 2.6 | 236 | 64 | 7 | 28 | 1068 | 201 | 7 | 201 | 899 | 40 | 27 | 1040 (766 / 274) | 5.2 | CLEAN |
+   | 41 | 84878 | 146 | 6 | 2.8 | 234 | 53 | 6 | 16 | 1074 | 202 | 9 | 204 | 901 | 41 | 16 | 656 (389 / 267) | 3.1 | CLEAN |
+   | 42 | 84880 | 148 | 26 | 2.5 | 237 | 93 | 20 | 49 | 1094 | 203 | 7 | 214 | 904 | 42 | 49 | 2058 (1387 / 671) | 9.5 | CLEAN |
+   | 43 | 84884 | 149 | 5 | 2.5 | 238 | 57 | 5 | 32 | 1099 | 204 | 7 | 220 | 910 | 43 | 28 | 1204 (707 / 497) | 5.5 | CLEAN |
+   | 44 | 84894 | 150 | 6 | 2.5 | 238 | 58 | 12 | 21 | 1111 | 205 | 8 | 224 | 912 | 44 | 21 | 880 (756 / 124) | 4.1 | CLEAN |
+   | 45 | 84901 | 151 | 11 | 2.7 | 238 | 114 | 30 | 51 | 1141 | 206 | 14 | 234 | 914 | 45 | 50 | 2250 (1767 / 483) | 9.7 | CLEAN |
+   | 46 | 84905 | 152 | 10 | 2.6 | 236 | 77 | 16 | 35 | 1157 | 207 | 4 | 239 | 905 | 46 | 35 | 1610 (1133 / 477) | 6.8 | CLEAN |
+   | 47 | 84919 | 154 | 32 | 2.6 | 238 | 78 | 20 | 45 | 1177 | 208 | 9 | 239 | 910 | 47 | 45 | 2115 (1290 / 825) | 8.8 | CLEAN |
+   | 48 | 84925 | 155 | 4 | 2.5 | 238 | 66 | 12 | 32 | 1189 | 209 | 9 | 243 | 931 | 48 | 31 | 1488 (1023 / 465) | 6.1 | CLEAN |
+   | 49 | 84926 | 156 | 3 | 2.5 | 239 | 83 | 16 | 41 | 1205 | 210 | 4 | 248 | 921 | 49 | 41 | 2009 (1234 / 775) | 8.0 | CLEAN |
+   | 50 | 84935 | 157 | 4 | 2.6 | 238 | 61 | 12 | 28 | 1217 | 211 | 9 | 254 | 927 | 50 | 27 | 1350 (868 / 482) | 5.3 | CLEAN |
+   | 51 | 84946 | 158 | 3 | 2.6 | 234 | 75 | 20 | 38 | 1237 | 212 | 6 | 258 | 957 | 51 | 36 | 1836 (1305 / 531) | 7.0 | CLEAN |
+   | 52 | 84950 | 160 | 27 | 2.5 | 240 | 121 | 37 | 61 | 1274 | 213 | 8 | 265 | 950 | 52 | 61 | 3172 (2197 / 975) | 11.8 | CLEAN |
+   | 53 | 84948 | 161 | 3 | 2.5 | 238 | 65 | 7 | 37 | 1281 | 214 | 7 | 266 | 952 | 53 | 34 | 1802 (897 / 905) | 6.7 | CLEAN |
+   | 54 | 84958 | 162 | 8 | 2.6 | 241 | 68 | 14 | 35 | 1295 | 215 | 8 | 270 | 954 | 54 | 35 | 1890 (1296 / 594) | 6.8 | CLEAN |
+   | 55 | 84965 | 163 | 8 | 2.5 | 239 | 87 | 15 | 38 | 1310 | 216 | 4 | 277 | 990 | 55 | 37 | 2035 (1246 / 789) | 7.2 | CLEAN |
+   | 56 | 84970 | 164 | 8 | 2.6 | 242 | 77 | 11 | 35 | 1321 | 217 | 5 | 286 | 977 | 56 | 32 | 1736 (988 / 748) | 6.3 | CLEAN |
+   | 57 | 84986 | 165 | 7 | 3.1 | 240 | 69 | 17 | 35 | 1338 | 218 | 4 | 296 | 983 | 57 | 34 | 1938 (1404 / 534) | 6.7 | CLEAN |
+   | 58 | 84984 | 167 | 31 | 2.5 | 241 | 102 | 15 | 51 | 1353 | 219 | 8 | 317 | 993 | 58 | 49 | 2842 (1750 / 1092) | 9.6 | CLEAN |
+   | 59 | 84990 | 168 | 5 | 2.5 | 239 | 99 | 23 | 47 | 1376 | 220 | 8 | 329 | 1001 | 59 | 45 | 2655 (2063 / 592) | 8.8 | CLEAN |
+   | 60 | 85009 | 169 | 6 | 2.5 | 239 | 99 | 10 | 42 | 1386 | 221 | 5 | 342 | 1008 | 60 | 40 | 2400 (1650 / 750) | 7.8 | CLEAN |
+   | 61 | 85006 | 170 | 5 | 2.5 | 241 | 93 | 16 | 50 | 1402 | 222 | 6 | 334 | 999 | 61 | 50 | 3050 (1743 / 1307) | 9.8 | CLEAN |
+   | 62 | 85019 | 171 | 4 | 2.5 | 239 | 74 | 12 | 33 | 1414 | 223 | 6 | 333 | 1008 | 62 | 32 | 1984 (1084 / 900) | 6.3 | CLEAN |
+   | 63 | 85012 | 172 | 10 | 2.7 | 238 | 79 | 19 | 32 | 1433 | 224 | 6 | 337 | 1013 | 63 | 30 | 1890 (1500 / 390) | 5.9 | CLEAN |
+   | 64 | 85032 | 174 | 21 | 10.0 | 241 | 92 | 22 | 39 | 1455 | 225 | 9 | 339 | 1022 | 64 | 38 | 2432 (1799 / 633) | 7.4 | CLEAN |
+   | 65 | 85030 | 175 | 8 | 2.6 | 243 | 93 | 16 | 49 | 1471 | 226 | 11 | 346 | 1026 | 65 | 45 | 2925 (1842 / 1083) | 8.8 | CLEAN |
+   | 66 | 85043 | 176 | 7 | 2.5 | 243 | 65 | 9 | 36 | 1480 | 227 | 10 | 337 | 1023 | 66 | 36 | 2376 (1515 / 861) | 7.1 | CLEAN |
+   | 67 | 85037 | 177 | 8 | 2.5 | 243 | 48 | 8 | 22 | 1488 | 228 | 5 | 354 | 1026 | 67 | 22 | 1474 (820 / 654) | 4.3 | CLEAN |
+   | 68 | 85053 | 178 | 7 | 2.5 | 241 | 58 | 9 | 24 | 1497 | 229 | 4 | 351 | 1031 | 68 | 22 | 1496 (1039 / 457) | 4.3 | CLEAN |
+   | 69 | 85052 | 179 | 6 | 2.6 | 243 | 72 | 7 | 32 | 1504 | 230 | 5 | 362 | 1036 | 69 | 29 | 2001 (1088 / 913) | 5.7 | CLEAN |
+
+   Batch ids:
+
+   | # | expid | associate job, Batch id | packet job, Batch id |
+   |---|---|---|---|
+   | 3 | 84635 | 97 `6e458232-b211-422a-a151-0b54f1bea6f5` | 99 `e3391306-a359-4166-b035-d210b4ce33c6` |
+   | 4 | 84640 | 98 `76a60251-7e8c-4a8d-aea2-d0d9ae670b2b` | 101 `4f856cbe-4abc-4059-8a05-113c0d3ee475` |
+   | 5 | 84637 | 100 `a06792b2-0fd1-41b8-8410-f79b020c9f2f` | 103 `7408b9c1-6673-43ff-b38a-fe1a02aa5683` |
+   | 6 | 84644 | 102 `30e88fc4-8cf2-4323-a59f-0bf4419bd7dc` | 108 `f52826d4-8d28-4b35-b296-a08334458045` |
+   | 7 | 84659 | 104 `36700572-dfa4-4f3a-98ca-cbd957efb230` | 112 `4880bb1b-92c9-43ff-b1e6-6e40c587ec31` |
+   | 8 | 84664 | 105 `6fa60e35-260c-4444-8b47-6a15802d6f65` | 118 `97f3f72a-3d56-4bf7-958f-4843555cc00e` |
+   | 9 | 84662 | 106 `059d28bf-e4ac-4bf4-a917-487463671a7a` | 120 `9c135592-cf9f-48c6-9c9f-2f514161ab4f` |
+   | 10 | 84668 | 107 `0aa00ebf-e923-4698-8a14-259f5db7f738` | 123 `d81ac321-c35b-48d4-9934-eb52144436fc` |
+   | 11 | 84684 | 109 `4c4d73f2-acb2-4ce9-aaf2-6a8bc52d6f8d` | 130 `67c1c973-5b59-4a4a-acbb-9959963b0f15` |
+   | 12 | 84687 | 110 `159ee7b6-378a-4687-a8b0-a2cecc599487` | 135 `90fcd72e-d6c7-48b3-9a39-5cb3a029af9c` |
+   | 13 | 84693 | 111 `4b7da7be-e19c-45b3-9cd2-6a1390d930ad` | 140 `809389a5-01e3-478b-9ad2-bd8bfaef303d` |
+   | 14 | 84701 | 113 `930392a5-5f1b-4a7c-be98-f141d869adf8` | 147 `46170d9d-d6c7-4c1e-9587-1d69658a28f5` |
+   | 15 | 84713 | 114 `e01c3960-acfe-4e75-867e-94f35b657c18` | 153 `68d66994-acd7-40e7-af9b-b09dfa828584` |
+   | 16 | 84710 | 115 `6edc7c3a-b6c7-496e-b78a-6d32e7c39c50` | 159 `18d171af-5cf8-4588-b23f-349f26877ce9` |
+   | 17 | 84723 | 116 `1b9dea46-9125-4bc8-a3bb-b4d77d2ec91f` | 166 `ed3ffbc3-c396-4dd2-8f95-86f557e04bad` |
+   | 18 | 84730 | 117 `9b83c773-064b-4cf9-9f11-081ca6c039bc` | 173 `f4fddf55-49b8-40e1-ab74-cccf9e014a29` |
+   | 19 | 84738 | 119 `aade812c-4310-4751-a693-0c016c94e55a` | 180 `01c6e3d5-84fe-4ad6-b9ec-7b25478d80ab` |
+   | 20 | 84737 | 121 `5197a64a-8488-468d-99b6-c9e4e77462d6` | 181 `62cea474-b7eb-4058-bdea-64b267ad661b` |
+   | 21 | 84747 | 122 `e4a8d56b-cc05-4170-aba1-634500218910` | 182 `a1f6df78-1088-4035-900d-d11cd38e6acb` |
+   | 22 | 84749 | 124 `75681d09-cc4d-4ee2-aacb-05794b91be07` | 183 `83dec5ee-2b15-4b27-a843-cd6ea3474149` |
+   | 23 | 84761 | 125 `555d2535-8b93-4097-af35-94168af0e45a` | 184 `226d958f-a17c-4c26-937e-59d561eb6a52` |
+   | 24 | 84765 | 126 `4cdde16f-6c7f-4d95-a09a-f1d4543e35b4` | 185 `030fd6b4-8e5c-43a6-a5f9-7e3c495ed569` |
+   | 25 | 84778 | 127 `1b7fbaf9-6931-4312-89c5-66b0ab752fe4` | 186 `aac4fbf5-813a-44cf-804a-feeabbd884d9` |
+   | 26 | 84787 | 128 `ef3d0d6e-e2b5-4220-a003-db374948698c` | 187 `b3e160cd-cb32-4044-ae3e-ef39b082d0d1` |
+   | 27 | 84781 | 129 `e45e2904-ced9-4a01-b0d9-82d12c8dfda5` | 188 `c006dbc2-e389-45e5-8923-c886e5cef90b` |
+   | 28 | 84791 | 131 `86886a6f-1e91-40a3-8a89-d652ac9b415f` | 189 `9fd8d636-0c04-49cd-9663-ee116baefd31` |
+   | 29 | 84800 | 132 `7313ed82-2d3c-4b5f-bf3b-7c269877a20d` | 190 `dede4635-ba7f-46ef-ad21-1d07846dfa1f` |
+   | 30 | 84805 | 133 `4ce44ddb-b26f-4a27-bba6-d8a63d1d1fd6` | 191 `b9ba89a0-66bc-47b4-aa85-c3a2a5725925` |
+   | 31 | 84806 | 134 `5ffb3e19-ee76-42e3-8c2d-46d0cb99b998` | 192 `0aeabd83-f13d-442f-9fbc-bcbd8b96ddee` |
+   | 32 | 84816 | 136 `2b5e0b14-15fb-4b1c-8c06-8007d28f8985` | 193 `3d248528-29db-439b-8369-331a8c2cc5fa` |
+   | 33 | 84822 | 137 `8233bca7-c9da-4be5-852e-8d1f825cbaf0` | 194 `c920140f-b6aa-4556-9144-0e944b1b8c4b` |
+   | 34 | 84828 | 138 `c16d6656-f48d-4c44-8580-e76d3a26eeaa` | 195 `2b2533b4-98cf-4818-98d6-b5bb592a338f` |
+   | 35 | 84837 | 139 `7d8dbeac-9065-4aa0-a3a6-45fcdfb5648e` | 196 `bbfa27a4-d383-482d-9003-70cc0f48739c` |
+   | 36 | 84850 | 141 `9464e513-aca4-4d93-90c1-73f8877066e8` | 197 `75f24e1e-caa2-4a71-a770-ee1a31477be6` |
+   | 37 | 84856 | 142 `a639ee65-adf7-4cec-a269-9bac980602c2` | 198 `b237cbe0-e352-48ad-9b6d-9bb270eb0b58` |
+   | 38 | 84852 | 143 `f523e430-da13-49cf-9346-9e62d1ff4a57` | 199 `4c3d9249-5b51-4145-be6b-d317cf708a3b` |
+   | 39 | 84861 | 144 `91ba9eab-52c5-47c5-87b1-04931ab7d42b` | 200 `9a4f1a8a-5320-478f-9cd4-ae0ce09d6557` |
+   | 40 | 84871 | 145 `f38650fa-0882-43b0-8ece-5baaeacc020a` | 201 `32a3e18c-47d6-448d-bdd4-c17881d955df` |
+   | 41 | 84878 | 146 `9d62ebe3-4955-4638-a9af-978e198e37c5` | 202 `ba6d4873-667a-465d-876a-6a9d218b9182` |
+   | 42 | 84880 | 148 `e8d8b260-478b-477a-aa22-d7dfbb423ccb` | 203 `2983d31d-1001-4269-a76d-8bab61e52592` |
+   | 43 | 84884 | 149 `f7163e20-9312-41d2-81d7-7d32c0aee1b6` | 204 `aa857253-be60-4fcf-80c0-562f137ba7df` |
+   | 44 | 84894 | 150 `88da66d2-e97e-425e-9c75-4286cbd33fe1` | 205 `819c321d-d7d3-4ec5-b69c-6578404dde31` |
+   | 45 | 84901 | 151 `58efc932-a0a2-4c94-9e5d-11fc763ffc48` | 206 `b1b293dc-1bcd-4576-9ddb-8147dbec286e` |
+   | 46 | 84905 | 152 `fe6dbc32-f18c-43ac-a49d-940b9cc04823` | 207 `338c066a-d213-4e55-8233-9207cf9dddfe` |
+   | 47 | 84919 | 154 `35536a2e-f642-482e-a7a4-d0370fc44b92` | 208 `905fd5ba-832e-41ac-a817-43d73629f7ec` |
+   | 48 | 84925 | 155 `1aa28eda-75a3-40bf-975f-7f8d2800e726` | 209 `1ae32eb9-59ef-4371-928e-7d266f104340` |
+   | 49 | 84926 | 156 `c588406f-37a8-4742-9d8a-26d8309c5bbb` | 210 `14349406-dbc1-4eea-8c26-eed9c03ceee1` |
+   | 50 | 84935 | 157 `4f031184-5f2c-4c9e-9d58-a8631dbadf36` | 211 `18a602da-4754-46d5-b2ef-81aef6978a4f` |
+   | 51 | 84946 | 158 `ecd0dab9-ace5-4c06-85ec-a7f057703a7c` | 212 `1d63e1ad-83a2-460c-9576-e1b1f0cd9d64` |
+   | 52 | 84950 | 160 `acb70453-296c-494f-ac04-1fc8e1b9a8e6` | 213 `1cfec275-4cba-4041-9a71-3c8f2c08c2b7` |
+   | 53 | 84948 | 161 `e04afa3e-eb2e-4c63-b6be-783e727dd4f8` | 214 `49273e5a-eb8b-4626-b67c-74d5e2230da0` |
+   | 54 | 84958 | 162 `ea719568-98dd-49ae-a432-485d6f04c52e` | 215 `fdd266b3-f6e5-4762-89cc-e2e9ce61faea` |
+   | 55 | 84965 | 163 `b0652e99-e52a-4706-b5a6-e71ca6aeef86` | 216 `10087043-a868-4f64-bad0-8eb27ddb889f` |
+   | 56 | 84970 | 164 `219c2f86-5636-49a9-be04-57974e6e38e7` | 217 `20b249e9-3ceb-47f2-a195-a5f5eac71bfd` |
+   | 57 | 84986 | 165 `56b71b90-956b-4497-9441-684351f4d0c8` | 218 `1308ffab-052c-403d-bf91-d6b73cd2ed3f` |
+   | 58 | 84984 | 167 `2ad6b723-b364-4038-b661-ce117094a215` | 219 `1c20ca4a-3b7a-4c31-bf90-9db41f4907c8` |
+   | 59 | 84990 | 168 `37e4095b-63d1-4619-ab6f-f74e34a0eab5` | 220 `13c7213b-6063-47ff-9567-54fef4263a95` |
+   | 60 | 85009 | 169 `f66f7eaa-bfb0-4c66-a31d-92d99790ac64` | 221 `b4038d6d-c668-4aa6-8374-3426efc6aebe` |
+   | 61 | 85006 | 170 `84455271-6f46-4c90-8edb-4b0f265fe66f` | 222 `ea2f0b62-ed3b-4d63-91a0-ccdd6850d586` |
+   | 62 | 85019 | 171 `fb689272-8a09-4fd8-98a4-358a8c7b4a08` | 223 `b9d9b6ff-84e1-4a93-9fb0-58e1b3f23a4f` |
+   | 63 | 85012 | 172 `d8c744b5-4b2d-45e3-8f53-4a91e4d6372c` | 224 `163f32cf-b06e-4d87-93bc-40fbf6f29839` |
+   | 64 | 85032 | 174 `5242159c-7f90-4bde-9009-a23f2147e210` | 225 `f7908bd1-87a0-41ea-b6b7-2a35358cf92e` |
+   | 65 | 85030 | 175 `f1b0a401-6c0f-4096-9869-aa67a83663f9` | 226 `84fef227-4eb8-464b-b0c5-742980bd110a` |
+   | 66 | 85043 | 176 `c57a4f9e-42b7-4f45-8b9e-c39df3de4214` | 227 `7abc82b7-bc43-4af9-94d1-994b72506590` |
+   | 67 | 85037 | 177 `6b540e25-3cfd-4322-ba03-ea5592267be6` | 228 `7cc87bdc-143e-4886-9a91-4343e777ff9a` |
+   | 68 | 85053 | 178 `29fd22f8-f205-44b3-b5ca-bcbd1d1e47a9` | 229 `a8527225-eae9-41ec-8a8d-9deb218fbad5` |
+   | 69 | 85052 | 179 `b55cfe12-d187-46a2-a76a-2587155c870b` | 230 `f5215e43-9e09-4c51-9fc9-924afcb679e0` |
+
+5. **The eight queries and the team's shapes at this size.**
+   `database/queries.sql`'s 23 statements, each under `EXPLAIN (ANALYZE,
+   BUFFERS)` through the pooler, with the night's ids: object set 179,
+   the most-observed object, packet set 230, the 35th epoch (84837) for
+   the image and cone parameters, group 215. Execution time on the
+   server, rows returned, the indexes used and any sequential scan:
+
+   | statement | rows | ms | indexes used | sequential scans |
+   |---|---|---|---|---|
+   | `current_image_and_source_set` | 1 | 0.14 | `official_open_product_job`, `jobs_pkey`, `sources_job_sid_key`, `diffimages_dataset_expid_sca_fid_job_key`, `l2files_dataset_expid_sca_fid_job_key`, `official_open_product_job` | none |
+   | `object_set_and_members` | 2547 | 25.98 | `official_open_product_job`, `jobs_pkey`, `job_inputs_job_idx`, `objects_job_idx`, `official_open_product_job` | `job_inputs`, `memberships` |
+   | `object_history_in_named_set` | 89 | 1.19 | `forced_aid_idx`, `forced_job_forced_id_key`, `memberships_job_aid_source_job_sid_key`, `job_inputs_job_idx`, `job_inputs_source_job_idx`, `packets_object_idx`, `sources_job_sid_key` | none |
+   | `packet_history_by_observation` | 51 | 0.22 | `official_open_product_job` | `packets` |
+   | `packet_history_by_source` | 0 | 0.04 | `official_open_product_job`, `packets_job_source_job_sid_key` | none |
+   | `packet_history_by_object` | 14 | 0.18 | `official_open_product_job`, `job_inputs_job_idx`, `packets_object_idx` | none |
+   | `candidate_against_official` | 509 | 24.66 | `official_open_product_job`, `jobs_pkey`, `memberships_job_aid_source_job_sid_key`, `job_inputs_job_idx`, `sources_job_sid_key` | `job_inputs`, `memberships` |
+   | `ancestors_of_packet_set` | 207 | 1.77 | `job_inputs_job_idx`, `jobs_pkey` | `official` |
+   | `descendants_of_reference` | 227 | 2.28 | `job_inputs_source_job_idx` | `jobs`, `official`, `refimages` |
+   | `failed_and_unbound_jobs` | 87 | 0.37 | `job_inputs_job_idx`, `jobs_pkey` | `official` |
+   | `bindings_around_group` | 1 | 0.01 | `official_closed_group_idx`, `official_opened_group_idx` | none |
+   | `diffimages_in_cone` | 69 | 0.54 | `jobs_pkey`, `diffimages_dataset_expid_sca_fid_job_key`, `official_open_product_job` | `l2files` |
+   | `l2files_in_cone_overlapping_field` | 69 | 0.32 | `jobs_pkey`, `l2files_job_idx`, `official_open_product_job` | none |
+   | `diffimages_in_cone_with_reference` | 69 | 0.29 | `jobs_pkey`, `official_open_product_job` | `diffimages`, `refimages` |
+   | `l2files_overlapping_fields` | 69 | 0.20 | `jobs_pkey`, `official_open_product_job` | `l2files` |
+   | `objects_in_cone` | 1504 | 3.05 | `jobs_pkey`, `objects_job_idx`, `official_open_product_job` | none |
+   | `chip_sources` | 138 | 8.81 | `jobs_pkey`, `official_open_product_job`, `filters_pkey`, `official_open_product_job`, `sources_job_sid_key` | `exposures` |
+   | `reference_for_field` | 1 | 0.03 | `jobs_pkey`, `official_open_product_job` | `refimages` |
+   | `l2files_for_field_in_window` | 69 | 0.17 | `jobs_pkey`, `official_open_product_job` | `l2files` |
+   | `l2files_without_diffimage` | 0 | 0.37 | `diffimages_dataset_expid_sca_fid_job_key`, `jobs_pkey`, `official_open_product_job` | `l2files` |
+   | `frame_counts` | 1 | 0.18 | `jobs_pkey`, `official_open_product_job` | `l2files` |
+   | `diffimage_by_pid` | 1 | 0.04 | `jobs_pkey`, `diffimages_pkey`, `l2files_dataset_expid_sca_fid_job_key`, `official_open_product_job` | none |
+   | `l2files_with_usable_reference` | 69 | 0.24 | `jobs_pkey`, `official_open_product_job` | `l2files`, `refimages` |
+
+   Every statement ran under 30 ms. Two read `memberships` and `job_inputs`
+   whole: `object_set_and_members` (26 ms) and
+   `candidate_against_official` (25 ms) walk the chain and filter the
+   members rather than reaching them through
+   `memberships_job_aid_source_job_sid_key`. At 2,547 memberships and
+   8,227 `job_inputs` rows that is the planner's cheaper choice, and whether
+   it holds at a field's year of nights is not measured here. The cone and
+   window statements scan `l2files`, `diffimages` and `refimages`, tables of
+   69 rows or fewer, instead of their q3c indexes; that is expected at this
+   size, not a finding. The database is 141 MB; its largest tables are
+   `objects` and `forced` (18 MB each) and `sources` (11 MB).
+
 ## If a step fails
 
 - Part 1: stop. Before step 2 nothing has changed. After it, there is no
