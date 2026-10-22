@@ -2483,6 +2483,255 @@ Measurements:
     its span is the pass interval times the depth, not the work. Packet
     *n* goes out beside associate *n + 1*.
 
+13. **Every F146 pointing on SCA 8, drained by the loop.** The selection
+    widened to the whole F146 footprint on SCA 8: 54 pointings × 6 passes,
+    324 epochs, 312 of them new. The loop ran under a 5-hour bound from a
+    worktree of `rebuild` at `f4bf89e7` (task 5's merge); the jobs ran run
+    12's image, revision `c81e17ae`, `rapid-rebuild:35`. No stage code
+    changed, so no new run or revision.
+
+    ```sh
+    timeout 18000 rp loop --run 12 --filters F146 --scas 8 --pointings all \
+      --job-definition rapid-rebuild:35 --max-intake 200
+    ```
+
+    `--max-intake 200`: task 5 measured 0.3 s per submission; here the
+    first pass submitted 200 intakes in 34.0 s (0.17 s each: two database
+    transactions and one `SubmitJob`), so 200 is what one pass submits in
+    under a minute, and the remaining 112 went in the second pass.
+
+    | pass | at (UTC) | pass s | new | submitted | pending | packets produced |
+    |---|---|---|---|---|---|---|
+    | 1 | 07:37:57 | 65.5 | 312 | intake 200 | | |
+    | 2 | 07:39:39 | 47.7 | 112 | intake 112 | intake 200 | |
+    | 3 | 07:41:32 | 40.3 | 0 | reference 52 | | |
+    | 4 | 07:44:14 | 82.3 | 0 | difference 312 | | |
+    | 5 | 07:45:24 | 32.5 | 0 | | difference 312 | |
+    | 6 | 07:47:27 | 35.0 | 0 | associate 11 | difference 301 | |
+    | 7 | 07:49:33 | 41.4 | 0 | associate 39, packet 11 | difference 262 | |
+    | 8 | 07:52:23 | 91.9 | 0 | associate 51, packet 39 | difference 16 | 1,604 (11 sets) |
+    | 9 | 07:57:25 | 273.8 | 0 | associate 52, packet 51 | | 5,398 (39 sets) |
+    | 10 | 08:01:41 | 255.3 | 0 | associate 52, packet 52 | | 6,803 (51 sets) |
+    | 11 | 08:06:05 | 264.2 | 0 | associate 52, packet 52 | | 6,970 (52 sets) |
+    | 12 | 08:10:33 | 268.2 | 0 | associate 52, packet 52 | | 7,052 (52 sets) |
+    | 13 | 08:14:48 | 254.5 | 0 | associate 3, packet 52 | | 6,938 (52 sets) |
+    | 14 | 08:18:59 | 251.0 | 0 | packet 3 | | 7,059 (52 sets) |
+    | 15 | 08:19:39 | 40.3 | 0 | | | 367 (3 sets), **drained**, exit 0 |
+
+    Every line also carries `listed 68040`, `admitted 324` and `failed []`.
+    Jobs 404 to 1703, every one published and bound: intake 404 to 715,
+    52 references (rfids for the 52 new fields), 312 differences, 312
+    associates (52 chains of depth 6), 312 packet sets. No Batch job
+    failed and none needed a second attempt. `official` went from 1,073 to
+    2,997 rows; the last change group is 1612.
+
+    Fields advancing side by side, live: pass 6 started 11 field chains
+    while 301 differences of other fields were still running, and passes 9
+    to 12 each advanced all 52 chains by one epoch. A pass that publishes
+    ~7,000 packets takes about 4.4 minutes, longer than the 2-minute
+    interval, so from pass 9 on the passes ran back to back and associate
+    and packet jobs finished inside the pass that submitted them (no
+    associate or packet is ever seen pending).
+
+14. **The measurement of the SCA 8 ramp.** From `jobs`, `describe-jobs`
+    and each job's CloudWatch stream (`peak_rss_kib`), over jobs 404 to
+    1703. Queue wait is Batch's created to started; container is started
+    to stopped; peak RSS is the job process plus its largest child.
+
+    | stage | jobs | instance | queue wait s min / median / max | container s min / median / max | peak RSS MiB | bytes out (median per job) |
+    |---|---|---|---|---|---|---|
+    | intake | 312 | r6i.8xlarge | 54.0 / 143.7 / 158.1 | 17.1 / 20.8 / 24.6 | 910 | 60.9 GB (195 MB) |
+    | reference | 52 | r6i.8xlarge | 5.0 / 6.5 / 9.2 | 77.4 / 98.3 / 101.9 | 2,831 | 31.0 GB (596 MB) |
+    | difference | 312 | r6i.8xlarge | 7.0 / 153.7 / 228.0 | 205.6 / 246.3 / 327.2 | 16,125 | 796.5 GB (2.55 GB) |
+    | associate | 312 | r6i.8xlarge | 4.6 / 11.5 / 191.1 | 2.4 / 3.5 / 11.8 | 238 | 0.01 GB |
+    | packet | 312 | r6i.8xlarge (309), r6i.2xlarge (3) | 3.0 / 48.0 / 189.0 | 13.0 / 30.2 / 60.5 | 867 | 8.2 GB (26 MB) |
+
+    | what | figure |
+    |---|---|
+    | first intake submitted to last packet produced | 42.3 min (07:37:23 to 08:19:39) |
+    | loop start to drained | 42.8 min (07:36:51 to 08:19:39), 15 passes |
+    | span per stage, first launched to last ended | intake 3.5 min; reference 1.9 min; difference 9.0 min; associate 23.8 min; packet 29.7 min |
+    | per-field associate chain (first launched to last ended) | 52 chains of depth 6: 19.9 / 20.0 / 22.2 min (min / median / max), against 9.0 min for all 312 differences |
+    | peak concurrent containers | 290, at 07:46:46 (the differences); the compute environment chose r6i.8xlarge for every stage this time |
+    | one pass, idle | 29.3 to 35.0 s, of which the listing is about 30 s |
+    | one pass that publishes ~52 sets | 251 to 274 s: about 4.3 s per packet set produced (three pooler connections, one `flush`, the acks), 31 packets/s |
+    | Kafka, the ramp | 42,191 packets produced in 312 sets, about 8.1 GB of Avro; run 12 in all 43,725 packets, 8.43 GB |
+    | database | 365 MB (`pg_database_size`; 239 MB after part 6) |
+    | ten largest tables (total size, rows) | `sources` 133 MB (592,538), `forced` 49 MB (240,464), `objects` 48 MB (178,185), `packets` 14 MB (46,914), `memberships` 8.3 MB (47,301), `job_inputs` 3.3 MB, `jobs` 2.6 MB (1,703), `official` 1.8 MB (2,997), `l2files` 432 kB, `external` 424 kB |
+    | S3 under run 12's prefix after the ramp | 931 GB, 27,759 objects: difference 827 GB, intake 63 GB, reference 32 GB, packet 8.4 GB |
+
+    The null test over all 324 SCA 8 epochs (observations, not gates; the
+    simulation has no variable sources, so every detection is a residual):
+
+    | per epoch | min | p10 | median | p90 | max | total |
+    |---|---|---|---|---|---|---|
+    | detections before the cap (`max_sources` 500) | 798 | 858 | 954 | 1,081 | 1,207 | 312,154 |
+    | sources kept | 500 | 500 | 500 | 500 | 500 | 162,000 |
+    | S/N > 5 | 232 | 268 | 316 | 374 | 456 | 103,385 |
+    | S/N > 20 | 53 | 68 | 79 | 93 | 119 | 25,832 |
+    | bright-residual fraction (S/N > 20 of kept) | 0.106 | 0.136 | 0.158 | 0.186 | 0.238 | |
+    | packets | 56 | 102 | 132 | 169 | 233 | 43,725 |
+
+    Every epoch hit the cap, as task 4's six did; the bright residuals are
+    PSF mismatch at stars (step 9), uniform across the footprint.
+
+    Checks, all held:
+    - `validate_run.py --run 12`: **6/6 PASS in 1,231 s** over 324
+      epochs, 54 fields, 54 references and 54 chains of depth 6. lineage
+      1.2 s (7,236 input and exclude rows, 2,035 bindings); tables 542 s
+      (1,387 published jobs, 3,115 declared outputs, 518,400 rows, counts
+      and checksums equal); chain 8.6 s; packets 676 s (324 sets, 23,806 history detections,
+      152,187 forced entries, each against its own recorded inputs); forced 2.8 s (151,281 rows, 53,613 shared with a recorded
+      predecessor, every one its predecessor's measurement); counts 0.1 s.
+    - `read_packets.py` once per packet set, eight at a time: **324 of 324
+      CLEAN** in 2 min 16 s; 43,725 records, 131,175 cutouts (2,652 at an
+      edge), 0 failures.
+    - `consume_packets.py --run 12`: `CLEAN; read 44039, kept 43725, valid
+      43725, byte-equal 43725, packets expected 43725 seen 43725;
+      partitions p0 73505..117543`, 1,895.5 s, peak RSS about 20 GB (it
+      holds the whole topic range and the outbox in memory).
+
+15. **The second ramp: all 18 SCAs of the first pointing.** Step 14 was
+    recorded at 08:55 UTC (01:55 PDT), before the 06:00 PDT cutoff, so
+    the second ramp ran: 108 stems, 102 new, the other 17 SCAs' F146 PSFs
+    already imported (jobs 317 to 352).
+
+    ```sh
+    timeout 7200 rp loop --run 12 --filters F146 --scas 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18 \
+      --pointings 001_0001 --job-definition rapid-rebuild:35 --max-intake 200
+    ```
+
+    | pass | at (UTC) | pass s | new | submitted | pending | packets produced |
+    |---|---|---|---|---|---|---|
+    | 1 | 08:56:37 | 48.9 | 102 | intake 102 | | |
+    | 2 | 08:58:19 | 30.5 | 0 | difference 4 | intake 32 | |
+    | 3 | 09:00:21 | 32.9 | 0 | difference 2, reference 16 | difference 4 | |
+    | 4 | 09:02:34 | 45.5 | 0 | associate 1, difference 90 | difference 2, reference 1 | |
+    | 5 | 09:04:21 | 32.8 | 0 | associate 1, difference 6, packet 1 | difference 91 | |
+    | 6 | 09:06:29 | 41.0 | 0 | associate 8, packet 1 | difference 87 | 210 (1 set) |
+    | 7 | 09:08:30 | 41.3 | 0 | associate 16, packet 8 | difference 44 | 199 (1 set) |
+    | 8 | 09:10:51 | 62.5 | 0 | associate 17, packet 16 | | 853 (8 sets) |
+    | 9 | 09:13:22 | 93.9 | 0 | associate 17, packet 17 | | 1,732 (16 sets) |
+    | 10 | 09:14:18 | 29.6 | 0 | | associate 17, packet 17 | |
+    | 11 | 09:17:27 | 99.1 | 0 | associate 16, packet 17 | | 1,930 (17 sets) |
+    | 12 | 09:19:29 | 100.4 | 0 | associate 16, packet 16 | | 2,007 (17 sets) |
+    | 13 | 09:21:25 | 96.4 | 0 | associate 9, packet 16 | | 1,754 (16 sets) |
+    | 14 | 09:23:21 | 92.9 | 0 | associate 1, packet 9 | | 1,856 (16 sets) |
+    | 15 | 09:24:56 | 68.3 | 0 | packet 1 | | 1,022 (9 sets) |
+    | 16, 17 | 09:26:21, 09:28:18 | 33.0, 29.3 | 0 | | packet 1 | |
+    | 18 | 09:30:23 | 34.6 | 0 | | | 148 (1 set), **drained**, exit 0 |
+
+    It drained in 34.6 min (08:55:48 to 09:30:23). Jobs 1704 to 2127:
+    intake 1704 to 1805, references 1810 to 1825 (16), 102 differences,
+    102 associates, 102 packet sets; every one published and bound, none
+    failed. The 108 stems landed on 18 fields: SCA 8 on 5387158 (done in
+    step 8), 16 SCAs on 16 new fields, and **SCA 9 on field 5390959, the
+    field of SCA 8 in pointing (visit 1, exposure 2)** (step 12), because
+    the pointing grid's step is one SCA width.
+
+    What the breadth exercised for the first time:
+    - **The exposures key across SCAs.** The 18 SCAs of one exposure
+      share `{dataset, expid}`. Each intake writes an `exposures` row, and
+      only the first of an expid expects the binding: `official` holds 324
+      open `exposures` bindings, one per expid, and the other 102 rows are
+      published, unbound candidates. No binding was refused.
+    - **A field shared by two SCAs.** The reference key is `{dataset,
+      field, fid}` (`database/schema.sql`), with no SCA, so SCA 9's six
+      epochs were differenced against field 5390959's existing reference
+      (rfid 5, built from SCA 8 frames) as soon as they were official,
+      in passes 2 and 3, before any other reference existed. Each
+      difference names SCA 9's reference PSF (`loop.py` names the
+      science's SCA for both PSFs) although the reference stack is SCA 8's.
+      Its null-test numbers are ordinary (76 detections above S/N 20 per
+      epoch, median of the run 79).
+    - **A chain that is no longer chronological.** SCA 9's epochs on
+      5390959 were taken 5.4 minutes before SCA 8's in each survey pass
+      (`mjdobs` 61587.6450 against 61587.6488 in pass 1). The field's
+      chain held SCA 8's six already (set 401), so the loop appended SCA
+      9's six after them (associates 1918, 1925, 1934, 1951, 1976, 2009):
+      chain depth 12, epochs out of `mjdobs` order. The associate stage
+      accepted each one, and `validate_run.py`'s chain check (which checks
+      the chain's integrity, not its order) holds over it. The plan says
+      the chain is chronological within a field; what it should do when
+      an earlier epoch arrives after a later one is not decided here
+      (see Results).
+
+    Measurements (jobs 1704 to 2127):
+
+    | stage | jobs | instance | queue wait s min / median / max | container s min / median / max | peak RSS MiB | bytes out (median per job) |
+    |---|---|---|---|---|---|---|
+    | intake | 102 | r6i.8xlarge | 77.4 / 86.4 / 101.3 | 17.0 / 20.5 / 24.4 | 909 | 19.9 GB (195 MB) |
+    | reference | 16 | r6i.8xlarge | 8.1 / 9.8 / 67.8 | 89.0 / 97.3 / 115.4 | 2,831 | 9.5 GB (595 MB) |
+    | difference | 102 | r6i.8xlarge (100), r6i.2xlarge (2) | 6.5 / 97.7 / 131.1 | 177.8 / 249.1 / 311.7 | 16,127 | 260.3 GB (2.55 GB) |
+    | associate | 102 | r6i.8xlarge (101), r6i.2xlarge (1) | 3.1 / 6.1 / 131.4 | 2.4 / 3.4 / 10.4 | 238 | 0.00 GB |
+    | packet | 102 | r6i.8xlarge (101), m6a.2xlarge (1) | 1.9 / 12.2 / 193.3 | 12.4 / 28.4 / 46.2 | 864 | 2.3 GB (22 MB) |
+
+    | what | figure |
+    |---|---|
+    | first intake submitted to last packet produced | 34.0 min (08:56:19 to 09:30:23) |
+    | peak concurrent containers | 99, at 09:04:58 |
+    | packets produced | 11,711 in 102 sets |
+
+    The null test by SCA (mean per epoch, six epochs each): detections
+    before the cap 609 (SCA 9) to 1,854 (SCA 4); above S/N 20, 41 (SCA 17)
+    to 159 (SCA 7) for fifteen SCAs, but **355 on SCA 4 and 255 on SCA 5**.
+    Every SCA used dev's F146 PSF for that SCA; SCAs 4 and 5 are where the
+    PSF models fit the simulation worst, or where the sky is most crowded.
+    Neither was looked into further. Over run 12's 426 epochs: S/N > 20 per
+    epoch 33 to 375, median 79; packets per epoch 16 to 233, median 130;
+    55,436 packets in all.
+
+Checks over the whole run after it, all held:
+    - `validate_run.py --run 12`: **6/6 PASS in 1,515.6 s** over 426
+      epochs, 70 fields, 70 references and 70 chains (set 2009, field
+      5390959, depth 12: 1,931 members, 950 objects' sums); tables 679 s
+      (1,811 published jobs, 4,081 declared outputs, 666,822 rows),
+      packets 819 s (426 sets, 55,436 packets), forced 4.3 s (192,251
+      rows, 70,296 shared with a recorded predecessor, every one its
+      predecessor's measurement).
+    - `read_packets.py` on the 102 new sets: **102 of 102 CLEAN**, 41 s.
+    - `consume_packets.py --run 12`: `CLEAN; read 55750, kept 55436, valid
+      55436, byte-equal 55436, packets expected 55436 seen 55436;
+      partitions p0 73505..129254`, 2,457.4 s, peak RSS about 25 GB.
+
+## Results of part 7 (2026-10-22)
+
+The chain has the right shape and functions on simple data: a raw SOC L2
+ASDF file goes in at the intake and a packet comes out on the Kafka topic,
+with one consistent account of itself in the database, the Parquet and the
+outbox, and it kept doing so from one SCA of one pointing to the whole
+F146 footprint on SCA 8 and then all 18 SCAs of one pointing.
+
+- **Run 12** (live for the HLWAS dataset r00342, revision `c81e17ae`,
+  `rapid-rebuild:35`): 36 F146 PSFs and the footprint's Gaia copy
+  (imports 317 to 359), then **426 epochs on 70 fields**: 426 intakes,
+  70 references, 426 differences, 426 associates in 70 per-field chains
+  (69 of depth 6, field 5390959 of depth 12), 426 packet sets, **55,436
+  packets** on the topic. Jobs 317 to 2127, every one published and bound;
+  no Batch job failed. Run 9 stays live for the GBTDS dataset beside it.
+- **The loop** carried everything from step 12 on with no hand: 324 epochs
+  in 42.8 min (step 13), 102 more in 34.6 min (step 15). An idle pass
+  takes about 30 s, almost all of it the listing.
+- **Kafka**: every packet set of run 12 produced to the topic and read
+  back byte-equal by the consumer check.
+- **Validation**: `validate_run.py --run 12` 6/6 PASS, the reader CLEAN on
+  every set, the consumer CLEAN on every packet, after step 13 and again
+  after step 15.
+
+Final state: `official` 3,523 rows, the last change group
+2036; database 396 MB; run 12's prefix 1,223 GB in 36,455 objects.
+
+Open, from this part (for the plan's "Open" list):
+- **A field shared by two SCAs.** The reference key has no SCA, so an SCA
+  landing on a field another SCA referenced is differenced against that
+  stack while naming its own reference PSF, and its epochs join the
+  field's chain out of `mjdobs` order when they arrive later (step 15).
+  Whether a reference is per (field, filter) or per (field, filter, SCA),
+  and what the chain does with a late earlier epoch, are not decided.
+- SCAs 4 and 5 leave three to four times the bright residuals of the
+  others with dev's F146 PSFs (step 15).
+- Injection, not breadth, is the next scientific step.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
