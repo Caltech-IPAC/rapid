@@ -8,7 +8,8 @@ its check, and nothing goes on to the next step until the check holds. Parts 1
 to 3 were run unattended on 2026-10-21 from a fleet host in the same security
 group as the database's pooler, and are written here as run, with their
 results; parts 4 and 5 followed the same day, run the same way, and part 6 is
-the night of the same field written by the tasks that ran it. Six parts, in order:
+the night of the same field written by the tasks that ran it; part 7, the
+HLWAS simulation from ASDF intake to Kafka, was run the next night. Seven parts, in order:
 
 1. **Schema**: the SMDC `rapid` database's `public` schema becomes `database/schema.sql`.
 2. **Inputs**: the field's directory is copied to the inputs bucket under `foundation/`.
@@ -21,6 +22,8 @@ the night of the same field written by the tasks that ran it. Six parts, in orde
    its change group and undo timed (milestones 5 and 6 as far as this field's two epochs reach).
 6. **The night**: the PSF key gains its kind and the read role can select (step 1), then the
    field's 69 epochs through the whole chain.
+7. **HLWAS**: the night's fixes and their image (step 1), then the SOC HLWAS simulation
+   from its ASDF files through intake, the chain and Kafka publication.
 
 Part 4 needs the `reference` and `difference` stages on the `run(job)` contract
 (`rapidpipe/foundation/local.py`), the difference stage refreshed from `dev`
@@ -1900,6 +1903,96 @@ Measurements:
 | ten largest tables (total size) | `sources` 102 MB, `objects` 19.0 MB, `forced` 18.7 MB, `job_inputs` 1.8 MB, `packets` 1.1 MB, `official` 1.0 MB, `jobs` 655 kB, `memberships` 532 kB, `diffimages` 205 kB, `l2files` 205 kB |
 | `official` rows at the end | 961 |
 | S3 under the scratch root, per run | 1: 1.28 GB; 2: 0.60 GB; 3: 2.82 GB; 4: 6.26 GB; 5: 5.66 GB; 6: 5.63 GB; 7: 5.63 GB; 8: none; 9: 22.4 GB (1,273 objects); 10: **200.7 GB** (5,168 objects) |
+
+## Part 7: HLWAS, from ASDF intake to Kafka (2026-10-22)
+
+1. **The night's fixes, their image and a Batch proof.** PR 301 (merged
+   `32970a24`) records the EC2 instance type in a new `jobs.instance_type`
+   column beside `image_digest`, read from IMDSv2 when the attempt starts
+   (null, with the error logged, when unreachable); makes `job run` exit 0
+   when a published job's only refusal is that its run is not live; removes
+   `prefix.get`'s download cache at process exit; and pins
+   `[reference.statistics] clip_correction_seed = 0`. SMDC gets the column
+   as `postgres`:
+
+   ```sh
+   pg -c "ALTER TABLE jobs ADD COLUMN instance_type text;"
+   ```
+
+   Check, held: `jobs.instance_type text` present (0.25 s); jobs 1 to 314,
+   last change group 224, `official` 961 rows before and after.
+
+   The earlier runs' download caches on the fleet host were removed by
+   their `mkdtemp` prefix, listed first: 170 directories
+   `/tmp/rapidpipe-get-*`, 10.3 GiB, every byte re-fetchable from S3;
+   the root disk went from 87% to 70% used. Nothing else under `/tmp` was
+   touched (89 `rapidpipe-job-*` working directories, 22.2 GiB, remain).
+
+   The image, on the fleet host (rapid_systems' release-hooks README):
+
+   ```sh
+   containers/rapid-pipeline/build-rebuild.sh 32970a244eed35f68fa97c6f9899fee5cb87e3cb --tag rebuild-32970a244eed35f68fa97c6f9899fee5cb87e3cb
+   RELEASE_TAG=rebuild-32970a244eed35f68fa97c6f9899fee5cb87e3cb RELEASE_IMAGE_DIGEST=sha256:b666e04d… cloudformation/release-hooks/deploy
+   ```
+
+   Check, held: build 21 s with cached layers, image 1.96 GB compressed;
+   deploy 73 s; **`rapid-rebuild:34`** (and `rapid-rebuild-production:25`),
+   its image and `RAPID_IMAGE_DIGEST` both `sha256:b666e04d…`, retry 3,
+   24 GiB, read back with `describe-job-definitions`.
+
+   The proof, under a new non-live run with the shipped settings at the
+   merged sha, uncapped as run 10 was so that its rows compare with run
+   10's:
+
+   ```sh
+   git show 32970a24:rapidpipe/settings/foundation-thin.toml | sed 's/^max_sources = 500$/max_sources = 0/' > uncapped1.toml
+   rp run create --who "$USER" --why "hlwas-night-2026-10-21 task 1 (night-fixes): ..." \
+     --revision 32970a244eed35f68fa97c6f9899fee5cb87e3cb --settings uncapped1.toml --survey GBTDS --dataset $D
+   rp job submit --run 11 --stage difference --job-definition rapid-rebuild:34 --scope '{"expid": 84624, "fid": 8, "sca": 8}' \
+     --inputs '<job 233's four inputs: l2files from job 3, refimages field 4658155 from job 231, the science PSF from job 1, the reference PSF from job 9>' \
+     --expects '[{"product": "diffimages", "key": '"$(k 84624)"', "binding": null}, {"product": "sources", "key": '"$(k 84624)"', "binding": null}]'
+   ```
+
+   and the same for epoch 84635 with job 234's inputs (its `l2files` from
+   job 30). The second job is there because the night's instance-family
+   observation (step 13 of part 6) compared job 234 (r6i.8xlarge) with job
+   312 (m6a.2xlarge) on epoch 84635; jobs 233 and 301 on 84624 ran on the
+   same family and agreed.
+
+   Check, held: run **11** (`"live": null`); jobs **315** (84624, Batch
+   `6f3e145c…`) and **316** (84635, Batch `73fda254…`) Batch `SUCCEEDED`
+   on attempt 1 with exit 0; each published attempt 1 and unbound, its row
+   carrying `run 11 is not live for its survey and dataset` and the same
+   line on the job's log; no `official` row names either; `instance_type`
+   **r6i.2xlarge** on both, matching ECS's `ecs.instance-type` for their
+   container instance, so the IMDSv2 read reaches the metadata service
+   from the container and the launch templates need no change (their
+   `MetadataOptions` set `HttpTokens: required` and no hop limit).
+
+   **The instance-family data point.** Sources compared row for row on
+   (`isdiffpos`, `id`), every column but `job`, `sid` and `pid` (the job's
+   own difference-image id), NaN equal to NaN:
+
+   | job | epoch | instance | against | result |
+   |---|---|---|---|---|
+   | 315 | 84624 | r6i.2xlarge | 233 (r6i.8xlarge) | identical, 5,115 rows |
+   | 315 | 84624 | r6i.2xlarge | 301 (r6i.8xlarge) | identical |
+   | 316 | 84635 | r6i.2xlarge | 234 (r6i.8xlarge) | identical, 5,536 rows |
+   | 316 | 84635 | r6i.2xlarge | 312 (m6a.2xlarge) | 2,156 rows differ: 1,342 in RA, 2,075 in Dec, 10 by more than 1 mas, 1 by 0.52″; 15 fluxes by more than 1e-3 relative; 1 `flags` |
+
+   Two Intel sizes give the same rows, and the AMD job differs from all
+   three Intel executions of its epoch in the same way. Consistent with
+   CPU-dependent arithmetic in the tools; one AMD execution, so recorded,
+   not resolved.
+
+   Measurements:
+
+   | what | job 315 | job 316 |
+   |---|---|---|
+   | queue wait (created to started) | 226.5 s | 225.4 s |
+   | container (started to stopped) | 1,316.6 s | 1,305.4 s |
+   | peak RSS, self / largest child | 1.33 / 14.54 GiB | 1.25 / 14.54 GiB |
+   | bytes under `11/difference/<job>/1/` | 2.81 GB, 72 objects | 2.82 GB, 72 objects |
 
 ## Validation
 
