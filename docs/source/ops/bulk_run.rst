@@ -318,6 +318,22 @@ scans the request's Sources/XSources child tables in full for sources of any not
 image, for example after setting ``vbest = 0`` by hand.  Either way they vacuum only the tables
 they deleted records from, and drop empty ones.
 
+The not-best ``sid`` (``xsid``) values are selected on the database server, into one unlogged
+table shared by the worker processes, ``notbest_sids_<processing date>_req<reqid>``
+(``notbest_xsids_...`` for stage 17), which the workers delete from the ``Merges_<field>``
+(``XMerges_<field>``) tables with.  Since 10/22/2026 only the not-best difference-image ids are
+sent from the script: the ids used to be read into Python and sent back to every worker in a
+single statement, which for processing request 7 of 10/21/2026 (95,305,802 not-best ``sid``
+values) exceeded PostgreSQL's 1-GB memory-allocation limit and failed the stage.  The table is
+dropped when the stage ends, even if a worker fails, and a table left behind by an earlier
+failed run of the same request is dropped when the stage starts.  While a pruning stage runs,
+
+.. code-block::
+
+   select relname from pg_class where relname like 'notbest_%';
+
+lists the table; it should be gone afterwards.
+
 
 Performance
 ********************************************

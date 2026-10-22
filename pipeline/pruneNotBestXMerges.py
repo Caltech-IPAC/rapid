@@ -20,7 +20,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "pruneNotBestXMerges.py"
-swvers = "1.2"
+swvers = "1.3"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -137,7 +137,7 @@ print("num_cores =",num_cores)
 # PRUNEFULLSCAN=True finds the not-best XSources by scanning the processing request's XSources child
 # tables in full, which also finds those of difference images set to vbest = 0 by hand or by
 # another processing request.  By default (unset or False), only the difference images of the
-# request's own rids are considered (see collect_notbest_xsids), which is much faster.
+# request's own rids are considered (see load_notbest_xsids_table), which is much faster.
 
 full_scan_str = os.getenv('PRUNEFULLSCAN')
 
@@ -183,16 +183,37 @@ def execute_or_raise(dbh,sql_queries,thread_debug,fh,context):
     return records
 
 
-def collect_notbest_xsids(dbh,xsources_child_tables,rids,full_scan):
+def drop_notbest_xsids_table(dbh,notbest_tablename):
 
     '''
-    Return the xsids of the XSources records that are no longer best (vbest = 0 in the associated
-    DiffImages record), from the given XSources child tables.
+    Drop the given not-best-xsids database table if it exists (it is left behind if an earlier
+    run of this script for the same processing request failed).  Raises RuntimeError on a
+    database error.
+    '''
+
+    execute_or_raise(dbh,[f"DROP TABLE IF EXISTS {notbest_tablename};"],0,None,
+                     f"drop of {notbest_tablename}")
+
+
+def load_notbest_xsids_table(dbh,notbest_tablename,xsources_child_tables,rids,full_scan):
+
+    '''
+    Create the given database table and load into it, on the database server, the xsids of the
+    XSources records that are no longer best (vbest = 0 in the associated DiffImages record),
+    from the given XSources child tables.
+
+    The xsids are selected and inserted by INSERT ... SELECT on the database server, rather than
+    being read into Python and sent back as a literal array: a processing request can make
+    ~100 million xsids not best, and a query string that size exceeds the 1-GB limit of a
+    PostgreSQL memory allocation.  The table is a regular (unlogged) table rather than a
+    temporary table, so that all the parallel worker processes can read the one copy.
 
     Parameters
     ----------
     dbh : database.modules.utils.rapid_db.RAPIDDB
         Open database connection.
+    notbest_tablename : str
+        Name of the database table to create; it must not exist.
     xsources_child_tables : list of str
         Names of the existing xsources_<obs_date>_<sca> child tables of the processing request.
     rids : list of int
@@ -209,32 +230,39 @@ def collect_notbest_xsids(dbh,xsources_child_tables,rids,full_scan):
 
     Returns
     -------
-    xsids : list of int
-        Distinct not-best xsids, in ascending order (empty if none).  Raises RuntimeError on a
+    nxsids : int
+        Number of not-best xsids loaded into the table (0 if none).  Raises RuntimeError on a
         database error.
     '''
 
     thread_debug = 0
 
-    xsids = set()
+
+    # Create the table without its primary key, which is added after the bulk insert (faster).
+
+    sql_queries = [
+        "SET default_tablespace = pipeline_data_01;",
+        f"CREATE UNLOGGED TABLE {notbest_tablename} (xsid bigint NOT NULL);",
+    ]
+
+    execute_or_raise(dbh,sql_queries,thread_debug,None,f"creation of {notbest_tablename}")
 
     if full_scan:
 
         for xsources_tablename in xsources_child_tables:
 
-            query = f"SELECT a.xsid FROM {xsources_tablename} AS a " +\
+            query = f"INSERT INTO {notbest_tablename} (xsid) " +\
+                    f"SELECT a.xsid FROM {xsources_tablename} AS a " +\
                     f"JOIN diffimages AS b ON a.pid = b.pid " +\
                     f"WHERE b.vbest = 0;"
 
-            records = execute_or_raise(dbh,[query],thread_debug,None,
-                                       f"full scan of {xsources_tablename} for not-best xsids")
+            execute_or_raise(dbh,[query],thread_debug,None,
+                             f"full scan of {xsources_tablename} for not-best xsids")
 
-            xsids.update(int(record[0]) for record in records)
-
-        return sorted(xsids)
+        return index_and_count_notbest_xsids_table(dbh,notbest_tablename)
 
     if len(rids) == 0:
-        return []
+        return index_and_count_notbest_xsids_table(dbh,notbest_tablename)
 
 
     # Not-best difference images of the request's rids, and the child table that holds the
@@ -271,17 +299,35 @@ def collect_notbest_xsids(dbh,xsources_child_tables,rids,full_scan):
 
         pids_str = ",".join(str(pid) for pid in sorted(set(pids)))
 
-        query = f"SELECT xsid FROM {xsources_tablename} WHERE pid IN ({pids_str});"
+        query = f"INSERT INTO {notbest_tablename} (xsid) " +\
+                f"SELECT xsid FROM {xsources_tablename} WHERE pid IN ({pids_str});"
 
-        records = execute_or_raise(dbh,[query],thread_debug,None,
-                                   f"lookup of not-best xsids in {xsources_tablename}")
+        execute_or_raise(dbh,[query],thread_debug,None,
+                         f"lookup of not-best xsids in {xsources_tablename}")
 
-        xsids.update(int(record[0]) for record in records)
-
-    return sorted(xsids)
+    return index_and_count_notbest_xsids_table(dbh,notbest_tablename)
 
 
-def run_single_core_job(fields,notbest_xsids,index_thread):
+def index_and_count_notbest_xsids_table(dbh,notbest_tablename):
+
+    '''
+    Add the primary key (xsid) to the given not-best-xsids database table, analyze it, and return
+    its number of records.  Raises RuntimeError on a database error (including a duplicate xsid,
+    which the xsid sequence of the XSources tables rules out).
+    '''
+
+    sql_queries = [
+        f"ALTER TABLE {notbest_tablename} ADD PRIMARY KEY (xsid) USING INDEX TABLESPACE pipeline_indx_01;",
+        f"ANALYZE {notbest_tablename};",
+        f"SELECT count(*) FROM {notbest_tablename};",
+    ]
+
+    records = execute_or_raise(dbh,sql_queries,0,None,f"indexing and counting of {notbest_tablename}")
+
+    return int(records[0][0])
+
+
+def run_single_core_job(fields,notbest_tablename,index_thread):
 
     '''
     Remove records from XMerges_<field> database tables associated with XSources that are no longer best
@@ -337,22 +383,11 @@ def run_single_core_job(fields,notbest_xsids,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
-    # Prune not-best merges for all fields associated with this thread:
-    # 1. Load the not-best xsids, which the main process collected once, into a temporary table.
-    # 2. Delete from each XMerges_<field> table the records having those xsids, through its
-    #    xsid index.
+    # Prune not-best xmerges for all fields associated with this thread: delete from each
+    # XMerges_<field> table the records having the not-best xsids, which the main process loaded
+    # once into the shared notbest_tablename database table, through its xsid index.
 
-    xsids_str = ",".join(str(xsid) for xsid in notbest_xsids)
-
-    sql_queries = [
-        "CREATE TEMP TABLE notbest_xsids (xsid bigint PRIMARY KEY);",
-        f"INSERT INTO notbest_xsids (xsid) SELECT unnest(ARRAY[{xsids_str}]::bigint[]);",
-        "ANALYZE notbest_xsids;",
-    ]
-
-    execute_or_raise(dbh,sql_queries,thread_debug,fh,"building notbest_xsids temporary table")
-
-    fh.write(f"Loaded {len(notbest_xsids)} not-best xsids into temporary table notbest_xsids.\n")
+    fh.write(f"Using not-best xsids in database table {notbest_tablename}.\n")
     fh.flush()
 
     for index_field in my_fields:
@@ -378,7 +413,7 @@ def run_single_core_job(fields,notbest_xsids,index_thread):
 
             continue
 
-        query = f"WITH deleted AS (DELETE FROM {xmerges_tablename} AS m USING notbest_xsids AS n " +\
+        query = f"WITH deleted AS (DELETE FROM {xmerges_tablename} AS m USING {notbest_tablename} AS n " +\
                 f"WHERE m.xsid = n.xsid RETURNING 1) SELECT count(*) FROM deleted;"
 
         records = execute_or_raise(dbh,[query],thread_debug,fh,
@@ -400,7 +435,7 @@ def run_single_core_job(fields,notbest_xsids,index_thread):
         fh.flush()
 
 
-    # Close database connection (which drops the temporary table).
+    # Close database connection.
 
     dbh.close()
 
@@ -418,7 +453,7 @@ def run_single_core_job(fields,notbest_xsids,index_thread):
     return ndeleted_by_field
 
 
-def execute_parallel_processes(fields_list,notbest_xsids,num_cores):
+def execute_parallel_processes(fields_list,notbest_tablename,num_cores):
 
     '''
     Run run_single_core_job in num_cores processes, and return the combined dictionary of
@@ -429,7 +464,7 @@ def execute_parallel_processes(fields_list,notbest_xsids,num_cores):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,fields_list,notbest_xsids,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,fields_list,notbest_tablename,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -584,13 +619,19 @@ if __name__ == '__main__':
         exit(7)
 
 
-    # Collect, once, the xsids of the XSources that are no longer best.
+    # Load, once, the xsids of the XSources that are no longer best into a database table that
+    # all the worker processes share.  The table is named for the processing request, and one
+    # left behind by an earlier failed run for the same request is dropped first.
 
     rids = [meta_dict["rid"] for meta_dict in meta_list]
 
-    notbest_xsids = collect_notbest_xsids(dbh,xsources_child_tables,rids,full_scan)
+    notbest_tablename = f"notbest_xsids_{proc_date}_req{int(proc_req)}"
 
-    print(f"Number of not-best xsids to prune (full_scan={full_scan}) = {len(notbest_xsids)}")
+    drop_notbest_xsids_table(dbh,notbest_tablename)
+
+    nnotbest_xsids = load_notbest_xsids_table(dbh,notbest_tablename,xsources_child_tables,rids,full_scan)
+
+    print(f"Number of not-best xsids to prune (full_scan={full_scan}) = {nnotbest_xsids}")
 
 
     # Close the main database connection before the parallel phases, rather than leaving
@@ -613,17 +654,28 @@ if __name__ == '__main__':
     ################################################################################
     # Delete the not-best records for fields in parallel, with the number of parallel
     # threads equal to the number of cores on the job-launcher machine.  Skipped if
-    # there is nothing to prune.
+    # there is nothing to prune.  The not-best-xsids table is dropped afterwards, even
+    # if a worker fails.
     ################################################################################
 
-    if len(notbest_xsids) == 0:
-        print("No not-best xsids; nothing to prune.")
-        ndeleted_by_field = {}
-    elif num_cores > 1:
-        ndeleted_by_field = execute_parallel_processes(fields_list,notbest_xsids,num_cores)
-    else:
-        thread_index = 0
-        ndeleted_by_field = run_single_core_job(fields_list,notbest_xsids,thread_index)
+    try:
+        if nnotbest_xsids == 0:
+            print("No not-best xsids; nothing to prune.")
+            ndeleted_by_field = {}
+        elif num_cores > 1:
+            ndeleted_by_field = execute_parallel_processes(fields_list,notbest_tablename,num_cores)
+        else:
+            thread_index = 0
+            ndeleted_by_field = run_single_core_job(fields_list,notbest_tablename,thread_index)
+    finally:
+        dbh = db.RAPIDDB()
+
+        if dbh.exit_code < 64:
+            drop_notbest_xsids_table(dbh,notbest_tablename)
+            dbh.close()
+        else:
+            print(f"*** Error: Could not open database connection to drop {notbest_tablename}; " +
+                  f"it will be dropped by the next run for this processing request...")
 
     print("Total number of not-best XMerges records deleted =",sum(ndeleted_by_field.values()))
 
