@@ -13,9 +13,11 @@ The stage fetches ``<source_root><file>_cal.asdf`` (anonymously when
 ``unsigned``), converts it with `dev`'s ``build_fits_file``
 (:mod:`rapidpipe.science.intake`), gzips it at ``gzip_level``, measures the
 limiting magnitude with the science PSF of the ``psfs`` set the job names
-as an input, and declares one ``exposures`` row and one ``l2files`` row
-with the centre, corners, tessellation field, overlapping fields and
-HEALPix indexes the import stage derives the same way. The calibrated file
+as an input, and declares one ``l2files`` row with the centre, corners,
+tessellation field, overlapping fields and HEALPix indexes the import
+stage derives the same way, and one ``exposures`` row only when the job
+expects the ``exposures`` key (the loop gives that expectation to one
+SCA of an exposure; a row nothing binds is not written). The calibrated file
 carries the gWCS and the whole ``meta`` tree, so its ``_wcs.asdf`` sidecar
 is not read.
 
@@ -132,8 +134,11 @@ def run(job: JobContext) -> None:
     dateobs = datetime.fromisoformat(header["DATE-OBS"])
     exposure = {"dataset": job.dataset, "expid": key["expid"], "dateobs": dateobs,
                 "exptime": float(header["EXPTIME"]), "program_id": int(settings["program_id"])}
+    tables = [("l2files", [l2file])]
+    if any(i["kind"] == "expects" and i["product"] == "exposures" for i in job.inputs):
+        tables.insert(0, ("exposures", [exposure]))
     outputs = []
-    for table, rows in (("exposures", [exposure]), ("l2files", [l2file])):
+    for table, rows in tables:
         pq.write_table(pa.Table.from_pylist(rows), job.path / f"{table}.parquet")
         outputs.append((table, f"{table}.parquet"))
     lap("rows")
