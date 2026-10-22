@@ -39,13 +39,20 @@ fetched with :func:`rapidpipe.foundation.prefix.get`:
   scope's filter and SCA. The kind is the key's, read from the row; the
   file's header is not consulted.
 
-Outputs under ``job.path``. ``[paths] work_subdirectory`` holds every
-working file `dev` uploads for diagnosis, the inputs' copies removed; the
-packet stage reads the ZOGY difference image's neighbours there
-(``zogy_diffimage_uncert_masked.fits``, ``diffpsf.fits``,
-``bkg_subbed_science_image.fits``,
-``awaicgen_output_mosaic_image_resampled_gainmatched.fits``). Declared
-tables: ``diffimages`` (one row, the ZOGY image; ``pid`` is drawn from the
+Outputs under ``job.path``. ``[paths] work_subdirectory`` holds what the
+packet stage and a person read, and nothing else (:func:`trim`, Ben's
+ruling of 2026-10-22): the ZOGY difference image, its uncertainty, its
+mask (the resampled reference coverage map it is masked with) and its
+positive PSF-fit catalog (``*_psfcat.parquet``, uncapped), and the packet
+stage's other reads beside the difference image, the difference PSF
+(``diffpsf.fits``, forced photometry), the background-subtracted science
+image (forced photometry and the science cutout) and the resampled
+gain-matched reference (the template cutout). Every FITS file is
+gzipped (``.fits.gz``, level 1, as the intake's). The rest of `dev`'s
+diagnostic files (SFFT and naive products, negatives, S_corr,
+intermediate images, text catalogs) is not published; a variant is
+re-created by rerunning the job. Declared tables: ``diffimages`` (one
+row, the ZOGY image, ``filename`` the ``.fits.gz``; ``pid`` is drawn from the
 table's identity sequence so the sources can carry it; ``infobitssci`` is
 `dev`'s catalog-outcome mask, ``infobitsref`` the reference's infobits)
 and ``sources`` (the ZOGY positive PSF-fit catalog through
@@ -61,9 +68,10 @@ moves every clipped standard deviation by about 3e-4 and the source count
 by a few (foundation/determinism).
 
 Departures from `dev` (difference page): SFFT and naive files are not
-published as rows (a run has one differencer); a missing ZOGY PSF-fit
-catalog publishes an empty source set with its outcome bit set, where
-`dev`'s loader skips the job.
+published as rows (a run has one differencer), nor uploaded at all (the
+trim above; SFFT and naive still run when their settings say so, for the
+outcome bits); a missing ZOGY PSF-fit catalog publishes an empty source
+set with its outcome bit set, where `dev`'s loader skips the job.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
@@ -78,6 +86,7 @@ import logging
 import math
 import shutil
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -109,6 +118,7 @@ from rapidpipe.science.difference import (
 )
 from rapidpipe.science.difference.fitsops import scale_image_data
 from rapidpipe.science.difference.tools import ToolRunner
+from rapidpipe.science.intake import gzip_file
 from rapidpipe.science.load.catalogs import source_set
 from rapidpipe.science.spatial import image_centre_and_corners, tessellation_field
 
@@ -120,6 +130,8 @@ REFERENCE_CATALOG_TYPE = 1
 STATUS_GOOD = 1
 #: The two ``psfs`` key kinds the job names, one of each.
 PSF_KINDS = ("science", "reference")
+#: The gzip level of the published FITS files, the intake's.
+GZIP_LEVEL = 1
 
 DIFFIMAGES_SCHEMA = pa.schema([
     ("pid", pa.int32()), ("dataset", pa.string()), ("expid", pa.int32()), ("sca", pa.int16()),
@@ -646,13 +658,19 @@ def run(job: JobContext) -> None:
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         infobits |= _run_naive(reference_psf=staged["reference_psf"], **common)
 
-    # The inputs' copies are not this job's products.
-    for name in (*staged.values(), science_image_filename):
-        w(name).unlink(missing_ok=True)
-
     # Rows.
     with fits.open(w(filename_diffimage_masked)) as hdul:
         header = hdul[0].header.copy()
+    parquet = zogy_catalogs.parquet["positive"]
+    if parquet is None:
+        logger.warning("no ZOGY PSF-fit catalog: the source set is empty")
+    catalog = pq.read_table(w(parquet)) if parquet else _EMPTY_CATALOG
+
+    published = trim(work_dir, images=[
+        filename_diffimage_masked, filename_diffimage_unc_masked,
+        output_resampled_reference_cov_map, filename_diffpsf, filename_bkg_subbed_science_image,
+        output_resampled_gainmatched_reference_image], others=[parquet] if parquet else [])
+    filename_diffimage_published = filename_diffimage_masked + ".gz"
     centre, corners = image_centre_and_corners(WCS(header), header["NAXIS1"], header["NAXIS2"])
     footprint = {"ra0": centre["ra"], "dec0": centre["dec"]}
     for n, (ra, dec) in enumerate(corners, start=1):
@@ -664,13 +682,9 @@ def run(job: JobContext) -> None:
         "field": tessellation_field(centre["ra"], centre["dec"]),
         "jd": inputs.mjdobs + 2400000.5, **footprint,
         "infobitssci": infobits, "infobitsref": inputs.infobits_reference,
-        "filename": job.prefix + w(filename_diffimage_masked).relative_to(job.path).as_posix(),
-        "checksum": _md5_of_file(w(filename_diffimage_masked)), "status": STATUS_GOOD,
+        "filename": job.prefix + w(filename_diffimage_published).relative_to(job.path).as_posix(),
+        "checksum": _md5_of_file(w(filename_diffimage_published)), "status": STATUS_GOOD,
     }
-    parquet = zogy_catalogs.parquet["positive"]
-    if parquet is None:
-        logger.warning("no ZOGY PSF-fit catalog: the source set is empty")
-    catalog = pq.read_table(w(parquet)) if parquet else _EMPTY_CATALOG
     sources, candidates = source_set(
         catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"],
         max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
@@ -694,7 +708,39 @@ def run(job: JobContext) -> None:
             "source_counts": {"sextractor": zogy_catalogs.sextractor,
                               "photutils": zogy_catalogs.photutils},
             "sources_before_cap": candidates, "sources_kept": sources.num_rows,
-            "infobits_science_l2": inputs.infobits_science, "sfft": sfft_note})
+            "infobits_science_l2": inputs.infobits_science, "sfft": sfft_note,
+            "published": published})
+
+
+def trim(work_dir: Path, images: list[str], others: list[str]) -> dict[str, Any]:
+    """Keep only ``images``, gzipped, and ``others`` in ``work_dir``; remove every other file.
+
+    Returns what the manifest records: the kept names and the bytes and
+    seconds of the gzip, beside the bytes removed.
+    """
+    start = time.perf_counter()
+    plain = gzipped = 0
+    for name in images:
+        plain += (work_dir / name).stat().st_size
+        gzip_file(work_dir / name, work_dir / (name + ".gz"), GZIP_LEVEL)
+        (work_dir / name).unlink()
+        gzipped += (work_dir / (name + ".gz")).stat().st_size
+    keep = {name + ".gz" for name in images} | set(others)
+    removed = nfiles = 0
+    for path in sorted(work_dir.iterdir()):
+        if path.name in keep:
+            continue
+        files = [path] if path.is_symlink() or not path.is_dir() else [
+            f for f in path.rglob("*") if not f.is_dir() or f.is_symlink()]
+        removed += sum(f.lstat().st_size for f in files)
+        nfiles += len(files)
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    return {"files": sorted(keep), "fits_bytes": plain, "fits_gz_bytes": gzipped,
+            "gzip_s": round(time.perf_counter() - start, 3), "removed_files": nfiles,
+            "removed_bytes": removed}
 
 
 #: A PSF-fit catalog with no rows, for an image whose catalog was not produced.
