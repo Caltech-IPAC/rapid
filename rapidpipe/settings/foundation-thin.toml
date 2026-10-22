@@ -167,8 +167,10 @@ inject_fake_sources_flag = false
 [reference.statistics]
 # New: seed for the clipped-statistics correction factor's Monte Carlo
 # draw (as [difference.statistics]). Negative reproduces `dev`, which draws from
-# numpy.random unseeded.
-clip_correction_seed = -1
+# numpy.random unseeded. Pinned as the difference stage's is, so the same
+# frames give the same reference catalog (foundation/night-fixes); whether
+# the reference stage varied run to run without it was not demonstrated.
+clip_correction_seed = 0
 
 # [SEXTRACTOR_REFIMAGE] verbatim (generated from the ini; configparser's
 # lower-case keys). The per-call values `dev` fills in -- detection and
