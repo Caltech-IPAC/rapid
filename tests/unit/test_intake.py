@@ -7,6 +7,7 @@ bound, ``sip_max_pix_error`` (0.1 px: ``to_fits_sip`` raises when a
 fixed-degree fit misses it, and a corner is the domain's edge, where a
 polynomial fit is worst); the ``exposures`` and ``l2files`` rows have
 exactly their schema columns and the key the file name gives; the
+``exposures`` row is declared only when the job expects its key; the
 manifest names the file's provenance; a file whose own identifiers
 contradict its name fails before a manifest; the file name parses, and the
 expid packs, as the stage's docstring says.
@@ -128,14 +129,20 @@ def source(tmp_path: Path) -> Path:
     return src
 
 
-def run_intake(tmp_path: Path, source: Path, stem: str = STEM) -> Path:
+def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
+               expects_exposure: bool = True) -> Path:
     prefix = tmp_path / "outputs"
-    prefix.mkdir()
+    prefix.mkdir(parents=True)
     settings = {"intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/"}}
+    expects = [{"kind": "expects", "product": "l2files", "key": {}, "source_job": None,
+                "binding": None}]
+    if expects_exposure:
+        expects.append({"kind": "expects", "product": "exposures", "key": {}, "source_job": None,
+                        "binding": None})
     job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "r00342", "file": stem},
                      survey="HLWAS", dataset="r00342", settings=settings,
                      inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
-                              "binding": None}],
+                              "binding": None}, *expects],
                      attempt=1, prefix=prefix.as_uri() + "/",
                      connect=fake_connect((source / "psf.fits").as_uri()))
     intake.run(job)
@@ -192,6 +199,15 @@ def test_the_manifest_names_the_provenance(tmp_path, source):
     assert provenance["romancal"] == "0.23.0"
     assert provenance["wcs_fit_results"]["status"] == "SUCCESS"
     assert provenance["wcs_fit_results"]["rmse"] == pytest.approx(0.17)
+
+
+def test_the_exposures_row_is_declared_only_when_the_job_expects_it(tmp_path, source):
+    expected = json.loads((run_intake(tmp_path / "a", source) / "manifest.json").read_text())
+    assert [o["table"] for o in expected["outputs"]] == ["exposures", "l2files"]
+    sibling = run_intake(tmp_path / "b", source, expects_exposure=False)
+    assert [o["table"] for o in json.loads((sibling / "manifest.json").read_text())["outputs"]] \
+        == ["l2files"]
+    assert not (sibling / "exposures.parquet").exists()
 
 
 def test_a_file_whose_identifiers_contradict_its_name_fails_before_a_manifest(tmp_path, source):
