@@ -452,6 +452,24 @@ The record is closed out when the run ends, with ``status`` set to:
 * ``-1`` -- the request terminated early because a stage failed.
 
 The ``started``, ``ended`` and ``elapsed`` columns of the record bound the request in time.
+They are taken from the actual clock time of the database server (``clock_timestamp()``).  Before
+10/21/2026 they were taken from ``localtimestamp``, the start time of the current transaction,
+and the VPO's database connection stayed in one transaction from its first query after the
+``ProcReqs`` record was inserted, so ``ended`` was recorded only seconds after ``started``
+(e.g., 26 s for a 7.9-hour run).  The records of reqids 1, 2, 3 and 6 in socsimsdb have been
+corrected from the VPO logs; other records of earlier runs keep the wrong ``ended`` and
+``elapsed``.
+
+The VPO's read-only queries (the high-water mark, the unprocessed and still-arriving L2Files of
+the open loop, and the jobs it waits for) end their transaction, so that its database connection
+is not left idle in a transaction while it waits for AWS Batch jobs or sleeps between open-loop
+iterations, which would also hold back vacuuming.  This query should return no rows for the
+VPO's database user:
+
+.. code-block::
+
+    select state, xact_start, query from pg_stat_activity
+    where usename = '<VPO database user>' and state like 'idle in transaction%';
 
 
 Error handling

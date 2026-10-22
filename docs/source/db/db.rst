@@ -313,6 +313,29 @@ The AstroObjectsMeta_<fields> database tables are explicitly vacuumed and analyz
 For the 7/22/2026 test with SOC sims, it took 1.6 hours with 8 parallel processes to compute
 statistics for ~90 million AstroObjects.
 
+For each field, the script finds the best sources (``vbest > 0`` in DiffImages) of each aid in
+Merges_<field>, in the Sources child tables that can hold sources of the field.  It computes the
+statistics from those sources, and keeps AstroObjectsMeta_<field> consistent with
+AstroObjects_<field> (the XAstroObjects tables are handled the same way):
+
+* An aid is deleted from AstroObjects_<field> and Merges_<field>, in one transaction, only if
+  every one of its Merges records' sources was found and none is best (e.g., all of its sources
+  are in difference images superseded by reprocessing).
+* An aid with a source that was not found in the child tables is left alone, and counted in a
+  warning in the thread log, since its sources may well be best.  Before 10/21/2026 such an aid
+  was deleted from AstroObjects_<field> but kept in Merges_<field>, which is how the 8/21-era
+  version of the script, whose child-table lookup was incomplete, lost AstroObjects records of
+  objects seen on earlier observation dates.
+* AstroObjectsMeta_<field> records are written only for best aids that have an
+  AstroObjects_<field> record.  Merges_<field> records whose aid has no AstroObjects_<field>
+  record are counted in a warning in the thread log and left alone, so that the lost
+  AstroObjects records can still be rebuilt from them.
+
+The AstroObjectsMeta records written before 10/21/2026 for aids without an AstroObjects record
+(after the 10/20/2026 socsims test, AstroObjectsMeta had 105.8M records and AstroObjects 38.5M)
+remain until those AstroObjects records are rebuilt or the orphaned records are deleted; the
+next run of the script no longer writes them.
+
 Because reprocessing generates new product versions (usually latest is best), there are
 separate processes that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
 and then explicitly clusters, vacuums, and analyzes these database tables.

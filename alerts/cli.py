@@ -19,6 +19,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 # Support both `python -m alerts.cli` (module) and `python cli.py` (script).
 if __package__:
@@ -149,6 +150,54 @@ def build_gaia_reader(gaia_source: str | None,
         return None
 
 
+PIPELINE_INI = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
+
+
+def read_rb_settings(config: Any) -> tuple[float | None, str | None]:
+    """The real/bogus threshold and model identifier the alerts should carry.
+
+    Both are facts about the science pipeline's configuration, so they are
+    read from its .ini rather than typed per run: the threshold from
+    ``[ALERTS] rb_threshold`` (must equal threshold.json of the model that
+    scored the detections), the model from ``[ALERTS] rb_version`` or, when
+    that is blank, the last path component of ``[RUBRAT] s3_prefix``.
+
+    Parameters
+    ----------
+    config : configparser.ConfigParser
+        The parsed pipeline .ini.
+
+    Returns
+    -------
+    (float or None, str or None)
+        ``(rb_threshold, rb_version)``; None where the .ini says nothing.
+    """
+    alerts = config["ALERTS"] if config.has_section("ALERTS") else {}
+    raw = str(alerts.get("rb_threshold", "")).strip()
+    threshold = float(raw) if raw else None
+    version = str(alerts.get("rb_version", "")).strip() or None
+    if version is None and config.has_section("RUBRAT"):
+        prefix = str(config["RUBRAT"].get("s3_prefix", "")).strip().rstrip("/")
+        version = prefix.rsplit("/", 1)[-1] or None
+    return threshold, version
+
+
+def default_rb_settings() -> tuple[float | None, str | None]:
+    """read_rb_settings() over the pipeline .ini this checkout runs with:
+    ``$RAPID_SW/cdf/`` if set, else the repository's ``cdf/``. (None, None)
+    when no .ini is found, so the CLI still runs outside a pipeline tree."""
+    import configparser
+    roots = [os.environ["RAPID_SW"]] if os.environ.get("RAPID_SW") else []
+    roots.append(str(Path(__file__).resolve().parents[1]))
+    for root in roots:
+        path = Path(root) / "cdf" / PIPELINE_INI
+        if path.exists():
+            config = configparser.ConfigParser()
+            config.read(path)
+            return read_rb_settings(config)
+    return None, None
+
+
 def make_provider(diff_flavor: str = "sfft",
                   kona_file: str | Path | None = None,
                   refcat: bool = True,
@@ -160,7 +209,9 @@ def make_provider(diff_flavor: str = "sfft",
                   max_sources: int = MAX_SOURCES_PER_CHIP,
                   forced_phot: bool = True,
                   forced_window_days: float | None = FORCED_WINDOW_DAYS,
-                  forced_store: str | None = None) -> AlertDataProvider:
+                  forced_store: str | None = None,
+                  rb_threshold: float | None = None,
+                  rb_version: str | None = None) -> AlertDataProvider:
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
 
@@ -255,7 +306,8 @@ def make_provider(diff_flavor: str = "sfft",
                              gaia_reader=gaia_reader,
                              max_sources=max_sources, forced_phot=forced_phot,
                              forced_window_days=forced_window_days,
-                             forced_store=forced_store)
+                             forced_store=forced_store,
+                             rb_threshold=rb_threshold, rb_version=rb_version)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -350,6 +402,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="keep per-chip forced-photometry parquet files here "
                              "(s3://bucket/prefix or a directory) and re-read "
                              "them when present; default: memory only")
+    ini_threshold, ini_version = default_rb_settings()
+    parser.add_argument("--rb-threshold", type=float, default=ini_threshold,
+                        metavar="SCORE",
+                        help="real/bogus threshold carried as reliabilityThreshold "
+                             "(default: [ALERTS] rb_threshold of the pipeline .ini, "
+                             "currently %(default)s)")
+    parser.add_argument("--rb-version", default=ini_version, metavar="MODEL",
+                        help="real/bogus model identifier carried as reliabilityVersion "
+                             "(default: from the pipeline .ini, currently %(default)s)")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="diagnostic verbosity on stderr; quiet by "
@@ -381,7 +442,9 @@ def main(argv: list[str] | None = None) -> int:
                              max_sources=args.max_sources,
                              forced_phot=not args.no_forced_phot,
                              forced_window_days=args.forced_window_days or None,
-                             forced_store=args.forced_store)
+                             forced_store=args.forced_store,
+                             rb_threshold=args.rb_threshold,
+                             rb_version=args.rb_version)
 
     # Make producer, if kafka arg is True
     producer = None

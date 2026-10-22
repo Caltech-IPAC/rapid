@@ -383,6 +383,11 @@ def assemble_alert_for_source(provider: AlertDataProvider,
 
     time_proc = float(Time.now().mjd) # pyright: ignore[reportArgumentType]
     source.time_proc = float(time_proc)
+    # the real/bogus model and threshold in force for this run (the score
+    # rode in with the sources row); prior detections keep these null
+    # (getattr: providers are duck-typed; a minimal one may not carry them)
+    source.rb_threshold = getattr(provider, "rb_threshold", None)
+    source.rb_version = getattr(provider, "rb_version", None)
 
     prv = provider.get_prv_detections(source, obj,
                                       window_days=PRV_WINDOW_DAYS)

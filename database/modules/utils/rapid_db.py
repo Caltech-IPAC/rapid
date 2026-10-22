@@ -3057,8 +3057,14 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting unclosedout Jobs records for given ppid={} and processing date {}: {}; skipping...'.format(ppid,proc_date,error))
+            self.conn.rollback()         # Rollback database transaction
             self.exit_code = 67
             return
+
+        # End the read-only transaction, so that the connection is not left idle in a
+        # transaction (the VPO waits hours for AWS Batch jobs between calls).
+
+        self._commit()                   # Commit database transaction (unless deferred)
 
         return records
 
@@ -4163,10 +4169,12 @@ class RAPIDDB:
         self.exit_code = 0
 
 
-        # Define query.
+        # Define query.  Use clock_timestamp() (cast to timestamp, as localtimestamp is)
+        # for the actual current time; localtimestamp is the start time of the current
+        # transaction, which may have been opened long before by an earlier query.
 
         query = f"INSERT INTO procreqs (obsstarttime,obsendtime,started) " +\
-                f"VALUES ('{obsstarttime}','{obsendtime}',localtimestamp) " +\
+                f"VALUES ('{obsstarttime}','{obsendtime}',cast(clock_timestamp() as timestamp)) " +\
                 f"RETURNING reqid;"
 
         if debug == 1:
@@ -4224,15 +4232,20 @@ class RAPIDDB:
             return
 
 
-        # Define query.  Compute elapsed from localtimestamp, not from the ended column, since
-        # all assignments in an UPDATE see the pre-update row values (ended is still null here).
-        # Use localtimestamp rather than now() so that no timestamptz-to-timestamp conversion is
-        # involved, which would make elapsed sensitive to daylight-saving-time transitions.
+        # Define query.  Use clock_timestamp() (cast to timestamp, as localtimestamp is) for
+        # the actual current time, not localtimestamp, which is the start time of the current
+        # transaction: the VPO's database connection has a transaction open since its first
+        # query after the ProcReqs record was inserted, so localtimestamp gave an ended time
+        # only seconds after started.  Evaluate clock_timestamp() once, in a subquery, so that
+        # ended and elapsed use the same time.  Compute elapsed from that time, not from the
+        # ended column, since all assignments in an UPDATE see the pre-update row values
+        # (ended is still null here).
 
         query = f"update procreqs " +\
-            f"set ended = localtimestamp, " +\
-            f"elapsed = localtimestamp - started, " +\
+            f"set ended = t.now_ts, " +\
+            f"elapsed = t.now_ts - started, " +\
             f"status = {status} " +\
+            f"from (select cast(clock_timestamp() as timestamp) as now_ts) as t " +\
             f"where reqid = {reqid};"
 
         if debug == 1:
@@ -4297,6 +4310,11 @@ class RAPIDDB:
             self.exit_code = 67
             return
 
+        # End the read-only transaction, so that the connection is not left idle in a
+        # transaction (the open-loop VPO sleeps between calls).
+
+        self._commit()                   # Commit database transaction (unless deferred)
+
         return record[0] if record is not None else None
 
 
@@ -4351,6 +4369,11 @@ class RAPIDDB:
             self.exit_code = 67
             return
 
+        # End the read-only transaction, so that the connection is not left idle in a
+        # transaction (the open-loop VPO sleeps between calls).
+
+        self._commit()                   # Commit database transaction (unless deferred)
+
         return record
 
 
@@ -4385,6 +4408,10 @@ class RAPIDDB:
 
         self.exit_code = 0
 
+        # Compare with clock_timestamp() (cast to timestamp, as localtimestamp is), the actual
+        # current time, not localtimestamp, which is the start time of the current transaction
+        # and so can be stale if the transaction was opened earlier on this connection.
+
         query = "select l.expid, min(l.dateobs), count(distinct l.sca), max(l.created) from L2Files l " +\
                 "where l.vbest > 0 "
 
@@ -4393,7 +4420,7 @@ class RAPIDDB:
 
         query += "group by l.expid " +\
                  f"having count(distinct l.sca) < {int(n_scas_per_exposure)} " +\
-                 f"and max(l.created) > localtimestamp - interval '{float(settle_seconds)} seconds' " +\
+                 f"and max(l.created) > cast(clock_timestamp() as timestamp) - interval '{float(settle_seconds)} seconds' " +\
                  "and bool_or(l.status > 0 and not exists " +\
                  f"(select 1 from DiffImages d where d.rid = l.rid and d.ppid = {int(ppid)} and d.vbest > 0)) " +\
                  "order by min(l.dateobs), l.expid limit 1;"
@@ -4410,5 +4437,10 @@ class RAPIDDB:
             self.conn.rollback()         # Rollback database transaction
             self.exit_code = 67
             return
+
+        # End the read-only transaction, so that the connection is not left idle in a
+        # transaction (the open-loop VPO sleeps between calls).
+
+        self._commit()                   # Commit database transaction (unless deferred)
 
         return record

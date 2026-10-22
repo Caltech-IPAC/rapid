@@ -593,3 +593,413 @@ Number of Merges_<field> database tables                                        
 Number of AstroObjects_<field> database tables                                                       359
 Number of AstroObjectsMeta_<field> database tables                                                   359
 =========================================================================================  =====================
+
+
+
+
+10/20/2026
+************************************
+
+This test is a small-scale, end-to-end exercise of the full VPO processing chain,
+including several stages that were not part of the earlier socsims tests:
+loading SExtractor difference-image catalogs into XSources database tables and cross-matching
+them into XAstroObjects/XMerges, pruning not-best merges, and producing alerts with forced photometry.
+The observation-date range is limited to a 10-minute window at the end of 2027-10-07,
+which selects 72 science images (4 exposures x 18 SCAs, ``expid`` = 85052, 85054, 85055, 85059;
+MJD 61685.99444 to 61685.99920), all for the W146 bandpass filter (``fid=8``) and overlapping 72 unique fields.
+
+Other notable differences from the 8/21/2026 test:
+
+* The input FITS files are the same as for the 8/21/2026 test:
+
+  .. code-block::
+
+      s3://socsims-fakesrc-fits-20260807-lite/
+
+* Reference images are now 9100 x 9100 pixels (previously 7000 x 7000), so each reference image
+  has about 1.69 times as many pixels.  A new set of reference images was generated (109 in all for ``fid = 8``),
+  before the RAPID science pipelines were run, and registered under ``ppid = 12``.
+  Since there is no MJD restriction on the reference-image inputs, each reference image
+  was built from the maximum of 25 input frames (from 737 to 1,487 candidate frames per field).
+
+* The science pipeline computes extra columns for the SFFT-difference-image catalogs:
+  ``sumrat``, ``nneg``, ``nbad``, and real/bogus ``rb_score`` and ``rb_label`` from the RUBRAT model
+  (``s3://rapid-pipeline-files/rubrat/2026-10-06_canonical9_seed42``), and PhotUtils-style
+  PSF-fit columns for the SExtractor catalogs (for sources passing ``sumrat > 0.4`` and aperture S/N > 5).
+
+* The science-image PSFs, ZOGY S/N from uncertainty maps, and repair of extreme artifact pixels
+  remain turned on, as in the 8/21/2026 test:
+
+  .. code-block::
+
+      zogy_sn_sr_from_uncertainty_maps = True
+      refimage_psf_filename = refimage_psf_f146_scaSCAID.fits
+      repair_extreme_artifact_pixels = True
+
+Here are details about how the reference images were configured:
+
+.. code-block::
+
+    [REF_IMAGE]
+    ppid = 12
+    min_n_images_to_coadd = 2
+    max_n_images_to_coadd = 25
+    naxis1 = 9100
+    naxis2 = 9100
+    cdelt1 = -3.0555555556e-05
+    cdelt2 = 3.0555555556e-05
+    crota2 = 0.0
+
+Here are details about how the test was executed via the Virtual Pipeline Operator (VPO), version 1.11:
+
+.. code-block::
+
+    export DBNAME=socsimsdb
+    export STARTDATETIME="2027-10-07 23:50:00"
+    export ENDDATETIME="2027-10-08 00:00:00"
+    export STARTREFIMMJDOBS=0.0
+    export ENDREFIMMJDOBS=999999.9
+    export RUNFID=8
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20261020 >& virtualPipelineOperator_20261020.out &
+
+The VPO run was registered as processing request ``reqid = 6``.
+The pipeline product files are located in the usual place:
+
+.. code-block::
+
+    s3://rapid-product-files/20261020/req6/
+
+All pipeline instances finished normally (``exitcode = 0`` is normal):
+
+=====================================================  ===========  ===================
+Pipeline                                                Instances    Exit code
+=====================================================  ===========  ===================
+Reference-image pipeline (``ppid = 12``)                      109    0 (all)
+Science pipeline (``ppid = 15``)                               72    0 (all)
+Post-processing pipeline (``ppid = 17``)                       72    0 (all)
+Alert production (chips)                                       72    ok (all)
+=====================================================  ===========  ===================
+
+No AWS Batch jobs needed to be resubmitted.  All 109 reference-image pipelines started on AWS Batch within
+14 seconds of each other, as did all 72 science pipelines, so there was no queueing delay.
+
+The registration steps log many ``*** Warning: Failed to download ... .done`` messages
+(181 ``job_config``, 72 ``postproc_job_config``, 72 ``source_dbload``, and 72 ``xsource_dbload``,
+which is one per pipeline instance).  These come from the check for a done-marker file
+before a job is processed; they did not affect the results.
+
+Overall timing
+----------------------------------
+
+The VPO started at 2026-10-20T12:58:39 PT and finished at 20:51:57 PT, a total of 28,398 seconds (7.89 hours).
+The breakdown by VPO stage is shown below.  The two AWS Batch waits account for 69% of the total;
+alert production is the next largest stage.
+
+=========================================================================  =====================
+VPO stage                                                                   Elapsed time (sec)
+=========================================================================  =====================
+Launching reference-image pipelines                                                    25.8
+Waiting for reference-image-pipeline AWS Batch jobs to finish                        9568.7
+Registering reference-image pipeline metadata into operations database                  5.3
+Launching science pipelines                                                             5.0
+Waiting for science-pipeline AWS Batch jobs to finish                               10068.7
+Registering science-pipeline metadata into operations database                          3.2
+Launching post-processing pipelines                                                     4.1
+Waiting for post-processing AWS Batch jobs to finish                                  260.7
+Registering post-processing metadata into operations database                           1.6
+Loading Sources database tables (PSF-fit SFFT catalogs)                              1251.4
+Loading XSources database tables (SExtractor SFFT catalogs)                           922.2
+Cross-matching Sources with AstroObjects                                             1582.0
+Cross-matching XSources with XAstroObjects                                            340.7
+Computing statistics for AstroObjects                                                 674.5
+Computing statistics for XAstroObjects                                                128.6
+Deleting not-best Merges records                                                      120.7
+Deleting not-best XMerges records                                                      75.9
+Producing alerts                                                                     3358.8
+Resubmitting failed AWS Batch jobs (three checks; none failed)                          0.6
+Total time to run VPO                                                               28398.4
+=========================================================================  =====================
+
+For the 72 science images, this is 394 seconds per input science image overall.
+That is not directly comparable to the 7/6/2026 throughput of 1.926 seconds per image,
+because this test is far too small to fill AWS Batch.
+Most of the elapsed time here is the length of the slowest single pipeline instance,
+together with a full set of 109 reference images built for only 72 science images.
+
+Reference-image pipeline
+----------------------------------
+
+The 109 reference-image pipelines ran from 13:01:35 to 15:37:05 PT (2.59 hours of wall-clock time).
+Generating the PSF-fit PhotUtils catalog of the reference image dominates the pipeline.
+The reference-image PSF-fit catalogs contain from 113,609 to 582,769 sources (median 302,669),
+30,850,395 in all.  Setting up and executing awaicgen took about 5 minutes, about the same as in the 7/6/2026 test.
+
+==========================================================================  ==========  ==========  ==========
+Reference-image pipeline step (109 instances)                                Min (sec)   Med (sec)   Max (sec)
+==========================================================================  ==========  ==========  ==========
+Setting up inputs for awaicgen                                                    31.7        33.9        38.0
+Executing awaicgen                                                               246.9       269.6       349.5
+Generating reference-image SExtractor catalog                                      6.3        11.1        32.6
+Generating reference-image PhotUtils catalog                                    1783.7      4793.5      8967.3
+Downloading or generating reference image (incl. above)                         2141.6      5170.7      9301.1
+Uploading reference image to S3 product bucket                                    11.6        16.2        22.9
+Total time to run one instance of reference-image pipeline                      2153.3      5186.4      9324.0
+==========================================================================  ==========  ==========  ==========
+
+The slowest instance (jid = 129364) took 2.59 hours; the fastest (jid = 129304) took 36 minutes.
+The summed run time over all 109 instances is 147.1 hours.
+
+Science pipeline
+----------------------------------
+
+The 72 science pipelines ran from 15:41:19 to 18:25:56 PT (2.74 hours of wall-clock time).
+The per-instance run time ranged from 6,842 seconds (jid = 148059) to 9,875 seconds (jid = 147251),
+with a median of 8,032 seconds (2.2 hours).  This is much slower than the ~20 minutes per
+instance in the 7/6/2026 test.  As the table below shows, almost all of the time goes to PSF-fit
+catalog generation and the new extra-column computations.
+
+==========================================================================  ==========  ==========  ==========
+Science pipeline step (72 instances)                                         Min (sec)   Med (sec)   Max (sec)
+==========================================================================  ==========  ==========  ==========
+Downloading science image                                                          0.7         0.8         1.1
+Uploading science image to product S3 bucket                                       0.4         0.4         0.6
+Downloading or generating reference image                                          3.5         4.0         4.4
+Generating science-image catalog                                                   6.9         9.2        12.3
+Swarping images                                                                    9.8        10.4        11.4
+Running bkgest on science image                                                    3.7         4.0         4.2
+Running bkgest on reference image                                                  4.0         4.2         4.4
+Running gainMatchScienceAndReferenceImages                                         7.1        10.5        16.4
+Replacing NaNs, applying image offsets, etc.                                       4.8         5.2         5.7
+Uploading intermediate FITS files to product S3 bucket                             1.8         2.0         3.4
+Running ZOGY                                                                      34.1        39.8        42.0
+Masking ZOGY difference image                                                      1.0         1.1         1.2
+Running SExtractor on positive ZOGY difference image                               3.5         3.8         4.1
+Running SExtractor on negative ZOGY difference image                              17.3        22.2        26.4
+Generating PSF-fit catalog on positive ZOGY difference image                     287.7       389.5       496.5
+Generating PSF-fit catalog on negative ZOGY difference image                    2290.8      2901.8      3497.4
+Uploading main products to S3 bucket                                               4.5         4.9         8.0
+Running SFFT                                                                     101.3       107.3       146.4
+Uploading SFFT difference image to S3 product bucket                               4.2         4.5         5.5
+Running SExtractor on positive SFFT difference images (+extra cols)              438.2       922.3      2292.9
+Running SExtractor on negative SFFT difference images (+extra cols)                9.3        13.2        75.8
+Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket                  0.5         0.6         1.7
+Generating PSF-fit catalog on positive SFFT difference image                     486.1       726.8      1257.7
+Generating PSF-fit catalog on negative SFFT difference image                     801.9      1289.4      2562.8
+Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket                     1.1         1.3         1.9
+Computing naive difference images                                                  0.6         0.8         0.9
+Uploading naive difference images to S3 product bucket                             0.6         0.7         1.0
+Running SExtractor on positive naive difference image                              5.9         7.6        10.6
+Running SExtractor on negative naive difference image                             38.1        43.8        48.1
+Uploading SExtractor catalogs for naive difference images                          0.8         1.1         1.5
+Generating PSF-fit catalog on positive naive difference image                    362.2       561.0       752.8
+Generating PSF-fit catalog on negative naive difference image                    572.3       729.0       852.1
+Uploading PSF-fit catalogs for naive difference images                             0.9         1.0         1.7
+Total time to run one instance of science pipeline                              6841.8      8032.4      9874.6
+==========================================================================  ==========  ==========  ==========
+
+Observations:
+
+* The single most expensive step is the PSF-fit catalog on the *negative* ZOGY difference image
+  (median 2,902 seconds, 36% of the run time).  The negative ZOGY difference images
+  yield 42,416 to 71,776 PSF-fit sources (median 58,910) per image, compared with 5,053 to 9,095
+  (median 7,043) for the positive ZOGY difference images.  The negative ZOGY SExtractor catalogs
+  are similarly larger (median 36,615 vs. 348 sources).  This positive/negative asymmetry is worth
+  investigating, and may be related to ``zogy_sn_sr_from_uncertainty_maps = True``.
+
+* The "Running SExtractor on positive SFFT difference images" step timing includes the new
+  PhotUtils-style extra columns computed for the SExtractor catalog, which PSF-fits the sources passing
+  the prefilter (e.g., 52,516 of 101,825 sources for jid = 151288).  The positive SFFT SExtractor
+  catalogs are large: 35,879 to 123,284 sources (median 66,821) per image.  SExtractor itself
+  takes only a few seconds, as it does for the naive difference images.
+
+* The SFFT PSF-fit catalog steps likewise include computing ``sumrat``, ``nneg``, ``nbad``,
+  ``rb_score``, and ``rb_label`` for every PSF-fit source.
+
+* The summed run time over all 72 instances is 161.5 hours, of which the six PSF-fit catalog
+  steps account for 134.6 hours (83%).
+
+Here are the source counts, summed over all 72 science images, for each difference-image catalog:
+
+=====================================================  ======================  ======================
+Difference image                                        SExtractor sources      PSF-fit sources
+=====================================================  ======================  ======================
+ZOGY, positive                                                         26,575                 504,310
+ZOGY, negative                                                      2,674,799               4,213,556
+SFFT, positive                                                      4,988,914                 754,230
+SFFT, negative                                                        127,525               1,183,622
+Naive, positive                                                       811,244                 688,548
+Naive, negative                                                     4,538,924                 850,272
+=====================================================  ======================  ======================
+
+Post-processing pipeline
+----------------------------------
+
+All 72 post-processing pipelines ran within about 40 seconds (18:28:59 to 18:29:38 PT).
+The VPO waited 260.7 seconds for AWS Batch to start and finish them.
+
+Database loading, cross-matching, and lightcurve statistics
+--------------------------------------------------------------
+
+The PSF-fit catalogs from the SFFT difference images, both positive and negative, were loaded into
+18 Sources_20271007_<sca> child database tables.  New in this test, the SExtractor catalogs from the SFFT
+difference images were loaded into the analogous XSources_20271007_<sca> tables.  Also new, sources are
+prefiltered before loading, according to the following parameters (and positions out of range or
+within 2 pixels of the image edge are rejected):
+
+.. code-block::
+
+    [DATABASE_PREFILTER]
+    sumrat_prefilter_threshold = 0.4
+    rb_prefilter_threshold = 0.0
+    snr_prefilter_threshold = 5.0
+
+As a result, 717,644 of the 1,937,852 PSF-fit catalog rows (37%) were loaded into the Sources tables, and
+2,107,292 of the 5,116,439 SExtractor catalog rows (41%) were loaded into the XSources tables.
+Of the loaded Sources records, 246,347 have ``flags = 0``, which is exactly the number of alertable detections
+in the alert-production stage below.
+For both, indexing, clustering, and applying grants to the new tables took far longer than the bulk load itself.
+
+Cross-matching touched the AstroObjects_<field>/Merges_<field> tables of 235 fields, 234 of which already existed
+from earlier tests.  The ``match_radius`` is the same as before, half a Roman WFI pixel.  All jobs used 64 parallel
+processes.
+
+=========================================================================================  =====================
+Database stage                                                                              Elapsed time (sec)
+=========================================================================================  =====================
+Sources: bulk load into database tables                                                                   7.0
+Sources: index, cluster, and apply grants                                                              1243.4
+XSources: bulk load into database tables                                                                 44.3
+XSources: index, cluster, and apply grants                                                              876.8
+Cross-match Sources: load AstroObjects and Merges within field boundaries                               321.8
+Cross-match Sources: recluster and reanalyze AstroObjects tables                                       1253.1
+Cross-match Sources: load Merges across field boundaries                                                  5.6
+Cross-match XSources: load XAstroObjects and XMerges within field boundaries                             66.0
+Cross-match XSources: recluster and reanalyze XAstroObjects tables                                      267.6
+Cross-match XSources: load XMerges across field boundaries                                                5.6
+AstroObjects statistics: parallel processing                                                            523.8
+AstroObjects statistics: create indexes on AstroObjectsMeta tables                                      125.5
+AstroObjects statistics: vacuum and analyze AstroObjectsMeta tables                                      16.4
+XAstroObjects statistics: parallel processing                                                            62.0
+XAstroObjects statistics: create indexes on XAstroObjectsMeta tables                                     52.2
+XAstroObjects statistics: vacuum and analyze XAstroObjectsMeta tables                                     8.4
+Prune not-best Merges (parallel delete + drop/vacuum)                                                   120.0
+Prune not-best XMerges (parallel delete + drop/vacuum)                                                   75.0
+=========================================================================================  =====================
+
+As in earlier tests, table maintenance (index/cluster/analyze/vacuum) dominates the database stages,
+not the loading or matching itself.  Because the tables span all 235 fields and include
+records from earlier tests, this cost does not scale down with the number of science images.
+
+Below are numbers for this test related to extraction of lightcurves from the SFFT-difference-image catalogs,
+counted from the database after the test.  Except for the first four rows, which count only the
+sources from this test's 72 difference images, the numbers of records include contributions from all earlier
+socsims tests that loaded into the same database tables (including the 7/22/2026 and 8/21/2026 tests, and
+earlier processing requests for this processing date).
+
+=========================================================================================  =====================
+Item                                                                                        Number
+=========================================================================================  =====================
+Number of sources from this test loaded into Sources_20271007_<sca> database tables                      717,644
+Number of sources from this test in Sources_20271007_<sca> database tables with flags = 0                246,347
+Number of xsources from this test loaded into XSources_20271007_<sca> database tables                  2,107,292
+Number of xsources from this test in XSources_20271007_<sca> tables with flags = 0                     1,938,509
+Number of sources in all Sources_<obsdate>_<sca> database tables                                     599,230,769
+Number of sources in all Sources_<obsdate>_<sca> database tables with flags = 0                      402,022,867
+Number of xsources in all XSources_<obsdate>_<sca> database tables                                   179,260,997
+Number of xsources in all XSources_<obsdate>_<sca> database tables with flags = 0                    159,493,585
+Number of merges inside AND outside field, in Merges_<field> database tables                         975,577,896
+Number of astroObjects in AstroObjects_<field> database tables                                        38,501,951
+Number of records in AstroObjectsMeta_<field> database tables                                        105,839,952
+Number of xmerges inside AND outside field, in XMerges_<field> database tables                       196,222,293
+Number of xastroObjects in XAstroObjects_<field> database tables                                      20,006,876
+Number of records in XAstroObjectsMeta_<field> database tables                                        20,006,876
+Number of Sources_<obsdate>_<sca> database tables                                                             36
+Number of XSources_<obsdate>_<sca> database tables                                                            18
+Number of Merges_<field> database tables                                                                     361
+Number of AstroObjects_<field> database tables                                                               362
+Number of AstroObjectsMeta_<field> database tables                                                           360
+Number of XMerges_<field> database tables                                                                    360
+Number of XAstroObjects_<field> database tables                                                              362
+Number of XAstroObjectsMeta_<field> database tables                                                          359
+=========================================================================================  =====================
+
+Unlike in the 8/21/2026 test, the number of AstroObjectsMeta records no longer equals the number of
+AstroObjects records (105,839,952 vs. 38,501,951), whereas the XAstroObjectsMeta and XAstroObjects counts
+do agree.  For example, for field 4731882 there are 132,498 AstroObjects records but 256,850 AstroObjectsMeta
+records, of which 124,352 have no matching ``aid`` in AstroObjects_4731882 (nor in any other
+AstroObjects_<field> database table).
+
+These AstroObjectsMeta records are not stale: they are newly computed, but for astronomical objects whose
+AstroObjects records were deleted in an earlier test while their Merges records were kept.
+All of their sources are best (``vbest = 1``) sources from the 7/22/2026 test (observation date 2027-10-01).
+For field 4731882, the astronomical objects break down by the observation dates of their sources as follows:
+
+=====================================================  ===============  ======================
+Observation dates of the sources of the object          AstroObjects     With AstroObjects
+                                                        in Merges        record
+=====================================================  ===============  ======================
+Only 2027-10-01 (7/22/2026 test)                               124,653                     301
+Both 2027-10-01 and 2027-10-07                                  96,946                  96,946
+Only 2027-10-07                                                120,358                  35,251
+=====================================================  ===============  ======================
+
+(For the objects with sources only on 2027-10-07, the missing AstroObjects records are those whose sources
+are all from not-best difference images (``vbest = 0``) of earlier processing requests; these are deleted as intended.)
+
+The cause is the version of ``computeStatisticsForAstroObjects.py`` used for the 8/21/2026 test.
+It found the sources of a field only in the Sources_<obsdate>_<sca> database tables of the processing date's own jobs
+(Sources_20271007_<sca>), so an astronomical object with sources only from 2027-10-01 appeared to have
+no best sources.  It was deleted as "not-best" from the AstroObjects_<field> and AstroObjectsMeta_<field>
+database tables, but not from the Merges_<field> database table (which is why the AstroObjects and
+AstroObjectsMeta counts in the 8/21/2026 test agree).  Since 8/27/2026, the script finds the
+Sources_<obsdate>_<sca> database tables of a field for all observation dates.  It builds the AstroObjectsMeta_<field>
+records from the distinct ``aid`` values in Merges_<field> that join best sources, without requiring a matching
+AstroObjects_<field> record, so it now writes AstroObjectsMeta records for the deleted objects.  The XAstroObjects
+database tables are unaffected because they were introduced after the fix (9/30/2026).
+
+Two weaknesses remain in the current code: the AstroObjectsMeta records are not restricted to ``aid`` values in
+AstroObjects_<field>, and the "not-best" deletion removes AstroObjects records but leaves their Merges records.
+The lost AstroObjects records (``aid``, ``ra0``, ``dec0``, ``flux0``) can be rebuilt from each object's first
+detection in the Merges and Sources database tables; otherwise, the orphaned AstroObjectsMeta and Merges records
+should be deleted.
+
+Alert production
+----------------------------------
+
+Alerts were produced from the SFFT difference-image sources (``diff_flavor = sfft``), with
+reference-catalog, NED, NED-LVS, and Gaia cross-matching, and forced photometry over a 30-day window.
+All 72 chips succeeded, in 3,358 seconds (56 minutes) with 64 parallel processes.
+
+=========================================================================================  =====================
+Item                                                                                        Number
+=========================================================================================  =====================
+Number of chips processed (all succeeded)                                                                    72
+Number of flagged detections skipped (flags <> 0, not alertable)                                        471,297
+Number of alertable detections                                                                          246,347
+Number of alertable detections dropped by the ``max_sources`` = 2,000 per chip cut                      102,377
+Number of alerts archived                                                                               143,970
+Number of alerts with prior detections                                                                  123,999
+Number of prior-detection records in alerts                                                           3,523,723
+Number of alerts with forced photometry                                                                 135,637
+Number of alerts with a reference-catalog star match                                                     14,983
+Number of alerts with a reference-catalog galaxy match                                                   94,534
+Number of alerts with a NED match                                                                       141,318
+Number of alerts with a Gaia match                                                                       34,652
+Number of alerts with a NED-LVS match                                                                         0
+Total size of Avro alert archives (deflate codec), bytes                                         28,616,646,790
+=========================================================================================  =====================
+
+The 2,000-alert cut (the highest-S/N alertable detections are kept) is labeled in the logs as a temporary
+stand-in for a real-bogus cut; it truncated 71 of the 72 chips (from 2,012 to 7,080 alertable detections
+per chip).  The Avro archives average about 199 KB per alert.  Every alert includes three image cutouts
+(difference, science, and reference).
+
+Forced photometry dominates the alert-production time: it averaged about 1,660 seconds per chip,
+out of a median of 1,803 seconds per chip, and ~70% of it was staging and fitting.  For each chip it measured
+about 280 previous images that overlap the alert positions.  In all, about 27.2 million new forced-photometry rows
+were written to:
+
+.. code-block::
+
+    s3://rapid-forced-photometry/
