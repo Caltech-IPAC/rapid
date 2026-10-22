@@ -115,6 +115,9 @@ NUM_CORES               Number of parallel processes.  Defaults to the number
 SIPDISTORTIONDEGREE     Degree of the SIP fit to the gWCS.  Defaults to 5,
                         which is what the L2Files table stores.
 MAXFILESTOINGEST        Stop after this many files, for short tests.
+L2GZIPLEVEL             gzip compression level (0-9) of the FITS files.
+                        Defaults to 1, which is about 30 times faster than 9
+                        for a 4 percent larger file.
 DONTCHECKALREADYINGESTED
                         Set to skip the L2Files query for already-ingested
                         files and (re-)ingest everything in the input bucket.
@@ -212,7 +215,7 @@ from database.modules.utils.overlapping_fields import overlapping_fields
 # Define code name and version.
 
 swname = "ingestL2Files.py"
-swvers = "1.0"
+swvers = "1.1"
 
 debug = 1
 
@@ -248,12 +251,12 @@ exit_code_worker_failed = 70      # A worker process did not finish, so part of 
 exit_code_cannot_create = 73      # A file could not be created: the per-process log.
 
 
-def get_int_from_env(name,default,minimum=None):
+def get_int_from_env(name,default,minimum=None,maximum=None):
 
     '''
     Return an integer environment variable, or the default if it is unset.
 
-    A value that is not an integer, or is below the minimum, quits with a message rather than
+    A value that is not an integer, or is outside [minimum, maximum], quits with a message rather than
     being quietly defaulted or raising a bare ValueError.  A run started with a misspelled
     NUM_CORES should say which variable is wrong and exit with the code that means
     "misconfigured", not hand back a traceback that tells the daemon only that something
@@ -274,6 +277,11 @@ def get_int_from_env(name,default,minimum=None):
 
     if minimum is not None and value < minimum:
         print(f"*** Error: Env. var. {name} = {value} is less than {minimum}; quitting...")
+        print("terminating_exitcode =",exit_code_config)
+        exit(exit_code_config)
+
+    if maximum is not None and value > maximum:
+        print(f"*** Error: Env. var. {name} = {value} is greater than {maximum}; quitting...")
         print("terminating_exitcode =",exit_code_config)
         exit(exit_code_config)
 
@@ -411,6 +419,16 @@ print("num_cores =",num_cores)
 max_files_to_ingest = get_int_from_env('MAXFILESTOINGEST',None,minimum=1)
 
 print("max_files_to_ingest =",max_files_to_ingest)
+
+
+# gzip compression level of the FITS files uploaded to the output bucket.  The default, 1, is
+# much faster than gzip's own default, 9, for little more space: for a 389 MB SOC L2 FITS file,
+# level 1 took 3.9 s for 198.7 MB, and level 9 117 s for 191.6 MB.  Floating-point image data
+# barely compress further at the higher levels.  The decompressed file is the same at any level.
+
+gzip_compresslevel = get_int_from_env('L2GZIPLEVEL',1,minimum=0,maximum=9)
+
+print("gzip_compresslevel =",gzip_compresslevel)
 
 
 # Translate the Roman optical-element names into the filter names used by the RAPID
@@ -1336,15 +1354,31 @@ def build_fits_file(dm,asdf_path,fits_path):
     return True
 
 
-def gzip_file(input_filename,output_filename):
+def gzip_file(input_filename,output_filename,compresslevel=None):
 
     '''
     Write a gzipped copy of a file, keeping the original, which the registration still needs
     to read the header from and to compute the limiting magnitude with.
+
+    Parameters
+    ----------
+    input_filename : str
+        File to compress.
+    output_filename : str
+        gzipped file to write.
+    compresslevel : int or None, optional
+        gzip compression level, 0-9.  None (the default) uses L2GZIPLEVEL (default 1).
+
+    Returns
+    -------
+    None
     '''
 
+    if compresslevel is None:
+        compresslevel = gzip_compresslevel
+
     with open(input_filename,'rb') as fh_in:
-        with gzip.open(output_filename,'wb') as fh_out:
+        with gzip.open(output_filename,'wb',compresslevel=compresslevel) as fh_out:
             shutil.copyfileobj(fh_in,fh_out)
 
 
