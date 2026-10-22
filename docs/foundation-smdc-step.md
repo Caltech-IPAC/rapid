@@ -1994,6 +1994,67 @@ Measurements:
    | peak RSS, self / largest child | 1.33 / 14.54 GiB | 1.25 / 14.54 GiB |
    | bytes under `11/difference/<job>/1/` | 2.81 GB, 72 objects | 2.82 GB, 72 objects |
 
+2. **The cluster from the fleet host, and the stamp column.** The
+   bootstrap servers, topic and maximum request size are read from the SSM
+   parameters the shipped settings' `[kafka]` table names; with
+   kafka-python and the AWS MSK signer (`SASL_SSL`, `OAUTHBEARER`) under
+   `rapid-deploy`, the host lists the cluster's topics in 1.7 s, so its
+   security group reaches the brokers on 9098. The topic already exists
+   (1 partition, replication 3, every in-sync replica present) and was
+   empty: earliest and end offset both **73505**, earlier tests' messages
+   aged out by retention. Nothing was created. SMDC gets the stamp column
+   as `postgres`:
+
+   ```sh
+   pg -c "ALTER TABLE jobs ADD COLUMN kafka_published_at timestamp with time zone;"
+   ```
+
+   Check, held: the column present (0.26 s), `UPDATE` on it held by
+   `rapid_rebuild_pipeline`; jobs 1 to 316, last change group 224,
+   `official` 961 rows, unchanged.
+
+3. **Run 10's packets onto the topic and back.** `rp publish` produces
+   every official, unstamped packet set of a run, one message per packet
+   keyed `<packet set job>:<sid>`, the value the container's header and
+   the packet's block (a one-record Avro container, exactly what the
+   reader decodes), waits for every acknowledgement (`acks=all`) and then
+   stamps the set's job; `scripts/consume_packets.py` reads the topic back
+   from the earliest offset and compares:
+
+   ```sh
+   rp publish --run 10
+   python scripts/consume_packets.py --run 10
+   rp publish --run 10
+   ```
+
+   Check, held: the first `publish` produced run 10's five official sets
+   (jobs 304, 307, 309, 310, 311), **314 packets**, and stamped each job;
+   the consumer check read `Consumer check run 10: CLEAN; read 314, kept
+   314, valid 314, byte-equal 314, packets expected 314 seen 314;
+   partitions p0 73505..73818`; the second `publish` produced nothing and
+   the end offset stayed 73819.
+
+   Measurements:
+
+   | what | figure |
+   |---|---|
+   | packets / bytes produced | 314 / 71.4 MB (71,421,248) |
+   | `publish` wall time | 11.8 s inside the verb (12.6 s process), five containers read from S3 included; 26.6 packets/s, 6.1 MB/s; about 2.3 s per set |
+   | largest message against `max_request_bytes` | 228,677 B against 15,728,640 (1.5%); every message is the 34,935-byte container header plus one packet |
+   | `publish` peak RSS | 188 MiB |
+   | consumer check | 14.2 s reading the topic, 17.3 s process (the outbox read from S3 included), peak RSS 334 MiB |
+   | second `publish` | 0.10 s, nothing produced |
+
+   **From a container, later.** The Batch job role
+   (`rapid-scratch-batch-job-role`) reads the SSM parameters under the
+   scratch tree but holds no `kafka-cluster:*` action, so the packet stage
+   cannot produce from a Batch job as it stands; its permissions boundary
+   already names `Connect`, `DescribeTopic` and `WriteData`, so a grant on
+   the role is the one IAM change that would allow it, and whether the
+   compute environment's security group reaches the brokers is untested.
+   The image (`rebuild-32970a24`) already carries kafka-python 3.0.11 and
+   the signer. Not changed by this run.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21:
