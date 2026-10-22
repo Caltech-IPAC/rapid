@@ -1629,6 +1629,295 @@ and `SUCCEEDED`.
     frames (rfid 90011's 25 are not in this night) or injected sources
     with known positions (data-limited, part 5).
 
+11. **Checks 1 to 6 on run 9**, before any group: the `_official` views
+    are run 9's (and run 1's for epochs 1 and 2). The checks are one script
+    outside the repository, one function per check, each printing a pass
+    line or its first counter-example: SQL over the tables and views,
+    Parquet read from the prefixes, Avro read with the reader's own
+    functions (`scripts/read_packets.py`'s comparison helpers, imported).
+
+    1. **Lineage closes.** Every row of the 14 product tables, and every
+       other job a row names (`memberships.source_job`, `packets.object_job`
+       and `source_job`, `external.source_job` and `catalog_job`), names a
+       `published` job; every job names a run; every `input` and `excludes`
+       row of `job_inputs` (8,190 of 8,751; the rest are `expects`) resolves
+       to a published row of its product with its key; every `expects`
+       binding is a binding of its product and key; every product binding,
+       open or closed, names a published row of its key; every live binding
+       names a run.
+    2. **Parquet and tables agree.** For every published job, each declared
+       output's Parquet row count equals the table's row count for the job,
+       and no table holds rows of a job that did not declare it; the bytes
+       of every declared file of ten jobs (1, 30, 96, 179, 230, 231, 233,
+       301, 308, 311: every stage, both runs) match the manifest's SHA-256.
+    3. **The chain.** `members_official` equals the union of the chain's
+       `matches.parquet` (read from each set's prefix) minus the chain's
+       exclusions, row for row as (set, object, source set, source). Every
+       object's stored sums reproduce its members' mean and standard
+       deviation of position and flux, to PR 280's tolerances (means to
+       1e-12°, `stdevdec` and flux to 1e-9 relative, `stdevra` to 1e-6
+       relative); every object of set k is a row of set k+1.
+    4. **Packets**, each set against its own recorded inputs, never the
+       current official sets: the index's object and source sets are the
+       job's `input` rows; every locator decodes to the record of its
+       source, object and trigger; every history detection precedes the
+       trigger; `nDiaSources` equals the object's memberships at or before
+       the trigger through the job's recorded object set's chain minus its
+       exclusions; the three cutouts open as 129 × 129 FITS; every
+       `prvDiaForcedSources` entry equals its row in the set's own
+       `forced.parquet` by id (fluxes at float32). Then `read_packets.py`
+       over every official set.
+    5. **Forced photometry is measured once.** Across the run's official
+       packet sets, every (object, image) pair that appears in more than one
+       `forced.parquet` is the same measurement in each, value for value,
+       `time_proc` included: a copy reused from a predecessor set, never a
+       second measurement. (A set's `forced.parquet` carries its reused rows
+       too, so the set is self-contained; a pair appearing twice is the
+       design, a pair measured twice would be the defect.)
+    6. **The two 84624 executions** of run 10, jobs 233 and 301: both
+       published, their 5,115 source rows equal in every column but `job`
+       and the drawn `pid`, neither bound.
+
+    All six held:
+
+    | check | run 9 (before group A) | s | run 10 (after group A) | s |
+    |---|---|---|---|---|
+    | 1 lineage | 0 orphans; 452 bindings | 0.4 | 0 orphans; 597 bindings | 0.5 |
+    | 2 Parquet and tables | 309 jobs, 838 outputs; 29 files' bytes | 138 | the same | 134 |
+    | 3 chain | set 179, depth **69**, 2,547 members row for row, 1,504 objects' sums (559 with several members); walk 1.8 ms, view 32 ms | 0.9 | set 308, depth **5**, 315 members, 300 objects (10 with several); walk 1.8 ms, view 5.1 ms | 0.2 |
+    | 4 packets | 69 sets, 2,488 packets, 2,286 history detections, 7,464 cutouts, 87,658 forced entries; reader 69 sets **CLEAN** in 81 s | 114 | 5 sets, 314 packets, 21 history detections, 942 cutouts, 976 forced entries; reader 5 sets **CLEAN** in 7.5 s | 10.6 |
+    | 5 forced once | 69 sets, 87,520 rows, 62,543 pairs, each measured once (38 to 3,172 pairs per set, windows of 1 to 69 images) | 1.1 | 5 sets, 976 rows, 945 pairs, each measured once | 0.04 |
+    | 6 the two 84624 | both published, equal, unbound | 0.1 | 233 official (its two bindings), 301 unbound with its refusal | 0.2 |
+
+    Run 10's five sets, check 5:
+
+    | packet job | expid | forced rows | pairs | measured here | window images |
+    |---|---|---|---|---|---|
+    | 304 | 84613 | 50 | 50 | 50 | 1 |
+    | 307 | 84624 | 124 | 124 | 121 | 2 |
+    | 309 | 84635 | 231 | 231 | 227 | 3 |
+    | 310 | 84640 | 216 | 216 | 211 | 4 |
+    | 311 | 84637 | 355 | 355 | 336 | 5 |
+
+    One check written for this run was wrong and was dropped: "an object
+    has exactly one member at its trigger's time" failed on 7 packets of
+    run 9 (first: job 180, object 6808753316802956105, which holds three
+    sources of source set 46 within 0.055″ of each other at one epoch).
+    The matcher allows several sources of one epoch to join one object,
+    as dev's does, so this is the data, not a defect.
+
+12. **Change group A: the night becomes official.** Built from the
+    database: close the open binding of the reference (rfid 90011, job 1),
+    of every difference image and source set (run 1's import jobs 2 and 3,
+    run 9's 30 to 96), of the object set (job 179) and of all 69 packet
+    sets (jobs 6, 7 and run 9's); open run 10's reference (job 231), its 69
+    differences and source sets (jobs 232 to 300, with **233** for 84624,
+    not 301), its last object set (**308**, epoch 5's) and its five packet
+    sets (304, 307, 309, 310, 311). Run 9's packet bindings for epochs 6 to
+    69 close with nothing opened (an item may be a close alone). **209
+    items: 145 opens (1 + 69 + 69 + 1 + 5) and 209 closes.** Applied through
+    `rapidpipe.foundation.official.change` from a scratch script, as PR 292
+    did, so the operation is timed apart from process start-up:
+
+    ```sh
+    # group-a.json: [{"close": <open binding>, "open": {"product", "key", "job"}}, ..., {"close": <packet binding>}, ...]
+    rp official change --group group-a.json --who "$USER" --why "the Batch night of run 10 becomes official"
+    ```
+
+    **Group 216**: 256.9 ms of operation for 145 opens and 209 closes,
+    **1.23 ms per key** (by the larger side), 0.58 s for the process. PR
+    292's 8-key group took 19.3 ms (2.4 ms per key) through the same pooler;
+    PR 277's local curve gives 0.14 ms per key. Per key the larger group is
+    cheaper, the fixed cost of the round trip and the transaction spread
+    over more keys; still about three round trips per item over the network.
+
+    Check, all held: `refimages_official` (with `refimimages_official` and
+    `refimcatalogs_official`), `diffimages_official`, `sources_official`,
+    `objects_official`, `members_official`, `packets_official`,
+    `forced_official` and `external_official` return only run 10's jobs;
+    `exposures_official` and `l2files_official` are still run 1's two and
+    run 9's 67, `psfs_official` jobs 1 and 9, `catalogs_official` job 1; the
+    live binding is still 50 (run 9); every table's row count is unchanged
+    except `official`, 452 to **597** (+145); `read_packets.py --job` exits
+    0 CLEAN on all five of run 10's sets:
+
+    | job | key | records | Avro bytes | cutouts | edge cutouts | history | forced values |
+    |---|---|---|---|---|---|---|---|
+    | 304 | 84613-8-8 | 50 | 9,607,799 | 150 | 3 | 0 | 50 |
+    | 307 | 84624-8-8 | 62 | 11,990,248 | 186 | 0 | 3 | 124 |
+    | 309 | 84635-8-8 | 77 | 14,831,940 | 231 | 3 | 3 | 231 |
+    | 310 | 84640-8-8 | 54 | 10,456,858 | 162 | 0 | 3 | 216 |
+    | 311 | 84637-8-8 | 71 | 13,739,488 | 213 | 0 | 12 | 355 |
+
+    Then checks 1 to 6 in full on run 10 (step 11's table, right column).
+
+13. **A mid-night epoch replaced.** The third epoch by `mjdobs`, 84635
+    (run 10's job 234), the middle of run 10's five-epoch chain, replaced
+    after the night was complete. Run 10 is a campaign and names its inputs
+    and exclusions itself; every job is staged unbound (no `expects`, so
+    each Batch job exits 0), then one group binds the four keys together.
+
+    ```sh
+    rp job submit --run 10 --stage difference --job-definition $DEF --scope '{"expid": 84635, "sca": 8, "fid": 8}' \
+      --inputs '<job 234's four inputs: l2files job 30, refimages job 231, psfs science job 1, psfs reference job 9>'
+    rp job submit --run 10 --stage associate --job-definition $DEF --scope '{"field": 4658155}' \
+      --inputs '[{"product": "sources", "key": '"$(k 84635)"', "source_job": 312}, {"product": "objects", "key": '"$OKEY"', "source_job": 308}]' \
+      --excludes '[{"key": '"$(k 84635)"', "source_job": 234}]'
+    rp job submit --run 10 --stage packet --job-definition $DEF --scope '{"expid": 84635, "sca": 8, "fid": 8}' \
+      --inputs '<job 309's inputs with the object set 313 and epoch 84635's difference image and source set 312>'
+    # group-b.json: four items, each closing run 10's binding of the key and opening the new job's
+    rp official change --group group-b.json --who "$USER" --why "epoch 84635 replaced mid-night"
+    ```
+
+    Difference **job 312** (Batch `c99a4613-d98d-4f7a-9990-0ca25440abcf`),
+    associate **313** (`67e4b954-1cf3-417a-8862-9b815eee09b1`, 144 sources
+    accepted, 77 excluded members subtracted, 77 memberships, no new
+    object), packet **314** (`046f7276-0839-4c5f-a422-…`, 77
+    packets, 231 forced rows, 227 measured and 4 reused), all `SUCCEEDED`
+    and published on attempt 1. **Group 217** closed bindings 458, 459, 592
+    and 595 and opened the four new ones: 12.1 ms (3.0 ms per key).
+
+    Checks, by conservation, all held:
+    - The expected membership is the predecessor's (set 308's chain, 315
+      rows) minus every membership of the old source set (77) plus the
+      replacement's matches (77): 315 rows. `members_official` equals it
+      row for row, and so does the new chain's `matches.parquet` minus its
+      exclusions.
+    - Objects: set 313 holds all 300 of set 308's objects and no new one.
+      None is removed (no object is left without members), none added; the
+      77 objects whose epoch-3 member moved from job 234's source to job
+      312's are the changed ones, and the other 223 are unchanged, their
+      stored sums equal to set 308's bit for bit. Every object's sums
+      reproduce its current members (check 3's tolerances).
+    - The other four packet sets are untouched: `packets_official` holds
+      jobs 304, 307, 310 and 311 with their rows and bindings as before, and
+      314 in place of 309.
+    - The new set passes check 4 against its own recorded inputs (77
+      packets, 3 history detections, 231 cutouts, 231 forced entries); none
+      of the new object set's chain memberships is from job 234, so no
+      packet's history or `nDiaSources` counts the old detection;
+      `read_packets.py --job 314` exits 0 CLEAN. Checks 3 and 4 on the five
+      official sets after the group: chain depth 6, 315 members, CLEAN.
+
+    **Observation for the plan: what the model leaves.** The packets of
+    epochs 4 and 5 (jobs 310 and 311) were built when the old epoch-3
+    detections were members, and stay as published: 1 packet of 310 and 2
+    of 311 carry an old epoch-3 detection (job 234's) in their history.
+    They are valid against their recorded inputs (check 4 passes on them
+    after group B), because a packet is a record at its trigger time. A
+    live loop would do nothing about them: the alert went out with what was
+    known then. A campaign that wants its packets consistent with the
+    replacement reruns from the replaced epoch on (here, packets 4 and 5
+    against set 313) and binds them in the same group.
+
+    **Observation: the replacement is not bit-identical to job 234.** Same
+    image (`rapid-rebuild:33`), same inputs, same 5,536 sources, but 2,156
+    rows differ in some column: 1,342 in RA by more than 1e-12″, 63 by more
+    than 1 µas, 9 by more than 1 mas and one by more than 0.1″; 15 fluxes by
+    more than 1e-3 relative; one `flags` value. Jobs 233 and 301 (task 5)
+    were identical. Jobs 233, 234 and 301 ran on r6i.8xlarge (Intel) and
+    job 312 on m6a.2xlarge (AMD), from `describe-container-instances`, so
+    the likely mechanism is CPU-dependent floating point in the tools
+    (vector paths in the FFTs or BLAS) amplified by the fit. Unverified:
+    consistent with every figure, not probed on one instance type. Task
+    1's seed pins the draw, not the arithmetic. Step 13's checks are by
+    conservation and do not depend on the two agreeing.
+
+14. **Undo.** Each through `rapidpipe.foundation.official.undo`, timed the
+    same way; each result compared with its target state as the full set
+    of open bindings, row for row on (product, key, job) and (survey,
+    dataset, run).
+
+    | group | what | opens / closes | operation | per key | result |
+    |---|---|---|---|---|---|
+    | 218 | undo of B | 4 / 4 | 8.9 ms | 2.2 ms | open bindings equal those after group A, row for row |
+    | 219 | undo of A | refused | | | `binding 458 is no longer open`; nothing written |
+    | 220 | A's inverse as of now | 209 / 145 | 317.4 ms | 1.5 ms | open bindings equal those before group A, row for row |
+    | 221 | A2: group A again | 145 / 209 | 247.0 ms | 1.2 ms | open bindings equal those after group A, row for row |
+
+    **The undo of A refuses, by the rule.** Group B closed binding 458 (the
+    84635 difference image's, opened by A), and B's undo reopened that key
+    as a new row (an undo never reopens a closed row, plan statement 5).
+    So A's inverse, which closes the rows A opened, finds 458 closed and
+    refuses, naming it, as proof step 12 showed on the synthetic world;
+    group 219 wrote no row. The restoration is then an explicit group, 220,
+    built from A's two sides as they stand: close the binding now open on
+    each of the 145 keys A opened (141 of them A's own rows, 4 the undo of
+    B's) and open, as new rows, the 209 bindings A closed. After it run 9
+    is official again, row for row as before group A. Group A2 (221)
+    applies A's membership again (the same 145 opens; the closes name run
+    9's current bindings), a choice recorded as such: the run ends with run
+    10's products official and run 9 live (binding 50). Nothing was
+    deleted: every table's row count after A2 equals that after A plus
+    steps 13's three jobs' rows, and `official` only grew.
+
+15. **Two change groups at once, through the pooler.** `rapid_rebuild_pipeline`
+    is transaction-pooled by pgbouncer (rapid_systems
+    `rpms/rapid-pgbouncer/pgbouncer.rapid.ini`), so a transaction holds one
+    server connection from its first statement to its commit. Two sessions
+    through the pooler, from a scratch script holding each group open
+    through the library (no verb holds one uncommitted): session 1 applies
+    a group closing the epoch-5 packet binding 959 and reopening that key
+    to job 311, uncommitted; session 2 applies a group closing binding 955
+    (epoch 1's packets, a lower id) and then 959. Session 2 closed 955 and
+    blocked on 959's row (after 3 s it waited on a `ShareLock` on session
+    1's transaction, from `pg_locks`); session 1 committed **group 222**;
+    session 2 woke, found 959 closed, refused with `binding 959 is no longer
+    open` and rolled back. Check, held: binding 955 still open, 959 closed
+    by 222 only, group 222 one open and one close, the refused group's id
+    (223) on no row: nothing half-applied. **Undo of 222: group 224**, 5.9
+    ms; the open bindings equal those after A2, row for row.
+
+## Results of part 6 (2026-10-21)
+
+Every check of steps 11 to 15 held; the night is one coherent account in
+the database, the Parquet and the outbox, under both runs.
+
+- **Run 9** (live, the loop's shape): imports 30 to 96, associates and
+  packets 97 to 230 (part 6 steps 2 to 5), with run 1's jobs 1 to 7 for
+  epochs 1 and 2. **Run 10** (the campaign): reference 231, differences
+  232 to 301, chain 302 to 311 (steps 6 to 10), the replacement 312 to
+  314 (step 13).
+- **Final state**: run 10's reference, 69 differences and source sets (233
+  for 84624), object set 308 and five packet sets 304, 307, 309, 310, 311
+  official (group 221, with 224 restoring the epoch-5 packet key); 301 and
+  312 to 314 published and unbound; run 9 live (binding 50); `official`
+  **961** rows; change groups 216 to 224.
+
+Measurements:
+
+| what | figure |
+|---|---|
+| checks 1 to 6, run 9 | 254.5 s (check 2 138 s and check 4 114 s, both mostly S3 reads) |
+| checks 1 to 6, run 10 | 145.1 s |
+| group A (216), 145 / 209 | 256.9 ms, 1.23 ms per key, 0.58 s process |
+| group B (217), 4 / 4 | 12.1 ms, 3.0 ms per key |
+| undo B (218) / restore A (220) / A2 (221) / undo 222 (224) | 8.9 / 317.4 / 247.0 / 5.9 ms |
+| difference 312 | queue 222 s, container 1,131 s, peak RSS 1.25 GiB self, 14.54 GiB largest child, on m6a.2xlarge |
+| associate 313 | queue 10.7 s, container 2.7 s, peak RSS 228 MiB |
+| packet 314 | queue 10.9 s, container 23.7 s (forced photometry 10.8 s), peak RSS 846 MiB |
+| database | 239 MB (`pg_database_size`) |
+| ten largest tables (total size) | `sources` 102 MB, `objects` 19.0 MB, `forced` 18.7 MB, `job_inputs` 1.8 MB, `packets` 1.1 MB, `official` 1.0 MB, `jobs` 655 kB, `memberships` 532 kB, `diffimages` 205 kB, `l2files` 205 kB |
+| `official` rows at the end | 961 |
+| S3 under the scratch root, per run | 1: 1.28 GB; 2: 0.60 GB; 3: 2.82 GB; 4: 6.26 GB; 5: 5.66 GB; 6: 5.63 GB; 7: 5.63 GB; 8: none; 9: 22.4 GB (1,273 objects); 10: **200.7 GB** (5,168 objects) |
+
+## Validation
+
+The ten checks a night meets, and their outcome on 2026-10-21:
+
+| check | outcome |
+|---|---|
+| 1 lineage closes | held on run 9 and run 10 |
+| 2 Parquet and tables agree | held on both (counts for 309 jobs, bytes for ten) |
+| 3 the chain | held on both: depth 69 and 5, row for row, sums reproduced, sets only grow |
+| 4 packets against their recorded inputs, and the reader | held on both: 69 and 5 sets CLEAN |
+| 5 forced photometry measured once | held on both |
+| 6 two executions of one key | held: one official, the other an unbound candidate |
+| 7 one group makes the night official | held: 145 keys, every view moved, nothing else did |
+| 8 a mid-night epoch replaced | held by conservation; packets 4 and 5 left as published (observation) |
+| 9 undo restores | held row for row; the undo of A refuses after B by the rule, and an explicit group restores |
+| 10 two groups at once through the pooler | held: one commits, the other refuses naming the binding, nothing half-applied |
+
 ## If a step fails
 
 - Part 1: stop. Before step 2 nothing has changed. After it, there is no
