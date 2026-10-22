@@ -30,8 +30,10 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   in the image (``rapidpipe.launch.submit``), printing both ids.
 
 A refused change group, or a job published but refused its automatic
-binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr; a run, job or group that does not exist, or an unreadable
-file, exits 64. Data goes to stdout, everything else to stderr.
+binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr;
+a job published under a run that is not live exits 0 with the refusal on
+stderr and on its row, so Batch's status means "the job ran". A run, job
+or group that does not exist, or an unreadable file, exits 64. Data goes to stdout, everything else to stderr.
 
 Stage modules are resolved by ``importlib.import_module`` at call time, so
 ``rapidpipe.cli`` stays the only place that decides which stage code loads.
@@ -273,7 +275,8 @@ def _run_job(args: argparse.Namespace) -> int:
     if result["published"] and result["refusal"]:
         sys.stderr.write(f"rapidpipe job {args.verb}: job {job_id} published, binding refused: "
                          f"{result['refusal']}\n")
-        return int(ExitCode.FAILURE)
+        if result["live"] is not False:
+            return int(ExitCode.FAILURE)
     return int(ExitCode.SUCCESS)
 
 

@@ -105,6 +105,7 @@ CREATE TABLE jobs (
     state text DEFAULT 'launched' NOT NULL
         CHECK (state IN ('launched', 'running', 'published', 'failed')),
     image_digest text,                               -- none for a local checkout
+    instance_type text,                              -- the EC2 instance type it ran on; null when unknown
     settings_hash text,
     published_attempt integer,
     manifest jsonb,

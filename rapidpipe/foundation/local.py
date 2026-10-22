@@ -30,6 +30,7 @@ import json
 import os
 import resource
 import tempfile
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -114,8 +115,9 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     and of its largest finished child process (``children``, the toolkit's
     binaries), in KiB. A job already published returns at once with
     ``published`` false and no file touched. The job row records
-    ``running``, ``started`` and the image digest (``RAPID_IMAGE_DIGEST``,
-    which the job definition sets; none for a checkout) before the stage,
+    ``running``, ``started``, the image digest (``RAPID_IMAGE_DIGEST``,
+    which the job definition sets; none for a checkout) and the instance
+    type (:func:`instance_type`) before the stage,
     ``ended`` and ``exit_code`` after it; a stage or publication that raises
     leaves the job ``failed`` and the exception propagates.
     """
@@ -130,7 +132,7 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             if job["state"] == "published":
                 conn.commit()
                 return {"job": job_id, "attempt": job["published_attempt"], "published": False,
-                        "group": None, "refusal": job["refusal"]}
+                        "group": None, "refusal": job["refusal"], "live": None}
             cur.execute("SELECT kind, product, key, source_job, binding FROM job_inputs"
                         " WHERE job = %s ORDER BY kind, product, source_job", (job_id,))
             inputs = [dict(r) for r in cur.fetchall()]
@@ -145,7 +147,8 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             prefix = f"{job_prefix}/{attempt}/"
             workdir = Path(tempfile.mkdtemp(prefix=f"rapidpipe-job-{job_id}-{attempt}-"))
         _record(conn, job_id, "state = 'running', started = now(), ended = NULL, exit_code = NULL,"
-                " image_digest = %s", (os.environ.get("RAPID_IMAGE_DIGEST"),))
+                " image_digest = %s, instance_type = %s",
+                (os.environ.get("RAPID_IMAGE_DIGEST"), instance_type()))
 
     context = JobContext(
         job=job_id, run=job["run"], stage=job["stage"], scope=job["scope"],
@@ -165,6 +168,29 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     peak = {who: resource.getrusage(scope).ru_maxrss for who, scope in
             (("self", resource.RUSAGE_SELF), ("children", resource.RUSAGE_CHILDREN))}
     return {**result, "peak_rss_kib": peak}
+
+
+#: The EC2 instance metadata service (IMDSv2): a session token, then one read.
+_IMDS = "http://169.254.169.254/latest"
+
+
+def instance_type(timeout: float = 1.0) -> str | None:
+    """The EC2 instance type this process runs on, from IMDSv2; ``None`` when unreachable.
+
+    One ``PUT`` for a token and one ``GET`` of ``meta-data/instance-type``,
+    each with ``timeout`` seconds; off EC2, or in a container the metadata
+    service's hop limit does not reach, either fails and the type is unknown.
+    """
+    try:
+        token = urllib.request.urlopen(urllib.request.Request(
+            f"{_IMDS}/api/token", method="PUT",
+            headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"}), timeout=timeout).read()
+        reply = urllib.request.urlopen(urllib.request.Request(
+            f"{_IMDS}/meta-data/instance-type",
+            headers={"X-aws-ec2-metadata-token": token.decode()}), timeout=timeout).read()
+    except (OSError, ValueError):
+        return None
+    return reply.decode().strip() or None
 
 
 def _record(conn, job_id: int, assignments: str, params: tuple = ()) -> None:

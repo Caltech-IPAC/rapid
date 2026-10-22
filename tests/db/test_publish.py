@@ -88,7 +88,7 @@ def test_a_job_whose_run_is_not_live_is_published_unbound_with_the_refusal_recor
 
     result = publish(conn, job, 1, _attempt(tmp_path, conn, job))
 
-    assert result["published"] and result["group"] is None
+    assert result["published"] and result["group"] is None and result["live"] is False
     assert job_show(conn, job)["refusal"] == result["refusal"] and "not live" in result["refusal"]
     assert _count(conn, "objects", job) == 3
     assert open_bindings(conn, product="objects") == []

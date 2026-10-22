@@ -4,7 +4,8 @@ Contracts: ``job local`` records a job, runs a trivial stage and publishes
 it, and the live run's job binds the key it expects; ``job run`` on a job
 whose attempt 1 wrote files but did not publish publishes attempt 2, once;
 ``job run`` on a published job stops before touching a file; a job run
-under a job definition records its image digest and reports its peak memory.
+under a job definition records its image digest and instance type and reports
+its peak memory.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from rapidpipe.cli import main as cli
-from rapidpipe.foundation import create_job, run_job
+from rapidpipe.foundation import create_job, local, run_job
 from tests.db.foundation_helpers import DATASET, new_run
 
 KEY = {"dataset": DATASET, "expid": 7}
@@ -94,14 +95,16 @@ def test_job_run_on_a_published_job_stops_before_touching_a_file(connect, tmp_pa
     assert exposures_rows(conn, job) == (1, ("published", 1))
 
 
-def test_job_run_records_the_image_digest_and_reports_peak_memory(connect, tmp_path, monkeypatch):
+def test_job_run_records_the_image_digest_and_instance_type_and_reports_peak_memory(
+        connect, tmp_path, monkeypatch):
     conn = connect()
     run = new_run(conn)
     job = create_job(conn, run, "trivial", {})
     monkeypatch.setenv("RAPID_IMAGE_DIGEST", "sha256:" + "ab" * 32)
+    monkeypatch.setattr(local, "instance_type", lambda: "m6a.4xlarge")
     result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), trivial_stage)
     assert result["published"] and result["peak_rss_kib"]["self"] > 0
     with conn.cursor() as cur:
-        cur.execute("SELECT image_digest FROM jobs WHERE id = %s", (job,))
-        assert cur.fetchone()[0] == "sha256:" + "ab" * 32
+        cur.execute("SELECT image_digest, instance_type FROM jobs WHERE id = %s", (job,))
+        assert cur.fetchone() == ("sha256:" + "ab" * 32, "m6a.4xlarge")
     conn.commit()

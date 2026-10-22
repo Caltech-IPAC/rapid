@@ -51,9 +51,11 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     instead when the binding is refused. ``ANALYZE`` every table it wrote
     to after commit: the loaded tables, and ``official`` when it bound.
 
-    Returns ``{"job", "attempt", "published", "group", "refusal"}``:
+    Returns ``{"job", "attempt", "published", "group", "refusal", "live"}``:
     ``published`` is whether this call published, ``group`` the automatic
-    binding's change group or ``None``.
+    binding's change group or ``None``, ``live`` whether the job's run was
+    live when it bound (``None`` when the job expects nothing, or was
+    already published).
     """
     root = prefix.rstrip("/") + "/"
     try:
@@ -67,7 +69,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             if state == "published":
                 conn.commit()
                 return {"job": job_id, "attempt": published_attempt, "published": False,
-                        "group": None, "refusal": refusal}
+                        "group": None, "refusal": refusal, "live": None}
             manifest = _verified_manifest(root)
             tables = []
             for output in manifest["outputs"]:
@@ -76,7 +78,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             cur.execute("UPDATE jobs SET state = 'published', published_attempt = %s,"
                         " manifest = %s WHERE id = %s",
                         (attempt, Json({"prefix": prefix, **manifest}), job_id))
-            group, refusal = _bind(cur, job_id, run)
+            group, refusal, live = _bind(cur, job_id, run)
         conn.commit()
     except BaseException:
         conn.rollback()
@@ -86,7 +88,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(table)))
     conn.commit()
     return {"job": job_id, "attempt": attempt, "published": True, "group": group,
-            "refusal": refusal}
+            "refusal": refusal, "live": live}
 
 
 def _verified_manifest(root: str) -> dict:
@@ -125,19 +127,20 @@ def _load(cur, table: str, path: Path, job_id: int) -> None:
     execute_values(cur, statement, rows, page_size=1000)
 
 
-def _bind(cur, job_id: int, run: int) -> tuple[int | None, str | None]:
-    """The automatic binding, inside a savepoint; returns (group id, refusal)."""
+def _bind(cur, job_id: int, run: int) -> tuple[int | None, str | None, bool | None]:
+    """The automatic binding, inside a savepoint; returns (group id, refusal, run live)."""
     cur.execute("SELECT product, key, binding FROM job_inputs"
                 " WHERE job = %s AND kind = 'expects' ORDER BY product", (job_id,))
     expects = cur.fetchall()
     if not expects:
-        return None, None
+        return None, None, None
     cur.execute("SAVEPOINT automatic_binding")
+    cur.execute("SELECT 1 FROM official o JOIN runs r ON r.id = o.run"
+                " AND r.survey = o.survey AND r.dataset = o.dataset"
+                " WHERE o.run = %s AND o.closed_at IS NULL", (run,))
+    live = cur.fetchone() is not None
     try:
-        cur.execute("SELECT 1 FROM official o JOIN runs r ON r.id = o.run"
-                    " AND r.survey = o.survey AND r.dataset = o.dataset"
-                    " WHERE o.run = %s AND o.closed_at IS NULL", (run,))
-        if cur.fetchone() is None:
+        if not live:
             raise Refused(f"run {run} is not live for its survey and dataset")
         group = [{"close": binding, "open": {"product": product, "key": key, "job": job_id}}
                  for product, key, binding in expects]
@@ -145,6 +148,6 @@ def _bind(cur, job_id: int, run: int) -> tuple[int | None, str | None]:
     except Refused as refused:
         cur.execute("ROLLBACK TO SAVEPOINT automatic_binding")
         cur.execute("UPDATE jobs SET refusal = %s WHERE id = %s", (str(refused), job_id))
-        return None, str(refused)
+        return None, str(refused), live
     cur.execute("RELEASE SAVEPOINT automatic_binding")
-    return group_id, None
+    return group_id, None, live

@@ -4,7 +4,8 @@ Contracts: ``get`` gives a ``file://`` URL's own path and downloads an
 ``s3://`` object once per process, raising ``FileNotFoundError`` for an
 absent one; ``put`` leaves a ``file://`` prefix alone and uploads a
 directory to an ``s3://`` prefix with ``manifest.json`` last; ``attempts``
-names the attempt directories present under an ``s3://`` job prefix.
+names the attempt directories present under an ``s3://`` job prefix; the
+download cache is made under ``TMPDIR`` and removed at process exit.
 """
 
 from __future__ import annotations
@@ -66,3 +67,19 @@ def test_attempts_names_the_attempt_directories_under_a_job_prefix(s3):
         s3.seed("bucket", key, b"")
     assert prefix.attempts("s3://bucket/root/3/packet/9") == {1, 2}
     assert prefix.attempts("s3://bucket/root/3/packet/8") == set()
+
+
+def test_the_download_cache_is_made_under_tmpdir_and_removed_at_exit(monkeypatch, tmp_path):
+    fake = FakeS3(page_size=2)
+    fake.seed("bucket", "run/1/a.parquet", b"rows")
+    monkeypatch.setattr("rapidpipe.products.storage.s3_client", lambda: fake)
+    monkeypatch.setattr(prefix, "_cache", None)
+    monkeypatch.setattr(prefix.tempfile, "tempdir", str(tmp_path))
+    registered = []
+    monkeypatch.setattr(prefix.atexit, "register", lambda *call, **kw: registered.append((call, kw)))
+    path = prefix.get("s3://bucket/run/1/a.parquet")
+    cache = prefix._cache
+    assert cache.parent == tmp_path and path.is_relative_to(cache)
+    (remove, *args), kwargs = registered[0]
+    remove(*args, **kwargs)
+    assert not cache.exists()

@@ -7,6 +7,8 @@ by the URL their rows record. Two schemes, one function each way:
 - :func:`get` gives a local path for a file URL: the file itself for
   ``file://``, a download into this process's cache for ``s3://``. Objects
   under a published prefix never change, so a cached download is reused.
+  The cache is one ``mkdtemp`` directory under ``TMPDIR``, removed when the
+  process exits normally; a killed process leaves it behind.
 - :func:`put` makes a local directory's files appear under a prefix: a
   no-op for ``file://`` (the stage wrote there), an upload of every file
   for ``s3://`` with ``manifest.json`` last.
@@ -17,6 +19,8 @@ the one indirection a test replaces.
 
 from __future__ import annotations
 
+import atexit
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -50,6 +54,7 @@ def get(url: str, *, client: Any = None) -> Path:
     bucket, key = _bucket_key(url)
     if _cache is None:
         _cache = Path(tempfile.mkdtemp(prefix="rapidpipe-get-"))
+        atexit.register(shutil.rmtree, _cache, ignore_errors=True)
     path = _cache / bucket / key
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
