@@ -2055,6 +2055,105 @@ Measurements:
    The image (`rebuild-32970a24`) already carries kafka-python 3.0.11 and
    the signer. Not changed by this run.
 
+4. **The intake stage and its image.** PR 304 (merged `c81e17ae`) adds
+   the `intake` stage: one SOC L2 `_cal.asdf` file, named by its stem in
+   the scope and read under the run's `[intake] source_root` (anonymously
+   when `unsigned`), converted by `dev`'s `build_fits_file` into its
+   16-HDU FITS, gzipped at level 1, its limiting magnitude measured with
+   the science PSF the job names, and declared as one `exposures` and one
+   `l2files` row; `expid` is `pass * 10**6 + observation * 10**4 + visit *
+   10**2 + exposure`, shared by the 18 SCAs of one exposure. The image,
+   with `TMPDIR` unset (buildah cannot make its root filesystem under an
+   EFS `TMPDIR`: `mkdir .../mnt/rootfs: permission denied`):
+
+   ```sh
+   env -u TMPDIR containers/rapid-pipeline/build-rebuild.sh c81e17ae6e5dda677c0cb9e0b92bee89e482506e --tag rebuild-c81e17ae6e5dda677c0cb9e0b92bee89e482506e
+   RELEASE_TAG=rebuild-c81e17ae6e5dda677c0cb9e0b92bee89e482506e RELEASE_IMAGE_DIGEST=sha256:971b5a87… cloudformation/release-hooks/deploy
+   ```
+
+   Check, held: the import gate passed with `asdf`, `roman_datamodels`,
+   `gwcs` and `sympy`, all four already in the base environment, so
+   nothing was added to the image (1,955,119,219 B compressed before,
+   1,955,186,171 after: the package itself); build 21 s, deploy 73 s;
+   **`rapid-rebuild:35`** (and `rapid-rebuild-production:26`), image and
+   `RAPID_IMAGE_DIGEST` both `sha256:971b5a87…`, retry 3, 24 GiB.
+
+5. **The HLWAS live run and its PSFs.** The run's settings body is the
+   shipped file at the merged sha with the overlay `[intake] source_root =
+   "$SOURCE_ROOT"` (the public bucket's `r00342/l2/` prefix) and
+   `unsigned = true`; it is made live with a change group opening its live
+   binding, with no cutover, since run 9's is another dataset's:
+
+   ```sh
+   rp run create --who "$USER" --why "hlwas-night-2026-10-21 task 3 (intake): ..." \
+     --revision c81e17ae6e5dda677c0cb9e0b92bee89e482506e --settings hlwas-run.json --survey HLWAS --dataset r00342
+   echo '[{"open": {"survey": "HLWAS", "dataset": "r00342", "run": 12}}]' > live.json
+   rp official change --group live.json --who "$USER" --why "... run 12 live for HLWAS r00342 ..."
+   ```
+
+   Then the 36 F146 PSFs (`psfs/sciimage_psf_f146_sca01..18.fits` kind
+   science, `refimage_psfs/refimage_psf_f146_sca01..18.fits` kind
+   reference, under the inputs bucket's `g0006-psf-f146/`, copied to this
+   host first), one `job local` each, each expecting its key unbound:
+
+   ```sh
+   rp job local --run 12 --stage import \
+     --scope '{"source_dir": "<copy>/psfs", "psf": {"kind": "science", "path": "sciimage_psf_f146_sca08.fits"}}' \
+     --expects '[{"product": "psfs", "key": {"dataset": "r00342", "fid": 8, "sca": 8, "kind": "science"}, "binding": null}]'
+   ```
+
+   Check, held: run **12** (survey `HLWAS`, dataset `r00342`) live,
+   binding **962** in group **225**; run 9's binding 50 still open. Jobs
+   **317 to 334** (science, SCAs 1 to 18) and **335 to 352** (reference)
+   published and bound in groups 226 to 261, 69 s for the 36 (1.9 s and
+   238 MiB each); `psfs_official` returns 18 of each kind for `r00342`.
+   SCA 8's are job **324** (science, binding 970) and job **342**
+   (reference).
+
+6. **Intake on this host, then on Batch.** The pass-1 file of pointing
+   (observation 4, visit 1, exposure 1) on SCA 8, then its pass-2 sibling
+   as a Batch job (its sidecar's SCA 8 centre is 0.002 arcsec from the
+   pass-1 one, the target position identical):
+
+   ```sh
+   rp job local --run 12 --stage intake --scope '{"dataset": "r00342", "file": "r0034201001001004001_0001_wfi08_f146"}' \
+     --inputs '[{"product": "psfs", "key": {"dataset": "r00342", "fid": 8, "sca": 8, "kind": "science"}, "source_job": 324, "binding": 970}]' \
+     --expects '[{"product": "l2files", "key": {"dataset": "r00342", "expid": 1040101, "sca": 8, "fid": 8}, "binding": null},
+                 {"product": "exposures", "key": {"dataset": "r00342", "expid": 1040101}, "binding": null}]'
+   rp job submit --run 12 --stage intake --job-definition rapid-rebuild:35 \
+     --scope '{"dataset": "r00342", "file": "r0034201002001004001_0001_wfi08_f146"}' --inputs '<the same>' \
+     --expects '<the same two keys with expid 2040101>'
+   ```
+
+   Check, held: job **353** (local) and job **354** (Batch `84b5fc80…`,
+   `SUCCEEDED` on attempt 1, exit 0, the image digest above, instance
+   type **m6a.2xlarge**) published attempt 1 and bound their `l2files`
+   and `exposures` keys (groups 262 and 263); rids 1 and 2, `limmag`
+   26.951 and 26.953, field 5387158, `hp6` 35382, `hp9` 2264449, six
+   overlapping fields each, the `.fits.gz` under
+   `12/intake/<job>/1/`. **A Batch container reads the public bucket
+   unsigned** (0.8 s for 204 MB through the VPC), so the copy fallback is
+   not needed and tasks 4 to 6 read the source root directly. The
+   published FITS went through the difference stage's `reformat` (0.58 s,
+   4089 x 4089 in DN/s, median 1.30) and `modules/sip_tpv`'s `sip_to_pv`
+   (0.15 s, `PV1_*` and `PV2_*` written) by hand. `official` 961 rows
+   before, 1,002 after (1 live, 36 PSFs, 2 x 2 intake).
+
+   Measurements:
+
+   | what | job 353 (this host, m8a.4xlarge, EFS) | job 354 (Batch, m6a.2xlarge) |
+   |---|---|---|
+   | queue wait (created to started) | none | 155.0 s |
+   | container, or job started to ended | 14.9 s | 17.0 s container, 14.9 s job |
+   | fetch `_cal.asdf` (204 MB, unsigned) | 1.06 s | 0.81 s |
+   | convert (`build_fits_file`, 421 MB, 16 HDUs) | 4.54 s | 2.71 s |
+   | gzip level 1 (to 195 MB) | 4.10 s | 5.45 s |
+   | limiting magnitude | 2.58 s | 3.49 s |
+   | rows (MD5, footprint, field, overlap) and manifest | 1.32 s | 1.00 s |
+   | upload and publish | 1.3 s | 1.5 s |
+   | peak RSS | 914 MiB | 906 MiB |
+   | bytes under `12/intake/<job>/1/` | 195.1 MB, 4 objects | 195.1 MB, 4 objects |
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21:
