@@ -2154,9 +2154,218 @@ Measurements:
    | peak RSS | 914 MiB | 906 MiB |
    | bytes under `12/intake/<job>/1/` | 195.1 MB, 4 objects | 195.1 MB, 4 objects |
 
+7. **Validation as a script.** `scripts/validate_run.py --run <id>` runs
+   the night's checks 1 to 6 over one run's jobs, one function each, as
+   part 6's Validation names them: `lineage`, `tables`, `chain`,
+   `packets` (each set against its own recorded inputs, then
+   `read_packets.py` on the run's bound sets), `forced` and `counts`
+   (no job still launched or running; jobs per stage and state, rows per
+   table and open bindings printed); `twice` (check 6) runs only with
+   `--twice A,B`. It prints one line per check, PASS with its counts or
+   FAIL with the first counter-example, and exits non-zero on any
+   failure. Checks 7 to 10 were operations, checked as they ran, and have
+   no read-only form over a run. Two checks are scoped to a run rather
+   than to the whole database: `chain` takes every object set of the run
+   that is bound or final (no other set of the run names it as its
+   predecessor), and `forced` compares each packet set's forced rows with
+   those of the predecessor sets it recorded, so a replacement set that
+   measures afresh what it replaces (run 10's job 314) is not a repeat.
+
+   ```sh
+   python scripts/validate_run.py --run 10 --twice 233,301 --depth 5
+   python scripts/validate_run.py --run 9
+   ```
+
+   Check, held: run 10 6 of 6 and `twice` (233 and 301 equal in 5,115
+   source rows, 233 bound), 41 s: set 308 depth 5 with 315 members equal
+   to `members_official` and 300 objects' sums, the unbound replacement
+   set 313 depth 6, 5 bound sets CLEAN, as part 6 found; run 9 6 of 6 in
+   143 s (set 179 depth 69, 2,547 members, 1,504 objects; 67 sets, 2,411
+   packets; its sets unbound since group A). A pair of different keys
+   (`--twice 233,312`) fails, naming the difference.
+
+8. **The first HLWAS pointing: intake, Gaia, reference.** The pointing
+   is (visit 1, exposure 1) of F146 on SCA 8 in passes 1 to 6. Pass 6 is
+   F146 alone and is **observation 1**, where passes 1 to 5 hold F146 as
+   observation 4, so its stem is `r0034201006001001001_0001_wfi08_f146`
+   (`expid` 6010101); the six sidecars' SCA 8 centres agree to within
+   0.003 arcsec (target 9.671532, -45.202805; `pa_v3` 0.4289; Gaia fit
+   SUCCESS in each). Passes 3 to 6 on Batch, at once, with step 6's
+   inputs and expects:
+
+   ```sh
+   rp job submit --run 12 --stage intake --job-definition rapid-rebuild:35 \
+     --scope '{"dataset": "r00342", "file": "r0034201003001004001_0001_wfi08_f146"}' \
+     --inputs '[{"product": "psfs", "key": {"dataset": "r00342", "fid": 8, "sca": 8, "kind": "science"}, "source_job": 324, "binding": 970}]' \
+     --expects '[{"product": "l2files", "key": {"dataset": "r00342", "expid": 3040101, "sca": 8, "fid": 8}, "binding": null},
+                 {"product": "exposures", "key": {"dataset": "r00342", "expid": 3040101}, "binding": null}]'
+   ```
+
+   and the same for passes 4, 5 and 6. Check, held: jobs **355 to 358**
+   Batch `SUCCEEDED` on attempt 1, published and bound (groups 265 to
+   268); `l2files_official` holds the six for `r00342`, every one in
+   field **5387158**, `limmag` 26.951 to 26.958.
+
+   Gaia. The only Gaia product on SMDC covered the GBTDS field. Dev built
+   its copy with astroquery's `SELECT * FROM gaiadr3.gaia_source` over a
+   cone, written to Parquet with the query in the file's metadata; the
+   HLWAS copy is the same query over the footprint's box with a
+   0.2-degree margin (RA 6.9 to 11.2, Dec -45.7 to -42.6), from the ESA
+   archive on this host:
+
+   ```sh
+   python fetch.py gaia-dr3-hlwas-r00342-box.parquet   # astroquery Gaia.launch_job_async, the GBTDS file's schema
+   rp job local --run 12 --stage import \
+     --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"name": "gaia-r00342", "version": "DR3"}, "binding": null}]'
+   ```
+
+   **The catalog's key is `gaia-r00342`, not `gaia`.** The `catalogs`
+   key is (name, version), with no dataset, and `{gaia, DR3}` is bound to
+   the GBTDS copy (binding 2, job 1); binding the HLWAS copy under the
+   same key would close it and leave GBTDS's official Gaia a catalog that
+   does not cover its field. The packet stage reads the catalog its job
+   names by source job, so the name is free. Check, held: job **359**
+   published and bound (binding 1003, group 264); **34,171 rows**, every
+   one inside the box, one `ref_epoch` (2016.0), the column names and
+   types exactly the GBTDS copy's (152 columns, every one the packet
+   stage reads among them); query 16.5 s, import 2.4 s, 16 MB.
+
+   The reference, from the six frames (one field, read from the rows):
+
+   ```sh
+   rp job submit --run 12 --stage reference --job-definition rapid-rebuild:35 --scope '{"field": 5387158, "fid": 8, "sca": 8}' \
+     --inputs '[{"product": "l2files", "key": {"dataset": "r00342", "expid": 1040101, "sca": 8, "fid": 8}, "source_job": 353}, ..., <6010101 from job 358>]' \
+     --expects '[{"product": "refimages", "key": {"dataset": "r00342", "field": 5387158, "fid": 8}, "binding": null}]'
+   ```
+
+   Check, held: job **360** (Batch `c6315181…`, m6a.2xlarge) published
+   and bound (binding 1012, group 269); **rfid 4**, `nframes` 6, six
+   `refimimages` rows, nothing left uncoadded. Measured as PR 287 did:
+   7000 x 7000 grid centred (9.473684, -45.487946), `cov5percent` 32.62
+   (the SCA covers a third of the grid; 33.0 million NaN pixels, median
+   coverage 0), clipped mean 1.3501 and standard deviation 0.01723,
+   median pixel uncertainty 0.01572, `MAGZP` 26.863, total exposure
+   1,764.66 s (6 x 294.1), **5,165** catalog sources, median FWHM 2.59
+   px. **The reference coadds the six epochs it is differenced against
+   (self-including)**, as the night's did; a reference disjoint from the
+   epochs differenced is a later step.
+
+9. **Difference, associate and packet: the null test.** The six
+   differences at once against job 360, with the science PSF (job 324)
+   and the reference PSF (job 342), as part 6 step 8; then associate in
+   `mjdobs` order, each naming the field's previous object set, and
+   packet per epoch after its associate and the previous packet, in
+   waves (associate n with packet n-1), every one on Batch under
+   `rapid-rebuild:35` with expects naming the previous binding or none,
+   as part 6 steps 9 and 10 (the packet's inputs: the Gaia catalog of job
+   359, the reference of job 360, the science PSF, the epoch's object
+   set, the difference images and L2 rows of epochs 1 to n, the epoch's
+   sources and the packet sets of epochs 1 to n-1). Then the reader and
+   the validation script:
+
+   ```sh
+   python scripts/read_packets.py --job 369 --job 371 --job 373 --job 375 --job 377 --job 378
+   python scripts/validate_run.py --run 12 --depth 6
+   ```
+
+   Check, held: differences **361 to 366**, associates **367, 368, 370,
+   372, 374, 376** and packets **369, 371, 373, 375, 377, 378**, all
+   Batch `SUCCEEDED` on attempt 1, published and bound; `infobitssci` 0
+   on all six; the object set **376** (binding 1034) holds 525 objects
+   and 826 members; the reader `6 set(s), CLEAN`; `validate_run.py --run
+   12` 6 of 6 in 30 s (lineage 134 input rows and 74 bindings; 62 jobs,
+   94 outputs; chain depth 6 equal to `members_official`; 825 packets, 517
+   history detections, 2,475 cutouts; 1,236 forced rows reused from a
+   predecessor, each its measurement).
+
+   **The null test.** Observations, not gates (`max_sources` 500 as
+   shipped):
+
+   | epoch | difference | sources before cap | kept | S/N > 5 | > 10 | > 20 | within 1″ of a reference source | packets |
+   |---|---|---|---|---|---|---|---|---|
+   | 1040101 | 361 | 982 | 500 | 291 | 160 | 70 | 222 (44%) | 118 |
+   | 2040101 | 362 | 973 | 500 | 396 | 187 | 83 | 172 (34%) | 148 |
+   | 3040101 | 363 | 993 | 500 | 301 | 146 | 80 | 216 (43%) | 112 |
+   | 4040101 | 364 | 949 | 500 | 321 | 155 | 72 | 215 (43%) | 143 |
+   | 5040101 | 365 | 969 | 500 | 380 | 185 | 74 | 210 (42%) | 157 |
+   | 6010101 | 366 | 1,035 | 500 | 422 | 222 | 100 | 199 (40%) | 147 |
+
+   A static field differenced against a coadd that holds the epoch itself
+   should leave noise: with Gaussian residuals, a few chance detections
+   above 5 sigma per chip, fewer than the uncorrelated case because each
+   epoch is a sixth of its reference, and nothing at S/N 20. It gave
+   about a thousand detections per epoch before the cap, 290 to 420
+   above S/N 5 and 70 to 100 above S/N 20, the same in all six epochs.
+   Of the S/N > 20 ones, 37 to 58 per epoch lie within 1″ of a reference
+   catalog source (median `CLASS_STAR` 0.82 to 0.96: stars) and the rest
+   a median 2 to 3″ from one: residuals at and around stars, which is
+   what a PSF that does not match the image's gives (the PSFs are dev's
+   F146 models for the GBTDS simulation, not measured on this one), not
+   variability; only 6 to 12 per epoch are within 1″ of a Gaia star
+   (median G 13.2 to 14.5: the brightest). The cap keeps about half of each
+   epoch's detections. Every epoch produced packets (112 to 157), so
+   this tile reaches Kafka; 3 Gaia matches in all.
+
+   Measurements (queue wait is Batch's created to started; container is
+   started to stopped; job is the attempt's own start to end; peak RSS
+   from `job run`'s log line, self and children):
+
+   | job | stage | instance | queue wait | container | job | peak RSS self / children | bytes under the attempt |
+   |---|---|---|---|---|---|---|---|
+   | 355 to 358 | intake | r6i.4xlarge | 165.5 to 168.6 s | 18.0 s | 15.8 to 16.1 s | 907 MiB / 0 | 195.1 MB, 4 objects each |
+   | 360 | reference | m6a.2xlarge | 193.5 s | 80.3 s | 74.7 s | 1,390 / 1,440 MiB | 594.9 MB, 8 objects |
+   | 361, 363 to 366 | difference | r6i.4xlarge | 125.9 to 132.0 s | 226.6 to 233.6 s | 224.3 to 231.4 s | 1,193 to 1,232 / 14,885 MiB | 2.55 GB, 72 objects each |
+   | 362 | difference | m6a.2xlarge | 4.7 s | 200.2 s | 197.6 s | 1,232 / 14,889 MiB | 2.55 GB, 72 objects |
+   | 367 to 376 (six) | associate | r6i.4xlarge | 3.8 to 10.4 s | 2.6 to 2.7 s | 0.9 to 1.1 s | 231 to 236 MiB | 3 objects, a few kB |
+   | 369 | packet | r6i.4xlarge | 3.3 s | 15.0 s | 12.9 s | 845 MiB | 22.9 MB, 5 objects |
+   | 371 | packet | r6i.4xlarge | 5.1 s | 21.0 s | 19.0 s | 847 MiB | 28.7 MB |
+   | 373 | packet | r6i.4xlarge | 6.9 s | 25.3 s | 23.1 s | 848 MiB | 21.7 MB |
+   | 375 | packet | r6i.4xlarge | 6.5 s | 31.9 s | 29.7 s | 849 MiB | 27.8 MB |
+   | 377 | packet | r6i.4xlarge | 2.6 s | 36.9 s | 34.9 s | 849 MiB | 30.5 MB |
+   | 378 | packet | r6i.4xlarge | 6.3 s | 42.1 s | 40.0 s | 850 MiB | 28.6 MB |
+
+   The difference stage took a fifth of the GBTDS night's container time
+   (about 230 s against 1,131 s for job 312) at the same 14.5 GiB child
+   peak; the packet stage's time grows with the chain (13 s to 40 s over
+   six epochs), the forced photometry measuring each new object on every
+   earlier image of the window. From the first intake submitted to the
+   last packet published: 22 minutes, of which the ramp-up queue waits
+   (about 2 to 3 minutes each for the intake, reference and difference
+   waves) are a third.
+
+10. **Kafka: the first ASDF-to-received-packet slice.** Run 12's six
+    official packet sets onto the topic and back, as step 3:
+
+    ```sh
+    rp publish --run 12
+    python scripts/consume_packets.py --run 12
+    rp publish --run 12
+    ```
+
+    Check, held: the first `publish` produced the six sets (369 to 378),
+    **825 packets**, 188.5 MB, and stamped each job; the consumer check
+    `Consumer check run 12: CLEAN; read 1139, kept 825, valid 825,
+    byte-equal 825, packets expected 825 seen 825; partitions p0
+    73505..74643`; the second `publish` produced nothing. This is the
+    first slice from a SOC L2 ASDF file to a packet read back from the
+    topic: six raw files of the HLWAS simulation in at one end, 825
+    packets out of the other, one consistent account in the tables, the
+    Parquet and the outbox.
+
+    | what | figure |
+    |---|---|
+    | packets / bytes produced | 825 / 188.5 MB (188,505,169) |
+    | `publish` | 25.7 s in the verb, 26.7 s process; 32.1 packets/s, 7.3 MB/s; peak RSS 258 MiB |
+    | largest message against `max_request_bytes` | 230,284 B against 15,728,640 (1.5%) |
+    | consumer check | 41.4 s, 45.9 s process (1,139 messages read), peak RSS 644 MiB |
+    | second `publish` | 0.09 s, nothing produced |
+
 ## Validation
 
-The ten checks a night meets, and their outcome on 2026-10-21:
+The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
+are `scripts/validate_run.py --run <id>` (part 7 step 7); 7 to 10 are
+operations, checked as they run.
 
 | check | outcome |
 |---|---|
