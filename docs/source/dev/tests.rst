@@ -27,6 +27,7 @@ OpenUniverse           fakesourcesdb            For fake-source injection (copy 
 RimTimSim              rimtimsims2db            For fake-source injection (emptied copy of fakesourcesdb)
 SOC GBTDS Sims         socsimsdb                For fake-source injection (emptied copy of rimtimsims2db)
 RimTimSim              rimtimsims3db            New sims delivered on 6/22/26 (emptied copy of socsimsdb)
+On-orbit               commissioning            On-orbit L2 files streamed from MAST
 ===============      ===================      =====================================================================
 
 
@@ -158,3 +159,4 @@ Tests
    openuniv_tests.rst
    rimtimsim_tests.rst
    socsim_tests.rst
+   onorbit_tests.rst
