@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import resource
 import tempfile
@@ -179,7 +180,8 @@ def instance_type(timeout: float = 1.0) -> str | None:
 
     One ``PUT`` for a token and one ``GET`` of ``meta-data/instance-type``,
     each with ``timeout`` seconds; off EC2, or in a container the metadata
-    service's hop limit does not reach, either fails and the type is unknown.
+    service's hop limit does not reach, either fails, the type is unknown and
+    the error is logged.
     """
     try:
         token = urllib.request.urlopen(urllib.request.Request(
@@ -188,7 +190,8 @@ def instance_type(timeout: float = 1.0) -> str | None:
         reply = urllib.request.urlopen(urllib.request.Request(
             f"{_IMDS}/meta-data/instance-type",
             headers={"X-aws-ec2-metadata-token": token.decode()}), timeout=timeout).read()
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        logging.getLogger(__name__).warning("instance type unknown: %s", exc)
         return None
     return reply.decode().strip() or None
 
