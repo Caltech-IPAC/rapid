@@ -2,10 +2,10 @@
 
 Contracts: only the run's sets with a null stamp are sent; every packet of
 every set is sent, keyed ``<job>:<sid>`` with the container header and its
-block as the value, before the pass's one flush, and the sets are stamped
-after it; one connection serves the pass; a failed acknowledgement leaves
-its set's stamp null, the other sets stamped, and ``publish`` exits
-non-zero.
+block as the value, then flushed and stamped before the next set is sent;
+one connection serves the pass; a failed acknowledgement leaves its set's
+stamp null, the other sets stamped, and ``publish`` exits non-zero; a flush
+that times out stops the pass, leaving that set and the later ones unstamped.
 """
 
 from __future__ import annotations
@@ -48,16 +48,18 @@ class Future:
 
 
 class Producer:
-    def __init__(self, events: list, fail_on: bytes | None = None):
-        self.sent, self.fail_on, self.events = [], fail_on, events
+    def __init__(self, events: list, fail_on: bytes | None = None, stall_on: bytes | None = None):
+        self.sent, self.fail_on, self.stall_on, self.events = [], fail_on, stall_on, events
 
     def send(self, topic, key, value):
         self.sent.append((topic, key, value))
         self.events.append(("send", key))
         return Future(RuntimeError("broker said no") if key == self.fail_on else None)
 
-    def flush(self):
+    def flush(self, timeout):
         self.events.append(("flush", None))
+        if self.stall_on is not None and self.sent[-1][1] == self.stall_on:
+            raise TimeoutError(f"flush not finished in {timeout} s")
 
     def close(self):
         pass
@@ -90,11 +92,11 @@ class Connects:
         return contextlib.nullcontext()
 
 
-def test_every_set_is_sent_before_one_flush_and_stamped_after_it_on_one_connection(outbox):
+def test_each_set_is_sent_flushed_and_stamped_before_the_next_on_one_connection(outbox):
     producer, connect = Producer(outbox), Connects()
     result = publish_kafka.publish(connect, 3, producer, "topic")
-    assert outbox == [("send", b"7:70"), ("send", b"7:71"), ("send", b"7:72"), ("send", b"9:90"),
-                      ("flush", None), ("stamp", 7), ("stamp", 9)]
+    assert outbox == [("send", b"7:70"), ("send", b"7:71"), ("send", b"7:72"), ("flush", None), ("stamp", 7),
+                      ("send", b"9:90"), ("flush", None), ("stamp", 9)]
     assert connect.opened == 1
     assert (result["sets"], result["packets"]) == ([7, 9], 4)
     assert publish_kafka.publish(_connect, 4, producer, "topic")["packets"] == 0
@@ -104,6 +106,13 @@ def test_a_failed_acknowledgement_leaves_its_set_unstamped_and_the_others_stampe
     with pytest.raises(publish_kafka.PublishError, match=r"\[7\]"):
         publish_kafka.publish(_connect, 3, Producer(outbox, fail_on=b"7:71"), "topic")
     assert [e for e in outbox if e[0] == "stamp"] == [("stamp", 9)]
+
+
+def test_a_flush_that_times_out_stops_the_pass_with_that_set_and_the_later_ones_unstamped(outbox):
+    with pytest.raises(publish_kafka.PublishError, match=r"\[7\]"):
+        publish_kafka.publish(_connect, 3, Producer(outbox, stall_on=b"7:72"), "topic")
+    assert not [e for e in outbox if e[0] == "stamp"]
+    assert ("send", b"9:90") not in outbox
 
 
 def test_each_message_is_a_one_record_container_of_its_packet(outbox):

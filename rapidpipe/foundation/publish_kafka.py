@@ -14,12 +14,17 @@ packet:
   decodes for that index row: a one-record Avro object container, no
   registry.
 
-One pass opens one database connection and produces every unstamped set's
-messages, then flushes the producer once; a set is stamped
-(``kafka_published_at``) only when every one of its messages was
-acknowledged. A set with a failed acknowledgement keeps a null stamp while
-the others are stamped, and the pass then raises, so the verb exits
-non-zero and the next ``publish`` sends that set again. A crash between
+One pass opens one database connection and, set by set, produces a set's
+messages, flushes the producer and stamps the set (``kafka_published_at``)
+only when every one of its messages was acknowledged, so no message waits
+in the producer behind a whole pass (2026-10-23: five loops' passes of
+thousands of packets each, queued before one flush, outwaited the client's
+delivery timeout, and kafka-python 3.0.11's expiry path then killed its
+sender thread and left ``flush()`` waiting for ever). A set with a failed
+acknowledgement keeps a null stamp while the others are stamped; a flush
+that does not finish in :data:`ACK_TIMEOUT_S` stops the pass there. Either
+way the pass then raises, so the verb exits non-zero and the next
+``publish`` sends the unstamped sets again. A crash between
 the acknowledgements and the stamps likewise replays the sets on the next
 run; that is allowed (an internal topic, and consumers key on the
 identity), and nothing here tries to be exactly-once.
@@ -46,7 +51,7 @@ from rapidpipe.foundation.prefix import get
 
 logger = logging.getLogger(__name__)
 
-#: Seconds to wait for one message's acknowledgement after the pass's flush.
+#: Seconds to wait for one set's flush, and then for each of its acknowledgements.
 ACK_TIMEOUT_S = 120
 
 
@@ -100,27 +105,30 @@ def messages(job: int, index: list[dict]) -> list[tuple[bytes, bytes]]:
 
 
 def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> dict[str, Any]:
-    """Produce every unstamped official packet set of ``run`` to ``topic`` and flush once; stamp each
-    set whose every message was acknowledged.
+    """Produce every unstamped official packet set of ``run`` to ``topic``, one set at a time, each
+    flushed and stamped when its every message was acknowledged.
 
     ``connect()`` is a context manager yielding a connection, opened once for
     the pass (the unstamped sets, every set's index and the stamps);
     ``producer`` has kafka-python's ``send(topic, key=, value=)`` returning a
-    future and ``flush()``. Returns the sets stamped, packets, bytes, the
-    largest message and the wall time. A set with a failed acknowledgement is
-    left unstamped; the others are stamped, then :class:`PublishError` names
-    the unstamped sets.
+    future and ``flush(timeout=)``. Returns the sets stamped, packets, bytes,
+    the largest message and the wall time. A set with a failed acknowledgement
+    is left unstamped and the next set is tried; a flush that times out leaves
+    its set and every later one unstamped; then :class:`PublishError` names
+    the sets that failed.
     """
     started = time.monotonic()
     sets, failed, packets, total, largest = [], {}, 0, 0, 0
     with connect() as conn:
-        produced = []
         for job in unpublished_sets(conn, run):
             batch = messages(job, set_index(conn, job))
-            produced.append((job, batch, [producer.send(topic, key=key, value=value) for key, value in batch]))
-        if produced:
-            producer.flush()
-        for job, batch, futures in produced:
+            futures = [producer.send(topic, key=key, value=value) for key, value in batch]
+            try:
+                producer.flush(timeout=ACK_TIMEOUT_S)
+            except Exception as error:  # noqa: BLE001 - the producer is no longer draining: stop the pass
+                failed[job] = error
+                logger.error("packet set %d: the flush did not finish (%s); the pass stops here", job, error)
+                break
             try:
                 for future in futures:
                     future.get(timeout=ACK_TIMEOUT_S)
