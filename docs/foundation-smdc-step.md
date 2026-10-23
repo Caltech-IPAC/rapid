@@ -2902,6 +2902,128 @@ run on run 12's pixels. Run 12 and run 9 stay live and untouched.
    whole topic range and holds it in memory (about 30 min and 20 GB on run
    12); task 3 bounds it and runs it.
 
+2. **Batch: the Batch job id on the row, the loop reading Batch for what it
+   holds pending, per-stage memory.** Three PRs, merged in turn: PR 316
+   (`d6c90ecb`) records the id Batch returns as `jobs.batch_job_id` on
+   every submission (`job show` prints it); PR 317 (`c1f97648`) makes each
+   loop pass read Batch first (`loop.reconcile`, one `describe-jobs` call
+   per hundred of the run's unpublished jobs with an id): a Batch job that
+   has ended while its row is `launched` or `running` marks the row
+   `failed` with `refusal = 'Batch <status>: <reason>'`, and a row `job
+   run` marked `failed` whose Batch job is still queued or running is
+   Batch's retry, held pending; it also adds `job submit --job <id>`, a new
+   attempt of an existing job on Batch; PR 318 (`dc837023`) makes each
+   Batch job ask for its stage's memory from the run's `[batch.memory_mib]`
+   table (intake 2048, reference 6144, difference 24576, associate 1024,
+   packet 2048 MiB, the ramp's peaks times about two), the job definition
+   still one definition at 24 GiB.
+
+   SMDC gets the column as `postgres`, before PR 316 merged:
+
+   ```sh
+   pg -c "ALTER TABLE jobs ADD COLUMN batch_job_id text;"
+   ```
+
+   Check, held: the column present (0.27 s), `UPDATE` on it held by
+   `rapid_rebuild_pipeline`; jobs 1 to 2263, `official` 3,696 rows, last
+   change group 2173, unchanged.
+
+   The image and its revision (build 22 s with cached layers, deploy 74 s):
+
+   ```sh
+   env -u TMPDIR containers/rapid-pipeline/build-rebuild.sh dc837023b7b45634df393a697bc45db9dcc19a4f --tag rebuild-dc837023b7b45634df393a697bc45db9dcc19a4f
+   RELEASE_TAG=rebuild-dc837023b7b45634df393a697bc45db9dcc19a4f RELEASE_IMAGE_DIGEST=sha256:16ac8c92… cloudformation/release-hooks/deploy
+   ```
+
+   Check, held: **`rapid-rebuild:37`** (and `rapid-rebuild-production:28`),
+   image and `RAPID_IMAGE_DIGEST` both `sha256:16ac8c92…`, retry 3 on exit
+   75, 1 vCPU, 24 GiB, read back with `describe-job-definitions`.
+
+   The dataset `r00342-hk2` and its live run, as step 1 did for
+   `r00342-hk1`: the shipped settings at `dc837023` (which now carry
+   `[batch.memory_mib]`; nothing else differs from run 13's body) with the
+   same overlay, the 36 F146 PSFs and the Gaia copy under the name
+   `gaia-r00342-hk2`. Check, held: run **14** live (group 2174); PSF
+   imports **2264 to 2299**, published and bound in groups 2175 to 2210,
+   71 s for the 36; Gaia job **2300**, group 2211.
+
+   The proof, one pointing on SCA 8, with the targeted case inside it: one
+   pass, then one intake terminated on Batch, one pass, the intake
+   resubmitted, then the loop to drain:
+
+   ```sh
+   sel="--run 14 --filters F146 --scas 8 --pointings 001_0001 --job-definition rapid-rebuild:37"
+   rp loop $sel --once                       # 6 intakes, 2301 to 2306
+   aws batch terminate-job --job-id <2306's batch_job_id> --reason "...the targeted case..."
+   rp loop $sel --once                       # exit 2: job 2306 failed
+   rp job submit --job 2306 --job-definition rapid-rebuild:37
+   timeout 5400 rp loop $sel
+   ```
+
+   - **A container ended unrecorded, seen**: job 2306's Batch job was
+     terminated while `RUNNABLE` (00:46:14 UTC; `FAILED` 8 s later). The
+     next pass's reconcile (0.1 s, 6 jobs described) marked the row
+     `failed`, `refusal` "Batch FAILED: housekeeping-2026-10-22 task 2:
+     the targeted case, a container ended under the loop", `exit_code`
+     null (no container ran), reported it under `failed` and
+     `batch.ended`, and the verb exited 2; it submitted nothing.
+   - **The rerun on Batch, and a failed row held pending**: `job submit
+     --job 2306` gave the row a new `batch_job_id`. The loop's first pass
+     found the row still `failed` with that Batch job queued and held it
+     pending (`batch.retrying [2306]`), so it did not exit 2: the second
+     reading of the lookup, met live by the rerun rather than by Batch's
+     own exit-75 retry (that one is unit-tested only). Job 2306 published
+     on attempt 1 (its first container) with `refusal` cleared.
+   - The loop then drained in **36.1 min** (00:47:23 to 01:23:27 UTC, 19
+     passes, 29.6 to 40.6 s each), exit 0, no job failed: 6 intakes, 1
+     reference (2307, six frames), 6 differences, 6 associates (one chain
+     of depth 6), 6 packet sets, **827 packets** produced and stamped.
+     Jobs 2264 to 2325; every Batch job's row carries its `batch_job_id`.
+   - `validate_run.py --run 14`: **6/6 PASS in 30.2 s** (lineage, 134
+     input and exclude rows, 74 bindings; tables, 62 jobs, 9,762 rows;
+     chain, set 2323 depth 6; packets, 6 sets, 827 packets; forced; counts).
+     `read_packets.py` on the 6 sets: **6 of 6 CLEAN**, 13 s.
+
+   Measurements (Batch's created to started is the queue wait, started to
+   stopped the container; peak RSS is `job run`'s `peak_rss_kib`, the
+   larger of the process and its largest child, from the job's log):
+
+   | stage | jobs | asked MiB | peak RSS MiB (max) | instances | queue wait s min / median / max | container s min / median / max | ramp (PR 308) container median, peak |
+   |---|---|---|---|---|---|---|---|
+   | intake | 6 | 2,048 | 938 | one m6a.2xlarge, all six | 141.8 / 179.9 / 180.4 | 38.0 / 39.1 / 39.3 | 20.8 s, 910 |
+   | reference | 1 | 6,144 | 1,439 | the same m6a.2xlarge | 5.5 | 76.4 | 98.3 s, 2,831 |
+   | difference | 6 | 24,576 | 14,889 | one r6i.4xlarge (5), the m6a.2xlarge (1) | 4.4 / 98.9 / 99.5 | 190.6 / 225.6 / 229.2 | 246.3 s, 16,125 |
+   | associate | 6 | 1,024 | 232 | m6a.2xlarge (5, three instances), r6i.4xlarge (1) | 4.6 / 73.5 / 185.7 | 2.6 / 3.0 / 3.1 | 3.5 s, 238 |
+   | packet | 6 | 2,048 | 863 | m6a.2xlarge (6, four instances) | 4.4 / 156.4 / 198.9 | 19.1 / 35.9 / 54.3 | 30.2 s, 867 |
+
+   - **Packing**: 31 Batch jobs ran on **6 container instances**, five
+     m6a.2xlarge (8 vCPU, 32 GiB) and one r6i.4xlarge (16 vCPU, 128 GiB),
+     where every job of the ramp asked for 24 GiB and landed on
+     r6i.8xlarge (256 GiB), about ten jobs per instance. The six intakes
+     and the reference shared one m6a.2xlarge; five differences shared
+     the r6i.4xlarge. Instances are counted by Batch's
+     `containerInstanceArn` per job (each job's latest Batch job).
+   - **Every peak is under its ask**: intake 938 of 2,048, reference 1,439
+     of 6,144, difference 14,889 of 24,576, associate 232 of 1,024, packet
+     863 of 2,048 MiB.
+   - **The intake ran twice as long** (container median 39.1 s against
+     the ramp's 20.8 s; `job run`'s own time 36.5 s against 18.0 s in step
+     1): six intakes at once on one 8-vCPU instance, each reading 200 MB
+     unsigned from the public bucket and gzipping its FITS, where the ramp
+     spread them over larger instances. The packing traded seconds for
+     instances.
+   - **The reconcile**: 0.0 to 0.1 s per pass (at most 6 jobs described),
+     against passes of 29.6 to 40.6 s, almost all of them the listing.
+   - The run's prefix: 3.43 GB in 251 objects for 6 epochs, 0.57 GB per
+     epoch (step 1: 0.53).
+   - `official` 3,696 rows before, **3,771** after; the last change group
+     **2236**; database 409 MB.
+   - Packets: 827 for the six epochs, where run 12's same pointing and SCA
+     gave 825 (part 7 step 9); field 5387158's reference differs between
+     the runs, as step 1 found (run 12's 360 was submitted by hand), and
+     this run's reference is from the same six frames as run 13's 2189.
+     Not compared further here.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
