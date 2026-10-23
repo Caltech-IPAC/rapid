@@ -3891,11 +3891,16 @@ runs 13 to 16 stay live and untouched.
    | filter | run | verdict line | wall |
    |---|---|---|---|
    | F087 | 35 | `Check run 35: CLEAN validate 6/6 85 s reader 34/34 20 s consumer 5596/5596 251 s` | 12:30:55 to 12:36:51 |
-   | F106 | 36 | `validate 6/6 checks PASS in 2251.9 s; reader 834 sets CLEAN; consumer still reading at the cutoff` | 13:10:27 to (running) |
-   | F129 | 37 | `validate 6/6 checks PASS in 2284.3 s; reader 829 sets CLEAN; consumer still reading at the cutoff` | 13:16:44 to (running) |
-   | F158 | 38 | `validate 6/6 checks PASS in 2549.0 s; reader 903 sets CLEAN; consumer still reading at the cutoff` | 13:16:44 to (running) |
+   | F106 | 36 | `Check run 36: CLEAN validate 6/6 2352 s reader 834/834 336 s consumer 161856/161856 6256 s` (task 3's second attempt waited on it) | 13:10:27 to 15:39:31 |
+   | F129 | 37 | `Check run 37: CLEAN validate 6/6 2383 s reader 829/829 319 s consumer 164008/164008 6143 s` (task 3's second attempt waited on it) | 13:16:44 to 15:44:09 |
+   | F158 | 38 | `Check run 38: CLEAN validate 6/6 2710 s reader 903/903 348 s consumer 184163/184163 6509 s` (task 3's second attempt waited on it) | 13:16:44 to 15:56:11 |
    | F184 | 39 | `Check run 39: CLEAN validate 6/6 88 s reader 34/34 20 s consumer 6176/6176 269 s` | 12:30:55 to 12:37:12 |
    | F213 | 29 | `Check run 29: CLEAN validate 6/6 304 s reader 142/142 44 s consumer 14631/14631 1271 s` | 12:30:55 to 12:57:54 |
+
+   Every run of the six filters is CLEAN over the enlarged run. Runs 36 to
+   38 read 525,559 messages each from offset 279,745, three at once, in
+   6,143 to 6,509 s (about 33 MB/s per process), against 4,589 to 5,107 s
+   for the same runs' step 2 checks.
 
 ## Results of part 9 (2026-10-23)
 
