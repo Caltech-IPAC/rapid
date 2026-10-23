@@ -3738,6 +3738,248 @@ runs 13 to 16 stay live and untouched.
      chain (runs 36 to 38, depth 13 to 14: 1,850 to 2,223 s with seven at
      once; run 37's 1,554 s in the first attempt).
 
+3. **The 18 SCAs of pointing `001_0001` for the same six runs.** No code
+   change: the same live runs (F087 35, F106 36, F129 37, F158 38, F184
+   39, F213 29), `rapid-rebuild:42` (`a3f1d321`; nothing under `rapidpipe`
+   changed after it), six loops started together at 11:54 UTC, each in its
+   own script and log under one 10,800 s deadline:
+
+   ```sh
+   rp loop --run <id> --filters F<nnn> --scas 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18 \
+     --pointings 001_0001 --job-definition rapid-rebuild:42 --max-intake 1000
+   ```
+
+   - **Pass 1 submitted 17 `psf` jobs per filter, 102 in all, and no
+     intake**; the new stems were 85 (F087, F184, F213), 272 (F106, F129)
+     and 289 (F158), 1,088 in all: SCA 8 of `001_0001` was already in.
+   - **A seen failure, transient: the CRDS server under 102 fetches at
+     once.** 72 of the 102 psf jobs failed (70 `HTTP Error 504: Gateway
+     Time-out`, 2 `TimeoutError: The read operation timed out`, from
+     `urlopen` of the 178.6 MB reference, every one from the job's
+     CloudWatch stream), 30 published; every loop exited 2 at 11:58. The
+     server answered a HEAD in 0.04 s a minute later. The 72 were rerun with
+     `rp job submit --job <id> --job-definition rapid-rebuild:42`, 24 and
+     then waves of 12 (11:59 to 12:07), every one published at its second
+     attempt, and the six loops were restarted at 12:07:42; they planned
+     from the official rows and resumed. Each derived PSF's job read its
+     own file's `meta.ref_file.epsf`; every intake's `EPSFREF` assertion
+     held (no intake refused).
+   - **All six drained, exit 0, no other job failed**: F213 and F184 at
+     12:30:06, F087 12:30:32, F106 13:09:24, F129 and F158 13:16:30 (3
+     passes before the restart and 12 to 34 after). Per filter: 17 x 2 PSF
+     rows; 16 references of exactly three frames, not 17, because **SCA 9
+     of `001_0001` shares SCA 8's field** (5390959 in F146; the reference
+     key has no SCA, part 7 step 9), so SCA 9's epochs were differenced
+     against the field's SCA 8 reference and appended to its chain, as in
+     run 12; 17 x (epochs - 3) differences, associates and packet sets
+     (34; 221 for F106 and F129; 238 for F158).
+
+   **The null test per filter, the 18 SCAs** (medians over SCAs of each
+   SCA's median over its differenced epochs; SCA 8's epochs are step 2's;
+   `max_sources` 500; S/N is `fluxfit / fluxerr` of the kept rows). F146
+   is run 12's 18-SCA ramp (part 7 step 9), whose reference rule differs:
+   no `before_mjd`, every one of the six epochs differenced against a
+   reference holding it, and dev's copied PSF. Descriptive only: filter,
+   PSF and reference rule change together across the rows.
+
+   | filter | run | exposures | SCAs | differenced epochs | before the cap | kept | S/N > 20 | bright-residual fraction | packets per epoch | SCA 4 / 5 S/N > 20 | SCA 4 / 5 fraction | other 16 SCAs' fraction (median) |
+   |---|---|---|---|---|---|---|---|---|---|---|---|---|
+   | F146 | run 12 | 294.1 s | 18 | 108 | 995 | 500 | 79 | 0.158 | 118 | 352 / 256 | 0.70 / 0.51 | 0.153 |
+   | F087 | run 35 | 294.1 s | 18 | 36 | 907 | 500 | 103 | 0.207 | 145 | 401 / 324 | 0.80 / 0.65 | 0.197 |
+   | F106 | run 36 | 294.1 s | 18 | 216 | 1,000 | 500 | 97 | 0.195 | 149 | 393 / 229 | 0.79 / 0.46 | 0.188 |
+   | F106 | run 36 | 107.5 s | 18 | 18 | 895 | 500 | 49 | 0.098 | 140 | 186 / 66 | 0.37 / 0.13 | 0.094 |
+   | F129 | run 37 | 294.1 s | 18 | 216 | 1,175 | 500 | 118 | 0.235 | 168 | 500 / 180 | 1.00 / 0.36 | 0.221 |
+   | F129 | run 37 | 107.5 s | 18 | 18 | 1,048 | 500 | 54 | 0.108 | 146 | 265 / 54 | 0.53 / 0.11 | 0.108 |
+   | F158 | run 38 | 294.1 s | 18 | 216 | 1,487 | 500 | 161 | 0.322 | 176 | 500 / 270 | 1.00 / 0.54 | 0.316 |
+   | F158 | run 38 | 107.5 s | 18 | 36 | 1,219 | 500 | 86 | 0.172 | 169 | 306 / 134 | 0.61 / 0.27 | 0.170 |
+   | F184 | run 39 | 294.1 s | 18 | 36 | 1,674 | 500 | 214 | 0.428 | 170 | 500 / 500 | 1.00 / 1.00 | 0.397 |
+   | F213 | run 29 | 294.1 s | 18 | 36 | 394 | 394 | 44 | 0.127 | 104 | 66 / 166 | 0.13 / 0.33 | 0.119 |
+
+   Per SCA, the 294.1 s epochs: S/N > 20 per epoch (bright-residual
+   fraction), each SCA's median:
+
+   | SCA | F146 (run 12) | F087 | F106 | F129 | F158 | F184 | F213 |
+   |---|---|---|---|---|---|---|---|
+   | 1 | 99 (0.20) | 106 (0.21) | 100 (0.20) | 104 (0.21) | 124 (0.25) | 152 (0.30) | 43 (0.09) |
+   | 2 | 81 (0.16) | 76 (0.15) | 86 (0.17) | 90 (0.18) | 122 (0.24) | 190 (0.38) | 34 (0.11) |
+   | 3 | 114 (0.23) | 155 (0.31) | 113 (0.23) | 165 (0.33) | 200 (0.40) | 310 (0.62) | 40 (0.10) |
+   | 4 | 352 (0.70) | 401 (0.80) | 393 (0.79) | 500 (1.00) | 500 (1.00) | 500 (1.00) | 66 (0.13) |
+   | 5 | 256 (0.51) | 324 (0.65) | 229 (0.46) | 180 (0.36) | 270 (0.54) | 500 (1.00) | 166 (0.33) |
+   | 6 | 86 (0.17) | 115 (0.23) | 79 (0.16) | 118 (0.23) | 200 (0.40) | 241 (0.48) | 60 (0.15) |
+   | 7 | 160 (0.32) | 158 (0.32) | 166 (0.33) | 182 (0.36) | 222 (0.44) | 386 (0.77) | 63 (0.14) |
+   | 8 | 77 (0.15) | 112 (0.22) | 102 (0.20) | 101 (0.20) | 157 (0.31) | 373 (0.75) | 48 (0.13) |
+   | 9 | 76 (0.15) | 184 (0.37) | 154 (0.31) | 176 (0.35) | 226 (0.45) | 320 (0.64) | 120 (0.24) |
+   | 10 | 86 (0.17) | 96 (0.19) | 80 (0.16) | 83 (0.17) | 150 (0.30) | 204 (0.41) | 76 (0.20) |
+   | 11 | 100 (0.20) | 174 (0.35) | 146 (0.29) | 216 (0.43) | 254 (0.51) | 360 (0.72) | 84 (0.21) |
+   | 12 | 62 (0.12) | 44 (0.09) | 52 (0.10) | 76 (0.15) | 96 (0.19) | 92 (0.18) | 37 (0.13) |
+   | 13 | 72 (0.14) | 96 (0.19) | 95 (0.19) | 124 (0.25) | 162 (0.33) | 194 (0.39) | 36 (0.09) |
+   | 14 | 64 (0.13) | 90 (0.18) | 104 (0.21) | 118 (0.23) | 184 (0.37) | 168 (0.34) | 38 (0.09) |
+   | 15 | 58 (0.12) | 52 (0.10) | 63 (0.13) | 67 (0.13) | 55 (0.11) | 53 (0.11) | 38 (0.11) |
+   | 16 | 53 (0.11) | 60 (0.12) | 80 (0.16) | 72 (0.14) | 118 (0.24) | 114 (0.23) | 23 (0.07) |
+   | 17 | 38 (0.08) | 66 (0.13) | 59 (0.12) | 81 (0.16) | 120 (0.24) | 121 (0.24) | 32 (0.06) |
+   | 18 | 70 (0.14) | 100 (0.20) | 93 (0.19) | 152 (0.30) | 159 (0.32) | 225 (0.45) | 44 (0.13) |
+
+   - **The SCA 4 and 5 excess appears in the other filters.** SCA 4 holds
+     the most bright residuals of the 18 in F087, F106, F129, F158 and F184
+     (in F129, F158 and F184 every kept row of SCA 4 is above S/N 20, 500
+     of 500); SCA 5 is second in F087, F106 and F158, at the cap beside SCA 4
+     in F184 and fourth in F129; in F213,
+     the shallowest band, SCA 4 does not stand out (66, 0.13) and SCA 5
+     does (166, 0.33). F184 is high on most SCAs (0.397 median over the
+     other 16). Nothing here says why.
+   - **SCA 9 sits above its filter's SCA 8 in five of the six** (all but
+     F184; 0.24 to 0.45 against 0.13 to 0.31), where in F146 the two were
+     level (0.15): SCA 9 is the SCA differenced against SCA 8's reference
+     stack, in F146 as here; stated as an observation.
+   - The 107.5 s epochs (passes 12 and 13, F106, F129, F158) about halve
+     the fraction again, SCA 4 and 5 included (SCA 4: 0.79, 1.00, 1.00 to
+     0.37, 0.53, 0.61).
+
+   Per stage, this step's jobs (count: queue wait median / container
+   median (max), seconds; Batch's created to started and started to ended;
+   peak RSS is `job run`'s `peak_rss_kib`, 8 jobs sampled per stage per
+   filter):
+
+   | stage | F087 | F106 | F129 | F158 | F184 | F213 | peak RSS MiB median (max) |
+   |---|---|---|---|---|---|---|---|
+   | psf | 17: 106 / 117 (118) | 17: 635 / 53 (58) | 17: 565 / 53 (120) | 17: 635 / 54 (58) | 17: 105 / 115 (120) | 17: 357 / 118 (120) | 301 (305) |
+   | intake | 85: 15 / 79 (99) | 272: 195 / 83 (103) | 272: 188 / 84 (103) | 289: 196 / 82 (103) | 85: 15 / 84 (99) | 85: 16 / 78 (98) | 907 (921) |
+   | reference | 16: 7 / 66 (94) | 16: 204 / 151 (155) | 16: 205 / 137 (155) | 16: 204 / 146 (155) | 16: 195 / 106 (108) | 16: 7 / 65 (92) | 1,439 (1,440) |
+   | difference | 34: 203 / 205 (255) | 221: 100 / 212 (278) | 221: 99 / 213 (276) | 238: 103 / 217 (285) | 34: 140 / 214 (292) | 34: 204 / 181 (250) | 14,885 (15,013) |
+   | associate | 34: 45 / 2 (4) | 221: 10 / 2 (8) | 221: 10 / 3 (9) | 238: 10 / 4 (9) | 34: 33 / 2 (4) | 34: 57 / 2 (4) | 232 (246) |
+   | packet | 34: 14 / 27 (43) | 221: 11 / 76 (184) | 221: 13 / 82 (287) | 238: 12 / 86 (306) | 34: 24 / 26 (45) | 34: 18 / 24 (40) | 852 (888) |
+
+   - **The psf job's container is 53 to 118 s** (step 1: 10.9 s alone),
+     the fetch shared with up to 101 others (F106, F129 and F158's figures,
+     53 to 54 s, are nearly all reruns in waves of 12 or 24). Peak RSS 301
+     MiB of 2,048 asked, as in steps 1 and 2.
+   - The reference container is 65 s (F087, F213) to 137 to 151 s (F106,
+     F129, F158, whose references waited 204 s behind their 272 to 289
+     intakes); the packet's grows with the chain as in
+     step 2 (24 to 27 s at depth 2, 76 to 86 s median and 306 s at most at
+     depth 13 to 14).
+   - Instances: m6a.8xlarge for every psf, intake and reference job;
+     differences, associates and packets on m6a.8xlarge, r6i.4xlarge and
+     r6i.8xlarge; no family pinned.
+
+   | filter | run | jobs (ids) | packet sets | packets | `sources` rows | `forced` rows | bytes out GB | loop passes | loop drained |
+   |---|---|---|---|---|---|---|---|---|---|
+   | F087 | 35 | 220 (16174 to 18494) | 34 | 5,596 | 17,000 | 8,326 | 36.1 | 3 + 12 | 12:30:32 |
+   | F106 | 36 | 968 (16229 to 19783) | 221 | 38,435 | 110,500 | 266,086 | 126.0 | 3 + 31 | 13:09:24 |
+   | F129 | 37 | 968 (16225 to 19805) | 221 | 40,169 | 110,500 | 278,102 | 126.5 | 3 + 34 | 13:16:29 |
+   | F158 | 38 | 1,036 (16231 to 19804) | 238 | 44,904 | 119,000 | 330,033 | 135.1 | 3 + 34 | 13:16:31 |
+   | F184 | 39 | 220 (16175 to 18484) | 34 | 6,176 | 17,000 | 9,109 | 36.2 | 3 + 12 | 12:30:06 |
+   | F213 | 29 | 220 (16177 to 18490) | 34 | 3,760 | 13,875 | 5,624 | 34.6 | 3 + 12 | 12:30:06 |
+
+   - **Totals**: 3,632 jobs (16174 to 19805), 1,088 epochs ingested, 782
+     packet sets, **139,040 packets**, 0.49 TB of new objects under the six
+     run prefixes (0.45 GB per new epoch; the brief estimated 0.6 TB);
+     `official` 22,520 to 27,036 (4,516 rows); database **2.74 GB** (2.27 GB
+     after step 2).
+   - **Kafka**: about 29 packets a second per loop (F106's full passes,
+     3,006 packets in 103 s), up to six loops publishing together, one set
+     at a time (PR 333).
+   - **Wall time**: 11:54 to 13:16 UTC, 1 h 22 min with 9 min lost to the
+     psf reruns; F087, F184 and F213 (chains of 2) drained 23 min after the
+     restart, F106, F129 and F158 (chains of 13 and 14) in 62 to 69 min,
+     about 2 min a pass, one epoch per field per pass.
+
+   **The checks** (`scripts/check_run.sh --run <id>` per run as soon as it
+   drained; the enlarged runs, every packet set of step 2 and of this step
+   alike):
+
+   | filter | run | verdict line | wall |
+   |---|---|---|---|
+   | F087 | 35 | `Check run 35: CLEAN validate 6/6 85 s reader 34/34 20 s consumer 5596/5596 251 s` | 12:30:55 to 12:36:51 |
+   | F106 | 36 | `validate 6/6 checks PASS in 2251.9 s; reader 834 sets CLEAN; consumer still reading at the cutoff` | 13:10:27 to (running) |
+   | F129 | 37 | `validate 6/6 checks PASS in 2284.3 s; reader 829 sets CLEAN; consumer still reading at the cutoff` | 13:16:44 to (running) |
+   | F158 | 38 | `validate 6/6 checks PASS in 2549.0 s; reader 903 sets CLEAN; consumer still reading at the cutoff` | 13:16:44 to (running) |
+   | F184 | 39 | `Check run 39: CLEAN validate 6/6 88 s reader 34/34 20 s consumer 6176/6176 269 s` | 12:30:55 to 12:37:12 |
+   | F213 | 29 | `Check run 29: CLEAN validate 6/6 304 s reader 142/142 44 s consumer 14631/14631 1271 s` | 12:30:55 to 12:57:54 |
+
+## Results of part 9 (2026-10-23)
+
+Three steps: the `psf` stage and the loop deriving what is missing (step
+1, PRs 327 to 329), the six other filters on SCA 8 of the 54 pointings
+(step 2, PRs 331 to 335 and 337), and the 18 SCAs of `001_0001` for the
+same six (step 3, no code). Seven datasets, each with its own live run;
+runs 9, 10, 12 and the housekeeping runs stayed live and untouched;
+nothing was deleted on S3 or in the database.
+
+**What the `psf` stage changed.** Every filter now has its PSF with no
+copy: the loop submits one `psf` job per (filter, SCA) of its new stems
+that has no official science and reference PSF, holds that SCA's intakes
+until both rows are official, and the job derives both from the CRDS ePSF
+reference the L2 file itself names (`meta.ref_file.epsf`), fetched by
+name. 109 psf jobs over seven datasets, 109 pairs of `psfs` rows, and
+every intake's `EPSFREF` assertion held: r00342 names one ePSF per
+(filter, SCA). Against dev's copied F146 PSF on the same pixels (step 1)
+the derived PSF cut the bright residuals by a third (0.23 to 0.16).
+
+**What the per-filter dataset shape changed.** One dataset and one live
+run per filter, each with its own `before_mjd` (the midpoint of its own
+pass 3 and pass 4 at `001_0001`), gives every filter exactly three
+reference frames per field and its own chains, and keeps a filter's
+fixes and resumes from touching the others (step 2's Kafka and associate
+fixes resumed five datasets while F213, drained, stayed as it was). It avoids cross-band
+association by construction: a source seen in two filters is two objects
+in two datasets.
+
+**Every filter's numbers**, medians per differenced epoch (S/N > 20 of
+the 500 kept, and its fraction), the 294.1 s epochs:
+
+| filter | SCA 8, 54 pointings (step 2) | 18 SCAs, `001_0001` (step 3) | SCA 4 / 5 at `001_0001` | packets | run prefixes |
+|---|---|---|---|---|---|
+| F146 | 79 (0.158), run 17, 3 epochs | 79 (0.158), run 12, other reference rule | 352 / 256 | | |
+| F087 | 110 (0.220) | 103 (0.207) | 401 / 324 | 27,644 | 154 GB |
+| F106 | 97 (0.194); short 44 (0.088) | 97 (0.195); short 49 (0.098) | 393 / 229 | 180,389 | 534 GB |
+| F129 | 92 (0.184); short 44 (0.088) | 118 (0.235); short 54 (0.108) | 500 / 180 | 183,535 | 535 GB |
+| F158 | 148 (0.296); short 78 (0.156) | 161 (0.322); short 86 (0.172) | 500 / 270 | 203,892 | 571 GB |
+| F184 | 333 (0.665) | 214 (0.428) | 500 / 500 | 31,913 | 155 GB |
+| F213 | 33 (0.101), 333 kept | 44 (0.127), 394 kept | 66 / 166 | 14,631 | 148 GB |
+
+4,544 epochs ingested over the two steps, 3,266 differenced, **643,004
+packets**, 2.1 TB of run prefixes, database 2.74 GB. The checks by
+`scripts/check_run.sh` are step 3's table.
+
+The machinery's seen failures at breadth, each now fixed or rerun:
+SSM throttling at 3,400 jobs starting together (PR 331); kafka-python's
+dead sender thread under one flush per pass (PR 333); the associate rule
+under a resumed run (PR 334); a validation false failure on a duplicated
+source (PR 335); the consumer check's pure-Python CRC and its read from
+the topic's beginning (PR 337); Batch's `Task failed to start` (16 jobs,
+rerun by hand); and the CRDS server's 504s under 102 concurrent 178.6 MB
+fetches (72 psf jobs, rerun in waves).
+
+Open, for the plan:
+
+- **Cross-band association.** The per-filter shape avoids it; the plan
+  must decide whether an object is per band or across bands, and with it
+  forced photometry in the other bands at a source's position.
+- **The 107.5 s epochs** (passes 12 and 13, F106, F129, F158) are
+  differenced against a 294.1 s reference and carry half the bright
+  residuals and a quarter fewer packets: whether a short epoch gets a
+  reference of its own exposure time, or is differenced at all, is not
+  decided.
+- **The reference PSF rule.** The reference PSF is the science PSF (the
+  same ePSF, since a reference coadds same-filter, same-SCA frames); a
+  coadd's PSF from its frames' positions and dithers is not built.
+- **SCAs 4 and 5.** Their bright-residual excess appears in five of the
+  six other filters (SCA 4 at the cap in F129, F158, F184) under PSFs
+  derived from their own ePSF references; its cause is not looked into.
+- **A field shared by two SCAs.** SCA 9 of `001_0001` is differenced
+  against SCA 8's reference stack in every filter (the reference key has
+  no SCA), and its chain appends after SCA 8's out of time order.
+- **F184's residuals**: 0.43 to 0.67 of the kept rows above S/N 20,
+  three to four times F146's; F213 reaches the cap on 5 of 18 SCAs
+  (median kept 394).
+- **The psf fetch** is 178.6 MB from the CRDS server per (filter, SCA)
+  per dataset; one fetch per job under a wide fan-out drew 504s. A
+  server error mapped to Batch's retried exit 75, or the reference read
+  through the job's CRDS cache once per reference, are a later brief's.
+- **Retention**: the topic keeps 7 days; a run's consumer check holds only
+  inside it (run 12's earliest messages have aged out).
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
