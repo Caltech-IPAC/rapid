@@ -36,7 +36,7 @@ from typing import Any, Sequence
 
 from rapidpipe.stages.contract import STAGE_NAMES
 
-__all__ = ["LaunchError", "batch_client", "run_locally", "submit"]
+__all__ = ["LaunchError", "batch_client", "memory_mib", "run_locally", "submit"]
 
 
 class LaunchError(Exception):
@@ -55,11 +55,14 @@ def _stage(stage: str) -> str:
     return stage
 
 
-def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, client: Any = None) -> str:
+def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, client: Any = None,
+           memory_mib: int | None = None) -> str:
     """Submit job ``job_id`` (of ``stage``) to Batch as ``job run --job <id>``; return the Batch job id.
 
     With ``conn``, the id is recorded as the row's ``batch_job_id`` and committed; a
-    resubmission replaces it, so the row names its latest Batch job.
+    resubmission replaces it, so the row names its latest Batch job. With
+    ``memory_mib`` (the run's ``[batch.memory_mib]`` value for the stage, :func:`memory_mib`),
+    the job asks for that memory instead of the job definition's.
     """
     queue = os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
     if not queue:
@@ -71,15 +74,22 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     if os.environ.get("RAPID_DB_SECRET_ID"):
         environment.append({"name": "RAPID_DB_SECRET_ID", "value": os.environ["RAPID_DB_SECRET_ID"]})
     prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX") or "rapid"
+    overrides = {"command": ["job", "run", "--job", str(job_id)], "environment": environment}
+    if memory_mib is not None:
+        overrides["resourceRequirements"] = [{"type": "MEMORY", "value": str(int(memory_mib))}]
     response = (client or batch_client()).submit_job(
         jobName=f"{prefix}-{stage}-{job_id}", jobQueue=queue, jobDefinition=job_definition,
-        containerOverrides={"command": ["job", "run", "--job", str(job_id)],
-                            "environment": environment})
+        containerOverrides=overrides)
     if conn is not None:
         with conn.cursor() as cur:
             cur.execute("UPDATE jobs SET batch_job_id = %s WHERE id = %s", (response["jobId"], job_id))
         conn.commit()
     return response["jobId"]
+
+
+def memory_mib(settings: dict, stage: str) -> int | None:
+    """The run's ``[batch.memory_mib]`` value for ``stage``; ``None`` (the job definition's) without one."""
+    return settings.get("batch", {}).get("memory_mib", {}).get(stage)
 
 
 def run_locally(stage: str, stage_argv: Sequence[str], *, python: str = sys.executable) -> int:

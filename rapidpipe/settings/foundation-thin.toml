@@ -67,6 +67,19 @@ gaia_max_matches = 3
 refcat_radius_arcsec = 5.0
 refcat_max_matches = 3
 
+[batch.memory_mib]
+# New, not dev's: the memory each stage's Batch job asks for (a
+# resourceRequirements override of the one job definition's 24 GiB), the
+# 2026-10-21 ramp's measured peaks times about two, rounded (PR 308: intake
+# 910 MiB, reference 2,831, difference 16,125, associate 238, packet 867).
+# The difference keeps the definition's 24 GiB and its headroom. A stage
+# with no key gets the job definition's value.
+intake = 2048
+reference = 6144
+difference = 24576
+associate = 1024
+packet = 2048
+
 [kafka]
 # New, not dev's: `rapidpipe publish` produces official packet sets to the
 # topic. The SSM parameter names, never their values: the deployment holds

@@ -28,7 +28,8 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
 - ``job submit`` takes ``job local``'s arguments and ``--job-definition``
   (or ``--job <id>`` in their place, a new attempt of an existing job),
   records the job and submits one Batch job running ``job run --job <id>``
-  in the image (``rapidpipe.launch.submit``), recording the Batch job id
+  in the image (``rapidpipe.launch.submit``) asking for the run's
+  ``[batch.memory_mib]`` memory for the stage, recording the Batch job id
   on the row (``job show`` prints it) and printing both ids;
 - ``loop --run --filters --scas --pointings --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
@@ -324,7 +325,9 @@ def _run_job(args: argparse.Namespace) -> int:
     if args.verb == "submit":
         try:
             with connect_job() as conn:
-                batch_job = launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn)
+                settings = foundation.run_show(conn, foundation.job_show(conn, job_id)["run"])["settings"]
+                batch_job = launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
+                                          memory_mib=launch.memory_mib(settings, stage))
         except launch.LaunchError as exc:
             raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
         _print_json({"job": job_id, "batch_job": batch_job})
@@ -373,7 +376,8 @@ def _loop(args: argparse.Namespace) -> int:
         with connect_loop() as conn:
             job_id = foundation.create_job(conn, args.run, item["stage"], item["scope"],
                                            item["inputs"], item["expects"])
-            launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn)
+            launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn,
+                          memory_mib=launch.memory_mib(settings, item["stage"]))
 
     def publish() -> dict:
         with connect_loop() as conn:

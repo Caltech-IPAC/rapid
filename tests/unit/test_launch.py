@@ -65,6 +65,19 @@ def test_submit_records_the_batch_job_id_on_the_job_row(batch_env):
     assert conn.committed
 
 
+def test_submit_asks_for_the_stages_memory_and_the_definitions_stands_without_a_key(batch_env):
+    settings = {"batch": {"memory_mib": {"intake": 2048}}}
+    batch = _Batch()
+    launch.submit(7, "intake", job_definition="definition", client=batch,
+                  memory_mib=launch.memory_mib(settings, "intake"))
+    launch.submit(8, "associate", job_definition="definition", client=batch,
+                  memory_mib=launch.memory_mib(settings, "associate"))
+    assert batch.submitted[0]["containerOverrides"]["resourceRequirements"] == \
+        [{"type": "MEMORY", "value": "2048"}]
+    assert "resourceRequirements" not in batch.submitted[1]["containerOverrides"]
+    assert launch.memory_mib({}, "intake") is None
+
+
 def test_submit_passes_the_database_secret_when_the_submitter_names_one(batch_env, monkeypatch):
     monkeypatch.setenv("RAPID_DB_SECRET_ID", "secret-name")
     batch = _Batch()
