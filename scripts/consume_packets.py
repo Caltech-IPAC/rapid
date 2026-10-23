@@ -2,8 +2,11 @@
 
 Outside the pipeline, like ``read_packets.py``: it never writes to the
 database or the topic, and exits non-zero on any failure. It reads every
-partition of the topic from its earliest offset to its end offset at
-start, with no consumer group, keeps the messages whose key
+partition of the topic, with no consumer group, from the first offset
+whose timestamp is at or after the earliest ``ended`` of the run's
+stamped packet jobs (a set is produced only after its job ended, so no
+message of the run is earlier; ``offsets_for_times``) to its end offset
+at start, keeps the messages whose key
 ``<job>:<sid>`` names one of the run's packet sets stamped
 ``kafka_published_at``, and for each kept message checks that:
 
@@ -17,7 +20,14 @@ reads the topic in order and holds one set's outbox at a time and no
 message after comparing it; what it keeps across the topic is the set of
 packet keys expected and seen. The verdict is one line: messages read, kept, valid, byte-equal, packets
 expected and seen, and the offset range read per partition. Zero kept
-messages is a failure.
+messages is a failure; a run with no stamped set reads nothing and says
+so.
+
+The client skips its record-batch CRC check: kafka-python without the
+``crc32c`` C module computes CRC-32C in pure Python, which held the read
+to about 50 messages a second (2026-10-23, a 600 thousand message topic:
+three to four hours per run), and every kept message is compared byte
+for byte with the outbox anyway.
 
 Usage::
 
@@ -46,6 +56,12 @@ from rapidpipe.foundation import publish_kafka
 from rapidpipe.science.alerts.assemble import load_schema
 
 SHIPPED = Path(__file__).resolve().parents[1] / "rapidpipe" / "settings" / "foundation-thin.toml"
+
+
+def earliest_ended(conn, jobs: list[int]):
+    """The earliest ``ended`` of ``jobs``: no message of their sets was produced before it."""
+    return publish_kafka._query(conn, "SELECT min(ended) AS t FROM jobs WHERE id = ANY(%s)",
+                                (jobs,))[0]["t"]
 
 
 def stamped_sets(conn, run: int) -> list[int]:
@@ -113,13 +129,15 @@ def check(messages: Iterable[tuple[bytes, bytes]], keys: set[bytes],
     return counts, failures
 
 
-def read_topic(settings: dict, ranges: dict[int, tuple[int, int]]) -> Iterator[tuple[bytes, bytes]]:
-    """Every message of every partition, earliest to the end offset at start, one at a time;
+def read_topic(settings: dict, since_ms: int,
+               ranges: dict[int, tuple[int, int]]) -> Iterator[tuple[bytes, bytes]]:
+    """Every message of every partition from the first whose timestamp is at or after
+    ``since_ms`` (milliseconds since the epoch) to the end offset at start, one at a time;
     ``ranges`` receives each partition's offsets read."""
     from kafka import KafkaConsumer, TopicPartition
 
     endpoint = publish_kafka.endpoint(settings)
-    consumer = KafkaConsumer(group_id=None, enable_auto_commit=False,
+    consumer = KafkaConsumer(group_id=None, enable_auto_commit=False, check_crcs=False,
                              max_partition_fetch_bytes=endpoint["max_request_bytes"],
                              fetch_max_bytes=endpoint["max_request_bytes"],
                              **publish_kafka.client_config(endpoint["bootstrap_servers"]))
@@ -127,10 +145,12 @@ def read_topic(settings: dict, ranges: dict[int, tuple[int, int]]) -> Iterator[t
         partitions = [TopicPartition(endpoint["topic"], p)
                       for p in sorted(consumer.partitions_for_topic(endpoint["topic"]) or ())]
         consumer.assign(partitions)
-        first = consumer.beginning_offsets(partitions)
         last = consumer.end_offsets(partitions)
+        found = consumer.offsets_for_times({tp: since_ms for tp in partitions})
+        first = {tp: last[tp] if found[tp] is None else found[tp].offset for tp in partitions}
         ranges.update({tp.partition: (first[tp], last[tp] - 1) for tp in partitions})
-        consumer.seek_to_beginning(*partitions)
+        for tp in partitions:
+            consumer.seek(tp, first[tp])
         pending = {tp for tp in partitions if last[tp] > first[tp]}
         while pending:
             for tp, batch in consumer.poll(timeout_ms=10000).items():
@@ -152,9 +172,16 @@ def main(argv: list[str] | None = None) -> int:
     settings = tomllib.loads(args.settings.read_text())["kafka"]
     ranges: dict[int, tuple[int, int]] = {}
     with connect(application_name="consume_packets") as conn:
-        keys = expected_keys(conn, stamped_sets(conn, args.run))
+        jobs = stamped_sets(conn, args.run)
+        keys = expected_keys(conn, jobs)
         started = time.monotonic()
-        counts, failures = check(read_topic(settings, ranges), keys, lambda job: outbox(conn, job))
+        if jobs:
+            since_ms = int(earliest_ended(conn, jobs).timestamp() * 1000)
+            messages = read_topic(settings, since_ms, ranges)
+        else:
+            print(f"Run {args.run} has no stamped packet set: nothing read")
+            messages = iter(())
+        counts, failures = check(messages, keys, lambda job: outbox(conn, job))
         seconds = time.monotonic() - started
     verdict = "CLEAN" if not failures else f"{len(failures)} FAILURES"
     offsets = ", ".join(f"p{p} {a}..{b}" for p, (a, b) in sorted(ranges.items()))
