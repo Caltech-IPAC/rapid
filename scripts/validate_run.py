@@ -40,6 +40,12 @@ The night's checks 7 to 10 (one group makes a night official, a
 replacement, undo, two groups at once) are operations, checked as they
 ran; they have no read-only form over a run and are not here.
 
+``tables`` and ``packets`` check their jobs and sets eight at a time
+(:data:`WORKERS`), each worker thread on its own connection, and reduce the
+results in job order; a set's decoded records are dropped once it is
+checked. The checks themselves are the serial ones: every Parquet output is
+read and hashed, every packet decoded.
+
 Usage::
 
     python scripts/validate_run.py --run N [--only lineage,chain] [--twice A,B] [--depth D]
@@ -58,8 +64,10 @@ import hashlib
 import io
 import json
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import fastavro
@@ -70,6 +78,7 @@ from astropy.io import fits
 
 from rapidpipe.db.connection import connect
 from rapidpipe.foundation.prefix import get
+from rapidpipe.products import storage
 from rapidpipe.science.statistics.sums import Sums, ra_offset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -94,15 +103,38 @@ JOB_COLUMNS = {"memberships": ("source_job",), "packets": ("object_job", "source
 FORCED_COMPARED = ("forced_id", "psf_flux", "psf_fluxerr", "science_flux", "science_fluxerr", "flags",
                    "time_proc", "x", "y", "ra", "dec", "pid")
 
-_conn = None
+#: Jobs or packet sets checked at once by ``tables`` and ``packets``.
+WORKERS = 8
+
+_local = threading.local()
+_opening = threading.Lock()
+_opened = contextlib.ExitStack()      # every thread's connection, closed when main returns
+_s3 = None
 
 
 def q(sql: str, params=()) -> list[dict]:
-    with _conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    """Rows of ``sql`` on this thread's connection, opened on first use."""
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        with _opening:                  # connect() reads its secret through boto3, whose session is not thread-safe
+            conn = _local.conn = _opened.enter_context(connect(application_name="validate_run"))
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(sql, params)
         rows = cur.fetchall() if cur.description else []
-    _conn.commit()
+    conn.commit()
     return [dict(r) for r in rows]
+
+
+def fetch(url: str) -> Path:
+    """``prefix.get`` through the one S3 client every thread shares (boto3 clients are thread-safe,
+    creating them is not)."""
+    return get(url, client=_s3)
+
+
+def each(check, items: list) -> list:
+    """``check`` over ``items``, :data:`WORKERS` at a time, the results in ``items``' order."""
+    with ThreadPoolExecutor(WORKERS) as pool:
+        return list(pool.map(check, items))
 
 
 def keyed(product: str, alias: str = "t") -> str:
@@ -120,7 +152,7 @@ def read_output(job: int, table: str):
     (row,) = q("SELECT manifest FROM jobs WHERE id = %s", (job,))
     prefix = row["manifest"]["prefix"].rstrip("/") + "/"
     (out,) = [o for o in row["manifest"]["outputs"] if o["table"] == table]
-    return pq.read_table(get(prefix + out["path"]))
+    return pq.read_table(fetch(prefix + out["path"]))
 
 
 def run_jobs(run: int, stage: str | None = None) -> list[int]:
@@ -179,25 +211,34 @@ def check_lineage(run: int) -> bool:
                   " bindings resolve to published rows", t0)
 
 
+def job_table_failures(j: dict) -> tuple[list[str], int, int]:
+    """One published job's declared outputs against its manifest and its table rows."""
+    bad, n_outputs, n_rows = [], 0, 0
+    prefix = j["manifest"]["prefix"].rstrip("/") + "/"
+    per_table = Counter()
+    for out in j["manifest"]["outputs"]:
+        path = fetch(prefix + out["path"])
+        per_table[out["table"]] += pq.read_metadata(path).num_rows
+        n_outputs += 1
+        if out["checksum"] != "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest():
+            bad.append(f"job {j['id']} {out['path']}: the checksum differs from the manifest's")
+    for table in TABLES:
+        (r,) = q(f"SELECT count(*) n FROM {table} WHERE job = %s", (j["id"],))
+        if table in per_table and r["n"] != per_table[table]:
+            bad.append(f"job {j['id']} {table}: Parquet {per_table[table]} rows, table {r['n']}")
+        elif table not in per_table and r["n"]:
+            bad.append(f"job {j['id']} {table}: {r['n']} rows and no declared output")
+        n_rows += r["n"]
+    return bad, n_outputs, n_rows
+
+
 def check_tables(run: int) -> bool:
     t0, bad, n_outputs, n_rows = time.perf_counter(), [], 0, 0
     jobs = q("SELECT id, manifest FROM jobs WHERE run = %s AND state = 'published' ORDER BY id", (run,))
-    for j in jobs:
-        prefix = j["manifest"]["prefix"].rstrip("/") + "/"
-        per_table = Counter()
-        for out in j["manifest"]["outputs"]:
-            path = get(prefix + out["path"])
-            per_table[out["table"]] += pq.read_metadata(path).num_rows
-            n_outputs += 1
-            if out["checksum"] != "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest():
-                bad.append(f"job {j['id']} {out['path']}: the checksum differs from the manifest's")
-        for table in TABLES:
-            (r,) = q(f"SELECT count(*) n FROM {table} WHERE job = %s", (j["id"],))
-            if table in per_table and r["n"] != per_table[table]:
-                bad.append(f"job {j['id']} {table}: Parquet {per_table[table]} rows, table {r['n']}")
-            elif table not in per_table and r["n"]:
-                bad.append(f"job {j['id']} {table}: {r['n']} rows and no declared output")
-            n_rows += r["n"]
+    for b, n_out, n_row in each(job_table_failures, jobs):
+        bad += b
+        n_outputs += n_out
+        n_rows += n_row
     return report("tables", bad, f"{len(jobs)} published jobs, {n_outputs} declared outputs and"
                   f" {n_rows} rows: counts equal, checksums match", t0)
 
@@ -310,21 +351,16 @@ def check_chain(run: int, depth: int | None) -> bool:
     return report("chain", bad, "; ".join(notes) + "; every set holds its predecessor's objects", t0)
 
 
-_members: dict[int, dict] = {}
-
-
 def members_by_aid(object_job: int) -> dict:
     """aid -> {(source job, sid): mjdobs} through the set's chain, minus exclusions."""
-    if object_job not in _members:
-        chain = chain_of(object_job)
-        rows = q("SELECT DISTINCT m.aid, m.source_job, m.sid, s.mjdobs FROM memberships m"
-                 " JOIN sources s ON s.job = m.source_job AND s.sid = m.sid"
-                 " WHERE m.job = ANY(%s) AND NOT m.source_job = ANY(%s)", (chain, list(excluded_of(chain))))
-        out = defaultdict(dict)
-        for r in rows:
-            out[r["aid"]][(r["source_job"], r["sid"])] = r["mjdobs"]
-        _members[object_job] = out
-    return _members[object_job]
+    chain = chain_of(object_job)
+    rows = q("SELECT DISTINCT m.aid, m.source_job, m.sid, s.mjdobs FROM memberships m"
+             " JOIN sources s ON s.job = m.source_job AND s.sid = m.sid"
+             " WHERE m.job = ANY(%s) AND NOT m.source_job = ANY(%s)", (chain, list(excluded_of(chain))))
+    out = defaultdict(dict)
+    for r in rows:
+        out[r["aid"]][(r["source_job"], r["sid"])] = r["mjdobs"]
+    return out
 
 
 def packet_set_failures(job: int) -> tuple[list[str], Counter]:
@@ -346,7 +382,7 @@ def packet_set_failures(job: int) -> tuple[list[str], Counter]:
             bad.append(f"{where}: the index names sets {row['object_job']} and {row['source_job']},"
                        f" its inputs {objects_in[0]} and {sources_in[0]}")
         if row["filename"] not in containers:
-            data = get(row["filename"]).read_bytes()
+            data = fetch(row["filename"]).read_bytes()
             containers[row["filename"]] = (data, next(fastavro.block_reader(io.BytesIO(data))).offset)
         data, header_end = containers[row["filename"]]
         try:
@@ -399,8 +435,7 @@ def packet_set_failures(job: int) -> tuple[list[str], Counter]:
 def check_packets(run: int) -> bool:
     t0, bad, total = time.perf_counter(), [], Counter()
     sets = run_jobs(run, "packet")
-    for job in sets:
-        b, c = packet_set_failures(job)
+    for b, c in each(packet_set_failures, sets):
         bad += b
         total += c
     read = [r["job"] for r in q("SELECT DISTINCT job FROM packets_official WHERE job = ANY(%s) ORDER BY job",
@@ -481,7 +516,7 @@ def check_counts(run: int) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    global _conn
+    global _s3
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", type=int, required=True)
     parser.add_argument("--only", help="comma-separated checks; default every one but twice")
@@ -501,8 +536,8 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         parser.error(f"unknown or unarmed checks {unknown}")
     t0 = time.perf_counter()
-    with connect(application_name="validate_run") as conn:
-        _conn = conn
+    _s3 = storage.s3_client()
+    with _opened:
         results = [checks[n]() for n in names]
     print(f"run {args.run}: {sum(results)}/{len(results)} checks PASS in {time.perf_counter() - t0:.1f} s")
     return 0 if all(results) else 1
