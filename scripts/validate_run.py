@@ -301,7 +301,9 @@ def sums_failures(set_job: int, members: Counter) -> tuple[list[str], int]:
                  ("stdevdec", st["stdevdec"], np.std(dec), 1e-13, 1e-9),
                  ("stdevra", st["stdevra"], np.std(dra * np.cos(np.radians(dec))), 1e-13, 1e-6),
                  ("meanflux", st["meanflux"], flux.mean(), 0.0, 1e-9),
-                 ("stdevflux", st["stdevflux"], np.std(flux), 1e-9 * abs(flux).max(), 1e-9))
+                 # The sums' one-pass variance (sum f^2 / n - mean^2) cancels: members equal to float32
+                 # precision leave it off by ~eps * mean^2, the stdev by ~sqrt(eps) * |f| (1.5e-8 |f|).
+                 ("stdevflux", st["stdevflux"], np.std(flux), 1e-7 * abs(flux).max(), 1e-9))
         for name, got, want, atol, rtol in tests:
             if not abs(got - want) <= atol + rtol * abs(want):
                 bad.append(f"set {set_job} object {aid}: {name} {got!r} from the sums, {want!r} from"
