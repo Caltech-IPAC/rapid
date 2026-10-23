@@ -2,9 +2,10 @@
 
 Foundation plan, Part 2: the live run admits what is new under its source
 root, and each stage runs when its inputs are official; association is per
-field. One pass, :func:`run_pass`, reads the source root's listing and one
-snapshot of the tables (:func:`snapshot`), decides every submission from
-them (:func:`plan`, pure), submits each through the caller's ``submit``
+field. One pass, :func:`run_pass`, reads the source root's listing of the
+selected filters' observations (:func:`list_stems`) and one snapshot of the
+tables (:func:`snapshot`), decides every submission from them
+(:func:`plan`, pure), submits each through the caller's ``submit``
 without waiting, and ends by producing the run's newly official packet sets
 to the Kafka topic. The verb repeats passes until one finds nothing new,
 nothing pending and nothing to submit (drained).
@@ -74,6 +75,8 @@ import psycopg2.extras
 #: A SOC L2 stem, the fields the selection reads (the intake stage parses all of them).
 STEM = re.compile(r"r\d{5}\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<visit>\d{3})"
                   r"_(?P<exposure>\d{4})_wfi(?P<sca>\d{2})_(?P<filter>f\d{3})$")
+#: Any key under the source root that begins with a stem.
+KEY = re.compile(STEM.pattern.removesuffix("$"))
 SUFFIX = "_cal.asdf"
 PENDING = ("launched", "running")
 #: Batch's job states before it ends one (``SUCCEEDED`` and ``FAILED`` end it).
@@ -129,15 +132,38 @@ def stem_expid(stem: str) -> int:
             + int(m["exposure"]))
 
 
-def list_stems(client: Any, source_root: str) -> list[str]:
-    """Every ``_cal.asdf`` stem under ``source_root`` (``s3://bucket/prefix/``), through the paginator."""
-    bucket, _, prefix = source_root.removeprefix("s3://").partition("/")
+def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]:
+    """Every ``_cal.asdf`` stem under ``source_root`` (``s3://bucket/prefix/``) in an observation of a
+    selected filter.
+
+    An observation (``r<program><plan><pass><segment><observation>``, the
+    stem's first 17 characters) is one filter, and its number differs by
+    pass, so the observations are found from the listing itself: one
+    one-key request per observation, each starting after the last one's
+    prefix, reads its first key's filter. Each selected observation's prefix
+    is then listed through the paginator; nothing outside them is listed.
+    """
+    bucket, _, root = source_root.removeprefix("s3://").partition("/")
+    observations, after = [], root
+    while first := client.list_objects_v2(Bucket=bucket, Prefix=root, StartAfter=after,
+                                          MaxKeys=1).get("Contents"):
+        name = first[0]["Key"][len(root):]
+        m = KEY.match(name)
+        if m is None:
+            after = first[0]["Key"]
+            continue
+        observation = name[: m.end("observation")]
+        after = root + observation + "~"          # past every key of the observation
+        if m["filter"].upper() in selection.filters:
+            observations.append(observation)
     stems = []
-    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
-        for item in page.get("Contents", []):
-            name = item["Key"].rsplit("/", 1)[-1]
-            if name.endswith(SUFFIX):
-                stems.append(name[: -len(SUFFIX)])
+    for observation in observations:
+        for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket,
+                                                                     Prefix=root + observation):
+            for item in page.get("Contents", []):
+                name = item["Key"].rsplit("/", 1)[-1]
+                if name.endswith(SUFFIX):
+                    stems.append(name[: -len(SUFFIX)])
     return stems
 
 

@@ -6,7 +6,8 @@ is submitted only once its field has ``min_frames`` official L2 rows; each
 field's associate chain submits one epoch at a time in ``mjdobs`` order and
 waits while an earlier exposure of the field is upstream; two fields
 advance in the same pass; a pass with nothing new, pending or to submit is
-drained and the verb exits 0. Against Batch: a container that ended without
+drained and the verb exits 0; the listing pages only the observations of
+the selected filters. Against Batch: a container that ended without
 its row recording it is marked failed with Batch's reason; a row marked
 failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone.
@@ -36,19 +37,27 @@ def expid(p: int, v: int, e: int) -> int:
 
 
 class Pages:
-    """A fake S3 client whose ``list_objects_v2`` paginator returns two pages."""
+    """A fake S3 bucket of ``keys`` under ``l2/``: ``list_objects_v2`` answers ``StartAfter`` and
+    ``MaxKeys`` in key order, and its paginator returns a prefix's keys in two pages; every
+    paginated prefix is recorded."""
 
     def __init__(self, keys: list[str]):
-        self.keys = keys
+        self.keys, self.listed = sorted("l2/" + k for k in keys), []
+
+    def list_objects_v2(self, Bucket, Prefix, StartAfter, MaxKeys):
+        found = [k for k in self.keys if k.startswith(Prefix) and k > StartAfter][:MaxKeys]
+        return {"Contents": [{"Key": k} for k in found]} if found else {}
 
     def get_paginator(self, name):
         assert name == "list_objects_v2"
         return self
 
     def paginate(self, Bucket, Prefix):
-        half = len(self.keys) // 2
-        return [{"Contents": [{"Key": Prefix + k} for k in self.keys[:half]]},
-                {"Contents": [{"Key": Prefix + k} for k in self.keys[half:]]}]
+        self.listed.append(Prefix)
+        keys = [k for k in self.keys if k.startswith(Prefix)]
+        half = len(keys) // 2
+        return [{"Contents": [{"Key": k} for k in keys[:half]]},
+                {"Contents": [{"Key": k} for k in keys[half:]]}]
 
 
 def snap(**kw) -> loop.Snapshot:
@@ -72,7 +81,17 @@ def stages(subs: list[dict], name: str) -> list[dict]:
 def test_listing_reads_every_page_and_keeps_cal_stems():
     keys = [stem(1, 1, 1) + "_cal.asdf", stem(1, 1, 1) + "_wcs.asdf",
             stem(2, 1, 1) + "_cal.asdf", stem(2, 1, 1) + "_thumb.png"]
-    assert loop.list_stems(Pages(keys), "s3://bucket/l2/") == [stem(1, 1, 1), stem(2, 1, 1)]
+    assert loop.list_stems(Pages(keys), "s3://bucket/l2/", SEL) == [stem(1, 1, 1), stem(2, 1, 1)]
+
+
+def test_listing_requests_only_the_selected_filters_observations():
+    """F146 is observation 004 in passes 1 and 2 and 001 in pass 6; F087 holds 001 in pass 1."""
+    f087 = "r0034201001001001001_0001_wfi08_f087"
+    f146 = [stem(1, 1, 1), stem(2, 2, 1), "r0034201006001001001_0001_wfi08_f146"]
+    client = Pages([s + "_cal.asdf" for s in [f087, *f146]] + [f087 + "_wcs.asdf"])
+    stems = loop.list_stems(client, "s3://bucket/l2/", loop.Selection.parse("F146", "8", "all"))
+    assert client.listed == ["l2/r0034201001001004", "l2/r0034201002001004", "l2/r0034201006001001"]
+    assert sorted(stems) == sorted(f146)
 
 
 def test_new_stem_is_submitted_once_and_not_again_while_pending():

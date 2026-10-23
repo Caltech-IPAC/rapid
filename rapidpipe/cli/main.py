@@ -392,7 +392,7 @@ def _loop(args: argparse.Namespace) -> int:
 
     while True:
         started = time.monotonic()
-        stems = loop.list_stems(s3, intake["source_root"])
+        stems = loop.list_stems(s3, intake["source_root"], selection)
         summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
                                 args.max_intake, batch)
         summary["seconds"] = round(time.monotonic() - started, 1)
