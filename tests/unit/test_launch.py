@@ -36,6 +36,35 @@ def test_submit_runs_job_run_for_the_job_with_the_outputs_root(batch_env):
             "environment": [{"name": "RAPIDPIPE_OUTPUTS_ROOT", "value": "s3://products/foundation"}]}}]
 
 
+class _Conn:
+    """Records the statements a submission runs and whether it committed."""
+
+    def __init__(self):
+        self.statements, self.committed = [], False
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params):
+        self.statements.append((sql, params))
+
+    def commit(self):
+        self.committed = True
+
+
+def test_submit_records_the_batch_job_id_on_the_job_row(batch_env):
+    conn = _Conn()
+    launch.submit(7, "difference", job_definition="definition", conn=conn, client=_Batch())
+    assert conn.statements == [("UPDATE jobs SET batch_job_id = %s WHERE id = %s", ("batch-1", 7))]
+    assert conn.committed
+
+
 def test_submit_passes_the_database_secret_when_the_submitter_names_one(batch_env, monkeypatch):
     monkeypatch.setenv("RAPID_DB_SECRET_ID", "secret-name")
     batch = _Batch()

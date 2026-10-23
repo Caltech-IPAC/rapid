@@ -27,7 +27,8 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   (``rapidpipe.foundation.run_job``), printing the publisher's result;
 - ``job submit`` takes ``job local``'s arguments and ``--job-definition``,
   records the job and submits one Batch job running ``job run --job <id>``
-  in the image (``rapidpipe.launch.submit``), printing both ids;
+  in the image (``rapidpipe.launch.submit``), recording the Batch job id
+  on the row (``job show`` prints it) and printing both ids;
 - ``loop --run --filters --scas --pointings --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
@@ -308,7 +309,9 @@ def _run_job(args: argparse.Namespace) -> int:
                                            args.expects, args.excludes)
         if args.verb == "submit":
             try:
-                batch_job = launch.submit(job_id, args.stage, job_definition=args.job_definition)
+                with connect_job() as conn:
+                    batch_job = launch.submit(job_id, args.stage, job_definition=args.job_definition,
+                                              conn=conn)
             except launch.LaunchError as exc:
                 raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
             _print_json({"job": job_id, "batch_job": batch_job})
@@ -360,7 +363,7 @@ def _loop(args: argparse.Namespace) -> int:
         with connect_loop() as conn:
             job_id = foundation.create_job(conn, args.run, item["stage"], item["scope"],
                                            item["inputs"], item["expects"])
-        launch.submit(job_id, item["stage"], job_definition=args.job_definition)
+            launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn)
 
     def publish() -> dict:
         with connect_loop() as conn:
