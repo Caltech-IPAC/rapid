@@ -165,8 +165,8 @@ def test_job_submit_records_the_job_and_submits_job_run_for_it(capsys, conn, mon
     assert batch.submitted[0]["containerOverrides"]["command"] == ["job", "run", "--job",
                                                                     str(printed["job"])]
     with conn.cursor() as cur:
-        cur.execute("SELECT run, stage, state FROM jobs WHERE id = %s", (printed["job"],))
-        assert cur.fetchone() == (run, "difference", "launched")
+        cur.execute("SELECT run, stage, state, batch_job_id FROM jobs WHERE id = %s", (printed["job"],))
+        assert cur.fetchone() == (run, "difference", "launched", "batch-1")
 
 
 def test_job_submit_refuses_without_a_queue_naming_the_recorded_job(capsys, conn, monkeypatch):

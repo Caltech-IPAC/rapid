@@ -4,7 +4,8 @@ Foundation plan v5, Part 5 item 1: the launcher is reduced to submitting a
 job under a run. The job row and its recorded inputs are written first by
 ``rapidpipe.foundation.create_job``; :func:`submit` starts one Batch job
 whose command is ``job run --job <id>`` after the image's ``rapidpipe``
-entrypoint, the in-container counterpart of ``rapidpipe job local``: it
+entrypoint, and records the Batch job id on the job row
+(``jobs.batch_job_id``) when given the connection, the in-container counterpart of ``rapidpipe job local``: it
 runs the stage's ``run(job)`` and publishes (``rapidpipe.foundation.run_job``).
 A retry is a resubmission of the same job: ``job run`` stops on a
 published job and otherwise takes the next attempt. Nothing retries here.
@@ -54,8 +55,12 @@ def _stage(stage: str) -> str:
     return stage
 
 
-def submit(job_id: int, stage: str, *, job_definition: str, client: Any = None) -> str:
-    """Submit job ``job_id`` (of ``stage``) to Batch as ``job run --job <id>``; return the Batch job id."""
+def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, client: Any = None) -> str:
+    """Submit job ``job_id`` (of ``stage``) to Batch as ``job run --job <id>``; return the Batch job id.
+
+    With ``conn``, the id is recorded as the row's ``batch_job_id`` and committed; a
+    resubmission replaces it, so the row names its latest Batch job.
+    """
     queue = os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
     if not queue:
         raise LaunchError("RAPIDPIPE_BATCH_JOB_QUEUE is not set")
@@ -70,6 +75,10 @@ def submit(job_id: int, stage: str, *, job_definition: str, client: Any = None) 
         jobName=f"{prefix}-{stage}-{job_id}", jobQueue=queue, jobDefinition=job_definition,
         containerOverrides={"command": ["job", "run", "--job", str(job_id)],
                             "environment": environment})
+    if conn is not None:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE jobs SET batch_job_id = %s WHERE id = %s", (response["jobId"], job_id))
+        conn.commit()
     return response["jobId"]
 
 
