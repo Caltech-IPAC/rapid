@@ -10,7 +10,8 @@ group as the database's pooler, and are written here as run, with their
 results; parts 4 and 5 followed the same day, run the same way, and part 6 is
 the night of the same field written by the tasks that ran it; part 7, the
 HLWAS simulation from ASDF intake to Kafka, was run the next night, and
-part 8, the housekeeping that makes the ramp cheaper, the night after. Eight parts, in order:
+part 8, the housekeeping that makes the ramp cheaper, the night after, and
+part 9, breadth over the other filters, the night after that. Nine parts, in order:
 
 1. **Schema**: the SMDC `rapid` database's `public` schema becomes `database/schema.sql`.
 2. **Inputs**: the field's directory is copied to the inputs bucket under `foundation/`.
@@ -28,6 +29,8 @@ part 8, the housekeeping that makes the ramp cheaper, the night after. Eight par
 8. **Housekeeping**: the difference outputs trimmed and gzipped, the working directory
    removed and the intake's `exposures` row only when expected (step 1), each proven on
    Batch under a throwaway dataset with its own live run.
+9. **Breadth**: the PSF derived from each file's own CRDS ePSF reference by a `psf`
+   stage the loop submits (step 1), then the six other filters, each its own dataset.
 
 Part 4 needs the `reference` and `difference` stages on the `run(job)` contract
 (`rapidpipe/foundation/local.py`), the difference stage refreshed from `dev`
@@ -3331,6 +3334,166 @@ Open, for the plan:
   Each explicit id ahead of the sequence will do this once.
 - **The intake twice as long when six share an 8-vCPU instance** (step 2:
   39 s against 21 s): packing trades seconds for instances.
+
+## Part 9: breadth, the PSF from each file's own ePSF reference, then the other filters (2026-10-23)
+
+Part 6 row 16's first half, brought forward by Ben on 2026-10-22: every
+filter gets its PSF from the CRDS ePSF reference its L2 files name, derived
+by the pipeline, with no copy; then the six filters other than F146 run
+un-injected, the same null test as F146's, SCA 8 over the footprint and then
+the 18 SCAs of one pointing, each filter its own dataset and live run. Every
+proof runs under a dataset of its own; runs 9, 10, 12 and the housekeeping
+runs 13 to 16 stay live and untouched.
+
+1. **The `psf` stage, the loop deriving what is missing, the intake's
+   assertion.** Three PRs, merged in turn: PR 327 (`e46eb1a3`) adds the
+   `psf` stage (`rapidpipe/stages/psf.py`, scope `{dataset, file}`): it
+   reads the cal file's `meta.ref_file.epsf`, fetches that reference by
+   name from `[psf] crds_server` (`/unchecked_get/references/roman/<name>`),
+   asserts its detector and filter are the file's, and reduces
+   `psf[focus 0, G2V]` as a gridded model at the detector centre (2048,
+   2048), sampled on `4 x 61` sub-pixel centres per axis, each 4 x 4 block
+   summed, unit sum: a 61 x 61 stamp (`[psf] size`, the copied F146 file's
+   `NAXIS1`), written as the science and the reference PSF (two files, two
+   `psfs` rows, `EPSFREF` naming the reference); it also makes the import
+   draw `psfid` from the table's identity. PR 328 (`cadbec78`) makes the
+   loop submit one `psf` job per (filter, SCA) of its new stems without
+   both official rows and hold that SCA's intakes until they are official.
+   PR 329 (`7ee86ca6`) makes the intake refuse a file, before a manifest,
+   whose `meta.ref_file.epsf` is not the reference its science PSF's
+   `EPSFREF` names (a PSF naming none is accepted; dev's copied F146 files
+   name `roman_wfi_epsf_0276.asdf`, the same reference).
+
+   The `psfs` identity sequence moved past the explicit ids, as `postgres`
+   (part 8 step 4's seen failure), before the proof:
+
+   ```sql
+   SELECT setval(pg_get_serial_sequence('psfs','psfid'), (SELECT max(psfid) FROM psfs));
+   ```
+
+   Check, held: before, `last_value` **182**, `is_called` true, `max(psfid)`
+   182 over 182 rows; after, the same (2 ms). The sequence had already
+   passed every explicit id (run 15's rerun of import 2394 drew past 153),
+   so the statement changed nothing; the import's half of PR 327 stops a
+   new explicit id from appearing.
+
+   The image and its revision (build 20 s with cached layers, deploy 74 s;
+   the import gate now imports `photutils.psf`):
+
+   ```sh
+   env -u TMPDIR containers/rapid-pipeline/build-rebuild.sh 7ee86ca6333e51b06e87a9bcb1080caf424feb42 --tag rebuild-7ee86ca6333e51b06e87a9bcb1080caf424feb42
+   RELEASE_TAG=rebuild-7ee86ca6333e51b06e87a9bcb1080caf424feb42 RELEASE_IMAGE_DIGEST=sha256:8a5b724b… cloudformation/release-hooks/deploy
+   ```
+
+   Check, held: **`rapid-rebuild:39`** (and `rapid-rebuild-production:30`),
+   image and `RAPID_IMAGE_DIGEST` both `sha256:8a5b724b…`, retry 3, 1 vCPU,
+   24 GiB, read back with `describe-job-definitions`.
+
+   The dataset `r00342-ep1` and its live run: the shipped settings at
+   `7ee86ca6` (now carrying `[psf]` and `[batch.memory_mib] psf = 2048`)
+   with the overlay (`[intake] source_root` the public `r00342/l2/` prefix,
+   `unsigned = true`, `[reference.selection] before_mjd = 61591.4056`, part
+   8 step 4's F146 midpoint), Gaia under the dataset, and **no PSF
+   imported**:
+
+   ```sh
+   rp run create ... --revision 7ee86ca6333e51b06e87a9bcb1080caf424feb42 --settings ep1-run.json --survey HLWAS --dataset r00342-ep1
+   rp official change --group live.json ...      # run 17 live for HLWAS r00342-ep1
+   rp job local --run 17 --stage import --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342-ep1", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "r00342-ep1", "name": "gaia-r00342-ep1", "version": "DR3"}, "binding": null}]'
+   ```
+
+   Check, held: run **17** live (group 2359); Gaia job **2446**, group 2360.
+
+   The proof:
+
+   ```sh
+   timeout 5400 rp loop --run 17 --filters F146 --scas 8 --pointings 001_0001 --job-definition rapid-rebuild:39
+   ```
+
+   - It drained in **24.2 min** (04:52:02 to 05:16:14 UTC, 13 passes of
+     4.2 to 11.7 s), exit 0, no job failed.
+   - **Pass 1 submitted one `psf` job (2447) and no intake**; pass 2 held
+     (`pending.psf` 1); the job published and bound **two `psfs` rows**,
+     psfid 183 (`science`, binding 3923) and 184 (`reference`, binding
+     3924), drawn from the identity with no collision; pass 3 admitted the
+     six intakes (2448 to 2453), every one of which published: the intake's
+     `EPSFREF` assertion held for all six (`roman_wfi_epsf_0276.asdf` on
+     both sides).
+   - Then **one reference (2454) from exactly three frames** (passes 1 to
+     3), 3 differences (2455 to 2457, passes 4 to 6), 3 associates (2458,
+     2460, 2461: one chain of depth 3), 3 packet sets (2459, 2462, 2463),
+     **628 packets** (216, 213, 199) produced and stamped.
+   - The psf job: 178,603,467 B fetched in 3.18 s from the compute subnet,
+     the cal file's meta read in 2.05 s, the model built in 2.93 s, the
+     reduction 0.12 s, rows 0.26 s; 9.1 s for the job, **10.9 s container**,
+     **186.2 s queue wait**, peak RSS **302 MiB** of 2,048 asked, on an
+     m6a.2xlarge. Its prefix: 4 objects, 43.7 KB (two 20,160-byte FITS).
+     The derived stamp holds 0.9710 of the model's unit flux in 61 x 61
+     pixels before normalising, its centroid **-0.027, -0.043 pixel** from
+     the stamp's centre.
+   - `validate_run.py --run 17`: **6/6 PASS in 8.5 s** (lineage, 56 input
+     and exclude rows and 28 bindings; tables, 18 jobs, 38 declared
+     outputs, 4,925 rows; chain, set 2461 depth 3, 628 members; packets, 3
+     sets, 628 packets; forced, 1,239 rows; counts, `psfs` 2,
+     `refimimages` 3). `read_packets.py` on the 3 sets: **3 of 3 CLEAN**,
+     8 s. The consumer check over run 17: **CLEAN**, 628 of 628 packets
+     seen, valid and byte-equal, 61,799 messages read (offsets 73,505 to
+     135,303), 1,213 s, 366 MiB.
+
+   **The null test, the PSF the only change**: run 15 (`r00342-hk4`, part 8
+   step 4) and run 17 difference the same three epochs (passes 4 to 6,
+   pointing `001_0001`, SCA 8) against a three-frame reference of passes 1
+   to 3 under the same bound, run 15 with dev's copied WebbPSF files, run
+   17 with the derived ones (`max_sources` 500; S/N is `fluxfit / fluxerr`
+   of the kept rows):
+
+   | epoch | run | PSF | difference | before the cap | S/N > 5 | > 10 | > 20 | bright-residual fraction (> 20 of kept) | packets |
+   |---|---|---|---|---|---|---|---|---|---|
+   | 4040101 | 15 | copied | 2437 | 1,002 | 422 | 222 | 113 | 0.226 | 189 |
+   | 4040101 | 17 | derived | 2455 | 1,035 | **500** | 256 | **80** | **0.160** | 216 |
+   | 5040101 | 15 | copied | 2438 | 962 | 414 | 246 | 114 | 0.228 | 179 |
+   | 5040101 | 17 | derived | 2456 | 1,065 | **500** | 259 | **79** | **0.158** | 213 |
+   | 6010101 | 15 | copied | 2439 | 1,061 | 454 | 255 | 128 | 0.256 | 183 |
+   | 6010101 | 17 | derived | 2457 | 1,030 | **500** | 237 | **75** | **0.150** | 199 |
+
+   An observation, not a gate, and within the factor of two the brief set:
+   with the derived PSF the **bright residuals fall by a third** (S/N > 20
+   from 113, 114, 128 to 80, 79, 75; the fraction from 0.23 to 0.26 down to
+   0.15 to 0.16), while **every kept row now clears S/N 5** (500 of 500,
+   against 414 to 454) and the packets rise by 14% (551 to 628), since the
+   associate keeps sources at S/N 5 and above. Detections before the cap
+   move by a few percent either way. A reading, unverified: r00342 was
+   simulated with these CRDS ePSFs, so a PSF reduced from the same
+   reference matches the stars' cores better than dev's ensemble files
+   (`NPHASE = 12`, peak 0.240 against the derived stamp's 0.344, the same
+   encircled energy within 5 pixels, 0.874), which removes bright
+   mismatch residuals at stars; the same sharper PSF raises every fit's
+   S/N, so faint residuals and noise peaks clear the cut more often. The
+   detector response (inter-pixel capacitance, charge diffusion) is in
+   neither comparison's control here.
+
+   Measurements (Batch's created to started is the queue wait, started to
+   stopped the container; peak RSS is `job run`'s `peak_rss_kib`):
+
+   | stage | jobs | asked MiB | peak RSS MiB (max) | instances | queue wait s min / median / max | container s min / median / max | part 8 step 4 (run 15) container median |
+   |---|---|---|---|---|---|---|---|
+   | psf | 1 | 2,048 | 302 | m6a.2xlarge | 186.2 | 10.9 | (none: 36 imports by hand) |
+   | intake | 6 | 2,048 | 940 | one m6a.2xlarge, all six | 194.0 / 194.5 / 195.1 | 37.4 / 37.6 / 38.5 | 43.9 |
+   | reference | 1 | 6,144 | 1,439 | the same m6a.2xlarge | 7.8 | 45.7 (3 frames) | 46.0 |
+   | difference | 3 | 24,576 | 14,889 | m6a.2xlarge (1), r6i.2xlarge (2) | 4.6 / 210.8 / 211.0 | 198.6 / 232.6 / 232.9 | 246.9 |
+   | associate | 3 | 1,024 | 232 | the r6i.2xlarge | 6.4 / 11.3 / 19.9 | 2.6 / 2.8 / 9.0 | 2.9 |
+   | packet | 3 | 2,048 | 859 | the r6i.2xlarge | 6.2 / 9.3 / 9.8 | 22.9 / 30.2 / 36.4 | 27.5 |
+
+   - 18 Batch jobs on **3 container instances**; every peak under its ask.
+   - **The PSF costs one queue wait before the first intake**: the psf
+     job's 186 s wait and 11 s container put the intakes two passes (4
+     min) later than an imported PSF would; against that, the 36 imports by
+     hand per dataset (70 s and a person, part 8) are gone.
+   - The run's prefix: **2.64 GB in 93 objects** for 6 epochs, 0.44 GB per
+     epoch (part 8: 0.53 to 0.57; the run differences three of six).
+   - `official` 3,920 rows before (part 8 step 4), **3,949** after; the
+     last change group **2377**; database 414 MB.
 
 ## Validation
 
