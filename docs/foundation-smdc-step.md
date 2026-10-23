@@ -2900,7 +2900,7 @@ run on run 12's pixels. Run 12 and run 9 stay live and untouched.
 
    Not run here: the consumer check (`consume_packets.py`) reads the
    whole topic range and holds it in memory (about 30 min and 20 GB on run
-   12); task 3 bounds it and runs it.
+   12); step 3 bounds it and runs it.
 
 2. **Batch: the Batch job id on the row, the loop reading Batch for what it
    holds pending, per-stage memory.** Three PRs, merged in turn: PR 316
@@ -3023,6 +3023,88 @@ run on run 12's pixels. Run 12 and run 9 stay live and untouched.
      the runs, as step 1 found (run 12's 360 was submitted by hand), and
      this run's reference is from the same six frames as run 13's 2189.
      Not compared further here.
+
+3. **Pass: the listing by the selection's observations, one flush per
+   publish pass, the two checks bounded.** Four PRs, merged in turn, none
+   to a stage (so no new image or revision: the loop runs on this host,
+   the jobs on `rapid-rebuild:37`): PR 320 (`17494b0e`) makes
+   `loop.list_stems` take the selection and page only the observations of
+   its filters, found from the listing itself (one one-key request per
+   observation, each starting after the last one's prefix, reads its
+   first key's filter: F146 is observation 004 in passes 1 to 5 and 001
+   in pass 6); PR 321 (`aacfe5cb`) makes `publish` one connection, one
+   producer and one flush per pass, stamping each set whose messages were
+   all acknowledged and leaving a set with a failed acknowledgement
+   unstamped; PR 322 (`96e14e6c`) runs `validate_run.py`'s `tables` and
+   `packets` eight at a time, a connection per worker, the same
+   assertions; PR 323 (`ffc0be8b`) makes `consume_packets.py` read the
+   topic one message at a time, holding one set's outbox and no message
+   after comparing it.
+
+   Baseline reads on run 12, nothing submitted or stamped there, the old
+   code (`15446a0c`) and then the new (`ffc0be8b`), each as the two checks
+   at once on this host under `/usr/bin/time -v`:
+
+   ```sh
+   python scripts/validate_run.py --run 12
+   python scripts/consume_packets.py --run 12
+   ```
+
+   The live pass on run 14 (`r00342-hk2`, task 2's run), a new pointing on
+   SCA 8, from a checkout at `aacfe5cb` (PRs 320 and 321), then one idle
+   pass:
+
+   ```sh
+   sel="--run 14 --filters F146 --scas 8 --pointings 001_0002 --job-definition rapid-rebuild:37"
+   timeout 5400 rp loop $sel
+   rp loop $sel --once
+   ```
+
+   - The loop drained in **34.1 min** (01:50:35 to 02:24:43 UTC, 18
+     passes), exit 0, no job failed: 6 intakes (2326 to 2331), 1
+     reference (2332, six frames, field 5390959), 6 differences, 6
+     associates (one chain of depth 6, set 2348), 6 packet sets (2341,
+     2343, 2345, 2347, 2349, 2350), **709 packets** (127, 118, 112, 123,
+     123, 106) produced and stamped, one set per publishing pass (the
+     field's chain is serial). The idle `--once` pass: drained, **4.9 s**.
+   - `validate_run.py --run 14`: **6/6 PASS** in 26.1 s (87 jobs; chain
+     sets 2323 and 2348, depth 6 each; packets 12 sets, 1,536 packets).
+     `read_packets.py` on the 6 new sets: **CLEAN**, 13 s. The consumer
+     check over run 14: **CLEAN**, 1,536 of 1,536 packets of its 12 sets
+     read, valid and byte-equal, 1,201 s, 348 MiB.
+   - `official` 3,771 rows before, **3,808** after; the last change group
+     **2261**; database 411 MB.
+
+   Measurements, before and after:
+
+   | | before | after |
+   |---|---|---|
+   | loop listing, per pass (live, F146, SCA 8, `001_0002`) | 273 requests, 272,160 keys, 33.1 s | 95 requests (71 one-key + 24 pages), 23,398 keys, 3.7 s |
+   | loop listing, F146 all 18 SCAs, all pointings | the same 273 | 95 requests, 5,832 stems, 4.5 s |
+   | idle pass | 29.6 to 40.6 s (step 2), 30 s (PR 307) | 3.9 to 5.4 s (12 passes), 4.9 s `--once` |
+   | a pass that publishes one set | pass + 4.3 s per set (PR 308) | 7.7 to 9.0 s, about 4 s over an idle pass |
+   | database connections per publishing pass | 1 + 3 per set | 2 (the loop's idle guard and the pass) |
+   | `validate_run.py --run 12` | **1,512 s** (tables 677 s, packets 818 s), 579 MiB | **666 s** (tables 58 s, packets 593 s), 1,086 MiB |
+   | `consume_packets.py --run 12` | **2,397 s** check, 44.7 min wall, **24.8 GiB** | 2,740 s check, 45.9 min wall, **434 MiB**, CLEAN, 55,436 of 55,436 |
+
+   - The brief's references were 1,231 s and 1,515 s for `validate_run`
+     and 1,895 s and 20 GB for the consumer; this host's old-code baseline
+     today, with both checks at once, was 1,512 s and 2,397 s (the topic
+     has grown: 59,911 messages in range, offsets 73,505 to 133,415).
+   - Every publishing pass here carried one set, so the single flush saves
+     nothing per set; its time is the SSM read, the producer and its IAM
+     handshake. The flush pays where a pass carries many sets, as the
+     18-SCA ramp's did.
+   - `packets` is still most of `validate_run`: the eight threads share the
+     interpreter for Avro decoding and FITS opening.
+   - The consumer's time is the topic read itself (the whole range from
+     the earliest offset, one partition): bounding its memory does not
+     shorten it. The new run took 343 s longer than the old, read while
+     the run-14 consumer check and the tail of the loop shared the host,
+     and loading each set's outbox inline with the read rather than all
+     before it; not separated further.
+   - `validate_run` now holds 1.1 GB at peak against 0.6 GB: eight sets
+     decoded at once.
 
 ## Validation
 
