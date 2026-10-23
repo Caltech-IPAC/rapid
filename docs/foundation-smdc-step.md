@@ -3106,6 +3106,232 @@ run on run 12's pixels. Run 12 and run 9 stay live and untouched.
    - `validate_run` now holds 1.1 GB at peak against 0.6 GB: eight sets
      decoded at once.
 
+4. **Reference: the epochs a reference may coadd bounded by `mjdobs`, and
+   the `catalogs` key with its dataset.** One code PR, PR 325
+   (`124c0248`): a run setting `[reference.selection] before_mjd` (absent
+   by default); with it set, the loop builds a field's reference only from
+   its official L2 rows with `mjdobs < before_mjd`, once the selection's
+   intake has drained (every listed stem of the selection published and no
+   intake pending), differences only the rows at or after it (the rows
+   before it get no difference, associate or packet), and reports a field
+   with fewer than `min_frames` rows before the bound under `held`, every
+   pass, without stopping the drain. `catalogs` gains `dataset`; its key is
+   `(dataset, name, version)`; the import writes the job's dataset; the
+   loop takes the Gaia catalog from the dataset's open binding, so the
+   packet input names `{dataset, name, version}`.
+
+   SMDC gets the key as `postgres`, one transaction, before PR 325 merged
+   (`catalogs-dataset.sql`, 0.29 s, 03:16 UTC):
+
+   ```sql
+   ALTER TABLE catalogs ADD COLUMN dataset text;
+   UPDATE catalogs c SET dataset = r.dataset FROM jobs j JOIN runs r ON r.id = j.run WHERE j.id = c.job;
+   ALTER TABLE catalogs ALTER COLUMN dataset SET NOT NULL;
+   ALTER TABLE catalogs DROP CONSTRAINT catalogs_name_version_job_key;
+   ALTER TABLE catalogs ADD CONSTRAINT catalogs_dataset_name_version_job_key UNIQUE (dataset, name, version, job);
+   UPDATE official o SET key = o.key || jsonb_build_object('dataset', c.dataset)
+     FROM catalogs c WHERE o.product = 'catalogs' AND c.job = o.job
+     AND c.name = o.key->>'name' AND c.version = o.key->>'version' AND NOT o.key ? 'dataset';
+   UPDATE job_inputs i SET key = i.key || jsonb_build_object('dataset', c.dataset)
+     FROM catalogs c WHERE i.product = 'catalogs' AND c.job = coalesce(i.source_job, i.job)
+     AND c.name = i.key->>'name' AND c.version = i.key->>'version' AND NOT i.key ? 'dataset';
+   DROP VIEW catalogs_official;
+   CREATE VIEW catalogs_official AS ...;   -- schema.sql's, joining on (dataset, name, version)
+   ```
+
+   with a check inside the transaction (every binding and input carries the
+   dataset; every open binding has its view row). Check, held: the four
+   rows filled (job 1 `socsims-fakesrc-20260807`, 359 `r00342`, 2164
+   `r00342-hk1`, 2300 `r00342-hk2`); the four open bindings, before and
+   after, the same ids, jobs and groups (2 group 2, 1003 group 264, 3561
+   group 2074, 3734 group 2211) with the key gaining its row's dataset
+   (`{"name": "gaia-r00342", "version": "DR3"}` became `{"name":
+   "gaia-r00342", "dataset": "r00342", "version": "DR3"}`); the 545
+   `job_inputs` rows naming a `catalogs` key (4 `expects`, 541 `input`:
+   79 GBTDS, 426 run 12, 24 run 13, 12 run 14) given the same, since
+   `validate_run.py`'s lineage compares them with the row; the view's
+   grants (`rapid_read`, `rapid_rebuild_pipeline`) back by the default
+   privileges. On SMDC the column is the table's last; in `schema.sql` it
+   follows `job`.
+
+   The image and its revision (build 24 s with cached layers, deploy 73 s):
+
+   ```sh
+   env -u TMPDIR containers/rapid-pipeline/build-rebuild.sh 124c024823f459dc0ba759ed77f6310531df2ecf --tag rebuild-124c024823f459dc0ba759ed77f6310531df2ecf
+   RELEASE_TAG=rebuild-124c024823f459dc0ba759ed77f6310531df2ecf RELEASE_IMAGE_DIGEST=sha256:2e51339f… cloudformation/release-hooks/deploy
+   ```
+
+   Check, held: **`rapid-rebuild:38`** (and `rapid-rebuild-production:29`),
+   image and `RAPID_IMAGE_DIGEST` both `sha256:2e51339f…`, retry 3, 1 vCPU,
+   24 GiB, read back with `describe-job-definitions`.
+
+   The bound, read from run 12's `l2files` rows of pointing `001_0001` on
+   SCA 8 (field 5387158): pass 3 at MJD **61590.65351**, pass 4 at
+   **61592.15777**, midpoint **61591.4056**. Every F146 row of a pass lies
+   within 0.211 d of the pass's first (pass 3 ends 61590.86411, pass 4
+   starts 61592.15777), so one bound serves every pointing.
+
+   Two datasets, each with its live run, as steps 1 and 2 did: the shipped
+   settings at `124c0248` with the overlay (`[intake] source_root` the
+   public `r00342/l2/` prefix, `unsigned = true`) and
+   `[reference.selection] before_mjd`; the 36 F146 PSFs; Gaia for
+   `r00342-hk4` only (the gap run makes no packet).
+
+   ```sh
+   rp run create ... --revision 124c024823f459dc0ba759ed77f6310531df2ecf --settings hk4-run.json --survey HLWAS --dataset r00342-hk4   # before_mjd 61591.4056
+   rp run create ... --settings hk4g-run.json --survey HLWAS --dataset r00342-hk4g   # before_mjd 61586.6449, a day before pass 1
+   rp job local --run 15 --stage import --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342-hk4", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "r00342-hk4", "name": "gaia-r00342-hk4", "version": "DR3"}, "binding": null}]'
+   ```
+
+   Check, held: run **15** live for `r00342-hk4` (group 2262), run **16**
+   live for `r00342-hk4g` (group 2272); 36 PSFs bound under each (run 15:
+   jobs 2351 to 2422, run 16: 2362 to 2414, interleaved: the two imports
+   ran at once); Gaia job **2423**, group 2336, its row and binding
+   carrying the dataset (the import's half of PR 325, live). One PSF import
+   of run 15 (2394, reference SCA 10) failed at the publish with
+   `UniqueViolation` on `psfs_pkey`, psfid 153: the `psfs` identity
+   sequence reached the psfid that job 1 (the GBTDS import) inserted
+   explicitly; `job run --job 2394` published it on its second attempt
+   (psfid from the sequence past it).
+
+   The two proofs, at once:
+
+   ```sh
+   timeout 5400 rp loop --run 15 --filters F146 --scas 8 --pointings 001_0001 --job-definition rapid-rebuild:38
+   timeout 2400 rp loop --run 16 --filters F146 --scas 8 --pointings 001_0002 --job-definition rapid-rebuild:38
+   rp loop --run 16 --filters F146 --scas 8 --pointings 001_0002 --job-definition rapid-rebuild:38 --once
+   ```
+
+   - **The disjoint reference, on run 12's pixels**: run 15 drained in
+     **28.2 min** (03:24:35 to 03:52:46 UTC, 15 passes), exit 0, no job
+     failed: 6 intakes (2425 to 2435), **one reference, 2436, from
+     exactly three frames** (its inputs the L2 rows of passes 1, 2 and 3;
+     `refimimages` 3 rows, `nframes` 3), 3 differences (2437 to 2439,
+     passes 4, 5 and 6 only), 3 associates (2440, 2441, 2443: one chain of
+     depth 3 in pass order), 3 packet sets (2442, 2444, 2445), **551
+     packets** (189, 179, 183) produced and stamped, each packet job's
+     Gaia input `{"dataset": "r00342-hk4", "name": "gaia-r00342-hk4",
+     "version": "DR3"}`.
+   - **The gap, live**: run 16 drained in **4.1 min** (03:24:35 to
+     03:28:39 UTC, 3 passes), exit 0: 6 intakes (2424 to 2434) published
+     and bound (6 `l2files`, 6 `exposures`), no reference, difference,
+     associate or packet submitted; the drained pass and the `--once` pass
+     after it (4.2 s) both report `"held": [{"field": 5390959, "fid": 8,
+     "reason": "0 official L2 rows before before_mjd 61586.6449, fewer
+     than min_frames 2"}]`.
+   - `validate_run.py --run 15`: **6/6 PASS in 8.0 s** (lineage 0.2 s, 56
+     input and exclude rows and 62 bindings; tables 1.7 s, 53 jobs, 73
+     declared outputs, 4,617 rows; chain 0.2 s, set 2443 depth 3, 554
+     members; packets 5.8 s, 3 sets, 551 packets; forced; counts: 1
+     `refimages`, 3 `refimimages`, 1 `catalogs`). `read_packets.py` on
+     the 3 sets: **3 of 3 CLEAN**, 7 s. The consumer check over run 15:
+     **CLEAN**, 551 of 551 packets seen, valid and byte-equal, 61,171
+     messages read (offsets 73,505 to 134,675), 1,217 s, 350 MiB.
+   - The migration held for the runs before it: `validate_run.py --run
+     14` on the new code, **6/6 PASS in 25.8 s** (lineage 268 input and
+     exclude rows and 111 bindings, its packet jobs' Gaia inputs now
+     carrying `r00342-hk2`).
+
+   The null test, the same PSF and the same pixels, the reference the
+   only change (runs 12 and 14 differenced every epoch against six frames,
+   passes 1 to 6; run 15 differences passes 4 to 6 against passes 1 to 3;
+   `max_sources` 500; S/N is `fluxfit / fluxerr` of the kept rows):
+
+   | epoch | run | difference | reference (frames) | before the cap | S/N > 5 | > 10 | > 20 | bright-residual fraction (> 20 of kept) | packets |
+   |---|---|---|---|---|---|---|---|---|---|
+   | 4040101 | 12 | 364 | 360 (6) | 949 | 321 | 155 | 72 | 0.144 | 143 |
+   | 4040101 | 14 | 2311 | 2307 (6) | 949 | 321 | 155 | 72 | 0.144 | 143 |
+   | 4040101 | 15 | 2437 | 2436 (3) | 1,002 | 422 | 222 | **113** | **0.226** | 189 |
+   | 5040101 | 12 | 365 | 360 (6) | 969 | 380 | 185 | 74 | 0.148 | 157 |
+   | 5040101 | 14 | 2312 | 2307 (6) | 973 | 390 | 189 | 75 | 0.150 | 159 |
+   | 5040101 | 15 | 2438 | 2436 (3) | 962 | 414 | 246 | **114** | **0.228** | 179 |
+   | 6010101 | 12 | 366 | 360 (6) | 1,035 | 422 | 222 | 100 | 0.200 | 147 |
+   | 6010101 | 14 | 2313 | 2307 (6) | 1,035 | 422 | 222 | 100 | 0.200 | 147 |
+   | 6010101 | 15 | 2439 | 2436 (3) | 1,061 | 454 | 255 | **128** | **0.256** | 183 |
+
+   An observation, not a gate: against a reference that holds none of the
+   epoch, half as deep, the bright residuals rise by half (S/N > 20 from
+   72 to 100 to 113 to 128, the fraction from 0.14 to 0.20 to 0.23 to
+   0.26) and the packets by a quarter (447 to 551 for the three epochs);
+   detections before the cap barely move (every epoch still hits the
+   cap). With no variable sources in the simulation, every one of them is
+   still a residual. Whether the rise is the reference's noise (three
+   frames, not six) or the epoch's own signal no longer cancelling in a
+   coadd that held it is not separated here: a six-frame reference from
+   other epochs would separate them, and r00342 has six F146 epochs per
+   pointing.
+
+   Measurements, run 15 (Batch's created to started is the queue wait,
+   started to stopped the container; peak RSS is `job run`'s
+   `peak_rss_kib`):
+
+   | stage | jobs | asked MiB | peak RSS MiB (max) | instances | queue wait s min / median / max | container s min / median / max | step 2 (run 14) container median |
+   |---|---|---|---|---|---|---|---|
+   | intake | 6 | 2,048 | 935 | two m6a.2xlarge (4 + 2) | 131.5 / 132.5 / 147.7 | 25.4 / 43.9 / 44.8 | 39.1 |
+   | reference | 1 | 6,144 | 1,439 | m6a.2xlarge | 4.0 | **46.0 (3 frames)** | **76.4 (6 frames)** |
+   | difference | 3 | 24,576 | 14,889 | r6i.2xlarge (2), m6a.2xlarge (1) | 9.1 / 156.5 / 156.9 | 212.3 / 246.9 / 248.2 | 225.6 |
+   | associate | 3 | 1,024 | 231 | m6a.2xlarge (3 instances) | 176.0 / 184.6 / 201.8 | 2.8 / 2.9 / 3.0 | 3.0 |
+   | packet | 3 | 2,048 | 855 | m6a.2xlarge (2 instances) | 6.9 / 184.4 / 201.5 | 21.0 / 27.5 / 33.9 | 35.9 |
+
+   - 16 Batch jobs on 6 container instances; every peak under its ask.
+   - The reference: 46.0 s for three frames against 76.4 s for six; its
+     peak RSS the same 1,439 MiB.
+   - Loop passes 3.8 to 5.8 s, the three publishing passes 9.8 to 10.3 s.
+   - `official` 3,808 rows before (step 3), **3,920** after; the last
+     change group **2358**; database 412 MB.
+
+## Results of part 8 (2026-10-23)
+
+Four steps, eleven code PRs (312 to 314, 316 to 318, 320 to 323, 325) and
+four runbook PRs, each proven on Batch under a throwaway dataset with its
+own live run (runs 13 to 16), on run 12's pixels. Run 12 and run 9 stayed
+live and untouched; nothing was deleted on S3 or in the database.
+
+| | before (run 12, the ramp) | after | step |
+|---|---|---|---|
+| bytes per difference job | 2,547 MB in 72 objects | 247 MB in 10 (gzipped, the read set only) | 1 |
+| run prefix per epoch | 2.83 GB | 0.53 to 0.57 GB | 1, 2 |
+| difference container median | 227.0 s (these epochs) | 227.4 s (gzip 8.9 s of it) | 1 |
+| packet container median | 26.7 s | 45.0 s in step 1 (gzipped reads, longer windows), 27.5 to 35.9 s in steps 2 and 4 | 1 |
+| leaked working directories on the fleet host | 89, 22.2 GiB | 0, removed after each upload | 1 |
+| unbound duplicate `exposures` rows | 102 (the 18-SCA ramp) | 0: one row per exposure (12 for 12 in step 1) | 1 |
+| memory asked per job | 24 GiB, every stage | 1 to 24 GiB by stage, every peak under it | 2 |
+| instances | r6i.8xlarge, about ten jobs each | m6a.2xlarge and r6i.2xlarge/4xlarge, 31 jobs on 6 (step 2), 16 on 6 (step 4) | 2, 4 |
+| a container that ends unrecorded | stays `running` | marked `failed` with Batch's reason in the next pass (0.1 s) | 2 |
+| idle loop pass | 29.6 to 40.6 s | 3.8 to 5.8 s | 3, 4 |
+| connections per publishing pass | 1 + 3 per set | 2 | 3 |
+| `validate_run.py --run 12` | 1,512 s, 579 MiB | 666 s, 1,086 MiB | 3 |
+| `consume_packets.py --run 12` | 2,397 s, 24.8 GiB | 2,740 s, 434 MiB | 3 |
+| the reference's epochs | every epoch of the field, including the one differenced | a run setting, `before_mjd`: passes 1 to 3 build it, passes 4 to 6 are differenced | 4 |
+| reference container | 76.4 s (6 frames) | 46.0 s (3 frames) | 4 |
+| S/N > 20 residuals per epoch, passes 4 to 6, pointing (1, 1), SCA 8 | 72, 75, 100 (6-frame reference holding the epoch) | 113, 114, 128 (3-frame reference disjoint from it) | 4 |
+| packets, those three epochs | 447 | 551 | 4 |
+| the `catalogs` key | (name, version) | (dataset, name, version) | 4 |
+
+Open, for the plan:
+
+- **The disjoint reference's residuals.** Half again as many bright
+  residuals, from a reference half as deep and disjoint from the epoch.
+  Which of the two does it is not separated: a three-frame reference
+  that holds the epoch would (r00342 has six F146 epochs per pointing, too
+  few for a six-frame reference disjoint from three of them). The PSF mismatch at stars (part 7 step 9) is
+  still under both.
+- **Where the bound goes for the injected ramp.** The midpoint of passes
+  3 and 4 leaves three epochs on each side of F146; a bound per filter is
+  a later brief's (row 16).
+- **The read side of gzip.** The packet stage's forced photometry reads
+  three gzipped files per window image, about 2.1 s of decompression each
+  (step 1); long chains pay it per epoch.
+- **The consumer check reads the topic from its earliest offset**: its
+  time is the topic, not the run (step 3).
+- **The `psfs` identity sequence meets explicit psfids** (step 4: psfid
+  153, job 1's): an import draws a psfid that a source system's import
+  already wrote; the job fails at the publish and a rerun draws past it.
+  Each explicit id ahead of the sequence will do this once.
+- **The intake twice as long when six share an 8-vCPU instance** (step 2:
+  39 s against 21 s): packing trades seconds for instances.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
