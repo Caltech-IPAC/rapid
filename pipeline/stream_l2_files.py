@@ -104,9 +104,12 @@ col_list = ['ra', 'dec', 'program', 'execution_plan', 'pass', 'segment', 'visit'
             'product_type', 'exposure_time', 'exposure_start_time', 'exposure_end_time', 'fileSetName']
 
 # Create a dictionary of search criteria
-search = {'program': program}
+search = {'program': program,
+          'instrument_name':'WFI'}
 if roman_filter is not None:
     search['optical_element']=roman_filter
+else:
+    search['optical_element'] = ['!GRISM', '!PRISM']
 if detector is not None:
     search['detector']=f"WFI{detector:02d}"
 if pass_num is not None:
