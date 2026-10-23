@@ -14,12 +14,15 @@ packet:
   decodes for that index row: a one-record Avro object container, no
   registry.
 
-A set is produced whole: every acknowledgement is awaited, then the job's
-``kafka_published_at`` is stamped. A producer error leaves the stamp null
-and raises, so the verb exits non-zero and the next ``publish`` sends the
-set again. A crash between the last acknowledgement and the stamp likewise
-replays the set on the next run; that is allowed (an internal topic, and
-consumers key on the identity), and nothing here tries to be exactly-once.
+One pass opens one database connection and produces every unstamped set's
+messages, then flushes the producer once; a set is stamped
+(``kafka_published_at``) only when every one of its messages was
+acknowledged. A set with a failed acknowledgement keeps a null stamp while
+the others are stamped, and the pass then raises, so the verb exits
+non-zero and the next ``publish`` sends that set again. A crash between
+the acknowledgements and the stamps likewise replays the sets on the next
+run; that is allowed (an internal topic, and consumers key on the
+identity), and nothing here tries to be exactly-once.
 
 Settings: the ``[kafka]`` table of a settings file (``--settings``, by
 default the shipped ``rapidpipe/settings/foundation-thin.toml``) names the
@@ -43,8 +46,12 @@ from rapidpipe.foundation.prefix import get
 
 logger = logging.getLogger(__name__)
 
-#: Seconds to wait for one message's acknowledgement after the set's flush.
+#: Seconds to wait for one message's acknowledgement after the pass's flush.
 ACK_TIMEOUT_S = 120
+
+
+class PublishError(RuntimeError):
+    """A pass left one or more sets unstamped after a failed acknowledgement."""
 
 
 def _query(conn, sql: str, params=()) -> list[dict]:
@@ -93,32 +100,44 @@ def messages(job: int, index: list[dict]) -> list[tuple[bytes, bytes]]:
 
 
 def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> dict[str, Any]:
-    """Produce every unstamped official packet set of ``run`` to ``topic``; stamp each after its acks.
+    """Produce every unstamped official packet set of ``run`` to ``topic`` and flush once; stamp each
+    set whose every message was acknowledged.
 
-    ``connect()`` is a context manager yielding a connection; ``producer`` has
-    kafka-python's ``send(topic, key=, value=)`` returning a future and
-    ``flush()``. Returns the sets, packets, bytes, the largest message and the
-    wall time. Raises on the first set whose produce fails, its stamp left null.
+    ``connect()`` is a context manager yielding a connection, opened once for
+    the pass (the unstamped sets, every set's index and the stamps);
+    ``producer`` has kafka-python's ``send(topic, key=, value=)`` returning a
+    future and ``flush()``. Returns the sets stamped, packets, bytes, the
+    largest message and the wall time. A set with a failed acknowledgement is
+    left unstamped; the others are stamped, then :class:`PublishError` names
+    the unstamped sets.
     """
     started = time.monotonic()
+    sets, failed, packets, total, largest = [], {}, 0, 0, 0
     with connect() as conn:
-        jobs = unpublished_sets(conn, run)
-    sets, packets, total, largest = [], 0, 0, 0
-    for job in jobs:
-        with connect() as conn:
+        produced = []
+        for job in unpublished_sets(conn, run):
             batch = messages(job, set_index(conn, job))
-        futures = [producer.send(topic, key=key, value=value) for key, value in batch]
-        producer.flush()
-        for future in futures:
-            future.get(timeout=ACK_TIMEOUT_S)
-        with connect() as conn:
+            produced.append((job, batch, [producer.send(topic, key=key, value=value) for key, value in batch]))
+        if produced:
+            producer.flush()
+        for job, batch, futures in produced:
+            try:
+                for future in futures:
+                    future.get(timeout=ACK_TIMEOUT_S)
+            except Exception as error:  # noqa: BLE001 - any failed acknowledgement leaves the set unstamped
+                failed[job] = error
+                logger.error("packet set %d: an acknowledgement failed (%s); left unstamped", job, error)
+                continue
             stamp(conn, job)
-        sizes = [len(value) for _, value in batch]
-        logger.info("packet set %d: %d packets, %d bytes produced and stamped", job, len(batch), sum(sizes))
-        sets.append(job)
-        packets += len(batch)
-        total += sum(sizes)
-        largest = max([largest, *sizes])
+            sizes = [len(value) for _, value in batch]
+            logger.info("packet set %d: %d packets, %d bytes produced and stamped", job, len(batch), sum(sizes))
+            sets.append(job)
+            packets += len(batch)
+            total += sum(sizes)
+            largest = max([largest, *sizes])
+    if failed:
+        raise PublishError(f"run {run}: packet sets {sorted(failed)} left unstamped after a failed"
+                           f" acknowledgement ({next(iter(failed.values()))}); stamped {sets}")
     return {"run": run, "topic": topic, "sets": sets, "packets": packets, "bytes": total,
             "largest_message": largest, "seconds": round(time.monotonic() - started, 3)}
 

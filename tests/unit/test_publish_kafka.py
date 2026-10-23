@@ -1,9 +1,11 @@
 """``rapidpipe publish``: official packet sets onto the Kafka topic, stamped after their acks.
 
 Contracts: only the run's sets with a null stamp are sent; every packet of
-a set is sent, keyed ``<job>:<sid>`` with the container header and its
-block as the value, before that set is stamped; a producer error leaves the
-stamp null and ``publish`` exits non-zero.
+every set is sent, keyed ``<job>:<sid>`` with the container header and its
+block as the value, before the pass's one flush, and the sets are stamped
+after it; one connection serves the pass; a failed acknowledgement leaves
+its set's stamp null, the other sets stamped, and ``publish`` exits
+non-zero.
 """
 
 from __future__ import annotations
@@ -77,15 +79,31 @@ def _connect():
     return contextlib.nullcontext()
 
 
-def test_only_the_unstamped_sets_are_sent_each_whole_before_its_stamp(outbox):
-    producer = Producer(outbox)
-    result = publish_kafka.publish(_connect, 3, producer, "topic")
-    assert [key for _, key, _ in producer.sent] == [b"7:70", b"7:71", b"7:72", b"9:90"]
-    assert outbox.index(("stamp", 7)) > outbox.index(("send", b"7:72"))
-    assert outbox.index(("stamp", 7)) < outbox.index(("send", b"9:90"))
-    assert [e for e in outbox if e[0] == "stamp"] == [("stamp", 7), ("stamp", 9)]
+class Connects:
+    """A ``connect`` that counts the connections opened."""
+
+    def __init__(self):
+        self.opened = 0
+
+    def __call__(self):
+        self.opened += 1
+        return contextlib.nullcontext()
+
+
+def test_every_set_is_sent_before_one_flush_and_stamped_after_it_on_one_connection(outbox):
+    producer, connect = Producer(outbox), Connects()
+    result = publish_kafka.publish(connect, 3, producer, "topic")
+    assert outbox == [("send", b"7:70"), ("send", b"7:71"), ("send", b"7:72"), ("send", b"9:90"),
+                      ("flush", None), ("stamp", 7), ("stamp", 9)]
+    assert connect.opened == 1
     assert (result["sets"], result["packets"]) == ([7, 9], 4)
     assert publish_kafka.publish(_connect, 4, producer, "topic")["packets"] == 0
+
+
+def test_a_failed_acknowledgement_leaves_its_set_unstamped_and_the_others_stamped(outbox):
+    with pytest.raises(publish_kafka.PublishError, match=r"\[7\]"):
+        publish_kafka.publish(_connect, 3, Producer(outbox, fail_on=b"7:71"), "topic")
+    assert [e for e in outbox if e[0] == "stamp"] == [("stamp", 9)]
 
 
 def test_each_message_is_a_one_record_container_of_its_packet(outbox):
@@ -107,4 +125,4 @@ def test_a_producer_error_leaves_the_stamp_null_and_the_verb_exits_non_zero(outb
     monkeypatch.setattr(publish_kafka, "producer", lambda servers, size: producer)
     code = cli.main(["publish", "--run", "3", "--settings", str(settings)])
     assert code != ExitCode.SUCCESS
-    assert not [e for e in outbox if e[0] == "stamp"]
+    assert ("stamp", 7) not in outbox
