@@ -11,6 +11,7 @@ Example:
 """
 
 import argparse
+import configparser
 import re
 import statistics
 from collections import Counter
@@ -19,6 +20,8 @@ from pathlib import Path
 
 
 DEFAULT_RST = Path(__file__).resolve().parent / "source" / "dev" / "onorbit_tests.rst"
+# Configuration file the AWS Batch job launchers read; [JOB_PARAMS] job_logs_s3_bucket_base is the job-logs bucket.
+DEFAULT_INI = Path(__file__).resolve().parent.parent / "cdf" / "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 # Doc labels for the stages timed by "VPO Elapsed time in seconds (to|after) <stage> = <sec>".
 VPO_STAGE_LABELS = {
@@ -190,6 +193,29 @@ def program_ids(texts):
         Sorted distinct program IDs.
     """
     return sorted({int(m.group(1)) for text in texts for m in ROMAN_FILENAME_RE.finditer(text)})
+
+
+def job_logs_bucket(ini_path):
+    """
+    Read the S3 bucket of the per-job pipeline logs from the AWS Batch job-launcher configuration file.
+
+    Parameters
+    ----------
+    ini_path : pathlib.Path
+        Configuration file with a ``[JOB_PARAMS] job_logs_s3_bucket_base`` setting.
+
+    Returns
+    -------
+    bucket : str
+        The job-logs S3 bucket name.
+    """
+    config = configparser.ConfigParser()
+    if not config.read(ini_path):
+        raise SystemExit(f"Could not read configuration file {ini_path}")
+    try:
+        return config["JOB_PARAMS"]["job_logs_s3_bucket_base"]
+    except KeyError:
+        raise SystemExit(f"No [JOB_PARAMS] job_logs_s3_bucket_base in {ini_path}")
 
 
 def parse_vpo(text, reqid=None):
@@ -388,13 +414,15 @@ def parse_job_logs(job_logs_dir):
     Parameters
     ----------
     job_logs_dir : pathlib.Path
-        Directory searched recursively for ``rapid_pipeline_job_*_jid*_log.txt`` files.
+        Directory searched recursively; every file is read (e.g. ``rapid_pipeline_job_*_jid*_log.txt``
+        or renamed ``*.out`` files), and the pipeline type is recognized from its contents.
 
     Returns
     -------
     job_logs : dict
         For each of ``refimage`` and ``science``: per-step lists of seconds, per-jid total seconds,
-        and the earliest start and latest end times.  ``n_incomplete`` counts logs with no total time.
+        and the earliest start and latest end times.  ``n_incomplete`` counts files with no total time
+        (failed jobs, or files that are not reference-image or science job output).
     """
     step_re = re.compile(rf"^(?:=====> )?Elapsed time in seconds (after|just to|to) (.+?) =\s*{SEC}\s*$")
     totals = {"refimage": "run one instance of reference-image pipeline",
@@ -402,13 +430,14 @@ def parse_job_logs(job_logs_dir):
     job_logs = {kind: {"steps": {}, "totals": {}, "started": [], "ended": []} for kind in totals}
     job_logs["n_incomplete"] = 0
 
-    for path in sorted(job_logs_dir.rglob("rapid_pipeline_job_*_jid*_log.txt")):
+    for path in sorted(p for p in job_logs_dir.rglob("*") if p.is_file()):
         text = path.read_text(errors="replace")
         kind = next((k for k, phrase in totals.items() if f"to {phrase} =" in text), None)
-        if kind is None:
+        jid = re.search(r"jid(\d+)", path.name) or re.search(r"^jid = (\d+)$", text, re.MULTILINE)
+        if kind is None or jid is None:
             job_logs["n_incomplete"] += 1
             continue
-        jid = int(re.search(r"_jid(\d+)_log\.txt$", path.name).group(1))
+        jid = int(jid.group(1))
         per_step = {}
         for line in text.splitlines():
             if m := step_re.match(line):
@@ -464,7 +493,7 @@ def step_table(title, steps):
     return rst_table([title, "Min (sec)", "Med (sec)", "Max (sec)"], rows)
 
 
-def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=()):
+def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_bucket=None):
     """
     Assemble the reStructuredText test entry from the parsed logs.
 
@@ -472,6 +501,8 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=()):
     ----------
     vpo : dict
         Output of ``parse_vpo``.
+    logs_bucket : str, optional
+        S3 bucket of the per-job pipeline logs (from ``job_logs_bucket``).
     ingest : dict, optional
         Output of ``parse_ingest``.
     streams : list of dict, optional
@@ -550,6 +581,9 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=()):
         add(f"The VPO run was registered as processing request ``reqid = {vpo['reqid']}``.")
         add("The pipeline product files are located in the usual place:\n")
         add(code_block([f"s3://{vpo['product_bucket'] or 'TODO'}/{procdate}/req{vpo['reqid']}/"]) + "\n")
+        if logs_bucket:
+            add("The per-job pipeline logs are located here:\n")
+            add(code_block([f"s3://{logs_bucket}/{procdate}/req{vpo['reqid']}/"]) + "\n")
 
     if vpo["jobs"]:
         add("Here is a summary of the pipeline instances run on AWS Batch:\n")
@@ -636,8 +670,11 @@ def main():
     p.add_argument("--ingest-log", type=Path, nargs="+", default=[], help="STDOUT of ingestL2Files.py (one or more)")
     p.add_argument("--stream-log", type=Path, nargs="+", default=[], help="STDOUT of stream_l2_files.py (one or more)")
     p.add_argument("--job-logs-dir", type=Path, default=None,
-                   help="directory with the per-job logs rapid_pipeline_job_<procdate>_jid<jid>_log.txt "
-                        "(from s3://rapid-pipeline-logs/<procdate>/req<reqid>/)")
+                   help="directory with the per-job STDOUT files (rapid_pipeline_job_<procdate>_jid<jid>_log.txt "
+                        "from s3://<job_logs_s3_bucket_base>/<procdate>/req<reqid>/, or the same files "
+                        "renamed, e.g. jid<jid>.out)")
+    p.add_argument("--ini", type=Path, default=DEFAULT_INI,
+                   help=f"job-launcher configuration file with [JOB_PARAMS] job_logs_s3_bucket_base (default: {DEFAULT_INI})")
     p.add_argument("--reqid", type=int, default=None, help="processing request to report, if the VPO ran several")
     p.add_argument("--rst", type=Path, default=DEFAULT_RST, help=f"page to append to (default: {DEFAULT_RST})")
     p.add_argument("--stdout", action="store_true", help="print the entry instead of appending it")
@@ -653,6 +690,7 @@ def main():
         streams=[parse_stream(path) for path in args.stream_log],
         job_logs=parse_job_logs(args.job_logs_dir) if args.job_logs_dir else None,
         programs=program_ids([vpo_text] + ingest_texts + stream_texts),
+        logs_bucket=job_logs_bucket(args.ini),
     )
 
     if args.stdout:
