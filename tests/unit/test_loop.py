@@ -6,7 +6,10 @@ is submitted only once its field has ``min_frames`` official L2 rows; each
 field's associate chain submits one epoch at a time in ``mjdobs`` order and
 waits while an earlier exposure of the field is upstream; two fields
 advance in the same pass; a pass with nothing new, pending or to submit is
-drained and the verb exits 0.
+drained and the verb exits 0. Against Batch: a container that ended without
+its row recording it is marked failed with Batch's reason; a row marked
+failed whose Batch job is still running is Batch's retry, held pending; a
+local job (no Batch id) is left alone.
 """
 
 from __future__ import annotations
@@ -176,7 +179,78 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
     monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf"]))
     monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
+    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client: {"retrying": []})
     code = cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
                      "--job-definition", "jd", "--interval", "0"])
     assert code == ExitCode.SUCCESS
     assert '"drained": true' in capsys.readouterr().out
+
+
+class Batch:
+    """A fake Batch client: ``describe_jobs`` answers from ``{batch id: (status, reason)}``."""
+
+    def __init__(self, jobs: dict):
+        self.jobs, self.calls = jobs, []
+
+    def describe_jobs(self, jobs):
+        self.calls.append(list(jobs))
+        return {"jobs": [{"jobId": j, "status": self.jobs[j][0], "statusReason": self.jobs[j][1]}
+                         for j in jobs if j in self.jobs]}
+
+
+class Rows:
+    """A fake connection: the jobs ``SELECT`` returns ``rows``; each ``UPDATE`` is recorded
+    and applies (``rowcount`` 1) while the row is still ``launched`` or ``running``."""
+
+    def __init__(self, rows):
+        self.rows, self.updates, self.rowcount = rows, [], 0
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params):
+        if sql.startswith("UPDATE"):
+            self.updates.append(params)
+            self.rowcount = 1
+
+    def fetchall(self):
+        return self.rows
+
+    def commit(self):
+        pass
+
+
+def test_a_container_that_ended_unrecorded_is_marked_failed_with_batchs_reason():
+    conn = Rows([(70, "intake", "launched", "b-70"), (71, "intake", "running", "b-71")])
+    batch = Batch({"b-70": ("FAILED", "Terminated by the operator"), "b-71": ("RUNNING", "")})
+    checked = loop.reconcile(conn, 12, batch)
+    assert checked["ended"] == [{"job": 70, "stage": "intake",
+                                 "reason": "Batch FAILED: Terminated by the operator"}]
+    assert [u[-1] for u in conn.updates] == [70] and conn.updates[0][1].startswith("Batch FAILED")
+    assert checked["retrying"] == []
+
+
+def test_a_failed_row_under_batchs_retry_is_held_pending_not_failed(monkeypatch):
+    k1 = (expid(1, 1, 1), 8, 8)
+    job = {"id": 80, "stage": "difference", "state": "failed",
+           "scope": {"expid": k1[0], "sca": 8, "fid": 8}}
+    monkeypatch.setattr(loop, "snapshot",
+                        lambda conn, run: snap(l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30}, jobs=[job]))
+    conn = Rows([(80, "difference", "failed", "b-80")])
+    summary = loop.run_pass(lambda: contextlib.nullcontext(conn), 12, SEL, [], lambda item: None, None,
+                            batch=Batch({"b-80": ("RUNNABLE", "")}))
+    assert summary["failed"] == [] and summary["pending"]["difference"] == 1
+    assert summary["submitted"]["difference"] == 0 and conn.updates == []
+
+
+def test_a_local_job_without_a_batch_id_is_left_alone():
+    conn, batch = Rows([(90, "import", "running", None)]), Batch({})
+    checked = loop.reconcile(conn, 12, batch)
+    assert batch.calls == [] and conn.updates == [] and checked["described"] == 0

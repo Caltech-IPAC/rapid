@@ -180,3 +180,20 @@ def test_job_submit_refuses_without_a_queue_naming_the_recorded_job(capsys, conn
                           "--scope", "{}", "--job-definition", "rapid-rebuild")
     assert code == ExitCode.USAGE and out == ""
     assert "recorded, not submitted" in err and "RAPIDPIPE_BATCH_JOB_QUEUE" in err
+
+
+def test_job_submit_with_job_submits_a_new_attempt_of_the_existing_job(capsys, conn, monkeypatch):
+    from rapidpipe import launch
+
+    batch = _Batch()
+    monkeypatch.setattr(launch, "batch_client", lambda: batch)
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://products/foundation")
+    job = new_job(conn, new_run(conn, live=True))
+    code, out, err = _run(capsys, "job", "submit", "--job", str(job), "--job-definition", "rapid-rebuild:37")
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    assert json.loads(out) == {"job": job, "batch_job": "batch-1"}
+    assert batch.submitted[0]["jobName"].endswith(f"-associate-{job}")
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*), max(batch_job_id) FROM jobs")
+        assert cur.fetchone() == (1, "batch-1")

@@ -17,7 +17,18 @@ of a filter.
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported and never resubmitted: its key
-counts as taken until a person reruns it (``job run --job <id>``).
+counts as taken until a person reruns it (``job run --job <id>``, or
+``job submit --job <id>`` on Batch).
+
+Each pass first reads Batch for the run's unpublished jobs that carry a
+``batch_job_id`` (:func:`reconcile`, one ``describe-jobs`` call per hundred
+ids), one lookup read two ways: a Batch job that has ended while its row is
+still ``launched`` or ``running`` is a container that ended without ``job
+run`` recording it, and the row is marked ``failed`` with Batch's status
+and reason in ``refusal``; a row ``job run`` marked ``failed`` whose Batch
+job is still queued or running is Batch's own retry (exit 75) in flight,
+and the pass holds it pending. Once Batch has ended, the job's own record
+is the authority.
 
 One pass, in order:
 
@@ -54,6 +65,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import time
 from collections import defaultdict
 from typing import Any, Callable, Iterable
 
@@ -64,6 +76,8 @@ STEM = re.compile(r"r\d{5}\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<vis
                   r"_(?P<exposure>\d{4})_wfi(?P<sca>\d{2})_(?P<filter>f\d{3})$")
 SUFFIX = "_cal.asdf"
 PENDING = ("launched", "running")
+#: Batch's job states before it ends one (``SUCCEEDED`` and ``FAILED`` end it).
+BATCH_ACTIVE = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING")
 STAGES = ("intake", "reference", "difference", "associate", "packet")
 
 
@@ -210,6 +224,47 @@ def snapshot(conn, run: int) -> Snapshot:
                  if b["key"].get("survey") == meta[0]["survey"]},
         packets={_l2key(b["key"]): b["job"] for b in by["packets"]},
         gaia=gaia[0] if gaia else None)
+
+
+def reconcile(conn, run: int, client: Any) -> dict:
+    """Read Batch for the run's unpublished jobs with a ``batch_job_id``; mark the dead ``failed``.
+
+    Returns ``{"described", "ended", "retrying", "seconds"}``: ``ended`` the
+    rows this call marked ``failed`` (``job``, ``stage``, ``reason``),
+    ``retrying`` the ids of ``failed`` rows whose Batch job has not ended. A
+    job without a Batch id (a local one), or one Batch no longer describes,
+    is left alone.
+    """
+    started = time.monotonic()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, stage, state, batch_job_id FROM jobs WHERE run = %s"
+                    " AND state <> 'published' ORDER BY id", (run,))
+        rows = [r for r in cur.fetchall() if r[3]]
+    conn.commit()
+    ids = [r[3] for r in rows]
+    batch = {}
+    for i in range(0, len(ids), 100):
+        batch.update((b["jobId"], b) for b in client.describe_jobs(jobs=ids[i:i + 100])["jobs"])
+    ended, retrying = [], []
+    for job, stage, state, batch_id in rows:
+        described = batch.get(batch_id)
+        if described is None:
+            continue
+        status = described["status"]
+        if status in BATCH_ACTIVE:
+            if state == "failed":
+                retrying.append(job)
+        elif state in PENDING:
+            reason = f"Batch {status}: {described.get('statusReason', '')}".strip()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE jobs SET state = 'failed', ended = now(), exit_code = %s,"
+                            " refusal = %s WHERE id = %s AND state IN ('launched', 'running')",
+                            (described.get("container", {}).get("exitCode"), reason, job))
+                if cur.rowcount:
+                    ended.append({"job": job, "stage": stage, "reason": reason})
+            conn.commit()
+    return {"described": len(batch), "ended": ended, "retrying": retrying,
+            "seconds": round(time.monotonic() - started, 2)}
 
 
 def _fid(band: str, fids: dict[str, int]) -> int:
@@ -371,10 +426,15 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
 
 def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, stems: list[str],
              submit: Callable[[dict], Any], publish: Callable[[], dict] | None,
-             max_intake: int = 100) -> dict:
-    """One pass: snapshot, plan, submit each without waiting, then publish; return the summary."""
+             max_intake: int = 100, batch: Any = None) -> dict:
+    """One pass: reconcile with ``batch`` (a Batch client) when given, snapshot, plan, submit
+    each without waiting, then publish; return the summary."""
     with conn_factory() as conn:
+        checked = reconcile(conn, run, batch) if batch is not None else None
         snap = snapshot(conn, run)
+    for job in snap.jobs:
+        if checked and job["id"] in checked["retrying"]:
+            job["state"] = "running"            # Batch's retry in flight: pending, not failed
     submissions, counts = plan(snap, stems, selection, max_intake)
     for item in submissions:
         submit(item)
@@ -383,4 +443,6 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     counts["sets_produced"] = produced["sets"]
     counts["drained"] = (counts["new"] == 0 and not submissions
                          and not any(counts["pending"].values()))
+    if checked is not None:
+        counts["batch"] = checked
     return {"run": run, "selection": selection.summary(), **counts}

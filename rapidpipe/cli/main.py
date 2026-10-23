@@ -25,7 +25,8 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   runs an existing job's next attempt. Both run the stage's ``run(job)``
   in this process under ``RAPIDPIPE_OUTPUTS_ROOT`` and publish it
   (``rapidpipe.foundation.run_job``), printing the publisher's result;
-- ``job submit`` takes ``job local``'s arguments and ``--job-definition``,
+- ``job submit`` takes ``job local``'s arguments and ``--job-definition``
+  (or ``--job <id>`` in their place, a new attempt of an existing job),
   records the job and submits one Batch job running ``job run --job <id>``
   in the image (``rapidpipe.launch.submit``), recording the Batch job id
   on the row (``job show`` prints it) and printing both ids;
@@ -150,15 +151,18 @@ def _build_parser() -> argparse.ArgumentParser:
                     "writing under RAPIDPIPE_OUTPUTS_ROOT; print the job and Batch job ids.")
     job_submit.add_argument("--job-definition", required=True,
                             help="The Batch job definition: name, name:revision or ARN.")
+    job_submit.add_argument("--job", type=int,
+                            help="Submit a new attempt of this existing job instead of recording one.")
     for verb in (job_local, job_submit):
-        verb.add_argument("--run", required=True, type=int)
-        verb.add_argument("--stage", required=True)
+        new_only = verb is job_local       # job submit --job names an existing job instead
+        verb.add_argument("--run", required=new_only, type=int)
+        verb.add_argument("--stage", required=new_only)
         for name, meaning in (("scope", "the job's scope, a JSON object"),
                               ("inputs", "a JSON list of {product, key, source_job}"),
                               ("expects", "a JSON list of {product, key, binding}"),
                               ("excludes", "a JSON list of {key, source_job}")):
-            verb.add_argument(f"--{name}", required=name == "scope", type=_json_argument,
-                              default=[], metavar="JSON", help=meaning)
+            verb.add_argument(f"--{name}", required=new_only and name == "scope", type=_json_argument,
+                              default=None if name == "scope" else [], metavar="JSON", help=meaning)
     job_run = job_subparsers.add_parser(
         "run", help="Run an existing job's next attempt here and publish it.",
         description="Run an existing job's next attempt in this process and publish it; "
@@ -302,24 +306,29 @@ def _run_job(args: argparse.Namespace) -> int:
     def connect_job():
         return connect(application_name=f"rapidpipe-job-{args.verb}")
 
-    if args.verb in ("local", "submit"):
-        stage_run = _stage_run(args.stage)
+    if args.verb == "submit" and args.job is not None:      # a new attempt of an existing job
+        job_id = args.job
         with connect_job() as conn:
-            job_id = foundation.create_job(conn, args.run, args.stage, args.scope, args.inputs,
+            stage = foundation.job_show(conn, job_id)["stage"]
+    elif args.verb in ("local", "submit"):
+        if args.run is None or args.stage is None or args.scope is None:
+            raise CommandExit(int(ExitCode.USAGE), "--run, --stage and --scope are required without --job")
+        stage, stage_run = args.stage, _stage_run(args.stage)
+        with connect_job() as conn:
+            job_id = foundation.create_job(conn, args.run, stage, args.scope, args.inputs,
                                            args.expects, args.excludes)
-        if args.verb == "submit":
-            try:
-                with connect_job() as conn:
-                    batch_job = launch.submit(job_id, args.stage, job_definition=args.job_definition,
-                                              conn=conn)
-            except launch.LaunchError as exc:
-                raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
-            _print_json({"job": job_id, "batch_job": batch_job})
-            return int(ExitCode.SUCCESS)
     else:
         job_id = args.job
         with connect_job() as conn:
             stage_run = _stage_run(foundation.job_show(conn, job_id)["stage"])
+    if args.verb == "submit":
+        try:
+            with connect_job() as conn:
+                batch_job = launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn)
+        except launch.LaunchError as exc:
+            raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
+        _print_json({"job": job_id, "batch_job": batch_job})
+        return int(ExitCode.SUCCESS)
     result = foundation.run_job(connect_job, job_id, root, stage_run)
     _print_json(result)
     if result["published"] and result["refusal"]:
@@ -358,6 +367,7 @@ def _loop(args: argparse.Namespace) -> int:
         settings = foundation.run_show(conn, args.run)["settings"]
     intake = settings["intake"]
     s3 = storage.s3_client(unsigned=bool(intake.get("unsigned")))
+    batch = launch.batch_client()
 
     def submit(item: dict) -> None:
         with connect_loop() as conn:
@@ -380,7 +390,7 @@ def _loop(args: argparse.Namespace) -> int:
         started = time.monotonic()
         stems = loop.list_stems(s3, intake["source_root"])
         summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
-                                args.max_intake)
+                                args.max_intake, batch)
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)
