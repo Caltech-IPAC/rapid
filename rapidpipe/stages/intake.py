@@ -13,7 +13,9 @@ The stage fetches ``<source_root><file>_cal.asdf`` (anonymously when
 ``unsigned``), converts it with `dev`'s ``build_fits_file``
 (:mod:`rapidpipe.science.intake`), gzips it at ``gzip_level``, measures the
 limiting magnitude with the science PSF of the ``psfs`` set the job names
-as an input, and declares one ``l2files`` row with the centre, corners,
+as an input (refusing the file, before a manifest, when the PSF names an
+ePSF reference, ``EPSFREF``, other than the file's own
+``meta.ref_file.epsf``), and declares one ``l2files`` row with the centre, corners,
 tessellation field, overlapping fields and HEALPix indexes the import
 stage derives the same way, and one ``exposures`` row only when the job
 expects the ``exposures`` key (the loop gives that expectation to one
@@ -40,7 +42,7 @@ import re
 import tempfile
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -123,7 +125,9 @@ def run(job: JobContext) -> None:
             primary, header = hdul[0].header.copy(), hdul[1].header.copy()
         _check_key(stem, ids, header)
         fid = FIDS[header["FILTER"]]
-        limmag = limiting_magnitude(fits_path, _science_psf(job, fid, ids["sca"]),
+        psf = _science_psf(job, fid, ids["sca"])
+        _check_epsf(stem, primary, psf)
+        limmag = limiting_magnitude(fits_path, psf,
                                     settings["limmag_nsigma"], settings["limmag_clip_sigma"],
                                     settings["limmag_maxiters"])
         lap("limmag")
@@ -167,6 +171,19 @@ def _check_key(stem: str, ids: dict, header) -> None:
     named = {k: ids[k] for k in own}
     if own != named:
         raise ValueError(f"{stem}: the file's own identifiers {own} are not its name's {named}")
+
+
+def _check_epsf(stem: str, primary, psf: Path) -> None:
+    """The file's own CRDS ePSF reference must be the one its science PSF names (``EPSFREF``).
+
+    The ``psf`` stage writes the name; a PSF file without it (an import
+    whose source never named one) is accepted.
+    """
+    named = fits.getheader(psf, 0).get("EPSFREF")
+    own = primary.get("HIERARCH meta ref_file epsf")
+    if named is not None and own is not None and PurePosixPath(str(own)).name != named:
+        raise ValueError(f"{stem}: the file names the ePSF reference {own}; its science PSF is "
+                         f"from {named}")
 
 
 def _science_psf(job: JobContext, fid: int, sca: int) -> Path:
