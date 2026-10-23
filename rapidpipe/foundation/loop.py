@@ -207,6 +207,8 @@ class Snapshot:
     diffs: dict[tuple[int, int, int], int]                       # key -> difference job
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
     objects: dict[int, tuple[int, int]]                          # field -> (job, binding)
+    chain: dict[int, int]                                        # source set job -> its associate in the
+                                                                 # chain of its field's official object set
     packets: dict[tuple[int, int, int], int]                     # key -> packet set job
     gaia: dict | None                                            # the dataset's {"key", "job"}
 
@@ -242,6 +244,10 @@ def snapshot(conn, run: int) -> Snapshot:
                 job["sources"] = named.get(job["id"])
         bound = _rows(cur, "SELECT id, product, key, job FROM official WHERE closed_at IS NULL"
                            " AND job IS NOT NULL AND key->>'dataset' = %s", (d,))
+        links = _rows(cur, "SELECT i.job, i.product, i.source_job FROM job_inputs i"
+                           " JOIN jobs j ON j.id = i.job JOIN runs r ON r.id = j.run"
+                           " WHERE r.dataset = %s AND j.stage = 'associate' AND i.kind = 'input'"
+                           " AND i.product IN ('sources', 'objects')", (d,))
         l2 = {_l2key(r): {"field": r["field"], "mjdobs": r["mjdobs"], "job": r["job"]}
               for r in _rows(cur, "SELECT expid, sca, fid, field, mjdobs, job FROM l2files_official"
                                   " WHERE dataset = %s", (d,))}
@@ -252,6 +258,8 @@ def snapshot(conn, run: int) -> Snapshot:
     gaia = [{"key": b["key"], "job": b["job"]} for b in by["catalogs"]]
     if len(gaia) > 1:
         raise LookupError(f"dataset {d} has {len(gaia)} official catalogs; the loop names one Gaia catalog")
+    objects = {int(b["key"]["field"]): (b["job"], b["id"]) for b in by["objects"]
+               if b["key"].get("survey") == meta[0]["survey"]}
     return Snapshot(
         dataset=d, survey=meta[0]["survey"], settings=meta[0]["settings"], fids=fids,
         published_stems=stems, jobs=jobs,
@@ -262,8 +270,7 @@ def snapshot(conn, run: int) -> Snapshot:
         refs={(int(b["key"]["field"]), int(b["key"]["fid"])): b["job"] for b in by["refimages"]},
         diffs={_l2key(b["key"]): b["job"] for b in by["diffimages"]},
         sources={_l2key(b["key"]): b["job"] for b in by["sources"]},
-        objects={int(b["key"]["field"]): (b["job"], b["id"]) for b in by["objects"]
-                 if b["key"].get("survey") == meta[0]["survey"]},
+        objects=objects, chain=_chain(objects, links),
         packets={_l2key(b["key"]): b["job"] for b in by["packets"]},
         gaia=gaia[0] if gaia else None)
 
@@ -307,6 +314,21 @@ def reconcile(conn, run: int, client: Any) -> dict:
             conn.commit()
     return {"described": len(batch), "ended": ended, "retrying": retrying,
             "seconds": round(time.monotonic() - started, 2)}
+
+
+def _chain(objects: dict[int, tuple[int, int]], links: list[dict]) -> dict[int, int]:
+    """Source set job -> associate job, for every associate in the chain of a field's official object
+    set: from the bound set back through each associate's recorded ``objects`` input, whatever run
+    made it. An associate outside every chain (a binding refused or undone) associated nothing."""
+    sources, previous = {}, {}
+    for link in links:
+        (sources if link["product"] == "sources" else previous)[link["job"]] = link["source_job"]
+    chain = {}
+    for job, _ in objects.values():
+        while job is not None and job in sources:
+            chain[sources[job]] = job
+            job = previous.get(job)
+    return chain
 
 
 def _fid(band: str, fids: dict[str, int]) -> int:
@@ -436,7 +458,12 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     by_field = defaultdict(list)
     for k, row in after.items():
         by_field[row["field"]].append((row["mjdobs"], k))
-    associated = {j["sources"]: j for j in run_jobs["associate"] if j.get("sources") is not None}
+    # An epoch is associated when its source set is in its field's official chain, by any run of the
+    # dataset (a run resumed in place of another must not associate it again), or when an associate
+    # of this run naming it has not published.
+    associated = {sset: {"id": job, "state": "published"} for sset, job in snap.chain.items()}
+    associated.update({j["sources"]: j for j in run_jobs["associate"]
+                       if j.get("sources") is not None and j["state"] != "published"})
     assoc_busy = {int(j["scope"]["field"]) for j in taken["associate"]}
     if not intake_pending:
         for field, epochs in sorted(by_field.items()):
