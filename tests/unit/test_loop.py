@@ -15,7 +15,10 @@ before it is reported held and the pass still drains; absent, nothing
 changes. Against Batch: a container that ended without
 its row recording it is marked failed with Batch's reason; a row marked
 failed whose Batch job is still running is Batch's retry, held pending; a
-local job (no Batch id) is left alone.
+local job (no Batch id) is left alone. PSFs: a new stem whose filter and
+SCA lack an official science or reference PSF gets one ``psf`` job for the
+pair, expecting both keys, and no intake; an official pair admits intakes;
+a psf job of the run pending for the pair submits nothing more.
 """
 
 from __future__ import annotations
@@ -329,3 +332,32 @@ def test_without_the_bound_the_reference_takes_every_row_and_nothing_is_held():
     subs, counts = loop.plan(snap(l2=l2), [stem(5, 1, 1)], SEL, max_intake=0)
     (ref,) = stages(subs, "reference")
     assert [i["source_job"] for i in ref["inputs"]] == [20, 22] and counts["held"] == []
+
+
+def test_a_missing_psf_submits_one_psf_job_and_no_intake_of_that_sca():
+    sel = loop.Selection.parse("F146", "8,9", "all")
+    stems = [stem(1, 1, 1), stem(2, 1, 1), stem(1, 1, 1, sca=9), stem(2, 1, 1, sca=9)]
+    psfs = {(8, 8, "science"): (10, 100), (8, 9, "science"): (12, 102), (8, 9, "reference"): (13, 103)}
+    subs, _ = loop.plan(snap(psfs=psfs), stems, sel)            # SCA 8 lacks its reference PSF
+    (psf,) = stages(subs, "psf")
+    assert psf["scope"] == {"dataset": D, "file": stem(1, 1, 1)}
+    assert [(e["product"], e["key"], e["binding"]) for e in psf["expects"]] == [
+        ("psfs", {"dataset": D, "fid": 8, "sca": 8, "kind": kind}, None) for kind in ("science", "reference")]
+    assert sorted(s["scope"]["file"] for s in stages(subs, "intake")) == [stem(1, 1, 1, sca=9),
+                                                                          stem(2, 1, 1, sca=9)]
+    # Neither SCA has a PSF: a job each, and no stem of either is admitted.
+    subs, _ = loop.plan(snap(psfs={}), stems, sel)
+    assert sorted(s["scope"]["file"] for s in stages(subs, "psf")) == [stem(1, 1, 1), stem(1, 1, 1, sca=9)]
+    assert stages(subs, "intake") == []
+
+
+def test_an_official_psf_pair_admits_intakes_and_submits_no_psf_job():
+    subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
+    assert stages(subs, "psf") == []
+    assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(2, 1, 1)]
+
+
+def test_a_pending_psf_job_submits_nothing_more():
+    pending = [{"id": 60, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": stem(1, 1, 1)}}]
+    subs, counts = loop.plan(snap(psfs={}, jobs=pending), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
+    assert subs == [] and counts["pending"]["psf"] == 1 and counts["new"] == 2

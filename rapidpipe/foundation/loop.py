@@ -33,11 +33,17 @@ is the authority.
 
 One pass, in order:
 
+- ``psf``: a job per (filter, SCA) of the new stems whose science or
+  reference ``psfs`` key has no official row, scoped to the first new stem
+  of that SCA and expecting both keys unbound, unless a ``psf`` job of this
+  run already serves the pair (pending, failed or published). That SCA's
+  stems wait for intake until both rows are official.
 - ``intake``: a job per listed ``_cal.asdf`` stem the selection admits for
   which no intake job of the dataset is published and no intake job of this
-  run exists, at most ``max_intake``; it names the science PSF of its filter
-  and SCA, and expects the ``exposures`` key only when nothing holds or
-  claims it (the 18 SCAs of an exposure share it).
+  run exists, and whose filter and SCA have official PSFs, at most
+  ``max_intake``; it names the science PSF of its filter and SCA, and
+  expects the ``exposures`` key only when nothing holds or claims it (the
+  18 SCAs of an exposure share it).
 - ``reference``: a job per (field, filter, SCA) with at least
   ``[reference.selection] min_frames`` official L2 rows, no official
   reference and none pending or failed, while no intake of the run is
@@ -92,7 +98,7 @@ SUFFIX = "_cal.asdf"
 PENDING = ("launched", "running")
 #: Batch's job states before it ends one (``SUCCEEDED`` and ``FAILED`` end it).
 BATCH_ACTIVE = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING")
-STAGES = ("intake", "reference", "difference", "associate", "packet")
+STAGES = ("psf", "intake", "reference", "difference", "associate", "packet")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -346,7 +352,27 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     new = sorted(s for s in admitted if s not in known)
     claimed = set(snap.exposures) | {stem_expid(j["scope"]["file"]) for j in pending["intake"]
                                      if STEM.match(j["scope"]["file"])}
-    for stem in new[:max_intake]:
+
+    # PSF: per (filter, SCA) of the new stems without both official rows, one job; its stems wait.
+    served = set()
+    for job in run_jobs["psf"]:
+        m = STEM.match(job["scope"]["file"])
+        served.add((_fid(m["filter"].upper(), snap.fids), int(m["sca"])))
+    unready = {}
+    for stem in new:
+        a = admitted[stem]
+        pair = (fids[a["filter"]], a["sca"])
+        if any((*pair, kind) not in snap.psfs for kind in ("science", "reference")):
+            unready.setdefault(pair, stem)
+    for (fid, sca), stem in sorted(unready.items()):
+        if (fid, sca) in served:
+            continue
+        out.append({"stage": "psf", "scope": {"dataset": d, "file": stem}, "inputs": [],
+                    "expects": [{"product": "psfs", "key": {"dataset": d, "fid": fid, "sca": sca,
+                                                            "kind": kind}, "binding": None}
+                                for kind in ("science", "reference")]})
+    ready_stems = [s for s in new if (fids[admitted[s]["filter"]], admitted[s]["sca"]) not in unready]
+    for stem in ready_stems[:max_intake]:
         a = admitted[stem]
         fid, expid = fids[a["filter"]], a["expid"]
         expects = [{"product": "l2files", "key": key(expid, a["sca"], fid), "binding": None}]
