@@ -185,6 +185,7 @@ verbose = int(config_input['JOB_PARAMS']['verbose'])
 debug = int(config_input['JOB_PARAMS']['debug'])
 upload_to_s3_bucket = ast.literal_eval(config_input['JOB_PARAMS']['upload_to_s3_bucket'])
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
@@ -337,6 +338,10 @@ def submit_job_to_aws_batch(proc_date,
                 {
                     'name': 'JOBS3BUCKET',
                     'value': job_info_s3_bucket
+                },
+                {
+                    'name': 'JOBLOGSS3BUCKET',
+                    'value': job_logs_s3_bucket_base
                 },
                 {
                     'name': 'JOBCONFIGFILENAME',
