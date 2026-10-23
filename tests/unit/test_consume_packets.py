@@ -4,16 +4,19 @@ Contracts: messages byte-equal to the outbox and covering every packet are
 clean; a message whose bytes differ, a packet never read, or no kept
 message at all is a failure; messages of other runs' sets are read and not
 kept; each set's outbox is loaded when its first message arrives, once for
-a set whose messages are contiguous.
+a set whose messages are contiguous; the topic is read from the offset the
+time lookup gives for the run, not from the earliest.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import io
+import types
 from pathlib import Path
 
 import fastavro
+import kafka
 
 _SPEC = importlib.util.spec_from_file_location(
     "consume_packets", Path(__file__).resolve().parents[2] / "scripts" / "consume_packets.py")
@@ -71,3 +74,58 @@ def test_a_sets_outbox_is_loaded_once_when_its_first_message_arrives(monkeypatch
     _check(monkeypatch, [(b"8:80", _container(80)), (b"7:70", _container(70)),
                          (b"7:71", _container(71))], loads)
     assert loads == [7]
+
+
+class _FakeConsumer:
+    """One partition of offsets 0..7 whose message at each offset is keyed by it."""
+
+    END, FOUND = 8, 5
+
+    def __init__(self, **config):
+        self.config, self.positions, self.since = config, {}, None
+
+    def partitions_for_topic(self, topic):
+        return {0}
+
+    def assign(self, partitions):
+        pass
+
+    def end_offsets(self, partitions):
+        return dict.fromkeys(partitions, self.END)
+
+    def offsets_for_times(self, timestamps):
+        self.since = set(timestamps.values())
+        return dict.fromkeys(timestamps, types.SimpleNamespace(offset=self.FOUND, timestamp=0))
+
+    def seek(self, tp, offset):
+        self.positions[tp] = offset
+
+    def position(self, tp):
+        return self.positions[tp]
+
+    def poll(self, timeout_ms):
+        batch = {tp: [types.SimpleNamespace(offset=o, key=str(o).encode(), value=b"")
+                      for o in range(start, self.END)] for tp, start in self.positions.items()}
+        self.positions = dict.fromkeys(self.positions, self.END)
+        return batch
+
+    def close(self):
+        pass
+
+
+def test_the_read_starts_at_the_offset_the_time_lookup_gives_not_the_earliest(monkeypatch):
+    consumers = []
+
+    def consumer(**config):
+        consumers.append(_FakeConsumer(**config))
+        return consumers[-1]
+
+    monkeypatch.setattr(kafka, "KafkaConsumer", consumer)
+    monkeypatch.setattr(consume_packets.publish_kafka, "endpoint",
+                        lambda s: {"topic": "t", "bootstrap_servers": "b", "max_request_bytes": 1})
+    monkeypatch.setattr(consume_packets.publish_kafka, "client_config", lambda servers: {})
+    ranges = {}
+    keys = [key for key, _ in consume_packets.read_topic({}, 1234, ranges)]
+    assert consumers[0].since == {1234}
+    assert keys == [b"5", b"6", b"7"]
+    assert ranges == {0: (5, 7)}
