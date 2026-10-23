@@ -45,6 +45,7 @@ OPTIONAL_BY_REQUIREMENT = {
     "roman_datamodels": "roman_datamodels",
     "gwcs": "gwcs",
     "sympy": "sympy",
+    "photutils": "photutils.psf",
 }
 
 

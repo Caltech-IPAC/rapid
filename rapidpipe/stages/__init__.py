@@ -1,8 +1,8 @@
 # ported-from: none
 """Stage entrypoints: one module per stage, each directly runnable.
 
-Holds one module per stage. The foundation's stages (``import``, ``associate``,
-``packet``, ``reference``, ``difference``) export ``run(job)``
+Holds one module per stage. The foundation's stages (``import``, ``intake``, ``psf``,
+``associate``, ``packet``, ``reference``, ``difference``) export ``run(job)``
 (:class:`rapidpipe.foundation.local.JobContext`); the stages still on the
 older contract, the fixed list ``admit``, ``finalize``,
 export ``main(argv)`` built on ``rapidpipe.stages.contract``. A stage module may import
