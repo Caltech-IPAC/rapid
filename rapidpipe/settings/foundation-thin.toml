@@ -46,6 +46,14 @@ F158 = 26.4
 F184 = 25.9
 F213 = 25.4
 
+[psf]
+# New, not dev's: the psf stage (rapidpipe.stages.psf) fetches the CRDS ePSF
+# reference an L2 file names from this server, by name, and reduces it to a
+# size x size stamp at the detector's pixel scale. size is the copied F146
+# WebbPSF files' NAXIS1 (sciimage_psf_f146_sca08.fits, 61).
+crds_server = "https://roman-crds.stsci.edu"
+size = 61
+
 [associate]
 # Degrees (dev's crossmatch match_radius).
 match_radius = 0.00001528
@@ -79,6 +87,8 @@ reference = 6144
 difference = 24576
 associate = 1024
 packet = 2048
+# New: the psf stage holds one 178.6 MB ePSF reference and its 42 MB array.
+psf = 2048
 
 [kafka]
 # New, not dev's: `rapidpipe publish` produces official packet sets to the

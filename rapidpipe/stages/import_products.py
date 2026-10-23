@@ -15,7 +15,7 @@ The job's scope names what to import, relative to ``source_dir``::
      "epochs": [{"expid": 1, "rid": 2, "pid": 3, "rfid": 4,
                  "l2": "<L2 FITS>", "difference": "<difference job directory>"}],
      "reference": {"rfid": 4, "dir": "<reference job directory>"},
-     "psf": {"psfid": 5, "kind": "science", "path": "<science-image PSF>"},
+     "psf": {"kind": "science", "path": "<science-image PSF>"},
      "gaia": {"name": "gaia", "version": "DR3", "path": "<Gaia Parquet>"}}
 
 Every key is optional. ``epochs`` holds at most one exposure, because a
@@ -35,8 +35,9 @@ them, as the difference stage does. ``reference`` writes
 ``refimages`` and ``refimcatalogs`` (the mosaic SExtractor catalog, type
 1); ``psf`` writes ``psfs`` (a science-image PSF, ``kind`` ``science``, or
 the reference-image PSF the difference stage also reads, ``kind``
-``reference``; ``psfid`` may be omitted, for a PSF the source system never
-registered); ``gaia`` writes ``catalogs`` under the job's dataset.
+``reference``; its ``psfid`` is drawn from the table's identity, never
+supplied: an explicit id ahead of the sequence makes a later drawn insert
+fail on the key, and the ``psf`` stage's rows are drawn); ``gaia`` writes ``catalogs`` under the job's dataset.
 
 The kind is declared in the scope and is part of the PSF's key. `dev`'s
 PSF files carry it as ``PSFKIND`` (:data:`PSFKIND`): a file whose keyword
@@ -255,6 +256,5 @@ def _psf(job: JobContext, source: Path, psf: dict) -> tuple[dict, str | None]:
     if keyword is not None and keyword != PSFKIND.get(kind):
         raise ValueError(f"{path.name}: PSFKIND {keyword!r} is not a {kind} PSF ({PSFKIND.get(kind)!r})")
     url, md5 = _copy(job, path)
-    ids = {"psfid": psf["psfid"]} if "psfid" in psf else {}  # none: the table's identity draws one
-    return {**ids, "dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind,
+    return {"dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind,
             "filename": url, "checksum": md5, "status": STATUS_GOOD}, keyword

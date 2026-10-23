@@ -182,16 +182,16 @@ def test_the_source_set_is_the_brightest_inside_the_bounds(tmp_path, source):
 def test_reference_psf_and_gaia_write_their_tables(tmp_path, source):
     prefix = run_import(tmp_path, source, {
         "reference": {"rfid": 55, "dir": "ref"},
-        "psf": {"psfid": 3, "kind": "science", "path": "psf.fits"},
+        "psf": {"kind": "science", "path": "psf.fits"},
         "gaia": {"name": "gaia", "version": "DR3", "path": "gaia.parquet"}}, "shared")
     for table in ("refimages", "refimcatalogs", "psfs", "catalogs"):
         assert set(pq.read_schema(prefix / f"{table}.parquet").names) == (
-            schema_columns(table) - {"rfcatid"})
+            schema_columns(table) - {"rfcatid", "psfid"})
     (ref,), (cat,) = read(prefix, "refimages"), read(prefix, "refimcatalogs")
     assert (ref["rfid"], ref["field"], ref["fid"], ref["nframes"]) == (55, 4658155, 8, 25)
     assert (cat["rfid"], cat["cattype"]) == (55, import_products.REFERENCE_CATALOG_TYPE)
-    assert [(p["psfid"], p["fid"], p["sca"], p["kind"]) for p in read(prefix, "psfs")] == [
-        (3, 8, 8, "science")]
+    # No psfid: the table's identity draws it.
+    assert [(p["fid"], p["sca"], p["kind"]) for p in read(prefix, "psfs")] == [(8, 8, "science")]
     # The file has no PSFKIND: imported under the declared kind, the absence recorded.
     manifest = json.loads((prefix / "manifest.json").read_text())
     assert manifest["psf"] == {"kind": "science", "PSFKIND": None}
