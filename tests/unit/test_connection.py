@@ -627,3 +627,19 @@ def test_explicit_endpoint_and_credentials_still_win_over_the_tree(monkeypatch):
     assert fake_ssm.calls == []
     assert connect_calls[0]["host"] == "explicit-host"
     assert connect_calls[0]["user"] == "explicit-user"
+
+
+def test_the_tree_read_outlasts_a_throttling_burst(monkeypatch):
+    """The default SSM client retries throttling with backoff for minutes, not botocore's four tries."""
+    boto3 = pytest.importorskip("boto3")
+    made = []
+
+    def fake_client(service, config=None):
+        made.append((service, config))
+        return _FakeSSMClient(_TREE_DB_VALUES, path=_TREE_PATH)
+
+    monkeypatch.setattr(boto3, "client", fake_client)
+    conn_mod._fetch_parameter_tree_db_values(_TREE_PATH)
+    (service, config), = made
+    assert service == "ssm"
+    assert config.retries["mode"] == "standard" and config.retries["max_attempts"] >= 20
