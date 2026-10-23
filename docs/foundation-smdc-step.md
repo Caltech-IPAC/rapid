@@ -3495,6 +3495,227 @@ runs 13 to 16 stay live and untouched.
    - `official` 3,920 rows before (part 8 step 4), **3,949** after; the
      last change group **2377**; database 414 MB.
 
+2. **The six other filters on SCA 8 of the 54 pointings, one dataset and
+   one live run each, and one script for a run's checks.** PR 332
+   (`c58bd2cd`) adds `scripts/check_run.sh --run <id> [--settings F]`:
+   `validate_run.py`, `read_packets.py` over the run's bound packet sets
+   eight processes at a time, and `consume_packets.py`, each one's output
+   to stderr and one line, `Check run <id>: CLEAN|FAIL validate <p>/<n>
+   <s> reader <clean>/<sets> <s> consumer <seen>/<expected> <s>`, exiting
+   non-zero on any failure (run 17: `CLEAN validate 6/6 9 s reader 3/3 4 s
+   consumer 628/628 1214 s`).
+
+   Each filter's bound, the midpoint of its own pass 3 and pass 4 start
+   times at `001_0001` SCA 8, re-read from the two `_wcs.asdf` sidecars
+   (`meta.exposure.start_time` as MJD), equal to the brief's values:
+
+   | filter | dataset | pass 3 | pass 4 | `before_mjd` |
+   |---|---|---|---|---|
+   | F087 | `r00342-f087` | 61590.00852 | 61591.51278 | 61590.76065 |
+   | F106 | `r00342-f106` | 61590.22362 | 61591.72788 | 61590.97575 |
+   | F129 | `r00342-f129` | 61590.43852 | 61591.94278 | 61591.19065 |
+   | F158 | `r00342-f158` | 61590.86840 | 61592.37266 | 61591.62053 |
+   | F184 | `r00342-f184` | 61591.08330 | 61592.58756 | 61591.83543 |
+   | F213 | `r00342-f213` | 61591.29840 | 61592.80266 | 61592.05053 |
+
+   The topic before the loops (05:55 UTC): one partition, offsets 73,505
+   to 135,304 (61,799 messages held), no topic-level overrides; the
+   cluster's configuration (revision 3) sets `log.retention.ms` 604800000
+   (7 days) and no `log.retention.bytes` (unbounded by size), replication
+   3, `min.insync.replicas` 2, three `kafka.m7g.large` brokers with 2,000 GB
+   of EBS each.
+
+   Per filter, the run recipe of step 1 with the filter's bound and **no
+   PSF imported**: `rp run create --revision <sha> --survey HLWAS
+   --dataset r00342-f<nnn>` with the overlay, one change group opening it
+   live, Gaia imported under the dataset (`gaia-r00342-f<nnn>`, DR3), then
+   six loops started together, each in its own script and log, under
+   `timeout 10800`:
+
+   ```sh
+   rp loop --run <id> --filters F<nnn> --scas 8 --pointings all --job-definition rapid-rebuild:<rev> --max-intake 1000
+   ```
+
+   **Three seen failures, each fixed by code, each resumed by a new live
+   run under the same dataset** (the brief's recipe), plus transient
+   start failures rerun:
+
+   - **SSM throttling** (05:51 UTC, `rapid-rebuild:39`, runs 18 to 23 at
+     `7ee86ca6`). Every loop's second pass submitted its filter's intakes
+     at once, 3,456 in a minute; **1,448 failed** reading the database
+     parameters from the SSM tree (`ThrottlingException ...
+     GetParametersByPath (reached max retries: 4)`), 1,351 at their first
+     connection (exit 64) and 97 at publish (exit 70). PR 331 (`cb358461`)
+     builds the SSM client with botocore's standard retry mode and 25
+     attempts. **`rapid-rebuild:40`**; runs **24 to 29** made live in place
+     of 18 to 23 (groups 4404 to 4409); the loops re-planned exactly the
+     1,448 stems no intake of the dataset had published, and none failed.
+   - **The Kafka publish hung** (06:31 UTC, five of six loops; F213 had
+     drained at 06:32:54, exit 0). A pass sent every unstamped set before
+     one flush; batches waited past kafka-python's 120 s delivery timeout,
+     and kafka-python 3.0.11's expiry path raised `KeyError` in the
+     producer's sender thread, which died, leaving `flush()` waiting for
+     ever. The leader broker was not the limit (produce time 4.6 ms, CPU
+     27%, 46.7 MB/s in, 5-minute maxima). PR 333 (`dacf49d2`): `publish`
+     sends, flushes (bounded at 120 s) and stamps one set at a time, and
+     the producer's close is bounded. **`rapid-rebuild:41`**. The hung loops
+     were stopped at 06:43 and `rapidpipe publish --run <n>` re-sent runs
+     24 to 28's 449 unstamped sets (533 to 548 s each, five at once); runs
+     **30 to 34** made live in place of 24 to 28.
+   - **The loop re-associated under a resumed run** (seen 07:01 UTC). Its
+     associate rule read only *this run's* associate jobs, so runs 30 and
+     34 associated all 108 epochs of F087 and F184 again onto the official
+     object sets, and runs 31 to 33 216 each with 63 packet sets on the
+     doubled chains. Runs 30 to 34 were taken off live at 07:02 (groups
+     10956 to 10960), so their in-flight jobs' bindings were refused (91).
+     `official undo` of their groups, newest first, stopped after 222 of
+     927: an undo reopens a closed binding as a new row, so the older
+     group's row it would close was already closed. The state was then
+     restored in **one change group, 11184**: for each of the 333 keys runs
+     30 to 34 had bound, the binding open before their first group (270
+     object sets of runs 24 to 28; 63 packet keys unbound). Checked after:
+     every open binding of the six datasets names a job of runs 18 to 29,
+     and each field's official chain (walked back through its associates'
+     inputs) holds only runs 24 to 29's associates. Nothing was deleted;
+     runs 30 to 34's 1,018 jobs and their outputs stay, unbound (927 bindings undone or restored, 91 refused). PR 334
+     (`a3f1d321`): an epoch is associated when its source set is in the
+     chain of its field's official object set, whatever run made it.
+     **`rapid-rebuild:42`**; runs **35 to 39** made live (groups 11185 to
+     11189). A dry plan before the loops: F087 and F184 nothing to submit,
+     F106, F129 and F158 one associate and one packet per field.
+   - **Task failed to start** (08:00 to 08:36 UTC, runs 36 to 38): 15
+     jobs (2 associates, 13 packets; 16 failures) failed with `DockerTimeoutError: Could not
+     transition to created; timed out after waiting 4m0s`, on two
+     container instances, before any container ran; Batch's retry
+     strategy retries exit code 75 only. Each was rerun with `rp job submit
+     --job <id> --job-definition rapid-rebuild:42` (15535 twice) and its
+     loop restarted.
+
+   Runs, revisions and jobs per filter (runs 30 to 34 left out of every
+   figure below; their 1,018 jobs, 11546 to 12563, are unbound):
+
+   | filter | runs (revision) | psf job | jobs | loop drained |
+   |---|---|---|---|---|
+   | F087 | 18 (`7ee86ca6`), 24 (`cb358461`), 35 (`a3f1d321`) | 2471 | 2464 to 11398 | 07:12 (run 24's chain complete 06:31) |
+   | F106 | 19, 25, 36 | 2475 | 2465 to 16173 | 09:04 |
+   | F129 | 20, 26, 37 | 2474 | 2466 to 16035 | 08:37 |
+   | F158 | 21, 27, 38 | 2473 | 2467 to 16142 | 08:56 |
+   | F184 | 22, 28, 39 | 2470 | 2468 to 11255 | 07:12 (run 28's chain complete 06:31) |
+   | F213 | 23, 29 | 2472 | 2469 to 11173 | **06:32:57, exit 0** |
+
+   Every filter: one psf job in the first pass, two `psfs` rows bound,
+   the intakes held one pass and then admitted (every `EPSFREF` assertion
+   held: no intake refused), 54 references of exactly three frames, 54 x
+   (epochs - 3) differences, chains of 2 (F087, F184, F213), 13 (F106,
+   F129) and 14 (F158) per field, every differenced epoch a packet set.
+
+   **The null test per filter**, medians over each dataset's official
+   differences (passes 4 and later; `max_sources` 500; S/N is `fluxfit /
+   fluxerr` of the kept rows; packets per differenced epoch), beside F146
+   under the same rule and the same derived PSF (step 1's run 17, three
+   epochs at `001_0001`; part 8 step 4's run 15, dev's copied PSF, 0.23).
+   Passes 12 and 13 are 107.5 s exposures (the others 294.1 s) and are in
+   F106, F129 and F158 only: their epochs are the "short" rows, as an
+   observation.
+
+   | filter | epochs | before the cap | kept | S/N > 20 | bright-residual fraction | packets per epoch | packets | sets |
+   |---|---|---|---|---|---|---|---|---|
+   | F146 (run 17) | 3 | 1,035 | 500 | 79 | 0.158 | 213 | 628 | 3 |
+   | F087 | 108 | 915 | 500 | 110 | 0.220 | 205 | 22,048 | 108 |
+   | F106 | 648 | 971 | 500 | 97 | 0.194 | 207 | | |
+   | F106 short | 54 | 900 | 500 | 44 | 0.088 | 152 | 141,954 (both) | 702 |
+   | F129 | 648 | 1,106 | 500 | 92 | 0.184 | 209 | | |
+   | F129 short | 54 | 960 | 500 | 44 | 0.088 | 165 | 143,366 (both) | 702 |
+   | F158 | 648 | 1,452 | 500 | 148 | 0.296 | 215 | | |
+   | F158 short | 108 | 1,183 | 500 | 78 | 0.156 | 186 | 158,988 (both) | 756 |
+   | F184 | 108 | 1,821 | 500 | 333 | **0.665** | 236 | 25,737 | 108 |
+   | F213 | 108 | 333 | **333** | 33 | 0.101 | 98 | 10,871 | 108 |
+
+   Descriptive only (filter, depth and PSF change together across rows):
+   F087, F106 and F129 sit near F146 (0.18 to 0.22 against 0.16); F158 is
+   higher (0.30) and **F184 is four times F146 (0.665)**, with 1,821
+   detections before the cap; F213 is the shallowest band (333 detections,
+   the cap not reached, consistent with the data ledger's fewer Gaia
+   matches at F213). The short exposures halve the bright-residual
+   fraction in each band that has them (0.088 against 0.18 to 0.19;
+   F158 0.156 against 0.296) and carry about a quarter fewer packets per
+   epoch. 503,964 packets over 2,484 differenced epochs.
+
+   Per stage, medians over the six datasets' runs (queue wait is Batch's
+   created to started, container started to ended; peak RSS is `job
+   run`'s `peak_rss_kib`, the larger of self and children, 8 jobs sampled
+   per stage per filter; bytes out per job from the run prefixes):
+
+   | stage | jobs | failed | queue wait s (F087 / F106 / F129 / F158 / F184 / F213) | container s (same order) | peak RSS MiB median (max) | asked MiB | bytes out per job | F146 run 17 container |
+   |---|---|---|---|---|---|---|---|---|
+   | psf | 6 | 0 | 159 / 154 / 154 / 155 / 159 / 158 | 38 / 40 / 39 / 39 / 40 / 40 | 326 to 333 | 2,048 | 44 KB | 10.9 (9.1 s job) |
+   | intake | 4,904 | 1,448 (SSM, re-planned) | 249 / 301 / 301 / 305 / 244 / 249 | 78 / 64 / 62 / 61 / 79 / 74 | 907 (911) | 2,048 | 200 MB | 37.6 |
+   | reference | 324 | 0 | 10 / 93 / 92 / 93 / 16 / 17 | 120 / 125 / 125 / 123 / 120 / 99 | 1,439 (1,440) | 6,144 | 593 MB | 45.7 (3 frames) |
+   | difference | 2,484 | 0 | 100 / 225 / 210 / 224 / 114 / 98 | 220 / 278 / 274 / 289 / 239 / 181 | 14,885 (15,013) | 24,576 | 248 MB | 232.6 |
+   | associate | 2,484 | 2 (start, rerun) | 129 / 17 / 21 / 31 / 38 / 130 | 9 / 4 / 4 / 4 / 9 / 7 | 233 (238) | 1,024 | 21 to 100 KB | 2.8 |
+   | packet | 2,484 | 13 (start, rerun) | 32 / 44 / 62 / 59 / 28 / 31 | 29 / 130 / 128 / 141 / 31 / 24 | 850 to 865 (877) | 2,048 | 19 to 46 MB | 30.2 |
+
+   - **The packet's container time grows with the chain**: 24 to 31 s
+     median at depth 2, 128 to 141 s at depths 13 and 14 (run 37's 608
+     packet jobs: 147 s median), while its memory stays flat (877 MiB at
+     most). The difference's container time rises with the job count
+     (220 s at 108 jobs, 274 to 289 s at 702: more containers per
+     instance).
+   - **The psf job** waited 154 to 159 s and ran 38 to 40 s (run 17: 9.1 s
+     alone): six fetching the 178.6 MB references at once.
+   - Instances: differences on m6a.8xlarge, r6i.8xlarge and r7i.8xlarge
+     (and one m6a.2xlarge), packets on those and m6a.2xlarge and
+     m6a.4xlarge; no family pinned.
+   - **Run prefixes**: F087 117.8 GB, F106 408.0 GB, F129 408.4 GB, F158
+     435.6 GB, F184 118.5 GB, F213 112.9 GB: **1.60 TB** for 3,456 epochs
+     (0.46 GB per epoch; the brief estimated 1.8 TB).
+   - **Rows** (official): `sources` 54,000 / 351,000 / 351,000 / 378,000 /
+     54,000 / 36,770 (1.22 million); `forced` 32,981 / 973,711 / 986,458 /
+     1,163,368 / 37,834 / 16,355 (3.21 million: forced rows grow with the
+     chain, about 1,400 per epoch at depth 13 against 300 at depth 2).
+     Database **2.27 GB** (414 MB after step 1).
+   - **Kafka**: about 30 packets per second per loop (F106's full passes:
+     11,100 packets in 355 to 370 s), five loops publishing together; the
+     publish re-sends of runs 24 to 28: 87 to 101 sets in 533 to 548 s
+     each, five at once.
+   - **Wall time**: the loops ran 05:43 to 09:04 UTC (3 h 21 min) including
+     the three fixes and their redeploys; F213, whose only interruption
+     was the SSM failure, drained 49 min after its first loop started
+     (29.9 min for its resumed run 29). F106, F129 and F158's chains of 13
+     and 14 took about 6 min a pass (one epoch per field per pass,
+     publish-bound: 54 sets of about 205 packets).
+
+   **The checks** (`scripts/check_run.sh` per run as soon as its chain was
+   final; `validate_run.py` alone on the intake-only runs 18 to 23, whose
+   consumer check would fail by its zero-kept rule; runs 30 to 34 not
+   checked: abandoned, unbound). State at this task's cutoff, 09:41 UTC:
+
+   | filter | run | validate | reader | consumer | verdict |
+   |---|---|---|---|---|---|
+   | all six | 18 to 23 | 6/6 each (7 to 39 s) | (no packets) | (no packets) | PASS |
+   | F087 | 24 | 6/6 in 269 s (after PR 335; 5/6 before) | 108/108 in 51 s | 22,048/22,048 in 5,073 s | CLEAN, from two invocations |
+   | F106 | 25 | 6/6 in 248 s | CLEAN | still reading at the cutoff | open |
+   | F129 | 26 | 6/6 in 264 s | CLEAN | still reading | open |
+   | F158 | 27 | 6/6 in 259 s | CLEAN | still reading | open |
+   | F184 | 28 | **`Check run 28: CLEAN validate 6/6 317 s reader 108/108 52 s consumer 25737/25737 5287 s`** | | | **CLEAN** |
+   | F213 | 29 | **`Check run 29: CLEAN validate 6/6 209 s reader 108/108 34 s consumer 10871/10871 2508 s`** | | | **CLEAN** |
+   | F106 | 36 | running | | | open |
+   | F129 | 37 | 6/6 in 1,554 s | running | | open |
+   | F158 | 38 | running | | | open |
+
+   - **A validation false failure, fixed**: run 24's chain check failed
+     one of 28,232 objects, a source catalogued twice in one difference
+     image (sids 941 and 943 of job 8034, 0.07 mas apart, equal flux to
+     float32), whose `stdevflux` from the one-pass sums is off by the
+     formula's cancellation; PR 335 (`db2f72f9`) sets the check's tolerance
+     at that floor (`1e-7 * max|f|`); run 24's chain check then passed.
+   - **The consumer check is the whole cost**: it reads the topic from
+     its earliest offset for every run, about 40 messages a second on one
+     core: run 29's 2,508 s and runs 24 and 28's 5,073 and 5,287 s, and
+     more for each later run as the topic grows (about 620 thousand
+     messages after these loops). `validate_run.py` grows with the chain
+     too (run 37, depth 13 to 14: 1,554 s).
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
