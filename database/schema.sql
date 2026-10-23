@@ -20,7 +20,7 @@
 --   refimages                          dataset, field, fid
 --   psfs                               dataset, fid, sca, kind
 --   objects                            dataset, survey, field
---   catalogs                           name, version
+--   catalogs                           dataset, name, version
 --
 -- A set (a reference image, a source set, an object set, a packet set) is
 -- identified by its job: its child rows (refimimages, refimcatalogs,
@@ -457,10 +457,11 @@ CREATE INDEX forced_aid_idx ON forced (aid);
 -- Reference catalogs as products: Gaia, NED, NED-LVS, solar-system predictions.
 CREATE TABLE catalogs (
     job bigint NOT NULL REFERENCES jobs (id),
+    dataset text NOT NULL,
     name text NOT NULL,
     version text NOT NULL,
     location text NOT NULL,
-    UNIQUE (name, version, job)
+    UNIQUE (dataset, name, version, job)
 );
 
 -- Gaia match rows of a packet set, each naming the catalog job matched against.
@@ -570,7 +571,7 @@ CREATE VIEW catalogs_official AS
 SELECT t.*, o.id AS binding, j.run
 FROM catalogs t
 JOIN official o ON o.closed_at IS NULL AND o.product = 'catalogs' AND o.job = t.job
-    AND o.key = jsonb_build_object('name', t.name, 'version', t.version)
+    AND o.key = jsonb_build_object('dataset', t.dataset, 'name', t.name, 'version', t.version)
 JOIN jobs j ON j.id = t.job;
 
 -- The official object set's full membership: the memberships of every set

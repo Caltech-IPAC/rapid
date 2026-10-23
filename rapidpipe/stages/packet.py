@@ -26,7 +26,8 @@ dataset (the run's). Recorded inputs, every one an ``input`` row:
 - ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``).
 - ``packets``: the predecessor packet sets, none for a first epoch;
   their ``forced`` rows are reused, never re-measured.
-- ``catalogs``: exactly one, the Gaia product (name ``gaia``).
+- ``catalogs``: exactly one, the Gaia product, by its whole key (``dataset``,
+  ``name``, ``version``; a key without ``dataset``, as runs before it named, reads too).
 - ``refimages``: exactly one, the reference whose mosaic catalog
   (``refimcatalogs`` cattype 1) gives the star and galaxy matches.
 
@@ -296,8 +297,9 @@ def _read(job: JobContext) -> Read:
                 row.pop("job")
                 reuse[row["forced_id"]] = dict(row)
 
-        cur.execute("SELECT location FROM catalogs WHERE job = %s AND name = %s AND version = %s",
-                    (gaia_in["source_job"], gaia_in["key"]["name"], gaia_in["key"]["version"]))
+        where, values = _key_where(gaia_in["key"], "c")
+        cur.execute("SELECT c.location FROM catalogs c WHERE c.job = %s AND " + where,
+                    (gaia_in["source_job"], *values))
         gaia_path = get(cur.fetchone()["location"])
         cur.execute("SELECT c.filename FROM refimcatalogs c JOIN refimages r"
                     " ON r.job = c.job AND r.rfid = c.rfid"

@@ -7,7 +7,12 @@ field's associate chain submits one epoch at a time in ``mjdobs`` order and
 waits while an earlier exposure of the field is upstream; two fields
 advance in the same pass; a pass with nothing new, pending or to submit is
 drained and the verb exits 0; the listing pages only the observations of
-the selected filters. Against Batch: a container that ended without
+the selected filters; the packet stage's Gaia input names the catalog by
+its whole key, dataset included. With ``before_mjd`` set: the reference
+names only rows before it and waits while a selected stem is unpublished;
+a difference is submitted only at or after it; a field with too few rows
+before it is reported held and the pass still drains; absent, nothing
+changes. Against Batch: a container that ended without
 its row recording it is marked failed with Batch's reason; a row marked
 failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone.
@@ -65,7 +70,7 @@ def snap(**kw) -> loop.Snapshot:
                 published_stems=set(), jobs=[],
                 psfs={(8, 8, "science"): (10, 100), (8, 8, "reference"): (11, 101)},
                 exposures=set(), l2={}, refs={}, diffs={}, sources={}, objects={}, packets={},
-                gaia={"key": {"name": "gaia-x", "version": "DR3"}, "job": 12})
+                gaia={"key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "job": 12})
     base.update(kw)
     return loop.Snapshot(**base)
 
@@ -162,6 +167,8 @@ def test_associate_chain_is_chronological_one_at_a_time_and_waits_for_upstream()
     assert {"product": "objects", "key": {"dataset": D, "survey": "HLWAS", "field": 7},
             "source_job": 60} in pk["inputs"]
     assert not [i for i in pk["inputs"] if i["product"] == "packets"]
+    assert {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"},
+            "source_job": 12} in pk["inputs"]
 
 
 def test_an_intake_pending_holds_association():
@@ -273,3 +280,52 @@ def test_a_local_job_without_a_batch_id_is_left_alone():
     conn, batch = Rows([(90, "import", "running", None)]), Batch({})
     checked = loop.reconcile(conn, 12, batch)
     assert batch.calls == [] and conn.updates == [] and checked["described"] == 0
+
+
+BOUND = {**SETTINGS, "reference": {"selection": {"min_frames": 2, "before_mjd": 2.5}}}
+
+
+def test_the_bound_reference_names_only_rows_before_it_and_waits_for_the_selections_intake():
+    k1, k2, k3 = ((expid(p, 1, 1), 8, 8) for p in (1, 2, 3))
+    l2 = {k1: l2row(7, 1.0, 20), k2: l2row(7, 2.0, 21), k3: l2row(7, 3.0, 22)}
+    listed = [stem(p, 1, 1) for p in (1, 2, 3)]
+    subs, _ = loop.plan(snap(settings=BOUND, l2=l2, published_stems=set(listed)), listed, SEL)
+    (ref,) = stages(subs, "reference")
+    assert [i["source_job"] for i in ref["inputs"]] == [20, 21]
+
+    # A selected stem not yet published (listed, beyond max_intake): no intake pending, but no reference.
+    subs, counts = loop.plan(snap(settings=BOUND, l2={k1: l2[k1], k3: l2[k3]},
+                                  published_stems={listed[0], listed[2]}), listed, SEL, max_intake=0)
+    assert stages(subs, "reference") == [] and counts["pending"]["intake"] == 0 and counts["held"] == []
+
+
+def test_the_bound_differences_only_rows_at_or_after_it():
+    k1, k2, k3 = ((expid(p, 1, 1), 8, 8) for p in (1, 2, 3))
+    l2 = {k1: l2row(7, 1.0, 20), k2: l2row(7, 2.5, 21), k3: l2row(7, 3.0, 22)}
+    subs, _ = loop.plan(snap(settings=BOUND, l2=l2, refs={(7, 8): 30}), [], SEL)
+    assert sorted(d["scope"]["expid"] for d in stages(subs, "difference")) == [k2[0], k3[0]]
+
+    # Once those two are associated the chain starts at the bound, not at the reference's rows.
+    sources = {k2: 42, k3: 43}
+    subs, _ = loop.plan(snap(settings=BOUND, l2=l2, refs={(7, 8): 30}, diffs=sources, sources=sources),
+                        [], SEL)
+    (a,) = stages(subs, "associate")
+    assert a["inputs"][0]["source_job"] == 42
+
+
+def test_a_field_with_too_few_rows_before_the_bound_is_held_and_the_pass_drains():
+    k3, k4 = (expid(3, 1, 1), 8, 8), (expid(4, 1, 2), 8, 8)
+    l2 = {k3: l2row(7, 3.0, 22), k4: l2row(9, 1.0, 23)}         # field 7: none before; 9: one
+    done = [stem(3, 1, 1), stem(4, 1, 2)]
+    subs, counts = loop.plan(snap(settings=BOUND, l2=l2, published_stems=set(done)), done, SEL)
+    assert subs == []
+    assert [(h["field"], h["reason"].split()[0]) for h in counts["held"]] == [(7, "0"), (9, "1")]
+    assert counts["new"] == 0 and not any(counts["pending"].values())
+
+
+def test_without_the_bound_the_reference_takes_every_row_and_nothing_is_held():
+    k1, k3 = (expid(1, 1, 1), 8, 8), (expid(3, 1, 1), 8, 8)
+    l2 = {k1: l2row(7, 1.0, 20), k3: l2row(7, 3.0, 22)}
+    subs, counts = loop.plan(snap(l2=l2), [stem(5, 1, 1)], SEL, max_intake=0)
+    (ref,) = stages(subs, "reference")
+    assert [i["source_job"] for i in ref["inputs"]] == [20, 22] and counts["held"] == []

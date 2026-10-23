@@ -196,7 +196,7 @@ def test_reference_psf_and_gaia_write_their_tables(tmp_path, source):
     manifest = json.loads((prefix / "manifest.json").read_text())
     assert manifest["psf"] == {"kind": "science", "PSFKIND": None}
     (gaia,) = read(prefix, "catalogs")
-    assert (gaia["name"], gaia["version"]) == ("gaia", "DR3")
+    assert (gaia["dataset"], gaia["name"], gaia["version"]) == ("D", "gaia", "DR3")
     assert Path(gaia["location"][7:]).is_file()
     assert not (prefix / "refimimages.parquet").exists()
 

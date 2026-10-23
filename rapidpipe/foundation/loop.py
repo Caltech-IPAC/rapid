@@ -41,7 +41,18 @@ One pass, in order:
 - ``reference``: a job per (field, filter, SCA) with at least
   ``[reference.selection] min_frames`` official L2 rows, no official
   reference and none pending or failed, while no intake of the run is
-  pending (so a reference coadds every epoch a drain admits).
+  pending (so a reference coadds every epoch a drain admits). A field two
+  SCAs share gets one, from the first SCA in order with enough frames.
+- With ``[reference.selection] before_mjd`` set, the reference's epochs are
+  bounded: it names only the field's official L2 rows with ``mjdobs <
+  before_mjd``, and waits until the selection's intake has drained (no
+  listed stem of the selection unpublished and no intake of the run
+  pending: a pass admits at most ``max_intake`` stems, so a pass with no
+  intake pending alone does not mean every pre-bound epoch is in). A field
+  with fewer than ``min_frames`` such rows once the intake has drained gets
+  no reference and is reported under ``held`` with the reason, every pass;
+  it does not stop the drain. Rows before the bound are the reference's:
+  they get no difference, associate or packet.
 - ``difference``: a job per official L2 row whose field has an official
   reference and whose key has no official difference and no difference job
   of this run pending or failed.
@@ -191,7 +202,7 @@ class Snapshot:
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
     objects: dict[int, tuple[int, int]]                          # field -> (job, binding)
     packets: dict[tuple[int, int, int], int]                     # key -> packet set job
-    gaia: dict | None                                            # {"key", "job"}
+    gaia: dict | None                                            # the dataset's {"key", "job"}
 
 
 def _rows(cur, sql: str, params=()) -> list[dict]:
@@ -228,14 +239,13 @@ def snapshot(conn, run: int) -> Snapshot:
         l2 = {_l2key(r): {"field": r["field"], "mjdobs": r["mjdobs"], "job": r["job"]}
               for r in _rows(cur, "SELECT expid, sca, fid, field, mjdobs, job FROM l2files_official"
                                   " WHERE dataset = %s", (d,))}
-        gaia = _rows(cur, "SELECT o.key, o.job FROM official o JOIN jobs j ON j.id = o.job"
-                          " WHERE o.closed_at IS NULL AND o.product = 'catalogs' AND j.run = %s", (run,))
     conn.commit()
     by = defaultdict(list)
     for b in bound:
         by[b["product"]].append(b)
+    gaia = [{"key": b["key"], "job": b["job"]} for b in by["catalogs"]]
     if len(gaia) > 1:
-        raise LookupError(f"run {run} has {len(gaia)} official catalogs; the loop names one Gaia catalog")
+        raise LookupError(f"dataset {d} has {len(gaia)} official catalogs; the loop names one Gaia catalog")
     return Snapshot(
         dataset=d, survey=meta[0]["survey"], settings=meta[0]["settings"], fids=fids,
         published_stems=stems, jobs=jobs,
@@ -349,14 +359,21 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
 
     selected = {k: v for k, v in snap.l2.items() if selection.admits_row(*k, set(fids.values()))}
     intake_pending = bool(pending["intake"])
+    bound = snap.settings["reference"]["selection"].get("before_mjd")
+    after = {k: v for k, v in selected.items() if bound is None or v["mjdobs"] >= float(bound)}
 
-    # Reference: per (field, filter, SCA), once its frames are official and no intake is pending.
+    # Reference: per (field, filter, SCA), once its frames are official and no intake is pending;
+    # with the bound, from the rows before it, once the selection's intake has drained.
     min_frames = int(snap.settings["reference"]["selection"]["min_frames"])
     held_refs = {(int(j["scope"]["field"]), int(j["scope"]["fid"])) for j in taken["reference"]}
     frames = defaultdict(list)
     for (expid, sca, fid), row in sorted(selected.items(), key=lambda kv: kv[1]["mjdobs"]):
-        frames[row["field"], fid, sca].append((expid, row["job"]))
-    if not intake_pending:
+        rows = frames[row["field"], fid, sca]     # a field with no row before the bound keeps its entry
+        if bound is None or (expid, sca, fid) not in after:
+            rows.append((expid, row["job"]))
+    ready = not intake_pending and (bound is None or all(s in snap.published_stems for s in admitted))
+    held = []
+    if ready:
         for (field, fid, sca), rows in sorted(frames.items()):
             if len(rows) < min_frames or (field, fid) in snap.refs or (field, fid) in held_refs:
                 continue
@@ -366,10 +383,17 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
                                    for e, j in rows],
                         "expects": [{"product": "refimages",
                                      "key": {"dataset": d, "field": field, "fid": fid}, "binding": None}]})
+        most = defaultdict(int)                 # (field, fid) -> the most pre-bound rows of one SCA
+        for (field, fid, _), rows in frames.items():
+            most[field, fid] = max(most[field, fid], len(rows))
+        held = [{"field": field, "fid": fid,
+                 "reason": f"{n} official L2 rows before before_mjd {bound}, fewer than min_frames {min_frames}"}
+                for (field, fid), n in sorted(most.items())
+                if bound is not None and (field, fid) not in snap.refs and (field, fid) not in held_refs]
 
-    # Difference: per official L2 row with an official reference.
+    # Difference: per official L2 row with an official reference, after the bound when one is set.
     held_diffs = {scope_l2(j) for j in taken["difference"]}
-    for k, row in sorted(selected.items()):
+    for k, row in sorted(after.items()):
         expid, sca, fid = k
         ref = snap.refs.get((row["field"], fid))
         if ref is None or k in snap.diffs or k in held_diffs:
@@ -384,7 +408,7 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
 
     # Associate: per field, the earliest unassociated official source set, one at a time.
     by_field = defaultdict(list)
-    for k, row in selected.items():
+    for k, row in after.items():
         by_field[row["field"]].append((row["mjdobs"], k))
     associated = {j["sources"]: j for j in run_jobs["associate"] if j.get("sources") is not None}
     assoc_busy = {int(j["scope"]["field"]) for j in taken["associate"]}
@@ -446,7 +470,7 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     counts = {"listed": len(stems), "admitted": len(admitted), "new": len(new),
               "submitted": {s: sum(1 for o in out if o["stage"] == s) for s in STAGES},
               "pending": {s: len(pending[s]) for s in STAGES},
-              "failed": [{"job": j["id"], "stage": j["stage"]} for j in failed]}
+              "failed": [{"job": j["id"], "stage": j["stage"]} for j in failed], "held": held}
     return out, counts
 
 
