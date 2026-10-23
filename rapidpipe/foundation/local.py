@@ -120,7 +120,8 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     ``published`` false and no file touched. The job row records
     ``running``, ``started``, the image digest (``RAPID_IMAGE_DIGEST``,
     which the job definition sets; none for a checkout) and the instance
-    type (:func:`instance_type`) before the stage,
+    type (:func:`instance_type`) before the stage, clearing a reason an
+    earlier attempt's failure left in ``refusal``,
     ``ended`` and ``exit_code`` after it; a stage or publication that raises
     leaves the job ``failed`` and the exception propagates.
     """
@@ -150,7 +151,7 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             prefix = f"{job_prefix}/{attempt}/"
             workdir = Path(tempfile.mkdtemp(prefix=f"rapidpipe-job-{job_id}-{attempt}-"))
         _record(conn, job_id, "state = 'running', started = now(), ended = NULL, exit_code = NULL,"
-                " image_digest = %s, instance_type = %s",
+                " refusal = NULL, image_digest = %s, instance_type = %s",
                 (os.environ.get("RAPID_IMAGE_DIGEST"), instance_type()))
 
     context = JobContext(
