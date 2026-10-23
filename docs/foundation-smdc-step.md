@@ -3688,20 +3688,28 @@ runs 13 to 16 stay live and untouched.
    **The checks** (`scripts/check_run.sh` per run as soon as its chain was
    final; `validate_run.py` alone on the intake-only runs 18 to 23, whose
    consumer check would fail by its zero-kept rule; runs 30 to 34 not
-   checked: abandoned, unbound). State at this task's cutoff, 09:41 UTC:
+   checked: abandoned, unbound). Every run CLEAN after the task's second
+   attempt (11:47 UTC); the first attempt's cutoff, 09:41 UTC, left runs
+   25 to 27 and 36 to 38 in their consumer check, and the second attempt
+   re-ran `check_run.sh` on runs 24 to 27 and 36 to 38 after PR 337, seven
+   at once (and run 29's consumer alone, as the proof):
 
-   | filter | run | validate | reader | consumer | verdict |
-   |---|---|---|---|---|---|
-   | all six | 18 to 23 | 6/6 each (7 to 39 s) | (no packets) | (no packets) | PASS |
-   | F087 | 24 | 6/6 in 269 s (after PR 335; 5/6 before) | 108/108 in 51 s | 22,048/22,048 in 5,073 s | CLEAN, from two invocations |
-   | F106 | 25 | 6/6 in 248 s | CLEAN | still reading at the cutoff | open |
-   | F129 | 26 | 6/6 in 264 s | CLEAN | still reading | open |
-   | F158 | 27 | 6/6 in 259 s | CLEAN | still reading | open |
-   | F184 | 28 | **`Check run 28: CLEAN validate 6/6 317 s reader 108/108 52 s consumer 25737/25737 5287 s`** | | | **CLEAN** |
-   | F213 | 29 | **`Check run 29: CLEAN validate 6/6 209 s reader 108/108 34 s consumer 10871/10871 2508 s`** | | | **CLEAN** |
-   | F106 | 36 | running | | | open |
-   | F129 | 37 | 6/6 in 1,554 s | running | | open |
-   | F158 | 38 | running | | | open |
+   | filter | run | verdict line (second attempt, after PR 337) | consumer before PR 337 |
+   |---|---|---|---|
+   | all six | 18 to 23 | `validate_run.py` 6/6 each (7 to 39 s); no packets | |
+   | F087 | 24 | `Check run 24: CLEAN validate 6/6 407 s reader 108/108 76 s consumer 22048/22048 3059 s` | 5,073 s |
+   | F106 | 25 | `Check run 25: CLEAN validate 6/6 454 s reader 89/89 72 s consumer 18533/18533 2342 s` | unfinished at 4 h |
+   | F129 | 26 | `Check run 26: CLEAN validate 6/6 486 s reader 94/94 69 s consumer 19527/19527 2359 s` | unfinished |
+   | F158 | 27 | `Check run 27: CLEAN validate 6/6 490 s reader 91/91 68 s consumer 19729/19729 2961 s` | unfinished |
+   | F184 | 28 | `Check run 28: CLEAN validate 6/6 317 s reader 108/108 52 s consumer 25737/25737 5287 s` (first attempt) | 5,287 s |
+   | F213 | 29 | `Check run 29: CLEAN validate 6/6 209 s reader 108/108 34 s consumer 10871/10871 2508 s` (first attempt); consumer alone after PR 337: CLEAN 10,871/10,871 in 1,210 s | 2,508 s |
+   | F106 | 36 | `Check run 36: CLEAN validate 6/6 1851 s reader 613/613 345 s consumer 123421/123421 4592 s` | not reached |
+   | F129 | 37 | `Check run 37: CLEAN validate 6/6 1850 s reader 608/608 337 s consumer 123839/123839 4589 s` | not reached |
+   | F158 | 38 | `Check run 38: CLEAN validate 6/6 2223 s reader 665/665 261 s consumer 139259/139259 5107 s` | not reached |
+
+   Runs 24 to 27 kept more messages than their packets (27,460 for
+   22,048 in run 24): the 06:43 re-sends of their unstamped sets, allowed
+   by the publisher's contract; every packet was seen and byte-equal.
 
    - **A validation false failure, fixed**: run 24's chain check failed
      one of 28,232 objects, a source catalogued twice in one difference
@@ -3709,12 +3717,26 @@ runs 13 to 16 stay live and untouched.
      float32), whose `stdevflux` from the one-pass sums is off by the
      formula's cancellation; PR 335 (`db2f72f9`) sets the check's tolerance
      at that floor (`1e-7 * max|f|`); run 24's chain check then passed.
-   - **The consumer check is the whole cost**: it reads the topic from
-     its earliest offset for every run, about 40 messages a second on one
-     core: run 29's 2,508 s and runs 24 and 28's 5,073 and 5,287 s, and
-     more for each later run as the topic grows (about 620 thousand
-     messages after these loops). `validate_run.py` grows with the chain
-     too (run 37, depth 13 to 14: 1,554 s).
+   - **The consumer check, fixed in the second attempt** (PR 337,
+     `7a0941a1`): it read the topic from its earliest offset for every run
+     at about 40 to 50 messages a second, and the cause was the client,
+     not the volume: kafka-python without the `crc32c` C module checks
+     every record batch's CRC-32C in pure Python (3,017 messages, 687 MB:
+     51 msg/s with the check, 805 msg/s without). The script now skips the
+     client CRC (every kept message is compared byte for byte with the
+     outbox) and starts at `offsets_for_times` for the earliest `ended` of
+     the run's stamped packet jobs, not their earliest
+     `kafka_published_at`, which is written after the set's
+     acknowledgements and so after its messages. Runs 24 to 29 started at
+     offset 135,304 and read 530,960 messages, runs 36 to 38 at 279,745
+     and 386,519; seven checks at once ran at 76 to 227 messages a second
+     each (validation of the kept messages and the shared core count), so
+     a run's consumer check is now 39 to 85 min where it was 4 h and
+     growing. The topic's beginning offset is 73,505: run 12's earliest
+     messages have aged out under its retention, so a consumer check of
+     run 12 now fails "never read". `validate_run.py` grows with the
+     chain (runs 36 to 38, depth 13 to 14: 1,850 to 2,223 s with seven at
+     once; run 37's 1,554 s in the first attempt).
 
 ## Validation
 
