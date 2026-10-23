@@ -72,7 +72,7 @@ def snap(**kw) -> loop.Snapshot:
     base = dict(dataset=D, survey="HLWAS", settings=SETTINGS, fids={"W146": 8, "F184": 1},
                 published_stems=set(), jobs=[],
                 psfs={(8, 8, "science"): (10, 100), (8, 8, "reference"): (11, 101)},
-                exposures=set(), l2={}, refs={}, diffs={}, sources={}, objects={}, packets={},
+                exposures=set(), l2={}, refs={}, diffs={}, sources={}, objects={}, chain={}, packets={},
                 gaia={"key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "job": 12})
     base.update(kw)
     return loop.Snapshot(**base)
@@ -158,7 +158,7 @@ def test_associate_chain_is_chronological_one_at_a_time_and_waits_for_upstream()
     # Once published, the next epoch goes, naming the field's open object set.
     done = _associated({60: (7, 41)})
     subs, _ = loop.plan(snap(l2=l2, refs=refs, diffs=diffs, sources=sources, jobs=done,
-                             objects={7: (60, 900)}), [], SEL)
+                             objects={7: (60, 900)}, chain={41: 60}), [], SEL)
     (a,) = stages(subs, "associate")
     assert a["inputs"][0]["source_job"] == 42
     assert a["inputs"][1] == {"product": "objects", "key": {"dataset": D, "survey": "HLWAS", "field": 7},
@@ -172,6 +172,28 @@ def test_associate_chain_is_chronological_one_at_a_time_and_waits_for_upstream()
     assert not [i for i in pk["inputs"] if i["product"] == "packets"]
     assert {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"},
             "source_job": 12} in pk["inputs"]
+
+
+def test_a_run_resumed_in_place_of_another_continues_the_official_chain_without_reassociating():
+    k1, k2 = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8)
+    l2 = {k1: l2row(7, 1.0, 20), k2: l2row(7, 2.0, 21)}
+    # Another run of the dataset associated epoch 1 (source set 41) as object set 60; this run has no jobs.
+    subs, _ = loop.plan(snap(l2=l2, refs={(7, 8): 30}, diffs={k1: 41, k2: 42}, sources={k1: 41, k2: 42},
+                             objects={7: (60, 900)}, chain={41: 60}), [], SEL)
+    (a,) = stages(subs, "associate")
+    assert a["inputs"][0]["source_job"] == 42 and a["expects"][0]["binding"] == 900
+    (pk,) = stages(subs, "packet")
+    assert pk["scope"]["expid"] == k1[0]
+    assert {"product": "objects", "key": {"dataset": D, "survey": "HLWAS", "field": 7},
+            "source_job": 60} in pk["inputs"]
+
+
+def test_the_chain_is_walked_back_from_the_official_object_set_and_skips_associates_outside_it():
+    links = [{"job": 60, "product": "sources", "source_job": 41},
+             {"job": 61, "product": "sources", "source_job": 42}, {"job": 61, "product": "objects", "source_job": 60},
+             {"job": 62, "product": "sources", "source_job": 43}, {"job": 62, "product": "objects", "source_job": 61},
+             {"job": 70, "product": "sources", "source_job": 41}, {"job": 70, "product": "objects", "source_job": 62}]
+    assert loop._chain({7: (62, 900)}, links) == {41: 60, 42: 61, 43: 62}
 
 
 def test_an_intake_pending_holds_association():
@@ -202,7 +224,7 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     k1 = (expid(1, 1, 1), 8, 8)
     done = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30},
                 diffs={k1: 41}, sources={k1: 41}, packets={k1: 90},
-                jobs=_associated({60: (7, 41)}), objects={7: (60, 900)})
+                jobs=_associated({60: (7, 41)}), objects={7: (60, 900)}, chain={41: 60})
     monkeypatch.setattr(loop, "snapshot", lambda conn, run: done)
     monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
     monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
