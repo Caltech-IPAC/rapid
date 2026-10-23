@@ -9,7 +9,8 @@ to 3 were run unattended on 2026-10-21 from a fleet host in the same security
 group as the database's pooler, and are written here as run, with their
 results; parts 4 and 5 followed the same day, run the same way, and part 6 is
 the night of the same field written by the tasks that ran it; part 7, the
-HLWAS simulation from ASDF intake to Kafka, was run the next night. Seven parts, in order:
+HLWAS simulation from ASDF intake to Kafka, was run the next night, and
+part 8, the housekeeping that makes the ramp cheaper, the night after. Eight parts, in order:
 
 1. **Schema**: the SMDC `rapid` database's `public` schema becomes `database/schema.sql`.
 2. **Inputs**: the field's directory is copied to the inputs bucket under `foundation/`.
@@ -24,6 +25,9 @@ HLWAS simulation from ASDF intake to Kafka, was run the next night. Seven parts,
    field's 69 epochs through the whole chain.
 7. **HLWAS**: the night's fixes and their image (step 1), then the SOC HLWAS simulation
    from its ASDF files through intake, the chain and Kafka publication.
+8. **Housekeeping**: the difference outputs trimmed and gzipped, the working directory
+   removed and the intake's `exposures` row only when expected (step 1), each proven on
+   Batch under a throwaway dataset with its own live run.
 
 Part 4 needs the `reference` and `difference` stages on the `run(job)` contract
 (`rapidpipe/foundation/local.py`), the difference stage refreshed from `dev`
@@ -2731,6 +2735,172 @@ Open, from this part (for the plan's "Open" list):
 - SCAs 4 and 5 leave three to four times the bright residuals of the
   others with dev's F146 PSFs (step 15).
 - Injection, not breadth, is the next scientific step.
+
+## Part 8: housekeeping, the ramp made cheaper (2026-10-22)
+
+Part 6 row 11 of the plan, ruled by Ben on 2026-10-22: housekeeping before
+the ramp grows. Every Batch proof of this part runs under a throwaway
+dataset of its own with its own live run, because the loop plans from
+official rows and admits a stem only when no intake of the dataset has
+published it (PR 307); the dataset's `l2files` start empty, so the proofs
+run on run 12's pixels. Run 12 and run 9 stay live and untouched.
+
+1. **Bytes: the difference outputs trimmed and gzipped, the working
+   directory removed, the intake's `exposures` row only when expected.**
+   Three PRs, merged in turn: PR 312 (`ba5feed3`) makes the intake declare
+   its `exposures` row only when its job expects the `exposures` key; PR
+   313 (`bd48eb84`) makes `run_job` remove its `rapidpipe-job-*` working
+   directory once `put` has uploaded it (left on failure); PR 314
+   (`bee19ebf`) makes the difference stage publish, under `diff/`, only the
+   ZOGY difference, its uncertainty, its mask (the resampled reference
+   coverage map), its positive PSF-fit catalog, the difference PSF, the
+   background-subtracted science image and the resampled gain-matched
+   reference, every FITS gzipped at level 1, and the packet stage read a
+   difference image's neighbours under the difference image's own suffix
+   (`packet.neighbour`), so run 12's plain files and the new gzipped ones
+   both read.
+
+   The leaked working directories on the fleet host, listed by prefix
+   first and then removed, nothing else under `/tmp`:
+
+   ```sh
+   ls -d /tmp/rapidpipe-job-* | wc -l        # 89
+   du -sc /tmp/rapidpipe-job-*               # 23,232,532 KiB (22.2 GiB)
+   rm -r /tmp/rapidpipe-job-*
+   ```
+
+   Check, held: 0 left; the root filesystem went from 42 GB to 20 GB used.
+
+   The image and its revision (build 44 s with cached layers, deploy 74 s):
+
+   ```sh
+   env -u TMPDIR containers/rapid-pipeline/build-rebuild.sh bee19ebf7a4bb1bc5ac839b9ad0e91abb63f4f10 --tag rebuild-bee19ebf7a4bb1bc5ac839b9ad0e91abb63f4f10
+   RELEASE_TAG=rebuild-bee19ebf7a4bb1bc5ac839b9ad0e91abb63f4f10 RELEASE_IMAGE_DIGEST=sha256:3bba4496… cloudformation/release-hooks/deploy
+   ```
+
+   Check, held: **`rapid-rebuild:36`** (and `rapid-rebuild-production:27`),
+   image and `RAPID_IMAGE_DIGEST` both `sha256:3bba4496…`, retry 3, 1 vCPU,
+   24 GiB, read back with `describe-job-definitions`.
+
+   The dataset `r00342-hk1` and its live run: the shipped settings at
+   `bee19ebf` with run 12's overlay (`[intake] source_root` the public
+   `r00342/l2/` prefix, `unsigned = true`), the 36 F146 PSFs from the
+   inputs bucket's `g0006-psf-f146/` and run 12's Gaia copy (job 359's
+   file) under the name `gaia-r00342-hk1`:
+
+   ```sh
+   rp run create --who "$USER" --why "housekeeping-2026-10-22 task 1 (bytes): ..." \
+     --revision bee19ebf7a4bb1bc5ac839b9ad0e91abb63f4f10 --settings hk1-run.json --survey HLWAS --dataset r00342-hk1
+   echo '[{"open": {"survey": "HLWAS", "dataset": "r00342-hk1", "run": 13}}]' > live.json
+   rp official change --group live.json --who "$USER" --why "... run 13 live for HLWAS r00342-hk1 ..."
+   rp job local --run 13 --stage import --scope '{"source_dir": "<copy>/psfs", "psf": {"kind": "science", "path": "sciimage_psf_f146_sca08.fits"}}' \
+     --expects '[{"product": "psfs", "key": {"dataset": "r00342-hk1", "fid": 8, "sca": 8, "kind": "science"}, "binding": null}]'
+   # ... the 36, then:
+   rp job local --run 13 --stage import --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342-hk1", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"name": "gaia-r00342-hk1", "version": "DR3"}, "binding": null}]'
+   ```
+
+   Check, held: run **13** live (group 2037); PSF imports **2128 to 2145**
+   (science, SCAs 1 to 18) and **2146 to 2163** (reference), published and
+   bound in groups 2038 to 2073, 70 s for the 36 (about 238 MiB each);
+   Gaia job **2164**, group 2074. The 37 `job local` runs left **no**
+   `rapidpipe-job-*` directory under this host's `TMPDIR`: PR 313 live.
+
+   The proof, the loop over two pointings on two SCAs:
+
+   ```sh
+   timeout 7200 rp loop --run 13 --filters F146 --scas 8,9 --pointings 001_0001,001_0002 \
+     --job-definition rapid-rebuild:36
+   ```
+
+   It drained in **48.6 min** (23:32:41 to 00:21:17 UTC, 25 passes, every
+   pass 28 to 48 s), exit 0, no job failed. Jobs 2165 to 2262: 24 intakes,
+   **3 references for 4 (pointing, SCA) pairs** (2189 field 5387158 from
+   SCA 8 of `001_0001`; 2190 field 5390959 from SCA 8 of `001_0002`; 2191
+   field 5394752 from SCA 9 of `001_0002`), 24 differences, 24 associates,
+   24 packet sets, **3,334 packets** produced and stamped. Checks, all held:
+
+   - **The intake's `exposures` row, both branches, from the tables**:
+     each of the 12 SCA 8 intakes published one `exposures` row and one
+     `l2files` row and bound both; each of the 12 SCA 9 intakes of the
+     same exposures published its `l2files` row, bound, and **no
+     `exposures` row** (3 objects under its prefix, not 4). The run has 12
+     `exposures` rows for 12 exposures, none unbound.
+   - **A field's chain in the loop's admission order**: field 5390959
+     (SCA 9 of `001_0001` and SCA 8 of `001_0002`) has one chain of
+     **depth 12, in `mjdobs` order, interleaved across the two SCAs**
+     (associates 2217, 2218, 2223, 2228, 2234, 2240, 2246, 2248, 2252,
+     2253, 2257, 2259: SCA 9 then SCA 8 in each survey pass, 5.4 min
+     apart), where run 12's held SCA 8's six first and SCA 9's six after
+     them (part 7 step 15). Fields 5387158 and 5394752: depth 6, in order.
+   - `validate_run.py --run 13`: **6/6 PASS in 109.5 s** (lineage 0.1 s,
+     639 input and exclude rows and 172 bindings; tables 44.4 s, 136 jobs,
+     250 declared outputs, 46,680 rows; chain 0.8 s, sets 2245, 2247 and
+     2259; packets 63.6 s, 24 sets, 3,334 packets, 16,836 forced entries;
+     forced 0.3 s, 11,718 rows shared with a predecessor; counts).
+   - `read_packets.py` on the 24 sets: **24 of 24 CLEAN**, 55 s.
+   - **The packet stage reads what it read before**: for the four SCA 9
+     epochs of `001_0001` in passes 2 to 5, all **781 packets** of run 13
+     match run 12's by position and every one's three cutouts are
+     **byte-equal**, read from the gzipped files.
+   - **Determinism**: the difference jobs of the four pairs on the same
+     instance type (run 12's 1807, 1808, 1809, 1826 against run 13's
+     2197, 2201, 2205, 2209, SCA 9 of `001_0001` passes 2 to 5, r6i.8xlarge)
+     give **row-for-row equal `sources`** (500 rows each, every column but
+     the job, the dataset and the ids); so does pass 1 (1806 on
+     r6i.8xlarge, 2193 on r6i.2xlarge). The two field 5390959 references
+     are pixel-equal (run 12's 385 on m6a.2xlarge, run 13's 2190 on
+     r6i.2xlarge). Field 5387158's are **not**: run 12's 360 and run 13's
+     2189 differ by up to 4.9e-4 on a median of 1.35, from pixel-equal
+     frames (run 12's pass-1 frame, the `job local` 353, and run 13's 2165
+     are equal HDU for HDU), so the SCA 8 differences of `001_0001` agree
+     to about the seventh figure only (361 against 2192). Why reference
+     360 differs is not known (an observation; 360 was submitted by hand
+     in part 7 step 8).
+
+   Measurements, run 13 (24 epochs) beside run 12's same epochs (18: SCA 9
+   of `001_0002` was never run under run 12), every job on Batch:
+
+   | stage | run | jobs | instance | queue wait s min / median / max | job s min / median / max | bytes out (median per job) | objects per job |
+   |---|---|---|---|---|---|---|---|
+   | intake | 12 | 18 | r6i (16), m6a, m8a (`job local`) | 0.2 / 137.3 / 170.0 | 14.9 / 16.2 / 17.9 | 3.51 GB (194.9 MB) | 4 |
+   | intake | 13 | 24 | r6i.8xlarge | 110.9 / 111.9 / 113.1 | 16.3 / 18.0 / 18.2 | 4.67 GB (194.8 MB) | 4 (SCA 8), 3 (SCA 9) |
+   | reference | 12 | 2 | m6a.2xlarge | 164.4 / 179.7 / 194.9 | 74.2 / 74.5 / 74.7 | 1.19 GB (594.8 MB) | 8 |
+   | reference | 13 | 3 | r6i.2xlarge | 151.0 / 151.3 / 161.6 | 76.1 / 77.1 / 77.4 | 1.79 GB (594.9 MB) | 8 |
+   | difference | 12 | 18 | r6i (17), m6a | 6.4 / 130.6 / 187.2 | 173.9 / 227.0 / 255.6 | **45.80 GB (2,547.2 MB)** | **72** |
+   | difference | 13 | 24 | r6i.8xlarge (20), r6i.2xlarge (4) | 10.7 / 138.0 / 153.4 | 175.3 / 227.4 / 254.1 | **5.67 GB (247.2 MB)** | **10** |
+   | associate | 12 | 18 | r6i, m6a | 4.9 / 8.8 / 220.0 | 0.9 / 1.0 / 1.5 | 0.00 GB | 3 |
+   | associate | 13 | 24 | r6i | 6.3 / 12.8 / 199.9 | 0.9 / 1.0 / 1.2 | 0.00 GB | 3 |
+   | packet | 12 | 18 | r6i, m6a | 4.2 / 9.3 / 133.6 | 12.9 / 26.7 / 41.3 | 0.53 GB (28.2 MB) | 5 |
+   | packet | 13 | 24 | r6i | 6.5 / 18.7 / 210.2 | 15.7 / **45.0** / 98.4 | 0.65 GB (23.9 MB) | 5 |
+
+   - **Bytes per difference job: 247 MB in 10 objects against 2,547 MB in
+     72**, a factor of 10.3. The seven kept FITS are 334.5 MB plain and
+     203 to 247 MB gzipped (float images compress only to about 74%); the
+     trim removed 69 files, 3.22 to 3.24 GB, per job before the upload
+     (the manifest's `difference.published`).
+   - **The run's whole prefix: 12.79 GB in 651 objects for 24 epochs, 0.53
+     GB per epoch**, against 51.0 GB for run 12's same 18 epochs (2.83 GB
+     per epoch, its two references counted), a factor of 5.3; the intake's
+     195 MB and the reference's 595 MB per job are now most of it.
+   - **The gzip costs 7.3 to 9.2 s per difference job** (median 8.9 s,
+     the manifest's `gzip_s`), inside a container median of 227.4 s,
+     the same as run 12's 227.0 s for these epochs (the ramp's median was
+     249 s): the time saved uploading 2.3 GB less pays for it.
+   - **The read side costs more**: the packet job's median rose from
+     26.7 s to 45.0 s. Its forced photometry opens three gzipped files per
+     window image; per window image it took 6.35 s (median, run 13)
+     against 4.2 s (median, all 426 of run 12's sets), about 2.1 s of
+     decompression per image, and field 5390959's chain of 12 puts up to
+     12 images in a window (run 12's selection here: at most 6).
+   - The loop: 25 passes, 28 to 48 s each, almost
+     all of it the listing (68,040 keys every pass, task 3's change).
+   - `official` 3,523 rows before, **3,696** after; the last change group
+     **2173**; database 407 MB (396 before).
+
+   Not run here: the consumer check (`consume_packets.py`) reads the
+   whole topic range and holds it in memory (about 30 min and 20 GB on run
+   12); task 3 bounds it and runs it.
 
 ## Validation
 
