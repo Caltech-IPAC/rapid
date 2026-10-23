@@ -356,7 +356,7 @@ def _publish(args: argparse.Namespace) -> int:
         result = publish_kafka.publish(lambda: connect(application_name="rapidpipe-publish"),
                                        args.run, producer, endpoint["topic"])
     finally:
-        producer.close()
+        producer.close(timeout=publish_kafka.ACK_TIMEOUT_S)
     _print_json({**result, "max_request_bytes": endpoint["max_request_bytes"]})
     return int(ExitCode.SUCCESS)
 
@@ -388,7 +388,7 @@ def _loop(args: argparse.Namespace) -> int:
         try:
             return publish_kafka.publish(connect_loop, args.run, producer, endpoint["topic"])
         finally:
-            producer.close()
+            producer.close(timeout=publish_kafka.ACK_TIMEOUT_S)
 
     while True:
         started = time.monotonic()
