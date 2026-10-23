@@ -37,6 +37,15 @@ echo "logfile = $logfile"
 logdir="${JOBPROCDATE}/req${PROCREQ}"
 echo "logdir = $logdir"
 
+# S3 bucket for the log file, passed by the job launcher from [JOB_PARAMS] job_logs_s3_bucket_base
+# of its configuration file.
+
+if [ -z "$JOBLOGSS3BUCKET" ]; then
+    echo "*** Error: Env. var. JOBLOGSS3BUCKET not set; quitting..."
+    exit 66
+fi
+echo "JOBLOGSS3BUCKET = $JOBLOGSS3BUCKET"
+
 echo "Executing /usr/bin/python3.11 /code/pipeline/awsBatchSubmitJobs_runSinglePostProcPipeline.py >& $logfile"
 /usr/bin/python3.11 /code/pipeline/awsBatchSubmitJobs_runSinglePostProcPipeline.py >& $logfile
 
@@ -68,8 +77,8 @@ else
 fi
 
 
-echo "Executing aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${logdir}/$logfile"
-aws s3 cp --quiet "$logfile" s3://rapid-pipeline-logs/${logdir}/$logfile
+echo "Executing aws s3 cp --quiet $logfile s3://${JOBLOGSS3BUCKET}/${logdir}/$logfile"
+aws s3 cp --quiet "$logfile" s3://${JOBLOGSS3BUCKET}/${logdir}/$logfile
 
 awss3cpexitcode=$?
 echo "awss3cpexitcode=$awss3cpexitcode"
@@ -79,7 +88,7 @@ then
 
     echo
     echo ##################################################################
-    echo "Successfully copied log file to s3://rapid-pipeline-logs/${logdir}/$logfile"
+    echo "Successfully copied log file to s3://${JOBLOGSS3BUCKET}/${logdir}/$logfile"
     echo ##################################################################
     echo
 
@@ -88,7 +97,7 @@ else
 
     echo
     echo ##################################################################
-    echo "*** Error: Failed copying log file to s3://rapid-pipeline-logs/${logdir}/$logfile"
+    echo "*** Error: Failed copying log file to s3://${JOBLOGSS3BUCKET}/${logdir}/$logfile"
     echo ##################################################################
     echo
 

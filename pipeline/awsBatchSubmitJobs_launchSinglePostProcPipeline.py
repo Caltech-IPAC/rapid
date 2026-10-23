@@ -211,6 +211,10 @@ def submit_job_to_aws_batch(proc_date,
                     'value': job_info_s3_bucket
                 },
                 {
+                    'name': 'JOBLOGSS3BUCKET',
+                    'value': job_logs_s3_bucket_base
+                },
+                {
                     'name': 'JOBCONFIGFILENAME',
                     'value': job_config_ini_file_filename
                 },
