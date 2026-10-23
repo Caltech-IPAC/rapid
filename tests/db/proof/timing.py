@@ -31,12 +31,12 @@ def main(n: int) -> None:
     old, new = (create_job(conn, run, "timing", {"n": n}) for _ in range(2))
     tag = f"timing-{old}"
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO catalogs (job, name, version, location)"
-                    " SELECT j, %s || g, 'v1', 'file:///dev/null'"
+        cur.execute("INSERT INTO catalogs (job, dataset, name, version, location)"
+                    " SELECT j, 'T', %s || g, 'v1', 'file:///dev/null'"
                     " FROM generate_series(1, %s) g, unnest(ARRAY[%s, %s]::bigint[]) j",
                     (tag, n, old, new))
         cur.execute("INSERT INTO official (product, key, job, opened_group, opened_by, opened_why)"
-                    " SELECT 'catalogs', jsonb_build_object('name', %s || g, 'version', 'v1'),"
+                    " SELECT 'catalogs', jsonb_build_object('dataset', 'T', 'name', %s || g, 'version', 'v1'),"
                     " %s, nextval('change_groups'), 'timing', 'setup'"
                     " FROM generate_series(1, %s) g RETURNING id, key", (tag, old, n))
         bindings = cur.fetchall()

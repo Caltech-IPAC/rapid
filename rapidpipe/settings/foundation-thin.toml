@@ -128,6 +128,10 @@ work_subdirectory = "ref"
 # order are not coadded (`dev` breaks its loop) and the manifest names them.
 min_frames = 2
 max_frames = 25
+# before_mjd (a float, absent by default): the loop builds a field's
+# reference only from its official L2 rows with mjdobs < before_mjd, once
+# the selection's intake has drained, and differences only the rows at or
+# after it; absent, a reference coadds every epoch (rapidpipe.foundation.loop).
 
 [reference.instrument]
 # [INSTRUMENT] (socsims values), as [difference.instrument].

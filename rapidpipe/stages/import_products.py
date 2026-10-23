@@ -36,7 +36,7 @@ them, as the difference stage does. ``reference`` writes
 1); ``psf`` writes ``psfs`` (a science-image PSF, ``kind`` ``science``, or
 the reference-image PSF the difference stage also reads, ``kind``
 ``reference``; ``psfid`` may be omitted, for a PSF the source system never
-registered); ``gaia`` writes ``catalogs``.
+registered); ``gaia`` writes ``catalogs`` under the job's dataset.
 
 The kind is declared in the scope and is part of the PSF's key. `dev`'s
 PSF files carry it as ``PSFKIND`` (:data:`PSFKIND`): a file whose keyword
@@ -115,7 +115,7 @@ def run(job: JobContext) -> None:
         recorded["psf"] = {"kind": row["kind"], "PSFKIND": keyword}
     if "gaia" in scope:
         gaia = scope["gaia"]
-        tables["catalogs"] = [{"name": gaia["name"], "version": gaia["version"],
+        tables["catalogs"] = [{"dataset": job.dataset, "name": gaia["name"], "version": gaia["version"],
                                "location": _copy(job, source / gaia["path"])[0]}]
     outputs = []
     for table, rows in tables.items():

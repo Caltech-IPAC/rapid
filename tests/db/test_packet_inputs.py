@@ -92,12 +92,12 @@ def test_a_packet_job_reads_the_object_set_it_names(connect, tmp_path):
             ("l2files", IMAGE_KEY), ("diffimages", IMAGE_KEY), ("sources", IMAGE_KEY),
             ("exposures", {"dataset": DATASET, "expid": 1}),
             ("psfs", {"dataset": DATASET, "fid": 8, "sca": 8, "kind": "science"}),
-            ("catalogs", {"name": "gaia", "version": "DR3"}))])
+            ("catalogs", {"dataset": DATASET, "name": "gaia", "version": "DR3"}))])
     tables = image_rows(tmp_path / "e1")
     tables["psfs"] = [{"psfid": 701, "dataset": DATASET, "fid": 8, "sca": 8, "kind": "science",
                        "checksum": "0" * 32,
                        "filename": (tmp_path / "e1" / "diffpsf.fits").as_uri()}]
-    tables["catalogs"] = [{"name": "gaia", "version": "DR3", "location": gaia.as_uri()}]
+    tables["catalogs"] = [{"dataset": DATASET, "name": "gaia", "version": "DR3", "location": gaia.as_uri()}]
     publish(conn, imported, 1, write_attempt(tmp_path / "import", tables))
 
     ra, dec = tables["sources"][0]["ra"], tables["sources"][0]["dec"]
@@ -109,7 +109,7 @@ def test_a_packet_job_reads_the_object_set_it_names(connect, tmp_path):
         ("sources", IMAGE_KEY, imported), ("objects", OBJECT_KEY, named),
         ("diffimages", IMAGE_KEY, imported), ("l2files", IMAGE_KEY, imported),
         ("psfs", {"dataset": DATASET, "fid": 8, "sca": 8, "kind": "science"}, imported),
-        ("catalogs", {"name": "gaia", "version": "DR3"}, imported),
+        ("catalogs", {"dataset": DATASET, "name": "gaia", "version": "DR3"}, imported),
         ("refimages", {"dataset": DATASET, "field": FIELD, "fid": 8}, imported))]
     job = create_job(conn, live, "packet", {"expid": 1, "sca": 8, "fid": 8}, inputs=inputs,
                      expects=[{"product": "packets", "key": IMAGE_KEY, "binding": None}])
