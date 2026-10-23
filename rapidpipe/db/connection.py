@@ -171,6 +171,10 @@ def _credentials_from_environment() -> Credentials:
 #: ``database_connection_inputs``.
 _PARAMETER_TREE_DB_KEYS = ("db/server", "db/port", "db/name", "db/secret-id")
 
+#: botocore's retry for the tree read: standard mode (exponential backoff
+#: with jitter, at most 20 s a wait), enough attempts to outlast a burst.
+SSM_RETRIES = {"mode": "standard", "max_attempts": 25}
+
 
 def _fetch_parameter_tree_db_values(path: str, ssm_client: Any = None) -> dict[str, str]:
     """Read the four ``db/*`` keys under ``path`` from the SSM parameter tree.
@@ -193,7 +197,13 @@ def _fetch_parameter_tree_db_values(path: str, ssm_client: Any = None) -> dict[s
             raise ConnectionConfigError(
                 "RAPID_PARAMETER_PATH is set but boto3 is not installed "
                 "in this environment") from exc
-        ssm_client = boto3.client("ssm")
+        from botocore.config import Config
+
+        # Thousands of Batch jobs start together and each reads the tree:
+        # the account's GetParametersByPath rate throttles them (seen
+        # 2026-10-23, 1,448 of 3,456 intakes failed on botocore's default
+        # four retries), so the read backs off over minutes, not seconds.
+        ssm_client = boto3.client("ssm", config=Config(retries=SSM_RETRIES))
 
     prefix = path.rstrip("/") + "/"
     values: dict[str, str] = {}
