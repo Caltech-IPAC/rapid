@@ -10,7 +10,9 @@ exactly their schema columns and the key the file name gives; the
 ``exposures`` row is declared only when the job expects its key; the
 manifest names the file's provenance; a file whose own identifiers
 contradict its name fails before a manifest; the file name parses, and the
-expid packs, as the stage's docstring says.
+expid packs, as the stage's docstring says; a file whose own ePSF
+reference is not the one its science PSF names (``EPSFREF``) fails before
+a manifest, and one whose PSF names the same reference publishes.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ REPO = Path(__file__).resolve().parents[2]
 STEM = "r0034201001001004001_0001_wfi08_f146"
 N = 64
 EXPTIME = 294.1
+EPSF = "roman_wfi_epsf_0276.asdf"
 SETTINGS = {"intake": {"source_root": None, "unsigned": False, "sip_degree": 5,
                        "sip_max_pix_error": 0.1, "gzip_level": 1, "program_id": -1,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10,
@@ -93,6 +96,7 @@ def write_asdf(path: Path, stem: str = STEM) -> None:
     meta.wcs_fit_results = {"status": "SUCCESS", "fitgeom": "rshift", "nmatches": 630,
                             "rmse": 0.17, "mae": 0.13}
     meta.calibration_software_version = "0.23.0"
+    meta.ref_file.epsf = f"crds://{EPSF}"
     path.parent.mkdir(parents=True, exist_ok=True)
     model.save(path)
 
@@ -227,3 +231,20 @@ def test_the_stem_parses_and_the_expid_packs():
         intake.parse_stem("r00342_0001_wfi08_f146")
     with pytest.raises(ValueError):
         intake.expid({**ids, "visit": 100})
+
+
+def _name_epsf(source: Path, name: str) -> None:
+    with fits.open(source / "psf.fits", mode="update") as hdul:
+        hdul[0].header["EPSFREF"] = name
+
+
+def test_a_psf_from_the_files_own_epsf_reference_is_accepted(tmp_path, source):
+    _name_epsf(source, EPSF)
+    assert (run_intake(tmp_path, source) / "manifest.json").exists()
+
+
+def test_a_psf_from_another_epsf_reference_refuses_the_file_before_a_manifest(tmp_path, source):
+    _name_epsf(source, "roman_wfi_epsf_0999.asdf")
+    with pytest.raises(ValueError, match="roman_wfi_epsf_0999.asdf"):
+        run_intake(tmp_path, source)
+    assert not (tmp_path / "outputs" / "manifest.json").exists()
