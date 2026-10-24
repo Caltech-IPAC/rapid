@@ -162,3 +162,21 @@ def test_source_set_keeps_the_brightest_inside_the_bounds_and_zero_keeps_all():
     assert set(table.column("pid").to_pylist()) == {7}
     everything, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
     assert sorted(everything.column("sid").to_pylist()) == [1, 2, 3]
+
+
+def test_source_set_carries_the_pixel_columns_null_where_the_catalog_has_none():
+    import pyarrow as pa
+
+    from rapidpipe.science.load.catalogs import source_set
+
+    names = [name for name, _ in catalogs.CATALOG_COLUMNS]
+    rows = {name: [1.0, 1.0] for name in names}
+    rows.update(id=[1, 2], ra=[10.0] * 2, dec=[-5.0] * 2, x_fit=[5.0, 6.0],
+                flux_fit=[50.0, 10.0], flux_err=[1.0, 1.0])
+    key = {"dataset": "D", "expid": 1, "sca": 2, "fid": 3}
+    measured = pa.table({**rows, "sumrat": [0.8, np.nan], "nneg": [3.0, np.nan], "nbad": [0.0, np.nan]})
+    table, _ = source_set(measured, key, 7, 60000.0, 10, 10, max_sources=0)
+    assert [table.column(c).to_pylist() for c in ("sid", "sumrat", "nneg", "nbad")] == [
+        [1, 2], [0.8, None], [3, None], [0, None]]
+    older, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
+    assert [older.column(c).null_count for c in ("sumrat", "nneg", "nbad")] == [2, 2, 2]
