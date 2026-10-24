@@ -27,3 +27,26 @@ dq_mask_bits = 0x2110C01
 # 001_0001, LEDGER-wcs-input-catalog, 2026-10-24). The intake's
 # gaia_dx_px / gaia_dy_px read it on every file.
 crpix_shift = [0.12, -0.99]
+
+[difference.sfft]
+# dev's OpenUniverse block, read when [difference] diff_flavor = "sfft" (the
+# published differencer stays ZOGY's). Measured on one epoch pair, 001_0001
+# SCA 8 F146 pass 4 against run 81's reference, the same bytes (sfft-core,
+# 2026-10-24): under the socsims block the stage's zeroed DQ-masked science
+# cores (5,096 px, 0.03% of the frame, 31% of the sum of the reference's
+# squared pixels) enter the kernel fit and pull its photometric ratio down,
+# core fraction +0.251, ring +0.021; this block masks every source with
+# FLUX_MAX >= 50 within 100 px and fits the 1.6% of pixels left on the
+# segmentation's sources, cross-convolved: core -0.000, ring -0.009 (ZOGY
+# -0.001, +0.002), S/N > 20 candidates 184 positive and 12 negative against
+# 771 and 300, 179 of the epoch's 200 injected sources in its PSF-fit
+# catalog against 130. Its reference catalog selects 62 sources and its
+# decorrelation sigmas come from pixels 96% segmentation background, so
+# neither of dev's ini caveats on this block holds here. The catalog path
+# alone (sfft_use_gainmatch_catalogs = true at 20000) selects nothing and
+# reproduces the socsims block to the digit.
+crossconv_flag = true
+sfft_use_segmentation = true
+sfft_use_gainmatch_catalogs = true
+sfft_bsmask_value = "50.0"
+sfft_bsmask_radius = "100.0"
