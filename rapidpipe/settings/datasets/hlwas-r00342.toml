@@ -11,3 +11,12 @@
 # The SOC simulations sit in a public bucket, read anonymously: a Batch
 # container read 204 MB unsigned in 0.8 s (runbook part 7 step 6, run 12).
 unsigned = true
+# #238's default mask 0x2110C03 without SATURATED 0x2: DO_NOT_USE 0x1, DEAD
+# 0x400, HOT 0x800, NONLINEAR 0x10000, NO_LIN_CORR 0x100000, UNRELIABLE_FLAT
+# 0x2000000 (LEDGER-fixes, run 17 pass 4, F146 SCA 8). Every isolated pixel
+# above 1000 DN/s carries one of these bits and the reference-only spikes are
+# all UNRELIABLE_FLAT, wild in all three reference frames, so no median or
+# clip could reject them; SATURATED sits on the core of every star above
+# about 100 DN/s, and #238's default cut 15 of 30 bright stars' aperture
+# flux to 0.23 to 0.83 of the unmasked value.
+dq_mask_bits = 0x2110C01
