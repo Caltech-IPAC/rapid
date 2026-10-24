@@ -626,6 +626,19 @@ filter_size = 3
 # about -0.32 (dev babd5d16).
 lower_median = false
 
+[difference.database_prefilter]
+# [DATABASE_PREFILTER]: dev's prefilter of the sources it loads
+# (loadPSFCatIntoDBSourcesTable.py, rapid_pipeline_subs.py
+# prefilter_database_records at c931b001), applied by source_set to SFFT's
+# catalog under diff_flavor = "sfft" before the max_sources cap; ZOGY's
+# catalog carries no sumrat and is not prefiltered. A source is kept when its
+# sumrat is above this, finite (a null sumrat is rejected, where dev passes
+# it), and its nearest pixel is at least 2 px from the image edge (dev's
+# XSources loader, 57559572, a module constant). "" applies none of it (dev:
+# the section missing). dev's rb_prefilter_threshold is not here: the
+# rebuild computes no real-bogus score.
+sumrat_prefilter_threshold = 0.4
+
 [difference.extra_catalog_cols]
 # [EXTRA_CATALOG_COLS]: nneg and nbad, the negative and the non-finite
 # pixels of an unfiltered stamp of this side [pixels], odd.

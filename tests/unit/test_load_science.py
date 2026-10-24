@@ -180,3 +180,38 @@ def test_source_set_carries_the_pixel_columns_null_where_the_catalog_has_none():
         [1, 2], [0.8, None], [3, None], [0, None]]
     older, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
     assert [older.column(c).null_count for c in ("sumrat", "nneg", "nbad")] == [2, 2, 2]
+
+
+def _prefilter_rows(x_fit, sumrat, flux_fit):
+    import pyarrow as pa
+
+    n = len(x_fit)
+    rows = {name: [5.0] * n for name, _ in catalogs.CATALOG_COLUMNS}
+    rows.update(id=list(range(1, n + 1)), ra=[10.0] * n, dec=[-5.0] * n, x_fit=x_fit,
+                flux_fit=flux_fit, flux_err=[1.0] * n, sumrat=sumrat)
+    return pa.table(rows)
+
+
+KEY = {"dataset": "D", "expid": 1, "sca": 2, "fid": 3}
+
+
+def test_the_prefilter_keeps_sumrat_above_the_threshold_and_drops_at_or_below_or_null():
+    rows = _prefilter_rows([5.0] * 4, [0.41, 0.4, None, 0.1], [40.0, 30.0, 20.0, 10.0])
+    table, candidates = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=0,
+                                            sumrat_prefilter_threshold=0.4)
+    assert table.column("sid").to_pylist() == [1] and candidates == 1
+
+
+def test_the_prefilter_drops_a_source_within_2_px_of_the_edge():
+    # zero-based, 10 pixels: nearest pixels 1, 2, 7 and 8; 2 and 7 are the last kept
+    rows = _prefilter_rows([1.4, 1.6, 7.4, 7.6], [0.9] * 4, [40.0, 30.0, 20.0, 10.0])
+    table, _ = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=0,
+                                   sumrat_prefilter_threshold=0.4)
+    assert table.column("sid").to_pylist() == [2, 3]
+
+
+def test_the_prefilter_runs_before_the_cap():
+    rows = _prefilter_rows([5.0] * 3, [0.1, 0.9, 0.9], [40.0, 30.0, 20.0])
+    table, _ = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=1,
+                                   sumrat_prefilter_threshold=0.4)
+    assert table.column("sid").to_pylist() == [2]
