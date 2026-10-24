@@ -1,7 +1,11 @@
 """Official packet sets onto the Kafka topic: the packet job's last act, and ``rapidpipe publish``.
 
 The publisher that writes rows is :mod:`rapidpipe.foundation.publish`; this
-module is the transport, and :func:`deliver` is its one send boundary. A
+module is the transport, and :func:`deliver` is its one send boundary,
+where the quality gate (:func:`rapidpipe.foundation.gate.decide`, the run's
+``[gate]`` table) answers first: a held set is not sent by either path,
+stays official and unstamped, and is sent by a later sweep whose answer is
+send. A
 packet job that its publisher has just loaded and bound sends its own set
 there as its last act (``job run``, ``job local``); ``rapidpipe publish
 --run <id>``, and the loop's per-pass publish step, call it for every
@@ -64,6 +68,7 @@ from typing import Any, Callable
 import fastavro
 import psycopg2.extras
 
+from rapidpipe.foundation import gate
 from rapidpipe.foundation.prefix import get
 
 logger = logging.getLogger(__name__)
@@ -115,10 +120,10 @@ def set_index(conn, job: int) -> list[dict]:
                         " WHERE job = %s ORDER BY sid", (job,))
 
 
-def set_dataset(conn, job: int) -> str:
-    """The dataset of ``job``'s run: the messages' key."""
-    return _query(conn, "SELECT r.dataset FROM jobs j JOIN runs r ON r.id = j.run"
-                        " WHERE j.id = %s", (job,))[0]["dataset"]
+def set_run(conn, job: int) -> dict:
+    """``job``'s run's ``dataset`` (the messages' key) and ``[gate]`` table (``gate``, or ``None``)."""
+    return _query(conn, "SELECT r.dataset, r.settings -> 'gate' AS gate FROM jobs j"
+                        " JOIN runs r ON r.id = j.run WHERE j.id = %s", (job,))[0]
 
 
 def stamp(conn, job: int, partition: int, first: int, last: int) -> None:
@@ -159,14 +164,21 @@ def messages(index: list[dict]) -> list[tuple[int, bytes]]:
 
 
 def deliver(conn, job: int, producer: Any, topic: str) -> dict[str, Any]:
-    """Send packet set ``job``, flush, read every acknowledgement and stamp the set.
+    """Unless the quality gate holds it, send packet set ``job``, flush, read every
+    acknowledgement and stamp the set.
 
     Returns the set's ``packets``, ``bytes``, ``largest`` message,
-    ``partition``, ``first`` and ``last`` offsets. A flush that does not
+    ``partition``, ``first`` and ``last`` offsets; for a held set, nothing
+    sent, ``held`` with the gate's answer. A flush that does not
     finish raises :class:`FlushStalled`, and a failed acknowledgement its
     own error, with nothing stamped.
     """
-    dataset = set_dataset(conn, job).encode()
+    run = set_run(conn, job)
+    answer = gate.decide(conn, job, run["gate"])
+    if not answer["send"]:
+        logger.warning("packet set %d: held by the quality gate (%s); not sent", job, answer["reason"])
+        return {"job": job, "held": answer}
+    dataset = run["dataset"].encode()
     batch = messages(set_index(conn, job))
     futures = [producer.send(topic, key=dataset, value=value, headers=headers(job, sid))
                for sid, value in batch]
@@ -197,13 +209,13 @@ def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> 
     the pass; ``producer`` has kafka-python's ``send(topic, key=, value=,
     headers=)`` returning a future and ``flush(timeout=)``. Returns the sets
     stamped, packets, bytes, the largest message, the sets left ``waiting``
-    in their settle window and the wall time. A set with a failed
+    in their settle window, the sets the quality gate ``held`` and the wall time. A set with a failed
     acknowledgement is left unstamped and the next set is tried; a flush
     that times out leaves its set and every later one unstamped; then
     :class:`PublishError` names the sets that failed.
     """
     started = time.monotonic()
-    sets, failed, packets, total, largest = [], {}, 0, 0, 0
+    sets, held, failed, packets, total, largest = [], [], {}, 0, 0, 0
     with connect() as conn:
         waiting = settling_sets(conn, run)
         for job in unpublished_sets(conn, run):
@@ -217,6 +229,9 @@ def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> 
                 failed[job] = error
                 logger.error("packet set %d: an acknowledgement failed (%s); left unstamped", job, error)
                 continue
+            if "held" in sent:
+                held.append(job)
+                continue
             sets.append(job)
             packets += sent["packets"]
             total += sent["bytes"]
@@ -225,7 +240,7 @@ def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> 
         raise PublishError(f"run {run}: packet sets {sorted(failed)} left unstamped after a failed"
                            f" acknowledgement ({next(iter(failed.values()))}); stamped {sets}")
     return {"run": run, "topic": topic, "sets": sets, "packets": packets, "bytes": total,
-            "largest_message": largest, "waiting": waiting,
+            "largest_message": largest, "waiting": waiting, "held": held,
             "seconds": round(time.monotonic() - started, 3)}
 
 

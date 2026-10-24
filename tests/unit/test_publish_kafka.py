@@ -9,9 +9,10 @@ acknowledgement leaves its set's stamp null, the other sets stamped, and
 ``publish`` exits non-zero; a flush that times out stops the pass, leaving
 that set and the later ones unstamped; a packet job that publishes and
 binds sends its own set, a failure to send it leaves the job exit 0 and the
-set unstamped, and a job that did not bind sends nothing; the producer
-waits for every replica and is not idempotent (the job role may write
-data, not write it idempotently).
+set unstamped, and a job that did not bind sends nothing; a set the
+quality gate holds is neither sent nor stamped, by the sweep or by its own
+packet job, and the others are; the producer waits for every replica and
+is not idempotent (the job role may write data, not write it idempotently).
 """
 
 from __future__ import annotations
@@ -84,9 +85,22 @@ def outbox(tmp_path, monkeypatch):
                         lambda conn, run: [7, 9] if run == 3 else [])
     monkeypatch.setattr(publish_kafka, "settling_sets", lambda conn, run: [11] if run == 3 else [])
     monkeypatch.setattr(publish_kafka, "set_index", lambda conn, job: index[job])
-    monkeypatch.setattr(publish_kafka, "set_dataset", lambda conn, job: "r00342-x")
+    monkeypatch.setattr(publish_kafka, "set_run", lambda conn, job: {"dataset": "r00342-x", "gate": None})
+    monkeypatch.setattr(publish_kafka.gate, "decide", lambda conn, job, settings: {
+        "send": job not in HELD, "reason": "n_sources_snr_gt20 off-scale"})
     monkeypatch.setattr(publish_kafka, "stamp", lambda conn, job, *coordinates: events.append(("stamp", job, *coordinates)))
     return events
+
+
+#: The packet sets the faked quality gate holds.
+HELD: set[int] = set()
+
+
+@pytest.fixture()
+def held():
+    HELD.clear()
+    yield HELD
+    HELD.clear()
 
 
 def _connect():
@@ -192,3 +206,18 @@ def test_the_producer_waits_for_every_replica_and_is_not_idempotent(monkeypatch)
     monkeypatch.setattr(publish_kafka, "client_config", lambda servers: {})
     publish_kafka.producer(["b:9098"], 1 << 20)
     assert built["acks"] == "all" and built["enable_idempotence"] is False
+
+
+def test_a_held_set_is_neither_sent_nor_stamped_by_the_sweep_and_the_others_are(outbox, held):
+    held.add(7)
+    producer = Producer(outbox)
+    result = publish_kafka.publish(_connect, 3, producer, "topic")
+    assert (result["sets"], result["held"]) == ([9], [7])
+    assert [e[:2] for e in outbox if e[0] in ("send", "stamp")] == [("send", b"9:90"), ("stamp", 9)]
+
+
+def test_a_held_set_is_not_sent_by_its_own_packet_job(packet_job, outbox, held, monkeypatch):
+    held.add(7)
+    monkeypatch.setattr(publish_kafka, "producer", lambda servers, size: Producer(outbox))
+    assert cli.main(["job", "run", "--job", "7"]) == ExitCode.SUCCESS
+    assert not [e for e in outbox if e[0] in ("send", "stamp")]
