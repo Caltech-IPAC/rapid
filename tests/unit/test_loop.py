@@ -243,6 +243,30 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     assert summary["sets_waiting"] == [90] and not summary["drained"]
 
 
+@pytest.mark.parametrize("listed, code", [([], ExitCode.USAGE), ([stem(1, 1, 1)], ExitCode.SUCCESS)],
+                         ids=["nothing-listed", "drained"])
+def test_a_first_pass_listing_no_stem_of_the_selection_exits_64_and_a_drained_one_0(
+        monkeypatch, capsys, listed, code):
+    k1 = (expid(1, 1, 1), 8, 8)
+    done = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30},
+                diffs={k1: 41}, sources={k1: 41}, packets={k1: 90})
+    monkeypatch.setattr(loop, "snapshot", lambda conn, run: done)
+    monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
+    monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
+    monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([s + "_cal.asdf" for s in listed]))
+    monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "late_sets", lambda conn, run: 0)
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
+    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client, *a: {"retrying": []})
+    monkeypatch.setattr(loop.attempts, "run_entries", lambda conn, run: [])
+    assert cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
+                     "--passes", "1", "--job-definition", "jd", "--interval", "0"]) == code
+    if code == ExitCode.USAGE:
+        err = capsys.readouterr().err
+        assert SETTINGS["intake"]["source_root"] in err and "F146" in err and "passes 1" in err
+
+
 @pytest.mark.parametrize("state, refusal", [("failed", None), ("published", "binding refused")])
 def test_a_failed_chain_holds_only_its_own_work_and_the_loop_exits_1_once_the_rest_drains(
         monkeypatch, capsys, state, refusal):
@@ -262,7 +286,8 @@ def test_a_failed_chain_holds_only_its_own_work_and_the_loop_exits_1_once_the_re
     monkeypatch.setattr(cli.foundation, "create_job", lambda conn, run, stage, *a: submitted.append(stage) or 91)
     monkeypatch.setattr(cli.launch, "submit", lambda *a, **kw: "batch-91")
     monkeypatch.setattr(cli.launch, "job_environment", lambda settings: {})
-    monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([]))
+    monkeypatch.setattr(cli.storage, "s3_client",
+                        lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf", stem(2, 1, 1) + "_cal.asdf"]))
     monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
     monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
     monkeypatch.setattr(cli.publish_kafka, "late_sets", lambda conn, run: 0)

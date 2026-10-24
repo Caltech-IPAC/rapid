@@ -46,7 +46,7 @@ from rapidpipe.foundation import attempts as submissions
 from rapidpipe.foundation.prefix import attempts, local_path, put
 from rapidpipe.foundation.publish import publish
 
-__all__ = ["JobContext", "local_path", "run_job"]
+__all__ = ["JobContext", "failure_reason", "local_path", "named_exit_code", "run_job"]
 
 
 @dataclass(frozen=True)
@@ -113,8 +113,23 @@ def _claim_attempt(job_root: Path) -> int:
             attempt += 1
 
 
+#: The longest reason a failed job's ``refusal`` records, in characters.
+REFUSAL_CHARS = 500
+
+
+def failure_reason(exc: BaseException) -> str:
+    """``<Class>: <message>``, at most :data:`REFUSAL_CHARS` characters: what a failed job's row says."""
+    return f"{type(exc).__name__}: {exc}"[:REFUSAL_CHARS]
+
+
+def named_exit_code(exc: BaseException) -> int:
+    """A :class:`~rapidpipe.exitcodes.CommandExit`'s code, 70 for anything else."""
+    return exc.code if isinstance(exc, CommandExit) else int(ExitCode.STAGE_ERROR)
+
+
 def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
-            stage_run: Callable[[JobContext], None]) -> dict[str, Any]:
+            stage_run: Callable[[JobContext], None],
+            exit_code: Callable[[BaseException], int] = named_exit_code) -> dict[str, Any]:
     """Run job ``job_id``'s next attempt with ``stage_run`` and publish it.
 
     ``connect()`` is a context manager yielding a connection
@@ -132,12 +147,15 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     type (:func:`instance_type`) before the stage, clearing a reason an
     earlier attempt's failure left in ``refusal``,
     ``ended`` and ``exit_code`` after it; a stage or publication that raises
-    leaves the job ``failed`` and the exception propagates. A stage that
-    stops with a named reason raises :class:`~rapidpipe.exitcodes.CommandExit`:
-    the job row records its code and its message in ``refusal``; any other
-    exception records 70 and its type and message in ``refusal`` (a
+    leaves the job ``failed`` and the exception propagates. The row records
+    ``exit_code(exc)``, the code the process will exit with (``rapidpipe
+    job run`` passes its own classification, so a transient failure records
+    75), and :func:`failure_reason` in ``refusal``: the exception's class and
+    message, a :class:`~rapidpipe.exitcodes.CommandExit`'s included (a
     :class:`~rapidpipe.science.difference.tools.ToolFailed` names the tool,
-    its exit code and its last output lines).
+    its exit code and its last output lines). When that write itself fails,
+    the job id and the reason are logged and the stage's exception still
+    propagates.
     """
     with connect() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -188,12 +206,16 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             _record(conn, job_id, "ended = now(), exit_code = 0")
             _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "published"})
     except BaseException as exc:
-        named = isinstance(exc, CommandExit)
-        code = exc.code if named else int(ExitCode.STAGE_ERROR)
-        with connect() as conn:
-            _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s, refusal = %s",
-                    (code, str(exc) if named else f"{type(exc).__name__}: {exc}"))
-            _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "failed", "exit_code": code})
+        code = exit_code(exc)
+        reason = failure_reason(exc)
+        try:
+            with connect() as conn:
+                _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s, refusal = %s",
+                        (code, reason))
+                _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "failed", "exit_code": code})
+        except Exception:  # noqa: BLE001 - the stage's own failure is the one to raise
+            logging.getLogger(__name__).exception(
+                "job %d: its failure (exit %d, %s) could not be recorded on its row", job_id, code, reason)
         raise
     return {**result, "peak_rss_kib": _peak_rss_kib()}
 

@@ -276,6 +276,12 @@ TRANSIENT_EXCEPTION_NAMES = (
 #: ``NoSuchKey`` from ``get_object``, ``NotFound`` from some resources.
 NOT_FOUND_ERROR_CODES = ("404", "NoSuchKey", "NotFound")
 
+#: A ClientError-shaped exception's ``Error.Code`` values that mean "slow
+#: down and repeat": AWS's throttling codes (SSM's ``ThrottlingException``
+#: failed 1,448 of 3,456 intakes on 2026-10-23) and S3's ``SlowDown``.
+TRANSIENT_ERROR_CODES = ("Throttling", "ThrottlingException", "TooManyRequestsException", "SlowDown",
+                         "RequestLimitExceeded")
+
 
 def client_error_code(exc: BaseException) -> str | None:
     """The ``Error.Code`` of a ClientError-shaped exception, or ``None``.
@@ -301,9 +307,17 @@ def is_not_found(exc: BaseException) -> bool:
 
 
 def is_transient(exc: BaseException) -> bool:
-    """Whether ``exc``'s class name is network-shaped (:data:`TRANSIENT_EXCEPTION_NAMES`)."""
+    """Whether ``exc`` is worth repeating: its class name is network-shaped
+    (:data:`TRANSIENT_EXCEPTION_NAMES`), or it is ClientError-shaped with a
+    throttling code (:data:`TRANSIENT_ERROR_CODES`) or HTTP status 503."""
     class_name = type(exc).__name__
-    return any(class_name.endswith(name) for name in TRANSIENT_EXCEPTION_NAMES)
+    if any(class_name.endswith(name) for name in TRANSIENT_EXCEPTION_NAMES):
+        return True
+    if client_error_code(exc) in TRANSIENT_ERROR_CODES:
+        return True
+    response = getattr(exc, "response", None)
+    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode") if isinstance(response, dict) else None
+    return status == 503
 
 
 class Storage:

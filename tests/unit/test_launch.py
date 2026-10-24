@@ -64,6 +64,9 @@ class _Conn:
     def commit(self):
         self.committed = True
 
+    def rollback(self):
+        pass
+
 
 def test_submit_records_the_batch_job_id_and_its_submission_on_the_job_row(batch_env):
     conn = _Conn()
@@ -74,6 +77,32 @@ def test_submit_records_the_batch_job_id_and_its_submission_on_the_job_row(batch
     assert "attempts" in sql and params[0] == "batch-1" and params[-1] == 7
     assert json.loads(params[2])["queue"] == "queue" and json.loads(params[2])["why"] == "first"
     assert conn.committed
+
+
+class _ThrottledBatch:
+    def submit_job(self, **request):
+        raise RuntimeError("TooManyRequestsException: the queue's rate")
+
+
+def test_a_raising_batch_request_leaves_the_row_failed_with_the_reason_and_propagates(batch_env):
+    conn = _Conn()
+    with pytest.raises(RuntimeError, match="TooManyRequestsException"):
+        launch.submit(7, "difference", job_definition="definition", conn=conn, client=_ThrottledBatch())
+    ((sql, params),) = conn.statements
+    assert "SET state = 'failed'" in sql and "state <> 'published'" in sql
+    assert params == ("RuntimeError: TooManyRequestsException: the queue's rate", 7) and conn.committed
+
+
+def test_a_failing_id_write_after_an_accepted_request_does_not_mark_the_row_failed(batch_env):
+    class Unwritable(_Conn):
+        def execute(self, sql, params):
+            self.statements.append((sql, params))
+            raise RuntimeError("the database went away")
+
+    conn = Unwritable()
+    with pytest.raises(RuntimeError, match="went away"):
+        launch.submit(7, "difference", job_definition="definition", conn=conn, client=_Batch())
+    assert not any("SET state = 'failed'" in sql for sql, _ in conn.statements)
 
 
 def test_a_spot_submission_names_its_queue_and_one_attempt_and_a_prompt_one_neither(batch_env):

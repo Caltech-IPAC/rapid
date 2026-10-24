@@ -25,7 +25,7 @@ def job_run(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_stage_run", lambda stage: None)
 
     def invoke(result):
-        monkeypatch.setattr(foundation, "run_job", lambda *args: {"job": 5, "attempt": 1, **result})
+        monkeypatch.setattr(foundation, "run_job", lambda *args, **kwargs: {"job": 5, "attempt": 1, **result})
         code = cli.main(["job", "run", "--job", "5"])
         return code, capsys.readouterr().err
 

@@ -176,7 +176,7 @@ def packet_job(outbox, monkeypatch):
     monkeypatch.setattr(publish_kafka, "endpoint", lambda settings: {
         "bootstrap_servers": ["b:9098"], "topic": "topic", "max_request_bytes": 1 << 20})
     published = {"job": 7, "attempt": 1, "published": True, "group": 5, "refusal": None, "live": True}
-    monkeypatch.setattr(cli.foundation, "run_job", lambda *a: dict(published))
+    monkeypatch.setattr(cli.foundation, "run_job", lambda *a, **kw: dict(published))
     return published
 
 
