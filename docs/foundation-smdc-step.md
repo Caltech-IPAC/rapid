@@ -5144,6 +5144,100 @@ does, so the numbers can arrive out of order.
       sweep sent the 76 packets and stamped the set. The endpoint came from the
       job environment, so this is the grant or the producer's settings, task 5's.
 
+5. **The packet job sends its own set; the gate at the send boundary; the
+   consumer check direct (PRs 358, 371, 372).** A packet job that its
+   publisher loaded and bound sends its own set as its last act through
+   `publish_kafka.deliver`, the one send boundary: the quality gate
+   (`gate.decide`, PR 366, the run's `[gate]` table) answers first and a
+   held set is neither sent nor stamped; otherwise one message per packet,
+   keyed by the run's dataset (one partition per dataset), the set and sid
+   in the `rapid-set` and `rapid-sid` headers, acks all, one flush, then
+   the stamp with the acknowledgements' partition and first and last
+   offsets. `rapidpipe publish`, and the loop's per-pass publish, are the
+   re-publication verb and the recovery sweep: every unstamped official set
+   whose job ended more than `SETTLE_S` (300 s) ago; a set inside the window
+   is the container's to send, reported as `sets_waiting`, and holds the
+   drain. `consume_packets.py --run N` reads only the stamped sets' recorded
+   ranges (overlapping ranges merged), keeps a set's messages by key and
+   headers, counts every set's packets and decodes and byte-compares one set
+   per field (the latest of the field); the O(topic) walk is retired.
+
+   The granted statement, `database/2026-10-24-kafka-offsets.sql`, applied
+   once on SMDC as `postgres` by SSM on the database host:
+
+   ```sh
+   podman exec rapid-postgres psql -U postgres -d rapid -v ON_ERROR_STOP=1 -c "ALTER TABLE jobs ADD COLUMN kafka_partition integer, ADD COLUMN kafka_first_offset bigint, ADD COLUMN kafka_last_offset bigint;"
+   ```
+
+   Check, held: `ALTER TABLE` at 05:13:43 UTC; `jobs` 20,126 rows (max id
+   20,126) before and after, the same the pooler reads.
+
+   **First proof, run 57** (`r00342-nt-producer`, `e23f349a`, image
+   `sha256:69e36fda…`, **`rapid-rebuild:50`**; F146, SCA 8, pointing
+   `001_0001`; 05:21:13 to 05:47:21 UTC, exit 0). Every packet job's own
+   send failed: `KafkaError: Unexpected error in InitProducerIdResponse:
+   [Error 31] ClusterAuthorizationFailedError` (job 20196's stream, 05:39:46
+   UTC). kafka-python 3.0.11 defaults to `enable_idempotence=True`, whose
+   producer-id request needs `kafka-cluster:WriteDataIdempotently`; the job
+   role's `MskAlertTopicProduce` holds `Connect`, `DescribeTopic`,
+   `WriteData` (rapid_systems PR 420), and `rapid-deploy` on the host is
+   administrator, which is why `publish` never met it. The sweep did its
+   work unplanned: each set waited out `SETTLE_S` under `sets_waiting` and
+   the next pass sent it (79, 108, 97 packets); the consumer check was
+   CLEAN, 284/284, p0 0..283, 4.0 s. PR 371 builds the producer with
+   `enable_idempotence=False` (nothing here is exactly-once; the IAM
+   alternative is Ben's).
+
+   **Second proof, run 68** (`r00342-nt-producer-b`, `75896e27`, image
+   `sha256:d22c66ba…`, **`rapid-rebuild:57`**; the same selection; 05:59:42
+   to 06:15:47 UTC, 17 passes, exit 0):
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision 75896e27fa3f76835ff71910a918afb5fbdb6166 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --survey HLWAS --dataset r00342-nt-producer-b
+   rp official change --group live.json ...                 # run 68 live for HLWAS r00342-nt-producer-b
+   rp job local --run 68 --stage import ...                 # Gaia under the dataset's key, job 20218
+   rp loop --run 68 --filters F146 --scas 8 --pointings 001_0001 --job-definition rapid-rebuild:57 --interval 60
+   python scripts/consume_packets.py --run 68
+   ```
+
+   Check, held:
+
+   | set | ended | stamped | partition | offsets | packets |
+   |---|---|---|---|---|---|
+   | 20235 | 06:08:11 | 06:08:14 | 1 | 79..154 | 76 |
+   | 20240 | 06:10:21 | 06:10:25 | 1 | 155..261 | 107 |
+   | 20243 | 06:15:25 | 06:15:28 | 1 | 608..706 | 99 |
+
+   Every pass's `sets_produced` was empty and `sets_waiting` empty: the
+   containers sent their own sets, 3 to 4 s after their jobs ended. Job
+   20243's Batch log ends with its result's `kafka` field (99 packets,
+   22,622,270 bytes, partition 1, offsets 608..706). The consumer check:
+   CLEAN, read 282, kept 282, packets expected 282 seen 282, one set
+   sampled (99 valid, 99 byte-equal), ranges `p1 79..261, p1 608..706`, 4.0
+   s (other datasets' messages lie between). `rapidpipe publish --run 68`
+   then sends nothing (`sets []`). The gate answers send for all three at
+   the defaults (three epochs, below its floor of five); with `[gate]
+   core_fraction_max_abs = 0.0001, min_epochs = 1` passed to `gate.decide`
+   it holds set 20245 with `core_fraction +0.0032 beyond ±0.0001`.
+
+   **The kill between the database publish and the acknowledgement.** The
+   last epoch's packet job repeated here as a new job superseding the
+   official set (`job local` with set 20243's scope and inputs and its
+   binding in `expects`), killed with SIGKILL the moment its row turned
+   `published` (`kill-t5.sh`, a watcher on the job row; the brief allows no
+   Batch termination). A first try keyed the kill to an INFO log line that
+   the CLI does not emit at its log level; that job, 20244, ran to the end
+   and sent its own set (p1 876..974), a supersession and no harm. Job
+   20245 was killed at 06:17:39 UTC: published, bound, `ended` and every
+   stamp column null. One pass, `rp loop --run 68 ... --once` at 06:17:50
+   UTC: `sets_produced [20245]`, `packets_produced 99`, drained, 6.7 s;
+   then the consumer check CLEAN, 480/480 over five stamped sets, the
+   sampled set 20245 byte-equal 99/99, ranges `p1 79..261, p1 608..706, p1
+   876..1073`, 4.1 s.
+
 6. **The database guards and the `forced` read (PRs 355, 357).** Three
    guards, no behaviour change, no schema statement on SMDC. A schema test
    in `tests/db/test_schema.py` reads the catalog CI applies: every product
