@@ -6,7 +6,8 @@ and the catalog-writing block repeated inline for each difference image
 and sign in ``awsBatchSubmitJobs_runSingleSciencePipeline.py``. DAOStarFinder
 detects above ``n_thresh_sigma`` times the image's clipped standard
 deviation; PSFPhotometry fits the given PSF with the uncertainty image as
-error. When the fit cannot be made the catalog is absent and the caller
+error, the image's non-finite pixels filled for the finder and masked
+(not dev). When the fit cannot be made the catalog is absent and the caller
 sets that difference image's catalog-outcome bit.
 
 photutils, pandas and pyarrow are imported inside the functions that use
@@ -46,6 +47,7 @@ def compute_psf_catalog(n_clip_sigma,
     """`dev` ``compute_psf_catalog``: returns ``(psfcat_flag, phot, psfphot)``."""
     import photutils
     photutils.future_column_names = True
+    from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
     from photutils.detection import DAOStarFinder
     from photutils.psf import ImagePSF, PSFPhotometry
 
@@ -103,7 +105,17 @@ def compute_psf_catalog(n_clip_sigma,
     # 2026-10-24) and raises only for faults, a ValueError among them, so
     # nothing is caught: a fault fails the job instead of publishing an empty
     # source set.
-    phot = psfphot(data=data_image, error=data_uncert)
+    # Not dev: the non-finite pixels are filled from their neighbours and
+    # passed as the mask. DAOStarFinder convolves and measures with NaNs in
+    # place, mask or not, and drops a star whose moments come out
+    # non-finite: a star within about 4 px of one masked pixel was never
+    # found (photutils 3.0.0, finder-mask, 2026-10-24). The fit ignores the
+    # masked pixels; a hole wider than the kernel is zero. A zero fill alone
+    # split a star with a masked peak into four rows.
+    nonfinite = ~np.isfinite(data_image)
+    filled = interpolate_replace_nans(data_image, Gaussian2DKernel(1))
+    filled[~np.isfinite(filled)] = 0.0
+    phot = psfphot(data=filled, mask=nonfinite, error=data_uncert)
 
     if psfcat_flag:
         try:
