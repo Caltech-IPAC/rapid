@@ -6,7 +6,7 @@ Repository for the RAPID (***R***oman ***A***lerts ***P***romptly from ***I***ma
 
 ## Getting started
 
-This takes one epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146) through the whole chain on your own machine: intake, PSF, a reference from two earlier passes, the difference, and the epoch's packet set. Every stage runs inside the pipeline image, which carries the tools (`sex`, `swarp`, `awaicgen`, `bkgest`), against a throwaway PostgreSQL 18. It took about six minutes on a 16 GB machine. To start a night on the team's database and Batch instead, read [Starting a night](https://roman-rapid.readthedocs.io/en/latest/system/loop.html#starting-a-night).
+This takes one epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146) through the whole chain on your own machine: intake, PSF, a reference from two earlier passes, the difference, and the epoch's packet set. Every stage runs inside the pipeline image, which carries the tools (`sex`, `swarp`, `awaicgen`, `bkgest`), against a throwaway PostgreSQL 18. It took four and a half minutes on a 16 GB machine. To start a night on the team's database and Batch instead, read [Starting a night](https://roman-rapid.readthedocs.io/en/latest/system/loop.html#starting-a-night).
 
 ### What you need
 
