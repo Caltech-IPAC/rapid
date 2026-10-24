@@ -31,8 +31,11 @@ jobs of ``--run``:
   opens at the run's stamp size and every forced entry is its set's
   ``forced.parquet`` row; then ``read_packets.py`` on the bound sets.
 - ``forced``: a packet set's forced rows of an (object, image) pair that a
-  recorded predecessor set also holds are the predecessor's measurement,
-  value for value, ``time_proc`` included: reused, never re-measured. (The
+  recorded predecessor set also holds are a predecessor's measurement,
+  value for value, ``time_proc`` included: reused, never re-measured. Two
+  packet sets in flight at once each measure a pair neither could read
+  (runs 72 and 73, 2026-10-24), so a later set may record both and copies
+  one: it must equal one of them. (The
   night's check took every official set as one measurement; a run may also
   hold a replacement set, which measures afresh what it replaces.)
 - ``twice`` (only with ``--twice A,B``): two executions of one key are both
@@ -445,6 +448,7 @@ def check_forced(run: int) -> bool:
                      for r in read_output(job, "forced").to_pylist()}
         n_rows += len(rows[job])
     for job, own in rows.items():
+        held = defaultdict(list)                  # pair -> the recorded predecessors' measurements of it
         for r in q("SELECT source_job FROM job_inputs WHERE job = %s AND kind = 'input'"
                    " AND product = 'packets'", (job,)):
             pred = rows.get(r["source_job"])
@@ -452,12 +456,14 @@ def check_forced(run: int) -> bool:
                 pred = {(x["aid"], x["rid"]): tuple(x[f] for f in FORCED_COMPARED)
                         for x in read_output(r["source_job"], "forced").to_pylist()}
             for pair in own.keys() & pred.keys():
-                n_reused += 1
-                if not all(rpk._same(a, b) for a, b in zip(own[pair], pred[pair])):
-                    bad.append(f"object {pair[0]} image rid {pair[1]}: set {job} measured it again,"
-                               f" differently from its predecessor {r['source_job']}")
+                held[pair].append((r["source_job"], pred[pair]))
+        for pair, preds in held.items():
+            n_reused += 1
+            if not any(all(rpk._same(a, b) for a, b in zip(own[pair], m)) for _, m in preds):
+                bad.append(f"object {pair[0]} image rid {pair[1]}: set {job} measured it again,"
+                           f" differently from its predecessors {[j for j, _ in preds]}")
     return report("forced", bad, f"{n_rows} forced rows in {len(rows)} sets; {n_reused} rows shared with a"
-                  " recorded predecessor, every one its predecessor's measurement", t0)
+                  " recorded predecessor, every one a predecessor's measurement", t0)
 
 
 def check_twice(a: int, b: int) -> bool:
