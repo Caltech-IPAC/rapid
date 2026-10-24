@@ -116,7 +116,9 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     Returns :func:`~rapidpipe.foundation.publish.publish`'s result with
     ``peak_rss_kib``: the peak resident memory of this process (``self``)
     and of its largest finished child process (``children``, the toolkit's
-    binaries), in KiB. A job already published returns at once with
+    binaries), in KiB. Their sum as the stage ended is also written into the
+    manifest's ``metrics`` as ``peak_rss_kib`` before publication, so
+    ``job_metrics`` holds every job's. A job already published returns at once with
     ``published`` false and no file touched. The job row records
     ``running``, ``started``, the image digest (``RAPID_IMAGE_DIGEST``,
     which the job definition sets; none for a checkout) and the instance
@@ -163,6 +165,8 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
         inputs=inputs, attempt=attempt, prefix=prefix, connect=connect, workdir=workdir)
     try:
         stage_run(context)  # no connection held while the stage computes
+        peak = _peak_rss_kib()
+        _record_peak(context.path / "manifest.json", peak["self"] + peak["children"])
         put(context.path, prefix)
         if workdir is not None:
             shutil.rmtree(workdir)
@@ -175,9 +179,22 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s, refusal = %s",
                     (exc.code if named else int(ExitCode.STAGE_ERROR), str(exc) if named else None))
         raise
-    peak = {who: resource.getrusage(scope).ru_maxrss for who, scope in
+    return {**result, "peak_rss_kib": _peak_rss_kib()}
+
+
+def _peak_rss_kib() -> dict[str, int]:
+    """This process's peak resident memory and its largest finished child's, KiB."""
+    return {who: resource.getrusage(scope).ru_maxrss for who, scope in
             (("self", resource.RUSAGE_SELF), ("children", resource.RUSAGE_CHILDREN))}
-    return {**result, "peak_rss_kib": peak}
+
+
+def _record_peak(manifest: Path, kib: int) -> None:
+    """Add ``peak_rss_kib`` (self plus the largest child, KiB, as the stage ended) to the manifest's ``metrics``."""
+    if not manifest.exists():
+        return
+    body = json.loads(manifest.read_text())
+    body.setdefault("metrics", {})["peak_rss_kib"] = int(kib)
+    manifest.write_text(json.dumps(body, indent=1))
 
 
 #: The EC2 instance metadata service (IMDSv2): a session token, then one read.

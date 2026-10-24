@@ -13,7 +13,10 @@ run's median row and, under it, each row's deviation from that median
 thumbnail and, for up to eight of the job's residual stars
 (``difference.residual_stars`` in its manifest, the stars the core and
 ring fractions are measured on), science, reference and difference
-cutouts. The sample is the first and last epoch of the run by ``expid``
+cutouts, the difference divided by its star's reference flux (5 px
+aperture less the 8 to 12 px annulus median, the core fraction's) and
+shown at ±:data:`FLUX_STRETCH` per pixel, so every star's residual
+pattern is seen at the scale the core and ring fractions measure it. The sample is the first and last epoch of the run by ``expid``
 and every epoch whose ``n_sources_snr_gt20`` is more than twice the run's
 median: the images ledger's pictures made by code, not every job.
 
@@ -32,6 +35,9 @@ from pathlib import Path
 
 #: A gallery's residual-star cutouts, at most; their half width, px; the thumbnail's block, px.
 GALLERY_STARS, CUTOUT_HALF, THUMB_BLOCK = 8, 15, 8
+#: The difference cutout's stretch, a fraction of its star's flux per pixel: a +0.006 core
+#: fraction over the 2.5 px core's 20 pixels is 3e-4 per pixel.
+FLUX_STRETCH = 1e-3
 #: Files beside a difference image that the gallery reads.
 SCIENCE, REFERENCE = "bkg_subbed_science_image.fits.gz", "awaicgen_output_mosaic_image_resampled_gainmatched.fits.gz"
 
@@ -109,6 +115,19 @@ def thumbnail(image, block: int = THUMB_BLOCK):
     return np.take_along_axis(flat, np.abs(flat).argmax(-1)[..., None], -1)[..., 0]
 
 
+def star_flux(cut) -> float:
+    """A centred cutout's star flux: within 5 px less the 8 to 12 px annulus median (the core fraction's)."""
+    import numpy as np
+
+    from rapidpipe.science.difference.metrics import APERTURE_PX, SKY_ANNULUS_PX
+
+    centre = (cut.shape[0] - 1) / 2
+    rows, cols = np.indices(cut.shape)
+    r = np.hypot(cols - centre, rows - centre)
+    sky = np.nanmedian(cut[(r >= SKY_ANNULUS_PX[0]) & (r < SKY_ANNULUS_PX[1])])
+    return float(np.nansum((cut - sky)[r < APERTURE_PX]))
+
+
 def gallery(cur, run: int, job: int, out: Path) -> Path:
     """Render one difference job's PNG; return its path."""
     import matplotlib
@@ -138,14 +157,20 @@ def gallery(cur, run: int, job: int, out: Path) -> Path:
     axes[0][2].axis("off")
     for row, s in zip(axes[1:], stars):
         ix, iy, h = int(round(s["x"])), int(round(s["y"])), CUTOUT_HALF
+        flux = star_flux(ref[iy - h:iy + h + 1, ix - h:ix + h + 1])
         for ax, (name, image) in zip(row, (("science", sci), ("reference", ref), ("difference", diff))):
             cut = image[iy - h:iy + h + 1, ix - h:ix + h + 1]
-            if name == "difference":
+            title = f"{name} ({s['x']:.0f}, {s['y']:.0f})"
+            if name == "difference" and flux > 0:
+                ax.imshow(cut / flux, origin="lower", cmap="gray", vmin=-FLUX_STRETCH,
+                          vmax=FLUX_STRETCH)
+                title += f" / flux {flux:.3g}, ±{FLUX_STRETCH:g}"
+            elif name == "difference":
                 ax.imshow(cut, origin="lower", cmap="gray", vmin=-5 * sigma, vmax=5 * sigma)
             else:
                 lo, hi = np.nanpercentile(cut, [1, 99.5])
                 ax.imshow(cut, origin="lower", cmap="gray", vmin=lo, vmax=hi)
-            ax.set_title(f"{name} ({s['x']:.0f}, {s['y']:.0f})", fontsize=8)
+            ax.set_title(title, fontsize=8)
             ax.set_xticks([])
             ax.set_yticks([])
     path = out / f"run-{run}-difference-{job}.png"

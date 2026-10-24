@@ -56,13 +56,14 @@ def _stage(stage: str) -> str:
 
 
 def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, client: Any = None,
-           memory_mib: int | None = None) -> str:
+           memory_mib: int | None = None, name_suffix: str = "") -> str:
     """Submit job ``job_id`` (of ``stage``) to Batch as ``job run --job <id>``; return the Batch job id.
 
     With ``conn``, the id is recorded as the row's ``batch_job_id`` and committed; a
     resubmission replaces it, so the row names its latest Batch job. With
     ``memory_mib`` (the run's ``[batch.memory_mib]`` value for the stage, :func:`memory_mib`),
-    the job asks for that memory instead of the job definition's.
+    the job asks for that memory instead of the job definition's. ``name_suffix`` ends
+    the Batch job's name (the loop's rerun marks its one automatic rerun so).
     """
     queue = os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
     if not queue:
@@ -78,7 +79,7 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     if memory_mib is not None:
         overrides["resourceRequirements"] = [{"type": "MEMORY", "value": str(int(memory_mib))}]
     response = (client or batch_client()).submit_job(
-        jobName=f"{prefix}-{stage}-{job_id}", jobQueue=queue, jobDefinition=job_definition,
+        jobName=f"{prefix}-{stage}-{job_id}{name_suffix}", jobQueue=queue, jobDefinition=job_definition,
         containerOverrides=overrides)
     if conn is not None:
         with conn.cursor() as cur:

@@ -18,9 +18,17 @@ of a filter; a pass is the survey's (the stem's three digits after the
 plan), so a sampled proof of a few epochs is ``--passes 1,2,3,4``.
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
-of the run in state ``failed`` is reported and never resubmitted: its key
+of the run in state ``failed`` is reported and not resubmitted: its key
 counts as taken until a person reruns it (``job run --job <id>``, or
-``job submit --job <id>`` on Batch).
+``job submit --job <id>`` on Batch). The one exception is a container
+that died for a reason not the code's (Batch ended it while its row was
+``launched`` or ``running``: a host reclaimed, a task that failed to start,
+a kill): the pass resubmits it once, its Batch job named with
+:data:`RERUN_SUFFIX`, and holds it pending; if the rerun's container dies
+too, the job stays ``failed``.
+
+A pass submits at most the run's ``[batch] max_submissions_per_pass``, in
+stage order; the rest are ``deferred`` to the next pass.
 
 Each pass first reads Batch for the run's unpublished jobs that carry a
 ``batch_job_id`` (:func:`reconcile`, one ``describe-jobs`` call per hundred
@@ -289,18 +297,27 @@ def snapshot(conn, run: int) -> Snapshot:
         gaia=gaia[0] if gaia else None)
 
 
+#: The Batch job name's suffix of the loop's one automatic rerun of a job (``launch.submit``'s
+#: ``name_suffix``): a job whose rerun's container died too stays ``failed``.
+RERUN_SUFFIX = "-rerun"
+
+
 def reconcile(conn, run: int, client: Any) -> dict:
     """Read Batch for the run's unpublished jobs with a ``batch_job_id``; mark the dead ``failed``.
 
-    Returns ``{"described", "ended", "retrying", "seconds"}``: ``ended`` the
-    rows this call marked ``failed`` (``job``, ``stage``, ``reason``),
-    ``retrying`` the ids of ``failed`` rows whose Batch job has not ended. A
+    Returns ``{"described", "ended", "retrying", "rerun", "seconds"}``:
+    ``ended`` the rows this call marked ``failed`` (``job``, ``stage``,
+    ``reason``), ``retrying`` the ids of ``failed`` rows whose Batch job has
+    not ended, ``rerun`` the ``failed`` rows whose container died without
+    ``job run`` recording it (the reason Batch's, as ``ended`` records it,
+    not the code's) on a first submission, not on a rerun
+    (:data:`RERUN_SUFFIX`): each is owed the loop's one automatic rerun. A
     job without a Batch id (a local one), or one Batch no longer describes,
     is left alone.
     """
     started = time.monotonic()
     with conn.cursor() as cur:
-        cur.execute("SELECT id, stage, state, batch_job_id FROM jobs WHERE run = %s"
+        cur.execute("SELECT id, stage, state, batch_job_id, refusal FROM jobs WHERE run = %s"
                     " AND state <> 'published' ORDER BY id", (run,))
         rows = [r for r in cur.fetchall() if r[3]]
     conn.commit()
@@ -308,8 +325,8 @@ def reconcile(conn, run: int, client: Any) -> dict:
     batch = {}
     for i in range(0, len(ids), 100):
         batch.update((b["jobId"], b) for b in client.describe_jobs(jobs=ids[i:i + 100])["jobs"])
-    ended, retrying = [], []
-    for job, stage, state, batch_id in rows:
+    ended, retrying, rerun = [], [], []
+    for job, stage, state, batch_id, refusal in rows:
         described = batch.get(batch_id)
         if described is None:
             continue
@@ -317,7 +334,8 @@ def reconcile(conn, run: int, client: Any) -> dict:
         if status in BATCH_ACTIVE:
             if state == "failed":
                 retrying.append(job)
-        elif state in PENDING:
+            continue
+        if state in PENDING:
             reason = f"Batch {status}: {described.get('statusReason', '')}".strip()
             with conn.cursor() as cur:
                 cur.execute("UPDATE jobs SET state = 'failed', ended = now(), exit_code = %s,"
@@ -325,8 +343,12 @@ def reconcile(conn, run: int, client: Any) -> dict:
                             (described.get("container", {}).get("exitCode"), reason, job))
                 if cur.rowcount:
                     ended.append({"job": job, "stage": stage, "reason": reason})
+                    state, refusal = "failed", reason
             conn.commit()
-    return {"described": len(batch), "ended": ended, "retrying": retrying,
+        if (state == "failed" and (refusal or "").startswith("Batch ")
+                and not described.get("jobName", "").endswith(RERUN_SUFFIX)):
+            rerun.append({"job": job, "stage": stage, "reason": refusal})
+    return {"described": len(batch), "ended": ended, "retrying": retrying, "rerun": rerun,
             "seconds": round(time.monotonic() - started, 2)}
 
 
@@ -354,10 +376,14 @@ def _fid(band: str, fids: dict[str, int]) -> int:
 
 
 def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
-         max_intake: int = 100) -> tuple[list[dict], dict]:
+         max_intake: int = 100, max_submissions: int | None = None) -> tuple[list[dict], dict]:
     """Every submission one pass makes, and the pass's counts; reads nothing but its arguments.
 
     A submission is ``{"stage", "scope", "inputs", "expects"}``, ``job submit``'s arguments.
+    With ``max_submissions``, only the first that many are made, in stage order, and
+    ``deferred`` counts the rest; the next pass plans them again. (An exposure's
+    ``exposures`` expectation rides on its first SCA's intake, earlier in the order than
+    its other SCAs', so a cut never strands it.)
     """
     d = snap.dataset
     fids = {name: _fid(name, snap.fids) for name in selection.filters}
@@ -536,7 +562,10 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
                         "expects": [{"product": "packets", "key": key(*k), "binding": None}]})
             break
 
-    counts = {"listed": len(stems), "admitted": len(admitted), "new": len(new),
+    deferred = len(out) - max_submissions if max_submissions is not None and len(out) > max_submissions else 0
+    if deferred:
+        out = out[:max_submissions]
+    counts = {"listed": len(stems), "admitted": len(admitted), "new": len(new), "deferred": deferred,
               "submitted": {s: sum(1 for o in out if o["stage"] == s) for s in STAGES},
               "pending": {s: len(pending[s]) for s in STAGES},
               "failed": [{"job": j["id"], "stage": j["stage"]} for j in failed], "held": held}
@@ -546,17 +575,26 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
 def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, stems: list[str],
              submit: Callable[[dict], Any], publish: Callable[[], dict] | None,
              max_intake: int = 100, batch: Any = None,
+             rerun: Callable[[int, str], Any] | None = None,
              held_sets: Callable[[], list[dict]] | None = None) -> dict:
-    """One pass: reconcile with ``batch`` (a Batch client) when given, snapshot, plan, submit
-    each without waiting, then publish; return the summary, with ``held_sets``, the
-    quality gate's held packet sets after the publish (``held_sets()``), when given."""
+    """One pass: reconcile with ``batch`` (a Batch client) when given, rerun once through ``rerun``
+    (``(job, stage)``) each job whose container died for a reason not the code's, snapshot, plan
+    at most ``[batch] max_submissions_per_pass`` submissions, submit each without waiting, then
+    publish; return the summary, with ``held_sets``, the quality gate's held packet sets after
+    the publish (``held_sets()``), when given."""
     with conn_factory() as conn:
         checked = reconcile(conn, run, batch) if batch is not None else None
         snap = snapshot(conn, run)
+    rerunning = set()
+    if checked and rerun is not None:
+        for died in checked.get("rerun", []):
+            rerun(died["job"], died["stage"])
+            rerunning.add(died["job"])
     for job in snap.jobs:
-        if checked and job["id"] in checked["retrying"]:
-            job["state"] = "running"            # Batch's retry in flight: pending, not failed
-    submissions, counts = plan(snap, stems, selection, max_intake)
+        if checked and job["id"] in checked["retrying"] or job["id"] in rerunning:
+            job["state"] = "running"            # Batch's retry or the rerun in flight: pending, not failed
+    cap = snap.settings.get("batch", {}).get("max_submissions_per_pass")
+    submissions, counts = plan(snap, stems, selection, max_intake, cap)
     for item in submissions:
         submit(item)
     produced = publish() if publish is not None else {"packets": 0, "sets": []}
@@ -569,4 +607,47 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
         counts["held_sets"] = held_sets()
     if checked is not None:
         counts["batch"] = checked
+    counts["rerun"] = sorted(rerunning)
     return {"run": run, "selection": selection.summary(), **counts}
+
+
+#: The job states ``job wait`` waits for.
+ENDED = ("published", "failed")
+
+
+def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: float,
+         interval: float = 30.0, sleep: Callable[[float], None] = time.sleep,
+         clock: Callable[[], float] = time.monotonic) -> dict:
+    """Block until every job of ``jobs`` is ``published`` or ``failed``, or ``timeout`` seconds pass.
+
+    Each check first reconciles the jobs' runs with Batch (``batch``, a Batch
+    client, or ``None`` for local jobs), so a container that died without its
+    row recording it ends the wait as ``failed``, as a loop pass marks it; a
+    ``failed`` row whose Batch job is still active (Batch's own retry) is not
+    ended. Returns ``{"states": {job: state}, "ended": bool, "seconds"}``;
+    ``LookupError`` names a job that does not exist.
+    """
+    started = clock()
+    while True:
+        with conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, run, state FROM jobs WHERE id = ANY(%s)", (list(jobs),))
+                rows = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+            conn.commit()
+            missing = sorted(set(jobs) - set(rows))
+            if missing:
+                raise LookupError(f"no job {', '.join(map(str, missing))}")
+            retrying = set()
+            if batch is not None:
+                for run in sorted({run for run, state in rows.values() if state != "published"}):
+                    retrying |= set(reconcile(conn, run, batch)["retrying"])
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, run, state FROM jobs WHERE id = ANY(%s)", (list(jobs),))
+                    rows = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+                conn.commit()
+        states = {job: rows[job][1] for job in jobs}
+        ended = all(state in ENDED and job not in retrying for job, state in states.items())
+        seconds = round(clock() - started, 1)
+        if ended or seconds >= timeout:
+            return {"states": states, "ended": ended, "seconds": seconds}
+        sleep(min(interval, max(0.0, timeout - seconds)))

@@ -80,10 +80,16 @@ def test_beyond_the_wing_radius_the_stamp_is_the_science_psf():
     assert measured.stamp[r > 16].sum() > 0.01            # the halo the ePSF cannot hold
 
 
-def test_a_science_psf_of_another_size_is_refused():
+def test_the_stamp_takes_the_science_psfs_side_and_an_even_or_small_one_is_refused():
     image, n = field(40)
-    with pytest.raises(ValueError, match="not 61 x 61"):
-        refpsf.measure(image, np.ones((n, n), dtype=bool), science_psf=np.ones((9, 9)))
+    c = 60.0
+    wide = 0.97 * _blob(121, c, c, 0.95) + 0.03 * _blob(121, c, c, 12.0)
+    measured = refpsf.measure(image, np.ones((n, n), dtype=bool), science_psf=wide)
+    assert measured.stamp.shape == (121, 121)
+    assert measured.stamp.sum() == pytest.approx(1.0, abs=1e-9)
+    for shape in ((9, 9), (62, 62), (61, 59)):
+        with pytest.raises(ValueError, match="not square, odd and at least"):
+            refpsf.measure(image, np.ones((n, n), dtype=bool), science_psf=np.ones(shape))
 
 
 def test_pixels_outside_usable_are_never_read():

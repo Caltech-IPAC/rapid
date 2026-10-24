@@ -83,6 +83,13 @@ gaia_max_matches = 3
 refcat_radius_arcsec = 5.0
 refcat_max_matches = 3
 
+[batch]
+# New, not dev's: the most jobs one loop pass submits, in stage order; the
+# rest wait for the next pass. The breadth night's 3,456 intakes submitted
+# at once throttled SSM and 1,448 failed (2026-10-23); 1,000 a pass at the
+# loop's 120 s interval is under that measured case.
+max_submissions_per_pass = 1000
+
 [batch.memory_mib]
 # New, not dev's: the memory each stage's Batch job asks for (a
 # resourceRequirements override of the one job definition's 24 GiB), the
