@@ -34,9 +34,11 @@ import subprocess
 import sys
 from typing import Any, Sequence
 
+from rapidpipe.db.connection import parameter_tree_environment
+from rapidpipe.foundation import publish_kafka
 from rapidpipe.stages.contract import STAGE_NAMES
 
-__all__ = ["LaunchError", "batch_client", "memory_mib", "run_locally", "submit"]
+__all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "run_locally", "submit"]
 
 
 class LaunchError(Exception):
@@ -56,7 +58,8 @@ def _stage(stage: str) -> str:
 
 
 def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, client: Any = None,
-           memory_mib: int | None = None, name_suffix: str = "") -> str:
+           memory_mib: int | None = None, name_suffix: str = "",
+           environment_extra: dict[str, str] | None = None) -> str:
     """Submit job ``job_id`` (of ``stage``) to Batch as ``job run --job <id>``; return the Batch job id.
 
     With ``conn``, the id is recorded as the row's ``batch_job_id`` and committed; a
@@ -64,6 +67,7 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     ``memory_mib`` (the run's ``[batch.memory_mib]`` value for the stage, :func:`memory_mib`),
     the job asks for that memory instead of the job definition's. ``name_suffix`` ends
     the Batch job's name (the loop's rerun marks its one automatic rerun so).
+    ``environment_extra`` (:func:`job_environment`) is added to the job's environment.
     """
     queue = os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
     if not queue:
@@ -71,9 +75,10 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     root = os.environ.get("RAPIDPIPE_OUTPUTS_ROOT", "")
     if not root.startswith("s3://"):
         raise LaunchError(f"RAPIDPIPE_OUTPUTS_ROOT {root!r} is not an s3:// URL a Batch job can write")
-    environment = [{"name": "RAPIDPIPE_OUTPUTS_ROOT", "value": root}]
+    values = {**(environment_extra or {}), "RAPIDPIPE_OUTPUTS_ROOT": root}
     if os.environ.get("RAPID_DB_SECRET_ID"):
-        environment.append({"name": "RAPID_DB_SECRET_ID", "value": os.environ["RAPID_DB_SECRET_ID"]})
+        values["RAPID_DB_SECRET_ID"] = os.environ["RAPID_DB_SECRET_ID"]
+    environment = [{"name": k, "value": v} for k, v in values.items()]
     prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX") or "rapid"
     overrides = {"command": ["job", "run", "--job", str(job_id)], "environment": environment}
     if memory_mib is not None:
@@ -86,6 +91,30 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
             cur.execute("UPDATE jobs SET batch_job_id = %s WHERE id = %s", (response["jobId"], job_id))
         conn.commit()
     return response["jobId"]
+
+
+_environments: dict[tuple, dict[str, str]] = {}
+
+
+def job_environment(settings: dict, ssm: Any = None) -> dict[str, str]:
+    """What a job would read from SSM, read here once per process and passed in its environment.
+
+    The database endpoint and secret name of ``RAPID_PARAMETER_PATH``'s tree
+    (``rapidpipe.db.connection.parameter_tree_environment``) unless this
+    process has its own ``PGHOST``, and the run's ``[kafka]`` endpoint
+    (``rapidpipe.foundation.publish_kafka.environment``) when the settings
+    have the table. A job given both reads no SSM parameter. ``ssm`` is a
+    test's SSM client.
+    """
+    path = os.environ.get("RAPID_PARAMETER_PATH")
+    kafka = settings.get("kafka")
+    key = (None if os.environ.get("PGHOST") else path, tuple(sorted((kafka or {}).items())))
+    if key not in _environments:
+        found = parameter_tree_environment(key[0], ssm_client=ssm) if key[0] else {}
+        if kafka:
+            found.update(publish_kafka.environment(kafka, ssm))
+        _environments[key] = found
+    return _environments[key]
 
 
 def memory_mib(settings: dict, stage: str) -> int | None:

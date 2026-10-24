@@ -11,7 +11,8 @@ stem under the run's ``[intake] source_root``::
 
 The stage fetches ``<source_root><file>_cal.asdf`` (anonymously when
 ``unsigned``), converts it with `dev`'s ``build_fits_file``
-(:mod:`rapidpipe.science.intake`), gzips it at ``gzip_level``, measures the
+(:mod:`rapidpipe.science.intake`), gzips it at ``gzip_level`` (``0``: the
+plain ``.fits``, read once by the stages after it), measures the
 limiting magnitude with the science PSF of the ``psfs`` set the job names
 as an input (refusing the file, before a manifest, when the PSF names an
 ePSF reference, ``EPSFREF``, other than the file's own
@@ -76,6 +77,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import shutil
 import tempfile
 import time
 import urllib.request
@@ -154,7 +156,8 @@ def run(job: JobContext) -> None:
     asdf_path = get(source, unsigned=bool(settings["unsigned"]))
     lap("fetch")
 
-    fits_name = f"{stem}_cal.fits.gz"
+    level = int(settings["gzip_level"])
+    fits_name = f"{stem}_cal.fits.gz" if level else f"{stem}_cal.fits"
     with tempfile.TemporaryDirectory(prefix="rapidpipe-intake-") as scratch:
         fits_path = Path(scratch) / f"{stem}_cal.fits"
         distortion = None
@@ -173,8 +176,11 @@ def run(job: JobContext) -> None:
         shift = [float(v) for v in settings["crpix_shift"]]
         if any(shift):
             _shift_crpix(fits_path, shift)
-        gzip_file(fits_path, job.path / fits_name, int(settings["gzip_level"]))
-        lap("gzip")
+        if level:
+            gzip_file(fits_path, job.path / fits_name, level)
+        else:
+            shutil.copyfile(fits_path, job.path / fits_name)
+        lap("gzip" if level else "copy")
         with fits.open(fits_path) as hdul:
             primary, header = hdul[0].header.copy(), hdul[1].header.copy()
             n_pixels = int(hdul[1].data.size)
@@ -222,7 +228,7 @@ def run(job: JobContext) -> None:
         dq=dq, wcs=wcs, metrics={**metrics, **(gaia or {})},
         crpix_shift=shift,
         conversion={"hdus": conversion["hdus"], "asdf_bytes": asdf_path.stat().st_size,
-                    "fits_bytes": fits_bytes, "fits_gz_bytes": (job.path / fits_name).stat().st_size,
+                    "fits_bytes": fits_bytes, "published_bytes": (job.path / fits_name).stat().st_size,
                     "timings_s": timings})
     log.info("intake %s: %s", stem, timings)
 

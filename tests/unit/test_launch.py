@@ -1,4 +1,9 @@
-"""``rapidpipe.launch``: a job submitted to Batch as ``job run``, or an old-contract stage run locally."""
+"""``rapidpipe.launch``: a job submitted to Batch as ``job run``, or an old-contract stage run locally.
+
+The job environment stands for every SSM read a job would make (the
+database tree, the ``[kafka]`` endpoint), is read once per process, and is
+what the job's ``publish_kafka.endpoint`` then reads instead of SSM.
+"""
 
 from __future__ import annotations
 
@@ -104,3 +109,46 @@ def test_submit_refuses_an_outputs_root_a_batch_job_cannot_write(batch_env, monk
 
 def test_run_locally_returns_the_stages_exit_code():
     assert launch.run_locally("admit", ["--no-such-flag"], python=sys.executable) == 64
+
+
+class _Ssm:
+    """A fake SSM client: the database tree under ``/rapid/x`` and the three Kafka parameters."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get_parameters_by_path(self, **kw):
+        self.calls += 1
+        return {"Parameters": [{"Name": f"/rapid/x/{k}", "Value": v} for k, v in (
+            ("db/server", "db.example"), ("db/port", "6432"), ("db/name", "rapid"), ("db/secret-id", "s-1"))]}
+
+    def get_parameter(self, Name):
+        self.calls += 1
+        return {"Parameter": {"Value": {"/k/b": "b1:9098,b2:9098", "/k/t": "alerts", "/k/m": "4194304"}[Name]}}
+
+
+KAFKA = {"bootstrap_servers_parameter": "/k/b", "topic_parameter": "/k/t", "max_request_bytes_parameter": "/k/m"}
+
+
+def test_the_job_environment_stands_for_every_ssm_read_and_is_read_once(monkeypatch, batch_env):
+    from rapidpipe.foundation import publish_kafka
+
+    ssm = _Ssm()
+    monkeypatch.setenv("RAPID_PARAMETER_PATH", "/rapid/x")
+    monkeypatch.delenv("PGHOST", raising=False)
+    monkeypatch.setattr(launch, "_environments", {})
+    env = launch.job_environment({"kafka": KAFKA}, ssm)
+    assert env == {"PGHOST": "db.example", "PGPORT": "6432", "PGDATABASE": "rapid", "RAPID_DB_SECRET_ID": "s-1",
+                   "RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS": "b1:9098,b2:9098", "RAPIDPIPE_KAFKA_TOPIC": "alerts",
+                   "RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES": "4194304"}
+    calls = ssm.calls
+    assert launch.job_environment({"kafka": KAFKA}, ssm) == env and ssm.calls == calls
+    batch = _Batch()
+    launch.submit(7, "packet", job_definition="d:1", client=batch, environment_extra=env)
+    passed = {e["name"]: e["value"] for e in batch.submitted[0]["containerOverrides"]["environment"]}
+    assert passed == {**env, "RAPIDPIPE_OUTPUTS_ROOT": "s3://products/foundation"}
+    # In the job: the endpoint comes from the environment; an SSM client would fail if called.
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert publish_kafka.endpoint(KAFKA, ssm=object()) == {
+        "bootstrap_servers": ["b1:9098", "b2:9098"], "topic": "alerts", "max_request_bytes": 4194304}

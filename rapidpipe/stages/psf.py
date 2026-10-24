@@ -13,7 +13,11 @@ The stage reads that ``_cal.asdf`` (anonymously when ``[intake]
 unsigned``), takes the basename of its ``meta.ref_file.epsf`` and fetches
 that reference **by name** from ``[psf] crds_server``
 (``<server>/unchecked_get/references/roman/<name>``): the name is the
-identity, with no rmap match and no CRDS context. The reference's
+identity, with no rmap match and no CRDS context. With ``[psf]
+epsf_cache`` set (a prefix holding copies by the same names,
+``scripts/copy_epsf.py``), the stage reads ``<epsf_cache>/<name>`` first and
+CRDS only for a name the cache lacks; the manifest's ``psf.fetched_from``
+says which. The default, empty, is CRDS alone. The reference's
 ``meta.instrument`` must name the file's detector and filter.
 
 The reduction, fixed: the reference's ``psf[focus 0, spectral type G2V]``
@@ -99,7 +103,19 @@ def run(job: JobContext) -> None:
     url = settings["crds_server"].rstrip("/") + "/unchecked_get/references/roman/" + name
     size = int(settings["size"])
     with tempfile.TemporaryDirectory(prefix="rapidpipe-psf-") as scratch:
-        reference = fetch(url, Path(scratch) / name)
+        reference, fetched_from = None, url
+        if settings["epsf_cache"]:
+            try:
+                fetched_from = settings["epsf_cache"].rstrip("/") + "/" + name
+                reference = get(fetched_from)
+                if not reference.is_file():         # a file:// cache returns its path unread
+                    raise FileNotFoundError(fetched_from)
+            except FileNotFoundError:
+                reference = None
+                log.warning("psf: %s is not in the ePSF cache; fetching it from CRDS", name)
+                fetched_from = url
+        if reference is None:
+            reference = fetch(url, Path(scratch) / name)
         lap("fetch")
         reference_bytes = reference.stat().st_size
         with asdf.open(reference, lazy_load=True, memmap=False) as af:
@@ -119,7 +135,8 @@ def run(job: JobContext) -> None:
     fid = FIDS[rapid_filter_name(filter_name)]
     provenance = {"epsf": name, "context": cal["context"], "position": list(POSITION),
                   "focus": FOCUS, "spectral_type": SPECTRAL_TYPE, "oversample": oversample,
-                  "block": oversample, "size": size, "epsf_bytes": reference_bytes, **recorded}
+                  "block": oversample, "size": size, "epsf_bytes": reference_bytes,
+                  "fetched_from": fetched_from, **recorded}
     rows = []
     for kind, keyword in KINDS.items():
         filename = f"{keyword}_{filter_name.lower()}_sca{sca:02d}.fits"

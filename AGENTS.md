@@ -62,7 +62,7 @@ summary and README.md has the detail.
 | `c/` | Vendored C tool source; the image takes the tools from the base image's RPMs instead. |
 | `containers/` | The pipeline image recipe (`rapid-pipeline/build.sh`, `Containerfile`). |
 | `tests/` | `unit/`, `db/` (with `db/proof/`, the procedure proof: synthetic steps in CI, and `thin_proof.py`, all thirteen steps on the thin field's real data, run by hand where the data is), `cli/` and `fixtures/<stage>/`. |
-| `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list, `read_packets.py` (the packet reader: a packet set's validation report, outside the pipeline), `consume_packets.py` (a run's packet sets read back at their recorded offsets, counted, and one set per field compared byte for byte with the outbox), `check_run.sh` (a run's three checks, `validate_run.py`, `read_packets.py` over its bound sets and `consume_packets.py`, and one verdict line). |
+| `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list, `read_packets.py` (the packet reader: a packet set's validation report, outside the pipeline), `consume_packets.py` (a run's packet sets read back at their recorded offsets, counted, and one set per field compared byte for byte with the outbox), `copy_epsf.py` (CRDS ePSF references copied by name under the prefix a run's `[psf] epsf_cache` names, once), `check_run.sh` (a run's three checks, `validate_run.py`, `read_packets.py` over its bound sets and `consume_packets.py`, and one verdict line). |
 | `docs/` | The Sphinx source of the readthedocs site. |
 
 `dev`'s `pipeline/`, `alerts/`, `aws/`, `soc/`, `sims/`, `docker/`,

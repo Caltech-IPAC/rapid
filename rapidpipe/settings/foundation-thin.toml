@@ -71,6 +71,11 @@ F213 = 25.4
 # WebbPSF files' NAXIS1 (sciimage_psf_f146_sca08.fits, 61).
 crds_server = "https://roman-crds.stsci.edu"
 size = 61
+# New: a prefix holding copies of the ePSF references by their CRDS names
+# (scripts/copy_epsf.py), read before CRDS; a location, so a run's --set,
+# never here. Empty: CRDS alone. A 178.6 MB reference from CRDS took most of
+# a psf job's time.
+epsf_cache = ""
 
 [associate]
 # Degrees (dev's crossmatch match_radius).
