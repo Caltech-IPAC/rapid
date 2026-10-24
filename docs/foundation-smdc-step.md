@@ -6836,6 +6836,59 @@ epochs under the new default sends nothing to Kafka until the core
 residual or the bound changes. Task `differencer-measure` measures this
 on the injected and OpenUniverse samples. This brief does no tuning.
 
+### Step err-publish: empty products never bound, refused jobs visible, exit codes right
+
+**The change (PR 409, merged `e46d6cf5`; rapid_docs PR 104, `d5a6ffba`).**
+The publisher's automatic binding (`_bind`, `rapidpipe/foundation/publish.py`)
+counts the rows each table loaded and refuses, inside its savepoint, a
+job that expects a product whose table loaded none (an undeclared table
+counts as none), unless the manifest's `empty_ok` names the table: the
+rows stay published and unbound, the reason on `jobs.refusal`.
+`JobContext.write_manifest(..., empty_ok=...)` writes it; `difference`
+declares `sources` (nothing above the cut is a valid set), `packet`
+declares `packets` when its source set has no triggers; `intake`, `psf`,
+`reference` and `import` declare nothing. The loop's `snapshot` reads
+`refusal` and `plan` reports a published job with one under `failed`,
+each entry with its `refusal`, its key held like a failed job's (it was
+resubmitted every pass before). `loop` exits 1 for failed or refused jobs
+(was 2); `job wait` exits 0 when all published, 1 when one failed (was
+0), 2 at the timeout (was 75). The earlier parts' "exit 2" are the
+codes of their day.
+
+**The proof** that the refusal does not fire on healthy work. Image
+`rebuild-e46d6cf5…` (digest `9a5c2263…`), job definition
+`rapid-rebuild:68`; run **87** (`r00342-wk-errpub`, live, group 21421),
+HLWAS `001_0001`, SCA 8, F146, passes 1 to 4 (three reference frames
+before the bound 61591.4056, part 9 step 2's F146 value, and one
+differenced epoch). Evidence in the brief's `t1/`.
+
+```sh
+rp run create ... --revision e46d6cf5... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+  --survey HLWAS --dataset r00342-wk-errpub                     # run 87
+rp official change --group live.json ...; rp job local --run 87 --stage import ...   # live; Gaia, job 22778
+rp loop --run 87 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:68 --interval 60
+scripts/check_run.sh --run 87 --inspect <dir>
+```
+
+Check, held:
+
+- **The drain.** 11 passes, 20:14:06 to 20:24:06 UTC, exit 0, `failed`
+  empty in every pass: psf 22779, intake 22780 to 22783, reference
+  22784, difference 22785, packet 22786, each published on attempt 1
+  with `refusal` null; the import 22778 the same.
+- **The bindings.** 14 opened, one per expected key: catalogs, psfs,
+  four exposures and four l2files, refimages, diffimages, sources,
+  packets. Rows behind them: 4 l2files, 1 psfs, 1 refimages, 1
+  diffimages, 500 sources, 471 packets. Difference 22785's manifest
+  carries `empty_ok: ["sources"]`; the set was not empty.
+- `check_run.sh --inspect`: **CLEAN**, validate 6/6, reader 1/1,
+  consumer 471/471.
+
+The refusal itself, the loop's report of it and the exit codes stand on
+their CI contracts (`tests/db/test_publish.py`, `tests/unit/test_loop.py`);
+no live failure was staged.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
