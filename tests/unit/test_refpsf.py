@@ -8,7 +8,9 @@ science PSF, the galaxies wider than the width cut); beyond the outer
 wing radius the stamp is the science PSF's, renormalised, so ZOGY sees no
 edge where the measured ePSF ends; pixels outside ``usable`` are never
 read; a science PSF of another size is refused; fewer than ``MIN_STARS``
-stars raise ``TooFewStars`` with the named reason.
+stars raise ``TooFewStars`` with the named reason; the peak floor is in units
+of the noise, so a field of a hundredth of the count rate and noise keeps
+the same stars.
 """
 
 from __future__ import annotations
@@ -97,3 +99,13 @@ def test_too_few_stars_raise_the_named_reason():
     image, n = field(7)
     with pytest.raises(refpsf.TooFewStars, match=r"^refpsf: 7 stars, 10 needed$"):
         refpsf.measure(image, np.ones((n, n), dtype=bool), science_psf=science_psf())
+
+
+def test_the_peak_floor_follows_the_noise_not_the_count_rate():
+    # A filter with a hundredth of the count rate and of the noise has the same stars.
+    image, n = field(30)
+    usable = np.ones((n, n), dtype=bool)
+    bright = refpsf.measure(image, usable, science_psf=science_psf())
+    faint = refpsf.measure(image / 100, usable, science_psf=science_psf())
+    assert faint.stars == bright.stars == 30
+    assert faint.sigma_px == pytest.approx(bright.sigma_px, abs=1e-3)
