@@ -18,12 +18,12 @@ What the adapter supplies, each from a measurement on
 ``TDS/simple_model/R062/10032/roman_tds_R062_10032_wfi17_simple.asdf``
 (runbook part 11 step 2):
 
-- The pixel origin. GalSim's images are one-based, and the file's gWCS takes
-  GalSim's pixel coordinates (the truth index's ``x, y`` too): 69 stars sit
-  at (-1.16, -1.06) px from their zero-based centroids through it, scatter
-  (0.08, 0.04) px. The adapter's gWCS is the file's after a shift of
-  :data:`GALSIM_ORIGIN` on each axis, so the SIP header is zero-based like
-  every other input's.
+- Not the pixel origin. GalSim's images are one-based and the file's gWCS
+  takes GalSim's pixel coordinates (the truth index's ``x, y`` too): 69
+  stars sit at (-1.16, -1.06) px from their zero-based centroids through it.
+  The SIP header is the file's gWCS as it is; the dataset's overlay corrects
+  it with ``[intake] crpix_shift = [-1, -1]``, after which 124 H158 stars on
+  pointing 1012 SCA 4 sit at (-0.004, -0.010) px.
 - The units. ``data`` is counts in the exposure (integers, gain 1); the
   conversion multiplies by ``EXPTIME`` to write DN, so the adapter hands it
   counts per second, and ``err`` the same way. ``err`` is not a 1-sigma map
@@ -52,9 +52,6 @@ from rapidpipe.science.intake import build_fits_file
 
 #: An OpenUniverse file stem: survey, filter (legacy spelling), pointing, SCA.
 STEM = re.compile(r"roman_(?P<survey>tds|was)_(?P<filter>[A-Z]\d{3})_(?P<pointing>\d+)_wfi(?P<sca>\d{2})")
-
-#: GalSim's first pixel: the file's gWCS takes one-based pixel coordinates.
-GALSIM_ORIGIN = 1.0
 
 #: The ``catalogs`` tables carried into the FITS file, in order.
 CATALOGS = ("transients", "point_sources", "galaxies")
@@ -87,9 +84,6 @@ class _Node(dict):
 
 def model(tree: dict, stem: str) -> _Node:
     """The file's tree as the data model :func:`build_fits_file` reads."""
-    from astropy.modeling.models import Shift
-    from gwcs import wcs as gwcs_wcs
-
     ids = parse_stem(stem)
     meta = tree["meta"]
     filter_name = str(meta["optical_element"]).strip()
@@ -101,10 +95,6 @@ def model(tree: dict, stem: str) -> _Node:
         raise ValueError(f"{stem}: the file's own detector {meta['detector']} is not its name's")
     exptime = float(meta["exp_time"])
     start = Time(meta["mjd_obs"], format="mjd", scale="utc")  # the exposure's start (the sequence's date)
-    file_wcs = tree["wcs"]
-    origin = Shift(GALSIM_ORIGIN) & Shift(GALSIM_ORIGIN)
-    wcs = gwcs_wcs.WCS(forward_transform=origin | file_wcs.forward_transform,
-                       input_frame=file_wcs.input_frame, output_frame=file_wcs.output_frame)
     observation = {name: None for name in ("program", "execution_plan", "pass", "segment",
                                            "visit", "exposure", "visit_id", "observation_id")}
     dm = _Node(
@@ -115,7 +105,7 @@ def model(tree: dict, stem: str) -> _Node:
             pointing=_Node(target_ra=float(meta["ra_pointing"]), target_dec=float(meta["dec_pointing"])),
             observation=_Node(observation, observation=ids["pointing"]),
             openuniverse=_Node(meta),  # the file's own meta, as HIERARCH cards
-            wcs=wcs),
+            wcs=tree["wcs"]),
         # counts per second, which the conversion's EXPTIME scaling returns to DN
         data=np.asarray(tree["data"], dtype=np.float32) / np.float32(exptime),
         err=np.asarray(tree["err"], dtype=np.float32) / np.float32(exptime),

@@ -14,6 +14,13 @@ unsigned = true
 reader = "openuniverse"
 # surveys: (-2, 'OpenUniverse', 'SIM').
 program_id = -2
+# GalSim's images are one-based and the file's gWCS takes its pixels: R062
+# pointing 10032 SCA 17's 69 bright stars sit at (-1.16, -1.06) px from the
+# file's WCS (zero-based centroids, scatter 0.08 and 0.04 px), the truth
+# index's x - 1, y - 1 at 0.000 px; after [-1, -1], H158 pointing 1012 SCA 4's
+# 124 stars sit at (-0.004, -0.010) px. The convention, not a fit: R062's
+# residual (-0.16, -0.06) is that filter's and is recorded, not shifted.
+crpix_shift = [-1.0, -1.0]
 
 [intake.nominal_zptmag]
 # The file has no meta.photometry, and its meta.zptmag is 2.5 log10(37570 cm^2

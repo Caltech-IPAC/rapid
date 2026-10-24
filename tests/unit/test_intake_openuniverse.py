@@ -4,12 +4,13 @@ Contracts: the stem parses and names the file's path under the source root;
 the FITS file is the SOC reader's layout, its science image the file's
 counts in DN, its keywords the file's own filter, SCA, exposure time and
 start, the pointing as ``OBSERVTN`` and the zero point from ``[intake.
-nominal_zptmag]``, and the truth tables follow the images; the SIP header is
-zero-based, so a sky position the file's one-based gWCS puts at ``(x, y)``
-lands at ``(x - 1, y - 1)``; a file whose own filter or detector contradicts
-its name fails; under ``[intake] reader = "openuniverse"`` the stage reads
-``<filter>/<pointing>/<stem>_simple.asdf`` and declares rows whose ``expid``
-is the pointing; an unknown reader is refused before anything is read.
+nominal_zptmag]``, and the truth tables follow the images; a file whose own
+filter or detector contradicts its name fails; under the dataset's overlay
+(``reader = "openuniverse"``, ``crpix_shift = [-1, -1]``) the stage reads
+``<filter>/<pointing>/<stem>_simple.asdf``, declares rows whose ``expid`` is
+the pointing, and writes a zero-based WCS: a sky position the file's
+one-based gWCS puts at ``(x, y)`` lands at ``(x - 1, y - 1)``; an unknown
+reader is refused before anything is read.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
+import tomllib
 from astropy.io import fits
 from astropy.table import Table
 from astropy.time import Time
@@ -35,11 +37,13 @@ STEM = "roman_tds_H158_10032_wfi08"
 N = 64
 EXPTIME = 302.275
 MJD = 62130.091
+OVERLAY = Path(__file__).resolve().parents[2] / "rapidpipe/settings/datasets/openuniverse-tds.toml"
 SETTINGS = {"intake": {"source_root": None, "unsigned": False, "reader": "openuniverse",
                        "sip_degree": 5, "sip_max_pix_error": 0.1, "gzip_level": 1,
                        "program_id": -2, "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0,
                        "limmag_maxiters": 10, "nominal_zptmag": {"F158": 26.5113},
-                       "dq_mask_bits": 0}}
+                       "dq_mask_bits": 0,
+                       "crpix_shift": tomllib.loads(OVERLAY.read_text())["intake"]["crpix_shift"]}}
 
 
 def one_based_gwcs(ra: float = 9.66, dec: float = -43.95):
@@ -107,17 +111,6 @@ def test_the_fits_file_is_the_soc_layout_with_the_files_own_keywords(tmp_path):
         np.testing.assert_allclose(sci.data, counts, rtol=1e-6)
 
 
-def test_the_sip_header_is_zero_based(tmp_path):
-    with fits.open(convert(tmp_path)[0]) as hdul:
-        sip = WCS(hdul["SCI"].header)
-    x = np.array([1.0, N, N, 1.0, (N + 1) / 2])  # one-based, the file's gWCS's own pixels
-    y = np.array([1.0, 1.0, N, N, (N + 1) / 2])
-    ra, dec = one_based_gwcs()(x, y)
-    x0, y0 = sip.all_world2pix(ra, dec, 0)
-    np.testing.assert_allclose(x0, x - 1, atol=0.01)
-    np.testing.assert_allclose(y0, y - 1, atol=0.01)
-
-
 @pytest.mark.parametrize("contradiction", [{"filter_name": "J129"}, {"detector": "SCA09"}])
 def test_a_file_whose_own_filter_or_detector_contradicts_its_name_fails(tmp_path, contradiction):
     with pytest.raises(ValueError, match="not its name's"):
@@ -166,7 +159,7 @@ def run_intake(tmp_path: Path, reader: str = "openuniverse") -> Path:
     return prefix
 
 
-def test_the_stage_reads_the_openuniverse_path_and_keys_the_rows_by_pointing(tmp_path):
+def test_the_stage_reads_the_openuniverse_path_keys_the_rows_by_pointing_and_is_zero_based(tmp_path):
     prefix = run_intake(tmp_path)
     manifest = json.loads((prefix / "manifest.json").read_text())
     assert manifest["source"].endswith(f"/H158/10032/{STEM}_simple.asdf")
@@ -176,6 +169,13 @@ def test_the_stage_reads_the_openuniverse_path_and_keys_the_rows_by_pointing(tmp
     assert (l2file["dataset"], l2file["expid"], l2file["sca"], l2file["fid"]) == ("ou-tds1", 10032, 8, 2)
     with gzip.open(prefix / f"{STEM}_cal.fits.gz") as stream, fits.open(stream) as hdul:
         assert hdul["SCI"].header["FILTER"] == "H158"
+        sip = WCS(hdul["SCI"].header)
+    x = np.array([1.0, N, N, 1.0, (N + 1) / 2])  # one-based, the file's gWCS's own pixels
+    y = np.array([1.0, 1.0, N, N, (N + 1) / 2])
+    ra, dec = one_based_gwcs()(x, y)
+    x0, y0 = sip.all_world2pix(ra, dec, 0)
+    np.testing.assert_allclose(x0, x - 1, atol=0.01)
+    np.testing.assert_allclose(y0, y - 1, atol=0.01)
 
 
 def test_an_unknown_reader_is_refused_before_anything_is_read(tmp_path):
