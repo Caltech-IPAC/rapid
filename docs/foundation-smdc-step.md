@@ -6512,6 +6512,119 @@ a task's step lands when its task does, so the numbers can arrive out of order.
    `check-82.txt`, `inspect-82/`, `gallery-67/`, `late-first-check.txt`,
    `failpsf.log`).
 
+## Results of part 12 (2026-10-24)
+
+The day's eight tasks ran unattended, seven in parallel and then the
+docs. Every task wrote `TASK DONE` on its first attempt. The night's
+one science finding is answered: under association by the source's
+field, 0.97 of the detected injected sources are alerted, against
+0.40. The producer is idempotent again, OpenUniverse TDS runs through
+the chain and is counted against its own truth, and the night's
+operational notes landed. The three probes (GBTDS's reference PSF,
+F213's scale, SCAs 7 and 9) each ended in a measurement, and none
+changed an overlay. Every run below is CLEAN by `check_run.sh`.
+
+| step | before | after | where |
+|---|---|---|---|
+| 1 field rule | `dev`'s pass 2: a source outside its image's field only joins an existing object; run 72 alerted 12,097 of 28,625 detected injected (0.42), 20,575 objects in 70 fields | association by the source's field, locks over each touched field and its neighbours, the forced window by position; run 81 alerted 27,750 of 28,623 (0.97), purity per magnitude unchanged (0.93 at AB 21 to 0.20 at 26), 37,800 objects in 290 fields, false positives per epoch 95 → 224, 30.9 min cold against 28.1 warm | PRs 393, 404; rapid_docs 99 |
+| 2 producer | `enable_idempotence=False` (PR 371), the grant missing | idempotent, `acks="all"`; run 78, 3 of 3 sets sent by their own packet jobs 3 to 4 s after they end, the sweep sent nothing, consumer CLEAN 280/280 | PRs 388, 396; rapid_docs 100 |
+| 3 OpenUniverse | one image through intake, the psf stage and the listing SOC-only | galsim.roman PSF in the psf stage, the loop's listing by obseq row, `completeness_ou.py`; run 80 (H158 SCA 10, six-frame reference, ten epochs, 29 jobs first attempt): 410 evaluated transients detected 1.0 to AB 24, 0.5 at 25, the 500-source cap ending the count; 348 rows lit in a reference frame reported apart | PRs 390, 392, 400, 402; rapid_docs 101 |
+| 4 GBTDS reference PSF | `reference_psf = "science"`, 367 / 418 / 346 above S/N 20 (run 67) | the crowded-field measured variant converges (100 stars, σ 1.20 to 1.26 px) and gives 62 / 500 / 81 (run 79), not lower on all three epochs, so not adopted; the variant stays on the unmerged branch `day/gbtds-refpsf` | PR 403 |
+| 5 F213 scale | measured `scalefacref` 0.939, core and ring both positive (run 54) | forced to the zero points' ratio, 0.972: star flux ratio 1.036 → 1.002, but the ring stays (+0.046 → +0.036) and the core goes negative (−0.021 → −0.045); a width mismatch, so no `[difference] scale` setting | PR 397 |
+| 6 SCAs 7 and 9 | 0.73 and 0.67 detected below AB 25, not diagnosed | area lost: `DAOStarFinder` misses any star within 4 px of a NaN (298 of 298 detected at 6 px or more); SCA 9's reference coadded from SCA 8's `001_0002` frames (70% coverage), SCA 7's isolated masked pixels blind 24% of its area; no one-key fix; SCAs 16 and 17's held sets a real residual | PR 391 |
+| 7 ops | the night's five notes | `job submit --job` marks a failed row `launched`, rapidpipe's INFO lines in CloudWatch, `sets_late` in the pass line, the gallery at ±3e-3 with cutouts without residual stars, a failed job holds only its own work; run 82 CLEAN 559/559 | PRs 389, 394, 395, 398, 399, 401 |
+| 8 docs | rapid_docs at the night's state | the field rule across the foundation, difference, alerts and loop pages; OpenUniverse in the foundation and loop pages; the loop's operations; this section | rapid_docs 102, this PR |
+
+The live runs the day made: 75 and 79 (`r00340-gb2`; 74 was created
+with a mistyped revision, never live, no jobs), 76 and 77
+(`r00342-dy-f213`, `r00342-dy-f213z`), 78 (`r00342-dy-producer`), 80
+(`ou-tds2`), 81 (`r00342-dy-field`), 82 (`r00342-dy-ops`). Job
+definitions `rapid-rebuild:61` to `:64` were registered today. Nothing
+was deleted.
+
+**What remains, and where it sits:**
+
+- **The false positives per epoch under the field rule**, a median 224
+  on the injected footprint, 130 of them on bright-footprint-flagged
+  sources (step 1). Alert volume is 2.3 times the night's at the same
+  purity per magnitude; it is the next science question.
+- **The finder blinded by NaNs** (step 6): `DAOStarFinder` and the fit
+  given the difference's non-finite pixels as `mask=` would recover up
+  to 24% of SCA 7's area and 1 to 12% on the other SCAs. It is a code
+  divergence from `dev`, so it needs a `decisions.md` line, and it is
+  the next detection lever on every SCA. SCA 9 is then counted on a
+  dataset whose selection holds it from the start.
+- **The OpenUniverse source cap** (step 3): every difference keeps 500
+  of 2,077 to 3,682 candidates, so the count below AB 25 measures the
+  cap; one measured step on `[difference] max_sources` on the overlay.
+  Its `scalefacref` of 2.2 against HLWAS's 0.99 is unexplained;
+  `[reference.instrument] sca_gain = 2.0` against the simulation's
+  gain of 1 is the first candidate (unverified). Run 80 predates the
+  field rule: 16 of its 35 detections, outside their image's field,
+  were not alerted.
+- **GBTDS's science PSF** (step 4): the frames' stars are 1.31 times
+  the ePSF's width (HLWAS 1.02), so ZOGY's science half is mismatched
+  whatever the reference PSF is; epoch 2171101's difference noise is
+  underestimated (22,357 candidates, noise correlation 2.32), seen and
+  not read.
+- **F213's width** (step 5): the reference PSF (1.387 px) is wider than
+  the science ePSF (1.291 px) and the science stars (1.326 px); the
+  measured scale's 3.4% bias would earn `scale = "zeropoint"` only once
+  the width is right.
+- **The bright-star residual's cause** (part 11 step 3): flagged, not
+  fixed, unchanged today.
+- **A local job dying before `job run` records `running`** stays
+  `launched` for ever and a loop counts it pending (step 7, run 82's
+  job 22047), seen and not built.
+- **Run 72's 8 and run 73's one official set unstamped** (step 7's
+  first check of `sets_late`), cause not read.
+- **The packet's window query** reads the dataset's difference images
+  in the MJD window through an unindexed haversine; enough at 162
+  images, a q3c or HEALPix predicate on `diffimages (ra0, dec0)` at
+  thousands a month (step 1).
+
+The night's grants are closed: the Spot interruption capture is live,
+the three identity sequences are past their imported ids, and the job
+role writes data idempotently (Ben, 2026-10-24 14:02 UTC).
+
+**Session notes**, every task's, gathered for Ben (the PR each came
+from in brackets):
+
+- Task 1 (field rule): the killed first launch at 14:40 had left an
+  empty local branch `day/field-rule`, so the brief's
+  `git worktree add ... -b` failed and the worktree went onto the
+  existing branch; a relaunch addendum should say "branches may exist,
+  empty" (404). PR 393's squash subject kept "runbook part 12's
+  header", which task 6 wrote first (404).
+- Task 2 (producer): the harness refuses a foreground `sleep` outright,
+  so even a short look at a just-started loop needs a background waiter
+  (396).
+- Task 3 (OpenUniverse): the brief's image check `podman run --rm
+  <image> python -c ...` cannot work, because the entrypoint is
+  `rapidpipe` and `python` is not on the image's PATH;
+  `--entrypoint /opt/rapid/conda/envs/rapid/bin/python3` works (390).
+  The brief's "a Gaia import is not needed" met the loop's hard
+  requirement for one at the packet stage; a brief that waives an input
+  should check the planner's refusals first (400).
+- Task 4 (GBTDS): `[difference.paths]` is frozen in a run's settings at
+  `run create`, so a proof mixing Batch stages and local differences
+  spends two runs unless the run is created with the paths up front
+  (403).
+- Task 5 (F213): the difference stage refuses an `l2files` input keyed
+  under another dataset, so "the same epoch under a second dataset"
+  re-keys the whole upstream chain; a brief should budget it or name
+  the not-bound publish under the first dataset (run 61's pattern)
+  (397).
+- Task 6 (SCAs 7 and 9): this host's AWS CLI has no `-q` on `aws s3 cp`;
+  `--only-show-errors` is the quiet flag (391).
+- Task 7 (ops): a heredoc fed to `python -` and also given `</dev/null`
+  (the no-stdin rule) runs nothing and exits 0, because the later
+  redirect replaces the heredoc; write the script to a file first (401).
+- Task 8 (docs): the rapid_docs venv is still absent on this host, so
+  the Sphinx build is CI's alone (rapid_docs 102); the main `rapid`
+  checkout carries an untracked `views-after.txt` from an earlier
+  session, left in place.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
