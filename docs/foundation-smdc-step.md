@@ -3985,6 +3985,55 @@ Open, for the plan:
 - **Retention**: the topic keeps 7 days; a run's consumer check holds only
   inside it (run 12's earliest messages have aged out).
 
+## Part 10: the null test's artefacts fixed on one pointing (2026-10-23)
+
+Brief `fixes-2026-10-23` (plan v9 Part 7): the two artefact sources run 17's
+detections were measured to be (the reference PSF mismatch, the unmasked
+pixel defects) removed on pointing `001_0001`, SCA 8, counted again in seven
+filters against the measured before, with the per-job quality numbers that
+would have caught the finding. One step per task.
+
+1. **Settings in layers (PR 341, merged `c6fcb196`).** `run create`
+   resolves the body it stores from the base (`--settings`, default the
+   shipped `foundation-thin.toml`), the dataset's `--overlay` and the
+   run's `--set`s, refusing a key the base lacks, and records the body's
+   hash and each layer's name and SHA-256 in a new `runs.layers` column.
+   The HLWAS overlay `rapidpipe/settings/datasets/hlwas-r00342.toml`
+   holds `[intake] unsigned = true` only. SMDC gets the column as
+   `postgres`, once, before the PR merged
+   (`database/2026-10-23-runs-layers.sql`), by SSM on the database host,
+   since the `postgres` secret is not read from a session:
+
+   ```sh
+   podman exec rapid-postgres psql -U postgres -d rapid -v ON_ERROR_STOP=1 -c "ALTER TABLE runs ADD COLUMN layers jsonb;"
+   ```
+
+   Check, held: `ALTER TABLE` at 00:05:54 UTC, `runs.layers jsonb`
+   present, runs 39 rows (max id 39) before and after.
+
+   The layering proof, one run under dataset `r00342-fx-f146`, not live,
+   no jobs (task 5 creates the final runs):
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision c6fcb1960fc8e48f187004539bf8cf22caeb13b3 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --survey HLWAS --dataset r00342-fx-f146
+   rp run show 40
+   ```
+
+   Check, held: run **40** (0.45 s), `live` null, no jobs. Its stored
+   body equals the hand-built full body of run 17's `ep1-run.json` shape
+   (the shipped toml at `c6fcb196` with `[intake] source_root` and
+   `unsigned = true` and the F146 bound 61591.4056), and the stored
+   `settings_hash`, the hand-built body's and the stored body's
+   recomputed hash are the same, `sha256:85a5ddf6…`. `run show` prints
+   `layers`: base `foundation-thin.toml` `a6e7e871…`, overlay
+   `hlwas-r00342.toml` `29e79bde…`, the two `--set`s in order
+   `896568d4…`. An overlay with `[intake] unsinged = true` exits 64 with
+   `unknown settings key 'intake.unsinged'` before any connection, and no
+   run is written.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
