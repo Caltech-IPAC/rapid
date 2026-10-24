@@ -49,7 +49,7 @@ def test_no_match_is_clean(repo):
 
 
 def test_a_match_is_reported(repo):
-    root = repo("written under /Users/someone/work\n")
+    root = repo("written under " + "/Us" "ers/someone/work\n")     # in fragments: this file is scanned too
     for result in (scan(root), scan(root, "HEAD")):
         assert result.returncode == 1 and "BLOCKED [users-path] notes.txt:1" in result.stderr
 
