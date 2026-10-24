@@ -32,6 +32,14 @@ the identifiers that vary, ``pass * 10**6 + observation * 10**4 + visit *
 same for every SCA of the exposure as `dev`'s one ``Exposures`` row per
 exposure is. The manifest records the file's provenance: its observation
 identifiers, romancal's version and the Gaia fit's summary.
+
+``[intake] dq_mask_bits`` is commissioning #238's DQ mask (0, `dev`'s
+behaviour, masks nothing): the conversion sets ``SCI``, ``ERR`` and
+``VAR_*`` NaN where ``DQ`` has any of the bits. The manifest's ``dq``
+records the bits and three pixel counts of the science image: the file's
+own NaN (``nan_input``), the masked pixels (``masked``) and the NaN written
+(``nan_output``, their union); ``metrics.masked_fraction`` is ``masked``
+over the image's pixels.
 """
 
 from __future__ import annotations
@@ -44,6 +52,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from astropy.io import fits
@@ -112,17 +121,20 @@ def run(job: JobContext) -> None:
     fits_name = f"{stem}_cal.fits.gz"
     with tempfile.TemporaryDirectory(prefix="rapidpipe-intake-") as scratch:
         fits_path = Path(scratch) / f"{stem}_cal.fits"
-        extnames = asdf_to_fits(
+        conversion = asdf_to_fits(
             asdf_path, fits_path, sip_degree=int(settings["sip_degree"]),
             sip_max_pix_error=float(settings["sip_max_pix_error"]),
             nominal_zptmag=settings["nominal_zptmag"], swname="rapidpipe intake",
             swvers=f"job {job.job}",  # the job names its run, the run its revision
-            created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+            created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            dq_mask_bits=int(settings["dq_mask_bits"]))
         lap("convert")
         gzip_file(fits_path, job.path / fits_name, int(settings["gzip_level"]))
         lap("gzip")
         with fits.open(fits_path) as hdul:
             primary, header = hdul[0].header.copy(), hdul[1].header.copy()
+            n_pixels = int(hdul[1].data.size)
+            nan_output = int(np.count_nonzero(np.isnan(hdul[1].data)))
         _check_key(stem, ids, header)
         fid = FIDS[header["FILTER"]]
         psf = _science_psf(job, fid, ids["sca"])
@@ -147,12 +159,16 @@ def run(job: JobContext) -> None:
         outputs.append((table, f"{table}.parquet"))
     lap("rows")
     fit = primary_fit(primary)
+    masked = conversion["dq_masked"] or 0
+    dq = {"mask_bits": hex(int(settings["dq_mask_bits"])), "masked": masked,
+          "nan_input": conversion["sci_nan_input"], "nan_output": nan_output}
     job.write_manifest(
         outputs, source=source,
         provenance={**ids,
                     "romancal": primary.get("HIERARCH meta calibration_software_version"),
                     "wcs_fit_results": fit},
-        conversion={"hdus": extnames, "asdf_bytes": asdf_path.stat().st_size,
+        dq=dq, metrics={"masked_fraction": masked / n_pixels},
+        conversion={"hdus": conversion["hdus"], "asdf_bytes": asdf_path.stat().st_size,
                     "fits_bytes": fits_bytes, "fits_gz_bytes": (job.path / fits_name).stat().st_size,
                     "timings_s": timings})
     log.info("intake %s: %s", stem, timings)

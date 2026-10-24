@@ -16,6 +16,12 @@ helpers it calls, and ``gzip_file``. The conversion is `dev`'s, unchanged:
   data, the variances by ``EXPTIME`` squared, the rest unscaled, float16
   widened to float32), then the ASDF tables as binary tables.
 
+Commissioning #238's DQ mask (``pipeline/dqMaskSubs.py`` @ 5300a6fc) is
+the one addition: where ``DQ & dq_mask_bits`` is nonzero the pixel is NaN
+in ``SCI``, ``ERR`` and every ``VAR_*`` array, each of those HDUs carries
+``DQMASK`` (the bits) and ``NDQMASK`` (the pixels), and ``DQ`` is written
+unchanged; ``dq_mask_bits = 0`` is `dev`'s conversion, nothing masked.
+
 `dev`'s hard-coded tuning is the caller's: the SIP degree and its maximum
 pixel error, the gzip level and the nominal zeropoints (used only when the
 file carries no photometric calibration). `dev`'s ``print`` lines are log
@@ -47,6 +53,12 @@ DATABASE_SIP_DEGREE = 5
 
 #: The ASDF node holding the science image.
 SCIENCE_NODE_NAME = "data"
+
+#: The ASDF node holding the data-quality flags.
+DQ_NODE_NAME = "dq"
+
+#: The nodes set NaN where the DQ mask is set (#238's ``dq_masked_node_names``).
+DQ_MASKED_NODE_NAMES = ("data", "err", "var_poisson", "var_rnoise", "var_flat")
 
 #: The exponent of EXPTIME converting each node from DN/s to DN; unlisted nodes are unscaled.
 EXPTIME_SCALING_EXPONENT = {"data": 1, "err": 1, "var_poisson": 2, "var_rnoise": 2, "var_flat": 2}
@@ -360,9 +372,24 @@ def asdf_table_nodes(dm) -> list[tuple[str, Any]]:
     return nodes
 
 
+def find_dq_masked_pixels(dq, mask_bits: int) -> np.ndarray:
+    """True where any of ``mask_bits`` is set in the DQ array (#238's helper)."""
+    if not 0 <= mask_bits < 2**32:
+        raise ConversionError(f"dq_mask_bits {mask_bits} is not a 32-bit unsigned value")
+    dq = np.asarray(dq)
+    if not np.issubdtype(dq.dtype, np.integer):
+        raise ConversionError(f"the DQ array has non-integer dtype {dq.dtype}")
+    return (dq.astype(np.uint32, copy=False) & np.uint32(mask_bits)) != 0
+
+
 def build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, exptime,
-                    sip_degree: int) -> fits.ImageHDU:
-    """One ASDF array as an image HDU in DN, with the science WCS when laid out like the science image."""
+                    sip_degree: int, dq_masked: np.ndarray | None = None,
+                    dq_mask_bits: int = 0) -> fits.ImageHDU:
+    """One ASDF array as an image HDU in DN, with the science WCS when laid out like the science image.
+
+    With ``dq_masked``, a node of :data:`DQ_MASKED_NODE_NAMES` is NaN there
+    and its header records ``DQMASK`` and ``NDQMASK``.
+    """
     extname = "SCI" if node_name == SCIENCE_NODE_NAME else node_name.upper()
     exponent = EXPTIME_SCALING_EXPONENT.get(node_name, 0)
     if exponent == 0:
@@ -370,6 +397,9 @@ def build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, ex
     else:
         data = np.array(array, dtype=np.float32)
         data *= np.float32(float(exptime) ** exponent)
+    masked = dq_masked is not None and node_name in DQ_MASKED_NODE_NAMES
+    if masked:
+        data[dq_masked] = np.nan
     if array.shape == science_shape:
         hdr = build_science_header(primary_hdr, wcs_header, array.shape, extname, sip_degree)
     else:
@@ -385,6 +415,9 @@ def build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, ex
     else:
         hdr["BUNIT"] = ("DN**2", "units of this array")
     hdr["EXPTSCAL"] = (float(exptime) ** exponent, "factor applied to convert from the ASDF units")
+    if masked:
+        hdr["DQMASK"] = (dq_mask_bits, f"DQ bits ({hex(dq_mask_bits)}) set to NaN here")
+        hdr["NDQMASK"] = (int(np.count_nonzero(dq_masked)), "number of pixels set to NaN by DQMASK")
     return fits.ImageHDU(data=data, header=hdr, name=extname)
 
 
@@ -401,10 +434,13 @@ def build_table_hdu(node_name, table):
 
 def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_error: float,
                     nominal_zptmag: Mapping[str, float], swname: str, swvers: str,
-                    created: str) -> list[str]:
-    """Write the FITS file of an open data model one HDU at a time; return its EXTNAMEs.
+                    created: str, dq_mask_bits: int = 0) -> dict[str, Any]:
+    """Write the FITS file of an open data model one HDU at a time.
 
-    The HDUs go to ``<fits_path>.partial``, moved into place only after the last.
+    Returns ``hdus`` (the EXTNAMEs), ``dq_masked`` (pixels the DQ mask set
+    NaN, None when nothing was masked) and ``sci_nan_input`` (the science
+    image's own NaN pixels before the mask). The HDUs go to
+    ``<fits_path>.partial``, moved into place only after the last.
     """
     import asdf
 
@@ -421,6 +457,14 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
         raise ConversionError(f"the ASDF file has no {SCIENCE_NODE_NAME} array")
     science_shape = image_nodes[0][1].shape
     wcs_header = gwcs_to_fits_sip_header(dm.meta.wcs, science_shape, sip_degree, sip_max_pix_error)
+    sci_nan_input = int(np.count_nonzero(np.isnan(image_nodes[0][1])))
+    dq_masked = None
+    if dq_mask_bits:
+        # #238 converts a file without a usable DQ array unmasked, with a
+        # warning; here a run that asked for the mask gets it or a failed job.
+        dq_masked = find_dq_masked_pixels(dict(image_nodes)[DQ_NODE_NAME], dq_mask_bits)
+        log.info("DQ mask %s: %d pixels (%.3f%%) set to NaN", hex(dq_mask_bits),
+                 np.count_nonzero(dq_masked), 100.0 * np.mean(dq_masked))
 
     partial = Path(str(fits_path) + ".partial")
     partial.unlink(missing_ok=True)
@@ -430,7 +474,7 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
         extnames.append("PRIMARY")
         for node_name, array in image_nodes:
             hdu = build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, exptime,
-                                  sip_degree)
+                                  sip_degree, dq_masked, dq_mask_bits)
             fits.append(partial, hdu.data, hdu.header, checksum=True)
             extnames.append(hdu.name)
             del hdu  # one array in memory at a time
@@ -446,10 +490,12 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
         raise
     os.replace(partial, fits_path)
     log.info("wrote %s with %d HDUs: %s", fits_path, len(extnames), ",".join(extnames))
-    return extnames
+    return {"hdus": extnames,
+            "dq_masked": None if dq_masked is None else int(np.count_nonzero(dq_masked)),
+            "sci_nan_input": sci_nan_input}
 
 
-def asdf_to_fits(asdf_path, fits_path, **conversion) -> list[str]:
+def asdf_to_fits(asdf_path, fits_path, **conversion) -> dict[str, Any]:
     """Convert one ASDF file, memory-mapped, into a multi-extension FITS file (:func:`build_fits_file`)."""
     import roman_datamodels as rdm
 
