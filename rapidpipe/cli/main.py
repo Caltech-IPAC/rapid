@@ -250,7 +250,8 @@ def _build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--filters", required=True, help="Comma-separated, e.g. F146.")
     loop_parser.add_argument("--scas", required=True, help="Comma-separated SCA numbers.")
     loop_parser.add_argument("--pointings", required=True,
-                             help="Comma-separated VVV_EEEE (visit, exposure), or 'all'.")
+                             help="Comma-separated VVV_EEEE (visit, exposure), or the observing "
+                                  "sequence's rows for an OpenUniverse run, or 'all'.")
     loop_parser.add_argument("--passes", default="all",
                              help="Comma-separated survey pass numbers, e.g. 1,2,3,4, or 'all' (default).")
     loop_parser.add_argument("--job-definition", required=True,
@@ -440,10 +441,14 @@ def _loop(args: argparse.Namespace) -> int:
     def connect_loop():
         return connect(application_name="rapidpipe-loop")
 
-    selection = loop.Selection.parse(args.filters, args.scas, args.pointings, args.passes)
     with connect_loop() as conn:
         settings = foundation.run_show(conn, args.run)["settings"]
     intake = settings["intake"]
+    try:
+        selection = loop.Selection.parse(args.filters, args.scas, args.pointings, args.passes,
+                                         intake.get("reader", "soc-l2"))
+    except ValueError as exc:
+        raise CommandExit(int(ExitCode.USAGE), str(exc)) from exc
     s3 = storage.s3_client(unsigned=bool(intake.get("unsigned")))
     batch = launch.batch_client()
     spot = launch.spot(settings)

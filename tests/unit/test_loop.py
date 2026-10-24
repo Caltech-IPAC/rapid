@@ -36,11 +36,18 @@ rerun (a reclaim counted), the rerun never again; a Spot job past
 ``hedge_factor`` times its stage's median since its start or submission is
 terminated and rerun, one inside it, a prompt one, or one with no median is
 not; a pass reports its submissions by queue.
+OpenUniverse (``[intake] reader = "openuniverse"``): the listing pages only
+the selected filters' prefixes in the RAPID spelling and keeps
+``_simple.asdf`` stems; a pointing is the observing sequence's row, the
+intake's expid, in stems and rows alike; a SOC stem is not admitted, a
+selection with passes is refused; a missing PSF submits one psf job.
 """
 
 from __future__ import annotations
 
 import contextlib
+
+import pytest
 
 from rapidpipe.cli import main as cli
 from rapidpipe.exitcodes import ExitCode
@@ -525,3 +532,46 @@ def test_a_pass_reports_its_submissions_by_queue(monkeypatch):
     summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [stem(p, 1, 1) for p in (1, 2, 3)],
                             lambda item: next(ids), None)
     assert summary["queues"] == {"spot-q": [500, 501], "prompt": [502]}
+
+
+OU = "openuniverse"
+
+
+def ou(pointing: int, sca: int = 10, band: str = "H158") -> str:
+    return f"roman_tds_{band}_{pointing}_wfi{sca:02d}"
+
+
+def test_an_openuniverse_listing_pages_the_selected_filters_and_keeps_simple_stems():
+    keys = [f"H158/1012/{ou(1012)}_simple.asdf", f"H158/1012/{ou(1012, 4)}_simple.asdf",
+            f"H158/1012/{ou(1012)}_thumb.png", f"R062/1000/{ou(1000, band='R062')}_simple.asdf"]
+    client = Pages(keys)
+    sel = loop.Selection.parse("F158", "10", "all", reader=OU)
+    assert sorted(loop.list_stems(client, "s3://bucket/l2/", sel)) == [ou(1012, 4), ou(1012)]
+    assert client.listed == ["l2/H158/"]
+
+
+def test_an_openuniverse_pointing_is_the_sequence_row_in_stems_and_rows():
+    sel = loop.Selection.parse("F158", "10", "1012,2034", reader=OU)
+    stems = [ou(1012), ou(2034), ou(3000), ou(1012, 4), stem(1, 1, 1, sca=10)]
+    subs, counts = loop.plan(snap(fids={"H158": 2}, psfs={(2, 10, "science"): (10, 100)}), stems, sel)
+    intake = stages(subs, "intake")
+    assert [s["scope"]["file"] for s in intake] == [ou(1012), ou(2034)] and counts["admitted"] == 2
+    assert intake[0]["expects"][1]["key"] == {"dataset": D, "expid": 1012, "sca": 10, "fid": 2}
+    assert sel.admits_row(2034, 10, 2, {2}) and not sel.admits_row(3000, 10, 2, {2})
+    assert sel.summary()["pointings"] == [1012, 2034]
+
+
+def test_an_openuniverse_selection_with_passes_is_refused():
+    with pytest.raises(ValueError, match="no passes"):
+        loop.Selection.parse("F158", "10", "all", "1,2", reader=OU)
+
+
+def test_an_openuniverse_stem_without_its_psf_gets_one_psf_job():
+    sel = loop.Selection.parse("F158", "10", "all", reader=OU)
+    subs, _ = loop.plan(snap(fids={"H158": 2}, psfs={}), [ou(1012), ou(2034)], sel)
+    (psf,) = stages(subs, "psf")
+    assert psf["scope"] == {"dataset": D, "file": ou(1012)} and stages(subs, "intake") == []
+    assert psf["expects"][0]["key"] == {"dataset": D, "fid": 2, "sca": 10, "kind": "science"}
+    pending = [{"id": 60, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": ou(1012)}}]
+    subs, _ = loop.plan(snap(fids={"H158": 2}, psfs={}, jobs=pending), [ou(1012), ou(2034)], sel)
+    assert subs == []
