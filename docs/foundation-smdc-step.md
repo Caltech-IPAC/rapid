@@ -5988,6 +5988,90 @@ a task's step lands when its task does, so the numbers can arrive out of order.
    Run 80, its dataset and the truth-star catalog stay; nothing was
    deleted.
 
+4. **GBTDS's crowded-field reference PSF: it converges and is not
+   adopted (branch `day/gbtds-refpsf`, unmerged).** Part 11 step 1 left
+   run 67's 346 to 418 core-and-ring residuals per epoch above S/N 20
+   under `[difference] reference_psf = "science"`, because the measured
+   reference PSF found 0 stars in the bulge. One measured step, run as an
+   experiment on the branch before any setting exists: a crowded variant
+   of `refpsf.measure` (`crowded=True`, the mode `"measured-crowded"`)
+   with the peak floor at the 300th brightest detection under the
+   3,500 DN/s ceiling instead of 400 clipped deviations, and isolation as
+   a contrast rule (no detection within 6 px peaking above 10% of the
+   star's) instead of no detection within 14 px; 31 px stamps, the
+   secant-then-search centring and the ten-star floor as before. A
+   module constant on the branch (`_EXPERIMENT_REFERENCE_PSF`, its own
+   commit `2a067507`) forced it over the overlay's `"science"`.
+
+   Proof, dataset `r00340-gb2` on the GBTDS overlay, the sample root and
+   the bound of part 11 step 1, reusing nothing of run 67's. Run **75**
+   (`998fb0ef`) made the psf, nine intakes and the six-frame reference on
+   Batch under `rapid-rebuild:60` (14:45 to 14:54 UTC; psf 21940, intakes
+   21942 to 21950, reference 21958), one `--once` pass at a time so no pass
+   could plan a difference; run **79** (`2a067507`, the same layers plus
+   `[difference.paths]` at the worktree) was made live in its place and
+   ran the three differences of run 67's epochs locally, one at a time,
+   from the dataset's official products:
+
+   ```sh
+   rp run create ... --revision 998fb0ef6b85094744b0e69702eef5d68b2561f6 \
+     --overlay rapidpipe/settings/datasets/gbtds-r00340.toml \
+     --set 'intake.source_root="<the sample root>"' --set intake.unsigned=false \
+     --set reference.selection.before_mjd=61679.1449 --survey GBTDS --dataset r00340-gb2   # run 75
+   rp official change --group live.json ...      # run 75 live
+   rp job local --run 75 --stage import ...      # Gaia under the dataset's key, job 21938
+   rp loop --run 75 --filters F146 --scas 8 --pointings all --job-definition rapid-rebuild:60 --once   # until the reference is submitted
+   rp run create ... --revision 2a06750789c841d85ca99be9f171a13d74b8da02 <the same layers> \
+     --set 'difference.paths.rapid_sw="<worktree>"' --set 'difference.paths.cfg_path="<worktree>/cdf"' \
+     --set 'difference.paths.zogy_code="<worktree>/modules/zogy/v21Aug2018/py_zogy.py"'          # run 79
+   rp official change --group live79.json ...    # close run 75's live binding, open run 79's
+   rp job local --run 79 --stage difference --scope '{"expid": 2014101, "sca": 8, "fid": 8}' \
+     --inputs <the loop's plan for the key> --expects <diffimages, sources>                   # and 2171101, 4254101
+   ```
+
+   Check, held: the three differences published (jobs **21967**, **22016**,
+   **22434**; 14:55 to 15:42 UTC, 875, 1,006 and 928 s, peak RSS 8.2 GB),
+   each with its 500 sources and the association's objects (161, 152,
+   129 founded). The variant converged on all three: 249 to 262 of
+   67,116 to 67,332 detections passed its cuts, 100 stars used, the
+   built stamp centred to 0.01 px, 6 s.
+
+   | epoch | job (run 67 / 79) | `refpsf_stars` | `refpsf_sigma_px` | `sci_star_sigma_px` / ePSF (79) | core / ring (79) | candidates (67 / 79) | above S/N 20 (67 / 79) | noise correlation (67 / 79) |
+   |---|---|---|---|---|---|---|---|---|
+   | 2014101 (+1.4 h) | 20211 / 21967 | 0 / 100 | – / 1.260 | 1.245 / 0.947 | −0.155 / 0.061 | 9,618 / 8,734 | **367 / 62** | 1.63 / 1.89 |
+   | 2171101 (+1 day) | 20212 / 22016 | 0 / 100 | – / 1.243 | 1.247 / 0.947 | −0.197 / 0.069 | 9,343 / 22,357 | **418 / 500** | 1.63 / 2.32 |
+   | 4254101 (+6 days) | 20213 / 22434 | 0 / 100 | – / 1.200 | 1.247 / 0.947 | −0.169 / 0.020 | 8,784 / 14,514 | **346 / 81** | 1.67 / 2.07 |
+
+   **The rule's answer: not adopted.** The count fell on two epochs by a
+   factor of 4 to 6 and rose on the third (418 to 500, every kept source),
+   so nothing of the variant merges, the overlay stays at `"science"`
+   and there is no second variant. The galleries (`gallery-<job>.png` in
+   the run directory, the eight kept sources of highest S/N) show what
+   changed: on 21967 and 22434 the core-and-ring of run 67 is gone and the
+   residuals at bright stars are small dipoles (S/N 84 to 118 against run
+   67's 393 to 563); of 22016's 500, 424 sit where the reference peaks
+   below 200 DN/s and the brightest is S/N 74, so it is the difference's
+   noise, not the stars: its candidates more than double and its noise
+   correlation is the highest of the six. Why the measured PSF inflates
+   that one epoch's noise is not read here.
+
+   **Seen on the way: the science PSF is the narrow one.** With the
+   reference's stars measured, `sci_star_sigma_px` exists for GBTDS for
+   the first time: the science frame's own stars are **1.245 px** against
+   the ePSF's 0.947, a ratio of 1.31 on all three epochs (HLWAS F146 SCA
+   8: 1.024, part 11 step 3). Run 67's "science" mode gave ZOGY that
+   0.947 px stamp for both images whose stars are 1.25 px wide; the
+   variant corrects the reference's half only. The next GBTDS measurement
+   is the science PSF's width on this dataset, not a second reference
+   variant.
+
+   Left in place, nothing deleted: run **74** (`r00340-gb2`, created with
+   a mistyped revision `998fb0ef3a0b…`, never live, no jobs), run 75
+   (its psf, intakes and reference official for the dataset), run 79
+   live with three differences and their objects and no packets (no
+   packet or send was part of the step), the branch with the variant, its
+   unit test and the experiment commit.
+
 5. **F213's flux scale: the paired difference, the measured scale against
    the zero points' ratio. The forced scale makes the stars' flux ratio
    right and leaves the ring, so no setting is born.** The experiment, as
