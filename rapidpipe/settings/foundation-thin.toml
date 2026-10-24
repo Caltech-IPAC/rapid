@@ -169,6 +169,15 @@ psf = 2048
 # OpenUniverse 0.034; the tail grows as the stars fall, hence twice the
 # healthy maximum; run 72 SCA 9 sits at 0.13 to 0.16, inside it, and is held
 # by its usable fraction. HLWAS's 1 px WCS offset is the failure it catches.
+#
+# Core and ring are image metrics (quality.residuals on the gain-matched
+# reference and the difference), not read from the source set, so dev's
+# prefilter leaves them unchanged (identical to the digit, dev-prefilter).
+# Revalidated on ZOGY at 14860f57 (runs 103, 104, HLWAS 001_0001 SCA 8, four
+# healthy differences, usable 0.9994, offset at most 0.019 px): core -0.0011
+# to +0.0032, ring -0.0000 to +0.0017, inside both bounds, which stay.
+# SFFT's core +0.251 to +0.271 (ring -0.002 to +0.021) is its bright-star
+# residual, a failure the bounds hold, never a healthy range.
 snr_gt20_factor = 3.0
 core_fraction_max_abs = 0.025
 ring_fraction_max_abs = 0.015
@@ -450,9 +459,15 @@ max_sources = 500
 # (Ben, 2026-10-24 21:19 UTC): on HLWAS the raw SFFT catalog fills the cap
 # with star residuals (core fraction +0.252 against ZOGY's +0.003; injected
 # detection at AB 25 0.99 -> 0.00, false positives per epoch 228 -> 385, run
-# 88 against run 81), and dev never publishes it raw: sumrat, nneg, nbad and
-# the prefilter are what make it usable, and they are not ported yet (queue
-# items dev-columns, dev-prefilter, sfft-core).
+# 88 against run 81), and dev never publishes it raw. dev's prefilter
+# ([difference.database_prefilter], dev-prefilter) does not earn it back:
+# HLWAS injected 001_0001 SCA 8, passes 4 to 6, same bytes at 14860f57 (runs
+# 103, 105, 107; null epoch runs 104, 102, 106): detected of 600, ZOGY 542,
+# raw SFFT 256, SFFT with the prefilter 275; AB 24 to 25, 93, 59, 78 of 96;
+# false positives per epoch mean (highest) 214 (233), 385 (390), 388 (390),
+# bright-flagged 0.62, 0.75, 0.86; null packets 182, 471, 478. The prefilter
+# keeps 0.67 to 0.71 of SFFT's candidates, and the bright-star residuals it
+# keeps still fill the 500 cap (queue item sfft-core).
 diff_flavor = "zogy"
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
