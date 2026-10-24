@@ -6692,6 +6692,59 @@ over 228: that is commit 2369769a's metric (after run 46's revision),
 which on run 46's catalog gives 1.016 over 139; the ports move it by
 0.0003 px.
 
+### Step err-tools: an external tool's nonzero exit fails the job, its reason on the row
+
+**The change (PR 407, merged `a1cc82e7`).** `ToolRunner.run` and
+`run_shell` (`rapidpipe/science/difference/tools.py`) raise `ToolFailed`
+on a nonzero exit: the tool's name (a Python interpreter's script
+named with it, so ZOGY reads `python3 py_zogy.py`), its exit code and
+the last 20 lines of its merged stdout and stderr. `check=False` returns
+the code instead; SFFT's caller passed it, and PR 410 (`differencer`)
+took it away when SFFT became the published differencer, so no stage
+passes it now. The callers rely on the default: SExtractor
+(`sextractor.py` 157 and 202, `gainmatch.py` 110, the reference's
+`catalog.py` 69), SWarp (`resample.py` 150, 162, 169), ZOGY
+(`difference.py` 687), bkgest (`background.py` 64 and 105), awaicgen
+(`reference.py` 357). `run_job` (`foundation/local.py`) now writes any
+failure's `type: message` into the row's `refusal`, where it wrote
+`NULL` for anything but a `CommandExit`.
+
+**The proof.** Image `rebuild-a1cc82e7…` (digest `191e2a09…`), job
+definition `rapid-rebuild:65`; HLWAS `001_0001`, SCA 8, F146, passes 1
+to 4 (three reference frames, epoch 4040101 differenced). Two runs, each
+live under its own dataset: run **83** (`r00342-et-fail`) with the
+difference stage's SExtractor pointed at `cat`, which refuses
+SExtractor's `-CATALOG_NAME` option and exits 1 with two lines; run
+**84** (`r00342-et-ok`), the same layers without it. Evidence in the
+brief's `t1/`.
+
+```sh
+rp run create ... --revision a1cc82e7... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+  --set 'difference.paths.sextractor="cat"' --survey HLWAS --dataset r00342-et-fail   # run 83; run 84 without the last --set
+rp official change --group live.json ...; rp job local --run 83 --stage import ...    # live; Gaia under the dataset's key
+rp loop --run 83 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:65 --interval 60
+```
+
+Check, held:
+
+- **The failed job.** Run 83's difference job 22766 (Batch
+  `4cc06c89…`): Batch `FAILED`, one attempt, exit 70; the row `failed`,
+  exit 70, `refusal` `ToolFailed: cat exited with code 1; its last 2
+  output lines:` then `cat: invalid option -- 'C'` and `Try 'cat --help'
+  for more information.` Its CloudWatch stream ends with the traceback
+  through `sextractor.py:157`, the first SExtractor call, and the same
+  message. The loop listed it under `failed` once, reran nothing (its
+  reruns key on a `Batch ` reason), and exited 2 at 20:06:55 UTC after
+  11 minutes; intake, psf and reference published.
+- **The twin.** Run 84's difference job 22767 published, then its packet
+  job 22775; the loop exited 0. Beside run 82's job 22067 on the same
+  epoch (r6i against m6a): candidates 774 and 773, S/N above 20 19 and
+  21, core −0.00106 and −0.00103, ring +0.00173 and +0.00171,
+  registration identical to 1e-8 px; the Intel-against-AMD difference
+  already recorded. `check_run.sh --run 84`: **CLEAN**, validate 6/6,
+  reader 1/1, consumer 180/180.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
