@@ -69,7 +69,10 @@ table's identity sequence so the sources can carry it; ``infobitssci`` is
 `dev`'s catalog-outcome mask, ``infobitsref`` the reference's infobits)
 and ``sources`` (the ZOGY positive PSF-fit catalog through
 :func:`rapidpipe.science.load.catalogs.source_set`, capped at ``max_sources``
-as the import caps it). The manifest records `dev`'s gain-matching and
+as the import caps it; a source in a bright reference source's footprint
+carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
+in ``flags``, informational, nothing dropped: :func:`flag_bright_footprint`).
+The manifest records `dev`'s gain-matching and
 catalog measurements under ``difference``, the reference PSF's
 measurement under ``difference.refpsf``, and ``metrics``, one flat dict of
 named numbers (``refpsf_sigma_px`` and ``sci_psf_sigma_px``, the two
@@ -85,7 +88,10 @@ absent when the image has too few full blocks,
 :func:`rapidpipe.science.difference.noise.noise_correlation`; and
 :mod:`rapidpipe.science.difference.metrics`' registration offset, core
 and ring fractions, usable fraction and source counts, ``n_candidates``
-before the cap and ``n_sources`` after it, defined there). The
+before the cap and ``n_sources`` after it, the bright footprint's
+``n_in_bright_footprint`` and ``bright_footprint_fraction``, and the
+uncapped catalog's ``n_sources_near_bright_px`` and
+``n_sources_ring_snr_gt20``, defined there). The
 residual stars' positions sit beside them as ``difference.residual_stars``
 for a reader's gallery. A metric the job cannot make is absent.
 
@@ -129,7 +135,7 @@ from astropy.wcs import WCS
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
-from rapidpipe.products.diffimage import catalog_outcome_bit
+from rapidpipe.products.diffimage import SOURCE_FLAG_BRIGHT_FOOTPRINT, catalog_outcome_bit
 from rapidpipe.science.difference import (
     background,
     gainmatch,
@@ -168,6 +174,9 @@ PSF_KINDS = ("science",)
 REFERENCE_PSF_NAME = "refimage_psf.fits"
 #: The gzip level of the published FITS files, the intake's.
 GZIP_LEVEL = 1
+#: The reference mosaic catalog's columns the job reads: position, flux, the footprint's aperture S/N.
+REFERENCE_CATALOG_COLUMNS = ["ALPHAWIN_J2000", "DELTAWIN_J2000", "FLUX_AUTO", "FLUX_APER_4",
+                             "FLUXERR_APER_4"]
 
 DIFFIMAGES_SCHEMA = pa.schema([
     ("pid", pa.int32()), ("dataset", pa.string()), ("expid", pa.int32()), ("sca", pa.int16()),
@@ -557,8 +566,7 @@ def run(job: JobContext) -> None:
         fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float),
         fits.getdata(w(output_resampled_reference_image), 0).astype(float), measured_psf.stars_xy))
     reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
-        w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp",
-        ["ALPHAWIN_J2000", "DELTAWIN_J2000"])
+        w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", REFERENCE_CATALOG_COLUMNS)
 
     # Gain matching, with the reference zero point the reference was built on.
     zero_point, zero_point_source = _resolve_zero_point(settings, w(staged["reference"]))
@@ -742,14 +750,18 @@ def run(job: JobContext) -> None:
         catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"],
         max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
         xy_fit_max_offset=settings["xy_fit_max_offset"])
+    reference_xy, reference_sky_rows = _reference_on_grid(reference_sky, header)
+    sources, in_footprint = flag_bright_footprint(sources, reference_xy, reference_sky_rows,
+                                                  zero_point)
     pq.write_table(pa.Table.from_pylist([diffimage], schema=DIFFIMAGES_SCHEMA),
                    job.path / "diffimages.parquet")
     pq.write_table(sources, job.path / "sources.parquet")
     residual_stars = _quality_metrics(
-        metrics, measured_psf, header=header, thresh=thresh, candidates=candidates, sources=sources,
+        metrics, measured_psf, thresh=thresh, candidates=candidates, sources=sources,
+        catalog=catalog, in_footprint=in_footprint,
         gainmatched_reference=w(output_resampled_gainmatched_reference_image + ".gz"),
         difference=w(filename_diffimage_published),
-        coverage=w(output_resampled_reference_cov_map + ".gz"), reference_sky=reference_sky)
+        coverage=w(output_resampled_reference_cov_map + ".gz"), reference_xy=reference_xy)
     logger.info("difference: expid %s -> pid %s, %d of %d sources kept", key["expid"],
                 inputs.pid, sources.num_rows, candidates)
     job.write_manifest(
@@ -807,15 +819,56 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
     return record, metrics, measured
 
 
-def _quality_metrics(metrics: dict, measured: refpsf.ReferencePsf, *, header, thresh: float,
-                     candidates: int, sources: pa.Table, gainmatched_reference: Path,
-                     difference: Path, coverage: Path, reference_sky: list) -> list[dict]:
+def _reference_on_grid(reference_sky: list, header) -> tuple[np.ndarray, np.ndarray]:
+    """The reference mosaic catalog's positions on the science grid and their rows.
+
+    ``reference_sky`` rows are :data:`REFERENCE_CATALOG_COLUMNS`; a row that
+    does not map is dropped. Returns ``(xy, rows)``, both ``(n, ...)`` floats.
+    """
+    if not reference_sky:
+        return np.empty((0, 2)), np.empty((0, len(REFERENCE_CATALOG_COLUMNS)))
+    rows = np.array(reference_sky, dtype=float)
+    cx, cy = WCS(header).all_world2pix(rows[:, 0], rows[:, 1], 0)
+    inside = np.isfinite(cx) & np.isfinite(cy)
+    return np.column_stack([cx[inside], cy[inside]]), rows[inside]
+
+
+def flag_bright_footprint(sources: pa.Table, reference_xy: np.ndarray, reference_rows: np.ndarray,
+                          zero_point: float) -> tuple[pa.Table, np.ndarray]:
+    """Set :data:`SOURCE_FLAG_BRIGHT_FOOTPRINT` on the sources in a bright reference source's footprint.
+
+    The bright reference sources are the mosaic catalog's rows of aperture
+    S/N above :data:`rapidpipe.science.difference.metrics.FOOTPRINT_SNR`,
+    their radii :func:`~rapidpipe.science.difference.metrics.footprint_radii`
+    on the reference's ``zero_point``. Nothing is dropped. Returns the table
+    and the per-source mask.
+    """
+    flux, aperture, aperture_err = (reference_rows[:, i] for i in (2, 3, 4))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        bright = (aperture_err > 0) & (aperture / aperture_err > quality.FOOTPRINT_SNR)
+    columns = sources.to_pydict()
+    inside = quality.bright_footprint(
+        np.asarray(columns["xfit"], dtype=float), np.asarray(columns["yfit"], dtype=float),
+        reference_xy[bright], quality.footprint_radii(flux[bright], zero_point))
+    flags = np.asarray(columns["flags"]).astype(np.int64)
+    flags[inside] |= SOURCE_FLAG_BRIGHT_FOOTPRINT
+    index = sources.schema.get_field_index("flags")
+    flagged = pa.array(flags, type=sources.schema.field(index).type)
+    return sources.set_column(index, sources.schema.field(index), flagged), inside
+
+
+def _quality_metrics(metrics: dict, measured: refpsf.ReferencePsf, *, thresh: float,
+                     candidates: int, sources: pa.Table, catalog: pa.Table, in_footprint: np.ndarray,
+                     gainmatched_reference: Path, difference: Path, coverage: Path,
+                     reference_xy: np.ndarray) -> list[dict]:
     """Add :mod:`rapidpipe.science.difference.metrics`' numbers to ``metrics``.
 
     Reads the job's own published files back from its work directory, all
-    on the science grid; ``reference_sky`` is the reference mosaic
-    catalog's (RA, Dec) rows, mapped onto the grid through ``header``. Returns the residual stars with their positions,
-    which the manifest records beside the metrics for a reader's gallery.
+    on the science grid; ``reference_xy`` is the reference mosaic catalog
+    mapped onto it, ``catalog`` the uncapped PSF-fit catalog and
+    ``in_footprint`` the kept sources' bright-footprint mask. Returns the
+    residual stars with their positions, which the manifest records beside
+    the metrics for a reader's gallery.
     """
     diff = fits.getdata(difference, 0).astype(float)
     cov = fits.getdata(coverage, 0)
@@ -825,17 +878,19 @@ def _quality_metrics(metrics: dict, measured: refpsf.ReferencePsf, *, header, th
     stars = quality.residual_stars(measured.found, diff.shape, gainmatched)
     found = quality.residuals(gainmatched, diff, stars)
     metrics.update(found)
-    catalog_xy = None
-    if reference_sky:
-        sky = np.array(reference_sky, dtype=float)
-        cx, cy = WCS(header).all_world2pix(sky[:, 0], sky[:, 1], 0)
-        inside = np.isfinite(cx) & np.isfinite(cy)
-        catalog_xy = np.column_stack([cx[inside], cy[inside]])
     columns = sources.to_pydict()
+    flux = np.asarray(columns["fluxfit"], dtype=float)
+    flux_err = np.asarray(columns["fluxerr"], dtype=float)
     metrics.update(quality.source_counts(
         np.asarray(columns["xfit"], dtype=float), np.asarray(columns["yfit"], dtype=float),
-        np.asarray(columns["fluxfit"], dtype=float), np.asarray(columns["fluxerr"], dtype=float),
-        catalog_xy))
+        flux, flux_err, reference_xy if len(reference_xy) else None))
+    metrics.update(quality.footprint_counts(in_footprint, flux, flux_err))
+    ux, uy, uflux, uerr = (catalog.column(n).to_numpy().astype(float)
+                           for n in ("x_fit", "y_fit", "flux_fit", "flux_err"))
+    metrics["n_sources_near_bright_px"] = quality.near_bright_count(ux, uy, gainmatched)
+    ring = quality.ring_count(ux, uy, uflux, uerr, measured.found)
+    if ring is not None:
+        metrics["n_sources_ring_snr_gt20"] = ring
     return [{"x": round(x, 2), "y": round(y, 2)} for x, y in stars]
 
 

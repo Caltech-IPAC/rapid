@@ -24,6 +24,7 @@ that died unrecorded is rerun once and held pending, a rerun's death fails
 the pass, a job the code failed is not rerun; a pass submits at most its cap,
 in stage order, an exposure's expectation kept on its first intake; an intake
 names the dataset's official Gaia catalog, and only the PSF without one.
+`--passes` selects the survey's passes in stems and rows alike, all by default.
 """
 
 from __future__ import annotations
@@ -440,3 +441,13 @@ def test_a_pass_submits_at_most_the_cap_in_stage_order_and_defers_the_rest():
     assert [e["product"] for e in subs[0]["expects"]] == ["exposures", "l2files"]
     whole, counts = loop.plan(snap(psfs=psfs), stems, sel)
     assert len(whole) == 3 and counts["deferred"] == 0
+
+
+def test_passes_select_the_surveys_passes_in_stems_and_rows_and_default_to_all():
+    sel = loop.Selection.parse("F146", "8", "all", "1,3")
+    assert [s for s in (stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)) if sel.admits_stem(s)] == [
+        stem(1, 1, 1), stem(3, 1, 1)]
+    assert [p for p in (1, 2, 3) if sel.admits_row(expid(p, 1, 1), 8, 8, {8})] == [1, 3]
+    subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)], sel)
+    assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(3, 1, 1)]
+    assert sel.summary()["passes"] == [1, 3] and SEL.passes is None and SEL.summary()["passes"] == "all"

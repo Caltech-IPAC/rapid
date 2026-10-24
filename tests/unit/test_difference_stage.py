@@ -359,3 +359,21 @@ def test_the_shipped_difference_table_is_valid_and_refuses_fake_sources():
         difference.check_settings(settings(fake_sources={"inject_fake_sources_flag": True})["difference"])
     with pytest.raises(ValueError, match="max_sources"):
         difference.check_settings(settings(max_sources=-1)["difference"])
+
+
+def test_the_bright_footprint_flag_is_set_beside_the_fit_bits_and_drops_nothing():
+    import pyarrow as pa
+
+    from rapidpipe.products.diffimage import SOURCE_FLAG_BRIGHT_FOOTPRINT
+
+    sources = pa.table({"xfit": [100.0, 103.0, 300.0], "yfit": [100.0, 100.0, 300.0],
+                        "flags": pa.array([0, 4, 0], pa.int16())})
+    flux_at_15 = 10 ** (0.4 * (25.0 - 15.0))     # radius 9.5 px on zero point 25
+    rows = np.array([[0, 0, flux_at_15, 1000.0, 1.0],      # aperture S/N 1000: a footprint
+                     [0, 0, flux_at_15, 50.0, 1.0]])       # S/N 50: none
+    xy = np.array([[95.0, 100.0], [300.0, 300.0]])
+    flagged, inside = difference.flag_bright_footprint(sources, xy, rows, 25.0)
+    assert inside.tolist() == [True, True, False]
+    assert flagged.column("flags").to_pylist() == [
+        SOURCE_FLAG_BRIGHT_FOOTPRINT, 4 | SOURCE_FLAG_BRIGHT_FOOTPRINT, 0]
+    assert flagged.schema == sources.schema
