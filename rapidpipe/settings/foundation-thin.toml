@@ -160,12 +160,12 @@ max_request_bytes_parameter = "/rapid/scratch/kafka/max-request-bytes"
 # 6458d3ca (the master config the reference launcher reads, section named
 # beside each table), unless the comment says it is new. Moved here from
 # rapidpipe/settings/reference.toml with the stage's port to run(job).
-# The file's pin is d6aac515, the difference stage's refresh; three
+# The file's pin is d6aac515, the difference stage's refresh; two
 # reference keys still hold their 6458d3ca values, left for the
 # reference stage's own refresh from dev and marked where they stand:
-# [reference.mosaic] naxis1/naxis2 (9100 since dev 1518042b) and
-# [reference.sextractor_refimage] deblend_nthresh/seeing_fwhm (32 and 0.25
-# since dev ce485e8f).
+# [reference.mosaic] naxis1/naxis2 (9100 since dev 1518042b).
+# [reference.sextractor_refimage] deblend_nthresh/seeing_fwhm carry dev
+# ce485e8f's 32 and 0.25.
 [reference.paths]
 # `dev`: rapid_sw = "/code", cfg_path = rapid_sw + "/cdf" (hard-coded in
 # awsBatchSubmitJobs_runSingleReferenceImagePipeline.py); the SExtractor
@@ -312,7 +312,7 @@ sextractor_analysis_thresh = "2.5"
 sextractor_filter = "Y"
 sextractor_filter_name = "fill_in_by_pipeline_script"
 sextractor_filter_thresh = "100"
-sextractor_deblend_nthresh = "4"
+sextractor_deblend_nthresh = "32"
 sextractor_deblend_mincont = "0.005"
 sextractor_clean = "Y"
 sextractor_clean_param = "1.0"
@@ -336,7 +336,7 @@ sextractor_mag_gamma = "4.0"
 sextractor_gain = "999999999999999.9"
 sextractor_gain_key = "GAIN"
 sextractor_pixel_scale = "0"
-sextractor_seeing_fwhm = "1.2"
+sextractor_seeing_fwhm = "0.25"
 sextractor_starnnw_name = "fill_in_by_pipeline_script"
 sextractor_back_type = "AUTO"
 sextractor_back_value = "0.0"

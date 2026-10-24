@@ -27,8 +27,9 @@ fastavro>=1.9
 # tools must carry it. The pipeline image's conda environment carries it.
 # The reference PSF (rapidpipe.science.difference.refpsf: DAOStarFinder,
 # EPSFBuilder) uses 3.0's names (sharpness_range, x_centroid); the image
-# carries 3.0.0.
-photutils>=3.0
+# carries 3.0.0. Below 4: 4.0 removes keywords the PSF-fit catalog's
+# PSFPhotometry call uses (dev 8d766c43).
+photutils>=3.0,<4
 # rapidpipe.foundation.publish reads a job's declared Parquet outputs with
 # pyarrow at module scope; the foundation workflow's publisher tests import it.
 pyarrow>=14
