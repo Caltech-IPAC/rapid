@@ -7012,6 +7012,183 @@ Galleries are in the brief's `t2/inspect-88/` and `t2/inspect-89/`.
 
 **The ruling owed.** The default stands as Ben ruled. Whether to revert it, or port dev's SFFT catalog cuts (sumrat, nneg, nbad), is his ruling.
 
+### Step dev-refresh: the 9100 px mosaic and dev's reference grading, measured on one pointing
+
+**The change (PR 416, merged `9a7f0167`; rapid_docs 106).** `dev`
+1518042b's mosaic: `[reference.mosaic]` 7000 → 9100 px. `dev`
+cb53d2c7, 2851627b and fdc7fa79's reference grading:
+`cdf/infobitsref.txt` by cherry-pick of that one path, the rest by hand
+in `rapidpipe/science/reference/infobits.py`, `[reference.infobits]`
+holding `dev`'s provisional thresholds and `fatalinfobits = [2, 5, 7,
+8, 16]`. The grade goes on the `refimages` row (`status`, `infobits`),
+in the manifest's `reference` block, and on the mosaic's and
+uncertainty map's headers (`INFOBITS` with its set-bits comment,
+`STATUS`, the `BITnn` cards). The Photutils catalog's bits (5, 6, 7, 16)
+are never set, because this build makes no Photutils reference catalog
+and has no PSF at the reference stage. A status-0 reference is published
+and differenced against, as `dev`'s science pipeline differences
+against the reference it has just built. The reference job also records
+`awaicgen_seconds`.
+
+**The proof.** Image `rebuild-9a7f0167…` (digest `9169d4d2…`), job
+definition `rapid-rebuild:70`. Four runs, each live under its own
+dataset, created from the shipped layers and the HLWAS overlay with
+`before_mjd = 61591.4056` and `batch.memory_mib.reference = 12288` on
+all four (headroom for the first 9100 build; the peak came in under the
+default). Each run is one arm of a pair, `001_0001`, SCA 8, F146,
+reference from passes 1 to 3 and passes 4 to 6 differenced (epochs
+4040101, 5040101, 6010101) under SFFT, today's default:
+
+| run | dataset | source | mosaic |
+|---|---|---|---|
+| **91** | `r00342-dr-inj7000` | the injected footprint `r00342-inj1` | `--set` 7000 |
+| **92** | `r00342-dr-inj9100` | the same | 9100 (default) |
+| **93** | `r00342-dr-null7000` | HLWAS r00342, uninjected | `--set` 7000 |
+| **94** | `r00342-dr-null9100` | the same | 9100 (default) |
+
+The arms stop at the difference: `t1/drive_arm.sh` in the brief
+directory runs `rp loop --once` passes until the three difference jobs
+are submitted, then `rp job wait` on them, so no packet job is planned
+and no Gaia import is needed. Evidence in the brief's `t1/`.
+
+```sh
+rp run create --who rusholme --why '…' --revision 9a7f016737471cdc602cbf7af86e0c83b48aa4f2 \
+  --overlay rapidpipe/settings/datasets/hlwas-r00342.toml --set reference.selection.before_mjd=61591.4056 \
+  --set batch.memory_mib.reference=12288 --set 'intake.source_root="'$INJ_ROOT'"' --set intake.unsigned=false \
+  [--set reference.mosaic.naxis1=7000 --set reference.mosaic.naxis2=7000] --survey HLWAS --dataset r00342-dr-inj7000
+rp official change --group live.json ...                                   # each run live for its dataset
+rp loop --run 91 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4,5,6 \
+  --job-definition rapid-rebuild:70 --once                                  # until three differences exist
+rp job wait --job <the three difference jobs>
+scripts/check_run.sh --run 91 --inspect DIR
+scripts/completeness.py --run 91 --truth truth-sca8.parquet --no-history
+```
+
+Check, held: every job of the four runs published on its first attempt
+(psf, six intakes, reference, three differences each). `check_run.sh`
+**CLEAN** on all four, validate 6/6; with no packets, the reader and the
+consumer read nothing.
+
+**Measured**, 7000 beside 9100:
+
+| | injected 7000 (91) | injected 9100 (92) | null 7000 (93) | null 9100 (94) |
+|---|---|---|---|---|
+| reference job, instance | 22868, m6a.2xlarge | 22867, m6a.2xlarge | 22869, r6i.8xlarge | 22870, r6i.8xlarge |
+| reference peak MiB | 2,824 | 4,488 | 2,827 | 4,490 |
+| reference seconds / awaicgen seconds | 45 / 21.8 | 53 / 22.9 | 48 / 20.8 | 56 / 22.1 |
+| each map (image, coverage, uncertainty) | 196 MB | 331 MB | 196 MB | 331 MB |
+| reference status / infobits / catalog sources | 1 / 1 / 4,300 | 1 / 1 / 4,300 | 1 / 1 / 4,300 | 1 / 1 / 4,300 |
+| difference seconds, per epoch | 222, 222, 219 | 223, 189\*, 223 | 210, 211, 185\* | 216, 217, 217 |
+| difference peak MiB | 16,133 to 16,134 | 16,133 to 16,138 | 16,132 to 16,136 | 16,132 to 16,134 |
+| SFFT candidates per epoch | 2,279, 2,217, 2,359 | the same | 2,151, 2,086, 2,229 | the same |
+| candidates at S/N > 20 (positive) | 775, 758, 820 | 775, 758, 820 | 683, 663, 722 | 683, 663, 723 |
+| negative candidates at S/N > 20 | 302, 314, 274 | 302, 315, 273 | 301, 312, 272 | 302, 312, 272 |
+| kept sources at S/N > 20 | 500 of 500 each | the same | 500 of 500 each | the same |
+| core fraction | +0.251, +0.252, +0.271 | the same | +0.251, +0.252, +0.271 | the same |
+| ring fraction | +0.021, +0.019, −0.002 | the same | +0.021, +0.019, −0.002 | the same |
+| detected of 600 injected (AB 21 to 26.5) | 256 | 256 | — | — |
+| false positives per epoch (bright-flagged) | 415 (314), 415 (305), 414 (313) | the same | — | — |
+
+\* m6a.2xlarge, the others r6i.8xlarge: the pairs at epoch 5040101
+(22873 against 22874) and 6010101 (22880 against 22882) ran on
+different families. They are flagged and not resubmitted. Batch places
+a job by the compute environment, the job definition names no family,
+and pinning one is ruled out (Ben, 2026-10-21). Their candidate counts
+are equal across the families. The spread recorded before is 2,156 rows
+between Intel and AMD on one ZOGY difference.
+
+Completeness per magnitude, both injected arms identically: detected
+0.74 at AB 21, 0.56 to 0.81 from AB 21.5 to 23.5, 0.90 at 24, 0.21 at 24.5, 0 from
+25. The cap of 500 fills with SFFT's bright-star cores (step
+`differencer`), so the count ends there. This is not compared with run
+81, which published ZOGY.
+
+**Why nothing changed downstream.** The pointing's three frames cover
+pixels 2256 to 7800 by 1286 to 6672 of the 9100 grid, and the central
+7000 box spans 1050 to 8049. No covered pixel lies outside it. At this
+pointing the 9100 mosaic only adds NaN padding. The resampled templates
+of each pair agree to 7e-4 DN/s, their NaN masks are equal, and the
+difference's peak memory does not move. What 9100 costs here is the
+reference's 1.6 GiB of extra peak memory (still inside `[batch.memory_mib]
+reference = 6144`, so no setting changed) and 1.69 times the bytes per
+map. What it buys is coverage for a field whose frames fall near the
+7000 grid's edge, which this pointing does not test.
+
+**The grading, over every reference the rebuild has built.** The
+population is every `refimages` row (719) and every reference
+job without one (job 21981, run 77, failed exit 70, built nothing).
+Each reference whose files remain was graded twice from its own
+products, recomputed, never from its recorded `fwhmmedpix`, whose
+meaning changed at PR 406: by the port, and by `dev`'s own code read
+from `origin/dev` c931b001 (`referenceImageSubs.evaluate_refimage_quality`,
+`psfFwhmSubs.catalog_fwhm_stats`, `rapid_pipeline_subs.compute_psf_catalog`,
+the ini's `[REFIMAGE_INFOBITS]` and `[PSFCAT_REFIMAGE]`) with the
+Photutils catalog made. The PSF for that catalog is the dataset's
+science PSF of the filter and SCA, a stand-in for `dev`'s per-filter
+reference PSF file. A reference under a deleted prefix is listed as
+unavailable, never counted as a pass.
+
+| run | dataset | built | graded | unavailable | port bits (count) | dev bits (count) | port status 0 | dev status 0 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `socsims-fakesrc-20260807` | 1 | 1 | 0 | none | none | 0 | 0 |
+| 2 | `socsims-fakesrc-20260807` | 1 | 1 | 0 | 0:1, 1:1 | 0:1, 1:1 | 0 | 0 |
+| 4 | `socsims-fakesrc-20260807` | 1 | 1 | 0 | 0:1, 1:1 | 0:1, 1:1 | 0 | 0 |
+| 10 | `socsims-fakesrc-20260807` | 1 | 1 | 0 | 0:1, 1:1 | 0:1, 1:1 | 0 | 0 |
+| 12 | `r00342` | 70 | 70 | 0 | 0:70 | 0:70 | 0 | 0 |
+| 17 | `r00342-ep1` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 46 | `r00342-fx-f146` | 3 | 3 | 0 | 0:3 | 0:3 | 0 | 0 |
+| 47 | `r00342-fx-f087` | 1 | 1 | 0 | none | none | 0 | 0 |
+| 48 | `r00342-fx-f106` | 1 | 1 | 0 | none | none | 0 | 0 |
+| 49 | `r00342-fx-f129` | 1 | 1 | 0 | none | none | 0 | 0 |
+| 50 | `r00342-fx-f158` | 1 | 1 | 0 | none | none | 0 | 0 |
+| 57 | `r00342-nt-producer` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 59 | `r00342-nt-metrics` | 3 | 3 | 0 | 0:3 | 0:3 | 0 | 0 |
+| 60 | `r00342-nt-stamp` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 62 | `r00340-gb1` | 1 | 1 | 0 | 0:1, 1:1 | 0:1, 1:1 | 0 | 0 |
+| 66 | `r00342-nt-caches` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 68 | `r00342-nt-producer-b` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 69 | `r00342-nt-assoc` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 70 | `r00342-nt-spot` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 71 | `r00342-inj0` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 72 | `r00342-inj1` | 70 | 70 | 0 | 0:70 | 0:70 | 0 | 0 |
+| 73 | `r00342-inj1s` | 54 | 54 | 0 | 0:54 | 0:54 | 0 | 0 |
+| 75 | `r00340-gb2` | 1 | 1 | 0 | 0:1, 1:1 | 0:1, 1:1 | 0 | 0 |
+| 76 | `r00342-dy-f213` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 77 | `r00342-dy-f213z` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 78 | `r00342-dy-producer` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 80 | `ou-tds2` | 1 | 1 | 0 | none | none | 0 | 0 |
+| 81 | `r00342-dy-field` | 54 | 54 | 0 | 0:54 | 0:54 | 0 | 0 |
+| 82 | `r00342-dy-ops` | 2 | 2 | 0 | 0:2 | 0:2 | 0 | 0 |
+| 83 | `r00342-et-fail` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 84 | `r00342-et-ok` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 85 | `r00342-dt-f146` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 86 | `r00342-dy-sfft` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 87 | `r00342-wk-errpub` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 90 | `r00342-ei-inputs` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 91 | `r00342-dr-inj7000` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 92 | `r00342-dr-inj9100` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 93 | `r00342-dr-null7000` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 94 | `r00342-dr-null9100` | 1 | 1 | 0 | 0:1 | 0:1 | 0 | 0 |
+| 13, 14, 15, 24, 25, 26, 27, 28, 29, 35, 36, 37, 38, 39, 41, 42, 44, 51, 52 | deleted prefixes | 431 | 0 | 431 | — | — | — | — |
+
+Outcome: 719 built, 288 graded, 431 unavailable (19 runs' deleted
+prefixes), errors 0. **No reference has status 0, under the port or
+under `dev`'s code**, so there is no port-only status 0 to correct. The
+port's bits equal `dev`'s on all 288; `dev`'s Photutils catalog made
+bits 5, 7 and 16 set nowhere (its smallest PSF-fit catalog has 1,301
+rows, the lowest catalog limiting magnitude 24.6). The only bits set
+are non-fatal. Bit 0 (median background above 1.0 DN/s) is set on 282
+references, all but the imported `dev` reference (run 1), the four
+other-filter fixes (runs 47 to 50) and OpenUniverse (run 80); run 85's
+reads 1.357 DN/s.
+Bit 1 (robust noise above 0.1 DN/s) is set on the five deep or crowded
+ones: the three early 25-frame socsims coadds and the two GBTDS
+references. The thresholds were not changed. `dev`'s PSF-fit catalog
+took 20 to 30 s on a three-frame HLWAS reference and 7 to 10 minutes on
+the 25-frame socsims coadds (155,000 rows). Per-reference results are in
+the brief's `t1/grading/results/`, the full table in
+`t1/grading/summary.md`.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
