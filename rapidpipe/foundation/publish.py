@@ -17,9 +17,10 @@ what Part 1 statement 4 otherwise names at launch (amendment of
 recorded as the job's ``input`` rows in ``job_inputs`` when it publishes
 (the difference job's object catalog, the packet job's members and
 forced-photometry window); and ``catalog``, ``{"dataset", "survey",
-"field", "radius"}`` on a difference job, whose founded ``objects`` and
-``memberships`` are reconciled under the field's lock against the objects
-founded since its read before they load (:mod:`rapidpipe.foundation.catalog`),
+"fields", "radius"}`` on a difference job, whose founded ``objects`` and
+``memberships`` are reconciled under the locks of those fields (each
+field that gained an object or a membership and its neighbours) against
+the objects founded in them since its read before they load (:mod:`rapidpipe.foundation.catalog`),
 the outcome recorded in the stored manifest as ``reconcile``.
 
 The prefix is a URL, ``file://`` or ``s3://``; each file is read through
@@ -155,8 +156,8 @@ def _insert(cur, table: str, rows: list[dict], job_id: int) -> None:
 
 def _reconcile(cur, job_id: int, run: int, catalog: dict, reads: list[dict],
                rows: dict[str, list[dict]]) -> dict:
-    """Attach the job's founded objects to those founded since its read, under the field's lock."""
-    object_catalog.lock(cur, run, catalog["field"])
+    """Attach the job's founded objects to those founded since its read, under the fields' locks."""
+    object_catalog.lock(cur, run, object_catalog.fields(catalog))
     read_jobs = [r["source_job"] for r in reads if r["product"] == "objects"]
     others = object_catalog.between(cur, job_id, run, catalog, read_jobs)
     rows["objects"], rows["memberships"], outcome = object_catalog.attach(

@@ -5849,6 +5849,48 @@ from in brackets):
 Brief `day-2026-10-24` (plan v9 Part 7's pruned list): one step per task, numbered by task;
 a task's step lands when its task does, so the numbers can arrive out of order.
 
+2. **The producer idempotent again (PR 388).** PR 371 built the producer
+   with `enable_idempotence=False` because the scratch job role lacked
+   `kafka-cluster:WriteDataIdempotently` (part 11 step 5, run 57). The
+   grant is live since 14:14 UTC (rapid_systems PR 425, role and
+   boundary), so `publish_kafka.producer` asks for idempotence again,
+   named explicitly (kafka-python 3.0.11's default), `acks="all"` kept.
+
+   Proof, run **78** (`r00342-dy-producer`, `2d282a6b`, image
+   `sha256:27b11a9c…`, **`rapid-rebuild:61`**; F146, SCA 8, pointing
+   `001_0001`, passes 1 to 6; 14:52:53 to 15:02:59 UTC, 11 passes, exit 0):
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision 2d282a6baef27bac98de0aa10bcdfd1178a8647a \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --survey HLWAS --dataset r00342-dy-producer
+   rp official change --group live.json ...                 # run 78 live for HLWAS r00342-dy-producer
+   rp job local --run 78 --stage import ...                 # Gaia under the dataset's key, job 21955
+   rp loop --run 78 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4,5,6 --job-definition rapid-rebuild:61 --interval 60
+   python scripts/consume_packets.py --run 78
+   rp publish --run 78
+   scripts/check_run.sh --run 78 --inspect <dir>
+   ```
+
+   Check, held: 15 jobs, each published on its first attempt, nothing
+   failed or rerun; every pass's `sets_produced` and `sets_waiting` empty,
+   so each packet job sent its own set:
+
+   | set | ended | stamped | partition | offsets | packets |
+   |---|---|---|---|---|---|
+   | 21976 | 15:00:31 | 15:00:34 | 1 | 1887..1962 | 76 |
+   | 21977 | 15:00:38 | 15:00:42 | 1 | 1963..2067 | 105 |
+   | 21982 | 15:02:41 | 15:02:45 | 1 | 2068..2166 | 99 |
+
+   Each packet job's Batch log ends with its result's `kafka` field
+   (partition 1 and the offsets above) and holds no `InitProducerId` or
+   authorization error. `rp publish --run 78` afterwards sends nothing
+   (`sets []`). The consumer check: CLEAN, read 280, kept 280, packets
+   expected 280 seen 280, one set sampled (99 valid, 99 byte-equal), range
+   `p1 1887..2166`, 4.4 s. `check_run.sh --inspect`: CLEAN, validate 6/6,
+   reader 3/3, consumer 280/280.
+
 5. **F213's flux scale: the paired difference, the measured scale against
    the zero points' ratio. The forced scale makes the stars' flux ratio
    right and leaves the ring, so no setting is born.** The experiment, as

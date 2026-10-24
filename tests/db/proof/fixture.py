@@ -154,7 +154,7 @@ class World:
                    if e["binding"] is CURRENT else e for e in expects]
         job = create_job(self.conn, run, "difference", {"epoch": epoch, "sca": sca}, (), expects)
         epoch_rows = associate_epoch({aid: (owner, ra0, dec0) for owner, aid, ra0, dec0 in read},
-                                     sources, job=job, field=FIELD, cone=None, radius=RADIUS)
+                                     sources, job=job, radius=RADIUS)
         outputs = {"diffimages": [diffimage], "sources": sources,
                    "objects": [{**o, "dataset": DATASET, "survey": SURVEY, "field": FIELD}
                                for o in epoch_rows.founded],
@@ -164,7 +164,8 @@ class World:
         manifest = json.loads((root / "manifest.json").read_text())
         manifest["reads"] = [{"product": "objects", "key": FIELD_KEY, "source_job": owner}
                              for owner in sorted({r[0] for r in read})]
-        manifest["catalog"] = {**FIELD_KEY, "radius": RADIUS}
+        manifest["catalog"] = {"dataset": DATASET, "survey": SURVEY, "fields": [FIELD],
+                               "radius": RADIUS}
         (root / "manifest.json").write_text(json.dumps(manifest))
         if published:
             publish(self.conn, job, 1, self.prefix(job, 1))

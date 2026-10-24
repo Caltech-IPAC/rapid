@@ -114,6 +114,15 @@ def settling_sets(conn, run: int, settle_s: float = SETTLE_S) -> list[int]:
     return [r["job"] for r in _query(conn, _UNSTAMPED, (settle_s, run)) if r["settling"]]
 
 
+def late_sets(conn, run: int, settle_s: float = SETTLE_S) -> int:
+    """How many of the run's official packet sets were stamped more than ``settle_s`` after their job
+    ended: sent by a sweep, not by their own job (its send failed, or the gate held the set then)."""
+    return _query(conn, "SELECT count(*) AS n FROM jobs j JOIN official o ON o.closed_at IS NULL"
+                        " AND o.product = 'packets' AND o.job = j.id WHERE j.run = %s AND j.stage = 'packet'"
+                        " AND j.kafka_published_at > j.ended + make_interval(secs => %s)",
+                  (run, settle_s))[0]["n"]
+
+
 def set_index(conn, job: int) -> list[dict]:
     """One packet set's index rows: ``sid``, ``filename``, ``byte_offset``, ``byte_length``."""
     return _query(conn, "SELECT sid, filename, byte_offset, byte_length FROM packets"
@@ -209,7 +218,8 @@ def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> 
     the pass; ``producer`` has kafka-python's ``send(topic, key=, value=,
     headers=)`` returning a future and ``flush(timeout=)``. Returns the sets
     stamped, packets, bytes, the largest message, the sets left ``waiting``
-    in their settle window, the sets the quality gate ``held`` and the wall time. A set with a failed
+    in their settle window, the sets the quality gate ``held``, the run's ``late`` count
+    (:func:`late_sets`, this pass's sends included) and the wall time. A set with a failed
     acknowledgement is left unstamped and the next set is tried; a flush
     that times out leaves its set and every later one unstamped; then
     :class:`PublishError` names the sets that failed.
@@ -236,11 +246,12 @@ def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> 
             packets += sent["packets"]
             total += sent["bytes"]
             largest = max(largest, sent["largest"])
+        late = late_sets(conn, run)
     if failed:
         raise PublishError(f"run {run}: packet sets {sorted(failed)} left unstamped after a failed"
                            f" acknowledgement ({next(iter(failed.values()))}); stamped {sets}")
     return {"run": run, "topic": topic, "sets": sets, "packets": packets, "bytes": total,
-            "largest_message": largest, "waiting": waiting, "held": held,
+            "largest_message": largest, "waiting": waiting, "held": held, "late": late,
             "seconds": round(time.monotonic() - started, 3)}
 
 

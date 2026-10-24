@@ -114,6 +114,9 @@ One pass, in order:
   is the recovery sweep for a set whose job died before its
   acknowledgements, and a set still inside its job's send window is
   reported under ``sets_waiting`` and keeps the selection from draining.
+  ``sets_late`` counts the run's sets a sweep sent after that window, so
+  a failing container send shows in the pass line once the sweep has
+  sent its set (none in a healthy run whose gate held nothing).
 """
 
 from __future__ import annotations
@@ -668,6 +671,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     counts["packets_produced"] = produced["packets"]
     counts["sets_produced"] = produced["sets"]
     counts["sets_waiting"] = produced.get("waiting", [])
+    counts["sets_late"] = produced.get("late", 0)
     counts["drained"] = (counts["new"] == 0 and not submissions
                          and not any(counts["pending"].values()) and not counts["sets_waiting"])
     if held_sets is not None:

@@ -12,9 +12,12 @@ row for it (a left join, so a detection without a packet stays detected),
 and **sent** when its packet set carries the topic's acknowledgement
 (``jobs.kafka_published_at``); an alerted set not sent is the quality
 gate's hold (or a send still owed), reported as held. ``in_field`` marks a
-detection in its difference image's own field: the association founds and
-joins objects for those (a neighbouring field's source joins only an object
-already within the radius), so a packet needs one.
+detection in its difference image's own field, a reader of `dev`'s rule's
+effect: under it only those founded objects (a neighbouring field's source
+joined only an object already within the radius), so run 72 alerted 0.40
+of what it detected; under the field rule (runbook part 12 step 1) every
+accepted source founds or joins in its own field, and the column says only
+where on the image a detection fell.
 
 The truth positions are compared through the corrected intake WCS: the
 intake adds ``[intake] crpix_shift`` ``(sx, sy)`` to CRPIX, so the
