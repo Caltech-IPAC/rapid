@@ -19,7 +19,10 @@ failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone. PSFs: a new stem whose filter and
 SCA lack an official science PSF gets one ``psf`` job for the
 pair, expecting both keys, and no intake; an official pair admits intakes;
-a psf job of the run pending for the pair submits nothing more; an intake
+a psf job of the run pending for the pair submits nothing more. A container
+that died unrecorded is rerun once and held pending, a rerun's death fails
+the pass, a job the code failed is not rerun; a pass submits at most its cap,
+in stage order, an exposure's expectation kept on its first intake; an intake
 names the dataset's official Gaia catalog, and only the PSF without one.
 `--passes` selects the survey's passes in stems and rows alike, all by default.
 `job wait` returns once every named job is published or failed, holds a
@@ -248,14 +251,15 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
 
 
 class Batch:
-    """A fake Batch client: ``describe_jobs`` answers from ``{batch id: (status, reason)}``."""
+    """A fake Batch client: ``describe_jobs`` answers from ``{batch id: (status, reason[, job name])}``."""
 
     def __init__(self, jobs: dict):
         self.jobs, self.calls = jobs, []
 
     def describe_jobs(self, jobs):
         self.calls.append(list(jobs))
-        return {"jobs": [{"jobId": j, "status": self.jobs[j][0], "statusReason": self.jobs[j][1]}
+        return {"jobs": [{"jobId": j, "status": self.jobs[j][0], "statusReason": self.jobs[j][1],
+                          "jobName": self.jobs[j][2] if len(self.jobs[j]) > 2 else f"rapid-x-{j}"}
                          for j in jobs if j in self.jobs]}
 
 
@@ -288,7 +292,7 @@ class Rows:
 
 
 def test_a_container_that_ended_unrecorded_is_marked_failed_with_batchs_reason():
-    conn = Rows([(70, "intake", "launched", "b-70"), (71, "intake", "running", "b-71")])
+    conn = Rows([(70, "intake", "launched", "b-70", None), (71, "intake", "running", "b-71", None)])
     batch = Batch({"b-70": ("FAILED", "Terminated by the operator"), "b-71": ("RUNNING", "")})
     checked = loop.reconcile(conn, 12, batch)
     assert checked["ended"] == [{"job": 70, "stage": "intake",
@@ -303,7 +307,7 @@ def test_a_failed_row_under_batchs_retry_is_held_pending_not_failed(monkeypatch)
            "scope": {"expid": k1[0], "sca": 8, "fid": 8}}
     monkeypatch.setattr(loop, "snapshot",
                         lambda conn, run: snap(l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30}, jobs=[job]))
-    conn = Rows([(80, "difference", "failed", "b-80")])
+    conn = Rows([(80, "difference", "failed", "b-80", None)])
     summary = loop.run_pass(lambda: contextlib.nullcontext(conn), 12, SEL, [], lambda item: None, None,
                             batch=Batch({"b-80": ("RUNNABLE", "")}))
     assert summary["failed"] == [] and summary["pending"]["difference"] == 1
@@ -311,7 +315,7 @@ def test_a_failed_row_under_batchs_retry_is_held_pending_not_failed(monkeypatch)
 
 
 def test_a_local_job_without_a_batch_id_is_left_alone():
-    conn, batch = Rows([(90, "import", "running", None)]), Batch({})
+    conn, batch = Rows([(90, "import", "running", None, None)]), Batch({})
     checked = loop.reconcile(conn, 12, batch)
     assert batch.calls == [] and conn.updates == [] and checked["described"] == 0
 
@@ -403,6 +407,42 @@ def test_an_intake_names_the_datasets_gaia_catalog_once_it_is_official():
         {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "source_job": 12}]
     alone, _ = loop.plan(snap(gaia=None), [stem(1, 1, 1)], SEL)
     assert [i["product"] for i in stages(alone, "intake")[0]["inputs"]] == ["psfs"]
+
+
+def test_a_container_that_died_unrecorded_is_rerun_once_and_held_pending(monkeypatch):
+    k1 = (expid(1, 1, 1), 8, 8)
+    job = {"id": 81, "stage": "difference", "state": "failed", "scope": {"expid": k1[0], "sca": 8, "fid": 8}}
+    monkeypatch.setattr(loop, "snapshot",
+                        lambda conn, run: snap(l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30}, jobs=[dict(job)]))
+    conn, reruns = Rows([(81, "difference", "running", "b-81", None)]), []
+    summary = loop.run_pass(lambda: contextlib.nullcontext(conn), 12, SEL, [], lambda item: None, None,
+                            batch=Batch({"b-81": ("FAILED", "Host EC2 (instance i-1) terminated.")}),
+                            rerun=lambda j, s: reruns.append((j, s)))
+    assert reruns == [(81, "difference")] and summary["rerun"] == [81]
+    assert summary["failed"] == [] and summary["pending"]["difference"] == 1
+    # The rerun's container dies too: no second rerun, and the job fails the pass.
+    conn, reruns = Rows([(81, "difference", "failed", "b-82", "Batch FAILED: Task failed to start")]), []
+    summary = loop.run_pass(lambda: contextlib.nullcontext(conn), 12, SEL, [], lambda item: None, None,
+                            batch=Batch({"b-82": ("FAILED", "Task failed to start", "rapid-difference-81-rerun")}),
+                            rerun=lambda j, s: reruns.append((j, s)))
+    assert reruns == [] and summary["failed"] == [{"job": 81, "stage": "difference"}]
+
+
+def test_a_job_the_code_failed_is_not_rerun():
+    conn = Rows([(83, "difference", "failed", "b-83", "reference PSF: 4 stars, fewer than 10")])
+    checked = loop.reconcile(conn, 12, Batch({"b-83": ("FAILED", "Essential container in task exited")}))
+    assert checked["rerun"] == [] and checked["ended"] == []
+
+
+def test_a_pass_submits_at_most_the_cap_in_stage_order_and_defers_the_rest():
+    stems = [stem(1, 1, 1), stem(1, 1, 1, sca=9), stem(2, 1, 1)]
+    sel = loop.Selection.parse("F146", "8,9", "all")
+    psfs = {(8, 8, "science"): (10, 100), (8, 9, "science"): (11, 101)}
+    subs, counts = loop.plan(snap(psfs=psfs), stems, sel, max_submissions=2)
+    assert [s["scope"]["file"] for s in subs] == stems[:2] and counts["deferred"] == 1
+    assert [e["product"] for e in subs[0]["expects"]] == ["exposures", "l2files"]
+    whole, counts = loop.plan(snap(psfs=psfs), stems, sel)
+    assert len(whole) == 3 and counts["deferred"] == 0
 
 
 def test_passes_select_the_surveys_passes_in_stems_and_rows_and_default_to_all():
