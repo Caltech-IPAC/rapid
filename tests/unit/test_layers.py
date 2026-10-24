@@ -111,13 +111,17 @@ def test_a_json_base_is_a_stored_body_taken_whole(tmp_path):
 def test_the_hlwas_overlay_resolves_to_the_hand_built_body():
     """Shipped defaults + the HLWAS overlay + the per-run --sets equals the
     full body earlier runs were created from (base, the two intake keys and
-    the reference bound, e.g. run 17's) with the DQ mask and the WCS
-    translation that followed them, hash included."""
+    the reference bound, e.g. run 17's) with the DQ mask, the WCS
+    translation and dev's OpenUniverse SFFT block that followed them, hash
+    included."""
     root, bound = "s3://bucket/r00342/l2/", 61591.4056
     hand_built = tomllib.loads(SHIPPED.read_text())
     hand_built["intake"].update(source_root=root, unsigned=True, dq_mask_bits=0x2110C01,
                                 crpix_shift=[0.12, -0.99])
     hand_built["reference"]["selection"]["before_mjd"] = bound
+    hand_built["difference"]["sfft"].update(crossconv_flag=True, sfft_use_segmentation=True,
+                                            sfft_use_gainmatch_catalogs=True, sfft_bsmask_value="50.0",
+                                            sfft_bsmask_radius="100.0")
     body, record = resolve(SHIPPED, HLWAS, [f'intake.source_root="{root}"',
                                             f"reference.selection.before_mjd={bound}"])
     assert body == hand_built
