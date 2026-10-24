@@ -140,10 +140,27 @@ psf = 2048
 # core 0.0224 at worst (run 46 SCA 5, above part 10's SCA 8 edge of 0.011),
 # F213's known flux-scale residual 0.031 to 0.037 beyond it; ring within
 # 0.015 (F213 0.022 beyond it).
+#
+# It also holds a set when usable_fraction is below usable_fraction_min or
+# the registration offset hypot(registration_dx_px, registration_dy_px) is
+# above registration_max_px (gate-metrics, 2026-10-24, every published
+# difference job SMDC holds, runs 46 to 95). Usable fraction: healthy 0.9385
+# (run 72 SCA 16) to 1.0, constant per SCA to 1e-4 across epochs, so set by
+# the SCA's reference coverage and mask, not by epoch; HLWAS SCA 8 0.9888 to
+# 0.9994, GBTDS 0.990, OpenUniverse 0.993 to 1.0; the one recorded coverage
+# failure, run 72 SCA 9 (its reference from another SCA's frames), 0.704.
+# The margin below 0.9385 is for an SCA's reference edge a few per cent
+# short. Registration: healthy at most 0.123 px (run 49 F129, 25 stars),
+# 0.060 on SCA 8 F146 over 162 epochs with 59 to 97 stars, GBTDS 0.094,
+# OpenUniverse 0.034; the tail grows as the stars fall, hence twice the
+# healthy maximum; run 72 SCA 9 sits at 0.13 to 0.16, inside it, and is held
+# by its usable fraction. HLWAS's 1 px WCS offset is the failure it catches.
 snr_gt20_factor = 3.0
 core_fraction_max_abs = 0.025
 ring_fraction_max_abs = 0.015
 min_epochs = 5
+usable_fraction_min = 0.9
+registration_max_px = 0.25
 
 [kafka]
 # New, not dev's: `rapidpipe publish` produces official packet sets to the
