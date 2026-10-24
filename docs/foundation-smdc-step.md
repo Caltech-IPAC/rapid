@@ -4287,6 +4287,96 @@ would have caught the finding. One step per task.
    - Stars per SCA for task 5's re-count: 38 of 4,290 detections on SCA 8
      in F146 pass the cuts; ten are needed.
 
+4. **The SWarp kernel, a paired comparison (PR 348, merged `6e8ca10e`):
+   BILINEAR stays.** `[difference.swarp] swarp_resampling_type` (dev's
+   `BILINEAR`) against `LANCZOS3` on identical masked inputs, the kernel
+   the only difference. PR 348 adds two difference metrics this step reads
+   and task 5 keeps: `metrics.noise_correlation` (the masked ZOGY
+   difference's clipped 4 x 4 block-mean sigma times 4 over its clipped
+   pixel sigma, 1 for white noise) and `metrics.ref_sigma_px` (the median
+   second-moment sigma, 4 px window, of the stars the reference PSF is
+   built from, on the resampled reference).
+
+   Image `rebuild-6e8ca10e…` (`sha256:98f42035…`, build 22 s), deploy 74 s:
+   **`rapid-rebuild:46`** (and `rapid-rebuild-production:37`). Dataset
+   `r00342-fx-lz`, F146, `001_0001`, SCA 8, the HLWAS overlay (task 2's
+   mask), the F146 bound, one run per kernel whose bodies differ in that
+   key alone (checked key by key):
+
+   ```sh
+   for K in BILINEAR LANCZOS3; do
+     rp run create --who "$USER" --why "..." --revision 6e8ca10e1ac46b9000c5390a93dd95c243ff8417 \
+       --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+       --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+       --set "difference.swarp.swarp_resampling_type=\"$K\"" --survey HLWAS --dataset r00342-fx-lz
+   done                                                                     # runs 44 and 45
+   rp official change --group live.json ...                                 # run 44 live, group 18463
+   rp job local --run 44 --stage import --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342-fx-lz", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "r00342-fx-lz", "name": "gaia-r00342-fx-lz", "version": "DR3"}, "binding": null}]'   # 19838
+   MAX_PASS=4 timeout 4800 $PY loop-passes.py loop --run 44 --filters F146 --scas 8 --pointings 001_0001 --job-definition rapid-rebuild:46 --interval 60
+   rp job submit --run 45 --stage difference --job-definition rapid-rebuild:46 --scope '{"expid": 4040101, "sca": 8, "fid": 8}' \
+     --inputs '[<l2files from 19843>, <psfs science from 19839>, <refimages field 5387158 from 19844>]' \
+     --expects '[<diffimages and sources of the key, binding null>]'           # 19846
+   ```
+
+   Check, held: run 44's loop (step 2's pass-limited wrapper) drained in
+   12.1 min (01:29:14 to 01:41:22 UTC), exit 0, no job failed: psf
+   **19839**, intakes **19840 to 19843**, reference **19844**, BILINEAR
+   difference **19845**, associate 19847, packet 19848 (80 packets). Run
+   45's LANCZOS3 difference **19846**, submitted as soon as 19844
+   published, on the same three inputs: published, exit 0. Both on
+   m6a.2xlarge.
+
+   | pass 4, reference 19844 | BILINEAR (19845) | LANCZOS3 (19846) |
+   |---|---|---|
+   | `ref_sigma_px`, reference stars' own sigma (fixes ledger 1.10 / 1.02) | 1.108 | **1.036** |
+   | `refpsf_sigma_px` / `refpsf_stars` | 1.080 / 39 | **1.012 / 49** |
+   | `sci_psf_sigma_px` | 0.947 | 0.947 |
+   | `noise_correlation` | 1.250 | **1.145** |
+   | difference MAD sigma | 0.0466 | 0.0522 |
+   | candidates before the cap / `sources` above S/N 20 | 752 / 23 | **533 / 17** |
+   | uncapped PSF-fit sources, all / above S/N 20 | 754 / 24 | 540 / 19 |
+   | core / ring of star flux, top 30 stars | +0.0062 / -0.0025 | +0.0019 / +0.0031 |
+   | `sources` within 3 px of a reference star, all / S/N > 20 | 45.6% / 21.7% | 34.4% / 35.3% |
+   | uncapped sources within 6 px of a hole, all / S/N > 20 | 11 / 3 | 9 / 2 |
+   | uncapped sources within 6 px of a spike, all / S/N > 20 | 23 / 12 | **29** / 11 |
+   | uncapped sources within 6 px of either, all / S/N > 20 | 28 / 12 | **31** / 11 |
+   | ringing at holes, max \|excursion\| in the 6 px ring, local sky sigma, median / 90th percentile | 47.1 / 58.3 | 38.3 / 47.6 |
+   | ringing at spikes, most negative value in the 6 px ring, local sky sigma, median / 10th percentile / minimum | +2.62 / +1.67 / +1.65 | +2.28 / **-2.48 / -6.25** |
+   | resampled coverage below 0.5, px | 6,663 | 11,297 |
+   | star flux, science over gain-matched reference, top 30, median (range) | 1.009 (0.78 to 1.06) | 1.003 (0.78 to 1.04) |
+   | ungained reference flux, LANCZOS3 over BILINEAR, top 30, median (range) | | 1.005 (0.975 to 1.017) |
+   | `scalefacref` | 0.9922 | 0.9948 |
+   | queue wait / container s | 9 / 178 | 208 / 177 |
+   | peak RSS KiB, self / children | 1,275,792 / 15,247,292 | 1,276,732 / 15,247,376 |
+
+   Positions are taken once, from the BILINEAR job, on the shared science
+   grid: holes are the 3,706 interior regions (5,108 px) of resampled
+   coverage below 0.5 smaller than 1,000 px (task 2's masked defects, NaN
+   in all three frames since passes 1 to 3 sit on the same pixel); spikes
+   the 13 regions (226 px) of the resampled reference above 1000 DN/s, all
+   bright star cores now that the defects are masked. "Uncapped" is the
+   published `*_psfcat.parquet`: both jobs keep 500 `sources` at the cap,
+   from different pools, so the near counts are read before the cap.
+
+   **The rule (the brief): LANCZOS3 if its ringing adds no sources within
+   6 px of holes and spikes beyond the bilinear count and the sigma falls
+   as the ledger measured.** The sigma falls as measured (1.108 to 1.036;
+   the ledger's 1.10 to 1.02), and no flux is lost. The ringing adds
+   sources: 31 against 28 within 6 px of a hole or spike, all of the
+   excess at the 13 bright-star cores (29 against 23), where LANCZOS3's
+   negative lobes reach -6.2 local sky sigma and BILINEAR's never go below
+   the sky. So `swarp_resampling_type` stays `BILINEAR` and the HLWAS
+   overlay is unchanged. The excess is faint (at S/N above 20 the counts
+   are 11 against 12) and one epoch's count is within its Poisson scatter,
+   while LANCZOS3 cuts the candidates by 29% and the noise correlation
+   from 1.25 to 1.14: the decision is by the rule, and a re-count over
+   more epochs (task 5's metrics give it per job) is what would reverse
+   it. LANCZOS3 also blanks 4,634 more pixels (0.03% of the frame), its
+   resampled coverage ringing below 0.5 at the hole edges. The fixes
+   ledger's other routes, a drizzle factor below 1 passed to awaicgen and a
+   finer mosaic, narrow the PSF without SWarp's kernel and are not built.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
