@@ -7529,6 +7529,138 @@ Check, held: all six runs `check_run.sh` **CLEAN** (consumer 1,158, 1,393, 1,420
 
 Raw evidence is in the brief's `t1/`: `metrics.txt`, `c-103/`, `c-105/`, `c-107/` and their `.txt`, `gate-zogy.txt`, `gate-sfft.txt`, `?-inj/` and `?-null/`.
 
+## Results of part 13 so far (2026-10-24 22:35 UTC)
+
+The weekend planner's briefs ran unattended from 19:22 UTC, one task
+each, several in parallel, and every brief's task wrote `TASK DONE` on
+its first attempt. The error-handling ledger's fixes 1 to 10 are in: a tool's
+failure, an empty product, a missing input and a transient fault each
+end where they should, with the reason on the job row and an exit code
+the loop and Batch read correctly. The reference converges on `dev`
+(point-source FWHM, SExtractor 0.25 / 32, 9100 px, InfoBits and status).
+SFFT was published, measured worse than ZOGY on the same bytes, and the
+published differencer is now the setting `[difference] diff_flavor`,
+shipped `zogy`; `dev`'s pixel columns and its prefilter, the remedy Ben
+named, are ported under `sfft` and measured: they do not bring SFFT to
+ZOGY on HLWAS, so `zogy` stays. The gate holds on lost sky and
+misregistration too. Every run below is CLEAN by `check_run.sh` except
+run 83, which failed on purpose.
+
+| step | before | after | where |
+|---|---|---|---|
+| dev-takenow | reference `fwhmmedpix` the all-source median, SExtractor seeing 1.2 and deblend 4: CLASS_STAR > 0.8 / < 0.2 411 / 1 of 4,240 (run 46) | the point-source mode (2.70 → 2.425 px), seeing 0.25, deblend 32: 1,059 / 1,447 of 4,299 (run 85); coadd pixels identical | PRs 406, 411 |
+| err-tools | a tool's nonzero exit unread: a failed SExtractor, SWarp, ZOGY or bkgest surfaced later as a missing file, or not at all | `ToolFailed` (the tool, its code, its last 20 lines) on the row, exit 70; run 83 (SExtractor forced to `cat`) failed exit 70 with the reason; twin run 84 CLEAN | PRs 407, 412; rapid_docs 105 |
+| differencer | ZOGY published | SFFT published and checked like every tool (PR 410 reconciled 407 and 408); run 86, one epoch: core fraction +0.251 against ZOGY's +0.006, the cap filled with stars (363 of 500 in a bright footprint), 471 packets | PRs 408, 410, 413; rapid_docs 103 |
+| err-publish | an empty expected product bound official; a published-refused job resubmitted every pass; `loop` exit 2, `job wait` 0 / 0 / 75 | refused unbound unless `empty_ok` names the table; the loop reports it under `failed`; `loop` 1, `job wait` 0 / 1 / 2; run 87 drained exit 0, 14 of 14 bindings opened | PRs 409, 414; rapid_docs 104 |
+| err-inputs | an unreadable trigger stamp, a bad reference catalog or a missing `refimcatalogs` row shipped null cutouts or matches; a catch-all around the PSF fit | each fails the packet job naming it; nothing caught around the fit (photutils returns `None` on every empty input probed); run 90 CLEAN, 471 packets as run 86; 0 of 436 live references lack their catalog row | PRs 415, 417 |
+| differencer-measure | SFFT's default unmeasured | same bytes, HLWAS injected passes 4 to 6: detected 256 of 600 against ZOGY's 542, 0.00 at AB 25 against 0.99, false positives per epoch 385 against 228 (run 88 against 81); OpenUniverse 24 of 410 against 35 (run 89 against 80) | PRs 418, 419; rapid_docs 107 |
+| dev-refresh | 7000 px mosaic; references graded `status` 1, `infobits` 0 by construction | 9100 px: reference peak 2.8 → 4.5 GiB inside the 6 GiB ask, nothing downstream changes at `001_0001` SCA 8 (runs 91 to 94, 256 of 600 both arms); `dev`'s grading: 288 graded, 0 status 0, bits equal `dev`'s on all 288 | PRs 416, 421; rapid_docs 106 |
+| err-transient | throttling and `OperationalError` exited 70 (Batch never retried); a raising submit left the row `launched`; an empty first pass exited 0; `validate_run.py` passed failed runs | 75 on process and row; every failed row `<Class>: <message>`; the row `failed`; the first pass exits 64 (live, pass 30); `validate_run.py` fails a failed job; run 95 CLEAN, run 83 now FAIL by design | PRs 420, 424; rapid_docs 108 |
+| diff-flavor | SFFT hard-coded as published | `[difference] diff_flavor`, `dev`'s knob, shipped `zogy` (Ben, 21:19 UTC); no run of its own: the ZOGY path is the one every run before PR 408 ran; run 98 is the first proof under it | PR 425; rapid_docs 110 |
+| dev-columns | no sumrat, nneg, nbad | on every SFFT candidate after a 64 px local background, on `sources` under `sfft`; run 96 identical to 88 but for the columns; sumrat > 0.4 keeps 0.997 of injected, 0.68 of noise, 0.90 of bright-flagged; 4.3 to 5.2 s a difference; schema statement applied 21:26 UTC | PRs 422, 427; rapid_docs 112 |
+| mig-quickstart | no local recipe; the loop page had no night from scratch | README Getting started, one HLWAS epoch in the image against a throwaway `postgres:18`, verbatim twice, 465 packets, validate 6/6; the loop page's Starting a night verbatim on SMDC, run 97 CLEAN 471 / 471 | PRs 423, 428; rapid_docs 109 |
+| gate-metrics | lost sky and misregistration invisible to the gate | holds at `usable_fraction` < 0.9 and offset > 0.25 px; replay of 4,627 sets holds run 72 SCA 9's three (usable 0.704) and nothing healthy; run 98 CLEAN as smoke | PRs 426, 430; rapid_docs 111 |
+| rimtimsim-reader (code only) | no FITS reader | `[intake] reader = "rimtimsim"`, overlay `rimtimsim-260622.toml`; one file: WCS (+0.052, +0.060) px from 588 Gaia stars, so no `crpix_shift`; the chain's runs are its step's | PR 429 |
+| dev-prefilter | SFFT's catalog capped raw | under `sfft`, sumrat > 0.4 and the 2 px edge before the cap, `""` none; same bytes, three arms: ZOGY detected 542 of 600, raw SFFT 256, SFFT with the cut 275 (AB 25 bin 57 / 0 / 0 of 57), false positives per epoch 214 / 385 / 388, null packets 182 / 471 / 478; the cut drops a third of SFFT's candidates but the bright-star residuals refill the cap, so `diff_flavor` stays `zogy` and the gate's core and ring bounds stay (arm A's sit inside them) | PRs 431, 432, 434; rapid_docs 114 |
+
+**The current procedure**, where these steps changed it:
+
+- A night is rapid_docs' loop page, Starting a night, as run 97
+  followed it: `run create` with the source root and bound by `--set`,
+  the live binding, the Gaia import, the loop under `timeout 5400`
+  running the module (a shell function cannot run under `timeout`),
+  then `check_run.sh`.
+- Read the loop's exit: 0 drained clean; 1 drained around failed or
+  refused jobs, each named in the last pass's `failed` (read the row's
+  `refusal`, fix, `job submit --job`); 64 a usage error, a first pass
+  that admitted nothing among them; 75 transient, start it again.
+  `job wait`: 0 all published, 1 one failed, 2 timed out.
+- A failed run is not clean: `check_run.sh` now fails any run with a
+  failed job, so a run that fails on purpose (run 83) reads FAIL.
+- A comparison of differencers runs on the same bytes: a dataset of its
+  own, the loop for PSF and intake only, the difference and packet jobs
+  submitted against the baseline difference job's own `refimages` and
+  `psfs` rows (runs 88, 89, 96).
+- The published catalog is ZOGY's unless a run sets
+  `difference.diff_flavor="sfft"`; SFFT's catalogs and their pixel
+  columns are under every difference job's `diff/` either way.
+- The unit suite runs under `env -u RAPID_PARAMETER_PATH` once the
+  session has exported it for the database.
+
+The live runs the part made: 83 (`r00342-et-fail`), 84
+(`r00342-et-ok`), 85 (`r00342-dt-f146`), 86 (`r00342-dy-sfft`), 87
+(`r00342-wk-errpub`), 88 (`r00342-dy-sfft-inj`), 89 (`ou-tds2-sfft`),
+90 (`r00342-ei-inputs`), 91 to 94 (`r00342-dr-inj7000`,
+`r00342-dr-inj9100`, `r00342-dr-null7000`, `r00342-dr-null9100`), 95
+(`r00342-wk-errtrans`), 96 (`r00342-dc-cols-inj`), 97
+(`r00342-mq-night`), 98 (`r00342-gm-smoke`), 102 to 107
+(dev-prefilter's three arms, injected and null). Job definitions
+`rapid-rebuild:65` to `:76` were registered; `:75` is `479eb163` (PR
+429) and `:76`, the latest, `14860f57` (PR 431). The one schema statement was PR 422's `ALTER TABLE sources
+ADD COLUMN`. Flight program 1049's four F158 WFI02 epochs are in the
+inputs bucket under `flight-1049/`, read by no run yet. Nothing was
+deleted.
+
+**What remains, and where it sits:**
+
+- **Whether `sfft` comes back**: not through the catalog's selection.
+  sumrat keeps 0.90 of SFFT's point-like bright-star residuals on HLWAS,
+  so the route is SFFT's own configuration (queue item `sfft-core`).
+  Under SFFT `n_sources_snr_gt20` saturates at the cap, so the gate's
+  count check cannot see an SFFT epoch off-scale (PR 432).
+- **The false positives per epoch** under the field rule, a median 224
+  on the injected footprint under ZOGY (part 12), unchanged by this part.
+- **The injected arms' 415 false positives per epoch** (runs 91, 92)
+  against run 88's 385 under SFFT: PR 432's raw arm reproduces 385 on
+  the tip's image against run 81's reference and PSF rows, so the shift
+  is in runs 91 and 92's own reference products (`refimages` 22868 and
+  22867); which part is unread, PR 406's reference catalog the
+  candidate.
+- **`sources_official` on SMDC** lacks the three columns, because the
+  view's `t.*` was expanded at creation and re-creating it needs a
+  `DROP VIEW` grant (step dev-columns).
+- **The dated SQL files fail after a fresh `schema.sql`** (step
+  mig-quickstart); the README applies `schema.sql` alone.
+- **The publisher binds an expected key no loaded row holds** (a dry-run
+  typo, caught afterwards by `validate_run.py`'s lineage check), and no
+  setting turns the packet job's Kafka send off (step mig-quickstart).
+- **`gate.decide` reads the first `sources` input with no `ORDER BY`**;
+  insertion order picks the set's own epoch in all 532 multi-source sets
+  (PRs 426, 431).
+- **`job wait` ends 0 for a job published with a refusal**, where the
+  loop counts it failed (PRs 409, 420).
+- **A stage's own `KeyError` exits 64** as a usage error with no
+  traceback (PR 420, queue item `err-edges`), and `ToolRunner` has no
+  timeout (PR 407).
+- **OpenUniverse 28737's ZOGY reproduction shares 323 of 500 ids**,
+  Intel against Intel, cause unread (step differencer-measure).
+
+**Session notes**, every task's, gathered for Ben (the PR each came
+from in brackets):
+
+- dev-takenow: the image tag must be the full 40-character sha; a short
+  one fails the deploy hook at `CreateChangeSet` after the push (411).
+- err-tools: two briefs touching one line raced; naming which brief
+  owns the line would remove it (407).
+- differencer: the `deploy` hook moved `rapid-rebuild-production` with
+  `rapid-rebuild:67`, by design, so production published SFFT until PR
+  425 (413). PRs 407 and 408, each green on its own base, merged into a
+  red `rebuild` for about ten minutes; CI does not rerun a PR on a moved
+  base (410, 414).
+- err-inputs: `python -I` also drops `PYTHONPATH`, so a session's own
+  scripts importing `rapidpipe` run without it (415).
+- dev-refresh and differencer-measure: the unit suite fails one
+  connection test when `RAPID_PARAMETER_PATH` is exported (416, 418).
+- dev-refresh: the graders were bound by `dev`'s PSF fit on the
+  25-frame coadds, 7 to 10 minutes each, not by EFS (421).
+- err-transient: the repository's pre-push hook blocked a test fixture
+  holding a literal personal path; it is now assembled from fragments
+  (424).
+- mig-quickstart: err-transient merged while the task was open; it was
+  merged in and the walk-through rerun on it (423).
+- gate-metrics, rimtimsim-reader: COMMON's "at writing" facts were one
+  merge behind PR 425 (426, 429).
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
