@@ -20,3 +20,10 @@ unsigned = true
 # about 100 DN/s, and #238's default cut 15 of 30 bright stars' aperture
 # flux to 0.23 to 0.83 of the unmasked value.
 dq_mask_bits = 0x2110C01
+# The L2 WCS sits a constant (+0.12, -0.99) px from the stars, measured minus
+# predicted: the simulation's own input catalog (Gaia DR3 positions at epoch
+# 2016.0) through the file's gWCS, 30 stars, scatter 0.03 px, no trend
+# across the frame, identical through the intake's SIP (F146 SCA 8 pass 4,
+# 001_0001, LEDGER-wcs-input-catalog, 2026-10-24). The intake's
+# gaia_dx_px / gaia_dy_px read it on every file.
+crpix_shift = [0.12, -0.99]
