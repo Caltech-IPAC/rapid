@@ -13,6 +13,7 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "inspect_run", Path(__file__).resolve().parents[2] / "scripts" / "inspect_run.py")
@@ -59,3 +60,11 @@ def test_the_thumbnail_keeps_each_blocks_largest_magnitude_pixel():
     image[1, 2], image[9, 12] = 3.0, -7.0
     thumb = inspect_run.thumbnail(image, 8)
     assert thumb.tolist() == [[3.0, 0.0], [0.0, -7.0]]
+
+
+def test_a_cutouts_star_flux_is_its_aperture_sum_less_the_sky():
+    import numpy as np
+
+    cut = np.full((31, 31), 2.0)
+    cut[15, 15] += 500.0
+    assert inspect_run.star_flux(cut) == pytest.approx(500.0)

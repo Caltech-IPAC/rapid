@@ -1,7 +1,8 @@
 """``run_job``'s local working directory under an ``s3://`` outputs root.
 
 Contracts: the directory is removed once its upload has succeeded; a stage
-that raises leaves it where it was, for a person.
+that raises leaves it where it was, for a person; the uploaded manifest's
+``metrics`` carry ``peak_rss_kib``, beside the stage's own.
 """
 
 from __future__ import annotations
@@ -93,3 +94,20 @@ def test_a_failed_stage_leaves_the_working_directory(workdirs):
         local.run_job(connect, 5, ROOT, fail)
     (workdir,) = workdirs
     assert (workdir / "out.parquet").read_bytes() == b"rows"
+
+
+def test_the_uploaded_manifest_carries_the_peak_memory_beside_the_stages_metrics(workdirs,
+                                                                                monkeypatch):
+    import json
+
+    uploaded = {}
+    monkeypatch.setattr(local, "put", lambda directory, prefix: uploaded.update(
+        json.loads((Path(directory) / "manifest.json").read_text())))
+    monkeypatch.setattr(local, "_peak_rss_kib", lambda: {"self": 100, "children": 50})
+
+    def with_metrics(job):
+        write_a_file(job)
+        job.write_manifest([("t", "out.parquet")], metrics={"n": 3})
+
+    local.run_job(connect, 5, ROOT, with_metrics)
+    assert uploaded["metrics"] == {"n": 3, "peak_rss_kib": 150}

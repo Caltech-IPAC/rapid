@@ -13,7 +13,8 @@ resampling, so the stamp is measured per job on the image ZOGY sees
 (``LEDGER-fixes.md`` sections 2 and 5(a), 2026-10-23).
 
 :func:`measure` takes the resampled, background-subtracted reference and
-the pixels it may use and returns a ``SIZE x SIZE`` stamp, unit sum,
+the pixels it may use and returns a stamp the science PSF's size (an odd
+square, :data:`SIZE` shipped), unit sum,
 re-centred on the central pixel, with what it measured:
 
 - stars: ``DAOStarFinder`` at :data:`THRESHOLD_SIGMA` times the clipped
@@ -95,7 +96,8 @@ ISOLATION_PX = 14.0
 OVERSAMPLE, STAMP_PX = 4, 31
 #: Stars needed and stars used.
 MIN_STARS, MAX_STARS = 10, 100
-#: The output stamp's side, px: the science PSF's.
+#: The output stamp's side, px: the shipped science PSF's (``[psf] size``). :func:`measure`
+#: writes the science stamp's side, whatever it is (the stamp-size probe ran 121).
 SIZE = 61
 #: The centroid's largest offset from the central pixel after re-centring, px.
 CENTRING_TOLERANCE_PX = 0.01
@@ -152,11 +154,14 @@ def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> R
     """The reference PSF of ``image`` from its stars.
 
     ``usable`` marks the pixels it may read; ``science_psf`` is the science
-    PSF's ``SIZE x SIZE`` stamp: its :func:`moments` sigma is the floor of a
-    star's width and its wings are the stamp's.
+    PSF's stamp, an odd square (:data:`SIZE` shipped): its :func:`moments`
+    sigma is the floor of a star's width, its wings are the stamp's and its
+    side is the stamp's.
     """
-    if science_psf.shape != (SIZE, SIZE):
-        raise ValueError(f"refpsf: the science PSF is {science_psf.shape}, not {SIZE} x {SIZE}")
+    size = science_psf.shape[0]
+    if science_psf.shape != (size, size) or size % 2 == 0 or size < STAMP_PX:
+        raise ValueError(f"refpsf: the science PSF is {science_psf.shape}, not square, odd and at "
+                         f"least {STAMP_PX} px")
     science_psf = science_psf / science_psf.sum()
     science_sigma_px = moments(science_psf)[2]
     from astropy.nddata import NDData
@@ -201,7 +206,7 @@ def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> R
     stars = extract_stars(NDData(data), Table({"x": x[chosen], "y": y[chosen]}),
                           size=(STAMP_PX, STAMP_PX))
     built = EPSFBuilder(oversampling=OVERSAMPLE, progress_bar=False)(stars)
-    stamp = _with_wings(_evaluate_centred(built.epsf, SIZE), science_psf)
+    stamp = _with_wings(_evaluate_centred(built.epsf, size), science_psf)
     dx, dy, sigma = moments(stamp)
     return ReferencePsf(stamp=stamp, stars=len(chosen), detections=len(found), passed_cuts=passed,
                         sigma_px=sigma, centroid_px=(dx, dy),
