@@ -7,7 +7,9 @@ cutouts are (2 half width + 1) pixels square with off-chip pixels zero;
 a forced row a predecessor set holds is carried, not measured again,
 while a pair it lacks is measured; a difference image's neighbours are
 read under its own suffix, so a gzipped epoch gives the packets a plain
-one gives. The forced window is the images covering the triggers'
+one gives. An unreadable stamp image of the trigger's epoch fails the
+set, naming the file; the stamps are the trigger's alone, so a window
+epoch's unreadable reference image does not. The forced window is the images covering the triggers'
 objects, whichever field each image is centred on (the field rule,
 runbook part 12 step 1): an image centred elsewhere that holds an object
 is in it, one that holds none is not, the trigger's own always; the
@@ -31,7 +33,7 @@ from astropy.wcs import WCS
 
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import load_schema
-from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS
+from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS, REFCAT_COLUMNS
 from rapidpipe.science.alerts.records import Source
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
@@ -81,6 +83,12 @@ def write_epoch(directory, stars: list[tuple[float, float, float]], gzipped: boo
             path.unlink()
 
 
+def write_refcat(path, columns=REFCAT_COLUMNS, rows: int = 1) -> None:
+    """A SExtractor ASCII_HEAD catalog with ``columns``, every value 1."""
+    head = "".join(f"# {i:3d} {name}\n" for i, name in enumerate(columns, 1))
+    path.write_text(head + "".join(" ".join(["1"] * len(columns)) + "\n" for _ in range(rows)))
+
+
 def corners() -> tuple[float, ...]:
     ra, dec = wcs().all_pix2world([1, N, N, 1], [1, 1, N, N], 1)
     return tuple(v for pair in zip(ra, dec) for v in pair)
@@ -93,13 +101,17 @@ def source(epoch: int, sid: int, x: float, y: float, aid: int) -> Source:
                   fluxfit=500.0, fluxerr=10.0, flags=0, field=1, pid=100 + epoch, exptime=60.0)
 
 
-def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False):
+def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: str | None = None):
     """Two objects: A with members in epochs 1, 2 and 3; B (near the edge) only in epoch 2.
 
     The packet set is epoch 2's; epoch 3's detection of A is after the trigger.
+    ``unreadable`` names a file under the job directories (``e1/...``) overwritten with bytes
+    that are not FITS.
     """
     write_epoch(tmp_path / "e1", [(50, 50, 400.0)], gzipped)
     write_epoch(tmp_path / "e2", [(50, 50, 500.0), (20, 80, 300.0)], gzipped)
+    if unreadable:
+        (tmp_path / unreadable).write_bytes(b"not a FITS file")
     diff = "zogy_diffimage_masked.fits" + (".gz" if gzipped else "")
 
     def beside(e, name):
@@ -248,3 +260,16 @@ def test_the_reach_admits_every_overlapping_image_of_the_detector():
     corner_on_corner = _image(2, RA0 + c, DEC0 + 0.95 * 0.12)
     assert covering([corner_on_corner], [(RA0 + 0.058 / np.cos(np.radians(DEC0)), DEC0 + 0.058)], own=1)
     assert _separation(RA0, DEC0, corner_on_corner["ra0"], corner_on_corner["dec0"]) <= window_reach(own)
+
+
+REFERENCE_STAMP = "awaicgen_output_mosaic_image_resampled_gainmatched.fits"
+
+
+def test_an_unreadable_stamp_image_of_the_trigger_fails_the_set(tmp_path):
+    with pytest.raises(ValueError, match=f"template image .*e2/{REFERENCE_STAMP}"):
+        build(tmp_path, reuse_first_epoch=False, unreadable=f"e2/{REFERENCE_STAMP}")
+
+
+def test_an_unreadable_reference_image_of_a_window_epoch_does_not(tmp_path):
+    _, summary, _ = build(tmp_path, reuse_first_epoch=False, unreadable=f"e1/{REFERENCE_STAMP}")
+    assert summary["packets"] == 2

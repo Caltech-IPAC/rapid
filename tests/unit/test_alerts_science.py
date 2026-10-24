@@ -228,3 +228,23 @@ def test_chip_ned_matches_with_a_stub_reader():
         raise OSError("NED down")
 
     assert crossmatch.chip_ned_matches(sources, broken) == {}
+
+
+@pytest.mark.parametrize("case", ["unreadable", "empty", "missing a column"])
+def test_a_reference_catalog_that_cannot_serve_the_match_raises(tmp_path, case):
+    from tests.unit.test_packet import write_refcat
+    path = tmp_path / "refcat.txt"
+    if case == "unreadable":
+        path.write_bytes(b"\x00\x01 not a catalog")
+    elif case == "empty":
+        write_refcat(path, rows=0)
+    else:
+        write_refcat(path, columns=[c for c in crossmatch.REFCAT_COLUMNS if c != "CLASS_STAR"])
+    with pytest.raises(ValueError, match="refcat.txt"):
+        crossmatch.load_refcat(str(path))
+
+
+def test_a_complete_reference_catalog_loads(tmp_path):
+    from tests.unit.test_packet import write_refcat
+    write_refcat(tmp_path / "refcat.txt", rows=2)
+    assert len(crossmatch.load_refcat(str(tmp_path / "refcat.txt")).columns["NUMBER"]) == 2

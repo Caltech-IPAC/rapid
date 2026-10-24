@@ -625,9 +625,8 @@ def test_photutils_catalog_none_when_no_sources_pass_filtering(tmp_path):
     sharpness/roundness filter (``NoDetectionsWarning``) -- a real, valid
     outcome on a near-empty image, found live on the difference stage's
     negative-image catalog against the fixture's synthetic data
-    (LEDGER-fixture-real.md, 2026-09-23). psf_catalog() must report this
-    the same way as the constructor/fit exceptions above: not produced,
-    not a crash.
+    (LEDGER-fixture-real.md, 2026-09-23). psf_catalog() reports it as
+    not produced, not a crash: the empty catalog.
     """
     pytest.importorskip("photutils")
     from rapidpipe.science.difference import psfcat
@@ -653,3 +652,32 @@ def test_photutils_catalog_none_when_no_sources_pass_filtering(tmp_path):
         parquet=None, label="negative test", seed=1)
     assert result == psfcat.PsfCatalogResult(produced=False, nsources=None)
     assert not (tmp_path / "c.txt").exists()
+
+
+def test_a_fault_inside_the_photutils_fit_raises(tmp_path):
+    """A nonempty fit that photutils cannot weight (a zero uncertainty under a source) raises.
+
+    Its ValueError is the class photutils raises for its faults; nothing is
+    caught around the fit, so it fails the job rather than becoming an
+    empty source set.
+    """
+    pytest.importorskip("photutils")
+    from rapidpipe.science.difference import psfcat
+
+    from rapidpipe.selftest.support.fakedifftools import _gaussian
+
+    rng = np.random.default_rng(11)
+    n = 64
+    data = rng.normal(0.0, 1.0, size=(n, n))
+    data += 400.0 * _gaussian(n, 20.0, 20.0, sigma=1.5) / (2 * np.pi * 2.25)
+    image = _write(tmp_path / "d.fits", data.astype(np.float32), wcs_header(n, sip=False))
+    unc = _write(tmp_path / "u.fits", np.zeros((n, n), dtype=np.float32))
+    kernel = _gaussian(17, 8, 8, sigma=1.5)
+    psf_path = _write(tmp_path / "p.fits", (kernel / kernel.sum()).astype(np.float32))
+    settings = psfcat.PsfCatalogSettings(3.0, 5.0, 2.0, (17, 17), 8.0, 0.2, 1.0, -1.0, 1.0, 1.0)
+    with pytest.raises(ValueError, match="Error array"):
+        psfcat.psf_catalog(
+            settings, image=str(image), uncertainty=str(unc), psf=str(psf_path),
+            sky_coords_image=str(image), catalog=str(tmp_path / "c.txt"),
+            finder=str(tmp_path / "f.txt"), residual=str(tmp_path / "r.fits"),
+            parquet=None, label="test", seed=1)

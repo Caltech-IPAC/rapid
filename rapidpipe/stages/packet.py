@@ -366,6 +366,9 @@ def _read(job: JobContext) -> Read:
                     (ref_in["source_job"], REFCAT_CATTYPE, *_key_where(ref_in["key"], "r")[1]))
         ref = cur.fetchone()
         conn.rollback()
+    if ref is None:  # the reference stage always writes its catalog's row
+        raise ValueError(f"job {job.job}: reference {ref_in['key']} of job {ref_in['source_job']}"
+                         " has no refimcatalogs row")
 
     trigger_image = [i for i in images if (i.expid, i.sca, i.fid) == (key["expid"], key["sca"], key["fid"])]
     if len(trigger_image) != 1:
@@ -375,7 +378,7 @@ def _read(job: JobContext) -> Read:
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
                 gaia_job=gaia_in["source_job"], gaia_path=gaia_path,
-                refcat_path=get(ref["filename"]) if ref else None, reads=reads)
+                refcat_path=get(ref["filename"]), reads=reads)
 
 
 def window_reach(image: dict) -> float:
@@ -560,12 +563,16 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
 
     t0 = time.perf_counter()
     half = int(settings["stamp_half_width"])
-    stamps = {name: load_fits_image(path) for name, path in (
-        ("difference", read.trigger_image.diff),
-        ("science", read.trigger_image.diff.with_name(
-            neighbour(CUTOUT_FILES["sci"], read.trigger_image.diff.name))),
-        ("template", read.trigger_image.diff.with_name(
-            neighbour(CUTOUT_FILES["ref"], read.trigger_image.diff.name))))}
+    stamps = {}
+    for kind, stamp_path in (
+            ("difference", read.trigger_image.diff),
+            ("science", read.trigger_image.diff.with_name(
+                neighbour(CUTOUT_FILES["sci"], read.trigger_image.diff.name))),
+            ("template", read.trigger_image.diff.with_name(
+                neighbour(CUTOUT_FILES["ref"], read.trigger_image.diff.name)))):
+        stamps[kind] = load_fits_image(stamp_path)
+        if stamps[kind][0] is None:  # the trigger's own images are required, not optional
+            raise ValueError(f"the trigger's {kind} image {stamp_path} could not be read")
     timing["cutouts_s"] = time.perf_counter() - t0
 
     forced_by_aid: dict[int, list[dict]] = {}
