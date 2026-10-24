@@ -5724,6 +5724,126 @@ does, so the numbers can arrive out of order.
    inputs bucket's `r00342-inj1/` holds 426 files and two truth tables
    (immutable); `r00342-inj1s` reads the same prefix.
 
+
+## Results of part 11 (2026-10-24)
+
+The second iteration landed in one unattended night: association moved
+into the difference job and the loop lost its chains, the packet job
+sends its own set behind the quality gate, Spot ran under four rules
+beside on-demand at footprint scale, injected sources were counted, and
+two new simulations were taken in. Every task's checks held on its first
+attempt; every run below is CLEAN by `check_run.sh`.
+
+| step | before | after | where |
+|---|---|---|---|
+| 1 GBTDS | never read; L2 WCS 9 to 50 px off by tweakreg | WCS re-derived at intake, catalog stars +0.03 / -0.03 px; one pointing through the chain, run 67, 515 packets | PRs 361, 370 |
+| 2 OpenUniverse | never read beyond the listing | format, truth and cadence written down; one image through the `openuniverse` reader, WCS on the truth to 0.0016 px | PR 365 |
+| 3 metrics | bright end unflagged; SCA 4/5 excess and F213 unexplained | bit 16384 informational, 74 to 79% of sources above S/N 20 flagged; science stars 1.5 to 3.3% wider than the ePSF on SCAs 4, 5 and 8 alike; zero-point table within 0.035 mag; F213 `scalefacref` 0.939; a 121 px stamp changes nothing | PRs 360, 363, 369 |
+| 4 loop-ops | HLWAS WCS (+0.12, -0.99) px off; a wrapper for passes; no waiter; failures by hand | Gaia offset +0.007 / +0.003 px with `crpix_shift`; `--passes`; `job wait`; one rerun and a cap of 1,000 a pass; the gate's query; ePSF fetch 4.1 → 0.8 s; no SSM read in a job | PRs 354, 356, 359, 364, 366, 367, 374 |
+| 5 producer | the host's `publish` sent every set; the consumer check walked the topic | the packet job sends its own set 3 to 4 s after it ends, offsets on the stamp, the gate at the send boundary; a kill between publish and send swept by the next pass; consumer check 4 s | PRs 358, 371, 372 |
+| 6 db-guards | no test of dataset in keys or of import identities | both in CI; one Gaia binding without dataset (on purpose); `pid`, `rid`, `rfid` 89k to 1.8M draws ahead of their sequences, `setval` not granted; `forced` rows per set = packets × window images on the SCA | PRs 355, 357 |
+| 7 association | a per-field chain of associate jobs, 5.2 min last difference to last packet | association in the difference job, reconcile at publish; 31 s; field read 422 → 0.9 ms; reconcile replayed equal to the sequential result | PRs 378, 379, rapid_docs 97 |
+| 8 spot | Spot parked | four rules, one attempt on Spot; run 70, 7 of 14 jobs on Spot, 0 reclaims; `Task failed to start` retried by the job definition | PR 381, rapid_systems 421, 423 |
+| 9 injection | no completeness number | SCA 8 footprint detected 0.94 to 0.98 to AB 25, 0.75 at 26; alerted 0.40; purity 0.93 at AB 21 to 0.20 at 26; Spot twin $1.30 vs $2.03 by lane, 2.1 min later | PRs 383, 384, 385, rapid_systems 424 |
+| 10 docs | rapid_docs at task 7's state | the foundation's settings statement and amendment, the gate, Spot, the datasets page, these figures | rapid_docs 98 |
+
+**The metrics the gate reads** (`gate.decide`, the run's `[gate]`):
+per difference job `n_sources_snr_gt20` against 3.0 times the run's
+median, `|core_fraction|` against 0.025 and `|ring_fraction|` against
+0.015, from 5 published differences on. At those values every one of
+the fixes' 55 sets was sent; the SCA 8 footprint held 1 of 162 (ring
++0.0162) and the 18 SCAs of `001_0001` held 7 of 51 (`core_fraction`
++0.026 to +0.028; SCAs 16 and 17 entire, SCA 14 pass 4). Beside the
+gate's three, the night added per difference `bright_footprint_fraction`,
+`n_in_bright_footprint`, `sci_star_sigma_px`, `sci_star_psf_sigma_ratio`,
+`scalefacref`, `n_sources_near_bright_px`, `n_sources_ring_snr_gt20`,
+`n_objects_read`, `n_objects_founded`, `n_memberships`; per intake
+`gaia_dx_px`, `gaia_dy_px`, `n_gaia_stars`; per packet
+`n_packets_bright_footprint`; per job `peak_rss_kib`,
+`container_seconds`, `batch_submissions`, `reclaims`, `hedges`,
+`lost_seconds`.
+
+**What remains, and where it sits:**
+
+- **The association's field rule** (step 7's last paragraph, step 9's
+  completeness): a detection outside its image's own field only joins
+  an existing object, so three fifths of the detected injected sources
+  are never alerted. The next science question, before purity work.
+- **The bright-star residual's cause**: flagged, not fixed; neither
+  the science PSF's width nor the stamp size (step 3). About 20 per
+  epoch above S/N 20 on SCA 8, the bright end of the purity floor.
+- **GBTDS's 346 to 418 core-and-ring residuals per epoch** with the
+  science PSF on both images (step 1); the next GBTDS measurement.
+- **OpenUniverse past intake**: the psf stage's ePSF source, the loop's
+  listing and psf dispatch on `reader`, a reference before a
+  transient's start (step 2). Completeness on TDS comes after HLWAS
+  injection, by Ben's order.
+- **The Spot interruption capture**: rapid_systems PR 422 open, a
+  CloudWatch Logs resource-policy grant for Ben (the ledger's DEPLOY
+  line). No reclaim has been seen.
+- **The three sequences** behind the imported ids (step 6): one
+  `setval` each as `postgres`, not granted.
+- **The producer's idempotence**: off, because the job role lacks
+  `WriteDataIdempotently`; the IAM alternative is Ben's (step 5).
+- **SCAs 7 and 9's low detection** (0.73, 0.67 below AB 25; step 9),
+  read and not diagnosed.
+
+**What the two probes found.** GBTDS r00340 (step 1): the L2 WCS is
+tweakreg's spurious crowded-field match and the re-derivation needs the
+file's own distortion reference by name, not CRDS's current one; the
+bulge is confusion-limited, so no reference PSF can be measured; a
+pointing is the visit modulo six; the difference job takes 820 s. The
+quirks and dispositions are rapid_docs `system/datasets.md`.
+OpenUniverse TDS (step 2): STScI's copy is ASDF, not FITS, one patch
+of 0.27 deg² with 106 images per filter at a point; truth in every file
+and per image on IRSA, so completeness is a join; the WCS is one-based
+and the zero point is not AB, both fixed on the overlay.
+
+**Session notes**, every task's, gathered for Ben (the PR each came
+from in brackets):
+
+- Task 1 (gbtds): the session-start sync failed on all three repos
+  (`fatal: Cannot fast-forward to multiple branches`), so the vault and
+  dotfiles were not pulled (361, 376); force-push being reserved, a
+  branch overtaken by parallel merges is brought up to date by merging
+  `rebuild` into it and squash-merging, worth a line in the brief
+  skill's preamble for parallel groups (370).
+- Task 2 (openuniverse): `tail`-piped test commands hide pytest's exit
+  status; one push went out on a red local run and was caught before the
+  PR; "check the test's exit, not its tail" in the Procedure would cover
+  it (365).
+- Task 3 (metrics): the fixes' runs 51 and 52 have no bytes left but
+  their rows still name them, so a check that reads old files should go
+  through kept runs (363); `rp job local` with `[difference.paths]` at a
+  checkout reproduces a Batch difference in about 2 minutes, worth a line
+  in "If a step fails" (369, 373).
+- Task 4 (loop-ops): the host's load reached 41 on 16 cores with six
+  sessions running unit suites at once, the full suite 6 min 51 s (354);
+  two of its PRs conflicted only in `test_loop.py`'s docstring and tail
+  (364); `podman` here pulls the pipeline image from ECR directly, which
+  made checking the image a one-liner (367).
+- Task 5 (producer): the brief put the gate in task 5 and its query in
+  parallel task 4, so the wiring was a later PR of its own (358); the
+  harness also resets the cwd after a backgrounded command and refuses
+  an inline `sleep`, so every wait was a background command (377).
+- Task 6 (db-guards): six parallel tasks each opened part 11 and the
+  first to land wrote its header, so the rest rebased; a header staged
+  before launch would save that (362).
+- Task 7 (association): "proof on the last merged sha" and "statements
+  before the PR merges" order themselves (statement, merge, build,
+  deploy, run); ending a turn on a `run_in_background` waiter worked
+  every time, eight waits (378).
+- Task 8 (spot): a stray `cat` with no input hung for the tool's two
+  minutes before backgrounding, since an unattended session has no
+  stdin; "no command reads stdin" in the preamble would cover it; the
+  release hook is already the rapid-batch change-set inspector (382).
+- Task 9 (injection): the Bash tool refuses foreground `sleep N && cmd`
+  chains; two wake sources (the command's notification and a watcher)
+  caught the loop's exit 2 within a minute (386).
+- Task 10 (docs): the rapid_docs venv is absent on the fleet host and
+  building it is a package install, so a docs task here cannot run the
+  Sphinx build locally; CI is the only build (rapid_docs 98).
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
