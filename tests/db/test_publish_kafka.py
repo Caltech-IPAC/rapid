@@ -2,8 +2,10 @@
 
 Contract: the sets offered are the run's packet jobs with an open
 ``packets`` binding and a null ``kafka_published_at``; a closed binding,
-another run, another stage or a stamped job is not offered; ``stamp``
-sets the column, after which the job is no longer offered.
+another run, another stage or a stamped job is not offered; a job that
+ended inside the settle window is not offered but is settling; ``stamp``
+sets the column and the acknowledgement's coordinates, after which the job
+is no longer offered.
 """
 
 from __future__ import annotations
@@ -35,16 +37,23 @@ def test_only_unstamped_official_packet_sets_of_the_run_are_offered(connect):
             cur.execute("INSERT INTO runs (who, why, revision, settings, survey, dataset)"
                         " VALUES ('t', 't', 'r', '{}', 'S', 'D') RETURNING id")
             runs.append(cur.fetchone()[0])
-        offered, stamped, closed, other_run = (_job(cur, runs[0]) for _ in range(4))
+        offered, stamped, closed, other_run, settling = (_job(cur, runs[0]) for _ in range(5))
         cur.execute("UPDATE jobs SET run = %s WHERE id = %s", (runs[1], other_run))
         associate = _job(cur, runs[0], "associate")
         _job(cur, runs[0])  # a packet set with no binding
-        for expid, job in enumerate((offered, stamped, other_run)):
+        for expid, job in enumerate((offered, stamped, other_run, settling)):
             _bind(cur, job, "packets", expid)
         _bind(cur, closed, "packets", 9, closed=True)
         _bind(cur, associate, "objects", 0)
         cur.execute("UPDATE jobs SET kafka_published_at = now() WHERE id = %s", (stamped,))
+        cur.execute("UPDATE jobs SET ended = now() - interval '1 hour' WHERE id = %s", (offered,))
+        cur.execute("UPDATE jobs SET ended = now() WHERE id = %s", (settling,))
     conn.commit()
     assert publish_kafka.unpublished_sets(conn, runs[0]) == [offered]
-    publish_kafka.stamp(conn, offered)
+    assert publish_kafka.settling_sets(conn, runs[0]) == [settling]
+    publish_kafka.stamp(conn, offered, 2, 40, 45)
     assert publish_kafka.unpublished_sets(conn, runs[0]) == []
+    with conn.cursor() as cur:
+        cur.execute("SELECT kafka_partition, kafka_first_offset, kafka_last_offset FROM jobs"
+                    " WHERE id = %s", (offered,))
+        assert cur.fetchone() == (2, 40, 45)
