@@ -22,6 +22,7 @@ pair, expecting both keys, and no intake; an official pair admits intakes;
 a psf job of the run pending for the pair submits nothing more; an intake
 names the dataset's official Gaia catalog, and only the PSF without one.
 `--passes` selects the survey's passes in stems and rows alike, all by default.
+A pass reports the quality gate's held sets when given the query.
 """
 
 from __future__ import annotations
@@ -411,3 +412,13 @@ def test_passes_select_the_surveys_passes_in_stems_and_rows_and_default_to_all()
     subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)], sel)
     assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(3, 1, 1)]
     assert sel.summary()["passes"] == [1, 3] and SEL.passes is None and SEL.summary()["passes"] == "all"
+
+
+def test_a_pass_reports_the_gates_held_sets_when_given(monkeypatch):
+    held = [{"job": 5, "metric": "core_fraction", "value": 0.04}]
+    monkeypatch.setattr(loop, "snapshot", lambda conn, run: snap())
+    summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [], lambda item: None, None,
+                            held_sets=lambda: held)
+    assert summary["held_sets"] == held
+    assert "held_sets" not in loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [],
+                                            lambda item: None, None)

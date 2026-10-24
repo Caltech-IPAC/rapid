@@ -545,9 +545,11 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
 
 def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, stems: list[str],
              submit: Callable[[dict], Any], publish: Callable[[], dict] | None,
-             max_intake: int = 100, batch: Any = None) -> dict:
+             max_intake: int = 100, batch: Any = None,
+             held_sets: Callable[[], list[dict]] | None = None) -> dict:
     """One pass: reconcile with ``batch`` (a Batch client) when given, snapshot, plan, submit
-    each without waiting, then publish; return the summary."""
+    each without waiting, then publish; return the summary, with ``held_sets``, the
+    quality gate's held packet sets after the publish (``held_sets()``), when given."""
     with conn_factory() as conn:
         checked = reconcile(conn, run, batch) if batch is not None else None
         snap = snapshot(conn, run)
@@ -563,6 +565,8 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     counts["sets_waiting"] = produced.get("waiting", [])
     counts["drained"] = (counts["new"] == 0 and not submissions
                          and not any(counts["pending"].values()) and not counts["sets_waiting"])
+    if held_sets is not None:
+        counts["held_sets"] = held_sets()
     if checked is not None:
         counts["batch"] = checked
     return {"run": run, "selection": selection.summary(), **counts}
