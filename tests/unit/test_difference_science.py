@@ -681,3 +681,39 @@ def test_a_fault_inside_the_photutils_fit_raises(tmp_path):
             sky_coords_image=str(image), catalog=str(tmp_path / "c.txt"),
             finder=str(tmp_path / "f.txt"), residual=str(tmp_path / "r.fits"),
             parquet=None, label="test", seed=1)
+
+
+def test_photutils_catalog_finds_a_star_beside_a_masked_pixel(tmp_path):
+    """A star with a non-finite pixel 2 px from its centre is in the catalog.
+
+    DAOStarFinder convolves and measures with the data's NaNs in place and
+    drops a star whose moments come out non-finite, so the difference's
+    masked pixels blinded it over about 4 px (part 12 step 6, finder-mask).
+    """
+    pytest.importorskip("photutils")
+    from astropy.io import ascii
+
+    from rapidpipe.science.difference import psfcat
+
+    from rapidpipe.selftest.support.fakedifftools import _gaussian
+
+    rng = np.random.default_rng(11)
+    n = 64
+    data = rng.normal(0.0, 1.0, size=(n, n))
+    data += 400.0 * _gaussian(n, 30.0, 30.0, sigma=1.5) / (2 * np.pi * 2.25)
+    uncertainty = np.ones((n, n))
+    data[30, 32] = uncertainty[30, 32] = np.nan
+    image = _write(tmp_path / "d.fits", data.astype(np.float32), wcs_header(n, sip=False))
+    unc = _write(tmp_path / "u.fits", uncertainty.astype(np.float32))
+    kernel = _gaussian(17, 8, 8, sigma=1.5)
+    psf_path = _write(tmp_path / "p.fits", (kernel / kernel.sum()).astype(np.float32))
+    settings = psfcat.PsfCatalogSettings(3.0, 5.0, 2.0, (17, 17), 8.0, 0.2, 1.0, -1.0, 1.0, 1.0)
+    result = psfcat.psf_catalog(
+        settings, image=str(image), uncertainty=str(unc), psf=str(psf_path),
+        sky_coords_image=str(image), catalog=str(tmp_path / "c.txt"),
+        finder=str(tmp_path / "f.txt"), residual=str(tmp_path / "r.fits"),
+        parquet=None, label="test", seed=1)
+    assert result.produced
+    phot = ascii.read(tmp_path / "c.txt")
+    near = (abs(phot["x_fit"] - 30.0) < 1.0) & (abs(phot["y_fit"] - 30.0) < 1.0)
+    assert near.sum() == 1 and np.isfinite(phot["flux_fit"][near][0])
