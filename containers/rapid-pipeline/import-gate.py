@@ -43,6 +43,7 @@ OPTIONAL_BY_REQUIREMENT = {
     "psycopg2-binary": "psycopg2",
     "asdf": "asdf",
     "roman_datamodels": "roman_datamodels",
+    "romancal": "romancal.assign_wcs.assign_wcs",
     "gwcs": "gwcs",
     "sympy": "sympy",
     "photutils": "photutils.psf",
