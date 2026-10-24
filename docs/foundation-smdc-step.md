@@ -4692,6 +4692,152 @@ does, so the numbers can arrive out of order.
    - `loop.list_stems` and the psf stage dispatching on `reader` (both read `_cal.asdf`);
    - a reference from epochs before a transient's `start_mjd`, or from the late visits.
 
+3. **The bright-star footprint flag and the metrics the re-count asked
+   for (PRs 360, 363 and 369, merged `dcc0877e`, `ad7e1035` and
+   `df39552e`).** The difference job sets `sources.flags` bit `1 << 14`
+   (16384) on every kept source within a bright reference source's
+   footprint and drops nothing. A bright reference source is a mosaic
+   catalog source with `FLUX_APER(4)` S/N above 100. Its footprint is a
+   disc on the science grid of radius `max(4, 9.5 × 10^(0.2 (15 − m)))` px,
+   where `m` is its magnitude on the reference's `MAGZP`. The associate and
+   packet predicates read one informational mask
+   (`rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS`), so a
+   flagged source is associated, is a trigger, and its packet carries the
+   bit in `psfFitFlags` (no Avro schema change).
+
+   New metrics:
+   - difference: `n_in_bright_footprint`, `bright_footprint_fraction`
+     (of the sources above S/N 20), `sci_star_sigma_px` and
+     `sci_star_psf_sigma_ratio`, `scalefacref`, `n_sources_near_bright_px`
+     and `n_sources_ring_snr_gt20`;
+   - packet: `n_packets_bright_footprint`;
+   - every job: `peak_rss_kib` (self plus the largest child).
+
+   `job_metrics` reads the new keys from the manifests, so there is no
+   schema statement. The gallery divides each difference cutout by its
+   star's reference flux. The reference PSF stamp takes the science PSF's
+   side, and it is re-centred by a secant step (PR 369, below).
+
+   The radius law was derived on run 46's own published sources (F146 SCA
+   8, passes 4 to 6, jobs 19864 to 19866) before any run. It flags 21 of
+   23, 15 of 19 and 11 of 15 of the sources above S/N 20: part 10 step 5's
+   bright-star counts exactly. About half of all kept sources fall in a
+   footprint (282, 251, 270 of 500), faint sources on bright stars.
+
+   The zero-point table was checked once against each filter's own
+   `meta.photometry` (one SOC L2 file per filter, SCA 8, the intake's
+   `compute_zptmag`):
+
+   | | F087 | F106 | F129 | F146 | F158 | F184 | F213 |
+   |---|---|---|---|---|---|---|---|
+   | file − table, mag | +0.0144 | −0.0006 | +0.0007 | −0.0017 | −0.0036 | −0.0353 | −0.0310 |
+
+   The table is right to within 0.035 mag and is not corrected. It enters
+   the difference only through the reference's `MAGZP`, and the gain match
+   then measures `scalefac` from matched stars, where the zero points
+   cancel; the table matters only in the fallback. The re-count's stored
+   `scalefacref` (median per filter, SCA 8) is F087 1.010, F106 0.992,
+   F129 0.992, F146 0.992, F158 0.989, F184 **0.958** and F213 **0.939**:
+   the long-wavelength references are scaled down 4 to 6%, which fits
+   F213's positive core and ring.
+
+   Image `rebuild-ad7e1035…` (`sha256:4a55acc6…`): **`rapid-rebuild:52`**.
+   Then `rebuild-df39552e…` (`sha256:7d4e288b…`): **`rapid-rebuild:54`**.
+   Three runs at `ad7e1035`, the HLWAS overlay (with task 4's
+   `crpix_shift`) and the F146 bound:
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision ad7e10359b41fb416dcd36b69cca3d52b6dc0074 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --survey HLWAS --dataset r00342-nt-metrics                               # run 59, live (group 18761)
+   # the same for --dataset r00342-nt-stamp                                  # run 60, live (group 18763)
+   # the same with --set psf.size=121 for r00342-nt-stamp                     # run 61, not live
+   rp job local --run <59|60> --stage import --scope '{"source_dir": "<gaia dir>", "gaia": {"name": "gaia-<dataset>", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "<dataset>", "name": "gaia-<dataset>", "version": "DR3"}, "binding": null}]'
+   rp loop --run 59 --filters F146 --scas 4,5,8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:52 --interval 60
+   rp loop --run 60 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:52 --interval 60
+   rp job submit --run 61 --stage psf --job-definition rapid-rebuild:52 \
+     --scope '{"dataset": "r00342-nt-stamp", "file": "r0034201004001004001_0001_wfi08_f146"}' ...   # 20144
+   rp job submit --run 61 --stage difference --job-definition rapid-rebuild:52 --scope '{"expid": 4040101, "sca": 8, "fid": 8}' \
+     --inputs '[<l2files from 20151>, <psfs science from 20144>, <refimages field 5387158 from 20164>]' ...   # 20178
+   ```
+
+   **Run 59's SCA 5 difference failed** (job 20184, exit 70):
+   `refpsf: centroid still (0.0587, 0.0383) px off centre after 10
+   shifts`. A local run (run 65, not live, job 20192, `rp job local` with
+   `[difference.paths]` at a checkout) reproduced it, and the iteration was
+   traced on its files. The ePSF's centroid moved 1.8 times each shift, so
+   the plain step oscillated. Run 46's SCA 5 had converged before
+   `crpix_shift` moved the sub-pixel phase. PR 369's secant step converges
+   on the same files (78 stars, sigma 1.098). Job 20184 was resubmitted
+   under `:54`, and run 59's loop was resumed under `:54` and drained.
+
+   Check, held: run 60 drained (05:26 to 05:45 UTC), CLEAN validate 6/6,
+   reader 1/1, consumer 79/79. Run 59 drained after the resumption
+   (06:03 UTC), CLEAN 6/6, 3/3, 301/301. Run 61's difference 20178 was
+   published (not bound). Jobs: psf 20140 to 20143; intakes 20145 to 20160;
+   references 20164 to 20167; differences 20182 (SCA 4), 20184 (5), 20185
+   (8), 20183 (run 60); associates 20194, 20201, 20202, 20215; packets
+   20197, 20205, 20206, 20217.
+
+   **The flag followed into a packet**: run 60's packet set 20197 holds 79
+   packets, 49 of them flagged (`n_packets_bright_footprint`). Its source
+   225 is read from the Avro with `psfFitFlags` 16384 and both derived
+   photutils booleans false. Of the 500 kept sources of difference 20183,
+   253 are flagged and 466 are eligible (no photutils bit), the same
+   population as before the flag.
+
+   **Each new metric on `001_0001` F146 pass 4**, against the fixes
+   ledgers where they hold a number:
+
+   | metric | SCA 8 (20185) | SCA 5 (20184) | SCA 4 (20182) | the fixes' SCA 8 (run 46, 19864) |
+   |---|---|---|---|---|
+   | `ref_sigma_px` / `refpsf_sigma_px` | 1.115 / 1.103 | 1.109 / 1.098 | 1.096 / 1.076 | 1.108 / 1.080 |
+   | `refpsf_stars` | 66 | 78 | 88 | 39 |
+   | `sci_psf_sigma_px` (the ePSF) | 0.947 | 0.951 | 0.925 | 0.947 |
+   | **`sci_star_sigma_px`** / ratio | **0.969 / 1.024** | **0.966 / 1.015** | **0.956 / 1.033** | |
+   | `scalefacref` | 0.996 | 1.000 | 0.990 | 0.992 |
+   | core / ring | +0.00005 / +0.0009 | +0.0114 / −0.0015 | +0.0058 / +0.0024 | +0.0062 / −0.0023 |
+   | candidates / above S/N 20 | 802 / 29 | 884 / 69 | 640 / 36 | 752 / 23 |
+   | `n_in_bright_footprint` / `bright_footprint_fraction` | 253 / 0.79 | 279 / 0.74 | 292 / 0.75 | (282 / 0.91 by the law, before) |
+   | `n_sources_near_bright_px` | 23 | 29 | 20 | (19 by this code, 23 by task 4's region count) |
+   | `n_sources_ring_snr_gt20` (6 to 20 px) | 3 | 9 | 2 | (3, 10 to 20 px, part 10 step 3) |
+   | packets / above S/N 20 / flagged | 79 / 8 / 49 | 124 / 16 / 75 | 98 / 11 / 65 | 80 / 9 / |
+   | `peak_rss_kib` | 16.5 GB | 16.5 GB | 16.5 GB | (15.2 GB children, 1.28 GB self) |
+
+   The reference star width is within 0.01 px of the fixes' value, and the
+   bright-end count and the core move with the CRPIX translation (task 4's
+   `crpix_shift`, new inputs: 29 against 23 above S/N 20, 66 refpsf stars
+   against 39). **The science stars are 1.5 to 3.3% wider than the ePSF on
+   all three SCAs, and SCA 5, with the most bright-star residuals, has the
+   smallest mismatch.** So the SCA 4 and 5 excess is not a science-PSF
+   width mismatch, the ruling's question. Median `peak_rss_kib` per stage
+   over runs 59 and 60: psf 298 MB, intake 995 MB, reference 2.8 GB,
+   difference 16.1 GB, associate 212 MB, packet 842 MB.
+
+   **The stamp-size probe** (run 60's difference 20183 at 61 x 61 against
+   run 61's 20178 at 121 x 121, the same three inputs; measured, not
+   adopted):
+
+   | | 61 x 61 (20183) | 121 x 121 (20178) |
+   |---|---|---|
+   | ePSF flux the science stamp holds (`psf.flux_held`) | 0.971 | 0.979 |
+   | `refpsf_sigma_px` / stars | 1.103 / 66 | 1.103 / 66 |
+   | core / ring | +0.00005 / +0.0009 | +0.0008 / +0.0011 |
+   | candidates / above S/N 20 | 802 / 29 | 793 / 30 |
+   | `bright_footprint_fraction` / `n_in_bright_footprint` | 0.793 / 253 | 0.800 / 266 |
+   | `n_sources_near_bright_px` / ring count | 23 / 3 | 23 / 3 |
+
+   A larger stamp changes nothing that matters. The spike-truncation story
+   is not the bright-star residual's cause at this level; the next
+   iteration's list gets no win from it.
+
+   Measurements: loops of 19 min (run 60) and 37 min (run 59, with the
+   failure, fix and resumption); differences on m6a.2xlarge and
+   r6i.4xlarge; the local reproduction took 2 min up to the reference
+   PSF.
+
 6. **The database guards and the `forced` read (PRs 355, 357).** Three
    guards, no behaviour change, no schema statement on SMDC. A schema test
    in `tests/db/test_schema.py` reads the catalog CI applies: every product
