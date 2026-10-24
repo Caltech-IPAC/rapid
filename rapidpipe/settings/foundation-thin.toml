@@ -160,12 +160,11 @@ max_request_bytes_parameter = "/rapid/scratch/kafka/max-request-bytes"
 # 6458d3ca (the master config the reference launcher reads, section named
 # beside each table), unless the comment says it is new. Moved here from
 # rapidpipe/settings/reference.toml with the stage's port to run(job).
-# The file's pin is d6aac515, the difference stage's refresh; two
-# reference keys still hold their 6458d3ca values, left for the
-# reference stage's own refresh from dev and marked where they stand:
-# [reference.mosaic] naxis1/naxis2 (9100 since dev 1518042b).
-# [reference.sextractor_refimage] deblend_nthresh/seeing_fwhm carry dev
-# ce485e8f's 32 and 0.25.
+# The file's pin is d6aac515, the difference stage's refresh; the
+# reference keys carry dev's later values where they changed:
+# [reference.mosaic] naxis1/naxis2 9100 (dev 1518042b),
+# [reference.sextractor_refimage] deblend_nthresh/seeing_fwhm 32 and 0.25
+# (dev ce485e8f), [reference.infobits] (dev cb53d2c7, fdc7fa79).
 [reference.paths]
 # `dev`: rapid_sw = "/code", cfg_path = rapid_sw + "/cdf" (hard-coded in
 # awsBatchSubmitJobs_runSingleReferenceImagePipeline.py); the SExtractor
@@ -210,9 +209,9 @@ sca_readout_noise = 9.4
 # crota2; awaicgen truncates size / pixel scale to the pixel count, so
 # cdelt is kept exactly as `dev` writes it rather than derived from the
 # 0.11 arcsec pixel scale ([awaicgen] awaicgen_pixelscale_absolute).
-# dev 1518042b: 9100 (not taken; see above).
-naxis1 = 7000
-naxis2 = 7000
+# dev 1518042b: 9100.
+naxis1 = 9100
+naxis2 = 9100
 cdelt1 = -0.000030555555556
 cdelt2 = 0.000030555555556
 rotation = 0.0
@@ -291,6 +290,41 @@ inject_fake_sources_flag = false
 # frames give the same reference catalog (foundation/night-fixes); whether
 # the reference stage varied run to run without it was not demonstrated.
 clip_correction_seed = 0
+
+[reference.infobits]
+# [REFIMAGE_INFOBITS] (dev cb53d2c7, fdc7fa79), `dev`'s PROVISIONAL values,
+# "loose enough that a normal reference image raises no bit". The bits are
+# cdf/infobitsref.txt's (tNN its thresholds); a bit is set when its
+# condition holds and a metric that could not be computed sets none.
+# Pixels are DN/s at the filter's reference zero point.
+# bit 0: median background (gmedian) > t00 DN/s.
+t00 = 1.0
+# bit 1: robust pixel noise (datascale, 0.5 * (p84 - p16)) > t01 DN/s.
+t01 = 0.1
+# bit 2: per cent of the covered pixels (coverage > 0) NaN or saturated > t02.
+t02 = 65.0
+# bit 3: mode of FWHM_IMAGE over the catalog's point sources > t03 arcsec.
+t03 = 1.0
+# bit 4: the fwhm_percentile percentile of the same sources' FWHM > t04 arcsec.
+t04 = 2.0
+fwhm_percentile = 90.0
+# bits 5 and 6: limiting magnitude from the PSF-fit catalog's flux
+# uncertainties < t05, from the background noise and the PSF < t06, at
+# maglim_snr. Neither is computed in this build (no Photutils reference
+# catalog, no reference PSF at the reference stage), so neither bit is set.
+t05 = 15.0
+t06 = 15.0
+maglim_snr = 5.0
+# bit 7: PSF-fit catalog sources < t07; bit 16: the PSF-fit catalog could
+# not be made. Neither is evaluated while [reference.psfcat] enabled =
+# false: a catalog not attempted is not one that failed.
+t07 = 10
+# bit 8: SExtractor catalog sources < t08.
+t08 = 10
+# bit 10: robust spread (0.5 * (p84 - p16)) of the input frames' ZPTMAG > t10 mag.
+t10 = 3.5
+# Bits that make the reference bad (status 0), as ZTF.
+fatalinfobits = [2, 5, 7, 8, 16]
 
 # [SEXTRACTOR_REFIMAGE] verbatim (generated from the ini; configparser's
 # lower-case keys). The per-call values `dev` fills in -- detection and

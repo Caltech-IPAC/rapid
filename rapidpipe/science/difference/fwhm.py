@@ -15,8 +15,8 @@ Fallbacks, each logged as a warning: fewer than 50 point sources, their
 median; fewer than 10, the median over all sources.
 
 `dev`'s ``catalog_fwhm_stats`` also returns a percentile of the same
-sample, used only by the reference image's quality bits; the difference
-stage does not read it and it is not ported here.
+sample, used only by the reference image's quality bits; it is
+:func:`fwhm_percentile` here, which the difference stage does not call.
 """
 
 from __future__ import annotations
@@ -99,3 +99,20 @@ def catalog_fwhm_stats(catalog_rows, label: str = "image",
         logger.warning("only %d point sources in the %s catalog (need %d); using the median "
                        "over all %d sources = %s px", npoint, label, min_count, fwhm.size, medpix)
     return minpix, maxpix, medpix
+
+
+def fwhm_percentile(catalog_rows, percentile: float,
+                    min_count: int = MIN_POINT_SOURCE_COUNT) -> float:
+    """`dev`'s ``pctlpix``: the percentile of ``FWHM_IMAGE`` over ``medpix``'s sample, pixels.
+
+    The point sources, or every source with a positive FWHM when there are
+    fewer than ``min_count`` point sources; NaN for an empty sample.
+    """
+    rows = np.array(catalog_rows, dtype=float).reshape(-1, len(POINT_SOURCE_CATALOG_PARAMS))
+    fwhm, flags, flux, fluxerr, elongation = rows.T
+    point_sources = select_point_sources(fwhm, flags, flux, fluxerr, elongation)
+    if int(np.count_nonzero(point_sources)) >= min_count:
+        sample = fwhm[point_sources]
+    else:
+        sample = fwhm[np.isfinite(fwhm) & (fwhm > 0.0)]
+    return float(np.percentile(sample, percentile)) if sample.size > 0 else np.nan

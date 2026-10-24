@@ -1,11 +1,12 @@
-# ported-from: pipeline/referenceImageSubs.py, modules/utils/rapid_pipeline_subs.py @ 6458d3ca
+# ported-from: pipeline/referenceImageSubs.py, modules/utils/rapid_pipeline_subs.py @ 2851627b
 """The reference image's header stamp.
 
 `dev`: ``addKeywordsToReferenceImageHeader`` (``pipeline/referenceImageSubs.py``),
 called on the mosaic and again on its uncertainty image: ``BUNIT``,
 ``FIELD``, ``FID``, ``FILTER``, ``COV5PERC``, ``NFRAMES``, ``JDSTART``,
-``JDEND``, ``MAGZP``, ``TOTEXPTM`` and one ``INFILnnn`` per input file,
-then the HDU rewritten as a float32 ``PrimaryHDU`` with astropy's
+``JDEND``, ``MAGZP``, ``TOTEXPTM``, ``INFOBITS`` (its comment listing the
+set bits, dev 2851627b), ``STATUS`` and the ``BITnn`` definitions in use
+(dev cb53d2c7), one ``INFILnnn`` per input file, then the HDU rewritten as a float32 ``PrimaryHDU`` with astropy's
 ``CHECKSUM``/``DATASUM``.
 
 The WCS awaicgen wrote is kept as is (the header is rewritten, never
@@ -24,6 +25,8 @@ from typing import Any
 
 import numpy as np
 from astropy.io import fits
+
+from rapidpipe.science.reference.infobits import format_infobits_comment
 
 STAGE_NAME = "reference"
 
@@ -44,6 +47,9 @@ class StampValues:
     run: int
     job: int
     attempt: int
+    infobits: int
+    status: int
+    infobit_cards: tuple[tuple[str, int, str], ...]
 
 
 def infile_keyword(i: int) -> str:
@@ -68,7 +74,10 @@ def stamp_cards(values: StampValues) -> list[tuple[str, Any, str | None]]:
         ("JDEND", values.jdend, "Obs. JD of latest image used [days]"),
         ("MAGZP", values.zprefimg, "Zero point of reference image [mag]"),
         ("TOTEXPTM", values.total_refimage_exptime, "Total input-image exposure time [s]"),
+        ("INFOBITS", int(values.infobits), format_infobits_comment(values.infobits)),
+        ("STATUS", int(values.status), "Overall quality: 1 = usable, 0 = bad"),
     ]
+    cards += [(keyword, bit, comment) for keyword, bit, comment in values.infobit_cards]
     for i, fn in enumerate(values.refimage_input_filenames, start=1):
         cards.append((infile_keyword(i), fn, None))
     cards += [

@@ -102,7 +102,7 @@ def test_the_reference_metrics(tmp_path):
     fits.PrimaryHDU(cov).writeto(tmp_path / "cov.fits")
     rows = [[str(x + 1), str(y + 1), "0", "1000", "1"] for x, y in STARS]
     rows += [["331", "331", "0", "1000", "1"], ["351", "61", "0", "1000", "1"]]  # galaxies, wider
-    m = measure.MosaicMeasurements(*([0.0] * 9), gmin=-1.0, gmax=99.0)
+    m = measure.MosaicMeasurements(*([0.0] * 10), gmin=-1.0, gmax=99.0)
     out = measure.quality_metrics(tmp_path / "image.fits", tmp_path / "cov.fits", rows, m)
     assert out["star_sigma_px"] == pytest.approx(1.2, abs=0.05)
     assert out["n_sigma_stars"] == len(STARS)

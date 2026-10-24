@@ -19,7 +19,8 @@ zero point -> simple-model uncertainty (``prep``) -> awaicgen list files ->
 awaicgen, tile-centred (``awaicgen``) -> cov5percent and the coverage,
 uncertainty and image statistics (``measure``) -> SExtractor on the mosaic
 with the uncertainty as weight, and its FWHM statistics (``catalog``) ->
-the header stamp on the mosaic and its uncertainty image (``header``).
+the InfoBits and status (``infobits``, dev cb53d2c7) -> the header stamp
+on the mosaic and its uncertainty image (``header``).
 
 Scope: ``{"field": <tessellation id>, "fid": <filter id>, "sca": <SCA>}``.
 Settings: the run's ``[reference]`` table, whose subtables are `dev`'s
@@ -36,13 +37,14 @@ normalised to the RAPID spelling, must be the scope's filter.
 Outputs under ``job.path``: ``ref/`` holds the mosaic, its coverage and
 uncertainty maps (awaicgen's names, beside one another, as the import
 copies them) and the SExtractor catalog. Declared tables: ``refimages``
-(one row; ``rfid`` is drawn from the table's own identity sequence, so
-the child rows can carry it), ``refimimages`` (one row per coadded L2
+(one row, its ``status`` and ``infobits`` the grade; ``rfid`` is drawn
+from the table's own identity sequence, so the child rows can carry it),
+``refimimages`` (one row per coadded L2
 row) and ``refimcatalogs`` (the mosaic catalog, ``cattype`` 1, which the
 packet stage reads for reference-star matches). The manifest also records
 `dev`'s refimmeta measurements under ``reference`` and ``metrics``, one
 flat dict of named numbers (the compact stars' width, the coverage
-histogram, the extremes; :func:`rapidpipe.science.reference.measure.quality_metrics`).
+histogram, the extremes, awaicgen's wall seconds; :func:`rapidpipe.science.reference.measure.quality_metrics`).
 
 Departures from `dev` (reference page):
 
@@ -52,8 +54,13 @@ Departures from `dev` (reference page):
   records the MD5 before its header is stamped, so its checksum never
   matches its own object.
 - The Photutils reference catalog is not produced (``[psfcat] enabled =
-  false``; ``true`` is refused); fake-source injection is not ported
-  (``true`` is refused).
+  false``; ``true`` is refused), so the grade sets none of its bits (5, 6,
+  7, 16); fake-source injection is not ported (``true`` is refused).
+- A status-0 reference is published and differenced against, as `dev`'s
+  science pipeline differences against the reference it has just built
+  whatever its status; `dev` then never reuses it (``get_best_reference_image``
+  selects ``status > 0``), and the loop builds a field's reference once,
+  so the status is a recorded verdict here, not a gate.
 - `dev` never checks a tool's exit code; this stage fails when awaicgen
   or SExtractor leaves no output, and when the catalog has no source
   with a usable FWHM (`dev`'s ``nanmin`` raises there).
@@ -70,6 +77,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -81,18 +89,13 @@ from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.science.difference.sextractor import parse_ascii_text_sextractor_catalog
 from rapidpipe.science.difference.tools import ToolRunner
-from rapidpipe.science.reference import awaicgen, catalog, header, measure, prep
+from rapidpipe.science.reference import awaicgen, catalog, header, infobits, measure, prep
 from rapidpipe.science.spatial import field_center
 
 logger = logging.getLogger(__name__)
 
 #: `refimcatalogs.cattype` of the mosaic SExtractor catalog (as dev registers it).
 CATALOG_TYPE = 1
-#: The status `dev` writes for a new reference.
-STATUS = 1
-#: `dev` sets no infobits for a reference ("TODO" in generateReferenceImage).
-INFOBITS = 0
-
 REFIMAGES_SCHEMA = pa.schema([
     ("rfid", pa.int32()), ("dataset", pa.string()), ("field", pa.int32()), ("fid", pa.int16()),
     ("filename", pa.string()), ("checksum", pa.string()), ("status", pa.int16()),
@@ -161,6 +164,7 @@ class _Checked:
     sca_gain: float
     sca_readout_noise: float
     seed: int | None
+    infobits: dict[str, Any]
 
 
 def check_settings(settings: dict[str, Any]) -> _Checked:
@@ -216,7 +220,8 @@ def check_settings(settings: dict[str, Any]) -> _Checked:
         ra_center=ra_center, dec_center=dec_center,
         sca_gain=_number(settings, "instrument", "sca_gain"),
         sca_readout_noise=_number(settings, "instrument", "sca_readout_noise"),
-        seed=seed if seed >= 0 else None)
+        seed=seed if seed >= 0 else None,
+        infobits=infobits.check_params(settings["infobits"]))
 
 
 # ----------------------------------------------------------------------
@@ -354,7 +359,9 @@ def run(job: JobContext) -> None:
         zprefimg = prepared[-1].zprefimg
 
         args = awaicgen.build_awaicgen_command_line_args(awaicgen_dict, paths["awaicgen"])
+        started = time.monotonic()
         exit_code = int(kit.runner.run(args, cwd=scratch))
+        awaicgen_seconds = time.monotonic() - started
         names = {role: awaicgen_dict[key] for role, key in (
             ("image", "awaicgen_output_mosaic_image_file"),
             ("coverage", "awaicgen_output_mosaic_cov_map_file"),
@@ -380,7 +387,8 @@ def run(job: JobContext) -> None:
         names["image"], names["uncertainty"], executable=paths["sextractor"])
     _require_output(o(catalog_name), "SExtractor", sex_exit)
     try:
-        fwhm = catalog.fwhm_statistics(o(catalog_name), paths["cfg_path"] + "/" + catalog.PARAMS_FILE)
+        fwhm = catalog.fwhm_statistics(o(catalog_name), paths["cfg_path"] + "/" + catalog.PARAMS_FILE,
+                                       checked.infobits["fwhm_percentile"])
     except ValueError as exc:
         raise ValueError(f"reference catalog {catalog_name} has no sources with a usable "
                          f"FWHM_IMAGE (the coadd of these frames yields no reference): {exc}") from exc
@@ -391,12 +399,25 @@ def run(job: JobContext) -> None:
             o(catalog_name), paths["cfg_path"] + "/" + catalog.PARAMS_FILE,
             ["XWIN_IMAGE", "YWIN_IMAGE", "FLAGS", "FLUX_AUTO", "FLUXERR_AUTO"]),
         measurements)
+    metrics["awaicgen_seconds"] = round(awaicgen_seconds, 1)
+
+    grade = infobits.grade(
+        o(names["image"]), o(names["coverage"]),
+        paths["cfg_path"] + "/" + infobits.DEFINITIONS_FILE, checked.infobits,
+        gmedian=measurements.gmedian, datascale=measurements.datascale,
+        satcount=measurements.npixsat, fwhm_mode_pix=fwhm.fwhmmedpix,
+        fwhm_pctl_pix=fwhm.fwhmpctlpix, nsexcat=fwhm.nsexcatsources,
+        input_zptmags=[p.zptmag for p in prepared])
+    logger.info("reference: InfoBits %d (bits %s), status %d (fatal bits %s); metrics %s",
+                grade.infobits, grade.bits, grade.status, checked.infobits["fatalinfobits"],
+                grade.metrics)
 
     stamp = header.StampValues(
         field=rtid, exposure_filter=unit_filter, cov5percent=measurements.cov5percent,
         nframes=len(prepared), refimage_input_filenames=tuple(f.name for f in coadded),
         jdstart=jdstart, jdend=jdend, zprefimg=zprefimg, total_refimage_exptime=total_exptime,
-        run=job.run, job=job.job, attempt=job.attempt)
+        run=job.run, job=job.job, attempt=job.attempt,
+        infobits=grade.infobits, status=grade.status, infobit_cards=tuple(grade.cards))
     header.add_keywords_to_reference_image_header(o(names["image"]), stamp)
     header.add_keywords_to_reference_image_header(o(names["uncertainty"]), stamp)
 
@@ -407,8 +428,8 @@ def run(job: JobContext) -> None:
         "refimages": pa.table({
             "rfid": [rfid], "dataset": [job.dataset], "field": [rtid],
             "fid": [int(job.scope["fid"])], "filename": [url(names["image"])],
-            "checksum": [_md5_of_file(o(names["image"]))], "status": [STATUS],
-            "infobits": [INFOBITS], "nframes": [len(prepared)],
+            "checksum": [_md5_of_file(o(names["image"]))], "status": [grade.status],
+            "infobits": [grade.infobits], "nframes": [len(prepared)],
             "cov5percent": [measurements.cov5percent]}, schema=REFIMAGES_SCHEMA),
         "refimimages": pa.table({"rfid": [rfid] * len(coadded), "rid": [f.rid for f in coadded]},
                                 schema=REFIMIMAGES_SCHEMA),
@@ -427,5 +448,7 @@ def run(job: JobContext) -> None:
                    "zero_point": zprefimg, **measurements.to_dict(),
                    "fwhmmedpix": fwhm.fwhmmedpix, "fwhmminpix": fwhm.fwhmminpix,
                    "fwhmmaxpix": fwhm.fwhmmaxpix, "nsexcatsources": fwhm.nsexcatsources,
+                   "fwhmpctlpix": fwhm.fwhmpctlpix, "infobits": grade.infobits,
+                   "status": grade.status, "quality": grade.metrics,
                    "not_coadded": not_coadded},
         metrics=metrics)
