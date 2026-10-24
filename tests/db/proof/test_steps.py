@@ -167,7 +167,7 @@ def test_step_8_an_interrupted_publication(world, monkeypatch):
     publisher = importlib.import_module("rapidpipe.foundation.publish")
     loaded_when_killed = []
 
-    def killed(cur, job_id, run_id):
+    def killed(cur, job_id, run_id, *loaded):
         cur.execute("SELECT count(*) FROM packets WHERE job = %s", (job_id,))
         loaded_when_killed.append(cur.fetchone()[0])
         raise Killed
