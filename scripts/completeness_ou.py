@@ -14,9 +14,8 @@ counts above zero inside the frame; its AB magnitude is ``mag`` + 2.5
 log10(37570 x EXPTIME) (runbook part 11 step 2). Its position is the
 published L2 WCS at ``(x - 1, y - 1)``, which puts the index's objects on
 the image to 0.0016 px; a detection is the nearest official source of the
-epoch within ``--radius-px`` pixels (0.11 arcsec each). The reference is
-the field's official one, built from the first visits under ``[reference.
-selection] before_mjd``; each injected transient is then one of three
+epoch within ``--radius-px`` pixels (0.11 arcsec each). The reference was
+built from the first visits under ``[reference.selection] before_mjd``; each injected transient is then one of three
 groups, and only the first is counted:
 
 - ``evaluated``: its ``start_mjd`` (the L2 file's TRANSIENTS table) is after
@@ -26,6 +25,10 @@ groups, and only the first is counted:
   reference holds some of its light), reported apart, never counted missed;
 - ``early``: it started before the reference's last frame but has no
   counts in any reference frame, reported apart.
+
+The reference is the one each official difference job named as its
+``refimages`` input, so a run that differences against another run's
+reference reads that reference's frames.
 
 Purity, over every official packet, by the packet's own magnitude
 (``ZPTMAG`` - 2.5 log10(fluxfit)): its source matched to a transient row of
@@ -39,7 +42,9 @@ Usage::
 
 Writes ``truth.parquet`` (one row per injected row, its group and match),
 ``bins.parquet`` (evaluated rows), ``bins_group.parquet`` (per group),
-``bins_sca.parquet``, ``purity.parquet``, ``epochs.parquet`` and
+``bins_sca.parquet``, ``purity.parquet``, ``epochs.parquet`` (per epoch: the
+classes, ``false_pos`` the packets not on a transient, and the difference job's
+``n_candidates`` and ``container_seconds``) and
 ``history.parquet`` under ``--out`` (default ``$TMPDIR/completeness-ou-<run>``)
 and prints the tables.
 """
@@ -175,9 +180,10 @@ def main(argv: list[str] | None = None) -> int:
                    " FROM diffimages_official d JOIN l2files_official l ON l.dataset = d.dataset"
                    " AND l.expid = d.expid AND l.sca = d.sca AND l.fid = d.fid"
                    " JOIN filters f ON f.fid = d.fid WHERE d.run = %s ORDER BY l.mjdobs", (a.run,))
-        frames = q("SELECT r.field, r.fid, l.expid, l.sca, l.mjdobs, f.filter FROM refimages_official r"
-                   " JOIN refimimages i ON i.job = r.job AND i.rfid = r.rfid JOIN l2files l ON l.rid = i.rid"
-                   " JOIN filters f ON f.fid = l.fid WHERE r.dataset = %s", (run["dataset"],))
+        frames = q("SELECT DISTINCT r.field, r.fid, l.expid, l.sca, l.mjdobs, f.filter FROM diffimages_official d"
+                   " JOIN job_inputs n ON n.job = d.job AND n.kind = 'input' AND n.product = 'refimages'"
+                   " JOIN refimages r ON r.job = n.source_job JOIN refimimages i ON i.job = r.job AND i.rfid = r.rfid"
+                   " JOIN l2files l ON l.rid = i.rid JOIN filters f ON f.fid = l.fid WHERE d.run = %s", (a.run,))
         sources = pd.DataFrame(q("SELECT s.job, s.sid, s.expid, s.sca, s.ra, s.dec, s.fluxfit, s.flags,"
                                  " s.field = d.field AS in_field FROM sources_official s"
                                  " JOIN diffimages d ON d.pid = s.pid WHERE s.run = %s", (a.run,)))
@@ -185,6 +191,9 @@ def main(argv: list[str] | None = None) -> int:
             "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
             " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"
             " FROM packets_official p JOIN jobs j ON j.id = p.job WHERE p.run = %s", (a.run,)))
+        metrics = pd.DataFrame(q(
+            "SELECT expid, sca, metric, value FROM job_metrics WHERE run = %s AND stage = 'difference'"
+            " AND state = 'published' AND metric IN ('n_candidates', 'container_seconds')", (a.run,)))
         read_sets: dict = {}
         if len(packets):
             for r in q("SELECT i.job, i.source_job FROM job_inputs i WHERE i.kind = 'input'"
@@ -255,6 +264,10 @@ def main(argv: list[str] | None = None) -> int:
         mjd=("mjd", "first"), injected=("src_id", "size"), evaluated=("group", lambda g: (g == "evaluated").sum()),
         detected=("detected", "sum"), alerted=("alerted", "sum"), sent=("sent", "sum")).reset_index()
     ep = det.merge(ep, on=["expid", "sca"], how="outer")
+    ep["false_pos"] = ep[[c for c in CLASSES if c != "transient"]].fillna(0).sum(axis=1)
+    if len(metrics):
+        ep = ep.merge(metrics.pivot_table(index=["expid", "sca"], columns="metric", values="value")
+                      .reset_index(), on=["expid", "sca"], how="left")
     hist = pd.DataFrame()
     if not a.no_history and evaluated["alerted"].any():
         keys = {(int(j), int(s)) for j, s in zip(evaluated.loc[evaluated["detected"], "job"],
@@ -287,8 +300,10 @@ def main(argv: list[str] | None = None) -> int:
           f" flux ratio median {evaluated['flux_ratio'].median():.3f}")
     print("\npurity per packet magnitude bin")
     print(pur.to_string(**fmt))
-    print("\nper epoch")
+    print("\nper epoch (false_pos: packets not on a transient with counts, bright + galaxy + star + other)")
     print(ep.to_string(**fmt))
+    print(f"  false positives per epoch median {ep['false_pos'].median():.0f}, min {ep['false_pos'].min():.0f},"
+          f" max {ep['false_pos'].max():.0f}; median other (matched to no truth row) {ep['other'].median():.0f}")
     if len(hist):
         h = hist[["expected", "present", "missing", "late", "undetected"]].sum()
         print(f"\nhistory over {hist['src_id'].nunique()} alerted evaluated transients, {len(hist)} later packets:"
