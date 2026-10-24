@@ -240,6 +240,10 @@ class Toolkit:
     reference_psf: Callable = refpsf.measure
 
 
+#: EXPERIMENT ONLY (day-2026-10-24 task 4), never merged: overrides [difference] reference_psf.
+_EXPERIMENT_REFERENCE_PSF = "measured-crowded"
+
+
 def toolkit() -> Toolkit:
     return Toolkit()
 
@@ -594,7 +598,8 @@ def run(job: JobContext) -> None:
     # The reference PSF, measured on the resampled, background-subtracted reference.
     refpsf_record, metrics, measured_psf = _measure_reference_psf(
         kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
-        w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME), settings["reference_psf"])
+        w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME),
+        _EXPERIMENT_REFERENCE_PSF or settings["reference_psf"])
     # Registration, before the subpixel offset corrects it; the science stars' own width beside
     # the ePSF's; the reference catalog's sky positions.
     science_pixels = fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float)
