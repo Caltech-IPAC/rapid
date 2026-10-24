@@ -52,6 +52,12 @@ wavelength, drawn ``size x size`` at the detector's pixel scale with the
 pixel response (method ``auto``), unit sum. The file is not read. The
 header carries ``PSFSRC`` (the galsim version) and ``PSFWAVE``; the manifest
 the same under ``psf``. The SOC path is unchanged.
+
+With ``[intake] reader = "rimtimsim"`` the file (`dev`'s converted lite
+FITS) names no reference either; ``[psf.epsf]`` names one per filter, the
+CRDS reference for its detector and filter (the overlay's, with the
+context that chose it), and the stage reduces it as for a SOC file, the
+file unread and ``CRDSCTX`` empty.
 """
 
 from __future__ import annotations
@@ -74,6 +80,7 @@ from astropy.nddata import NDData
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
+from rapidpipe.science import intake_rimtimsim
 from rapidpipe.science.intake_openuniverse import parse_stem
 
 log = logging.getLogger(__name__)
@@ -121,9 +128,12 @@ def run(job: JobContext) -> None:
         write(job, stamp, RAPID_TO_ROMAN_FILTER_NAMES[str(ids["filter"])], int(ids["sca"]), cards,
               timings, lap, source=None, psf=provenance)
         return
-    source = source_settings["source_root"].rstrip("/") + "/" + stem + "_cal.asdf"
-    cal = cal_meta(get(source, unsigned=bool(source_settings["unsigned"])))
-    lap("read_cal")
+    if source_settings.get("reader", "soc-l2") == "rimtimsim":
+        source, cal = None, named_epsf(stem, settings["epsf"])
+    else:
+        source = source_settings["source_root"].rstrip("/") + "/" + stem + "_cal.asdf"
+        cal = cal_meta(get(source, unsigned=bool(source_settings["unsigned"])))
+        lap("read_cal")
     name = PurePosixPath(cal["epsf"]).name
     url = settings["crds_server"].rstrip("/") + "/unchecked_get/references/roman/" + name
     size = int(settings["size"])
@@ -222,6 +232,16 @@ def cal_meta(path: Path) -> dict[str, str]:
                 "context": str(meta["ref_file"]["crds"]["context"]),
                 "detector": str(meta["instrument"]["detector"]),
                 "filter": str(meta["instrument"]["optical_element"])}
+
+
+def named_epsf(stem: str, names: dict) -> dict[str, str]:
+    """A RimTimSim stem's ePSF reference, the one ``[psf.epsf]`` names for its filter, as
+    :func:`cal_meta` returns a SOC file's; no CRDS context."""
+    ids = intake_rimtimsim.parse_stem(stem)
+    name = names.get(str(ids["filter"]), "")
+    if not name:
+        raise ValueError(f"{stem}: the file names no ePSF reference and [psf.epsf] {ids['filter']} is empty")
+    return {"epsf": name, "context": "", "detector": f"WFI{int(ids['sca']):02d}", "filter": str(ids["filter"])}
 
 
 def fetch(url: str, target: Path) -> Path:

@@ -25,7 +25,9 @@ _<pointing>_wfi<sca>_simple.asdf`` with the filter in the RAPID spelling
 (``H158``): ``--filters`` stays in the pipeline's names (``F158``) and is
 mapped for the listing, a pointing is the survey's observing-sequence row
 (``1012``), which the intake writes as the ``expid``, and there are no
-passes.
+passes. With ``rimtimsim`` the source root holds RimTimSim's lite files,
+``rimtimsim_WFI_<filter>_SCA<NN>_<exposure>_lite.fits.gz``, flat; a pointing
+is GBTDS's exposure number (``411``), the ``expid``, and there are no passes.
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported (``failed``, with its scope) and
@@ -143,8 +145,16 @@ SUFFIX = "_cal.asdf"
 #: the filter in the RAPID spelling, the observing sequence's row and the SCA.
 OU_STEM = re.compile(r"roman_(?:tds|was)_(?P<filter>[A-Z]\d{3})_(?P<pointing>\d+)_wfi(?P<sca>\d{2})$")
 OU_SUFFIX = "_simple.asdf"
-#: The ``[intake] reader`` whose stems are :data:`OU_STEM`'s; every other is the SOC's.
+#: The ``[intake] reader`` whose stems are :data:`OU_STEM`'s.
 OPENUNIVERSE = "openuniverse"
+#: A RimTimSim lite stem (``rapidpipe.science.intake_rimtimsim``): the filter, the SCA and GBTDS's
+#: exposure number.
+RTS_STEM = re.compile(r"rimtimsim_WFI_(?P<filter>F\d{3})_SCA(?P<sca>\d{2})_(?P<exposure>\d{9})_lite$")
+RTS_SUFFIX = ".fits.gz"
+#: The ``[intake] reader`` whose stems are :data:`RTS_STEM`'s; every other is the SOC's.
+RIMTIMSIM = "rimtimsim"
+#: The readers whose data have no passes: a pointing is one integer, the row's ``expid``.
+PASSLESS = (OPENUNIVERSE, RIMTIMSIM)
 PENDING = ("launched", "running")
 #: Batch's job states before it ends one (``SUCCEEDED`` and ``FAILED`` end it).
 BATCH_ACTIVE = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING")
@@ -166,9 +176,9 @@ class Selection:
     @classmethod
     def parse(cls, filters: str, scas: str, pointings: str, passes: str = "all",
               reader: str = "soc-l2") -> "Selection":
-        if reader == OPENUNIVERSE:
+        if reader in PASSLESS:
             if passes != "all":
-                raise ValueError("an OpenUniverse selection has no passes: select its pointings")
+                raise ValueError(f"a {reader} selection has no passes: select its pointings")
             points = None if pointings == "all" else frozenset(int(p) for p in pointings.split(","))
         else:
             points = None if pointings == "all" else frozenset(
@@ -180,7 +190,7 @@ class Selection:
     def admits_stem(self, stem: str) -> dict | None:
         """The stem's SCA, filter and pointing when the selection admits it, else ``None``."""
         ids = stem_ids(stem)
-        if ids is None or (ids["pass"] is None) != (self.reader == OPENUNIVERSE):
+        if ids is None or ids["reader"] != (self.reader if self.reader in PASSLESS else "soc-l2"):
             return None
         if ids["sca"] not in self.scas or ids["filter"] not in self.filters:
             return None
@@ -196,7 +206,7 @@ class Selection:
         OpenUniverse pointing."""
         if sca not in self.scas or fid not in fids:
             return False
-        if self.reader == OPENUNIVERSE:
+        if self.reader in PASSLESS:
             return self.pointings is None or expid in self.pointings
         if self.passes is not None and expid // 10**6 not in self.passes:
             return False
@@ -204,7 +214,7 @@ class Selection:
 
     def summary(self) -> dict:
         points = "all" if self.pointings is None else sorted(self.pointings)
-        if self.reader != OPENUNIVERSE and points != "all":
+        if self.reader not in PASSLESS and points != "all":
             points = [f"{v:03d}_{e:04d}" for v, e in points]
         return {"filters": sorted(self.filters), "scas": sorted(self.scas), "pointings": points,
                 "passes": "all" if self.passes is None else sorted(self.passes)}
@@ -218,14 +228,20 @@ def stem_expid(stem: str) -> int:
 
 
 def stem_ids(stem: str) -> dict | None:
-    """A SOC or OpenUniverse stem's ``sca``, ``filter`` (the pipeline's name, ``F158``), ``expid``,
-    ``pointing`` and ``pass`` (``None`` for OpenUniverse); ``None`` for any other name."""
+    """A SOC, OpenUniverse or RimTimSim stem's ``reader``, ``sca``, ``filter`` (the pipeline's name,
+    ``F158``), ``expid``, ``pointing`` and ``pass`` (``None`` but for the SOC's); ``None`` for any other
+    name."""
     if m := STEM.match(stem):
-        return {"sca": int(m["sca"]), "filter": m["filter"].upper(), "expid": stem_expid(stem),
-                "pointing": (int(m["visit"]), int(m["exposure"])), "pass": int(m["pass"])}
+        return {"reader": "soc-l2", "sca": int(m["sca"]), "filter": m["filter"].upper(),
+                "expid": stem_expid(stem), "pointing": (int(m["visit"]), int(m["exposure"])),
+                "pass": int(m["pass"])}
     if m := OU_STEM.match(stem):
-        return {"sca": int(m["sca"]), "filter": RAPID_TO_ROMAN_FILTER_NAMES.get(m["filter"], m["filter"]),
+        return {"reader": OPENUNIVERSE, "sca": int(m["sca"]),
+                "filter": RAPID_TO_ROMAN_FILTER_NAMES.get(m["filter"], m["filter"]),
                 "expid": int(m["pointing"]), "pointing": int(m["pointing"]), "pass": None}
+    if m := RTS_STEM.match(stem):
+        return {"reader": RIMTIMSIM, "sca": int(m["sca"]), "filter": m["filter"],
+                "expid": int(m["exposure"]), "pointing": int(m["exposure"]), "pass": None}
     return None
 
 
@@ -241,9 +257,20 @@ def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]
     is then listed through the paginator; nothing outside them is listed.
 
     For :data:`OPENUNIVERSE`, each selected filter's prefix (``<root>H158/``) is
-    listed through the paginator and its ``_simple.asdf`` stems kept.
+    listed through the paginator and its ``_simple.asdf`` stems kept. For
+    :data:`RIMTIMSIM` (one flat prefix of 263 files) the root is listed through
+    the paginator and the selected filters' lite stems kept.
     """
     bucket, _, root = source_root.removeprefix("s3://").partition("/")
+    if selection.reader == RIMTIMSIM:
+        found = []
+        for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=root):
+            for item in page.get("Contents", []):
+                name = item["Key"][len(root):]
+                if (name.endswith(RTS_SUFFIX) and (m := RTS_STEM.match(name.removesuffix(RTS_SUFFIX)))
+                        and m["filter"] in selection.filters):
+                    found.append(name.removesuffix(RTS_SUFFIX))
+        return found
     if selection.reader == OPENUNIVERSE:
         found = []
         for band in sorted(selection.filters):

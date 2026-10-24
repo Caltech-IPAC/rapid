@@ -45,6 +45,10 @@ the selected filters' prefixes in the RAPID spelling and keeps
 ``_simple.asdf`` stems; a pointing is the observing sequence's row, the
 intake's expid, in stems and rows alike; a SOC stem is not admitted, a
 selection with passes is refused; a missing PSF submits one psf job.
+RimTimSim (``rimtimsim``): the listing pages the root once and keeps the
+selected filters' lite stems; a pointing is the exposure number, the
+intake's expid, in stems and rows alike; no other reader's stem is
+admitted, a selection with passes is refused.
 """
 
 from __future__ import annotations
@@ -664,3 +668,31 @@ def test_an_openuniverse_stem_without_its_psf_gets_one_psf_job():
     pending = [{"id": 60, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": ou(1012)}}]
     subs, _ = loop.plan(snap(fids={"H158": 2}, psfs={}, jobs=pending), [ou(1012), ou(2034)], sel)
     assert subs == []
+
+
+RTS = "rimtimsim"
+
+
+def rts(exposure: int, band: str = "F213", sca: int = 2) -> str:
+    return f"rimtimsim_WFI_{band}_SCA{sca:02d}_{exposure:09d}_lite"
+
+
+def test_a_rimtimsim_listing_pages_the_root_and_keeps_the_selected_filters_lite_stems():
+    keys = [rts(411) + ".fits.gz", rts(827) + ".fits.gz", rts(203, "F087") + ".fits.gz",
+            rts(411) + ".fits", "_manifest.json"]
+    client = Pages(keys)
+    sel = loop.Selection.parse("F213", "2", "all", reader=RTS)
+    assert sorted(loop.list_stems(client, "s3://bucket/l2/", sel)) == [rts(411), rts(827)]
+    assert client.listed == ["l2/"]
+
+
+def test_a_rimtimsim_pointing_is_the_exposure_number_in_stems_and_rows():
+    sel = loop.Selection.parse("F213", "2", "411,827", reader=RTS)
+    stems = [rts(411), rts(827), rts(1243), rts(411, sca=3), ou(411, 2, "K213"), stem(1, 1, 1, sca=2)]
+    subs, counts = loop.plan(snap(fids={"K213": 4}, psfs={(4, 2, "science"): (10, 100)}), stems, sel)
+    intake = stages(subs, "intake")
+    assert [s["scope"]["file"] for s in intake] == [rts(411), rts(827)] and counts["admitted"] == 2
+    assert intake[0]["expects"][1]["key"] == {"dataset": D, "expid": 411, "sca": 2, "fid": 4}
+    assert sel.admits_row(827, 2, 4, {4}) and not sel.admits_row(1243, 2, 4, {4})
+    with pytest.raises(ValueError, match="no passes"):
+        loop.Selection.parse("F213", "2", "all", "1", reader=RTS)
