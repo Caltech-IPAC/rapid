@@ -2,21 +2,19 @@
 
 A run is a recipe someone launched for a reason (Part 1 statement 1); a
 job is one execution of one stage under a run, with the inputs chosen for
-it at launch recorded in ``job_inputs`` in three kinds (statement 4):
+it at launch recorded in ``job_inputs`` in two kinds (statement 4):
 
 ``inputs``
-    the sets the job reads, its predecessor included: dicts with
-    ``product``, ``key`` and ``source_job`` (the set's job), optionally
-    ``binding`` (the binding it was read through). An object-set job's
-    input of product ``objects`` is its predecessor.
+    the sets the job reads: dicts with ``product``, ``key`` and
+    ``source_job`` (the set's job), optionally ``binding`` (the binding it
+    was read through). What a stage reads at execution instead (the
+    difference job's object catalog, the packet job's members and window,
+    amendment 2026-10-24) the publisher records as more ``input`` rows from
+    the manifest's ``reads``.
 ``expects``
     per output key, the open binding the job expects to replace: dicts
     with ``product``, ``key`` and ``binding`` (``None`` for none). The
     publisher binds exactly these keys.
-``excludes``
-    the predecessor's source sets that are no longer official: dicts with
-    ``key`` and ``source_job`` (product ``sources`` unless ``product`` is
-    given). ``members_official`` drops their members.
 
 Keys are dicts whose names are the product table's column names
 (``schema.sql``'s header).
@@ -52,14 +50,11 @@ def create_run(conn, who: str, why: str, revision: str, settings: dict,
 
 
 def create_job(conn, run_id: int, stage: str, scope: dict,
-               inputs: Iterable[dict] = (), expects: Iterable[dict] = (),
-               excludes: Iterable[dict] = ()) -> int:
+               inputs: Iterable[dict] = (), expects: Iterable[dict] = ()) -> int:
     """Record a job in state ``launched`` with its inputs; return its id."""
     rows = (
         [("input", i["product"], i["key"], i.get("source_job"), i.get("binding")) for i in inputs]
-        + [("expects", e["product"], e["key"], None, e["binding"]) for e in expects]
-        + [("excludes", x.get("product", "sources"), x["key"], x["source_job"], None)
-           for x in excludes])
+        + [("expects", e["product"], e["key"], None, e["binding"]) for e in expects])
     try:
         with conn.cursor() as cur:
             cur.execute("INSERT INTO jobs (run, stage, scope) VALUES (%s, %s, %s) RETURNING id",

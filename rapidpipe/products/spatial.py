@@ -57,6 +57,26 @@ def healpix_indexes(ra: float, dec: float) -> tuple[int, int]:
     return hp6, hp9
 
 
+def within(ra1: float, dec1: float, ra2: float, dec2: float, radius: float) -> bool:
+    """q3c's ``q3c_join`` test: the separation is strictly less than ``radius`` degrees.
+
+    ``sin²(Δdec/2) + cos dec1 cos dec2 sin²(Δra/2) < sin²(r/2)``, evaluated
+    in q3c's order so a pair on the boundary falls the same side. The
+    in-memory matcher (``rapidpipe.science.crossmatch.memory``) and the
+    publisher's reconcile (``rapidpipe.foundation.catalog``) share it.
+    """
+    d1, d2 = math.radians(dec1), math.radians(dec2)
+    s_dec = math.sin((d1 - d2) / 2)
+    s_ra = math.sin(math.radians(ra1 - ra2) / 2)
+    sindist = s_dec * s_dec + math.cos(d1) * math.cos(d2) * s_ra * s_ra
+    return sindist < math.sin(math.radians(radius) / 2) ** 2
+
+
+def ra_offset(ra: float, ra0: float) -> float:
+    """``ra - ra0`` in degrees, wrapped into [-180, 180)."""
+    return (ra - ra0 + 180.0) % 360.0 - 180.0
+
+
 def unit_vector(ra: float, dec: float) -> tuple[float, float, float]:
     """Return the ``(x, y, z)`` unit vector for ``(ra, dec)`` in degrees.
 

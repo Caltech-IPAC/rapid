@@ -2,7 +2,7 @@
 
 The fixture is the field's two imported source sets (the 500 brightest
 per difference image, simulated positions). Both matchers take the
-sources the associate stage accepts (``flags = 0``, ``fluxfit / fluxerr
+sources the association accepts (``flags = 0``, ``fluxfit / fluxerr
 >= 5``) and run epoch 1 then epoch 2 on one growing catalog, each epoch
 as the branch's crossmatch ran it (``git show
 bd626950:rapidpipe/stages/crossmatch.py``): pass 1 exposure by exposure in

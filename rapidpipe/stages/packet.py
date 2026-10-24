@@ -9,41 +9,49 @@ builds every packet in memory, writes the Avro container, the index and
 the forced-photometry and Gaia rows and returns; ``job local`` publishes.
 
 Scope: ``{"expid", "sca", "fid"}``, the packet set's key without the
-dataset (the run's). Recorded inputs, every one an ``input`` row:
+dataset (the run's). Recorded inputs at launch, every one an ``input`` row:
 
 - ``sources``: exactly one, the epoch's source set, whose key is the
   packet set's key. Its sources with no rejecting flag (`dev`'s
   ``ALERTABLE_FLAGS``, 0, once the informational bits of
   :data:`rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS` are
   cleared, so a source in a bright footprint is a trigger and its packet
-  carries the bit in ``psfFitFlags``) that the object set holds are the triggers; `dev`'s 2,000-per-chip cap
-  is not ported (plan, Part 2).
-- ``objects``: exactly one, the object set; through it its predecessor
-  chain and the chain's exclusions, as ``members_official`` follows them.
-  A trigger in several objects takes the lowest ``aid`` (`dev`'s rule).
-- ``diffimages`` and ``l2files``: the forced-photometry window, every
-  difference image (and the L2 row it differenced, for ``mjdobs``) the
-  launcher names; the trigger's own image is among them and is the
-  cutouts' source. Images outside ``[trigger - forced_window_days,
-  trigger]`` are not measured.
+  carries the bit in ``psfFitFlags``) that the difference job made a
+  member of an object are the triggers; `dev`'s 2,000-per-chip cap is not
+  ported (plan, Part 2). A trigger in several objects takes the lowest
+  ``aid`` (`dev`'s rule).
 - ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``).
-- ``packets``: the predecessor packet sets, none for a first epoch;
-  their ``forced`` rows are reused, never re-measured.
 - ``catalogs``: exactly one, the Gaia product, by its whole key (``dataset``,
   ``name``, ``version``; a key without ``dataset``, as runs before it named, reads too).
 - ``refimages``: exactly one, the reference whose mosaic catalog
   (``refimcatalogs`` cattype 1) gives the star and galaxy matches.
+
+Read at execution, as the object catalog stands (the plan's amendment of
+2026-10-24: best information at the time), and recorded exactly in the
+manifest's ``reads``, which the publisher writes to ``job_inputs``:
+
+- the triggers' objects and their members: every membership of those
+  objects whose source set is official (``memberships_official``), and the
+  set's own; ``sources`` reads, one per source set read;
+- the forced-photometry window: every difference image of the trigger's
+  field and dataset whose difference is official, or the trigger's own,
+  whose L2 ``mjdobs`` is in ``[trigger - forced_window_days, trigger]``,
+  with its L2 row; ``diffimages`` and ``l2files`` reads;
+- the official packet sets' ``forced`` rows measured on those images,
+  reused, never re-measured; ``packets`` reads.
+
+A late epoch's memberships therefore appear in packets issued after it
+arrives, never in those already sent.
 
 The job's ``expects`` row names the previous packet binding for its key,
 or none.
 
 Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
 
-- ``prvDiaSources``: the object's other members, through the chain minus
-  exclusions, with ``trigger - prv_window_days <= mjdobs < trigger``: the
+- ``prvDiaSources``: the object's other members read, with ``trigger - prv_window_days <= mjdobs < trigger``: the
   trigger bound the plan adds (`dev` has no upper bound).
-- ``diaObject``: ``ra0, dec0`` and ``raSigma, decSigma`` from the object
-  set's sums (:mod:`rapidpipe.science.statistics.sums`), as of the set;
+- ``diaObject``: ``ra0, dec0`` and ``raSigma, decSigma`` from the sums of
+  the members read (:mod:`rapidpipe.science.statistics.sums`);
   ``nDiaSources`` is the count as of the trigger, the members with
   ``mjdobs <= trigger``, the trigger counted. The schema's doc string is
   `dev`'s ("Total number"), kept verbatim with the 00.06 files.
@@ -55,8 +63,8 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   imported, so `dev`'s :func:`~rapidpipe.science.alerts.forced.error_array`
   fallback applies), merged one row per (object, image) as `dev`'s
   ``_run_forced`` merges them. An (object, image) pair whose
-  ``forced_id`` a predecessor set holds is copied from it. The difference
-  image measured is the one the job names (ZOGY here, with
+  ``forced_id`` an official packet set holds is copied from it. The difference
+  image measured is the window's (ZOGY here, with
   ``diffpsf.fits``); `dev` fixes the SFFT image.
 - ``gaiaMatches``: the Gaia product, propagated by proper motion from its
   ``ref_epoch`` to the trigger, within ``gaia_radius_arcsec``, at most
@@ -153,13 +161,37 @@ SOURCE_JOINS = (
     " JOIN filters f ON f.fid = s.fid"
     " LEFT JOIN exposures e ON e.job = s.job AND e.dataset = s.dataset AND e.expid = s.expid")
 
-#: The object set's chain (itself first), through each set's `objects` input.
-CHAIN_SQL = (
-    "WITH RECURSIVE chain (job) AS ("
-    " SELECT %s::bigint"
-    " UNION ALL SELECT i.source_job FROM chain c JOIN job_inputs i ON i.job = c.job"
-    " AND i.kind = 'input' AND i.product = 'objects' WHERE i.source_job IS NOT NULL)"
-    " SELECT job FROM chain")
+#: The trigger set's memberships: its sources' objects.
+TRIGGER_SQL = ("SELECT sid, object_job, aid FROM memberships WHERE job = %s"
+               " ORDER BY sid, aid, object_job")
+
+#: Every member of the triggers' objects whose source set is official, and the set's own.
+MEMBERS_SQL = (
+    f"SELECT DISTINCT ON (m.aid, s.job, s.sid) m.aid AS member_aid, {SOURCE_COLUMNS}"
+    " FROM memberships m JOIN sources s ON s.job = m.source_job AND s.sid = m.sid"
+    f"{SOURCE_JOINS}"
+    " WHERE (m.object_job, m.aid) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))"
+    " AND (m.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
+    " AND o.product = 'sources' AND o.job = m.job))"
+    " ORDER BY m.aid, s.job, s.sid")
+
+#: The window's difference images: official, or the trigger's own, in its field, by L2 mjdobs.
+WINDOW_SQL = (
+    "SELECT d.job, d.pid, d.rid, d.dataset, d.expid, d.sca, d.fid, d.filename,"
+    " d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4, f.filter,"
+    " l.mjdobs, l.job AS l2_job"
+    " FROM diffimages d JOIN filters f ON f.fid = d.fid JOIN l2files l ON l.rid = d.rid"
+    " WHERE d.dataset = %(dataset)s AND d.field = %(field)s"
+    " AND l.mjdobs BETWEEN %(lo)s AND %(hi)s"
+    " AND (d.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
+    " AND o.product = 'diffimages' AND o.job = d.job))"
+    " ORDER BY l.mjdobs, d.expid, d.sca, d.fid")
+
+#: Official packet sets' forced rows on the window's images.
+REUSE_SQL = ("SELECT f.*, p.dataset AS p_dataset, p.expid AS p_expid, p.sca AS p_sca, p.fid AS p_fid"
+             " FROM forced f JOIN official o ON o.closed_at IS NULL AND o.product = 'packets'"
+             " AND o.job = f.job JOIN LATERAL (SELECT dataset, expid, sca, fid FROM packets"
+             " WHERE job = f.job LIMIT 1) p ON true WHERE f.pid = ANY(%s)")
 
 
 @dataclasses.dataclass
@@ -187,9 +219,9 @@ class Read:
 
     key: dict
     source_job: int
-    object_job: int
+    object_job: dict[int, int]                   # aid -> the object's founding job
     flags_zero: int                              # the set's sources with no rejecting flag
-    triggers: list[Source]                       # those the object set holds
+    triggers: list[Source]                       # those that are members of an object
     aid_of: dict[int, int]                       # trigger sid -> aid
     objects: dict[int, tuple[float, float, Sums]]
     members: dict[int, list[tuple[int, Source]]]  # aid -> (source set, member)
@@ -199,6 +231,7 @@ class Read:
     gaia_job: int
     gaia_path: Path
     refcat_path: Path | None
+    reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
 
 
 def _one(inputs: list[dict], product: str, job: int) -> dict:
@@ -214,7 +247,7 @@ def _key_where(key: dict, alias: str) -> tuple[str, list]:
 
 
 def _read(job: JobContext) -> Read:
-    """Everything the job's inputs name, in one short transaction."""
+    """Everything the job reads, its inputs and the catalog as it stands, in one short transaction."""
     inputs = [i for i in job.inputs if i["kind"] == "input"]
     sources_in = _one(inputs, "sources", job.job)
     key = dict(sources_in["key"])
@@ -222,11 +255,11 @@ def _read(job: JobContext) -> Read:
             k: job.scope[k] for k in ("expid", "sca", "fid")}:
         raise ValueError(f"job {job.job}: the sources input {key} is not the scope's key {job.scope}")
     source_job = sources_in["source_job"]
-    object_job = _one(inputs, "objects", job.job)["source_job"]
     psf_in = _one(inputs, "psfs", job.job)
     gaia_in = _one(inputs, "catalogs", job.job)
     ref_in = _one(inputs, "refimages", job.job)
-    predecessors = [i["source_job"] for i in inputs if i["product"] == "packets"]
+    window_days = float(job.settings["packet"]["forced_window_days"])
+    reads: list[dict] = []
 
     with job.connect() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(f"SELECT {SOURCE_COLUMNS} FROM sources s{SOURCE_JOINS}"
@@ -234,56 +267,56 @@ def _read(job: JobContext) -> Read:
                     (source_job, INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS))
         alertable = [Source.from_row(r) for r in cur.fetchall()]
 
-        cur.execute(CHAIN_SQL, (object_job,))
-        chain = [r["job"] for r in cur.fetchall()]
-        cur.execute("SELECT DISTINCT source_job FROM job_inputs"
-                    " WHERE job = ANY(%s) AND kind = 'excludes'", (chain,))
-        excluded = [r["source_job"] for r in cur.fetchall()]
-        cur.execute("SELECT sid, min(aid) AS aid FROM memberships"
-                    " WHERE job = ANY(%s) AND source_job = %s AND NOT source_job = ANY(%s)"
-                    " GROUP BY sid", (chain, source_job, excluded))
-        aid_of = {r["sid"]: r["aid"] for r in cur.fetchall()}
+        cur.execute(TRIGGER_SQL, (source_job,))
+        aid_of, object_job = {}, {}
+        for r in cur.fetchall():                 # ordered by aid: the lowest is first
+            if r["sid"] not in aid_of:
+                aid_of[r["sid"]] = r["aid"]
+                object_job[r["aid"]] = r["object_job"]
         triggers = [s for s in alertable if s.sid in aid_of]
         aids = sorted({aid_of[s.sid] for s in triggers})
+        cur.execute("SELECT o.aid, o.ra0, o.dec0 FROM objects o WHERE (o.job, o.aid) IN"
+                    " (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))",
+                    ([object_job[a] for a in aids], aids))
+        origin = {r["aid"]: (r["ra0"], r["dec0"]) for r in cur.fetchall()}
 
-        cur.execute("SELECT aid, ra0, dec0, nsources, sumra, sumra2, sumdec, sumdec2,"
-                    " sumflux, sumflux2 FROM objects WHERE job = %s AND aid = ANY(%s)",
-                    (object_job, aids))
-        objects = {r.pop("aid"): (r["ra0"], r["dec0"], Sums(**r)) for r in cur.fetchall()}
-
-        cur.execute(f"SELECT DISTINCT ON (m.aid, s.job, s.sid) m.aid AS member_aid, {SOURCE_COLUMNS}"
-                    " FROM memberships m JOIN sources s ON s.job = m.source_job AND s.sid = m.sid"
-                    f"{SOURCE_JOINS}"
-                    " WHERE m.job = ANY(%s) AND m.aid = ANY(%s) AND NOT m.source_job = ANY(%s)"
-                    " ORDER BY m.aid, s.job, s.sid", (chain, aids, excluded))
+        cur.execute(MEMBERS_SQL, {"jobs": [object_job[a] for a in aids], "aids": aids,
+                                  "own": source_job})
         members: dict[int, list[tuple[int, Source]]] = {}
+        objects: dict[int, tuple[float, float, Sums]] = {
+            aid: (*origin[aid], Sums(*origin[aid])) for aid in aids}
+        member_sets = set()
         for row in cur.fetchall():
             aid = row.pop("member_aid")
             member = Source.from_row(row)
             member.aid = aid
             members.setdefault(aid, []).append((row["source_job"], member))
+            objects[aid][2].add(row["ra"], row["dec"], row["fluxfit"])
+            member_sets.add(row["source_job"])
+        if member_sets:
+            cur.execute("SELECT DISTINCT job, dataset, expid, sca, fid FROM diffimages"
+                        " WHERE job = ANY(%s) ORDER BY job", (sorted(member_sets),))
+            reads += [{"product": "sources", "source_job": r.pop("job"), "key": dict(r)}
+                      for r in cur.fetchall()]
 
         cur.execute("SELECT filename FROM psfs WHERE job = %s AND "
                     + _key_where(psf_in["key"], "psfs")[0],
                     (psf_in["source_job"], *_key_where(psf_in["key"], "psfs")[1]))
         sci_psf = get(cur.fetchone()["filename"])
 
+        cur.execute("SELECT d.field, l.mjdobs FROM diffimages d JOIN l2files l ON l.rid = d.rid"
+                    " WHERE d.job = %s", (source_job,))
+        own = cur.fetchone()
+        if own is None:
+            raise ValueError(f"job {job.job}: source set {source_job} has no difference image row")
+        cur.execute(WINDOW_SQL, {"dataset": key["dataset"], "field": own["field"], "own": source_job,
+                                 "lo": own["mjdobs"] - window_days,
+                                 "hi": own["mjdobs"] + TRIGGER_EPSILON_DAYS})
         images = []
-        for d_in in (i for i in inputs if i["product"] == "diffimages"):
-            where, params = _key_where(d_in["key"], "d")
-            cur.execute("SELECT d.pid, d.rid, d.expid, d.sca, d.fid, d.filename,"
-                        " d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4, f.filter"
-                        " FROM diffimages d JOIN filters f ON f.fid = d.fid"
-                        f" WHERE d.job = %s AND {where}", (d_in["source_job"], *params))
-            d = cur.fetchone()
-            l2_jobs = [i["source_job"] for i in inputs
-                       if i["product"] == "l2files" and i["key"] == d_in["key"]]
-            cur.execute("SELECT mjdobs FROM l2files WHERE rid = %s AND job = ANY(%s)",
-                        (d["rid"], l2_jobs))
-            l2 = cur.fetchone()
-            if l2 is None:
-                raise ValueError(f"job {job.job}: difference image {d['pid']} has no named"
-                                 f" l2files input for rid {d['rid']}")
+        for d in cur.fetchall():
+            image_key = {"dataset": d["dataset"], "expid": d["expid"], "sca": d["sca"], "fid": d["fid"]}
+            reads += [{"product": "diffimages", "key": image_key, "source_job": d["job"]},
+                      {"product": "l2files", "key": image_key, "source_job": d["l2_job"]}]
             diff = get(d["filename"])
             plain = diff.name.removesuffix(".gz")
             uncert = fp.DIFF_UNCERT_BASENAMES.get(plain)
@@ -292,7 +325,7 @@ def _read(job: JobContext) -> Read:
                     _beside(d["filename"], name)
             images.append(WindowImage(
                 pid=d["pid"], rid=d["rid"], expid=d["expid"], sca=d["sca"], fid=d["fid"],
-                band=d["filter"], mjdobs=l2["mjdobs"],
+                band=d["filter"], mjdobs=d["mjdobs"],
                 corners=tuple(d[c] for c in ("ra1", "dec1", "ra2", "dec2",
                                              "ra3", "dec3", "ra4", "dec4")),
                 diff=diff, diff_psf=_beside(d["filename"], fp.DIFF_PSF_BASENAMES[plain]),
@@ -300,11 +333,15 @@ def _read(job: JobContext) -> Read:
                 sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf))
 
         reuse: dict[int, dict] = {}
-        if predecessors:
-            cur.execute("SELECT * FROM forced WHERE job = ANY(%s)", (predecessors,))
-            for row in cur.fetchall():
-                row.pop("job")
-                reuse[row["forced_id"]] = dict(row)
+        reused_sets = {}
+        cur.execute(REUSE_SQL, ([i.pid for i in images],))
+        for row in cur.fetchall():
+            reused_sets[row["job"]] = {"dataset": row.pop("p_dataset"), "expid": row.pop("p_expid"),
+                                       "sca": row.pop("p_sca"), "fid": row.pop("p_fid")}
+            row.pop("job")
+            reuse[row["forced_id"]] = dict(row)
+        reads += [{"product": "packets", "key": k, "source_job": j}
+                  for j, k in sorted(reused_sets.items())]
 
         where, values = _key_where(gaia_in["key"], "c")
         cur.execute("SELECT c.location FROM catalogs c WHERE c.job = %s AND " + where,
@@ -320,13 +357,13 @@ def _read(job: JobContext) -> Read:
 
     trigger_image = [i for i in images if (i.expid, i.sca, i.fid) == (key["expid"], key["sca"], key["fid"])]
     if len(trigger_image) != 1:
-        raise ValueError(f"job {job.job}: the trigger's difference image is not among its inputs")
+        raise ValueError(f"job {job.job}: the trigger's difference image is not in its window")
     return Read(key=key, source_job=source_job, object_job=object_job,
                 flags_zero=len(alertable), triggers=triggers,
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
                 gaia_job=gaia_in["source_job"], gaia_path=gaia_path,
-                refcat_path=get(ref["filename"]) if ref else None)
+                refcat_path=get(ref["filename"]) if ref else None, reads=reads)
 
 
 def neighbour(name: str, diff: str) -> str:
@@ -438,10 +475,11 @@ def _gaia_catalog(path: Path, mjd: float):
 
 
 def run(job: JobContext) -> None:
-    summary = write_set(_read(job), job.settings["packet"], job.path, job.prefix, job.dataset,
+    read = _read(job)
+    summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
                         sync_seed=f"{job.job}/{job.attempt}")
     job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
-                        ("external", "external.parquet")], packet=summary,
+                        ("external", "external.parquet")], packet=summary, reads=read.reads,
                        metrics={"n_packets": summary["packets"],
                                 "n_packets_snr_gt20": summary["packets_snr_gt20"],
                                 "n_packets_bright_footprint": summary["packets_bright_footprint"]})
@@ -538,7 +576,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         raise RuntimeError(f"{avro}: {len(blocks)} blocks for {len(order)} records")
     url = prefix + f"packets/{name}"
     index = [{"dataset": dataset, "expid": read.key["expid"], "sca": read.key["sca"],
-              "fid": read.key["fid"], "object_job": read.object_job, "aid": aid,
+              "fid": read.key["fid"], "object_job": read.object_job[aid], "aid": aid,
               "source_job": read.source_job, "sid": source.sid, "trigger_mjd": source.mjdobs,
               "band": source.band, "schema_version": VERSION, "filename": url,
               "byte_offset": offset, "byte_length": size}

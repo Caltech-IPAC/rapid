@@ -78,6 +78,8 @@ size = 61
 epsf_cache = ""
 
 [associate]
+# Read by the difference job, which associates its sources with the field's
+# objects (plan amendment 2026-10-24; the associate stage is retired).
 # Degrees (dev's crossmatch match_radius).
 match_radius = 0.00001528
 # Sources matched: flags equal to this, and fluxfit / fluxerr at least min_snr.
@@ -115,7 +117,6 @@ max_submissions_per_pass = 1000
 intake = 2048
 reference = 6144
 difference = 24576
-associate = 1024
 packet = 2048
 # New: the psf stage holds one 178.6 MB ePSF reference and its 42 MB array.
 psf = 2048

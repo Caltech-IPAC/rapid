@@ -36,13 +36,12 @@ def write_attempt(root: Path, tables: dict[str, list[dict]]) -> str:
 
 def objects_rows(n: int = 3) -> list[dict]:
     return [{"aid": aid, "dataset": DATASET, "survey": SURVEY, "field": 1,
-             "ra0": 10.0 + aid, "dec0": -5.0, "nsources": 1,
-             "sumra": 10.0 + aid, "sumra2": (10.0 + aid) ** 2, "sumdec": -5.0, "sumdec2": 25.0,
-             "sumflux": 100.0, "sumflux2": 1.0e4} for aid in range(1, n + 1)]
+             "ra0": 10.0 + aid, "dec0": -5.0} for aid in range(1, n + 1)]
 
 
 def memberships_rows(source_job: int, n: int = 3) -> list[dict]:
-    return [{"aid": aid, "source_job": source_job, "sid": aid} for aid in range(1, n + 1)]
+    return [{"object_job": source_job, "aid": aid, "source_job": source_job, "sid": aid,
+             "dra": 0.0, "ddec": 0.0, "flux": 100.0} for aid in range(1, n + 1)]
 
 
 def new_run(conn, live: bool = False, why: str = "test") -> int:
@@ -53,7 +52,7 @@ def new_run(conn, live: bool = False, why: str = "test") -> int:
 
 
 def new_job(conn, run: int, expects=(), **inputs) -> int:
-    return create_job(conn, run, "associate", {"field": 1}, expects=expects, **inputs)
+    return create_job(conn, run, "difference", {"field": 1}, expects=expects, **inputs)
 
 
 def open_bindings(conn, **where) -> list[tuple]:

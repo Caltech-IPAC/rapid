@@ -25,8 +25,8 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
 - ``official undo <group-id> --who --why`` applies the inverse of a group
   and prints the new group's id;
 - ``run show <id>`` and ``job show <id>`` print the run or job as JSON;
-- ``job local --run --stage --scope JSON [--inputs JSON] [--expects JSON]
-  [--excludes JSON]`` records a job and runs it; ``job run --job <id>``
+- ``job local --run --stage --scope JSON [--inputs JSON] [--expects JSON]``
+  records a job and runs it; ``job run --job <id>``
   runs an existing job's next attempt. Both run the stage's ``run(job)``
   in this process under ``RAPIDPIPE_OUTPUTS_ROOT`` and publish it
   (``rapidpipe.foundation.run_job``), printing the publisher's result;
@@ -182,8 +182,7 @@ def _build_parser() -> argparse.ArgumentParser:
         verb.add_argument("--stage", required=new_only)
         for name, meaning in (("scope", "the job's scope, a JSON object"),
                               ("inputs", "a JSON list of {product, key, source_job}"),
-                              ("expects", "a JSON list of {product, key, binding}"),
-                              ("excludes", "a JSON list of {key, source_job}")):
+                              ("expects", "a JSON list of {product, key, binding}")):
             verb.add_argument(f"--{name}", required=new_only and name == "scope", type=_json_argument,
                               default=None if name == "scope" else [], metavar="JSON", help=meaning)
     job_run = job_subparsers.add_parser(
@@ -351,7 +350,7 @@ def _run_job(args: argparse.Namespace) -> int:
         stage, stage_run = args.stage, _stage_run(args.stage)
         with connect_job() as conn:
             job_id = foundation.create_job(conn, args.run, stage, args.scope, args.inputs,
-                                           args.expects, args.excludes)
+                                           args.expects)
     else:
         job_id = args.job
         with connect_job() as conn:

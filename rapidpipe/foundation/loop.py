@@ -1,8 +1,10 @@
 """The loop: ``rapidpipe loop``, one verb that carries a selection one stage forward per pass.
 
 Foundation plan, Part 2: the live run admits what is new under its source
-root, and each stage runs when its inputs are official; association is per
-field. One pass, :func:`run_pass`, reads the source root's listing of the
+root, and each stage runs when its inputs are official; association is in
+the difference job (the plan's amendment of 2026-10-24), so there are no
+field chains, no admission order and no pass interval per epoch: the
+loop's only waits are the reference's frames and the queue. One pass, :func:`run_pass`, reads the source root's listing of the
 selected filters' observations (:func:`list_stems`) and one snapshot of the
 tables (:func:`snapshot`), decides every submission from them
 (:func:`plan`, pure), submits each through the caller's ``submit``
@@ -69,23 +71,16 @@ One pass, in order:
   with fewer than ``min_frames`` such rows once the intake has drained gets
   no reference and is reported under ``held`` with the reason, every pass;
   it does not stop the drain. Rows before the bound are the reference's:
-  they get no difference, associate or packet.
+  they get no difference or packet.
 - ``difference``: a job per official L2 row whose field has an official
   reference and whose key has no official difference and no difference job
-  of this run pending or failed.
-- ``associate``: per field, one job for the earliest-``mjdobs`` official
-  source set no associate job of this run names, predecessor the field's
-  open object set, and only when no associate of the field is pending, no
-  earlier selected L2 row of the field lacks its official source set and no
-  intake of the run is pending (an intake's field is known only once it
-  publishes), so each field's chain stays chronological. Fields advance
-  independently.
-- ``packet``: per field, one job for the earliest published associate of
-  the run whose epoch has no packet set, once every earlier epoch's packet
-  set is official, naming its inputs as the 2026-10-21 night did: the
-  reference, the run's Gaia catalog, the science PSF, the object set, the
-  field's difference images and L2 rows in the forced window, the epoch's
-  source set and the field's earlier packet sets.
+  of this run pending or failed. It associates its sources with the
+  field's objects as they stand when it reads them, in any order.
+- ``packet``: a job per official source set of a selected key with no
+  official packet set and no packet job of this run pending or failed,
+  naming the reference, the run's Gaia catalog, the science PSF and the
+  source set; it reads the object catalog and the forced window as they
+  stand at its read (``rapidpipe.stages.packet``).
 - ``kafka``: the caller's ``publish()`` over the run's unstamped official
   packet sets: each packet job sends its own set as its last act, so this
   is the recovery sweep for a set whose job died before its
@@ -112,7 +107,7 @@ SUFFIX = "_cal.asdf"
 PENDING = ("launched", "running")
 #: Batch's job states before it ends one (``SUCCEEDED`` and ``FAILED`` end it).
 BATCH_ACTIVE = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING")
-STAGES = ("psf", "intake", "reference", "difference", "associate", "packet")
+STAGES = ("psf", "intake", "reference", "difference", "packet")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -212,8 +207,7 @@ class Snapshot:
 
     Keys are tuples: an L2 key is ``(expid, sca, fid)``, a reference key
     ``(field, fid)``. ``jobs`` are this run's jobs of the loop's stages:
-    dicts with ``id``, ``stage``, ``state``, ``scope`` and, for an
-    associate, ``sources`` (the source set job it names).
+    dicts with ``id``, ``stage``, ``state`` and ``scope``.
     """
 
     dataset: str
@@ -228,9 +222,6 @@ class Snapshot:
     refs: dict[tuple[int, int], int]                             # (field, fid) -> job
     diffs: dict[tuple[int, int, int], int]                       # key -> difference job
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
-    objects: dict[int, tuple[int, int]]                          # field -> (job, binding)
-    chain: dict[int, int]                                        # source set job -> its associate in the
-                                                                 # chain of its field's official object set
     packets: dict[tuple[int, int, int], int]                     # key -> packet set job
     gaia: dict | None                                            # the dataset's {"key", "job"}
 
@@ -257,19 +248,8 @@ def snapshot(conn, run: int) -> Snapshot:
                  " AND state = 'published' AND scope->>'dataset' = %s", (d,))}
         jobs = _rows(cur, "SELECT id, stage, state, scope FROM jobs WHERE run = %s AND stage = ANY(%s)"
                           " ORDER BY id", (run, list(STAGES)))
-        named = {r["job"]: r["source_job"] for r in _rows(
-            cur, "SELECT i.job, i.source_job FROM job_inputs i JOIN jobs j ON j.id = i.job"
-                 " WHERE j.run = %s AND j.stage = 'associate' AND i.kind = 'input'"
-                 " AND i.product = 'sources'", (run,))}
-        for job in jobs:
-            if job["stage"] == "associate":
-                job["sources"] = named.get(job["id"])
         bound = _rows(cur, "SELECT id, product, key, job FROM official WHERE closed_at IS NULL"
                            " AND job IS NOT NULL AND key->>'dataset' = %s", (d,))
-        links = _rows(cur, "SELECT i.job, i.product, i.source_job FROM job_inputs i"
-                           " JOIN jobs j ON j.id = i.job JOIN runs r ON r.id = j.run"
-                           " WHERE r.dataset = %s AND j.stage = 'associate' AND i.kind = 'input'"
-                           " AND i.product IN ('sources', 'objects')", (d,))
         l2 = {_l2key(r): {"field": r["field"], "mjdobs": r["mjdobs"], "job": r["job"]}
               for r in _rows(cur, "SELECT expid, sca, fid, field, mjdobs, job FROM l2files_official"
                                   " WHERE dataset = %s", (d,))}
@@ -280,8 +260,6 @@ def snapshot(conn, run: int) -> Snapshot:
     gaia = [{"key": b["key"], "job": b["job"]} for b in by["catalogs"]]
     if len(gaia) > 1:
         raise LookupError(f"dataset {d} has {len(gaia)} official catalogs; the loop names one Gaia catalog")
-    objects = {int(b["key"]["field"]): (b["job"], b["id"]) for b in by["objects"]
-               if b["key"].get("survey") == meta[0]["survey"]}
     return Snapshot(
         dataset=d, survey=meta[0]["survey"], settings=meta[0]["settings"], fids=fids,
         published_stems=stems, jobs=jobs,
@@ -292,7 +270,6 @@ def snapshot(conn, run: int) -> Snapshot:
         refs={(int(b["key"]["field"]), int(b["key"]["fid"])): b["job"] for b in by["refimages"]},
         diffs={_l2key(b["key"]): b["job"] for b in by["diffimages"]},
         sources={_l2key(b["key"]): b["job"] for b in by["sources"]},
-        objects=objects, chain=_chain(objects, links),
         packets={_l2key(b["key"]): b["job"] for b in by["packets"]},
         gaia=gaia[0] if gaia else None)
 
@@ -350,21 +327,6 @@ def reconcile(conn, run: int, client: Any) -> dict:
             rerun.append({"job": job, "stage": stage, "reason": refusal})
     return {"described": len(batch), "ended": ended, "retrying": retrying, "rerun": rerun,
             "seconds": round(time.monotonic() - started, 2)}
-
-
-def _chain(objects: dict[int, tuple[int, int]], links: list[dict]) -> dict[int, int]:
-    """Source set job -> associate job, for every associate in the chain of a field's official object
-    set: from the bound set back through each associate's recorded ``objects`` input, whatever run
-    made it. An associate outside every chain (a binding refused or undone) associated nothing."""
-    sources, previous = {}, {}
-    for link in links:
-        (sources if link["product"] == "sources" else previous)[link["job"]] = link["source_job"]
-    chain = {}
-    for job, _ in objects.values():
-        while job is not None and job in sources:
-            chain[sources[job]] = job
-            job = previous.get(job)
-    return chain
 
 
 def _fid(band: str, fids: dict[str, int]) -> int:
@@ -496,71 +458,23 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
                     "expects": [{"product": "diffimages", "key": key(*k), "binding": None},
                                 {"product": "sources", "key": key(*k), "binding": None}]})
 
-    # Associate: per field, the earliest unassociated official source set, one at a time.
-    by_field = defaultdict(list)
-    for k, row in after.items():
-        by_field[row["field"]].append((row["mjdobs"], k))
-    # An epoch is associated when its source set is in its field's official chain, by any run of the
-    # dataset (a run resumed in place of another must not associate it again), or when an associate
-    # of this run naming it has not published.
-    associated = {sset: {"id": job, "state": "published"} for sset, job in snap.chain.items()}
-    associated.update({j["sources"]: j for j in run_jobs["associate"]
-                       if j.get("sources") is not None and j["state"] != "published"})
-    assoc_busy = {int(j["scope"]["field"]) for j in taken["associate"]}
-    if not intake_pending:
-        for field, epochs in sorted(by_field.items()):
-            if field in assoc_busy:
-                continue
-            for _, k in sorted(epochs):
-                sset = snap.sources.get(k)
-                if sset is None:
-                    break                       # an earlier epoch is still upstream
-                if sset in associated:
-                    continue
-                prev = snap.objects.get(field)
-                inputs = [{"product": "sources", "key": key(*k), "source_job": sset}]
-                okey = {"dataset": d, "survey": snap.survey, "field": field}
-                if prev is not None:
-                    inputs.append({"product": "objects", "key": okey, "source_job": prev[0]})
-                out.append({"stage": "associate", "scope": {"field": field}, "inputs": inputs,
-                            "expects": [{"product": "objects", "key": okey,
-                                         "binding": prev[1] if prev else None}]})
-                break
-
-    # Packet: per field, the earliest associated epoch without a packet set, one at a time.
-    window = float(snap.settings["packet"]["forced_window_days"])
+    # Packet: per official source set of a selected key, once; it reads the catalog as it stands.
     packet_keys = {scope_l2(j) for j in taken["packet"]}
-    for field, epochs in sorted(by_field.items()):
-        if any(snap.l2.get(scope_l2(j), {}).get("field") == field for j in pending["packet"]):
+    for k, row in sorted(after.items()):
+        if k not in snap.sources or k in snap.packets or k in packet_keys:
             continue
-        for mjd, k in sorted(epochs):
-            assoc = associated.get(snap.sources.get(k))
-            if assoc is None or assoc["state"] != "published":
-                break
-            if k in snap.packets:
-                continue
-            if k in packet_keys:
-                break
-            if snap.gaia is None:
-                raise LookupError("the run has no official catalogs binding for the packet stage's Gaia")
-            expid, sca, fid = k
-            images = [(m, kk) for m, kk in sorted(epochs) if kk in snap.diffs and mjd - window <= m <= mjd]
-            inputs = [{"product": "refimages", "key": {"dataset": d, "field": field, "fid": fid},
-                       "source_job": snap.refs[field, fid]},
-                      {"product": "catalogs", "key": snap.gaia["key"], "source_job": snap.gaia["job"]},
-                      psf(fid, sca, "science"),
-                      {"product": "objects", "key": {"dataset": d, "survey": snap.survey, "field": field},
-                       "source_job": assoc["id"]}]
-            for _, kk in images:
-                inputs += [{"product": "diffimages", "key": key(*kk), "source_job": snap.diffs[kk]},
-                           {"product": "l2files", "key": key(*kk), "source_job": snap.l2[kk]["job"]}]
-            inputs.append({"product": "sources", "key": key(*k), "source_job": snap.sources[k]})
-            inputs += [{"product": "packets", "key": key(*kk), "source_job": snap.packets[kk]}
-                       for m, kk in sorted(epochs) if m < mjd and kk in snap.packets]
-            out.append({"stage": "packet", "scope": {"expid": expid, "sca": sca, "fid": fid},
-                        "inputs": inputs,
-                        "expects": [{"product": "packets", "key": key(*k), "binding": None}]})
-            break
+        if snap.gaia is None:
+            raise LookupError("the run has no official catalogs binding for the packet stage's Gaia")
+        expid, sca, fid = k
+        out.append({"stage": "packet", "scope": {"expid": expid, "sca": sca, "fid": fid},
+                    "inputs": [{"product": "refimages", "key": {"dataset": d, "field": row["field"],
+                                                                "fid": fid},
+                                "source_job": snap.refs[row["field"], fid]},
+                               {"product": "catalogs", "key": snap.gaia["key"],
+                                "source_job": snap.gaia["job"]},
+                               psf(fid, sca, "science"),
+                               {"product": "sources", "key": key(*k), "source_job": snap.sources[k]}],
+                    "expects": [{"product": "packets", "key": key(*k), "binding": None}]})
 
     deferred = len(out) - max_submissions if max_submissions is not None and len(out) > max_submissions else 0
     if deferred:

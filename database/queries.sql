@@ -37,49 +37,35 @@ LEFT JOIN official o
     AND o.key = jsonb_build_object('dataset', l.dataset, 'expid', l.expid, 'sca', l.sca, 'fid', l.fid)
 WHERE l.dataset = %(dataset)s AND l.expid = %(expid)s AND l.sca = %(sca)s AND l.fid = %(fid)s;
 
--- name: object_set_and_members
--- returns: object_set, aid, ra0, dec0, nsources, source_job, sid, recorded_by
--- The current object set of a field and its members through its predecessor
--- chain, less excluded source sets (dev: merges_<field> joined to
--- astroobjects_<field>). recorded_by is the set in the chain that matched it.
-SELECT o.job AS object_set, o.aid, o.ra0, o.dec0, o.nsources, m.source_job, m.sid,
-       m.job AS recorded_by
+-- name: field_objects_and_members
+-- returns: object_job, aid, ra0, dec0, nsources, source_job, sid
+-- A field's official objects and their official members (dev: merges_<field>
+-- joined to astroobjects_<field>). An object is its founding job and id; a
+-- superseded source set's members are absent (plan amendment 2026-10-24).
+SELECT o.job AS object_job, o.aid, o.ra0, o.dec0, o.nsources, m.source_job, m.sid
 FROM objects_official o
-JOIN members_official m ON m.set_job = o.job AND m.aid = o.aid
+JOIN memberships_official m ON m.object_job = o.job AND m.aid = o.aid
 WHERE o.dataset = %(dataset)s AND o.survey = %(survey)s AND o.field = %(field)s
 ORDER BY o.aid, m.source_job, m.sid;
 
--- name: object_history_in_named_set
+-- name: object_history
 -- returns: kind, mjdobs, flux, fluxerr, job, id
--- An object's detections and forced photometry within a named object set
--- (official or not): detections are the set's chain's memberships less
--- excluded source sets; forced rows are those of packet sets that used a set
--- of that chain, once per forced id. kind is 'detection' (job, id = the
--- source set and sid) or 'forced' (job, id = the packet set and forced_id).
-WITH RECURSIVE chain (job) AS (
-    SELECT %(object_set)s::bigint
-    UNION ALL
-    SELECT i.source_job FROM chain c
-    JOIN job_inputs i ON i.job = c.job AND i.kind = 'input' AND i.product = 'objects'
-    WHERE i.source_job IS NOT NULL
-)
+-- An object's official detections and the forced photometry of the packet
+-- sets that carried it, once per forced id. kind is 'detection' (job, id =
+-- the source set and sid) or 'forced' (job, id = the packet set and forced_id).
 SELECT * FROM (
     SELECT 'detection' AS kind, s.mjdobs, s.fluxfit::double precision AS flux,
            s.fluxerr::double precision AS fluxerr, m.source_job AS job, m.sid AS id
-    FROM chain c
-    JOIN memberships m ON m.job = c.job
+    FROM memberships_official m
     JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
-    WHERE m.aid = %(aid)s
-      AND NOT EXISTS (SELECT 1 FROM chain x
-                      JOIN job_inputs e ON e.job = x.job AND e.kind = 'excludes'
-                      WHERE e.source_job = m.source_job)
+    WHERE m.object_job = %(object_job)s AND m.aid = %(aid)s
     UNION ALL
     (SELECT DISTINCT ON (f.forced_id) 'forced', f.mjdobs, f.psf_flux, f.psf_fluxerr, f.job,
             f.forced_id
      FROM forced f
      WHERE f.aid = %(aid)s
-       AND EXISTS (SELECT 1 FROM packets p
-                   WHERE p.job = f.job AND p.aid = f.aid AND p.object_job IN (SELECT job FROM chain))
+       AND EXISTS (SELECT 1 FROM packets p WHERE p.job = f.job AND p.aid = f.aid
+                   AND p.object_job = %(object_job)s)
      ORDER BY f.forced_id, f.job)
 ) history
 ORDER BY mjdobs, kind, job, id;
@@ -106,63 +92,20 @@ ORDER BY p.job;
 
 -- name: packet_history_by_object
 -- returns: job, expid, sca, fid, source_job, sid, object_job, trigger_mjd, binding
--- A versioned object's alert history: the packets of object aid made with
--- the named object set or any set of its predecessor chain.
-WITH RECURSIVE chain (job) AS (
-    SELECT %(object_set)s::bigint
-    UNION ALL
-    SELECT i.source_job FROM chain c
-    JOIN job_inputs i ON i.job = c.job AND i.kind = 'input' AND i.product = 'objects'
-    WHERE i.source_job IS NOT NULL
-)
+-- An object's alert history: every packet, every version, that carried it.
 SELECT p.job, p.expid, p.sca, p.fid, p.source_job, p.sid, p.object_job, p.trigger_mjd,
        o.id AS binding
 FROM packets p
 LEFT JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = p.job
-WHERE p.aid = %(aid)s AND p.object_job IN (SELECT job FROM chain)
+WHERE p.object_job = %(object_job)s AND p.aid = %(aid)s
 ORDER BY p.trigger_mjd, p.job;
-
--- name: candidate_against_official
--- returns: source_job, sid, ra, dec, mjdobs, candidate_aid, official_aid
--- A candidate object set (an unbound associate job) against the official
--- set for the same key: every detection of the candidate's input source
--- sets, with the object each assigns it; a null aid is a detection that set
--- left unmatched (one row per pair of assignments when a source joins
--- several objects).
-WITH RECURSIVE chain (job) AS (
-    SELECT %(candidate)s::bigint
-    UNION ALL
-    SELECT i.source_job FROM chain c
-    JOIN job_inputs i ON i.job = c.job AND i.kind = 'input' AND i.product = 'objects'
-    WHERE i.source_job IS NOT NULL
-),
-candidate_members AS (
-    SELECT m.aid, m.source_job, m.sid
-    FROM chain c JOIN memberships m ON m.job = c.job
-    WHERE NOT EXISTS (SELECT 1 FROM chain x
-                      JOIN job_inputs e ON e.job = x.job AND e.kind = 'excludes'
-                      WHERE e.source_job = m.source_job)
-),
-official_set AS (
-    SELECT o.job FROM job_inputs e
-    JOIN official o ON o.closed_at IS NULL AND o.product = 'objects' AND o.key = e.key
-    WHERE e.job = %(candidate)s AND e.kind = 'expects' AND e.product = 'objects'
-)
-SELECT s.job AS source_job, s.sid, s.ra, s.dec, s.mjdobs, cm.aid AS candidate_aid,
-       om.aid AS official_aid
-FROM job_inputs i
-JOIN sources s ON s.job = i.source_job
-LEFT JOIN candidate_members cm ON cm.source_job = s.job AND cm.sid = s.sid
-LEFT JOIN members_official om ON om.source_job = s.job AND om.sid = s.sid
-    AND om.set_job = (SELECT job FROM official_set)
-WHERE i.job = %(candidate)s AND i.kind = 'input' AND i.product = 'sources'
-ORDER BY s.job, s.sid, cm.aid, om.aid;
 
 -- name: ancestors_of_packet_set
 -- returns: job, stage, run, state, bound
 -- Every job a packet set descends from, through recorded inputs, nearest
--- first by job id: its object set and that set's chain, source sets, images,
--- PSF, reference, catalogs. bound: whether the job holds an open binding.
+-- first by job id: its source set, the difference jobs whose objects that set
+-- read and the members and window it read itself, images, PSF, reference,
+-- catalogs. bound: whether the job holds an open binding.
 WITH RECURSIVE up (job) AS (
     SELECT i.source_job FROM job_inputs i
     WHERE i.job = %(packet_job)s AND i.kind = 'input' AND i.source_job IS NOT NULL
@@ -275,11 +218,11 @@ WHERE l.overlapfields && %(fields)s::integer[] AND l.dataset = %(dataset)s AND l
 ORDER BY l.dateobs, l.sca;
 
 -- name: objects_in_cone
--- returns: aid, ra0, dec0, nsources, object_set
--- Current objects within a cone (the association read's spatial shape, R25,
+-- returns: aid, ra0, dec0, nsources, object_job
+-- Official objects within a cone (the association read's spatial shape, R25,
 -- now a query rather than the matcher's: the matcher runs in memory).
 -- q3c index on object positions.
-SELECT o.aid, o.ra0, o.dec0, o.nsources, o.job AS object_set
+SELECT o.aid, o.ra0, o.dec0, o.nsources, o.job AS object_job
 FROM objects_official o
 WHERE q3c_radial_query(o.ra0, o.dec0, %(ra)s, %(dec)s, %(radius)s)
   AND o.dataset = %(dataset)s AND o.survey = %(survey)s

@@ -19,14 +19,15 @@
 --   packets                            dataset, expid, sca, fid
 --   refimages                          dataset, field, fid
 --   psfs                               dataset, fid, sca, kind
---   objects                            dataset, survey, field
 --   catalogs                           dataset, name, version
 --
--- A set (a reference image, a source set, an object set, a packet set) is
--- identified by its job: its child rows (refimimages, refimcatalogs,
--- sources, memberships, packets, forced, external) carry the set's job and
--- their own id, and their views join through the set's open binding on
--- (product, job).
+-- A set (a reference image, a source set, a packet set) is identified by its
+-- job: its child rows (refimimages, refimcatalogs, sources, objects,
+-- memberships, packets, forced, external) carry the set's job and their own
+-- id, and their views join through the set's open binding on (product, job).
+-- The object catalog has no binding of its own (plan amendment 2026-10-24):
+-- a difference job's founded objects and memberships ride on its source
+-- set's binding.
 --
 -- Columns are dev's names and types (database/schema/rapidOpsTables.sql and
 -- rapidOpsSourcesTable.sql on dev) for the columns the team's queries read,
@@ -167,16 +168,17 @@ CREATE INDEX official_open_product_job ON official (product, job)
 CREATE INDEX official_opened_group_idx ON official (opened_group);
 CREATE INDEX official_closed_group_idx ON official (closed_group);
 
--- A job's inputs, chosen at launch:
---   input     a set the job reads (product, key, source_job); for an object
---             set's job, its `objects` input is its predecessor
+-- A job's inputs, chosen at launch, or recorded at its read by the publisher
+-- from the manifest's `reads` (a difference job's object catalog: one
+-- `objects` row per founding job whose objects it read; a packet job's
+-- members and forced window):
+--   input     a set the job reads (product, key, source_job)
 --   expects   per output key, the open binding the job expects to replace
 --             (binding), or none (binding null)
---   excludes  a predecessor source set that is no longer official
---             (product 'sources', key, source_job), whose members it drops
+-- SMDC also holds `excludes` rows, the retired set chain's (2026-10-24).
 CREATE TABLE job_inputs (
     job bigint NOT NULL REFERENCES jobs (id),
-    kind text NOT NULL CHECK (kind IN ('input', 'expects', 'excludes')),
+    kind text NOT NULL CHECK (kind IN ('input', 'expects')),
     product text NOT NULL,
     key jsonb NOT NULL,
     source_job bigint REFERENCES jobs (id),
@@ -376,38 +378,44 @@ CREATE TABLE sources (
     UNIQUE (job, sid)
 );
 
--- An object set: every object of one field, with sufficient sums.
--- Object ids are position hashes of the founding source.
+-- The object catalog, per run and field, append-only (plan amendment
+-- 2026-10-24): an object is founded by the difference job whose unmatched
+-- source it was; its id is the position hash of that source. The publisher
+-- reconciles a job's founded objects against those founded since its read
+-- (rapidpipe.foundation.catalog), so no two jobs found one object.
 CREATE TABLE objects (
-    job bigint NOT NULL REFERENCES jobs (id),        -- the object set's job
+    job bigint NOT NULL REFERENCES jobs (id),        -- the difference job that founded it
     aid bigint NOT NULL,
     dataset text NOT NULL,
     survey text NOT NULL,
     field integer NOT NULL,
-    ra0 double precision NOT NULL,                   -- founding position
+    ra0 double precision NOT NULL,                   -- founding position, the origin of its members' offsets
     dec0 double precision NOT NULL,
-    nsources integer NOT NULL,                       -- count
-    sumra double precision NOT NULL,
-    sumra2 double precision NOT NULL,
-    sumdec double precision NOT NULL,
-    sumdec2 double precision NOT NULL,
-    sumflux double precision NOT NULL,
-    sumflux2 double precision NOT NULL,
     UNIQUE (dataset, survey, field, aid, job)
 );
 
 CREATE INDEX objects_job_idx ON objects (job, aid);
+CREATE INDEX objects_field_idx ON objects (dataset, survey, field);
 
--- An object set's new memberships (this epoch's matches); many-to-many.
+-- A difference job's memberships: each of its sources (source_job, sid) in
+-- each object (object_job, aid) it matched, with the source's share of the
+-- object's sufficient sums: its offsets from the object's founding position
+-- (degrees, RA wrapped into [-180, 180)) and its fluxfit
+-- (rapidpipe.science.statistics.sums). source_job is the job itself.
 CREATE TABLE memberships (
-    job bigint NOT NULL REFERENCES jobs (id),        -- the object set's job
+    job bigint NOT NULL REFERENCES jobs (id),        -- the difference job
+    object_job bigint NOT NULL REFERENCES jobs (id), -- the object's founding job
     aid bigint NOT NULL,
     source_job bigint NOT NULL REFERENCES jobs (id), -- the source set's job
     sid bigint NOT NULL,
-    UNIQUE (job, aid, source_job, sid)
+    dra double precision NOT NULL,
+    ddec double precision NOT NULL,
+    flux double precision NOT NULL,
+    UNIQUE (job, object_job, aid, source_job, sid)
 );
 
 CREATE INDEX memberships_source_idx ON memberships (source_job, sid);
+CREATE INDEX memberships_object_idx ON memberships (object_job, aid);
 
 -- The packet index: one row per (packet set, source); the Avro bytes are at
 -- (filename, byte_offset, byte_length).
@@ -417,7 +425,7 @@ CREATE TABLE packets (
     expid integer NOT NULL,
     sca smallint NOT NULL,
     fid smallint NOT NULL,
-    object_job bigint NOT NULL REFERENCES jobs (id), -- the object set
+    object_job bigint NOT NULL REFERENCES jobs (id), -- the object's founding job (an associate job's set before 2026-10-24)
     aid bigint NOT NULL,
     source_job bigint NOT NULL REFERENCES jobs (id), -- the source set
     sid bigint NOT NULL,
@@ -541,18 +549,33 @@ FROM sources t
 JOIN official o ON o.closed_at IS NULL AND o.product = 'sources' AND o.job = t.job
 JOIN jobs j ON j.id = t.job;
 
-CREATE VIEW objects_official AS
-SELECT t.*, o.id AS binding, j.run
-FROM objects t
-JOIN official o ON o.closed_at IS NULL AND o.product = 'objects' AND o.job = t.job
-    AND o.key = jsonb_build_object('dataset', t.dataset, 'survey', t.survey, 'field', t.field)
-JOIN jobs j ON j.id = t.job;
-
+-- An official membership: its source set is official. A superseded source
+-- set's memberships leave with it.
 CREATE VIEW memberships_official AS
 SELECT t.*, o.id AS binding, j.run
 FROM memberships t
-JOIN official o ON o.closed_at IS NULL AND o.product = 'objects' AND o.job = t.job
+JOIN official o ON o.closed_at IS NULL AND o.product = 'sources' AND o.job = t.job
 JOIN jobs j ON j.id = t.job;
+
+-- An object with at least one official membership, its statistics the sum
+-- of its official memberships' sufficient sums (rapidpipe.science.statistics.sums
+-- turns them into means and spreads). An object whose memberships are all
+-- superseded is absent here and stays in the catalog its run's difference
+-- jobs read, so its id survives a re-difference.
+CREATE VIEW objects_official AS
+SELECT t.*, j.run, s.nsources, s.sumra, s.sumra2, s.sumdec, s.sumdec2, s.sumflux, s.sumflux2
+FROM objects t
+JOIN jobs j ON j.id = t.job
+CROSS JOIN LATERAL (
+    SELECT count(*)::integer AS nsources,
+           sum(m.dra) AS sumra, sum(m.dra * m.dra) AS sumra2,
+           sum(m.ddec) AS sumdec, sum(m.ddec * m.ddec) AS sumdec2,
+           sum(m.flux) AS sumflux, sum(m.flux * m.flux) AS sumflux2
+    FROM memberships m
+    JOIN official o ON o.closed_at IS NULL AND o.product = 'sources' AND o.job = m.job
+    WHERE m.object_job = t.job AND m.aid = t.aid
+) s
+WHERE s.nsources > 0;
 
 CREATE VIEW packets_official AS
 SELECT t.*, o.id AS binding, j.run
@@ -578,32 +601,6 @@ FROM catalogs t
 JOIN official o ON o.closed_at IS NULL AND o.product = 'catalogs' AND o.job = t.job
     AND o.key = jsonb_build_object('dataset', t.dataset, 'name', t.name, 'version', t.version)
 JOIN jobs j ON j.id = t.job;
-
--- The official object set's full membership: the memberships of every set
--- in its predecessor chain (each object set job's `objects` input), except
--- those whose source set any set in the chain excludes. `set_job` is the
--- official set the row belongs to; `job` is the set that recorded it.
-CREATE VIEW members_official AS
-WITH RECURSIVE chain (set_job, binding, job) AS (
-    SELECT o.job, o.id, o.job
-    FROM official o
-    WHERE o.closed_at IS NULL AND o.product = 'objects'
-    UNION ALL
-    SELECT c.set_job, c.binding, i.source_job
-    FROM chain c
-    JOIN job_inputs i ON i.job = c.job AND i.kind = 'input' AND i.product = 'objects'
-    WHERE i.source_job IS NOT NULL
-)
-SELECT m.*, c.set_job, c.binding, j.run
-FROM chain c
-JOIN memberships m ON m.job = c.job
-JOIN jobs j ON j.id = c.set_job
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM chain x
-    JOIN job_inputs e ON e.job = x.job AND e.kind = 'excludes'
-    WHERE x.set_job = c.set_job AND e.source_job = m.source_job
-);
 
 -- The jobs' quality numbers, one row per job and metric (fixes-2026-10-23 task 5).
 CREATE VIEW job_metrics AS

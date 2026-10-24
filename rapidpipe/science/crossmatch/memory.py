@@ -29,6 +29,10 @@ come from a grid of unit vectors whose cell is the radius's chord, so the
 
 The one change from the branch, named: the catalog is a dictionary
 grown in memory instead of the per-field table the branch's SQL queried.
+Since the plan's amendment of 2026-10-24 it runs inside the difference
+job, one epoch against the field's objects as the job read them
+(:func:`associate_epoch`); the publisher reconciles founders that two jobs
+in flight at once both made (``rapidpipe.foundation.catalog``).
 Parity with the SQL matcher on the field is ``tests/db/test_associate_parity.py``.
 """
 
@@ -39,7 +43,10 @@ from collections import defaultdict
 from dataclasses import dataclass, field as dataclass_field
 from typing import Iterable
 
+from rapidpipe.products.spatial import ra_offset, within
 from rapidpipe.science.crossmatch.catalog import expid_order, new_object_id
+
+__all__ = ["Association", "Catalog", "EpochAssociation", "Source", "associate", "associate_epoch", "within"]
 
 
 @dataclass(frozen=True)
@@ -58,15 +65,6 @@ class Source:
 def _unit(ra: float, dec: float) -> tuple[float, float, float]:
     r, d = math.radians(ra), math.radians(dec)
     return math.cos(d) * math.cos(r), math.cos(d) * math.sin(r), math.sin(d)
-
-
-def within(ra1: float, dec1: float, ra2: float, dec2: float, radius: float) -> bool:
-    """q3c's ``q3c_join`` test: the separation is strictly less than ``radius`` degrees."""
-    d1, d2 = math.radians(dec1), math.radians(dec2)
-    s_dec = math.sin((d1 - d2) / 2)
-    s_ra = math.sin(math.radians(ra1 - ra2) / 2)
-    sindist = s_dec * s_dec + math.cos(d1) * math.cos(d2) * s_ra * s_ra
-    return sindist < math.sin(math.radians(radius) / 2) ** 2
 
 
 @dataclass
@@ -159,3 +157,57 @@ def associate(catalog: Catalog, field_sources: Iterable[Source],
     return Association(new_objects=new_objects, memberships=memberships, exposures=len(order),
                        pass1_memberships=pass1, pass2_memberships=len(memberships) - pass1)
 
+
+
+@dataclass
+class EpochAssociation:
+    """One difference job's association: the objects it founded and its memberships.
+
+    ``founded`` rows are ``aid, ra0, dec0``; ``memberships`` rows are
+    ``object_job, aid, source_job, sid, dra, ddec, flux``: the object (its
+    founding job and id), the source, and the source's offsets from the
+    object's founding position (RA wrapped, degrees) and its ``fluxfit``,
+    the membership's share of the object's sufficient sums
+    (:mod:`rapidpipe.science.statistics.sums`).
+    """
+
+    founded: list[dict]
+    memberships: list[dict]
+    counts: dict
+
+
+def associate_epoch(objects: dict[int, tuple[int, float, float]], sources: Iterable[dict], *,
+                    job: int, field: int,
+                    cone: tuple[float, float, float] | None, radius: float) -> EpochAssociation:
+    """Match one epoch's accepted ``sources`` against the field's ``objects`` as read.
+
+    ``objects`` maps ``aid`` to ``(founding job, ra0, dec0)``: the field's
+    objects of the run when the job read them. ``sources`` are dicts with
+    ``sid, expid, mjdobs, field, ra, dec, fluxfit``, the job's own (its id
+    ``job`` is their source set), those in ``field`` matched by pass 1 and
+    founding objects, those in its neighbours by pass 2 (inside ``cone``
+    when given), as :func:`associate` runs them; a founded object's job is
+    ``job``.
+    """
+    sources = list(sources)
+    catalog = Catalog(radius, {aid: (ra0, dec0) for aid, (_, ra0, dec0) in objects.items()})
+    as_source = [Source(job, s["sid"], s["expid"], s["mjdobs"], s["field"], s["ra"], s["dec"])
+                 for s in sources]
+    result = associate(catalog, [s for s in as_source if s.field == field],
+                       [s for s in as_source if s.field != field], cone)
+    origin = {aid: (owner, ra0, dec0) for aid, (owner, ra0, dec0) in objects.items()}
+    origin.update({aid: (job, ra, dec) for aid, (ra, dec) in result.new_objects.items()})
+    by_sid = {s["sid"]: s for s in sources}
+    memberships = []
+    for aid, source_job, sid in sorted(result.memberships):
+        owner, ra0, dec0 = origin[aid]
+        source = by_sid[sid]
+        memberships.append({"object_job": owner, "aid": aid, "source_job": source_job, "sid": sid,
+                            "dra": ra_offset(source["ra"], ra0), "ddec": source["dec"] - dec0,
+                            "flux": float(source["fluxfit"])})
+    founded = [{"aid": aid, "ra0": ra, "dec0": dec}
+               for aid, (ra, dec) in sorted(result.new_objects.items())]
+    return EpochAssociation(founded=founded, memberships=memberships, counts={
+        "sources": len(sources), "objects_read": len(objects), "founded": len(founded),
+        "pass1_memberships": result.pass1_memberships,
+        "pass2_memberships": result.pass2_memberships})

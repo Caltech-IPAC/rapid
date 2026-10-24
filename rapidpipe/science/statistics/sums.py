@@ -1,12 +1,12 @@
 # ported-from: none
 """An object's statistics as sufficient sums, updated per epoch without reading history.
 
-Foundation plan v5, "Association products are sets": an object set's
-``objects.parquet`` carries, per object, the count and the sum and sum of
-squares of RA, Dec and flux of its members, so the next epoch adds its own
-members (and subtracts those of an excluded source set) and the light-curve
-statistics of :mod:`rapidpipe.science.statistics.lightcurve` follow from
-the sums alone.
+Foundation plan, the amendment of 2026-10-24: each membership carries its
+source's offsets from the object's founding position and its flux, and an
+object's count and sums and sums of squares of RA, Dec and flux are the
+sums over its official memberships (``objects_official``), additive and so
+order-free; the light-curve statistics of
+:mod:`rapidpipe.science.statistics.lightcurve` follow from the sums alone.
 
 The position sums are of offsets from the object's founding position
 ``(ra0, dec0)``, in degrees, the RA offset wrapped into [-180, 180): the
@@ -30,10 +30,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from rapidpipe.products.spatial import ra_offset
 
-def ra_offset(ra: float, ra0: float) -> float:
-    """``ra - ra0`` in degrees, wrapped into [-180, 180)."""
-    return (ra - ra0 + 180.0) % 360.0 - 180.0
+__all__ = ["Sums", "ra_offset"]
 
 
 @dataclass
