@@ -68,7 +68,8 @@ class _Conn:
 def test_submit_records_the_batch_job_id_and_its_submission_on_the_job_row(batch_env):
     conn = _Conn()
     launch.submit(7, "difference", job_definition="definition", conn=conn, client=_Batch())
-    assert conn.statements[0] == ("UPDATE jobs SET batch_job_id = %s WHERE id = %s", ("batch-1", 7))
+    sql, params = conn.statements[0]
+    assert sql.startswith("UPDATE jobs SET batch_job_id = %s") and params == ("batch-1", 7)
     sql, params = conn.statements[1]
     assert "attempts" in sql and params[0] == "batch-1" and params[-1] == 7
     assert json.loads(params[2])["queue"] == "queue" and json.loads(params[2])["why"] == "first"

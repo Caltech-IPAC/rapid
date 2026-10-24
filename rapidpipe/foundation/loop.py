@@ -22,7 +22,7 @@ plan), so a sampled proof of a few epochs is ``--passes 1,2,3,4``.
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported and not resubmitted: its key
 counts as taken until a person reruns it (``job run --job <id>``, or
-``job submit --job <id>`` on Batch). The one exception is a container
+``job submit --job <id>`` on Batch, which marks the row ``launched``). The one exception is a container
 that died for a reason not the code's (Batch ended it while its row was
 ``launched`` or ``running``: a host reclaimed, a task that failed to start,
 a kill): the pass resubmits it once, its Batch job named with
