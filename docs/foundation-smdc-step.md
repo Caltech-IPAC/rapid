@@ -7721,6 +7721,77 @@ was deleted. The raw evidence is the brief directory's `t1/`
 (`metrics-*.json`, `snr-*.txt`, `gate-answers.txt`, `compat/`,
 `times-check.txt`, `scripts/`).
 
+### Step gbtds-second: a second GBTDS pointing and SCA through the chain, run 112 CLEAN; every kept source above S/N 20 and the difference 1,036 s
+
+**What.** Measurement only: no code, overlay, image or deploy change. One GBTDS r00340 pointing and SCA other than run 67's ran through intake, reference, difference and packet on Batch under the settings as merged. The sample has run 67's shape at the pointing farthest from it.
+
+- **The sample.** Pointing (266.71, −28.93), visit residue 0, SCA 2, F146 (l 0.03, b −0.16, the Galactic centre). Taken from `gbtds_manifest.ecsv` as part 11 step 1 fetched it: pass 2's first seven epochs (02:15 to 03:37 UTC on 2027-10-01), one a day later and one six days later. The stems are `r00340010020010010NN_0001_wfi02_f146` for NN = 06, 12, 18, 24, 30, 36, 42, then `r0034001002001017012_0001_wfi02_f146` and `r0034001004001025042_0001_wfi02_f146`.
+- **The source root.** The nine files were copied unchanged to `$RAPIDPIPE_OUTPUTS_ROOT/samples/r00340-gb3/l2/`, one `aws s3 cp` each, every size equal to the source's `head-object` (202,670,946 to 202,677,909 bytes).
+- **The reference.** The first **N = 6** (`before_mjd` 61679.1465, between the sixth and seventh); three epochs are differenced.
+- **Gaia DR3.** The box covers the 9100 px mosaic (0.278°) with margin: RA 266.33 to 266.83, Dec −29.24 to −28.74. It came as 5 x 5 sub-boxes after a `COUNT`, the sum checked: **26,508 rows**, 71 s. That is a tenth of run 67's box (256,209) over the same area, because this field is behind the Galactic centre's extinction.
+- **The pair.** `rapid-rebuild:77` runs image `sha256:b2304313…`, whose ECR tag is `rebuild-a761ae2372db221326728ec39b9021ddc5d6814e`. The run's `--revision` is that sha, every job of the run records that digest, and every submission used `:77`.
+
+```sh
+rp run create --who "$USER" --why "..." --revision a761ae2372db221326728ec39b9021ddc5d6814e \
+  --overlay rapidpipe/settings/datasets/gbtds-r00340.toml \
+  --set 'intake.source_root="<the sample root>"' --set intake.unsigned=false \
+  --set reference.selection.before_mjd=61679.1465 --survey GBTDS --dataset r00340-gb3   # run 112
+rp official change --group live.json ...      # run 112 live, group 21714
+rp job local --run 112 --stage import --scope '{"source_dir": "<dir>", "gaia": {"name": "gaia-r00340-gb3", "version": "DR3", "path": "gaia-dr3-gbtds-r00340-gb3-box.parquet"}}' \
+  --expects '[{"product": "catalogs", "key": {"dataset": "r00340-gb3", "name": "gaia-r00340-gb3", "version": "DR3"}, "binding": null}]'   # job 23051
+rp loop --run 112 --filters F146 --scas 2 --pointings all --job-definition rapid-rebuild:77 --interval 60
+scripts/check_run.sh --run 112 --inspect <dir>
+```
+
+Check, held: the loop drained in **29.0 min** (23:02:28 to 23:31:29 UTC) with exit 0. Every job published on its first attempt: psf 23052, intakes 23053 to 23061, reference 23062, differences 23063 to 23065 (field 4670427), packets 23084 to 23086. **`Check run 112: CLEAN validate 6/6 13 s reader 3/3 5 s consumer 1278/1278 15 s`.**
+
+**Per epoch, beside run 67.** The gate sent all three sets without judging them: run 112 has 3 published differences, below `[gate] min_epochs` 5. Judged, `usable_fraction` 0.9986 to 0.9988 passes. The registration, core and ring metrics are absent on GBTDS under `reference_psf = "science"`, as on run 67, because each needs the reference's measured stars. For the same reason `sci_star_psf_sigma_ratio` does not exist here.
+
+| run | epoch | when | candidates | kept | S/N > 20 | packets | packets S/N > 20 | noise correlation | bright-footprint fraction | gate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 67 (SCA 8) | 2014101 | pass 2, +1.4 h | 9,618 | 500 | 367 | 173 | 133 | 1.63 | 0.003 | send |
+| 67 | 2171101 | +1 day | 9,343 | 500 | 418 | 173 | 147 | 1.63 | 0.000 | send |
+| 67 | 4254101 | pass 4, +6 days | 8,784 | 500 | 346 | 169 | 118 | 1.67 | 0.003 | send |
+| **112 (SCA 2)** | 2014201 | pass 2, +1.4 h | **12,770** | 500 | **497** | **428** | 426 | **2.03** | **0.040** | send, below `min_epochs` |
+| 112 | 2171201 | +1 day | 13,477 | 500 | 500 | 429 | 429 | 2.02 | 0.038 | send, below `min_epochs` |
+| 112 | 4254201 | pass 4, +6 days | 13,357 | 500 | 500 | 421 | 421 | 2.00 | 0.030 | send, below `min_epochs` |
+
+- **The residuals.** Every kept source of run 112 sits above S/N 20 (run 67: 69 to 84%). The packets are 2.5 times run 67's, at 1,278 against 515. Of the kept sources, 333 to 378 sit near bright reference pixels and 274 to 293 are flagged out of field.
+- **The gallery.** `run-112-difference-23063.png` shows the eight sources of highest S/N, at fluxes 1.9 to 2.6 × 10⁴. Each is the core-and-ring of run 67 at a bright star, the science PSF given to ZOGY for both images. The higher counts are this field's denser bright stars through that same mismatch: candidates 1.4 times run 67's, the bright-footprint fraction more than ten times. The mismatch is part 12 step 4's open item, not repaired here.
+
+**Per stage.** The queue wait runs from Batch submitted to started; container seconds run from started to ended. Both come from the published attempt. Peak RSS is `peak_rss_kib`. The margin is the stage's `[batch.memory_mib]` ask less the peak.
+
+| stage | jobs | queue wait s min / median / max | container s min / median / max | peak RSS MiB (max) | ask MiB | margin MiB (% of ask) | run 67 container median / peak RSS MiB |
+|---|---|---|---|---|---|---|---|
+| psf | 1 | 6 | 8 | 308 | 2,048 | 1,740 (85%) | 12 / 294 |
+| intake | 9 | 8 / 35 / 63 | 17 / 23 / 24 | 998 | 2,048 | 1,050 (51%) | 39 / 1,047 |
+| reference | 1 (6 frames, **9100 px**) | 11 | 90 | **4,514** | 6,144 | **1,630 (27%)** | 82 / 2,847 (7000 px) |
+| difference | 3 | 210 / 211 / 211 | **1,030 / 1,036 / 1,050** | 16,277 | 24,576 | 8,299 (34%) | 820 / 16,221 |
+| packet | 3 | 9 / 11 / 12 | 28 / 39 / 45 | 889 | 2,048 | 1,159 (57%) | 35 / 860 |
+
+- **The difference.** 1,036 s, 1.26 times run 67's 820 s and 4.5 times HLWAS's 232.6 s. Its peak is unchanged, at 16.3 GB.
+- **The reference.** The first GBTDS reference at 9100 px peaks at 4.4 GiB, 1.59 times run 67's 7000 px mosaic. That is HLWAS's ratio (2.8 → 4.5 GiB), and it is the narrowest margin of the run, 27% of its 6 GiB ask.
+- **Not separate jobs here.** Association runs inside the difference job now (386 to 428 objects founded per epoch), so there is no associate row.
+
+**The intake, per epoch.** The WCS shift is what the re-derivation moved the frame by. `gaia_dx_px` and `gaia_dy_px` are the Gaia offset through the re-derived WCS.
+
+| epoch file (`…_0001_wfi02_f146`) | WCS shift dx, dy px | `gaia_dx_px` | `gaia_dy_px` | Gaia stars |
+|---|---|---|---|---|
+| r0034001002001001006 | −44.36, +25.22 | −0.155 | +0.232 | 256 |
+| r0034001002001001012 | −33.18, −18.39 | −0.080 | +0.274 | 243 |
+| r0034001002001001018 | +26.94, +38.08 | −0.134 | +0.263 | 259 |
+| r0034001002001001024 | −32.95, −18.62 | −0.060 | +0.380 | 242 |
+| r0034001002001001030 | +27.13, +38.40 | −0.136 | +0.268 | 250 |
+| r0034001002001001036 | −1.87, −25.06 | +0.020 | +0.296 | 252 |
+| r0034001002001001042 | +0.30, +8.50 | −0.024 | +0.239 | 254 |
+| r0034001002001017012 | +13.71, −28.76 | −0.096 | +0.272 | 244 |
+| r0034001004001025042 | −11.69, −0.98 | −0.073 | +0.278 | 245 |
+
+- **The WCS.** The re-derivation moved the frames by 8.5 to 51 px, different on every epoch, as at run 67's pointing (9 to 50 px).
+- **The Gaia offset.** It is **+0.23 to +0.38 px in y on all nine epochs**, against −0.08 to +0.05 on run 67's SCA 8, from about 250 Gaia stars per frame against 1,400. A constant offset in y on one SCA looks like the SCA's distortion or the extinction-biased Gaia sample rather than the re-derivation's error. It is recorded and not read here. The registration bound (0.25 px) does not apply: it reads the difference's registration metrics, which do not exist on GBTDS.
+
+Left in place, nothing deleted: dataset `r00340-gb3` with run 112 live, its products and 1,278 packets on the alerts topic. The sample root under `samples/r00340-gb3/l2/` also stays. Raw evidence is in the brief's `t1/`: `sample.txt`, `copy.log`, `gaia.log`, `loop.log`, `check.log`, `stages.md`, `inspect/` and `jobs/` (every job's `job show`).
+
 ## Results of part 13 so far (2026-10-24 22:35 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
