@@ -5849,6 +5849,160 @@ from in brackets):
 Brief `day-2026-10-24` (plan v9 Part 7's pruned list): one step per task, numbered by task;
 a task's step lands when its task does, so the numbers can arrive out of order.
 
+1. **The field rule: association by the source's field (PR 393, merged
+   `80fa77ef`; rapid_docs 99).** Part 11 step 9 found that run 72
+   detected 0.94 to 0.98 of the injected sources to AB 25 but alerted
+   0.40. `dev`'s pass 2 let a detection outside its difference image's
+   own field join only an object already there, so a field no image is
+   centred on founded nothing. The rule now: **an accepted source is
+   matched against the objects of its own field and its neighbouring
+   fields, and founds in its own field when nothing matches, whichever
+   image detected it.** The difference job reads the run's objects in
+   its sources' fields and their neighbours in one query, records the
+   read per (field, founding job), and founds each unmatched source in
+   that source's own field; pass 2 and its inclusion cone are gone. The
+   publisher takes the advisory locks of every field that gained an
+   object or a membership and each one's neighbours, ascending, in one
+   statement, so two jobs founding either side of a boundary serialise,
+   and it reconciles against the objects founded since the read in all
+   of those fields. The packet's forced window had been the images
+   centred on the trigger image's field. It is now the images covering
+   the triggers' objects, whichever field each is centred on: on run
+   72's SCA 8, inside 30 days, images centred on other fields overlap an
+   image 594 times against 324 for the same field. New difference
+   metric `n_sources_out_of_field`. `validate_run.py`'s `catalog` check
+   now asks every accepted source to be a member of an object in its own
+   field or a neighbour, and looks for duplicate founders across field
+   boundaries. No schema statement: `objects_field_idx` serves the
+   multi-field read.
+
+   **Measured first**, read-only on run 72's rows (`t1/before-72.txt`):
+
+   | run 72 | accepted | in own image's field | outside it | outside, in a field some image is centred on | outside, in a field no image is centred on |
+   |---|---|---|---|---|---|
+   | all SCAs and epochs | 83,854 | 35,025 | 48,829 | 1,288 | 47,541 |
+   | SCA 8 footprint | 63,634 | 27,260 | 36,374 | 444 | 35,930 |
+   | detected injected, accepted | 27,752 | 12,097 | 15,655 | 170 | 15,485 |
+
+   None of the sources outside their image's field was a member of
+   anything. Run 72's 70 fields with a centred image are exactly its 70
+   fields with a reference, so a field with no image centred on it is a
+   field with no reference of its own. Under the rule, 35,930 of SCA 8's
+   accepted sources found objects in such fields. Run 69's 374 were of
+   this kind.
+
+   Image `rebuild-80fa77ef…` (`sha256:1de22498…`): **`rapid-rebuild:63`**
+   (production `:54`), the change set its two `Modify`/`False` rows,
+   under the release lock. Proof under dataset `r00342-dy-field`,
+   **run 81**, live, Gaia job 22004, the injected footprint's source
+   root, F146's bound, on demand and cold (`minvCpus` 0):
+
+   ```sh
+   rp run create ... --revision 80fa77efba671e323b240a9e6f1fd232d1a26491 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"<inputs>/r00342-inj1/l2/\"" --set intake.unsigned=false \
+     --set reference.selection.before_mjd=61591.4056 --survey HLWAS --dataset r00342-dy-field
+   rp loop --run 81 --filters F146 --scas 8 --pointings 001_0001,001_0002 --job-definition rapid-rebuild:63 \
+     --job-queue rapid-queue-prompt --max-intake 400 --interval 60      # the sample
+   rp loop --run 81 --filters F146 --scas 8 --pointings all --job-definition rapid-rebuild:63 \
+     --job-queue rapid-queue-prompt --max-intake 400 --interval 60      # the footprint
+   python scripts/completeness.py --run 81 --truth truth-sca8.parquet
+   scripts/check_run.sh --run 81 --inspect DIR
+   ```
+
+   **The sample first** (15:08:42 to 15:20:44 UTC, exit 0, 27
+   submissions): pointings `001_0001` and `001_0002`, whose SCA 8 frames
+   meet with their centres 7.22 arcmin apart (fields 5387158 and
+   5390959), all six passes. 1,196 objects in 10 fields, 639 of them in
+   the 8 fields no image is centred on. Object `240735837836867856` in
+   field 5390958 (no image centred on it) has three members, one per
+   injected epoch of `001_0002`, and three packets. Their forced windows
+   name 1, then 2, then 3 images, each exactly the official differences
+   covering it, and their histories carry the 0, then 1, then 2 earlier
+   detections.
+
+   **The footprint** (15:21:00 to 15:43:03 UTC, exit 0, 703 submissions
+   in all, no failure, no rerun; first submission to last job end 30.9
+   min, cold, against run 72's 28.1 min warm with its 13 minutes lost to
+   the centring failure). 162 differences, 37,800 objects in 290 fields,
+   21,573 of them in fields no image is centred on. 39,485 founded, 1,685
+   reconciled onto objects founded in flight since the read (1,692
+   memberships attached). One official membership crosses a field
+   boundary, none skips a neighbour. Per difference job,
+   `n_sources_out_of_field` has median 222 (150 to 304), and
+   `n_objects_read` has median 830 (at most 2,109).
+
+   | AB | injected | detected | alerted, run 72 | **alerted, run 81** | sent, run 81 |
+   |---|---|---|---|---|---|
+   | 21.0 | 2,595 | 0.958 | 0.398 | **0.920** | 0.916 |
+   | 22.0 | 2,808 | 0.975 | 0.431 | **0.944** | 0.938 |
+   | 23.0 | 2,670 | 0.966 | 0.381 | **0.943** | 0.937 |
+   | 24.0 | 2,910 | 0.968 | 0.415 | **0.953** | 0.947 |
+   | 25.0 | 2,853 | 0.944 | 0.395 | **0.917** | 0.913 |
+   | 25.5 | 2,580 | 0.915 | 0.415 | **0.891** | 0.883 |
+   | 26.0 | 2,721 | 0.754 | 0.298 | **0.722** | 0.717 |
+   | 26.5 | 2,640 | 0.232 | 0.109 | **0.226** | 0.225 |
+   | all | 32,400 | 28,623 | 12,097 | **27,750** | 27,588 |
+
+   **Alerted is now 0.97 of detected** (27,750 of 28,623; run 72 had
+   12,097 of 28,625). The detected column is run 81's, two detections off
+   run 72's. What remains between the two is the flagged detections,
+   which the packet stage does not alert by its rule (12,067 of the
+   12,068 unflagged in-field detections are alerted, as before). The
+   gate held one set (job 22727, ring +0.0162, the epoch the night held),
+   so sent trails alerted by 162.
+
+   | packet AB | packets, run 72 | purity, run 72 | packets, run 81 | injected | bright | other | purity, run 81 |
+   |---|---|---|---|---|---|---|---|
+   | 21.0 | 978 | 0.93 | 2,181 | 2,031 | 123 | 27 | 0.93 |
+   | 22.0 | 1,309 | 0.91 | 2,817 | 2,511 | 286 | 20 | 0.89 |
+   | 23.0 | 1,408 | 0.75 | 3,349 | 2,506 | 653 | 190 | 0.75 |
+   | 24.0 | 2,033 | 0.59 | 4,694 | 2,707 | 1,398 | 589 | 0.58 |
+   | 25.0 | 3,181 | 0.35 | 7,654 | 2,612 | 3,192 | 1,850 | 0.34 |
+   | 26.0 | 4,776 | 0.20 | 11,115 | 2,210 | 5,053 | 3,852 | 0.20 |
+
+   Purity per magnitude is unchanged: the rule alerts the out-of-field
+   artefacts in the same proportion as the out-of-field injected
+   sources. False positives per epoch rise with it, median 224 (130
+   bright-flagged, 89 other) against run 72's 95. That is the purity
+   work part 11 put after this rule, now at the full alert volume.
+
+   **The forced window and history, proven on rows**
+   (`t1/window-81.txt`, `t1/read-81-showcase.txt`). Over all 162 packet
+   sets, no official difference that covers a set's objects, sits in its
+   30-day window and was published before the set started is missing
+   from the window it recorded. 249 of the 571 window images read are
+   centred on a field other than the trigger image's, and the field
+   window would have dropped them. Object `217081629015376663`, founded
+   in field 5301528 (no image centred on it), has five members from
+   images centred on fields 5301527 and 5301529. Its five packets'
+   forced windows name 2, 3, 4, 5 and 6 images, each time exactly the
+   covering differences, from both centre fields. Their `prvDiaSources`
+   carry 0, 1, 2, 3 and 4 earlier detections. History over the 9,335
+   alerted injected sources: of 26,601 earlier alerted epochs expected,
+   26,248 present, 339 late (published after the packet's read, the
+   best-information contract), 14 missing in the 13 packets whose source
+   is split over two objects. That is the night's in-flight founding
+   mechanism (run 72: 4 in 4 packets), now at a rate of 0.05%.
+
+   The packet job carries 2.3 times the packets (median 393 against 170
+   a set) and its container time has median 60 s against 37 s, with peak
+   memory unchanged (0.89 GB).
+
+   Check, held: `check_run.sh --run 81 --inspect` CLEAN: validate 6/6 in
+   552 s (`catalog`: 37,800 objects in 290 fields, every accepted source a
+   member of an object in its own field or a neighbour, no duplicate
+   founders across boundaries), reader 162/162, consumer 63,153/63,153
+   (the held set's 459 packets unsent). Raw evidence in the brief
+   directory's `t1/`.
+
+   What the next step must know: an object's `field` is its founding
+   source's field. Every accepted detection is alertable wherever it
+   falls. The alert volume is about 2.3 times the night's at the same
+   purity per magnitude, so the false positives per epoch (median 224)
+   are the next science question. `completeness.py`'s `in_field` column
+   now says only where on its image a detection fell.
+
 2. **The producer idempotent again (PR 388).** PR 371 built the producer
    with `enable_idempotence=False` because the scratch job role lacked
    `kafka-cluster:WriteDataIdempotently` (part 11 step 5, run 57). The
