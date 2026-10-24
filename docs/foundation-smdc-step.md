@@ -4621,6 +4621,77 @@ Brief `night-2026-10-24` (plan v9 Part 7, the second iteration's list):
 one step per task, numbered by task; a task's step lands when its task
 does, so the numbers can arrive out of order.
 
+2. **OpenUniverse TDS read, and one image through a second intake reader
+   (PR 365, merged `0e5459da`).** The record is
+   `LEDGER-openuniverse.md` beside the brief. The brief said FITS: STScI's
+   `nexus/open_universe/` copy is ASDF (`*_simple.asdf`), and the FITS are
+   IRSA's public full release (`openuniverse2024/roman/full/`).
+
+   **Data.**
+
+   | set | files | bytes | filters | pointings per filter |
+   |---|---|---|---|---|
+   | nexus TDS `simple_model/<filter>/<pointing>/roman_tds_<filter>_<pointing>_wfi<sca>_simple.asdf` | 13,256 | 3.58 TB | R062 Z087 Y106 J129 H158 F184 K213 | 440 to 449, 1 to 9 SCAs each |
+   | nexus WAS, the same grammar with `roman_was_` | 1,460 | 0.39 TB | F184 H158 J129 K213 W146 Y106 | 59 to 78 |
+   | IRSA TDS `RomanTDS/images/simple_model/…fits.gz` | 2,064,050 | 69.4 TB | the same seven | all 57,365 rows of the observing sequence |
+
+   - **The nexus TDS is one patch.** The SCA centres span ra 9.27 to 9.83 and dec −44.31 to −43.90, about 0.27 deg².
+   - **The pointing is a row of the sequence.** The pointing in a file name is the row index into IRSA's `Roman_TDS_obseq_11_6_23.fits`, and all 3,116 pointings sampled match it on the filter. The sequence's `date` is the file's `mjd_obs`, the exposure start.
+   - **Exposure times.** R062 161.025 s; Z087 101.7; Y106, J129 and H158 302.275; F184 and K213 901.175.
+   - **Cadence.** A visit runs all seven filters in order over 2.7 days, with 2 or 3 pointings per filter 23 minutes apart. Visits come every 5 days: 146 in MJD 62000 to 62725, then 3 in 63550 to 63560 after an 825-day gap.
+   - **Epochs per point.** A point in the patch has 106 images per filter at the median and up to 195 (R062) or 219 (F184), from 109 to 123 visits. This was measured from the YAML trees of all 13,256 files by 32 KB ranged gets in 33 s.
+
+   **The truth.**
+   - **In every file.** Each file carries `galaxies`, `point_sources` and `transients`. For one SCA that is 164 transients over 0.0188 deg², 67 of them peaking in the season. The classes are 113 core-collapse, 30 SN Ia, 20 SN Iax and 1 FIXMAG. The R062 peak magnitudes run 24.7 to 29.6 at 5 to 95%, and z runs 0.7 to 2.8.
+   - **Per image, on IRSA.** IRSA's `RomanTDS/truth/<filter>/<pointing>/Roman_TDS_index_<filter>_<pointing>_<sca>.txt` lists every object per image. Each row has one-based x and y, the realised flux in counts, and `mag`, where `mag` is the bandpass zero point minus 2.5 log10(counts).
+   - **Completeness is a join.** A completeness measurement joins each difference image's candidates to that file's transient rows, within 1.5 px of (x − 1, y − 1), per AB magnitude bin. AB = `mag` + 2.5 log10(37570 × exptime). Purity uses the galaxy and star rows for the residuals.
+   - **It complements injection.** TDS brings real hosts, light curves and cadence; injection keeps dense control on HLWAS. By Ben's order, TDS comes after HLWAS injection.
+
+   **The format, and its quirks:**
+   - **Not a data model.** The tree is a plain mapping, not a roman_datamodels model. `data` is float64 counts per exposure, gain 1, which is DN. `dq` is all zero.
+   - **One-based pixels.** The gWCS takes GalSim's one-based pixels. 69 stars sit at (−1.16, −1.06) px through it, and the truth index sits exactly one pixel off. Fixed on the overlay, `crpix_shift = [-1, -1]`. After the shift, H158 pointing 1012 SCA 4 is at (−0.004, −0.010) px and R062 keeps (−0.16, −0.06) px, which is recorded and attributed to the PSF centroid, unverified.
+   - **No AB zero point in the file.** `meta.zptmag` is 2.5 log10(37570 cm² × exptime), the photon flux to counts, not AB. Fixed on the overlay with galsim.roman's AB zero points for counts/s: R062 26.7339 against dev's 26.4, and K213 26.0164 against 25.4.
+   - **`err` is not a sigma.** It equals `data` on 90% of pixels. Recorded only; nothing reads `ERR`.
+   - **The inverse fails.** gwcs 1.x cannot invert the gWCS, which was written by 0.21. Only the forward transform is used, and the SIP fit matches it to 1.5e-9 arcsec. Recorded.
+   - **No ePSF reference.** Recorded; the proof imports a galsim.roman stamp.
+
+   **The reader (PR 365).** `[intake] reader` has two values:
+   - `soc-l2`, the default: dev's behaviour.
+   - `openuniverse`: an adapter onto `build_fits_file`, so the SOC reader's layout, SIP fit and DQ mask are unchanged. The truth tables follow the images as binary-table HDUs, and `expid` is the pointing.
+
+   The overlay `rapidpipe/settings/datasets/openuniverse-tds.toml` sets `unsigned`, `reader`, `program_id = -2` (`surveys`' OpenUniverse row), `crpix_shift` and the zero-point table.
+
+   The proof is dataset `ou-tds1`, survey `HLTDS`, on the merged sha, with `OU_ROOT` the
+   nexus copy's `open_universe/TDS/simple_model/` prefix:
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision 0e5459da81391be8ebe7eab832924c65034ab352 \
+     --overlay rapidpipe/settings/datasets/openuniverse-tds.toml \
+     --set "intake.source_root=\"$OU_ROOT\"" \
+     --survey HLTDS --dataset ou-tds1
+   rp official change --group live.json ...      # run 64 live for HLTDS ou-tds1
+   python galsim_psf.py R062 17 psf/sciimage_psf_r062_sca17.fits   # beside the brief: the simulation's own PSF model
+   rp job local --run 64 --stage import --scope '{"source_dir": "<psf>", "psf": {"kind": "science", "path": "sciimage_psf_r062_sca17.fits"}}' \
+     --expects '[{"product": "psfs", "key": {"dataset": "ou-tds1", "fid": 5, "sca": 17, "kind": "science"}, "binding": null}]'
+   rp job local --run 64 --stage intake --scope '{"dataset": "ou-tds1", "file": "roman_tds_R062_10032_wfi17"}' \
+     --inputs '[{"product": "psfs", "key": {"dataset": "ou-tds1", "fid": 5, "sca": 17, "kind": "science"}, "source_job": 20190, "binding": 27587}]' \
+     --expects '[{"product": "l2files", "key": {"dataset": "ou-tds1", "expid": 10032, "sca": 17, "fid": 5}, "binding": null},
+                 {"product": "exposures", "key": {"dataset": "ou-tds1", "expid": 10032}, "binding": null}]'
+   ```
+
+   Check, held:
+   - **The run.** Run **64**: its body's `[intake]` is the overlay's (`reader` `openuniverse`, `crpix_shift` [−1, −1], the eight zero points), and it is live in group 18811.
+   - **The PSF import.** Import job **20190**, `psfs` row 422, bound as 27587.
+   - **The intake.** Intake job **20191** published attempt 1 in 12.2 s: fetch 1.5 s, convert 4.0, gzip 2.1, limmag 1.3. Its peak RSS was 0.9 GB. It bound `l2files` and `exposures` (group 18813).
+   - **The FITS.** `roman_tds_R062_10032_wfi17_cal.fits.gz` is 45.8 MB, from a 269 MB ASDF. Its HDUs are PRIMARY, SCI, DQ, ERR, TRANSIENTS, POINT_SOURCES and GALAXIES. The header has `FILTER` R062, `SCA_NUM` 17, `EXPTIME` 161.025, `DATE-OBS` 2028-12-25T02:11:02.400, `OBSERVTN` 10032, `ZPTMAG` 26.7339, `BUNIT` DN and `CRPIX` 2043.5.
+   - **Its WCS against the truth.** Through the published FITS WCS, the truth index's (x − 1, y − 1) for 24,299 objects sit within 0.0016 px. 104 stars sit at (−0.159, −0.056) px.
+   - **The rows.** The `l2files` row has field 5325275, `hp6` 35388, `hp9` 2264882, `limmag` 27.023 and six overlapping fields. The `exposures` row has `program_id` −2.
+
+   Not built, and needed for a chain past intake (the next brief's OpenUniverse run):
+   - the psf stage's ePSF source, since the file names no CRDS reference;
+   - `loop.list_stems` and the psf stage dispatching on `reader` (both read `_cal.asdf`);
+   - a reference from epochs before a transient's `start_mjd`, or from the late visits.
+
 6. **The database guards and the `forced` read (PRs 355, 357).** Three
    guards, no behaviour change, no schema statement on SMDC. A schema test
    in `tests/db/test_schema.py` reads the catalog CI applies: every product
