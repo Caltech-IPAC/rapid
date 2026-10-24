@@ -8,6 +8,11 @@ answers. Given a packet set (its job), :func:`decide` reads the metrics of
 the difference job whose source set it names (``job_metrics``) and holds it
 when any of:
 
+- ``usable_fraction`` below ``[gate] usable_fraction_min`` (lost sky: a
+  reference that covers part of the SCA, non-finite difference pixels);
+- the registration offset, ``hypot(registration_dx_px,
+  registration_dy_px)``, above ``[gate] registration_max_px`` (a WCS
+  offset like HLWAS's 1 px before its overlay's ``crpix_shift``);
 - ``n_sources_snr_gt20`` above ``[gate] snr_gt20_factor`` times the
   median over the run's published difference jobs;
 - ``core_fraction`` or ``ring_fraction`` beyond ``[gate]
@@ -15,9 +20,10 @@ when any of:
   (signed values near zero make a ratio to the median meaningless, so the
   bound is absolute);
 
-and only once the run has at least ``[gate] min_epochs`` published
-difference jobs with the count, so a run's first epochs set its scale
-before any is held. A metric the difference job could not compute is not a
+the first two named first, since lost sky or a misregistration inflates the
+count and the residuals after it; and only once the run has at least
+``[gate] min_epochs`` published difference jobs with the count, so a run's
+first epochs set its scale before any is held. A metric the difference job could not compute is not a
 reason to hold. Nothing is deleted or unbound: a held set stays official and
 unsent, and a later pass whose answer is send sends it (the run's median
 moves as epochs arrive); there is no release verb.
@@ -27,11 +33,12 @@ moves as epochs arrive); there is no release verb.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 #: The ``[gate]`` table's defaults, for a run whose body predates it.
 DEFAULTS = {"snr_gt20_factor": 3.0, "core_fraction_max_abs": 0.025, "ring_fraction_max_abs": 0.015,
-            "min_epochs": 5}
+            "min_epochs": 5, "usable_fraction_min": 0.9, "registration_max_px": 0.25}
 
 
 def judge(metrics: dict[str, float], median: float | None, epochs: int,
@@ -46,6 +53,15 @@ def judge(metrics: dict[str, float], median: float | None, epochs: int,
     send = {"send": True, "metric": None, "value": None, "bound": None, "reason": None}
     if epochs < int(s["min_epochs"]):
         return send
+    usable, bound = metrics.get("usable_fraction"), float(s["usable_fraction_min"])
+    if usable is not None and usable < bound:
+        return {"send": False, "metric": "usable_fraction", "value": usable, "bound": bound,
+                "reason": f"usable_fraction {usable:.4f} below {bound:g}"}
+    dx, dy = metrics.get("registration_dx_px"), metrics.get("registration_dy_px")
+    if dx is not None and dy is not None and math.hypot(dx, dy) > float(s["registration_max_px"]):
+        offset, bound = math.hypot(dx, dy), float(s["registration_max_px"])
+        return {"send": False, "metric": "registration", "value": offset, "bound": bound,
+                "reason": f"registration offset {offset:.3f} px ({dx:+.3f}, {dy:+.3f}) above {bound:g} px"}
     count = metrics.get("n_sources_snr_gt20")
     if count is not None and median is not None and count > float(s["snr_gt20_factor"]) * median:
         bound = float(s["snr_gt20_factor"]) * median
