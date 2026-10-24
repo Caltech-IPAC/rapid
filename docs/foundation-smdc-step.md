@@ -6948,6 +6948,70 @@ Check, held:
   change from run 84 is PR 408's switch to SFFT, which step differencer
   reports, not this change.
 
+### Step differencer-measure: SFFT against ZOGY on the same bytes, injected HLWAS and OpenUniverse
+
+**The method (PR 418, merged `a17fca7d`; rapid_docs 107, merged `ca35d3d7`).** The SFFT default (image `rapid-rebuild:67`, task 1) was measured against ZOGY runs 81 (HLWAS injected) and 80 (OpenUniverse TDS). The inputs were the same bytes, not a rebuilt reference.
+
+- **New datasets.** `r00342-dy-sfft-inj` (run **88**) and `ou-tds2-sfft` (run **89**), from the baselines' layers at `5729031a`.
+- **Loop for PSF and intake only.** The selection holds no frame before the bound, so the reference is reported held.
+- **Hand-submitted jobs.** Differences 22804–22816 and packets 22825–22837. Each names the new `l2files` row and the baseline difference job's own `refimages` and `psfs` rows. The difference and packet stages read those rows by job, and refuse only an `l2files` row of another dataset.
+- **Identity checks.** The L2 science arrays' sha256 are equal (13 of 13), and the reference and PSF rows are the same. ZOGY, which still runs inside each job, reproduces the baseline's 500 source ids on 11 of 13 epochs. OpenUniverse 14492 (AMD against Intel) shares 438. OpenUniverse 28737 (Intel against Intel) shares 323; that cause is unread.
+- **Script fields.** `completeness.py --expids` recomputes run 81 on the sample's three epochs. `completeness_ou.py` reads the reference that the difference jobs named, and gains `false_pos`, `n_candidates` and `container_seconds` per epoch.
+
+```sh
+rp run create ... --survey HLWAS --dataset r00342-dy-sfft-inj     # run 88; run 81's layers
+rp loop --run 88 --filters F146 --scas 8 --pointings 001_0001 --passes 4,5,6 --job-definition rapid-rebuild:67
+#   psf and intake; the reference held (no frame before the bound selected)
+submit.py difference 88 81 rapid-rebuild:67; rp job wait ...; submit.py packet 88 81 ...   # the brief's t2/scripts
+python scripts/completeness.py --run 81 --expids 4040101,5040101,6010101
+python scripts/completeness.py --run 88 --expids 4040101,5040101,6010101
+python scripts/completeness_ou.py --run 80; python scripts/completeness_ou.py --run 89
+scripts/check_run.sh --run 88 --inspect DIR; scripts/check_run.sh --run 89 --inspect DIR
+```
+
+Check, held:
+
+- `check_run.sh --run 88`: **CLEAN** (validate 6/6, reader 3/3, consumer 1,393/1,393).
+- `check_run.sh --run 89`: **CLEAN** (validate 6/6, reader 10/10, consumer 4,934/4,934).
+- Every job published on its first attempt.
+
+Measured (fractions of injected, or of evaluated on OpenUniverse; purity is true packets over all packets in the bin):
+
+| HLWAS `001_0001` SCA 8, passes 4–6, 600 injected | ZOGY run 81 | SFFT run 88 |
+|---|---|---|
+| detected AB 21 / 23 / 24 / 25 / 26 | 1.00 / 1.00 / 0.97 / 0.99 / 0.55 | 0.73 / 0.64 / 0.61 / 0.00 / 0.00 |
+| alerted, all | 516 | 238 |
+| purity AB 21 / 23 / 24 | 0.91 / 0.71 / 0.52 | 0.31 / 0.10 / 0.18 |
+| false positives per epoch | 228 (145 bright-flagged) | 385 (289 bright-flagged) |
+| negative PSF-fit candidates / S/N > 20 per epoch | 751 / 30 | 975 / 300 |
+| core fraction | +0.003 | +0.252 |
+| difference seconds | 205 | 219 |
+
+| OpenUniverse H158 SCA 10, ten epochs, 410 evaluated | ZOGY run 80 | SFFT run 89 |
+|---|---|---|
+| detected AB 21–23 / 24 / 25 | 1.00 / 0.89 / 0.28 | 1.00 / 0.79 / 0.03 |
+| detected / alerted, all | 35 / 19 | 24 / 24 |
+| purity AB 24 | 0.04 of 236 | 0.01 of 2,562 |
+| false positives per epoch | 48 | 494 (455 matched to no truth row) |
+| candidates per difference | 2,612 | 2,354 |
+| negative PSF-fit candidates / S/N > 20 per epoch | 2,736 / 560 | 2,470 / 707 |
+| core fraction | +0.005 | +0.005 |
+| difference seconds | 292 | 279 |
+
+**Seen, reported, not tuned.**
+
+- **HLWAS.** SFFT's positive star cores fill the 500-source cap, and detection stops at AB 24.5.
+- **OpenUniverse.** SFFT subtracts stars cleanly, but the cap fills with sources that match no truth row.
+
+Galleries are in the brief's `t2/inspect-88/` and `t2/inspect-89/`.
+
+**Confounds.**
+
+- **OpenUniverse packet metrics.** Run 80 predates the field rule (PR 393), so its alerted, purity and false-positive counts differ by that rule as well as by SFFT. Detection depends on sources alone.
+- **The gate.** The gate held no set. HLWAS's three epochs are below `min_epochs` (5), and OpenUniverse's core fraction is inside the bound.
+
+**The ruling owed.** The default stands as Ben ruled. Whether to revert it, or port dev's SFFT catalog cuts (sumrat, nneg, nbad), is his ruling.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
