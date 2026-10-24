@@ -48,6 +48,11 @@ back), so this script does not read the topic.
 Usage::
 
     python scripts/completeness.py --run N [--truth F.parquet ...] [--radius 0.3] [--out DIR]
+        [--expids E,E,...]
+
+``--expids`` restricts every count to those epochs (truth, sources, packets
+and the per-epoch metrics), so a sample is compared with the same epochs of
+a larger run, never with its whole footprint.
 
 Without ``--truth`` it reads every Parquet under the dataset's
 ``catalog/`` prefix, the run's ``[intake] source_root`` with its last
@@ -252,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--radius", type=float, default=0.3, help="match radius, arcsec")
     p.add_argument("--out", type=Path)
     p.add_argument("--no-history", action="store_true", help="skip decoding the packets")
+    p.add_argument("--expids", help="comma-separated expids: count only these epochs")
     a = p.parse_args(argv)
     out_dir = a.out or Path(os.environ.get("TMPDIR", ".")) / f"completeness-{a.run}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -310,6 +316,14 @@ def main(argv: list[str] | None = None) -> int:
     if not len(packets):
         packets = pd.DataFrame(columns=["job", "source_job", "sid", "object_job", "aid", "expid", "sca",
                                         "trigger_mjd", "filename", "byte_offset", "byte_length", "sent"])
+    if a.expids:
+        keep = {int(e) for e in a.expids.split(",")}
+        truth = truth[truth["expid"].isin(keep)]
+        sources = sources[sources["expid"].isin(keep)]
+        packets = packets[packets["expid"].isin(keep)]
+        diffs = {k for k in diffs if k[0] in keep}
+        if len(metrics):
+            metrics = metrics[metrics["expid"].isin(keep)]
     epochs_in_truth = set(zip(truth["expid"], truth["sca"]))
     processed = epochs_in_truth & diffs
     unprocessed = sorted(epochs_in_truth - diffs)
