@@ -6,7 +6,9 @@ trigger's difference job made it a member of; the index names that object
 (founding job and id), the record carries the object and its position; the
 object's members counted are its official ones and the set's own, never a
 membership from a source set that is not official; the source sets and the
-forced window it read are recorded as the job's ``input`` rows.
+forced window it read are recorded as the job's ``input`` rows. A
+reference with no ``refimcatalogs`` row fails the job: the reference stage
+always writes one.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from rapidpipe.products.diffimage import SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS
 from rapidpipe.stages import packet
 from tests.db.foundation_helpers import write_attempt
-from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch
+from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch, write_refcat
 
 SURVEY, DATASET, FIELD = "S", "D", 4658155
 IMAGE_KEY = {"dataset": DATASET, "expid": 1, "sca": 8, "fid": 8}
@@ -68,10 +70,8 @@ def image_rows(directory) -> dict[str, list[dict]]:
     }
 
 
-# A source in a bright footprint is a trigger like a flags = 0 one, its bit in psfFitFlags.
-@pytest.mark.parametrize("flags", [0, SOURCE_FLAG_BRIGHT_FOOTPRINT])
-def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connect, tmp_path, flags):
-    conn = connect()
+def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True):
+    """A live run's packet job over one imported epoch, and the import and stray jobs."""
     live = create_run(conn, "tester", "live", "abc123", {"packet": SETTINGS}, SURVEY, DATASET)
     other = create_run(conn, "tester", "a recipe that is not live", "def456",
                        {"packet": SETTINGS}, SURVEY, DATASET)
@@ -94,6 +94,12 @@ def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connec
                        "checksum": "0" * 32,
                        "filename": (tmp_path / "e1" / "diffpsf.fits").as_uri()}]
     tables["catalogs"] = [{"dataset": DATASET, "name": "gaia", "version": "DR3", "location": gaia.as_uri()}]
+    tables["refimages"] = [{"rfid": 801, "dataset": DATASET, "field": FIELD, "fid": 8,
+                            "filename": (tmp_path / "e1" / "ref.fits").as_uri(), "checksum": "0" * 32}]
+    if refcat_row:
+        write_refcat(tmp_path / "e1" / "refcat.txt")
+        tables["refimcatalogs"] = [{"rfid": 801, "cattype": packet.REFCAT_CATTYPE, "checksum": "0" * 32,
+                                    "filename": (tmp_path / "e1" / "refcat.txt").as_uri()}]
     ra, dec = tables["sources"][0]["ra"], tables["sources"][0]["dec"]
     # The trigger's catalog rows, as its difference job publishes them beside its sources.
     tables["objects"] = [{"aid": 100, "dataset": DATASET, "survey": SURVEY, "field": FIELD,
@@ -101,7 +107,6 @@ def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connec
     tables["memberships"] = [{"object_job": imported, "aid": 100, "source_job": imported, "sid": 1,
                               "dra": 0.0, "ddec": 0.0, "flux": 400.0}]
     publish(conn, imported, 1, write_attempt(tmp_path / "import", tables))
-    founder = imported
     # A recipe that is not live: its unofficial source set joined object 100 too; never counted.
     stray = create_job(conn, other, "import", {})
     publish(conn, stray, 1, write_attempt(tmp_path / "stray", {
@@ -116,6 +121,14 @@ def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connec
         ("refimages", {"dataset": DATASET, "field": FIELD, "fid": 8}, imported))]
     job = create_job(conn, live, "packet", {"expid": 1, "sca": 8, "fid": 8}, inputs=inputs,
                      expects=[{"product": "packets", "key": IMAGE_KEY, "binding": None}])
+    return job, imported, stray, ra, dec
+
+
+# A source in a bright footprint is a trigger like a flags = 0 one, its bit in psfFitFlags.
+@pytest.mark.parametrize("flags", [0, SOURCE_FLAG_BRIGHT_FOOTPRINT])
+def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connect, tmp_path, flags):
+    conn = connect()
+    job, founder, stray, ra, dec = packet_job(conn, tmp_path, flags)
     result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
     assert result["published"] and result["refusal"] is None
 
@@ -134,5 +147,13 @@ def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connec
     assert record["diaSource"]["psfFitFlags"] == flags
     recorded = query(conn, "SELECT product, source_job FROM job_inputs WHERE job = %s"
                            " AND kind = 'input' ORDER BY product, source_job", (job,))
-    assert ("sources", imported) in recorded and ("diffimages", imported) in recorded
-    assert ("l2files", imported) in recorded and ("sources", stray) not in recorded
+    assert ("sources", founder) in recorded and ("diffimages", founder) in recorded
+    assert ("l2files", founder) in recorded and ("sources", stray) not in recorded
+
+
+def test_a_reference_without_its_catalog_row_fails_the_packet_job(connect, tmp_path):
+    conn = connect()
+    job, *_ = packet_job(conn, tmp_path, refcat_row=False)
+    with pytest.raises(ValueError, match="no refimcatalogs row"):
+        run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert query(conn, "SELECT state FROM jobs WHERE id = %s", (job,)) == [("failed",)]

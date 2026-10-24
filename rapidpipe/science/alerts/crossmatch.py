@@ -182,7 +182,7 @@ class RefCatalog:
     rows: dict[str, np.ndarray]   # class -> original row index per subset entry
 
 
-def load_refcat(path: str) -> RefCatalog | None:
+def load_refcat(path: str) -> RefCatalog:
     """Parse a reference-image SExtractor catalog for cross-matching.
 
     Parameters
@@ -192,10 +192,15 @@ def load_refcat(path: str) -> RefCatalog | None:
 
     Returns
     -------
-    RefCatalog or None
-        The parsed, star/galaxy-partitioned catalog; None (with a logged
-        warning) when the file is unreadable, empty, or missing expected
-        columns -- the cross-match then degrades to "not run".
+    RefCatalog
+        The parsed, star/galaxy-partitioned catalog.
+
+    Raises
+    ------
+    ValueError
+        When the file is unreadable, empty, or missing expected columns: a
+        recorded reference catalog is a required input, and `dev`'s
+        degradation to "not run" shipped every alert with null matches.
     """
     from astropy import units as u
     from astropy.coordinates import SkyCoord
@@ -204,19 +209,14 @@ def load_refcat(path: str) -> RefCatalog | None:
     try:
         # typed Any: pylance mis-infers astropy's ascii.read overloads
         table: Any = astropy_ascii.read(path, format="sextractor")
-    except Exception:
-        logger.warning("Could not parse reference catalog %s", path,
-                       exc_info=True)
-        return None
+    except Exception as exc:
+        raise ValueError(f"reference catalog {path} could not be parsed: {exc}") from exc
     if len(table) == 0:
-        logger.warning("Reference catalog %s is empty", path)
-        return None
+        raise ValueError(f"reference catalog {path} is empty")
     missing = [c for c in REFCAT_COLUMNS if c not in table.colnames]
     if missing:
-        logger.warning(
-            "Reference catalog %s is missing columns %s (SExtractor "
-            "parameter file changed?); cross-match skipped", path, missing)
-        return None
+        raise ValueError(f"reference catalog {path} is missing columns {missing}"
+                         " (SExtractor parameter file changed?)")
 
     columns = {name: np.asarray(table[name], dtype=float)
                for name in REFCAT_COLUMNS}

@@ -98,12 +98,12 @@ def compute_psf_catalog(n_clip_sigma,
     # constructor failed; kept.
     logger.info("psfphot_attributes = %s", psfphot.__dict__.keys())
 
-    try:
-        phot = psfphot(data=data_image, error=data_uncert)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("*** Warning: Exception thrown calling PSFPhotometry class instance: %s", e)
-        psfcat_flag = False
-        phot = None
+    # dev catches every exception here. photutils 3.0 returns None for every
+    # empty input probed (no sources found, all NaN, all zero; err-inputs,
+    # 2026-10-24) and raises only for faults, a ValueError among them, so
+    # nothing is caught: a fault fails the job instead of publishing an empty
+    # source set.
+    phot = psfphot(data=data_image, error=data_uncert)
 
     if psfcat_flag:
         try:
