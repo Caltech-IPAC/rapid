@@ -198,6 +198,24 @@ def test_job_metrics_exposes_each_numeric_metric_with_the_jobs_scope(conn):
                     (run, "difference", "D", 4040101, 8, 8, None, "n_sources", 500.0)]
 
 
+def test_job_metrics_reads_a_jobs_container_time_and_its_submissions(conn):
+    attempts = ('{"b-1": {"queue": "spot-q", "started": "2026-10-24T08:00:00+00:00",'
+                ' "stopped": "2026-10-24T08:10:00+00:00", "status_reason": "Host EC2 (instance i-1) terminated."},'
+                ' "b-2": {"queue": "prompt-q", "started": "2026-10-24T08:11:00+00:00",'
+                ' "ended": "2026-10-24T08:12:00+00:00", "outcome": "published"}}')
+    with conn.cursor() as cur:
+        run, _ = _run_and_job(cur)
+        cur.execute(
+            "INSERT INTO jobs (run, stage, scope, state, published_attempt, started, ended, attempts)"
+            " VALUES (%s, 'intake', '{}', 'published', 2, '2026-10-24T08:11:00Z', '2026-10-24T08:12:00Z', %s)"
+            " RETURNING id", (run, attempts))
+        job = cur.fetchone()[0]
+        cur.execute("SELECT metric, value FROM job_metrics WHERE job = %s ORDER BY metric", (job,))
+        rows = dict(cur.fetchall())
+    assert rows == {"batch_submissions": 2.0, "container_seconds": 60.0, "hedges": 0.0,
+                    "lost_seconds": 600.0, "reclaims": 1.0}
+
+
 def _official_views(cur) -> dict[str, tuple[str, str]]:
     """Each product table's official view: its bound product and its definition."""
     views = {}

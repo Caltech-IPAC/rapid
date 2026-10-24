@@ -35,10 +35,10 @@ import sys
 from typing import Any, Sequence
 
 from rapidpipe.db.connection import parameter_tree_environment
-from rapidpipe.foundation import publish_kafka
+from rapidpipe.foundation import attempts, publish_kafka
 from rapidpipe.stages.contract import STAGE_NAMES
 
-__all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "run_locally", "submit"]
+__all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "run_locally", "spot", "submit"]
 
 
 class LaunchError(Exception):
@@ -59,17 +59,23 @@ def _stage(stage: str) -> str:
 
 def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, client: Any = None,
            memory_mib: int | None = None, name_suffix: str = "",
-           environment_extra: dict[str, str] | None = None) -> str:
+           environment_extra: dict[str, str] | None = None, queue: str | None = None,
+           one_attempt: bool = False) -> str:
     """Submit job ``job_id`` (of ``stage``) to Batch as ``job run --job <id>``; return the Batch job id.
 
-    With ``conn``, the id is recorded as the row's ``batch_job_id`` and committed; a
-    resubmission replaces it, so the row names its latest Batch job. With
+    ``queue`` is the job queue, ``RAPIDPIPE_BATCH_JOB_QUEUE`` without one. With
+    ``one_attempt`` (a Spot submission, :func:`spot`) the submission overrides the job
+    definition's retry strategy to one attempt, so nothing retries on Spot; the loop's
+    reconcile sends the next attempt to the prompt queue.
+    With ``conn``, the id is recorded as the row's ``batch_job_id`` and its submission
+    in ``jobs.attempts`` (``rapidpipe.foundation.attempts``), and committed; a
+    resubmission replaces the id, so the row names its latest Batch job. With
     ``memory_mib`` (the run's ``[batch.memory_mib]`` value for the stage, :func:`memory_mib`),
     the job asks for that memory instead of the job definition's. ``name_suffix`` ends
     the Batch job's name (the loop's rerun marks its one automatic rerun so).
     ``environment_extra`` (:func:`job_environment`) is added to the job's environment.
     """
-    queue = os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
+    queue = queue or os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
     if not queue:
         raise LaunchError("RAPIDPIPE_BATCH_JOB_QUEUE is not set")
     root = os.environ.get("RAPIDPIPE_OUTPUTS_ROOT", "")
@@ -83,12 +89,16 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     overrides = {"command": ["job", "run", "--job", str(job_id)], "environment": environment}
     if memory_mib is not None:
         overrides["resourceRequirements"] = [{"type": "MEMORY", "value": str(int(memory_mib))}]
-    response = (client or batch_client()).submit_job(
-        jobName=f"{prefix}-{stage}-{job_id}{name_suffix}", jobQueue=queue, jobDefinition=job_definition,
-        containerOverrides=overrides)
+    request = {"jobName": f"{prefix}-{stage}-{job_id}{name_suffix}", "jobQueue": queue,
+               "jobDefinition": job_definition, "containerOverrides": overrides}
+    if one_attempt:
+        request["retryStrategy"] = {"attempts": 1}
+    response = (client or batch_client()).submit_job(**request)
     if conn is not None:
         with conn.cursor() as cur:
             cur.execute("UPDATE jobs SET batch_job_id = %s WHERE id = %s", (response["jobId"], job_id))
+            attempts.record(cur, job_id, response["jobId"], {
+                "queue": queue, "submitted": attempts.now(), "why": "rerun" if name_suffix else "first"})
         conn.commit()
     return response["jobId"]
 
@@ -115,6 +125,13 @@ def job_environment(settings: dict, ssm: Any = None) -> dict[str, str]:
             found.update(publish_kafka.environment(kafka, ssm))
         _environments[key] = found
     return _environments[key]
+
+
+def spot(settings: dict) -> dict | None:
+    """The run's ``[batch.spot]`` table (``queue``, ``backlog``, ``hedge_factor``); ``None`` when it names
+    no Spot queue, and then every submission goes to the prompt queue as before."""
+    table = settings.get("batch", {}).get("spot") or {}
+    return table if table.get("queue") else None
 
 
 def memory_mib(settings: dict, stage: str) -> int | None:

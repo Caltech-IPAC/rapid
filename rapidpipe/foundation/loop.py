@@ -32,6 +32,26 @@ too, the job stays ``failed``.
 A pass submits at most the run's ``[batch] max_submissions_per_pass``, in
 stage order; the rest are ``deferred`` to the next pass.
 
+Spot, a probe and never production (Ben, 2026-10-24), only when the run's
+``[batch.spot]`` names a ``queue`` (:func:`assign_queues`, :func:`reconcile`):
+
+- queue by backlog: a stage's submission goes to the Spot queue while the
+  pass has more than ``backlog`` of that stage's jobs still to submit, else
+  to the prompt queue, so each stage's last wave is on-demand;
+- one attempt on Spot: a Spot submission carries a one-attempt retry
+  strategy, and a Spot Batch job that ends with its row unpublished, for
+  any reason (a reclaim, exit 75, ``Task failed to start``, the code's own
+  failure), is the job's one rerun, on the prompt queue under the job
+  definition's own retries;
+- hedge: a Spot job not started, or not finished, ``hedge_factor`` times
+  the stage's median ``container_seconds`` (``job_metrics``, the run's
+  survey) after it was submitted or started is terminated and rerun on the
+  prompt queue the same way, ``hedged`` on its submission's record;
+- measure: every pass reports the run's submissions per queue, reclaims,
+  hedges, lost job-hours and the fill time to 1,000 vCPU
+  (``rapidpipe.foundation.attempts.report``) under ``attempts``, and the
+  pass's own submissions by queue under ``queues``.
+
 Each pass first reads Batch for the run's unpublished jobs that carry a
 ``batch_job_id`` (:func:`reconcile`, one ``describe-jobs`` call per hundred
 ids), one lookup read two ways: a Batch job that has ended while its row is
@@ -97,6 +117,8 @@ from collections import defaultdict
 from typing import Any, Callable, Iterable
 
 import psycopg2.extras
+
+from rapidpipe.foundation import attempts
 
 #: A SOC L2 stem, the fields the selection reads (the intake stage parses all of them).
 STEM = re.compile(r"r\d{5}\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<visit>\d{3})"
@@ -279,10 +301,34 @@ def snapshot(conn, run: int) -> Snapshot:
 RERUN_SUFFIX = "-rerun"
 
 
-def reconcile(conn, run: int, client: Any) -> dict:
+def _queue_name(described: dict) -> str:
+    """The job queue's name from Batch's description (``jobQueue`` is an ARN, ``.../job-queue/<name>``)."""
+    return described.get("jobQueue", "").rsplit("/", 1)[-1]
+
+
+def _iso(ms: int | None) -> str | None:
+    """Batch's epoch milliseconds as an ISO 8601 UTC string."""
+    if not ms:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(ms / 1000))
+
+
+def median_seconds(conn, run: int) -> dict[str, float]:
+    """Per stage, the median ``container_seconds`` of ``job_metrics`` over the run's survey."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT stage, percentile_cont(0.5) WITHIN GROUP (ORDER BY value) FROM job_metrics"
+                    " WHERE metric = 'container_seconds' AND survey = (SELECT survey FROM runs WHERE id = %s)"
+                    " GROUP BY stage", (run,))
+        found = {stage: float(m) for stage, m in cur.fetchall()}
+    conn.commit()
+    return found
+
+
+def reconcile(conn, run: int, client: Any, spot: dict | None = None,
+              medians: dict[str, float] | None = None, clock: Callable[[], float] = time.time) -> dict:
     """Read Batch for the run's unpublished jobs with a ``batch_job_id``; mark the dead ``failed``.
 
-    Returns ``{"described", "ended", "retrying", "rerun", "seconds"}``:
+    Returns ``{"described", "ended", "retrying", "rerun", "hedged", "reclaims", "seconds"}``:
     ``ended`` the rows this call marked ``failed`` (``job``, ``stage``,
     ``reason``), ``retrying`` the ids of ``failed`` rows whose Batch job has
     not ended, ``rerun`` the ``failed`` rows whose container died without
@@ -290,7 +336,15 @@ def reconcile(conn, run: int, client: Any) -> dict:
     not the code's) on a first submission, not on a rerun
     (:data:`RERUN_SUFFIX`): each is owed the loop's one automatic rerun. A
     job without a Batch id (a local one), or one Batch no longer describes,
-    is left alone.
+    is left alone. Every ended Batch job's stop is added to its
+    submission's record (``rapidpipe.foundation.attempts``).
+
+    With ``spot`` (the run's ``[batch.spot]``), a first submission on its
+    queue that ended unpublished is owed the rerun whatever the reason, and
+    with ``medians`` (:func:`median_seconds`) a Spot job past ``hedge_factor``
+    times its stage's median since its submission (not started) or its start
+    is terminated and owed it too, listed under ``hedged``; ``reclaims``
+    counts this call's Spot jobs ended by a reclaim.
     """
     started = time.monotonic()
     with conn.cursor() as cur:
@@ -302,31 +356,70 @@ def reconcile(conn, run: int, client: Any) -> dict:
     batch = {}
     for i in range(0, len(ids), 100):
         batch.update((b["jobId"], b) for b in client.describe_jobs(jobs=ids[i:i + 100])["jobs"])
-    ended, retrying, rerun = [], [], []
+    spot_queue = (spot or {}).get("queue")
+    factor = (spot or {}).get("hedge_factor")
+    ended, retrying, rerun, hedged, reclaims = [], [], [], [], 0
     for job, stage, state, batch_id, refusal in rows:
         described = batch.get(batch_id)
         if described is None:
             continue
         status = described["status"]
+        first = not described.get("jobName", "").endswith(RERUN_SUFFIX)
+        on_spot = bool(spot_queue) and _queue_name(described) == spot_queue and first
         if status in BATCH_ACTIVE:
             if state == "failed":
                 retrying.append(job)
+            elif on_spot and factor and medians and stage in medians and state in PENDING:
+                since = described.get("startedAt") or described.get("createdAt")
+                waited = clock() - since / 1000 if since else 0.0
+                if waited > float(factor) * medians[stage]:
+                    reason = (f"hedge: {'running' if described.get('startedAt') else 'not started'}"
+                              f" {waited:.0f} s, over {factor} x the {stage} median {medians[stage]:.0f} s")
+                    client.terminate_job(jobId=batch_id, reason=reason[:250])
+                    with conn.cursor() as cur:
+                        attempts.record(cur, job, batch_id, {"hedged": attempts.now(), "status_reason": reason})
+                    conn.commit()
+                    hedged.append({"job": job, "stage": stage, "reason": reason})
+                    rerun.append({"job": job, "stage": stage, "reason": reason})
             continue
+        reason = f"Batch {status}: {described.get('statusReason', '')}".strip()
+        exit_code = described.get("container", {}).get("exitCode")
+        with conn.cursor() as cur:
+            attempts.record(cur, job, batch_id, {
+                "stopped": _iso(described.get("stoppedAt")), "status": status,
+                "status_reason": described.get("statusReason"), "exit_code": exit_code})
+        conn.commit()
+        if on_spot and (described.get("statusReason") or "").startswith(attempts.RECLAIM):
+            reclaims += 1
         if state in PENDING:
-            reason = f"Batch {status}: {described.get('statusReason', '')}".strip()
             with conn.cursor() as cur:
                 cur.execute("UPDATE jobs SET state = 'failed', ended = now(), exit_code = %s,"
                             " refusal = %s WHERE id = %s AND state IN ('launched', 'running')",
-                            (described.get("container", {}).get("exitCode"), reason, job))
+                            (exit_code, reason, job))
                 if cur.rowcount:
                     ended.append({"job": job, "stage": stage, "reason": reason})
                     state, refusal = "failed", reason
             conn.commit()
-        if (state == "failed" and (refusal or "").startswith("Batch ")
-                and not described.get("jobName", "").endswith(RERUN_SUFFIX)):
+        if state == "failed" and first and (on_spot or (refusal or "").startswith("Batch ")):
             rerun.append({"job": job, "stage": stage, "reason": refusal})
     return {"described": len(batch), "ended": ended, "retrying": retrying, "rerun": rerun,
-            "seconds": round(time.monotonic() - started, 2)}
+            "hedged": hedged, "reclaims": reclaims, "seconds": round(time.monotonic() - started, 2)}
+
+
+def assign_queues(submissions: list[dict], spot: dict | None) -> None:
+    """Name the Spot queue on each submission (``"queue"``) while more than the run's ``backlog`` of its
+    stage's submissions remain to be made in this pass, itself included; the rest name none (the
+    prompt queue). Nothing without a ``[batch.spot]`` queue."""
+    if not spot:
+        return
+    backlog = int(spot.get("backlog", 0))
+    left = defaultdict(int)
+    for item in submissions:
+        left[item["stage"]] += 1
+    for item in submissions:
+        if left[item["stage"]] > backlog:
+            item["queue"] = spot["queue"]
+        left[item["stage"]] -= 1
 
 
 def _fid(band: str, fids: dict[str, int]) -> int:
@@ -479,6 +572,8 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     deferred = len(out) - max_submissions if max_submissions is not None and len(out) > max_submissions else 0
     if deferred:
         out = out[:max_submissions]
+    spot = snap.settings.get("batch", {}).get("spot") or {}
+    assign_queues(out, spot if spot.get("queue") else None)
     counts = {"listed": len(stems), "admitted": len(admitted), "new": len(new), "deferred": deferred,
               "submitted": {s: sum(1 for o in out if o["stage"] == s) for s in STAGES},
               "pending": {s: len(pending[s]) for s in STAGES},
@@ -490,14 +585,20 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
              submit: Callable[[dict], Any], publish: Callable[[], dict] | None,
              max_intake: int = 100, batch: Any = None,
              rerun: Callable[[int, str], Any] | None = None,
-             held_sets: Callable[[], list[dict]] | None = None) -> dict:
+             held_sets: Callable[[], list[dict]] | None = None, spot: dict | None = None) -> dict:
     """One pass: reconcile with ``batch`` (a Batch client) when given, rerun once through ``rerun``
-    (``(job, stage)``) each job whose container died for a reason not the code's, snapshot, plan
-    at most ``[batch] max_submissions_per_pass`` submissions, submit each without waiting, then
-    publish; return the summary, with ``held_sets``, the quality gate's held packet sets after
-    the publish (``held_sets()``), when given."""
+    (``(job, stage)``, on the prompt queue) each job whose container died for a reason not the
+    code's, or whose Spot submission ended unpublished or was hedged (``spot``, the run's
+    ``[batch.spot]``), snapshot, plan at most ``[batch] max_submissions_per_pass`` submissions,
+    submit each without waiting (``submit(item)`` returns the job id), then publish; return the
+    summary, with ``held_sets``, the quality gate's held packet sets after the publish
+    (``held_sets()``), when given, and the run's ``attempts`` report."""
     with conn_factory() as conn:
-        checked = reconcile(conn, run, batch) if batch is not None else None
+        if batch is not None:
+            medians = median_seconds(conn, run) if spot and spot.get("hedge_factor") else None
+            checked = reconcile(conn, run, batch, spot, medians)
+        else:
+            checked = None
         snap = snapshot(conn, run)
     rerunning = set()
     if checked and rerun is not None:
@@ -509,8 +610,10 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
             job["state"] = "running"            # Batch's retry or the rerun in flight: pending, not failed
     cap = snap.settings.get("batch", {}).get("max_submissions_per_pass")
     submissions, counts = plan(snap, stems, selection, max_intake, cap)
+    queues = defaultdict(list)
     for item in submissions:
-        submit(item)
+        queues[item.get("queue") or "prompt"].append(submit(item))
+    counts["queues"] = dict(queues)
     produced = publish() if publish is not None else {"packets": 0, "sets": []}
     counts["packets_produced"] = produced["packets"]
     counts["sets_produced"] = produced["sets"]
@@ -521,6 +624,8 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
         counts["held_sets"] = held_sets()
     if checked is not None:
         counts["batch"] = checked
+        with conn_factory() as conn:
+            counts["attempts"] = attempts.report(attempts.run_entries(conn, run), (spot or {}).get("queue"))
     counts["rerun"] = sorted(rerunning)
     return {"run": run, "selection": selection.summary(), **counts}
 

@@ -51,7 +51,12 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   rerun's container dies too, and a pass submits at most the run's
   ``[batch] max_submissions_per_pass``; every pass reports ``held_sets``,
   the run's unsent official packet sets the quality gate holds
-  (``rapidpipe.foundation.gate``), with the metric and value;
+  (``rapidpipe.foundation.gate``), with the metric and value; ``--job-queue``
+  names the prompt queue, and a run whose ``[batch.spot]`` names a Spot queue
+  sends a backlog there, one attempt each, with the next attempt and any
+  hedged straggler on the prompt queue (``rapidpipe.foundation.loop``), each
+  pass reporting ``queues`` and ``attempts``; ``job submit --job-queue`` names
+  one submission's queue;
 - ``publish --run [--settings FILE]`` produces the run's official packet
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
@@ -176,6 +181,9 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="The Batch job definition: name, name:revision or ARN.")
     job_submit.add_argument("--job", type=int,
                             help="Submit a new attempt of this existing job instead of recording one.")
+    job_submit.add_argument("--job-queue",
+                            help="The Batch job queue (default RAPIDPIPE_BATCH_JOB_QUEUE); the run's "
+                                 "[batch.spot] queue gets one attempt.")
     for verb in (job_local, job_submit):
         new_only = verb is job_local       # job submit --job names an existing job instead
         verb.add_argument("--run", required=new_only, type=int)
@@ -247,6 +255,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="Comma-separated survey pass numbers, e.g. 1,2,3,4, or 'all' (default).")
     loop_parser.add_argument("--job-definition", required=True,
                              help="The Batch job definition the run's revision is registered as.")
+    loop_parser.add_argument("--job-queue",
+                             help="The prompt (on-demand) Batch job queue (default "
+                                  "RAPIDPIPE_BATCH_JOB_QUEUE); the run's [batch.spot] names the Spot one.")
     loop_parser.add_argument("--max-intake", type=int, default=100,
                              help="At most this many intake jobs per pass (default 100).")
     loop_parser.add_argument("--interval", type=float, default=120.0,
@@ -360,9 +371,12 @@ def _run_job(args: argparse.Namespace) -> int:
         try:
             with connect_job() as conn:
                 settings = foundation.run_show(conn, foundation.job_show(conn, job_id)["run"])["settings"]
+                spot = launch.spot(settings)
                 batch_job = launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
                                           memory_mib=launch.memory_mib(settings, stage),
-                                          environment_extra=launch.job_environment(settings))
+                                          environment_extra=launch.job_environment(settings),
+                                          queue=args.job_queue,
+                                          one_attempt=bool(spot) and args.job_queue == spot["queue"])
         except launch.LaunchError as exc:
             raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
         _print_json({"job": job_id, "batch_job": batch_job})
@@ -432,20 +446,23 @@ def _loop(args: argparse.Namespace) -> int:
     intake = settings["intake"]
     s3 = storage.s3_client(unsigned=bool(intake.get("unsigned")))
     batch = launch.batch_client()
+    spot = launch.spot(settings)
 
-    def submit(item: dict) -> None:
+    def submit(item: dict) -> int:
         with connect_loop() as conn:
             job_id = foundation.create_job(conn, args.run, item["stage"], item["scope"],
                                            item["inputs"], item["expects"])
             launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn,
                           memory_mib=launch.memory_mib(settings, item["stage"]),
-                          environment_extra=launch.job_environment(settings))
+                          environment_extra=launch.job_environment(settings),
+                          queue=item.get("queue") or args.job_queue, one_attempt="queue" in item)
+        return job_id
 
-    def rerun(job_id: int, stage: str) -> None:
+    def rerun(job_id: int, stage: str) -> None:          # always the prompt queue
         with connect_loop() as conn:
             launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
                           memory_mib=launch.memory_mib(settings, stage), name_suffix=loop.RERUN_SUFFIX,
-                          environment_extra=launch.job_environment(settings))
+                          environment_extra=launch.job_environment(settings), queue=args.job_queue)
 
     def publish() -> dict:
         with connect_loop() as conn:
@@ -469,7 +486,7 @@ def _loop(args: argparse.Namespace) -> int:
         started = time.monotonic()
         stems = loop.list_stems(s3, intake["source_root"], selection)
         summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
-                                args.max_intake, batch, rerun, held_sets)
+                                args.max_intake, batch, rerun, held_sets, spot)
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)

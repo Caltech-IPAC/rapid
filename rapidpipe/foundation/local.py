@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 from psycopg2.extras import RealDictCursor
 
 from rapidpipe.exitcodes import CommandExit, ExitCode
+from rapidpipe.foundation import attempts as submissions
 from rapidpipe.foundation.prefix import attempts, local_path, put
 from rapidpipe.foundation.publish import publish
 
@@ -155,9 +156,13 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             attempt = 1 + max(attempts(job_prefix), default=0)
             prefix = f"{job_prefix}/{attempt}/"
             workdir = Path(tempfile.mkdtemp(prefix=f"rapidpipe-job-{job_id}-{attempt}-"))
+        machine = instance_type()
         _record(conn, job_id, "state = 'running', started = now(), ended = NULL, exit_code = NULL,"
                 " refusal = NULL, image_digest = %s, instance_type = %s",
-                (os.environ.get("RAPID_IMAGE_DIGEST"), instance_type()))
+                (os.environ.get("RAPID_IMAGE_DIGEST"), machine))
+        _record_attempt(conn, job_id, {"started": submissions.now(), "instance_type": machine,
+                                       "availability_zone": availability_zone(),
+                                       "batch_attempt": os.environ.get("AWS_BATCH_JOB_ATTEMPT")})
 
     context = JobContext(
         job=job_id, run=job["run"], stage=job["stage"], scope=job["scope"],
@@ -173,11 +178,14 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
         with connect() as conn:
             result = publish(conn, job_id, attempt, context.prefix)
             _record(conn, job_id, "ended = now(), exit_code = 0")
+            _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "published"})
     except BaseException as exc:
         named = isinstance(exc, CommandExit)
+        code = exc.code if named else int(ExitCode.STAGE_ERROR)
         with connect() as conn:
             _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s, refusal = %s",
-                    (exc.code if named else int(ExitCode.STAGE_ERROR), str(exc) if named else None))
+                    (code, str(exc) if named else None))
+            _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "failed", "exit_code": code})
         raise
     return {**result, "peak_rss_kib": _peak_rss_kib()}
 
@@ -201,12 +209,12 @@ def _record_peak(manifest: Path, kib: int) -> None:
 _IMDS = "http://169.254.169.254/latest"
 
 
-def instance_type(timeout: float = 1.0) -> str | None:
+def instance_type(timeout: float = 1.0, item: str = "instance-type") -> str | None:
     """The EC2 instance type this process runs on, from IMDSv2; ``None`` when unreachable.
 
-    One ``PUT`` for a token and one ``GET`` of ``meta-data/instance-type``,
+    One ``PUT`` for a token and one ``GET`` of ``meta-data/<item>``,
     each with ``timeout`` seconds; off EC2, or in a container the metadata
-    service's hop limit does not reach, either fails, the type is unknown and
+    service's hop limit does not reach, either fails, the value is unknown and
     the error is logged.
     """
     try:
@@ -214,12 +222,29 @@ def instance_type(timeout: float = 1.0) -> str | None:
             f"{_IMDS}/api/token", method="PUT",
             headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"}), timeout=timeout).read()
         reply = urllib.request.urlopen(urllib.request.Request(
-            f"{_IMDS}/meta-data/instance-type",
+            f"{_IMDS}/meta-data/{item}",
             headers={"X-aws-ec2-metadata-token": token.decode()}), timeout=timeout).read()
     except (OSError, ValueError) as exc:
-        logging.getLogger(__name__).warning("instance type unknown: %s", exc)
+        logging.getLogger(__name__).warning("%s unknown: %s", item, exc)
         return None
     return reply.decode().strip() or None
+
+
+def availability_zone() -> str | None:
+    """The availability zone this process runs in, read as :func:`instance_type` reads the type;
+    only inside a Batch container (``AWS_BATCH_JOB_ID`` set), ``None`` elsewhere."""
+    return instance_type(item="placement/availability-zone") if os.environ.get("AWS_BATCH_JOB_ID") else None
+
+
+def _record_attempt(conn, job_id: int, fields: dict) -> None:
+    """Add ``fields`` to this Batch job's entry in ``jobs.attempts``; nothing outside Batch."""
+    batch_job_id = os.environ.get("AWS_BATCH_JOB_ID")
+    if not batch_job_id:
+        return
+    conn.rollback()
+    with conn.cursor() as cur:
+        submissions.record(cur, job_id, batch_job_id, fields)
+    conn.commit()
 
 
 def _record(conn, job_id: int, assignments: str, params: tuple = ()) -> None:
