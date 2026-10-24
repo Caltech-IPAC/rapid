@@ -116,7 +116,7 @@ def test_the_hlwas_overlay_resolves_to_the_hand_built_body():
     root, bound = "s3://bucket/r00342/l2/", 61591.4056
     hand_built = tomllib.loads(SHIPPED.read_text())
     hand_built["intake"].update(source_root=root, unsigned=True, dq_mask_bits=0x2110C01,
-                                crpix_shift=[0.12, -0.99])
+                                crpix_shift=[0.12, -0.99], gzip_level=0)
     hand_built["reference"]["selection"]["before_mjd"] = bound
     body, record = resolve(SHIPPED, HLWAS, [f'intake.source_root="{root}"',
                                             f"reference.selection.before_mjd={bound}"])

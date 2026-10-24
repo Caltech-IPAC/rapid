@@ -27,3 +27,8 @@ dq_mask_bits = 0x2110C01
 # 001_0001, LEDGER-wcs-input-catalog, 2026-10-24). The intake's
 # gaia_dx_px / gaia_dy_px read it on every file.
 crpix_shift = [0.12, -0.99]
+# The intake's FITS is read once, by the reference and difference jobs, so it
+# is written uncompressed: gzip level 1 took 7.9 s of a 48 s intake (job
+# 20134, 2026-10-24) and single-threaded gzip doubled the container time when
+# six intakes shared an instance (runbook part 8); the image has no pigz.
+gzip_level = 0

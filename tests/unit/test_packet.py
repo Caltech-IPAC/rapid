@@ -7,7 +7,8 @@ cutouts are (2 half width + 1) pixels square with off-chip pixels zero;
 a forced row a predecessor set holds is carried, not measured again,
 while a pair it lacks is measured; a difference image's neighbours are
 read under its own suffix, so a gzipped epoch gives the packets a plain
-one gives.
+one gives; a gzipped window file is decompressed once, beside its
+neighbours, and a plain one read as it is.
 """
 
 from __future__ import annotations
@@ -213,3 +214,21 @@ def test_a_gzipped_epoch_gives_the_packets_a_plain_one_gives(tmp_path):
             assert gzipped[sid][name] == record[name]
         assert [(f["psfFlux"], f["scienceFlux"]) for f in gzipped[sid]["prvDiaForcedSources"]] == [
             (f["psfFlux"], f["scienceFlux"]) for f in record["prvDiaForcedSources"]]
+
+
+def test_a_gzipped_window_file_is_decompressed_once_beside_its_neighbours(tmp_path):
+    import gzip
+
+    from rapidpipe.stages import packet
+
+    source = tmp_path / "difference"
+    source.mkdir()
+    for name in ("diffimage.fits", "bkg_subbed_science_image.fits"):
+        (source / f"{name}.gz").write_bytes(gzip.compress(name.encode()))
+    diff = packet._plain(source / "diffimage.fits.gz")
+    sci = packet._plain(source / "bkg_subbed_science_image.fits.gz")
+    assert diff.name == "diffimage.fits" and diff.read_bytes() == b"diffimage.fits"
+    assert sci.parent == diff.parent and diff.with_name("bkg_subbed_science_image.fits") == sci
+    stamp = diff.stat().st_mtime_ns
+    assert packet._plain(source / "diffimage.fits.gz") == diff and diff.stat().st_mtime_ns == stamp
+    assert packet._plain(source / "psf.fits") == source / "psf.fits"

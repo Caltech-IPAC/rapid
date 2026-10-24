@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import time
 from typing import Any, Callable
 
@@ -228,8 +229,31 @@ def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> 
             "seconds": round(time.monotonic() - started, 3)}
 
 
+#: The job environment that stands for the ``[kafka]`` table's three SSM parameters, as a
+#: launcher passes them (:func:`environment`) so a Batch job never reads SSM.
+ENVIRONMENT = {"bootstrap_servers_parameter": "RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS",
+               "topic_parameter": "RAPIDPIPE_KAFKA_TOPIC",
+               "max_request_bytes_parameter": "RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES"}
+
+
+def environment(kafka_settings: dict, ssm: Any = None) -> dict[str, str]:
+    """The ``[kafka]`` parameters' values as the environment :func:`endpoint` reads first."""
+    found = endpoint(kafka_settings, ssm)
+    return {ENVIRONMENT["bootstrap_servers_parameter"]: ",".join(found["bootstrap_servers"]),
+            ENVIRONMENT["topic_parameter"]: found["topic"],
+            ENVIRONMENT["max_request_bytes_parameter"]: str(found["max_request_bytes"])}
+
+
 def endpoint(kafka_settings: dict, ssm: Any = None) -> dict[str, Any]:
-    """The bootstrap servers, topic and maximum request bytes the ``[kafka]`` table's parameters hold."""
+    """The bootstrap servers, topic and maximum request bytes the ``[kafka]`` table's parameters hold.
+
+    From the environment :data:`ENVIRONMENT` names when all three are set (a job its launcher
+    passed them to), else from SSM.
+    """
+    if all(os.environ.get(name) for name in ENVIRONMENT.values()):
+        return {"bootstrap_servers": os.environ[ENVIRONMENT["bootstrap_servers_parameter"]].split(","),
+                "topic": os.environ[ENVIRONMENT["topic_parameter"]],
+                "max_request_bytes": int(os.environ[ENVIRONMENT["max_request_bytes_parameter"]])}
     if ssm is None:
         import boto3
         ssm = boto3.client("ssm")

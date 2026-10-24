@@ -360,7 +360,8 @@ def _run_job(args: argparse.Namespace) -> int:
             with connect_job() as conn:
                 settings = foundation.run_show(conn, foundation.job_show(conn, job_id)["run"])["settings"]
                 batch_job = launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
-                                          memory_mib=launch.memory_mib(settings, stage))
+                                          memory_mib=launch.memory_mib(settings, stage),
+                                          environment_extra=launch.job_environment(settings))
         except launch.LaunchError as exc:
             raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
         _print_json({"job": job_id, "batch_job": batch_job})
@@ -436,12 +437,14 @@ def _loop(args: argparse.Namespace) -> int:
             job_id = foundation.create_job(conn, args.run, item["stage"], item["scope"],
                                            item["inputs"], item["expects"])
             launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn,
-                          memory_mib=launch.memory_mib(settings, item["stage"]))
+                          memory_mib=launch.memory_mib(settings, item["stage"]),
+                          environment_extra=launch.job_environment(settings))
 
     def rerun(job_id: int, stage: str) -> None:
         with connect_loop() as conn:
             launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
-                          memory_mib=launch.memory_mib(settings, stage), name_suffix=loop.RERUN_SUFFIX)
+                          memory_mib=launch.memory_mib(settings, stage), name_suffix=loop.RERUN_SUFFIX,
+                          environment_extra=launch.job_environment(settings))
 
     def publish() -> dict:
         with connect_loop() as conn:

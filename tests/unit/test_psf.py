@@ -7,7 +7,9 @@ measurement, not this stage's); the stamp is
 grid is cut at five sigma and spline-interpolated) and its centroid sits at
 the stamp's centre within 0.01 pixel, for odd and even ``size``; every
 header and the manifest carry the reference's name; a reference for
-another detector or filter fails before a manifest. The fetch is faked.
+another detector or filter fails before a manifest. With ``epsf_cache``,
+the reference is read from the cache by its name, and from CRDS only when
+the cache lacks it, the manifest saying which. The fetch is faked.
 """
 
 from __future__ import annotations
@@ -66,7 +68,8 @@ def source(tmp_path: Path) -> Path:
     return src
 
 
-def run_psf(tmp_path: Path, source: Path, monkeypatch, size: int = 15) -> Path:
+def run_psf(tmp_path: Path, source: Path, monkeypatch, size: int = 15, epsf_cache: str = "",
+            from_crds: bool = True) -> Path:
     fetched = []
 
     def fake_fetch(url: str, target: Path) -> Path:
@@ -76,14 +79,14 @@ def run_psf(tmp_path: Path, source: Path, monkeypatch, size: int = 15) -> Path:
 
     monkeypatch.setattr(psf, "fetch", fake_fetch)
     prefix = tmp_path / f"outputs-{size}"
-    prefix.mkdir()
+    prefix.mkdir(parents=True)
     settings = {"intake": {"source_root": source.as_uri() + "/", "unsigned": False},
-                "psf": {"crds_server": "https://crds.example/", "size": size}}
+                "psf": {"crds_server": "https://crds.example/", "size": size, "epsf_cache": epsf_cache}}
     job = JobContext(job=1, run=1, stage="psf", scope={"dataset": "r00342", "file": STEM},
                      survey="HLWAS", dataset="r00342", settings=settings, inputs=[], attempt=1,
                      prefix=prefix.as_uri() + "/", connect=lambda: contextlib.nullcontext(None))
     psf.run(job)
-    assert fetched == [f"https://crds.example/unchecked_get/references/roman/{EPSF}"]
+    assert fetched == ([f"https://crds.example/unchecked_get/references/roman/{EPSF}"] if from_crds else [])
     return prefix
 
 
@@ -127,3 +130,14 @@ def test_a_reference_for_another_detector_or_filter_refuses(tmp_path, source, mo
     with pytest.raises(ValueError, match="not the file's WFI08 F146"):
         run_psf(tmp_path, source, monkeypatch)
     assert not (tmp_path / "outputs-15" / "manifest.json").exists()
+
+
+def test_the_epsf_cache_is_read_first_and_crds_only_for_a_name_it_lacks(tmp_path, source, monkeypatch):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    shutil.copyfile(source / EPSF, cache / EPSF)
+    prefix = run_psf(tmp_path / "hit", source, monkeypatch, epsf_cache=cache.as_uri(), from_crds=False)
+    assert json.loads((prefix / "manifest.json").read_text())["psf"]["fetched_from"] == f"{cache.as_uri()}/{EPSF}"
+    (cache / EPSF).unlink()
+    prefix = run_psf(tmp_path / "miss", source, monkeypatch, epsf_cache=cache.as_uri())
+    assert json.loads((prefix / "manifest.json").read_text())["psf"]["fetched_from"].startswith("https://crds")

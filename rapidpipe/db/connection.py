@@ -235,6 +235,25 @@ def _fetch_parameter_tree_db_values(path: str, ssm_client: Any = None) -> dict[s
     return values
 
 
+#: The job environment variable each tree key stands for (:func:`parameter_tree_environment`).
+_TREE_ENVIRONMENT = {"db/server": "PGHOST", "db/port": "PGPORT", "db/name": "PGDATABASE",
+                     "db/secret-id": "RAPID_DB_SECRET_ID"}
+
+
+def parameter_tree_environment(path: str, ssm_client: Any = None) -> dict[str, str]:
+    """The tree's database keys as the environment this module reads ahead of the tree.
+
+    ``PGHOST``, ``PGPORT`` and ``PGDATABASE`` (the endpoint, read before the
+    tree) and ``RAPID_DB_SECRET_ID`` (the credential's secret, read before
+    the tree): a launcher that passes these to a job spares the job its own
+    tree walk, so thousands of jobs starting together never meet the SSM
+    rate (2026-10-23, 1,448 of 3,456 intakes failed on it). No password is
+    in them; the job still reads the secret.
+    """
+    values = _fetch_parameter_tree_db_values(path, ssm_client=ssm_client)
+    return {name: values[key] for key, name in _TREE_ENVIRONMENT.items()}
+
+
 def _cached_parameter_tree_db_values(
     path: str, ssm_client: Any, cache: dict[str, dict[str, str]],
 ) -> dict[str, str]:

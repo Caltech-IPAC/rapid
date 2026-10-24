@@ -87,9 +87,14 @@ the bright-footprint flag
 
 from __future__ import annotations
 
+import atexit
 import dataclasses
+import gzip
+import hashlib
 import logging
 import math
+import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -284,7 +289,7 @@ def _read(job: JobContext) -> Read:
             if l2 is None:
                 raise ValueError(f"job {job.job}: difference image {d['pid']} has no named"
                                  f" l2files input for rid {d['rid']}")
-            diff = get(d["filename"])
+            diff = _plain(get(d["filename"]))
             plain = diff.name.removesuffix(".gz")
             uncert = fp.DIFF_UNCERT_BASENAMES.get(plain)
             if (d["expid"], d["sca"], d["fid"]) == (key["expid"], key["sca"], key["fid"]):
@@ -335,8 +340,35 @@ def neighbour(name: str, diff: str) -> str:
 
 
 def _beside(url: str, name: str) -> Path:
-    """The neighbour ``name`` of the difference image ``url``, in its directory, fetched like it."""
-    return get(url.rsplit("/", 1)[0] + "/" + neighbour(name, url))
+    """The neighbour ``name`` of the difference image ``url``, in its directory, fetched like it
+    and decompressed once (:func:`_plain`)."""
+    return _plain(get(url.rsplit("/", 1)[0] + "/" + neighbour(name, url)))
+
+
+_plain_root: Path | None = None
+
+
+def _plain(path: Path) -> Path:
+    """``path``, decompressed once when it ends ``.gz``: the plain file, under this process's
+    scratch, one directory per source directory so a difference image's neighbours stay
+    beside it (``x.fits.gz`` -> ``x.fits``); any other path unchanged.
+
+    The window images are opened by the forced photometry and again for the cutouts, and a
+    gzipped FITS is decompressed again at every open and every backward seek (the 2026-10-22
+    gzip took the packet container from 27 to 45 s), so each is decompressed here once.
+    """
+    global _plain_root
+    if path.suffix != ".gz":
+        return path
+    if _plain_root is None:
+        _plain_root = Path(tempfile.mkdtemp(prefix="rapidpipe-plain-"))
+        atexit.register(shutil.rmtree, _plain_root, ignore_errors=True)
+    target = _plain_root / hashlib.sha1(str(path.parent).encode()).hexdigest()[:16] / path.stem
+    if not target.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(path, "rb") as src, target.open("wb") as dst:
+            shutil.copyfileobj(src, dst, 1 << 20)
+    return target
 
 
 def measure_forced(images: list[WindowImage], positions: list[fp.Position],
