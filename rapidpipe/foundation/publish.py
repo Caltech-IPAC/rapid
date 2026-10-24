@@ -11,6 +11,17 @@ prefix; ``checksum`` is the file's SHA-256 in the ``sha256:`` form of
 ``rapidpipe.products.manifest``. Each Parquet file's columns are the
 table's column names, without ``job``, which the publisher sets.
 
+Two optional manifest keys, written by a stage that reads at execution
+what Part 1 statement 4 otherwise names at launch (amendment of
+2026-10-24): ``reads``, a list of ``{"product", "key", "source_job"}``,
+recorded as the job's ``input`` rows in ``job_inputs`` when it publishes
+(the difference job's object catalog, the packet job's members and
+forced-photometry window); and ``catalog``, ``{"dataset", "survey",
+"field", "radius"}`` on a difference job, whose founded ``objects`` and
+``memberships`` are reconciled under the field's lock against the objects
+founded since its read before they load (:mod:`rapidpipe.foundation.catalog`),
+the outcome recorded in the stored manifest as ``reconcile``.
+
 The prefix is a URL, ``file://`` or ``s3://``; each file is read through
 :func:`rapidpipe.foundation.prefix.get`.
 """
@@ -26,6 +37,7 @@ import pyarrow.parquet as pq
 from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
 
+from rapidpipe.foundation import catalog as object_catalog
 from rapidpipe.foundation.official import Refused, apply
 from rapidpipe.foundation.prefix import get
 
@@ -71,10 +83,20 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                 return {"job": job_id, "attempt": published_attempt, "published": False,
                         "group": None, "refusal": refusal, "live": None}
             manifest = _verified_manifest(root)
+            rows = {output["table"]: _rows(get(root + output["path"]))
+                    for output in manifest["outputs"]}
+            reads = manifest.get("reads", [])
+            if "catalog" in manifest:
+                manifest["reconcile"] = _reconcile(cur, job_id, run, manifest["catalog"],
+                                                   reads, rows)
             tables = []
             for output in manifest["outputs"]:
-                _load(cur, output["table"], get(root + output["path"]), job_id)
+                _insert(cur, output["table"], rows[output["table"]], job_id)
                 tables.append(output["table"])
+            if reads:
+                execute_values(cur, "INSERT INTO job_inputs (job, kind, product, key, source_job)"
+                               " VALUES %s", [(job_id, "input", r["product"], Json(r["key"]),
+                                               r["source_job"]) for r in reads])
             cur.execute("UPDATE jobs SET state = 'published', published_attempt = %s,"
                         " manifest = %s WHERE id = %s",
                         (attempt, Json({"prefix": prefix, **manifest}), job_id))
@@ -114,17 +136,33 @@ def _verified_manifest(root: str) -> dict:
     return manifest
 
 
-def _load(cur, table: str, path: Path, job_id: int) -> None:
+def _rows(path: Path) -> list[dict]:
     data = pq.read_table(path)
     if "job" in data.column_names:
         raise PublishError(f"{path} carries a job column; the publisher sets it")
-    columns = data.column_names
-    rows = [(*values, job_id) for values in zip(*(data.column(c).to_pylist() for c in columns))]
+    return data.to_pylist()
+
+
+def _insert(cur, table: str, rows: list[dict], job_id: int) -> None:
     if not rows:
         return
+    columns = list(rows[0])
     statement = sql.SQL("INSERT INTO {} ({}) VALUES %s").format(
         sql.Identifier(table), sql.SQL(", ").join(map(sql.Identifier, [*columns, "job"])))
-    execute_values(cur, statement, rows, page_size=1000)
+    execute_values(cur, statement, [(*(r[c] for c in columns), job_id) for r in rows],
+                   page_size=1000)
+
+
+def _reconcile(cur, job_id: int, run: int, catalog: dict, reads: list[dict],
+               rows: dict[str, list[dict]]) -> dict:
+    """Attach the job's founded objects to those founded since its read, under the field's lock."""
+    object_catalog.lock(cur, run, catalog["field"])
+    read_jobs = [r["source_job"] for r in reads if r["product"] == "objects"]
+    others = object_catalog.between(cur, job_id, run, catalog, read_jobs)
+    rows["objects"], rows["memberships"], outcome = object_catalog.attach(
+        job_id, rows.get("objects", []), rows.get("memberships", []), others,
+        float(catalog["radius"]))
+    return outcome
 
 
 def _bind(cur, job_id: int, run: int) -> tuple[int | None, str | None, bool | None]:

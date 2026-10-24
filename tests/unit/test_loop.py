@@ -2,10 +2,11 @@
 
 Contracts: a listed stem with no published intake and no intake job of the
 run is submitted once, and not again while its job is pending; a reference
-is submitted only once its field has ``min_frames`` official L2 rows; each
-field's associate chain submits one epoch at a time in ``mjdobs`` order and
-waits while an earlier exposure of the field is upstream; two fields
-advance in the same pass; a pass with nothing new, pending or to submit is
+is submitted only once its field has ``min_frames`` official L2 rows; every
+official source set gets one packet job naming its reference, Gaia, PSF and
+source set only, in any order, whatever else of its field is upstream or
+pending (association is in the difference job), in every field in the same
+pass; a pass with nothing new, pending or to submit is
 drained and the verb exits 0, and a packet set still inside its job's
 send window keeps it from draining; the listing pages only the observations of
 the selected filters; the packet stage's Gaia input names the catalog by
@@ -81,7 +82,7 @@ def snap(**kw) -> loop.Snapshot:
     base = dict(dataset=D, survey="HLWAS", settings=SETTINGS, fids={"W146": 8, "F184": 1},
                 published_stems=set(), jobs=[],
                 psfs={(8, 8, "science"): (10, 100)},
-                exposures=set(), l2={}, refs={}, diffs={}, sources={}, objects={}, chain={}, packets={},
+                exposures=set(), l2={}, refs={}, diffs={}, sources={}, packets={},
                 gaia={"key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "job": 12})
     base.update(kw)
     return loop.Snapshot(**base)
@@ -137,80 +138,39 @@ def test_reference_waits_for_min_frames():
     assert [i["source_job"] for i in ref[0]["inputs"]] == [20, 21]
 
 
-def _associated(field_jobs: dict) -> list[dict]:
-    return [{"id": j, "stage": "associate", "state": "published", "scope": {"field": f}, "sources": s}
-            for j, (f, s) in field_jobs.items()]
-
-
-def test_associate_chain_is_chronological_one_at_a_time_and_waits_for_upstream():
+def test_every_official_source_set_gets_one_packet_in_any_order():
     k1, k2, k3 = ((expid(p, 1, 1), 8, 8) for p in (1, 2, 3))
     l2 = {k1: l2row(7, 1.0, 20), k2: l2row(7, 2.0, 21), k3: l2row(7, 3.0, 22)}
     refs, diffs = {(7, 8): 30}, {k1: 41, k2: 42, k3: 43}
 
-    # The earliest epoch's source set is still upstream: nothing associates.
+    # The earliest epoch's source set is still upstream: the later two go anyway, together.
     subs, _ = loop.plan(snap(l2=l2, refs=refs, diffs=diffs, sources={k2: 42, k3: 43}), [], SEL)
-    assert stages(subs, "associate") == []
+    packets = stages(subs, "packet")
+    assert [p["scope"]["expid"] for p in packets] == [k2[0], k3[0]]
+    assert packets[0]["inputs"] == [
+        {"product": "refimages", "key": {"dataset": D, "field": 7, "fid": 8}, "source_job": 30},
+        {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"},
+         "source_job": 12},
+        {"product": "psfs", "key": {"dataset": D, "fid": 8, "sca": 8, "kind": "science"},
+         "source_job": 10, "binding": 100},
+        {"product": "sources", "key": {"dataset": D, "expid": k2[0], "sca": 8, "fid": 8},
+         "source_job": 42}]
+    assert packets[0]["expects"] == [{"product": "packets", "key": {"dataset": D, "expid": k2[0],
+                                                                    "sca": 8, "fid": 8}, "binding": None}]
 
-    # All three official: only the earliest goes, with no predecessor.
-    sources = {k1: 41, k2: 42, k3: 43}
-    subs, _ = loop.plan(snap(l2=l2, refs=refs, diffs=diffs, sources=sources), [], SEL)
-    (a,) = stages(subs, "associate")
-    assert a["inputs"] == [{"product": "sources", "key": {"dataset": D, "expid": k1[0], "sca": 8, "fid": 8},
-                            "source_job": 41}]
-    assert a["expects"][0]["binding"] is None
-
-    # While it is pending, the field waits.
-    pend = [{"id": 60, "stage": "associate", "state": "launched", "scope": {"field": 7}, "sources": 41}]
-    subs, _ = loop.plan(snap(l2=l2, refs=refs, diffs=diffs, sources=sources, jobs=pend), [], SEL)
-    assert stages(subs, "associate") == []
-
-    # Once published, the next epoch goes, naming the field's open object set.
-    done = _associated({60: (7, 41)})
-    subs, _ = loop.plan(snap(l2=l2, refs=refs, diffs=diffs, sources=sources, jobs=done,
-                             objects={7: (60, 900)}, chain={41: 60}), [], SEL)
-    (a,) = stages(subs, "associate")
-    assert a["inputs"][0]["source_job"] == 42
-    assert a["inputs"][1] == {"product": "objects", "key": {"dataset": D, "survey": "HLWAS", "field": 7},
-                              "source_job": 60}
-    assert a["expects"][0]["binding"] == 900
-    # Its packet goes beside it, naming the first object set and no predecessor packet set.
-    (pk,) = stages(subs, "packet")
-    assert pk["scope"]["expid"] == k1[0]
-    assert {"product": "objects", "key": {"dataset": D, "survey": "HLWAS", "field": 7},
-            "source_job": 60} in pk["inputs"]
-    assert not [i for i in pk["inputs"] if i["product"] == "packets"]
-    assert {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"},
-            "source_job": 12} in pk["inputs"]
+    # One pending for k2 and k3's official: only k1's goes.
+    pend = [{"id": 60, "stage": "packet", "state": "launched", "scope": {"expid": k2[0], "sca": 8, "fid": 8}}]
+    subs, _ = loop.plan(snap(l2=l2, refs=refs, diffs=diffs, sources=diffs, packets={k3: 90}, jobs=pend),
+                        [], SEL)
+    assert [p["scope"]["expid"] for p in stages(subs, "packet")] == [k1[0]]
 
 
-def test_a_run_resumed_in_place_of_another_continues_the_official_chain_without_reassociating():
-    k1, k2 = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8)
-    l2 = {k1: l2row(7, 1.0, 20), k2: l2row(7, 2.0, 21)}
-    # Another run of the dataset associated epoch 1 (source set 41) as object set 60; this run has no jobs.
-    subs, _ = loop.plan(snap(l2=l2, refs={(7, 8): 30}, diffs={k1: 41, k2: 42}, sources={k1: 41, k2: 42},
-                             objects={7: (60, 900)}, chain={41: 60}), [], SEL)
-    (a,) = stages(subs, "associate")
-    assert a["inputs"][0]["source_job"] == 42 and a["expects"][0]["binding"] == 900
-    (pk,) = stages(subs, "packet")
-    assert pk["scope"]["expid"] == k1[0]
-    assert {"product": "objects", "key": {"dataset": D, "survey": "HLWAS", "field": 7},
-            "source_job": 60} in pk["inputs"]
-
-
-def test_the_chain_is_walked_back_from_the_official_object_set_and_skips_associates_outside_it():
-    links = [{"job": 60, "product": "sources", "source_job": 41},
-             {"job": 61, "product": "sources", "source_job": 42}, {"job": 61, "product": "objects", "source_job": 60},
-             {"job": 62, "product": "sources", "source_job": 43}, {"job": 62, "product": "objects", "source_job": 61},
-             {"job": 70, "product": "sources", "source_job": 41}, {"job": 70, "product": "objects", "source_job": 62}]
-    assert loop._chain({7: (62, 900)}, links) == {41: 60, 42: 61, 43: 62}
-
-
-def test_an_intake_pending_holds_association():
+def test_an_intake_pending_holds_no_packet():
     k1 = (expid(1, 1, 1), 8, 8)
     pend = [{"id": 70, "stage": "intake", "state": "running", "scope": {"dataset": D, "file": stem(2, 1, 1)}}]
     subs, _ = loop.plan(snap(l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30}, diffs={k1: 41},
                              sources={k1: 41}, jobs=pend), [], SEL)
-    assert stages(subs, "associate") == []
+    assert [p["scope"]["expid"] for p in stages(subs, "packet")] == [k1[0]]
 
 
 def test_two_fields_advance_in_the_same_pass():
@@ -218,7 +178,7 @@ def test_two_fields_advance_in_the_same_pass():
     l2 = {a1: l2row(7, 1.0, 20), a2: l2row(9, 1.1, 21)}
     subs, _ = loop.plan(snap(l2=l2, refs={(7, 8): 30, (9, 8): 31}, diffs={a1: 41, a2: 42},
                              sources={a1: 41, a2: 42}), [], SEL)
-    assert sorted(a["scope"]["field"] for a in stages(subs, "associate")) == [7, 9]
+    assert sorted(p["inputs"][0]["key"]["field"] for p in stages(subs, "packet")) == [7, 9]
 
 
 def test_failed_job_is_reported_and_its_key_not_resubmitted():
@@ -232,8 +192,7 @@ def test_failed_job_is_reported_and_its_key_not_resubmitted():
 def test_drained_pass_exits_zero(monkeypatch, capsys):
     k1 = (expid(1, 1, 1), 8, 8)
     done = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30},
-                diffs={k1: 41}, sources={k1: 41}, packets={k1: 90},
-                jobs=_associated({60: (7, 41)}), objects={7: (60, 900)}, chain={41: 60})
+                diffs={k1: 41}, sources={k1: 41}, packets={k1: 90})
     monkeypatch.setattr(loop, "snapshot", lambda conn, run: done)
     monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
     monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
@@ -347,12 +306,11 @@ def test_the_bound_differences_only_rows_at_or_after_it():
     assert {(i["key"]["kind"], i["source_job"]) for d in stages(subs, "difference")
             for i in d["inputs"] if i["product"] == "psfs"} == {("science", 10)}
 
-    # Once those two are associated the chain starts at the bound, not at the reference's rows.
+    # Packets start at the bound, not at the reference's rows.
     sources = {k2: 42, k3: 43}
     subs, _ = loop.plan(snap(settings=BOUND, l2=l2, refs={(7, 8): 30}, diffs=sources, sources=sources),
                         [], SEL)
-    (a,) = stages(subs, "associate")
-    assert a["inputs"][0]["source_job"] == 42
+    assert [p["inputs"][-1]["source_job"] for p in stages(subs, "packet")] == [42, 43]
 
 
 def test_a_field_with_too_few_rows_before_the_bound_is_held_and_the_pass_drains():

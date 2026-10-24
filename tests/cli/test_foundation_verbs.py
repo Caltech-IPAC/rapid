@@ -224,7 +224,7 @@ def test_job_submit_with_job_submits_a_new_attempt_of_the_existing_job(capsys, c
     code, out, err = _run(capsys, "job", "submit", "--job", str(job), "--job-definition", "rapid-rebuild:37")
     assert (code, err) == (ExitCode.SUCCESS, "")
     assert json.loads(out) == {"job": job, "batch_job": "batch-1"}
-    assert batch.submitted[0]["jobName"].endswith(f"-associate-{job}")
+    assert batch.submitted[0]["jobName"].endswith(f"-difference-{job}")
     with conn.cursor() as cur:
         cur.execute("SELECT count(*), max(batch_job_id) FROM jobs")
         assert cur.fetchone() == (1, "batch-1")

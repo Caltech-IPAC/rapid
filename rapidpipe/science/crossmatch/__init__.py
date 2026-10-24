@@ -8,7 +8,7 @@ keeps its `dev` counterpart's arithmetic and text format.
 - ``catalog``: `dev`'s ascending-MJD exposure order (stage 1), the
   ``merges``/``astroobjects`` CSV lines it bulk-copies, and the stage-2
   inclusion cone around a field's centre.
-- ``memory``: the in-memory matcher the ``associate`` stage runs, `dev`'s
+- ``memory``: the in-memory matcher the ``difference`` stage runs, `dev`'s
   two passes with q3c's all-within-radius test over a catalog held in memory.
 
 This subpackage imports nothing from ``rapidpipe.stages``, ``launch`` or

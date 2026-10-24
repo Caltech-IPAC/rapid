@@ -1,23 +1,23 @@
-"""A synthetic world for the procedure proof (foundation plan v5, Part 3).
+"""A synthetic world for the procedure proof (foundation plan, Part 3, amended 2026-10-24).
 
 Not a test module and no science: one dataset, one survey, one field, two
 epochs of one exposure each on two SCAs in one filter. Every product is
 written the way a stage writes it, as Parquet plus a manifest under a
 ``file://`` prefix holding the job id and attempt, and loaded by
 :func:`rapidpipe.foundation.publish`; every run and job is created through
-:func:`create_run` and :func:`create_job` with the inputs, expected
-bindings and exclusions Part 1 statement 4 names.
+:func:`create_run` and :func:`create_job` with the inputs and expected
+bindings Part 1 statement 4 names.
 
-* :meth:`World.import_image` stands for the import stage: one difference
-  image and its source set of :data:`NSOURCES` sources at fixed positions,
-  one job per (epoch, SCA), so each source set is its own set.
-* :meth:`World.associate` writes an object set: the predecessor's objects
-  with this epoch's sources added to their sufficient sums, the excluded
-  source sets' members taken out of them, and this epoch's memberships.
-  A source matches the object whose id is its position hash
-  (``radec_index``), which is exact here because positions repeat.
+* :meth:`World.difference` stands for the difference stage: one
+  difference image and its source set of :data:`NSOURCES` sources at fixed
+  positions (offset by ``jitter`` arcseconds per epoch), one job per
+  (epoch, SCA), associated as the stage does it: the run's objects of the
+  field read as they stand (or as ``catalog`` says, for two jobs in flight
+  at once), matched by :func:`rapidpipe.science.crossmatch.memory.associate_epoch`,
+  the read and the catalog key in the manifest, so the publisher reconciles.
 * :meth:`World.packets` writes a packet set for one image key: one index
-  row and one forced row per source of the epoch's source set.
+  row and one forced row per source of the epoch's source set that is a
+  member of an object.
 
 Expected bindings default to :data:`CURRENT`: the key's open binding at
 launch, what the loop would choose.
@@ -30,7 +30,7 @@ import json
 from pathlib import Path
 
 from rapidpipe.foundation import change, create_job, create_run, publish
-from rapidpipe.science.spatial import radec_index
+from rapidpipe.science.crossmatch.memory import associate_epoch
 from tests.db.foundation_helpers import write_attempt
 
 SURVEY, DATASET, FIELD, FID = "S", "D", 1, 1
@@ -38,6 +38,8 @@ SCAS = (1, 2)
 EPOCHS = (1, 2)
 NSOURCES = 24
 FIELD_KEY = {"dataset": DATASET, "survey": SURVEY, "field": FIELD}
+#: The match radius, degrees: 0.36 arcseconds, far below the sources' 7-arcsecond spacing.
+RADIUS = 1e-4
 
 #: ``expects`` default: the key's open binding at launch (or none).
 CURRENT = object()
@@ -48,13 +50,9 @@ def image_key(epoch: int, sca: int) -> dict:
     return {"dataset": DATASET, "expid": epoch, "sca": sca, "fid": FID}
 
 
-def position(sca: int, i: int) -> tuple[float, float]:
-    """Source ``i`` of SCA ``sca``: the same sky position in every epoch."""
-    return 10.0 + 0.5 * (sca - 1) + 0.01 * i, -5.0 + 0.002 * i
-
-
-def aid_of(ra: float, dec: float) -> int:
-    return int(radec_index(ra, dec))
+def position(sca: int, i: int, jitter: float = 0.0) -> tuple[float, float]:
+    """Source ``i`` of SCA ``sca``: one sky position, moved ``jitter`` arcseconds in both axes."""
+    return 10.0 + 0.5 * (sca - 1) + 0.01 * i + jitter / 3600, -5.0 + 0.002 * i + jitter / 3600
 
 
 class World:
@@ -99,12 +97,11 @@ class World:
         return rows
 
     def job(self, run: int, stage: str, scope: dict, outputs: dict[str, list[dict]],
-            inputs=(), expects=(), excludes=(), attempt: int = 1,
-            published: bool = True) -> int:
+            inputs=(), expects=(), attempt: int = 1, published: bool = True) -> int:
         """Create a job, write its attempt, and (unless told not to) publish it; return its id."""
         expects = [{**e, "binding": self.binding(e["product"], e["key"])}
                    if e["binding"] is CURRENT else e for e in expects]
-        job = create_job(self.conn, run, stage, scope, inputs, expects, excludes)
+        job = create_job(self.conn, run, stage, scope, inputs, expects)
         self.write(job, attempt, outputs)
         if published:
             publish(self.conn, job, attempt, self.prefix(job, attempt))
@@ -119,8 +116,19 @@ class World:
 
     # -- the stages, standing in -------------------------------------------
 
-    def import_image(self, run: int, epoch: int, sca: int, flux_scale: float = 1.0) -> int:
-        """One difference image and its source set; the job is the source set."""
+    def catalog(self, run: int) -> list[tuple]:
+        """The field's objects of ``run`` as a difference job reads them: (job, aid, ra0, dec0)."""
+        return self.rows("SELECT o.job, o.aid, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
+                         " WHERE j.run = %s AND o.field = %s ORDER BY o.job, o.aid", (run, FIELD))
+
+    def difference(self, run: int, epoch: int, sca: int, flux_scale: float = 1.0,
+                   jitter: float = 0.0, catalog: list[tuple] | None = None, expects=CURRENT,
+                   published: bool = True) -> int:
+        """One difference image, its source set and its association; the job is the source set.
+
+        ``catalog`` is what the job read (:meth:`catalog`'s rows), the run's
+        current objects when not given.
+        """
         key = image_key(epoch, sca)
         self._pids += 1
         pid = self._pids
@@ -131,7 +139,7 @@ class World:
                         for c, v in (("ra", position(sca, 0)[0]), ("dec", position(sca, 0)[1]))}}
         sources = []
         for i in range(NSOURCES):
-            ra, dec = position(sca, i)
+            ra, dec = position(sca, i, jitter)
             sources.append({
                 "sid": i, **key, "pid": pid, "id": i, "field": FIELD, "hp6": 0, "hp9": 0,
                 "mjdobs": 60000.0 + epoch, "ra": ra, "dec": dec,
@@ -139,56 +147,44 @@ class World:
                 "fluxfit": flux_scale * (100.0 + i + 10.0 * epoch), "fluxerr": 1.0,
                 "flags": 0, "qfit": 0.0, "cfit": 0.0, "npixfit": 9, "sharpness": 0.5,
                 "roundness1": 0.0, "roundness2": 0.0, "peak": 10.0})
-        expected = [{"product": product, "key": key, "binding": CURRENT}
-                    for product in ("diffimages", "sources")]
-        return self.job(run, "import", {"epoch": epoch, "sca": sca},
-                        {"diffimages": [diffimage], "sources": sources}, expects=expected)
+        read = self.catalog(run) if catalog is None else catalog
+        expects = [{"product": product, "key": key, "binding": expects}
+                   for product in ("diffimages", "sources")]
+        expects = [{**e, "binding": self.binding(e["product"], e["key"])}
+                   if e["binding"] is CURRENT else e for e in expects]
+        job = create_job(self.conn, run, "difference", {"epoch": epoch, "sca": sca}, (), expects)
+        epoch_rows = associate_epoch({aid: (owner, ra0, dec0) for owner, aid, ra0, dec0 in read},
+                                     sources, job=job, field=FIELD, cone=None, radius=RADIUS)
+        outputs = {"diffimages": [diffimage], "sources": sources,
+                   "objects": [{**o, "dataset": DATASET, "survey": SURVEY, "field": FIELD}
+                               for o in epoch_rows.founded],
+                   "memberships": epoch_rows.memberships}
+        root = self.root / f"job-{job}" / "attempt-1"
+        write_attempt(root, outputs)
+        manifest = json.loads((root / "manifest.json").read_text())
+        manifest["reads"] = [{"product": "objects", "key": FIELD_KEY, "source_job": owner}
+                             for owner in sorted({r[0] for r in read})]
+        manifest["catalog"] = {**FIELD_KEY, "radius": RADIUS}
+        (root / "manifest.json").write_text(json.dumps(manifest))
+        if published:
+            publish(self.conn, job, 1, self.prefix(job, 1))
+        return job
 
-    def import_epochs(self, run: int) -> dict[tuple[int, int], int]:
-        """Import every (epoch, SCA); return the source-set job per (epoch, SCA)."""
-        return {(e, s): self.import_image(run, e, s) for e in EPOCHS for s in SCAS}
+    def differences(self, run: int, epochs=EPOCHS) -> dict[tuple[int, int], int]:
+        """Difference every (epoch, SCA) in turn; return the source-set job per (epoch, SCA)."""
+        return {(e, s): self.difference(run, e, s) for e in epochs for s in SCAS}
 
-    def associate(self, run: int, epoch: int, source_sets: list[int], predecessor: int | None,
-                  excludes: list[int] = (), expects=CURRENT, published: bool = True) -> int:
-        """An object set: the predecessor's objects updated by ``source_sets``, minus ``excludes``."""
-        objects = {}
-        if predecessor is not None:
-            for row in self.rows(
-                    "SELECT aid, ra0, dec0, nsources, sumra, sumra2, sumdec, sumdec2, sumflux,"
-                    " sumflux2 FROM objects WHERE job = %s", (predecessor,)):
-                objects[row[0]] = dict(zip(_OBJECT_COLUMNS, row))
-        for aid, ra, dec, flux in self._excluded_members(predecessor, excludes):
-            _accumulate(objects[aid], ra, dec, flux, -1)
-        memberships = []
-        for source_job, sid, ra, dec, flux in self.rows(
-                "SELECT job, sid, ra, dec, fluxfit FROM sources WHERE job = ANY(%s)"
-                " AND flags = 0 ORDER BY job, sid", (list(source_sets),)):
-            aid = aid_of(ra, dec)
-            obj = objects.setdefault(aid, {"aid": aid, "ra0": ra, "dec0": dec, **_ZERO_SUMS})
-            _accumulate(obj, ra, dec, flux, +1)
-            memberships.append({"aid": aid, "source_job": source_job, "sid": sid})
-        rows = [{**obj, "dataset": DATASET, "survey": SURVEY, "field": FIELD}
-                for obj in objects.values()]
-        inputs = [{"product": "sources", "key": self._key_of(s), "source_job": s}
-                  for s in source_sets]
-        if predecessor is not None:
-            inputs.append({"product": "objects", "key": FIELD_KEY, "source_job": predecessor})
-        return self.job(run, "associate", {"field": FIELD, "epoch": epoch},
-                        {"objects": rows, "memberships": memberships}, inputs=inputs,
-                        expects=[{"product": "objects", "key": FIELD_KEY, "binding": expects}],
-                        excludes=[{"key": self._key_of(s), "source_job": s} for s in excludes],
-                        published=published)
-
-    def packets(self, run: int, epoch: int, sca: int, source_set: int, object_set: int,
+    def packets(self, run: int, epoch: int, sca: int, source_set: int,
                 expects=CURRENT, attempt: int = 1, published: bool = True) -> int:
-        """A packet set for one image key: the index and forced rows for its sources."""
+        """A packet set for one image key: the index and forced rows for its member sources."""
         key = image_key(epoch, sca)
         index, forced = [], []
-        for n, (sid, pid, ra, dec, mjd, flux) in enumerate(self.rows(
-                "SELECT sid, pid, ra, dec, mjdobs, fluxfit FROM sources WHERE job = %s"
-                " ORDER BY sid", (source_set,))):
-            aid = aid_of(ra, dec)
-            index.append({**key, "object_job": object_set, "aid": aid, "source_job": source_set,
+        for n, (sid, pid, ra, dec, mjd, flux, object_job, aid) in enumerate(self.rows(
+                "SELECT DISTINCT ON (s.sid) s.sid, s.pid, s.ra, s.dec, s.mjdobs, s.fluxfit,"
+                " m.object_job, m.aid FROM sources s JOIN memberships m"
+                " ON m.source_job = s.job AND m.sid = s.sid WHERE s.job = %s"
+                " ORDER BY s.sid, m.aid", (source_set,))):
+            index.append({**key, "object_job": object_job, "aid": aid, "source_job": source_set,
                           "sid": sid, "trigger_mjd": mjd, "band": "F184",
                           "schema_version": "00.06", "filename": f"packets-{epoch}-{sca}.avro",
                           "byte_offset": 1000 * n, "byte_length": 1000})
@@ -197,34 +193,32 @@ class World:
                            "mjdobs": mjd, "ra": ra, "dec": dec, "x": 0.0, "y": 0.0,
                            "psf_flux": flux, "psf_fluxerr": 1.0, "science_flux": flux,
                            "science_fluxerr": 1.0, "flags": 0, "time_proc": 0.0})
-        inputs = [{"product": "objects", "key": FIELD_KEY, "source_job": object_set},
-                  {"product": "sources", "key": key, "source_job": source_set}]
+        inputs = [{"product": "sources", "key": key, "source_job": source_set}]
         return self.job(run, "packet", {"epoch": epoch, "sca": sca},
                         {"packets": index, "forced": forced}, inputs=inputs,
                         expects=[{"product": "packets", "key": key, "binding": expects}],
                         attempt=attempt, published=published)
 
-    def recipe(self, run: int, source_sets: dict[tuple[int, int], int], epochs=EPOCHS,
-               predecessor: int | None = None) -> dict:
-        """Associate and packets for ``epochs`` under ``run``, each epoch's set the next's predecessor.
+    def recipe(self, run: int, epochs=EPOCHS) -> dict:
+        """Differences and packets for ``epochs`` under ``run``, in order.
 
-        Returns ``{"objects": {epoch: job}, "packets": {(epoch, sca): job}}``.
+        Returns ``{"differences": {(epoch, sca): job}, "packets": {(epoch, sca): job}}``.
         """
-        made = {"objects": {}, "packets": {}}
+        made = {"differences": {}, "packets": {}}
         for epoch in epochs:
-            sets = [source_sets[(epoch, s)] for s in SCAS]
-            predecessor = self.associate(run, epoch, sets, predecessor)
-            made["objects"][epoch] = predecessor
             for sca in SCAS:
-                made["packets"][(epoch, sca)] = self.packets(
-                    run, epoch, sca, source_sets[(epoch, sca)], predecessor)
+                made["differences"][(epoch, sca)] = job = self.difference(run, epoch, sca)
+                made["packets"][(epoch, sca)] = self.packets(run, epoch, sca, job)
         return made
 
     def cutover(self, to_run: int, made: dict) -> list[dict]:
         """The cutover group: every key ``made`` names rebound to its job, and ``to_run`` live."""
-        group = [{"close": self.binding("objects", FIELD_KEY),
-                  "open": {"product": "objects", "key": FIELD_KEY,
-                           "job": made["objects"][max(made["objects"])]}}]
+        group = []
+        for (epoch, sca), job in sorted(made["differences"].items()):
+            for product in ("diffimages", "sources"):
+                key = image_key(epoch, sca)
+                group.append({"close": self.binding(product, key),
+                              "open": {"product": product, "key": key, "job": job}})
         for (epoch, sca), job in sorted(made["packets"].items()):
             key = image_key(epoch, sca)
             group.append({"close": self.binding("packets", key),
@@ -232,43 +226,6 @@ class World:
         group.append({"close": self.live()[0], "open": {"survey": SURVEY, "dataset": DATASET,
                                                "run": to_run}})
         return group
-
-    # -- internals ---------------------------------------------------------
-
-    def _key_of(self, source_set: int) -> dict:
-        (key,) = self.rows("SELECT DISTINCT jsonb_build_object('dataset', dataset, 'expid', expid,"
-                           " 'sca', sca, 'fid', fid) FROM sources WHERE job = %s", (source_set,))[0]
-        return key
-
-    def _excluded_members(self, predecessor: int | None, excludes) -> list[tuple]:
-        """The members of the predecessor's chain whose source set is excluded, with their values."""
-        if predecessor is None or not excludes:
-            return []
-        return self.rows("""
-            WITH RECURSIVE chain (job) AS (
-                SELECT %s::bigint
-                UNION ALL
-                SELECT i.source_job FROM chain c
-                JOIN job_inputs i ON i.job = c.job AND i.kind = 'input' AND i.product = 'objects'
-            )
-            SELECT m.aid, s.ra, s.dec, s.fluxfit
-            FROM chain c
-            JOIN memberships m ON m.job = c.job
-            JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
-            WHERE m.source_job = ANY(%s)""", (predecessor, list(excludes)))
-
-
-_OBJECT_COLUMNS = ("aid", "ra0", "dec0", "nsources", "sumra", "sumra2", "sumdec", "sumdec2",
-                   "sumflux", "sumflux2")
-_ZERO_SUMS = {"nsources": 0, "sumra": 0.0, "sumra2": 0.0, "sumdec": 0.0, "sumdec2": 0.0,
-              "sumflux": 0.0, "sumflux2": 0.0}
-
-
-def _accumulate(obj: dict, ra: float, dec: float, flux: float, sign: int) -> None:
-    obj["nsources"] += sign
-    for name, value in (("ra", ra), ("dec", dec), ("flux", flux)):
-        obj[f"sum{name}"] += sign * value
-        obj[f"sum{name}2"] += sign * value * value
 
 
 def _forced_id(pid: int, aid: int, ra: float, dec: float) -> int:

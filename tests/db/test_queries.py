@@ -23,8 +23,9 @@ from pathlib import Path
 
 import pytest
 
+from rapidpipe.science.crossmatch.catalog import new_object_id
 from tests.db.proof.fixture import (
-    CURRENT, DATASET, FID, FIELD, FIELD_KEY, SCAS, SURVEY, World, aid_of, image_key, position,
+    CURRENT, DATASET, FID, FIELD, SCAS, SURVEY, World, image_key, position,
 )
 
 QUERIES = Path(__file__).resolve().parents[2] / "database" / "queries.sql"
@@ -102,17 +103,19 @@ def _background(w: World, run: int) -> None:
         for field in fields]}, expects=[
         {"product": "refimages", "key": {"dataset": DATASET, "field": field, "fid": FID},
          "binding": None} for field in fields])
-    key = {**FIELD_KEY, "field": FIELD + 1}
-    w.job(run, "associate", {"field": FIELD + 1}, {"objects": [
+    founder = w.job(run, "difference", {"field": FIELD + 1}, {"objects": [
         {"aid": i, "dataset": DATASET, "survey": SURVEY, "field": FIELD + 1,
-         "ra0": 100.0 + 0.1 * i, "dec0": 40.0, "nsources": 1, "sumra": 0.0, "sumra2": 0.0,
-         "sumdec": 0.0, "sumdec2": 0.0, "sumflux": 0.0, "sumflux2": 0.0}
-        for i in range(BACKGROUND)]}, expects=[{"product": "objects", "key": key, "binding": None}])
+         "ra0": 100.0 + 0.1 * i, "dec0": 40.0} for i in range(BACKGROUND)]})
+    # Official through a bound source set's memberships, as the view defines them.
+    w.job(run, "difference", {"field": FIELD + 1}, {"memberships": [
+        {"object_job": founder, "aid": i, "source_job": founder, "sid": i, "dra": 0.0, "ddec": 0.0,
+         "flux": 1.0} for i in range(BACKGROUND)]},
+        expects=[{"product": "sources", "key": image_key(1000, 1), "binding": None}])
 
 
 @pytest.fixture()
 def world(connect, tmp_path):
-    """The proof's two recipes' first one, plus L2, exposures, a reference, a candidate and a failure.
+    """The proof's two recipes' first one, plus L2, exposures, a reference and a failure.
 
     Returns ``(world, params)``: the parameters every statement takes.
     """
@@ -138,12 +141,7 @@ def world(connect, tmp_path):
                                 "key": {"dataset": DATASET, "expid": epoch}, "binding": CURRENT})
             w.job(run, "import", {"epoch": epoch, "sca": sca}, outputs, inputs=ref_input,
                   expects=expects)
-    sets = w.import_epochs(run)
-    made = w.recipe(run, sets)
-    first_set_binding = w.rows("SELECT id FROM official WHERE product = 'objects' AND job = %s",
-                               (made["objects"][1],))[0][0]
-    candidate = w.associate(run, 2, [sets[(2, s)] for s in SCAS], made["objects"][1],
-                            expects=first_set_binding)
+    made = w.recipe(run)
     failed = w.job(run, "packet", {"epoch": 2, "sca": 1}, {}, published=False)
     w.rows("UPDATE jobs SET state = 'failed', exit_code = 70 WHERE id = %s RETURNING id", (failed,))
     # The publisher analyses the product tables it loads; autovacuum analyses
@@ -157,8 +155,8 @@ def world(connect, tmp_path):
     ra, dec = position(SCAS[0], 0)
     params = {
         "dataset": DATASET, "survey": SURVEY, "field": FIELD, "fid": FID, "expid": 1,
-        "sca": SCAS[0], "object_set": made["objects"][2], "aid": aid_of(ra, dec),
-        "source_job": sets[(1, SCAS[0])], "sid": 0, "candidate": candidate,
+        "sca": SCAS[0], "object_job": made["differences"][(1, SCAS[0])], "aid": new_object_id(ra, dec),
+        "source_job": made["differences"][(1, SCAS[0])], "sid": 0,
         "packet_job": made["packets"][(2, SCAS[0])],
         "rfid": w.rows("SELECT rfid FROM refimages WHERE job = %s", (reference,))[0][0],
         "group": w.rows("SELECT max(opened_group) FROM official")[0][0],

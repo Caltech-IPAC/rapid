@@ -1,10 +1,11 @@
-"""The publisher (foundation plan v5, Part 1 statement 6).
+"""The publisher (foundation plan v5, Part 1 statement 6; the amendment of 2026-10-24).
 
 Run by foundation.yml against database/schema.sql; db-migrations.yml ignores it.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 
@@ -74,9 +75,8 @@ def test_a_live_runs_job_binds_the_keys_it_expects(connect, tmp_path):
     result = publish(conn, job, 1, _attempt(tmp_path, conn, job))
 
     assert result["group"] is not None and result["refusal"] is None
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM objects_official WHERE job = %s", (job,))
-        assert cur.fetchone()[0] == 3
+    assert [r[3] for r in open_bindings(conn, product="objects")] == [job]
+    assert _count(conn, "objects", job) == 3
 
 
 def test_a_job_whose_run_is_not_live_is_published_unbound_with_the_refusal_recorded(
@@ -123,3 +123,54 @@ def test_publication_racing_a_cutover_publishes_unbound(connect, tmp_path):
     assert f"binding {binding} is no longer open" in result["refusal"]
     assert _count(a, "objects", late) == 3
     assert [r[3] for r in open_bindings(a, product="objects")] == [replacement]
+
+
+def _difference_attempt(tmp_path, job, founded, memberships, reads, radius=1e-4):
+    """A difference job's catalog outputs, with its read and the catalog key in the manifest."""
+    root = tmp_path / f"job-{job}" / "attempt-1"
+    write_attempt(root, {"objects": [{**o, "dataset": DATASET, "survey": SURVEY, "field": 1}
+                                     for o in founded],
+                         "memberships": memberships})
+    manifest = json.loads((root / "manifest.json").read_text())
+    manifest["reads"] = reads
+    manifest["catalog"] = {**FIELD_KEY, "radius": radius}
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    return root.as_uri()
+
+
+def _member(job, owner, aid, sid, dra=0.0):
+    return {"object_job": owner, "aid": aid, "source_job": job, "sid": sid,
+            "dra": dra, "ddec": 0.0, "flux": 1.0}
+
+
+def test_reconcile_attaches_a_founder_to_one_founded_since_the_read_and_records_the_read(
+        connect, tmp_path):
+    """Jobs A and B of one run both read an empty catalog and founded an object at one star,
+    0.18 arcseconds apart; A publishes first; B's object is not inserted and its membership
+    goes to A's, rebased; B's read (empty) and A's (empty) are in job_inputs; a job C that read
+    A's object publishes its own founder elsewhere untouched."""
+    conn = connect()
+    run = new_run(conn)
+    a, b, c = (new_job(conn, run) for _ in range(3))
+    publish(conn, a, 1, _difference_attempt(tmp_path, a, [{"aid": 7, "ra0": 10.0, "dec0": -5.0}],
+                                            [_member(a, a, 7, 1)], []))
+    d = 0.5e-4
+    result = publish(conn, b, 1, _difference_attempt(
+        tmp_path, b, [{"aid": 8, "ra0": 10.0 + d, "dec0": -5.0}], [_member(b, b, 8, 1, dra=0.1e-4)], []))
+    publish(conn, c, 1, _difference_attempt(
+        tmp_path, c, [{"aid": 9, "ra0": 11.0, "dec0": -5.0}], [_member(c, a, 7, 1), _member(c, c, 9, 2)],
+        [{"product": "objects", "key": FIELD_KEY, "source_job": a}]))
+
+    assert result["published"]
+    assert job_show(conn, b)["manifest"]["reconcile"] == {
+        "objects_between": 1, "reconciled": 1, "attached_memberships": 1}
+    with conn.cursor() as cur:
+        cur.execute("SELECT job, aid FROM objects ORDER BY job")
+        assert cur.fetchall() == [(a, 7), (c, 9)]
+        cur.execute("SELECT object_job, aid, dra FROM memberships WHERE job = %s", (b,))
+        ((owner, aid, dra),) = cur.fetchall()
+    conn.commit()
+    assert (owner, aid) == (a, 7) and dra == pytest.approx(0.1e-4 + d)
+    assert [(i["product"], i["source_job"]) for i in job_show(conn, c)["inputs"]
+            if i["kind"] == "input"] == [("objects", a)]
+    assert job_show(conn, c)["manifest"]["reconcile"]["reconciled"] == 0

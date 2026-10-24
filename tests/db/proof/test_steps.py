@@ -1,10 +1,11 @@
-"""The procedure proof, milestone 0 (foundation plan v5, Part 3, steps 2, 4, 6, 8, 10, 11, 12, 13).
+"""The procedure proof, milestone 0 (foundation plan, Part 3, steps 1, 2, 4, 6, 8, 10, 11, 12, 13).
 
 One test per step, each asserting the step's observation as stated, read
 back from the database through the official views and the ``packets``
-table. Steps 1, 3, 5, 7 and 9 need the real stages and are milestone 3.
-Run by foundation.yml against database/schema.sql; db-migrations.yml
-ignores this directory.
+table. Steps 1, 2 and 13 are the amendment of 2026-10-24's: association
+in the difference job over an append-only per-field catalog, two epochs of
+one field in flight at once. Steps 3, 5, 7 and 9 need the real stages and
+are milestone 3. Run by foundation.yml against database/schema.sql.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from rapidpipe.foundation import Refused, apply, change, job_show, publish, undo
+from rapidpipe.products.spatial import within
 from tests.db.foundation_helpers import wait_until_blocked
 from tests.db.proof.fixture import (
-    DATASET, EPOCHS, FIELD_KEY, NSOURCES, SCAS, SURVEY, World, image_key,
+    DATASET, FIELD_KEY, NSOURCES, RADIUS, SCAS, SURVEY, World, image_key,
 )
 
 
@@ -36,61 +38,108 @@ def _official_table(world):
 
 
 def _two_recipes(world):
-    """Run 1 live through both epochs; run 2, not live, over the same imports."""
+    """Run 1 live through both epochs; run 2, not live, its own differences of the same epochs."""
     first = world.run("first recipe", live=True)
-    sets = world.import_epochs(first)
-    made_first = world.recipe(first, sets)
-    second = world.run("second recipe", {"recipe": "second", "radius": 2.0})
-    made_second = world.recipe(second, sets)
-    return sets, first, made_first, second, made_second
+    made_first = world.recipe(first)
+    second = world.run("second recipe", {"recipe": "second"})
+    made_second = world.recipe(second)
+    return first, made_first, second, made_second
 
 
-def test_step_2_two_candidates_from_one_predecessor(world):
+def _in_flight(world, run, jitter=0.0):
+    """Epochs 1 and 2 of SCA 1 differenced at once: both read the empty catalog, 1 publishes first."""
+    read = world.catalog(run)
+    one = world.difference(run, 1, 1, catalog=read, published=False)
+    two = world.difference(run, 2, 1, catalog=read, jitter=jitter, published=False)
+    return one, two, publish(world.conn, one, 1, world.prefix(one, 1)), \
+        publish(world.conn, two, 1, world.prefix(two, 1))
+
+
+def _object_stats(world):
+    return {(job, aid): (n, sumra, sumdec, sumflux) for job, aid, n, sumra, sumdec, sumflux in world.rows(
+        "SELECT job, aid, nsources, sumra, sumdec, sumflux FROM objects_official")}
+
+
+def test_step_1_two_epochs_of_a_field_in_flight_both_publish_and_bind_their_own_sources(world):
     run = world.run("recipe", live=True)
-    sets = world.import_epochs(run)
-    predecessor = world.recipe(run, sets, epochs=(1,))["objects"][1]
-    expected = world.binding("objects", FIELD_KEY)
-    epoch2 = [sets[(2, s)] for s in SCAS]
 
-    first, second = (world.associate(run, 2, epoch2, predecessor, published=False)
-                     for _ in range(2))
-    for job in (first, second):
-        publish(world.conn, job, 1, world.prefix(job, 1))
+    one, two, first, second = _in_flight(world, run)
 
-    assert _official_jobs(world, "objects_official") == {first}
-    assert world.rows("SELECT count(*) FROM objects WHERE job = %s", (second,))[0][0] > 0
-    shown = job_show(world.conn, second)
-    assert (shown["state"], shown["refusal"]) == (
-        "published", f"binding {expected} is no longer open")
-    assert {"kind": "input", "product": "objects", "key": FIELD_KEY,
-            "source_job": predecessor, "binding": None} in shown["inputs"]
-    assert {"kind": "expects", "product": "objects", "key": FIELD_KEY,
-            "source_job": None, "binding": expected} in shown["inputs"]
-    assert shown["bindings"] == []
+    assert first["group"] is not None and second["group"] is not None
+    assert first["refusal"] is None and second["refusal"] is None
+    for epoch, job in ((1, one), (2, two)):
+        for product in ("diffimages", "sources"):
+            assert world.rows("SELECT job FROM official WHERE id = %s",
+                              (world.binding(product, image_key(epoch, 1)),)) == [(job,)]
+    assert _official_jobs(world, "memberships_official") == {one, two}
+    # Every official source is a member, within the radius of its object's position.
+    assert world.rows("""
+        SELECT count(*) FROM sources_official s WHERE NOT EXISTS (
+            SELECT 1 FROM memberships_official m WHERE m.source_job = s.job AND m.sid = s.sid)""") == [(0,)]
+    for ra, dec, ra0, dec0 in world.rows(
+            "SELECT s.ra, s.dec, o.ra0, o.dec0 FROM memberships_official m"
+            " JOIN sources s ON s.job = m.source_job AND s.sid = m.sid"
+            " JOIN objects o ON o.job = m.object_job AND o.aid = m.aid"):
+        assert within(ra, dec, ra0, dec0, RADIUS)
+    # The second job's recorded read is the catalog it saw: empty.
+    assert [i for i in job_show(world.conn, two)["inputs"] if i["product"] == "objects"] == []
+
+
+def test_step_2_the_seconds_founded_objects_attach_where_they_duplicate(world):
+    """Epoch 2's stars sit 0.1 arcseconds off epoch 1's; both founded every one; the second to
+    publish founds none, its memberships attached with sums rebased to the surviving origins."""
+    run = world.run("recipe", live=True)
+
+    one, two, _, second = _in_flight(world, run, jitter=0.1)
+
+    assert world.rows("SELECT count(*) FROM objects WHERE job = %s", (one,)) == [(NSOURCES,)]
+    assert world.rows("SELECT count(*) FROM objects WHERE job = %s", (two,)) == [(0,)]
+    assert job_show(world.conn, two)["manifest"]["reconcile"] == {
+        "objects_between": NSOURCES, "reconciled": NSOURCES, "attached_memberships": NSOURCES}
+    # No two objects of different founding jobs within the radius of each other.
+    objects = world.rows("SELECT job, ra0, dec0 FROM objects")
+    assert not [(a, b) for a in objects for b in objects
+                if a[0] < b[0] and within(a[1], a[2], b[1], b[2], RADIUS)]
+    # The view's sums are the direct aggregation of the members' coordinates about the origin.
+    direct = world.rows("""
+        SELECT o.job, o.aid, count(*), sum(s.ra - o.ra0), sum(s.dec - o.dec0), sum(s.fluxfit)
+        FROM memberships_official m JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
+        JOIN objects o ON o.job = m.object_job AND o.aid = m.aid GROUP BY o.job, o.aid""")
+    stats = _object_stats(world)
+    assert len(stats) == NSOURCES == len(direct)
+    for job, aid, n, sumra, sumdec, sumflux in direct:
+        assert stats[(job, aid)][0] == n == 2
+        assert stats[(job, aid)][1:] == pytest.approx((sumra, sumdec, sumflux), rel=1e-6, abs=1e-12)
+    # The ids are the first publisher's and stay: a third epoch read after both joins them.
+    later = world.difference(run, 3, 1)
+    assert {r[0] for r in world.rows("SELECT DISTINCT object_job FROM memberships WHERE job = %s",
+                                     (later,))} == {one}
 
 
 def test_step_4_cutover_is_one_group(world):
-    sets, first, made_first, second, made_second = _two_recipes(world)
+    first, made_first, second, made_second = _two_recipes(world)
     assert _official_jobs(world, "packets_official") == set(made_first["packets"].values())
 
     group = change(world.conn, world.cutover(second, made_second), "proof", "cutover")
 
     opened = world.rows("SELECT product, job, run FROM official WHERE opened_group = %s", (group,))
     closed = world.rows("SELECT product, job, run FROM official WHERE closed_group = %s", (group,))
-    assert len(opened) == len(closed) == 1 + len(made_second["packets"]) + 1
+    assert len(opened) == len(closed) == 2 * len(made_second["differences"]) \
+        + len(made_second["packets"]) + 1
     assert world.live()[1] == second
     assert _official_jobs(world, "packets_official") == set(made_second["packets"].values())
-    assert _official_jobs(world, "objects_official") == {made_second["objects"][2]}
+    assert _official_jobs(world, "memberships_official") == set(made_second["differences"].values())
+    assert {r[0] for r in world.rows("SELECT DISTINCT run FROM objects_official")} == {second}
     for packet_job, object_job, source_job in world.rows(
             "SELECT DISTINCT job, object_job, source_job FROM packets_official"):
         inputs = {(i["product"], i["source_job"])
                   for i in job_show(world.conn, packet_job)["inputs"] if i["kind"] == "input"}
-        assert inputs == {("objects", object_job), ("sources", source_job)}
-        assert object_job in made_second["objects"].values()
+        assert inputs == {("sources", source_job)}
+        assert object_job in made_second["differences"].values()
 
 
 def test_step_6_undo_restores_the_first_recipe(world):
-    sets, first, made_first, second, made_second = _two_recipes(world)
+    first, made_first, second, made_second = _two_recipes(world)
     cutover = change(world.conn, world.cutover(second, made_second), "proof", "cutover")
     replaced = {r[0] for r in world.rows(
         "SELECT id FROM official WHERE closed_group = %s", (cutover,))}
@@ -99,7 +148,7 @@ def test_step_6_undo_restores_the_first_recipe(world):
 
     assert world.live()[1] == first
     assert _official_jobs(world, "packets_official") == set(made_first["packets"].values())
-    assert _official_jobs(world, "objects_official") == {made_first["objects"][2]}
+    assert _official_jobs(world, "memberships_official") == set(made_first["differences"].values())
     open_ids = {r[0] for r in world.rows("SELECT id FROM official WHERE closed_at IS NULL")}
     assert not replaced & open_ids
     second_jobs = list(made_second["packets"].values())
@@ -113,9 +162,8 @@ class Killed(BaseException):
 
 def test_step_8_an_interrupted_publication(world, monkeypatch):
     run = world.run("recipe", live=True)
-    sets = world.import_epochs(run)
-    object_set = world.recipe(run, sets, epochs=(1,))["objects"][1]
-    job = world.packets(run, 2, 1, sets[(2, 1)], object_set, published=False)
+    source_set = world.difference(run, 2, 1)
+    job = world.packets(run, 2, 1, source_set, published=False)
     publisher = importlib.import_module("rapidpipe.foundation.publish")
     loaded_when_killed = []
 
@@ -149,23 +197,22 @@ def test_step_8_an_interrupted_publication(world, monkeypatch):
 
 def test_step_10_two_change_groups_at_once(world, connect):
     run = world.run("recipe", live=True)
-    sets = world.import_epochs(run)
-    world.recipe(run, sets, epochs=(1,))
-    contested = world.binding("objects", FIELD_KEY)
-    bystander = world.binding("diffimages", image_key(1, 1))
+    world.recipe(run, epochs=(1,))
+    key = image_key(1, 1)
+    contested = world.binding("sources", key)
+    bystander = world.binding("diffimages", key)
     assert bystander < contested
     campaign = world.run("campaign")
-    one, other = (world.associate(campaign, 1, [sets[(1, s)] for s in SCAS], None)
-                  for _ in range(2))
+    one, other = (world.difference(campaign, 1, 1) for _ in range(2))
     a, b = world.conn, connect()
 
     with a.cursor() as cur:
         apply(cur, [{"close": contested,
-                     "open": {"product": "objects", "key": FIELD_KEY, "job": one}}], "a", "first")
+                     "open": {"product": "sources", "key": key, "job": one}}], "a", "first")
     with ThreadPoolExecutor(1) as pool:
         pending = pool.submit(change, b, [
             {"close": bystander},
-            {"close": contested, "open": {"product": "objects", "key": FIELD_KEY, "job": other}},
+            {"close": contested, "open": {"product": "sources", "key": key, "job": other}},
         ], "b", "second")
         wait_until_blocked(connect(), b.get_backend_pid())
         a.commit()
@@ -174,17 +221,18 @@ def test_step_10_two_change_groups_at_once(world, connect):
 
     assert refused.value.binding == contested
     assert f"binding {contested}" in str(refused.value)
-    assert _official_jobs(world, "objects_official") == {one}
-    assert world.binding("diffimages", image_key(1, 1)) == bystander
+    assert one in _official_jobs(world, "memberships_official")
+    assert other not in _official_jobs(world, "memberships_official")
+    assert world.binding("diffimages", key) == bystander
     assert world.rows("SELECT count(*) FROM official WHERE job = %s OR closed_by = 'b'"
                       " OR opened_by = 'b'", (other,))[0][0] == 0
 
 
 def test_step_11_publication_racing_a_cutover(world, connect):
-    sets, first, made_first, second, made_second = _two_recipes(world)
+    first, made_first, second, made_second = _two_recipes(world)
     key = image_key(2, 1)
     expected = world.binding("packets", key)
-    late = world.packets(first, 2, 1, sets[(2, 1)], made_first["objects"][2], published=False)
+    late = world.packets(first, 2, 1, made_first["differences"][(2, 1)], published=False)
     a, b = world.conn, connect()
 
     with a.cursor() as cur:
@@ -209,63 +257,66 @@ def test_step_11_publication_racing_a_cutover(world, connect):
 
 
 def test_step_12_undo_after_progress(world):
+    """Progress that moves a binding the cutover opened (epoch 1 of SCA 1 re-differenced under
+    the new recipe) refuses the undo; the keys still as expected are restored by a new group."""
     first = world.run("first recipe", live=True)
-    sets = world.import_epochs(first)
-    made_first = world.recipe(first, sets, epochs=(1,))
+    made_first = world.recipe(first, epochs=(1,))
     second = world.run("second recipe", {"recipe": "second"})
-    made_second = world.recipe(second, sets, epochs=(1,))
+    made_second = world.recipe(second, epochs=(1,))
     cutover = change(world.conn, world.cutover(second, made_second), "proof", "cutover")
-    moved = world.binding("objects", FIELD_KEY)
-    progress = world.recipe(second, sets, epochs=(2,), predecessor=made_second["objects"][1])
-    assert _official_jobs(world, "objects_official") == {progress["objects"][2]}
+    moved = {world.binding(p, image_key(1, 1)) for p in ("diffimages", "sources")}
+    progress = world.difference(second, 1, 1, flux_scale=2.0)
+    assert progress in _official_jobs(world, "memberships_official")
     before = _official_table(world)
 
     with pytest.raises(Refused) as refused:
         undo(world.conn, cutover, "proof", "undo the cutover")
 
-    assert refused.value.binding == moved
+    assert refused.value.binding in moved
     assert _official_table(world) == before
 
-    still = [{"close": world.binding("packets", image_key(1, s)),
-              "open": {"product": "packets", "key": image_key(1, s),
-                       "job": made_first["packets"][(1, s)]}} for s in SCAS]
+    still = []
+    for sca, products in ((1, ("packets",)), (2, ("diffimages", "sources", "packets"))):
+        key = image_key(1, sca)
+        for product in products:
+            job = made_first["packets" if product == "packets" else "differences"][(1, sca)]
+            still.append({"close": world.binding(product, key),
+                          "open": {"product": product, "key": key, "job": job}})
     still.append({"close": world.live()[0],
                   "open": {"survey": SURVEY, "dataset": DATASET, "run": first}})
     change(world.conn, still, "proof", "restore the keys still as expected")
 
-    assert {(e, j) for e, j in world.rows("SELECT DISTINCT expid, job FROM packets_official")} == \
-        {(1, made_first["packets"][(1, s)]) for s in SCAS} | \
-        {(2, progress["packets"][(2, s)]) for s in SCAS}
-    assert _official_jobs(world, "objects_official") == {progress["objects"][2]}
+    assert _official_jobs(world, "packets_official") == set(made_first["packets"].values())
+    assert _official_jobs(world, "memberships_official") == {made_first["differences"][(1, 2)], progress}
     assert world.live()[1] == first
 
 
 def test_step_13_a_superseded_source_set(world):
+    """Epoch 1 of SCA 1 re-differenced and rebound: its old memberships leave the view and the
+    sums; the replacement's sources join the same objects, whose ids do not change."""
     run = world.run("recipe", live=True)
-    sets = world.import_epochs(run)
-    set_1 = world.recipe(run, sets, epochs=(1,))["objects"][1]
-    superseded = sets[(1, 1)]
-    replacement = world.import_image(run, 1, 1, flux_scale=2.0)
-    assert _official_jobs(world, "sources_official") >= {replacement}
+    made = world.recipe(run)
+    superseded = made["differences"][(1, 1)]
+    ids_before = {(r[0], r[1]) for r in world.rows("SELECT job, aid FROM objects")}
+
+    replacement = world.difference(run, 1, 1, flux_scale=2.0)
+
+    assert replacement in _official_jobs(world, "sources_official")
     assert superseded not in _official_jobs(world, "sources_official")
-
-    set_2 = world.associate(run, 2, [sets[(2, s)] for s in SCAS] + [replacement], set_1,
-                            excludes=[superseded])
-
-    assert _official_jobs(world, "objects_official") == {set_2}
-    members = world.rows("SELECT DISTINCT source_job FROM members_official")
-    assert superseded not in {r[0] for r in members}
+    assert superseded not in _official_jobs(world, "memberships_official")
+    assert world.rows("SELECT count(*) FROM objects WHERE job = %s", (replacement,)) == [(0,)]
+    assert {(r[0], r[1]) for r in world.rows("SELECT job, aid FROM objects")} == ids_before
     sums = world.rows("""
         SELECT o.aid, o.nsources, o.sumflux, count(s.sid), coalesce(sum(s.fluxfit), 0)
         FROM objects_official o
-        LEFT JOIN members_official m ON m.set_job = o.job AND m.aid = o.aid
-        LEFT JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
+        JOIN memberships_official m ON m.object_job = o.job AND m.aid = o.aid
+        JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
         GROUP BY o.aid, o.nsources, o.sumflux""")
     assert len(sums) == NSOURCES * len(SCAS)
     for _, nsources, sumflux, members_count, members_flux in sums:
-        assert nsources == members_count == len(EPOCHS)
+        assert nsources == members_count == 2
         assert sumflux == pytest.approx(members_flux)
-    assert world.rows("SELECT count(*) FROM sources WHERE job = %s", (superseded,))[0][0] \
+    # The old rows still exist.
+    assert world.rows("SELECT count(*) FROM sources WHERE job = %s", (superseded,))[0][0] == NSOURCES
+    assert world.rows("SELECT count(*) FROM memberships WHERE job = %s", (superseded,))[0][0] \
         == NSOURCES
-    assert world.rows("SELECT count(*) FROM memberships WHERE job = %s AND source_job = %s",
-                      (set_1, superseded))[0][0] == NSOURCES

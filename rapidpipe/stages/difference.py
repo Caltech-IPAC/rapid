@@ -74,7 +74,14 @@ and ``sources`` (the ZOGY positive PSF-fit catalog through
 :func:`rapidpipe.science.load.catalogs.source_set`, capped at ``max_sources``
 as the import caps it; a source in a bright reference source's footprint
 carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
-in ``flags``, informational, nothing dropped: :func:`flag_bright_footprint`).
+in ``flags``, informational, nothing dropped: :func:`flag_bright_footprint`),
+``objects`` and ``memberships`` (the association, :func:`associate`: the
+plan's amendment of 2026-10-24 moved it here from the retired associate
+stage; the job reads the field's objects of its run as they stand, records
+that read in the manifest's ``reads``, matches its sources in memory and
+publishes the objects it founded and its memberships, which the publisher
+reconciles under the field's lock against those founded since the read,
+:mod:`rapidpipe.foundation.catalog`).
 The manifest records `dev`'s gain-matching and
 catalog measurements under ``difference``, the reference PSF's
 measurement under ``difference.refpsf``, and ``metrics``, one flat dict of
@@ -98,7 +105,8 @@ median second-moment sigma of the registration stars on the
 background-subtracted science image, and ``sci_star_psf_sigma_ratio``, it
 over ``sci_psf_sigma_px``; and the
 uncapped catalog's ``n_sources_near_bright_px`` and
-``n_sources_ring_snr_gt20``, defined there). The
+``n_sources_ring_snr_gt20``, defined there; ``n_objects_read``,
+``n_objects_founded`` and ``n_memberships``, the association's). The
 residual stars' positions sit beside them as ``difference.residual_stars``
 for a reader's gallery. A metric the job cannot make is absent.
 
@@ -142,7 +150,10 @@ from astropy.wcs import WCS
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
-from rapidpipe.products.diffimage import SOURCE_FLAG_BRIGHT_FOOTPRINT, catalog_outcome_bit
+from rapidpipe.products.diffimage import (
+    INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT, catalog_outcome_bit)
+from rapidpipe.science.crossmatch.catalog import field_inclusion_cone
+from rapidpipe.science.crossmatch.memory import associate_epoch
 from rapidpipe.science.difference import (
     background,
     gainmatch,
@@ -167,7 +178,7 @@ from rapidpipe.science.difference.fitsops import scale_image_data
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.intake import gzip_file
 from rapidpipe.science.load.catalogs import source_set
-from rapidpipe.science.spatial import image_centre_and_corners, tessellation_field
+from rapidpipe.science.spatial import field_neighbours, image_centre_and_corners, tessellation_field
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +195,22 @@ GZIP_LEVEL = 1
 #: The reference mosaic catalog's columns the job reads: position, flux, the footprint's aperture S/N.
 REFERENCE_CATALOG_COLUMNS = ["ALPHAWIN_J2000", "DELTAWIN_J2000", "FLUX_AUTO", "FLUX_APER_4",
                              "FLUXERR_APER_4"]
+
+#: `dev`'s pass 2 uses the field's inclusion cone only for a tile with this many neighbours.
+CONE_NEIGHBOURS = 8
+
+#: The field's objects of the job's run as they stand: every published difference job's founded ones.
+OBJECTS_SQL = ("SELECT o.job, o.aid, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
+               " WHERE j.run = %s AND o.dataset = %s AND o.survey = %s AND o.field = %s")
+
+OBJECTS_SCHEMA = pa.schema([
+    ("aid", pa.int64()), ("dataset", pa.string()), ("survey", pa.string()), ("field", pa.int32()),
+    ("ra0", pa.float64()), ("dec0", pa.float64()),
+])
+MEMBERSHIPS_SCHEMA = pa.schema([
+    ("object_job", pa.int64()), ("aid", pa.int64()), ("source_job", pa.int64()), ("sid", pa.int64()),
+    ("dra", pa.float64()), ("ddec", pa.float64()), ("flux", pa.float64()),
+])
 
 DIFFIMAGES_SCHEMA = pa.schema([
     ("pid", pa.int32()), ("dataset", pa.string()), ("expid", pa.int32()), ("sca", pa.int16()),
@@ -780,8 +807,14 @@ def run(job: JobContext) -> None:
         coverage=w(output_resampled_reference_cov_map + ".gz"), reference_xy=reference_xy)
     logger.info("difference: expid %s -> pid %s, %d of %d sources kept", key["expid"],
                 inputs.pid, sources.num_rows, candidates)
+    reads, catalog, association = associate(job, sources, diffimage["field"])
+    metrics.update(n_objects_read=association["objects_read"],
+                   n_objects_founded=association["founded"],
+                   n_memberships=association["pass1_memberships"] + association["pass2_memberships"])
     job.write_manifest(
-        [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet")],
+        [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet"),
+         ("objects", "objects.parquet"), ("memberships", "memberships.parquet")],
+        reads=reads, catalog=catalog, association=association,
         difference={
             "pid": inputs.pid, "rid": inputs.rid, "rfid": inputs.rfid,
             "zero_point": {"value": zero_point, "source": zero_point_source},
@@ -797,6 +830,50 @@ def run(job: JobContext) -> None:
             "infobits_science_l2": inputs.infobits_science, "sfft": sfft_note,
             "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},
         metrics=metrics)
+
+
+def associate(job: JobContext, sources: pa.Table, field: int) -> tuple[list, dict, dict]:
+    """Match the epoch's sources against the field's objects of the run as they stand; write the rows.
+
+    The plan's amendment of 2026-10-24: one short read of the field's
+    objects of the job's run (:data:`OBJECTS_SQL`), recorded exactly as the
+    founding jobs it saw (the manifest's ``reads``, one ``objects`` input
+    each, which the publisher records in ``job_inputs``); then
+    :func:`rapidpipe.science.crossmatch.memory.associate_epoch` over the
+    sources ``[associate]`` accepts (``flags`` equal to ``source_flags``
+    once the informational bits are cleared, ``fluxfit / fluxerr >=
+    min_snr``) in the field (pass 1) and its neighbours (pass 2, inside
+    the inclusion cone when the field has eight). Writes
+    ``objects.parquet`` (founded here) and ``memberships.parquet`` (this
+    epoch's, onto existing objects too) under ``job.path``; returns the
+    manifest's ``reads``, its ``catalog`` (what the publisher reconciles
+    under) and the counts.
+    """
+    settings = job.settings["associate"]
+    radius = float(settings["match_radius"])
+    neighbours = field_neighbours(field)
+    near = {field, *neighbours}
+    wanted = int(settings["source_flags"])
+    accepted = [r for r in sources.select(["sid", "expid", "mjdobs", "field", "ra", "dec", "fluxfit",
+                                           "fluxerr", "flags"]).to_pylist()
+                if r["field"] in near and (r["flags"] & ~INFORMATIONAL_SOURCE_FLAGS) == wanted
+                and r["fluxerr"] > 0 and r["fluxfit"] / r["fluxerr"] >= float(settings["min_snr"])]
+    with job.connect() as conn, conn.cursor() as cur:
+        cur.execute(OBJECTS_SQL, (job.run, job.dataset, job.survey, field))
+        found = cur.fetchall()
+        conn.commit()
+    objects = {aid: (owner, ra0, dec0) for owner, aid, ra0, dec0 in found}
+    cone = field_inclusion_cone(field, radius) if len(neighbours) == CONE_NEIGHBOURS else None
+    epoch = associate_epoch(objects, accepted, job=job.job, field=field, cone=cone, radius=radius)
+    pq.write_table(pa.Table.from_pylist(
+        [{**r, "dataset": job.dataset, "survey": job.survey, "field": field} for r in epoch.founded],
+        schema=OBJECTS_SCHEMA), job.path / "objects.parquet")
+    pq.write_table(pa.Table.from_pylist(epoch.memberships, schema=MEMBERSHIPS_SCHEMA),
+                   job.path / "memberships.parquet")
+    key = {"dataset": job.dataset, "survey": job.survey, "field": field}
+    reads = [{"product": "objects", "key": key, "source_job": owner}
+             for owner in sorted({owner for owner, *_ in found})]
+    return reads, {**key, "radius": radius}, epoch.counts
 
 
 def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh: float,

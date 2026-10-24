@@ -132,7 +132,7 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False):
         gaia[name] = [False]
     pq.write_table(pa.table(gaia), tmp_path / "gaia.parquet")
     read = Read(key={"dataset": "D", "expid": 2, "sca": 8, "fid": 8},
-                source_job=SOURCE_JOB[2], object_job=5, flags_zero=2,
+                source_job=SOURCE_JOB[2], object_job={7: 5, 9: 5}, flags_zero=2,
                 triggers=[a2, b2], aid_of={1: 7, 2: 9}, objects=objects, members=members,
                 images=images, trigger_image=images[1], reuse=reuse,
                 gaia_job=3, gaia_path=tmp_path / "gaia.parquet", refcat_path=None)

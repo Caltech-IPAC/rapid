@@ -1,9 +1,11 @@
 """The difference stage under ``run(job)``, on a synthetic epoch with the fake tools.
 
 Contracts: a job naming one ``l2files``, one ``refimages`` and one
-(science) ``psfs`` row writes ``diffimages`` (one row) and ``sources`` with exactly their
-tables' columns from ``database/schema.sql``, sharing the ``pid`` drawn for
-the job; the work subdirectory publishes exactly the kept set (the ZOGY
+(science) ``psfs`` row writes ``diffimages`` (one row), ``sources``,
+``objects`` and ``memberships`` with exactly their tables' columns from
+``database/schema.sql``, sharing the ``pid`` drawn for the job; it
+associates its sources with the catalog it read, recording the read and
+the catalog key in the manifest; the work subdirectory publishes exactly the kept set (the ZOGY
 image, its uncertainty, mask and PSF-fit catalog, and the neighbours the
 packet stage reads), every FITS gzipped, and nothing else; the tools run in `dev`'s
 order with the reference background subtracted by bkgest; ``max_sources``
@@ -72,7 +74,7 @@ def settings(**tables) -> dict:
             body[table].update(values)
         else:
             body[table] = values
-    return {"difference": body}
+    return {"difference": body, "associate": copy.deepcopy(THIN["associate"])}
 
 
 def fake_connect(files: dict[str, Path], queries: list):
@@ -94,12 +96,17 @@ def fake_connect(files: dict[str, Path], queries: list):
                 self.row = (files["catalog"].as_uri(),)
             elif "FROM psfs" in statement:
                 self.row = (files["science_psf"].as_uri(),)
+            elif "FROM objects" in statement:
+                self.rows = []                  # the field's catalog: empty, every source founds
             else:
                 assert "nextval" in statement
                 self.row = (PID,)
 
         def fetchone(self):
             return self.row
+
+        def fetchall(self):
+            return self.rows
 
     class Connection:
         def cursor(self):
@@ -170,8 +177,9 @@ def manifest(prefix: Path) -> dict:
 
 def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, fakes):
     prefix = run_difference(tmp_path, files)
-    assert [o["table"] for o in manifest(prefix)["outputs"]] == ["diffimages", "sources"]
-    for table in ("diffimages", "sources"):
+    assert [o["table"] for o in manifest(prefix)["outputs"]] == [
+        "diffimages", "sources", "objects", "memberships"]
+    for table in ("diffimages", "sources", "objects", "memberships"):
         assert set(pq.read_schema(prefix / f"{table}.parquet").names) == schema_columns(table)
     (row,) = read(prefix, "diffimages")
     assert {k: row[k] for k in ("pid", "dataset", "expid", "sca", "fid", "rid", "rfid")} == {
@@ -186,6 +194,28 @@ def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, f
     assert (recorded["pid"], recorded["rfid"]) == (PID, RFID)
     assert recorded["zero_point"] == {"value": 17.0, "source": "header"}
     assert recorded["sources_kept"] == len(sources) <= recorded["sources_before_cap"]
+
+
+def test_a_job_associates_its_sources_with_the_catalog_it_read_and_records_the_read(
+        tmp_path, files, fakes):
+    """An empty catalog: every accepted source of the image's field founds an object, its own
+    membership at offset zero; the read (no founding job) and the catalog key are in the manifest.
+    The fake catalog's sources are at S/N 4, so the cut is lowered to take them."""
+    body = settings()
+    body["associate"]["min_snr"] = 1.0
+    prefix = run_difference(tmp_path, files, body=body)
+    recorded = manifest(prefix)
+    (row,) = read(prefix, "diffimages")
+    assert recorded["reads"] == []
+    assert recorded["catalog"] == {"dataset": "D", "survey": "S", "field": row["field"],
+                                   "radius": THIN["associate"]["match_radius"]}
+    founded, members = read(prefix, "objects"), read(prefix, "memberships")
+    assert founded and {o["field"] for o in founded} == {row["field"]}
+    own = [m for m in members if m["dra"] == 0.0 and m["ddec"] == 0.0]
+    assert {m["aid"] for m in own} == {o["aid"] for o in founded}
+    assert {(m["object_job"], m["source_job"]) for m in members} == {(9, 9)}
+    assert recorded["metrics"]["n_objects_founded"] == len(founded)
+    assert recorded["metrics"]["n_objects_read"] == 0
 
 
 def test_the_job_publishes_the_kept_set_gzipped_and_nothing_else(tmp_path, files, fakes):

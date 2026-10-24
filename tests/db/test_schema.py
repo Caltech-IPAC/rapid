@@ -25,7 +25,7 @@ PRODUCT_TABLES = (
     "diffimages", "psfs", "sources", "objects", "memberships", "packets",
     "forced", "external", "catalogs",
 )
-VIEWS = tuple(f"{t}_official" for t in PRODUCT_TABLES) + ("members_official", "job_metrics")
+VIEWS = tuple(f"{t}_official" for t in PRODUCT_TABLES) + ("job_metrics",)
 
 
 def _admin_connection():
@@ -72,13 +72,13 @@ def _run_and_job(cur):
         "INSERT INTO runs (who, why, revision, settings, survey, dataset)"
         " VALUES ('t', 'test', 'abc', '{}', 'S', 'D') RETURNING id")
     run = cur.fetchone()[0]
-    cur.execute("INSERT INTO jobs (run, stage, scope) VALUES (%s, 'associate', '{}') RETURNING id",
+    cur.execute("INSERT INTO jobs (run, stage, scope) VALUES (%s, 'difference', '{}') RETURNING id",
                 (run,))
     return run, cur.fetchone()[0]
 
 
 def _job(cur, run):
-    cur.execute("INSERT INTO jobs (run, stage, scope) VALUES (%s, 'associate', '{}') RETURNING id",
+    cur.execute("INSERT INTO jobs (run, stage, scope) VALUES (%s, 'difference', '{}') RETURNING id",
                 (run,))
     return cur.fetchone()[0]
 
@@ -140,36 +140,38 @@ def test_the_psf_key_carries_its_kind(conn):
                         " VALUES (%s, 'D', 1, 1, 'difference', 'psf.fits', 'x')", (science,))
 
 
-def test_members_official_follows_the_chain_and_omits_excluded_source_sets(conn):
-    """Sets A <- B <- C, C official. A recorded members from source sets S1
-    and S2, B from S3, C from S4; C excludes S2. The view returns S1, S3 and
-    S4's members and not S2's, which still exist in memberships."""
+def test_the_catalog_views_follow_the_source_sets_bindings(conn):
+    """Object A founded by difference job D1, joined by D2 and D3; D1 and D2's source sets
+    official, D3's not (superseded). memberships_official is D1's and D2's rows;
+    objects_official is A with their two members' sums; an object B whose only member is
+    D3's is absent from the view and present in the table."""
     with conn.cursor() as cur:
-        run, a = _run_and_job(cur)
-        b, c = _job(cur, run), _job(cur, run)
-        s1, s2, s3, s4 = (_job(cur, run) for _ in range(4))
-        key = '{"dataset": "D", "survey": "S", "field": 1}'
-        for job, predecessor in ((b, a), (c, b)):
-            cur.execute(
-                "INSERT INTO job_inputs (job, kind, product, key, source_job)"
-                " VALUES (%s, 'input', 'objects', %s, %s)", (job, key, predecessor))
-        cur.execute(
-            "INSERT INTO job_inputs (job, kind, product, key, source_job)"
-            " VALUES (%s, 'excludes', 'sources', %s, %s)",
-            (c, '{"dataset": "D", "expid": 1, "sca": 1, "fid": 1}', s2))
-        members = [(a, 1, s1, 10), (a, 2, s2, 20), (b, 1, s3, 30), (c, 3, s4, 40)]
-        cur.executemany(
-            "INSERT INTO memberships (job, aid, source_job, sid) VALUES (%s, %s, %s, %s)", members)
-        binding = _open(cur, c, key)
+        run, d1 = _run_and_job(cur)
+        d2, d3 = _job(cur, run), _job(cur, run)
+        for aid, ra0 in ((1, 10.0), (2, 11.0)):
+            cur.execute("INSERT INTO objects (job, aid, dataset, survey, field, ra0, dec0)"
+                        " VALUES (%s, %s, 'D', 'S', 1, %s, -5.0)", (d1, aid, ra0))
+        members = [(d1, 1, 0.0, 0.0, 10.0), (d2, 1, 2e-6, -1e-6, 12.0), (d3, 1, 4e-6, 0.0, 99.0),
+                   (d3, 2, 0.0, 0.0, 5.0)]
+        cur.executemany("INSERT INTO memberships (job, object_job, aid, source_job, sid, dra, ddec, flux)"
+                        " VALUES (%s, %s, %s, %s, 1, %s, %s, %s)",
+                        [(j, d1, aid, j, dra, ddec, flux) for j, aid, dra, ddec, flux in members])
+        for epoch, job in ((1, d1), (2, d2)):
+            _open(cur, job, f'{{"dataset": "D", "expid": {epoch}, "sca": 1, "fid": 1}}', "sources")
 
-        cur.execute("SELECT job, aid, source_job, sid, set_job, binding, run FROM members_official")
-        rows = sorted(cur.fetchall())
-        cur.execute("SELECT count(*) FROM memberships WHERE source_job = %s", (s2,))
-        (kept,) = cur.fetchone()
+        cur.execute("SELECT DISTINCT job FROM memberships_official ORDER BY job")
+        official = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT aid, nsources, sumra, sumra2, sumdec, sumflux, sumflux2, run"
+                    " FROM objects_official")
+        objects = cur.fetchall()
+        cur.execute("SELECT count(*) FROM objects")
+        (stored,) = cur.fetchone()
 
-    assert rows == sorted((j, aid, s, sid, c, binding, run)
-                          for j, aid, s, sid in members if s != s2)
-    assert kept == 1
+    assert official == [d1, d2]
+    ((aid, n, sumra, sumra2, sumdec, sumflux, sumflux2, objects_run),) = objects
+    assert (aid, n, objects_run, stored) == (1, 2, run, 2)
+    assert (sumra, sumdec, sumflux, sumflux2) == pytest.approx((2e-6, -1e-6, 22.0, 244.0))
+    assert sumra2 == pytest.approx(4e-12)
 
 
 @pytest.mark.skipif(os.environ.get("CI") != "true",
