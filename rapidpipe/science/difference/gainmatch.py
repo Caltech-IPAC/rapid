@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 IAM = "Sub gainMatchScienceAndReferenceImages"
 
+# Experiment only (day-2026-10-24 task 5, F213's paired difference): the
+# scale forced to the zero points' ratio, the measured one only logged.
+FORCE_ZEROPOINT_SCALE = True
+
 
 def gain_match_science_and_reference_images(
     runner: ToolRunner,
@@ -258,6 +262,12 @@ def gain_match_science_and_reference_images(
         logger.warning("%s: === Warning: furthermore, assuming default RMSs for axial separations "
                        "(~ registration errors) of dxrms, dyrms = %s, %s pixels",
                        IAM, dxrmsfin, dyrmsfin)
+
+    if FORCE_ZEROPOINT_SCALE:
+        forced = 10**(0.4 * (magzpref - magzpsci))
+        logger.info("%s: EXPERIMENT measured scalefac = %s forced to the zero points' %s "
+                    "(magzpref %s, magzpsci %s)", IAM, scalefac, forced, magzpref, magzpsci)
+        scalefac = forced
 
     return scalefac, dxrmsfin, dyrmsfin, dxmedianfin, dymedianfin
 
