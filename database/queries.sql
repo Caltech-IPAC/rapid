@@ -288,13 +288,14 @@ ORDER BY o.aid;
 -- name: chip_sources
 -- returns: sid, ra, dec, fluxfit, fluxerr, filter, exptime
 -- The alertable sources of one chip with band and exposure time (dev:
--- providers.py R2): flags = 0.
+-- providers.py R2): no rejecting flag, the informational bright-footprint
+-- bit 16384 cleared (rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS).
 SELECT s.sid, s.ra, s.dec, s.fluxfit, s.fluxerr, f.filter, e.exptime
 FROM sources_official s
 JOIN filters f ON f.fid = s.fid
 LEFT JOIN exposures_official e ON (e.dataset, e.expid) = (s.dataset, s.expid)
 WHERE s.dataset = %(dataset)s AND s.expid = %(expid)s AND s.sca = %(sca)s AND s.fid = %(fid)s
-  AND s.flags = 0
+  AND s.flags & ~16384 = 0
 ORDER BY s.sid;
 
 -- name: reference_for_field

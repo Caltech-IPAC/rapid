@@ -38,6 +38,36 @@ grid, 0-based pixels.
   sources within :data:`ON_STAR_PX` of a reference mosaic catalog source
   mapped onto the science grid through the two WCSs (run 17 pass 4: 74%
   against the finder's list).
+- :func:`bright_footprint` and :func:`footprint_counts`: the sources within
+  a bright reference source's footprint (below), flagged by the stage and
+  counted as ``n_in_bright_footprint`` (all kept sources) and
+  ``bright_footprint_fraction`` (of the sources above S/N
+  :data:`BRIGHT_SNR`); flag, not fix (Ben, 2026-10-24).
+- :func:`near_bright_count`: ``n_sources_near_bright_px``, the uncapped
+  PSF-fit sources within :data:`NEAR_BRIGHT_PX` of a reference pixel above
+  :data:`BRIGHT_PIXEL_LEVEL` (the fixes' task 4 measure: 28 on run 44
+  pass 4).
+- :func:`ring_count`: ``n_sources_ring_snr_gt20``, the uncapped sources
+  above S/N :data:`BRIGHT_SNR` whose nearest of the :data:`RING_TOP_STARS`
+  brightest finder stars is :data:`RING_PX` away (the fixes' task 3
+  measure, 10 to 20 px: 190 under the truncated stamp, 3 after).
+
+**The bright footprint.** Every reference mosaic catalog source whose
+aperture S/N (``FLUX_APER(4)``, the 6 px diameter, over its error) exceeds
+:data:`FOOTPRINT_SNR` has a disc of radius
+``max(FOOTPRINT_MIN_PX, FOOTPRINT_R15_PX * 10 ** (0.2 * (15 - m)))`` on the
+science grid, ``m = zero point - 2.5 log10 FLUX_AUTO`` the source's AB
+magnitude on the reference's own zero point, so the radius grows as the
+square root of the flux. Derived on run 46's F146 SCA 8 passes 4 to 6
+(``001_0001``, jobs 19864 to 19866, 825 such sources on the grid): every
+source above S/N 20 near a bright source lies within that law's envelope
+(at m 12.8, 22.8 and 24.0 px from the star; at m 15.4, 9.7 px; at m 17
+to 18, 4.6 to 6.4 px; the faint ones on the star's core, under 2.5 px),
+and the law flags 21 of 23, 15 of 19 and 11 of 15 of them, the re-count's
+bright-star counts exactly (runbook part 10 step 5). The diffraction-spike
+arms lie inside the disc at every measured star, so the footprint is a
+disc. The sources it holds are 50 to 56% of all kept sources there: faint
+sources on bright stars, a measurement, not a failure.
 
 The constants are the ledger's, not settings: no measured case has needed
 a different one. This module may import leaf modules only.
@@ -65,6 +95,14 @@ ON_STAR_PX = 3.0
 BRIGHT_SNR = 20.0
 #: The centroid's Gaussian weight sigma and half window, px.
 CENTROID_SIGMA_PX, CENTROID_HALF = 1.5, 7
+#: Reference sources above this aperture S/N have a footprint.
+FOOTPRINT_SNR = 100.0
+#: The footprint's floor and its radius at AB magnitude 15, px (the law above).
+FOOTPRINT_MIN_PX, FOOTPRINT_R15_PX = 4.0, 9.5
+#: A source within this of a reference pixel above the level is near a bright pixel, px and DN/s.
+NEAR_BRIGHT_PX, BRIGHT_PIXEL_LEVEL = 6.0, 1000.0
+#: The ring count's stars and its distance range, px.
+RING_TOP_STARS, RING_PX = 100, (6.0, 20.0)
 _STAMP_HALF = 15
 
 
@@ -145,6 +183,69 @@ def source_counts(x: np.ndarray, y: np.ndarray, flux: np.ndarray, flux_err: np.n
         dist, _ = cKDTree(catalog_xy).query(np.column_stack([x, y]))
         out["on_reference_star_fraction"] = float(np.mean(dist <= ON_STAR_PX))
     return out
+
+
+def footprint_radii(flux: np.ndarray, zero_point: float) -> np.ndarray:
+    """The footprint radius of each reference source of ``flux`` (FLUX_AUTO) on ``zero_point``, px."""
+    flux = np.asarray(flux, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mag = zero_point - 2.5 * np.log10(np.where(flux > 0, flux, np.nan))
+    radius = FOOTPRINT_R15_PX * 10 ** (0.2 * (15.0 - mag))
+    return np.maximum(FOOTPRINT_MIN_PX, np.nan_to_num(radius, nan=0.0))
+
+
+def bright_footprint(x: np.ndarray, y: np.ndarray, stars_xy: np.ndarray,
+                     radii: np.ndarray) -> np.ndarray:
+    """True for each source ``(x, y)`` within the radius of one of ``stars_xy``."""
+    inside = np.zeros(len(x), dtype=bool)
+    if len(x) == 0 or len(stars_xy) == 0:
+        return inside
+    from scipy.spatial import cKDTree
+
+    tree = cKDTree(np.asarray(stars_xy, dtype=float))
+    points = np.column_stack([x, y])
+    for k, near in enumerate(tree.query_ball_point(points, float(np.max(radii)))):
+        if near:
+            d = np.hypot(stars_xy[near, 0] - x[k], stars_xy[near, 1] - y[k])
+            inside[k] = bool(np.any(d <= radii[near]))
+    return inside
+
+
+def footprint_counts(inside: np.ndarray, flux: np.ndarray, flux_err: np.ndarray) -> dict[str, float]:
+    """``n_in_bright_footprint`` and, with sources above S/N 20, ``bright_footprint_fraction``."""
+    out: dict[str, float] = {"n_in_bright_footprint": int(np.sum(inside))}
+    with np.errstate(divide="ignore", invalid="ignore"):
+        bright = flux / flux_err > BRIGHT_SNR
+    if bright.any():
+        out["bright_footprint_fraction"] = float(np.mean(inside[bright]))
+    return out
+
+
+def near_bright_count(x: np.ndarray, y: np.ndarray, reference: np.ndarray) -> int:
+    """The sources within :data:`NEAR_BRIGHT_PX` of a ``reference`` pixel above :data:`BRIGHT_PIXEL_LEVEL`."""
+    rows, cols = np.nonzero(np.nan_to_num(reference) > BRIGHT_PIXEL_LEVEL)
+    if len(x) == 0 or len(rows) == 0:
+        return 0
+    from scipy.spatial import cKDTree
+
+    dist, _ = cKDTree(np.column_stack([cols, rows])).query(np.column_stack([x, y]))
+    return int(np.sum(dist <= NEAR_BRIGHT_PX))
+
+
+def ring_count(x: np.ndarray, y: np.ndarray, flux: np.ndarray, flux_err: np.ndarray,
+               found: np.ndarray) -> int | None:
+    """Sources above S/N 20 whose nearest top finder star lies :data:`RING_PX` away; ``None`` without stars."""
+    if len(found) == 0:
+        return None
+    top = found[np.argsort(-found[:, 2])][:RING_TOP_STARS, :2]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        bright = flux / flux_err > BRIGHT_SNR
+    if not bright.any():
+        return 0
+    from scipy.spatial import cKDTree
+
+    dist, _ = cKDTree(top).query(np.column_stack([x[bright], y[bright]]))
+    return int(np.sum((dist >= RING_PX[0]) & (dist < RING_PX[1])))
 
 
 def centroid(image: np.ndarray, x: float, y: float, iterations: int = 20) -> tuple[float, float]:

@@ -363,7 +363,8 @@ CREATE TABLE sources (
     yerr real NOT NULL,
     fluxfit real NOT NULL,
     fluxerr real NOT NULL,
-    flags smallint NOT NULL,
+    flags smallint NOT NULL,                         -- photutils' fit bits (to 1 << 11); RAPID's 1 << 14 = 16384 the bright
+                                                     -- footprint, informational: eligible is flags & ~16384 = 0 (rapidpipe.products.diffimage)
     qfit real NOT NULL,
     cfit real NOT NULL,
     redchi real DEFAULT 0.0 NOT NULL,
