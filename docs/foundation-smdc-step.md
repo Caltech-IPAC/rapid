@@ -5387,6 +5387,110 @@ does, so the numbers can arrive out of order.
    Packets now read and record their window at execution, so an
    injection or Spot run needs no change to the loop's order.
 
+8. **Spot as a probe: four rules in the loop, never retried on Spot (PR
+   381, merged `43584e9a`; rapid_systems PRs 421 merged `fa004a4`, 423
+   the data point, 422 the interruption capture left open).** Spot is a
+   probe, never production (Ben, 2026-10-24). A run's `[batch.spot]`
+   (`queue`, `backlog`, `hedge_factor`; absent by default) sends a
+   stage's submission to the Spot queue while more than `backlog` of that
+   stage's jobs remain to submit in the pass, else to the prompt queue
+   (`--job-queue`); a Spot submission overrides the retry strategy to one
+   attempt; a Spot Batch job that ends unpublished, for any reason, is the
+   job's one rerun, on the prompt queue; a Spot straggler past
+   `hedge_factor` times its stage's median `container_seconds` is
+   terminated and rerun there. `jobs.attempts` records every submission
+   (queue, times, instance type, zone, Batch's reason); each pass reports
+   `queues` and `attempts`; `job_metrics` gains `container_seconds`,
+   `batch_submissions`, `reclaims`, `hedges`, `lost_seconds`.
+
+   The granted statement, `database/2026-10-24-job-attempts.sql` (the
+   column, and `job_metrics` redefined with the same columns), applied
+   once on SMDC as `postgres` by SSM on the database host, the file piped
+   to `podman exec -i rapid-postgres psql -U postgres -d rapid -X -1 -v
+   ON_ERROR_STOP=1`. Check, held: `COMMIT` at 07:56:28 UTC; 20,262 jobs,
+   none with attempts; 18,803 `container_seconds` rows; the view's grants
+   kept (`rapid_rebuild_pipeline` SELECT, INSERT, UPDATE, DELETE;
+   `rapid_read` SELECT).
+
+   The retry row: both rebuild job definitions gain `OnStatusReason:
+   'Task failed to start*'` retry before the catch-all (rapid_systems
+   PR 421), deployed by the release hook's change set, exactly its two
+   `Modify`/`False` rows, executed 07:58 UTC with image
+   `rebuild-43584e9a…` (`sha256:044533be…`): **`rapid-rebuild:59`**
+   (production `:50`). Read back: `attempts` 3, `evaluateOnExit` 75
+   retry, `*` exit, `Task failed to start*` retry, `*` exit.
+
+   The compute environments, read 07:4x UTC and not changed:
+   `rapid-ce-bulk` `SPOT_CAPACITY_OPTIMIZED`, min 0, max 10,000 vCPU;
+   `rapid-ce-prompt` `BEST_FIT_PROGRESSIVE`, min 0, max 5,000; both
+   ENABLED, VALID.
+
+   Proof under dataset `r00342-nt-spot`, **run 70**, live (group 18894),
+   Gaia job 20263:
+
+   ```sh
+   rp run create ... --revision 43584e9abb041895eb326396f6ffe261121903f9 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --set 'batch.spot.queue="rapid-queue-bulk"' --set batch.spot.backlog=1 --set batch.spot.hedge_factor=5.0 \
+     --survey HLWAS --dataset r00342-nt-spot
+   rp loop --run 70 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4,5,6 \
+     --job-definition rapid-rebuild:59 --job-queue rapid-queue-prompt --interval 60
+   scripts/check_run.sh --run 70 --inspect DIR
+   ```
+
+   One loop, 07:59:36 to 08:21:41 UTC, 23 passes, drained, no failure.
+   The hedge factor 5 is a choice for this sample: on the HLWAS medians
+   (intake 68 s, difference 248 s, packet 69 s) a factor of 3 would have
+   hedged a cold Spot start of four minutes.
+
+   | stage | jobs | Spot (one attempt) | prompt | Spot start lag | prompt start lag |
+   |---|---|---|---|---|---|
+   | psf | 1 | 0 | 1 | | 126 s (cold) |
+   | intake | 6 | 5 | 1 | 203 s (cold) | 202 s (cold) |
+   | reference | 1 | 0 | 1 | | 215 s (cold) |
+   | difference | 3 | 2 | 1 | 168 s, 292 s | 11 s (warm host) |
+   | packet | 3 | 0 | 3 | | 9 s, 190 s, 70 s |
+
+   Packets came one per pass as differences finished, so each was its
+   stage's last wave and went on-demand. Batch's own record agrees:
+   `retryStrategy.attempts` 1 on the Spot jobs (20265, 20272), 3 on the
+   prompt ones (20270, 20274). The pass report's `attempts`: 7 submissions
+   per queue, reclaims 0, hedges 0, lost job-hours 0, fill to 1,000 vCPU
+   unmeasured at this size. Every host was an m6a.2xlarge; Spot in
+   us-east-1a and 1c, three Spot requests, each closed
+   `instance-terminated-by-user` (the scale-down), none reclaimed. A
+   24 GiB difference takes a whole m6a.2xlarge, so the second Spot
+   difference waited for a third host (292 s).
+
+   | | run 69, on-demand (passes 1 to 5, two epochs) | run 70, Spot rules (passes 1 to 6, three epochs) |
+   |---|---|---|
+   | loop | 12.1 min (06:57:09 to 07:09:15) | 22.1 min (07:59:36 to 08:21:41) |
+   | reference ended to last packet ended | 5.6 min (07:03:06 to 07:08:44) | 10.2 min (08:11:01 to 08:21:14) |
+   | jobs rerun | 0 | 0 |
+
+   Run 46's chained pass (SCAs 4, 5 and 8, three epochs) ran 02:10:13
+   to 02:40:28 UTC, its SCA 8 packets done at 02:26:05.
+
+   Check, held: `check_run.sh --run 70 --inspect` CLEAN, validate 6/6,
+   reader 3/3, consumer 280/280 (the same 280 packets as run 69); every
+   rule exercised in the unit tests with a faked Batch (`test_loop.py`,
+   `test_launch.py`, `test_attempts.py`). Not held: the interruption
+   capture. It needs a CloudWatch Logs resource policy letting
+   EventBridge write to `/rapid/batch/spot-interruptions`; the account's
+   two policies name `/rapid/batch/job-failed` and
+   `/rapid/ops/ssm-association-events` only, and a new one is a grant this
+   brief does not make. rapid_systems PR 422 carries the group, the rule
+   and the policy, left open for Ben; no test event was sent and no real
+   warning was captured (the pointing drew no reclaim).
+
+   What the next step must know: on a sample this small Spot costs wall
+   time and saves nothing measurable; the backlog rule only sends a wave
+   to Spot when a stage has more than `backlog` submissions in one pass,
+   so the footprint's intakes and differences will, its packets mostly
+   not. Task 9's twin sets the three `--set`s above with its own backlog
+   and runs the loop with `--job-queue rapid-queue-prompt`.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
