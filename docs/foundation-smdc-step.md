@@ -5891,6 +5891,103 @@ a task's step lands when its task does, so the numbers can arrive out of order.
    `p1 1887..2166`, 4.4 s. `check_run.sh --inspect`: CLEAN, validate 6/6,
    reader 3/3, consumer 280/280.
 
+3. **OpenUniverse TDS through the chain, counted against its own truth
+   (PRs 390, 392, 400).** Three pieces made the `openuniverse` reader run
+   past intake (part 11 step 2's "Not built"):
+   - **The psf stage** (PR 390) draws the science PSF with galsim.roman,
+     the simulation's own model, for the stem's filter and SCA: `getPSF`
+     at the SCA centre (2044, 2044) in GalSim's pixels, achromatic at the
+     bandpass's effective wavelength, 61 px with the pixel response, unit
+     sum; the file is not read and no CRDS reference is named. galsim
+     2.8.5 is in the host's env and the image (`requirements.txt` now
+     lists it; the import gate checks `galsim.roman`). The H158 SCA 10
+     stamp holds 0.977 of the flux in 61 px and its centroid is
+     (−0.160, −0.127) px from the stamp centre, the size of part 11 step
+     2's unexplained R062 star residual.
+   - **The loop** (PR 392) lists `<source_root><H158>/` for `--filters
+     F158` and keeps the `_simple.asdf` stems; an OpenUniverse pointing is
+     the observing sequence's row, which the intake writes as `expid`, so
+     `--pointings 247,632,…` selects stems and rows alike; `--passes` is
+     refused.
+   - **The reference** needs no code: the first visits under the existing
+     `before_mjd`. The count script (PR 400) decides which transients a
+     reference built from them can be judged on.
+
+   The sample: H158, the filter whose live transients are brightest (4 to
+   10 per image below AB 26 on SCA 10 against R062's 1 to 3, IRSA's index
+   over six images each), and SCA 10 in field 5329200, which 27 in-season
+   H158 images share (the night's `tds-heads.txt` grouped by the
+   tessellation field of each file's SCA centre). The reference is the
+   first six (pointings 247 to 2172, MJD 62001.2 to 62026.2); the ten
+   epochs are spread over the season and include the two late visits
+   (14492, 15262, 16032, 28737, 29507, 30277, 42982, 44137, 56457,
+   57227). The packet stage needs a Gaia binding and the simulation has
+   no Gaia stars, so the run's catalog is the truth's 487 star rows over
+   the sixteen images on Gaia's Parquet schema (source_id the truth id,
+   `ref_epoch` 2016.0, zero motion), which also gives the intake's WCS
+   metric.
+
+   Image `rebuild-8c51fdb3…` (`sha256:4e120d5a…`), **`rapid-rebuild:62`**:
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision 8c51fdb386a7b49ef34230e4091d1d0c3421d679 \
+     --overlay rapidpipe/settings/datasets/openuniverse-tds.toml \
+     --set "intake.source_root=\"$OU_ROOT\"" --set reference.selection.before_mjd=62026.3 \
+     --survey HLTDS --dataset ou-tds2                              # run 80, live in group 20620
+   rp job local --run 80 --stage import --scope '{"source_dir": "<dir>", "gaia": {"name": "truth-stars-ou-tds2",
+     "version": "TDS-truth", "path": "openuniverse-tds-h158-sca10-stars.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "ou-tds2", "name": "truth-stars-ou-tds2", "version": "TDS-truth"}, "binding": null}]'
+   rp loop --run 80 --filters F158 --scas 10 \
+     --pointings 247,632,1017,1402,1787,2172,14492,15262,16032,28737,29507,30277,42982,44137,56457,57227 \
+     --job-definition rapid-rebuild:62 --interval 60              # 15:02 to 15:22 UTC, exit 0
+   scripts/check_run.sh --run 80 --inspect <dir>
+   python scripts/completeness_ou.py --run 80
+   ```
+
+   Check, held: 29 jobs (1 import, 1 psf, 16 intake, 1 reference, 10
+   difference, 10 packet), each published on its first attempt; every
+   L2 row in field 5329200; the gate held one set (44137, `ring_fraction`
+   −0.025), the other nine sent by their jobs. `check_run.sh`: CLEAN,
+   validate 6/6, reader 10/10 (677 packets), consumer 557/557.
+
+   | per job | median | range |
+   |---|---|---|
+   | psf, galsim draw | 0.45 s | |
+   | intake container | 23.9 s | 18.6 to 25.7 |
+   | intake WCS against the truth stars | (−0.081, −0.069) px | ±0.005; 135 to 148 stars |
+   | L2 `limmag` | 26.8 | 26.76 to 26.83 |
+   | difference container | 292 s | 267 to 327 |
+   | difference `n_candidates`, kept | 2,612, 500 | 2,077 to 3,682; 500 every epoch |
+   | `scalefacref` | 2.22 | 2.17 to 2.27 (HLWAS 0.99) |
+
+   **The count** (`completeness_ou.py`): 761 injected rows (transient
+   rows with realised counts in the frame), of which 410 are evaluated
+   (started after the reference's last frame, no counts in any reference
+   frame), 348 have counts in a reference frame and 3 started before its
+   end without any; only the 410 are counted.
+
+   | AB | evaluated | detected | alerted |
+   |---|---|---|---|
+   | 21.0 to 23.5 | 8 | 1.00 | 0.50 |
+   | 24.0 | 9 | 1.00 | 0.56 |
+   | 24.5 | 10 | 0.80 | 0.60 |
+   | 25.0 | 14 | 0.50 | 0.14 |
+   | 25.5 | 18 | 0.11 | 0.06 |
+   | 26 and fainter | 361 | 0.003 | 0.003 |
+
+   Every alerted detection is in its image's own field (19 of 19), and
+   16 of the 35 detections fall outside it (the field rule, step 1).
+   Purity over all 677 packets: 21 on transients, 139 bright-flagged, 4
+   on galaxies, 0 on stars, 513 other, which sit at AB 24.5 to 25.5.
+   **The faint end is the source cap's**: every difference keeps dev's
+   500 of 2,077 to 3,682 candidates, and 261 to 500 of the kept are
+   above S/N 20. As a different test, HLWAS injection (part 11 step 9)
+   detected 0.94 to 0.98 to AB 25. Recorded, not changed: the cap and
+   `scalefacref` 2.2 are the next OpenUniverse measurements.
+
+   Run 80, its dataset and the truth-star catalog stay; nothing was
+   deleted.
+
 5. **F213's flux scale: the paired difference, the measured scale against
    the zero points' ratio. The forced scale makes the stars' flux ratio
    right and leaves the ring, so no setting is born.** The experiment, as
