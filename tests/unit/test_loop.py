@@ -6,7 +6,8 @@ is submitted only once its field has ``min_frames`` official L2 rows; each
 field's associate chain submits one epoch at a time in ``mjdobs`` order and
 waits while an earlier exposure of the field is upstream; two fields
 advance in the same pass; a pass with nothing new, pending or to submit is
-drained and the verb exits 0; the listing pages only the observations of
+drained and the verb exits 0, and a packet set still inside its job's
+send window keeps it from draining; the listing pages only the observations of
 the selected filters; the packet stage's Gaia input names the catalog by
 its whole key, dataset included. With ``before_mjd`` set: the reference
 names only rows before it and waits while a selected stem is unpublished;
@@ -231,12 +232,16 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
     monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf"]))
     monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
     monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
     monkeypatch.setattr(loop, "reconcile", lambda conn, run, client: {"retrying": []})
     code = cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
                      "--job-definition", "jd", "--interval", "0"])
     assert code == ExitCode.SUCCESS
     assert '"drained": true' in capsys.readouterr().out
+    summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [stem(1, 1, 1)], lambda item: None,
+                            lambda: {"packets": 0, "sets": [], "waiting": [90]})
+    assert summary["sets_waiting"] == [90] and not summary["drained"]
 
 
 class Batch:

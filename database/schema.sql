@@ -116,6 +116,9 @@ CREATE TABLE jobs (
     ended timestamp with time zone,
     exit_code integer,
     kafka_published_at timestamp with time zone,      -- every packet of its set acknowledged by the topic
+    kafka_partition integer,                         -- the partition its set's acknowledgements named
+    kafka_first_offset bigint,                       -- the first and last offsets they gave; other sets interleave between
+    kafka_last_offset bigint,
     batch_job_id text,                               -- the Batch job of its latest submission; null for a local job
     CHECK ((state = 'published') = (published_attempt IS NOT NULL))
 );

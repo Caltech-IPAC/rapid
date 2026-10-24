@@ -1,33 +1,35 @@
-"""Read a run's packets back from the Kafka topic and compare them with the outbox.
+"""Read a run's packets back from the Kafka topic at their recorded offsets and check them.
 
 Outside the pipeline, like ``read_packets.py``: it never writes to the
-database or the topic, and exits non-zero on any failure. It reads every
-partition of the topic, with no consumer group, from the first offset
-whose timestamp is at or after the earliest ``ended`` of the run's
-stamped packet jobs (a set is produced only after its job ended, so no
-message of the run is earlier; ``offsets_for_times``) to its end offset
-at start, keeps the messages whose key
-``<job>:<sid>`` names one of the run's packet sets stamped
-``kafka_published_at``, and for each kept message checks that:
+database or the topic, and exits non-zero on any failure. Each packet set
+of the run stamped ``kafka_published_at`` carries the partition and the
+first and last offsets its acknowledgements gave
+(``rapidpipe.foundation.publish_kafka.deliver``); the check reads exactly
+those ranges, no consumer group, one partition assigned at a time and its
+overlapping ranges merged and read once (a poll that brings nothing ends
+the range), and identifies a set's own messages within a range
+by the message key (the run's dataset) and the ``rapid-set`` and
+``rapid-sid`` headers: concurrent sets of one dataset interleave in a
+partition, so a range's length is not a count. For every set it checks
+that each of its index's packets was read in its range and no message
+names a packet the index lacks; for a sample of one set per field (the
+latest stamped of the field), it also checks that each message decodes as
+a one-record Avro container whose record validates against the schema
+version its index row names (``read_packets.py``'s check) and that its
+bytes equal the outbox's (the container header and the packet's block).
+That is the per-run contract: the acknowledgements, every set counted,
+and the sample compared byte for byte (byte equality of every packet was
+milestone 8's proof). A stamped set without recorded offsets (stamped
+before they were recorded) is a failure, never read.
 
-- it decodes as a one-record Avro container whose record validates against
-  the schema version its index row names (``read_packets.py``'s check);
-- its bytes equal the outbox's for that key (the container header and the
-  packet's block, :func:`rapidpipe.foundation.publish_kafka.messages`);
-
-and that every packet of every stamped set was seen at least once. It
-reads the topic in order and holds one set's outbox at a time and no
-message after comparing it; what it keeps across the topic is the set of
-packet keys expected and seen. The verdict is one line: messages read, kept, valid, byte-equal, packets
-expected and seen, and the offset range read per partition. Zero kept
-messages is a failure; a run with no stamped set reads nothing and says
-so.
+The verdict is one line: messages read, kept, valid, byte-equal, packets
+expected and seen, sets and sets sampled, and the offset ranges read per
+partition. A run with no stamped set reads nothing and says so.
 
 The client skips its record-batch CRC check: kafka-python without the
-``crc32c`` C module computes CRC-32C in pure Python, which held the read
-to about 50 messages a second (2026-10-23, a 600 thousand message topic:
-three to four hours per run), and every kept message is compared byte
-for byte with the outbox anyway.
+``crc32c`` C module computes CRC-32C in pure Python, about 50 messages a
+second (2026-10-23), and every sampled message is compared byte for byte
+with the outbox anyway.
 
 Usage::
 
@@ -58,82 +60,109 @@ from rapidpipe.science.alerts.assemble import load_schema
 SHIPPED = Path(__file__).resolve().parents[1] / "rapidpipe" / "settings" / "foundation-thin.toml"
 
 
-def earliest_ended(conn, jobs: list[int]):
-    """The earliest ``ended`` of ``jobs``: no message of their sets was produced before it."""
-    return publish_kafka._query(conn, "SELECT min(ended) AS t FROM jobs WHERE id = ANY(%s)",
-                                (jobs,))[0]["t"]
+def stamped_sets(conn, run: int) -> list[dict]:
+    """The run's stamped packet sets: ``job``, ``dataset``, ``partition``, ``first``, ``last``, ``field``."""
+    return publish_kafka._query(conn, """
+        SELECT j.id AS job, r.dataset, j.kafka_partition AS partition,
+               j.kafka_first_offset AS first, j.kafka_last_offset AS last,
+               (SELECT min(l.field) FROM l2files l WHERE l.dataset = r.dataset
+                  AND l.expid = (j.scope->>'expid')::integer AND l.sca = (j.scope->>'sca')::smallint
+                  AND l.fid = (j.scope->>'fid')::smallint) AS field
+        FROM jobs j JOIN runs r ON r.id = j.run
+        WHERE j.run = %s AND j.stage = 'packet' AND j.kafka_published_at IS NOT NULL
+        ORDER BY j.id""", (run,))
 
 
-def stamped_sets(conn, run: int) -> list[int]:
-    return [r["job"] for r in publish_kafka._query(
-        conn, "SELECT id AS job FROM jobs WHERE run = %s AND stage = 'packet'"
-              " AND kafka_published_at IS NOT NULL ORDER BY id", (run,))]
+def sample(sets: list[dict]) -> set[int]:
+    """One set per field, the latest stamped (the highest job id) of each."""
+    latest: dict = {}
+    for s in sets:
+        latest[s["field"]] = max(latest.get(s["field"], 0), s["job"])
+    return set(latest.values())
 
 
-def expected_keys(conn, jobs: list[int]) -> set[bytes]:
-    """Every packet key ``<job>:<sid>`` of ``jobs``, from the index alone."""
-    return {f"{r['job']}:{r['sid']}".encode() for r in publish_kafka._query(
-        conn, "SELECT job, sid FROM packets WHERE job = ANY(%s)", (jobs,))}
+def index_sids(conn, jobs: list[int]) -> dict[int, set[int]]:
+    """Every packet ``sid`` of each of ``jobs``, from the index alone."""
+    out: dict[int, set[int]] = {job: set() for job in jobs}
+    for r in publish_kafka._query(conn, "SELECT job, sid FROM packets WHERE job = ANY(%s)", (jobs,)):
+        out[r["job"]].add(r["sid"])
+    return out
 
 
-def outbox(conn, job: int) -> tuple[dict[bytes, bytes], dict[bytes, str]]:
-    """One set's outbox bytes and schema version for each of its packet keys."""
+def outbox(conn, job: int) -> tuple[dict[int, bytes], dict[int, str]]:
+    """One set's outbox bytes and schema version for each of its packets, by ``sid``."""
     index = publish_kafka._query(conn, "SELECT sid, filename, byte_offset, byte_length,"
-                                       " schema_version FROM packets WHERE job = %s", (job,))
-    return (dict(publish_kafka.messages(job, index)),
-            {f"{job}:{r['sid']}".encode(): r["schema_version"] for r in index})
+                                       " schema_version FROM packets WHERE job = %s ORDER BY sid", (job,))
+    return dict(publish_kafka.messages(index)), {r["sid"]: r["schema_version"] for r in index}
 
 
-def check(messages: Iterable[tuple[bytes, bytes]], keys: set[bytes],
-          load: Callable[[int], tuple[dict[bytes, bytes], dict[bytes, str]]]) -> tuple[dict, list[str]]:
-    """Counts and failures for ``(key, value)`` messages against the outbox of the sets ``keys`` name.
+def merged_ranges(sets: list[dict]) -> dict[int, list[tuple[int, int]]]:
+    """Per partition, the sets' inclusive offset ranges with overlapping or adjacent ones merged."""
+    by: dict[int, list[tuple[int, int]]] = {}
+    for s in sorted(sets, key=lambda s: (s["partition"], s["first"])):
+        spans = by.setdefault(s["partition"], [])
+        if spans and s["first"] <= spans[-1][1] + 1:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], s["last"]))
+        else:
+            spans.append((s["first"], s["last"]))
+    return by
 
-    ``load(job)`` gives one set's outbox; one set is held at a time, loaded
-    when a message of another set arrives (a set's messages are produced
-    together, so each set is loaded once unless it was replayed), and no
-    message is kept after it is compared.
+
+def check(messages: Iterable[tuple[bytes, list, bytes]], sets: dict[int, dict],
+          load: Callable[[int], tuple[dict[int, bytes], dict[int, str]]]) -> tuple[dict, list[str]]:
+    """Counts and failures for ``(key, headers, value)`` messages against the sets ``sets`` names.
+
+    ``sets`` maps a job to its ``dataset``, its index's ``sids`` and whether
+    it is ``sampled``. A message is the set's when its key is the set's
+    dataset and its headers name the set. ``load(job)`` gives a sampled
+    set's outbox, loaded at its first message and dropped once every one of
+    its packets has been seen.
     """
-    jobs = {key.split(b":", 1)[0] for key in keys}
     counts = {"read": 0, "kept": 0, "valid": 0, "byte_equal": 0}
-    seen, failures, held, values, versions = set(), [], None, {}, {}
-    for key, value in messages:
+    seen: dict[int, set[int]] = {job: set() for job in sets}
+    failures: list[str] = []
+    held: dict[int, tuple[dict[int, bytes], dict[int, str]]] = {}
+    for key, headers, value in messages:
         counts["read"] += 1
-        if key is None or (job := key.split(b":", 1)[0]) not in jobs:
+        found = publish_kafka.identity(headers)
+        if found is None or found[0] not in sets or key != sets[found[0]]["dataset"].encode():
             continue
+        job, sid = found
         counts["kept"] += 1
-        if job != held:
-            held = job
-            values, versions = load(int(job))
-        if key not in values:
-            failures.append(f"{key.decode()}: no such packet in the outbox")
+        if sid not in sets[job]["sids"]:
+            failures.append(f"{job}:{sid}: no such packet in the index")
             continue
-        seen.add(key)
+        seen[job].add(sid)
+        if not sets[job]["sampled"]:
+            continue
+        if job not in held:
+            held[job] = load(job)
+        values, versions = held[job]
         try:
             records = list(fastavro.reader(io.BytesIO(value)))
         except Exception as error:  # noqa: BLE001 - an undecodable message is the failure reported
-            failures.append(f"{key.decode()}: does not decode ({error})")
+            failures.append(f"{job}:{sid}: does not decode ({error})")
             records = []
         if len(records) == 1 and fastavro.validation.validate(
-                records[0], load_schema(versions[key]), raise_errors=False):
+                records[0], load_schema(versions[sid]), raise_errors=False):
             counts["valid"] += 1
         elif records:
-            failures.append(f"{key.decode()}: {len(records)} records, or not valid {versions[key]}")
-        if value == values[key]:
+            failures.append(f"{job}:{sid}: {len(records)} records, or not valid {versions[sid]}")
+        if value == values[sid]:
             counts["byte_equal"] += 1
         else:
-            failures.append(f"{key.decode()}: bytes differ from the outbox")
-    counts["expected"], counts["seen"] = len(keys), len(seen)
-    failures += [f"{key.decode()}: never read" for key in sorted(keys - seen)]
-    if counts["kept"] == 0:
-        failures.append("no message of the run's stamped packet sets was read")
+            failures.append(f"{job}:{sid}: bytes differ from the outbox")
+        if seen[job] == sets[job]["sids"]:
+            del held[job]
+    counts["expected"] = sum(len(s["sids"]) for s in sets.values())
+    counts["seen"] = sum(len(s) for s in seen.values())
+    failures += [f"{job}:{sid}: never read" for job in sorted(sets)
+                 for sid in sorted(sets[job]["sids"] - seen[job])]
     return counts, failures
 
 
-def read_topic(settings: dict, since_ms: int,
-               ranges: dict[int, tuple[int, int]]) -> Iterator[tuple[bytes, bytes]]:
-    """Every message of every partition from the first whose timestamp is at or after
-    ``since_ms`` (milliseconds since the epoch) to the end offset at start, one at a time;
-    ``ranges`` receives each partition's offsets read."""
+def read_ranges(settings: dict, ranges: dict[int, list[tuple[int, int]]]) -> Iterator[tuple[bytes, list, bytes]]:
+    """``(key, headers, value)`` of every message in each partition's inclusive ``ranges``, in order."""
     from kafka import KafkaConsumer, TopicPartition
 
     endpoint = publish_kafka.endpoint(settings)
@@ -142,23 +171,18 @@ def read_topic(settings: dict, since_ms: int,
                              fetch_max_bytes=endpoint["max_request_bytes"],
                              **publish_kafka.client_config(endpoint["bootstrap_servers"]))
     try:
-        partitions = [TopicPartition(endpoint["topic"], p)
-                      for p in sorted(consumer.partitions_for_topic(endpoint["topic"]) or ())]
-        consumer.assign(partitions)
-        last = consumer.end_offsets(partitions)
-        found = consumer.offsets_for_times({tp: since_ms for tp in partitions})
-        first = {tp: last[tp] if found[tp] is None else found[tp].offset for tp in partitions}
-        ranges.update({tp.partition: (first[tp], last[tp] - 1) for tp in partitions})
-        for tp in partitions:
-            consumer.seek(tp, first[tp])
-        pending = {tp for tp in partitions if last[tp] > first[tp]}
-        while pending:
-            for tp, batch in consumer.poll(timeout_ms=10000).items():
-                for message in batch:
-                    if message.offset < last[tp]:
-                        yield message.key, message.value
-                if consumer.position(tp) >= last[tp]:
-                    pending.discard(tp)
+        for partition, spans in sorted(ranges.items()):
+            tp = TopicPartition(endpoint["topic"], partition)
+            consumer.assign([tp])
+            for first, last in spans:
+                consumer.seek(tp, first)
+                while (position := consumer.position(tp)) <= last:
+                    batch = consumer.poll(timeout_ms=10000).get(tp, [])
+                    for message in batch:
+                        if first <= message.offset <= last:
+                            yield message.key, message.headers, message.value
+                    if not batch and consumer.position(tp) == position:
+                        break       # nothing more arrives: what was not read is reported as never read
     finally:
         consumer.close()
 
@@ -170,24 +194,28 @@ def main(argv: list[str] | None = None) -> int:
                         help="a TOML file whose [kafka] table names the SSM parameters")
     args = parser.parse_args(argv)
     settings = tomllib.loads(args.settings.read_text())["kafka"]
-    ranges: dict[int, tuple[int, int]] = {}
     with connect(application_name="consume_packets") as conn:
-        jobs = stamped_sets(conn, args.run)
-        keys = expected_keys(conn, jobs)
+        stamped = stamped_sets(conn, args.run)
+        located = [s for s in stamped if s["partition"] is not None and s["first"] is not None]
+        failures = [f"packet set {s['job']}: stamped without acknowledgement offsets"
+                    for s in stamped if s not in located]
+        sampled, sids = sample(located), index_sids(conn, [s["job"] for s in located])
+        sets = {s["job"]: {"dataset": s["dataset"], "sids": sids[s["job"]], "sampled": s["job"] in sampled}
+                for s in located}
+        ranges = merged_ranges(located)
         started = time.monotonic()
-        if jobs:
-            since_ms = int(earliest_ended(conn, jobs).timestamp() * 1000)
-            messages = read_topic(settings, since_ms, ranges)
-        else:
+        if not stamped:
             print(f"Run {args.run} has no stamped packet set: nothing read")
-            messages = iter(())
-        counts, failures = check(messages, keys, lambda job: outbox(conn, job))
+        messages = read_ranges(settings, ranges) if ranges else iter(())
+        counts, more = check(messages, sets, lambda job: outbox(conn, job))
+        failures += more
         seconds = time.monotonic() - started
     verdict = "CLEAN" if not failures else f"{len(failures)} FAILURES"
-    offsets = ", ".join(f"p{p} {a}..{b}" for p, (a, b) in sorted(ranges.items()))
+    offsets = ", ".join(f"p{p} {a}..{b}" for p, spans in sorted(ranges.items()) for a, b in spans)
     print(f"Consumer check run {args.run}: {verdict}; read {counts['read']}, kept {counts['kept']},"
           f" valid {counts['valid']}, byte-equal {counts['byte_equal']}, packets expected"
-          f" {counts['expected']} seen {counts['seen']}; partitions {offsets}; {seconds:.1f} s")
+          f" {counts['expected']} seen {counts['seen']}; sets {len(stamped)} sampled {len(sampled)};"
+          f" ranges {offsets or 'none'}; {seconds:.1f} s")
     for failure in failures:
         print(f"- {failure}")
     return 0 if not failures else 1

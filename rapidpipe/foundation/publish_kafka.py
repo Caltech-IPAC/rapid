@@ -1,40 +1,56 @@
-"""Official packet sets onto the Kafka topic: ``rapidpipe publish --run <id>``.
+"""Official packet sets onto the Kafka topic: the packet job's last act, and ``rapidpipe publish``.
 
 The publisher that writes rows is :mod:`rapidpipe.foundation.publish`; this
-module is the transport. For every packet job of the run whose packet set
-is official (an open ``packets`` binding) and whose
-``jobs.kafka_published_at`` is null, it reads each packet's Avro bytes from
-the outbox (the container the ``packets`` index names, through
-:func:`rapidpipe.foundation.prefix.get`) and produces one message per
-packet:
+module is the transport, and :func:`deliver` is its one send boundary. A
+packet job that its publisher has just loaded and bound sends its own set
+there as its last act (``job run``, ``job local``); ``rapidpipe publish
+--run <id>``, and the loop's per-pass publish step, call it for every
+official packet set of the run (an open ``packets`` binding) whose
+``jobs.kafka_published_at`` is null: the re-publication verb, and the
+recovery sweep for a container that died between its database publish and
+its acknowledgements, so the set is sent without rerunning its science.
+The sweep leaves a set alone for :data:`SETTLE_S` after its job ended,
+the container's own window to send it, so the two paths do not both send
+one set; a set inside that window is reported as ``waiting``.
 
-- key ``<packet set job id>:<sid>``, the foundation's packet identity;
+Each packet of a set is read from the outbox (the container the
+``packets`` index names, through :func:`rapidpipe.foundation.prefix.get`)
+and sent as one message:
+
+- key the run's dataset, so a dataset's messages share one partition
+  and keep their order there;
+- headers ``rapid-set`` (the packet set's job id) and ``rapid-sid`` (the
+  packet's ``sid``), the foundation's packet identity, as decimal ASCII;
 - value the container's header (its schema included) followed by the
   packet's one block, exactly the bytes ``scripts/read_packets.py``
   decodes for that index row: a one-record Avro object container, no
   registry.
 
-One pass opens one database connection and, set by set, produces a set's
-messages, flushes the producer and stamps the set (``kafka_published_at``)
-only when every one of its messages was acknowledged, so no message waits
-in the producer behind a whole pass (2026-10-23: five loops' passes of
-thousands of packets each, queued before one flush, outwaited the client's
-delivery timeout, and kafka-python 3.0.11's expiry path then killed its
-sender thread and left ``flush()`` waiting for ever). A set with a failed
-acknowledgement keeps a null stamp while the others are stamped; a flush
-that does not finish in :data:`ACK_TIMEOUT_S` stops the pass there. Either
-way the pass then raises, so the verb exits non-zero and the next
-``publish`` sends the unstamped sets again. A crash between
-the acknowledgements and the stamps likewise replays the sets on the next
-run; that is allowed (an internal topic, and consumers key on the
-identity), and nothing here tries to be exactly-once.
+A set's messages are produced, the producer flushed, every acknowledgement
+read, and only then is the set stamped: ``kafka_published_at`` with the
+partition and the first and last offsets its acknowledgements gave
+(``kafka_partition``, ``kafka_first_offset``, ``kafka_last_offset`` on the
+set's job row), which ``scripts/consume_packets.py`` seeks to. Concurrent
+sets of one dataset interleave in the partition, so the range's length is
+not the set's count. No message waits in the producer behind another set
+(2026-10-23: five loops' passes of thousands of packets each, queued
+before one flush, outwaited the client's delivery timeout, and
+kafka-python 3.0.11's expiry path then killed its sender thread and left
+``flush()`` waiting for ever). A failed acknowledgement leaves the set's
+stamp null; a flush that does not finish in :data:`ACK_TIMEOUT_S` stops a
+``publish`` pass there; either way ``publish`` then raises, so the verb
+exits non-zero and the next pass sends the unstamped sets again. A crash
+between the acknowledgements and the stamp likewise replays the set, and
+the stamp records the replay's offsets; that is allowed (an internal
+topic, and consumers key on the identity), and nothing here tries to be
+exactly-once.
 
 Settings: the ``[kafka]`` table of a settings file (``--settings``, by
-default the shipped ``rapidpipe/settings/foundation-thin.toml``) names the
-SSM parameters that hold the bootstrap servers, the topic and the maximum
-request size, never their values. The cluster's auth is IAM
-(``SASL_SSL``/``OAUTHBEARER`` with ``aws_msk_iam_sasl_signer``) under the
-caller's AWS credentials and region.
+default the shipped ``rapidpipe/settings/foundation-thin.toml``; the run's
+own body for a packet job) names the SSM parameters that hold the
+bootstrap servers, the topic and the maximum request size, never their
+values. The cluster's auth is IAM (``SASL_SSL``/``OAUTHBEARER`` with
+``aws_msk_iam_sasl_signer``) under the caller's AWS credentials and region.
 """
 
 from __future__ import annotations
@@ -53,10 +69,17 @@ logger = logging.getLogger(__name__)
 
 #: Seconds to wait for one set's flush, and then for each of its acknowledgements.
 ACK_TIMEOUT_S = 120
+#: Seconds after a packet job ended during which the sweep leaves its set to the job's own send:
+#: the endpoint read and the connection, one flush and its acknowledgements, with a margin.
+SETTLE_S = 2 * ACK_TIMEOUT_S + 60
 
 
 class PublishError(RuntimeError):
     """A pass left one or more sets unstamped after a failed acknowledgement."""
+
+
+class FlushStalled(RuntimeError):
+    """The producer's flush did not finish: it is no longer draining."""
 
 
 def _query(conn, sql: str, params=()) -> list[dict]:
@@ -67,13 +90,22 @@ def _query(conn, sql: str, params=()) -> list[dict]:
     return rows
 
 
-def unpublished_sets(conn, run: int) -> list[int]:
-    """The run's official packet sets not yet stamped, by job id."""
-    return [r["job"] for r in _query(conn, """
-        SELECT j.id AS job FROM jobs j
-        JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = j.id
-        WHERE j.run = %s AND j.stage = 'packet' AND j.kafka_published_at IS NULL
-        ORDER BY j.id""", (run,))]
+_UNSTAMPED = """
+    SELECT j.id AS job, j.ended IS NOT NULL AND j.ended > now() - make_interval(secs => %s) AS settling
+    FROM jobs j
+    JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = j.id
+    WHERE j.run = %s AND j.stage = 'packet' AND j.kafka_published_at IS NULL
+    ORDER BY j.id"""
+
+
+def unpublished_sets(conn, run: int, settle_s: float = SETTLE_S) -> list[int]:
+    """The run's official packet sets not yet stamped whose job ended more than ``settle_s`` ago."""
+    return [r["job"] for r in _query(conn, _UNSTAMPED, (settle_s, run)) if not r["settling"]]
+
+
+def settling_sets(conn, run: int, settle_s: float = SETTLE_S) -> list[int]:
+    """The run's official packet sets not yet stamped whose job ended within ``settle_s``."""
+    return [r["job"] for r in _query(conn, _UNSTAMPED, (settle_s, run)) if r["settling"]]
 
 
 def set_index(conn, job: int) -> list[dict]:
@@ -82,15 +114,37 @@ def set_index(conn, job: int) -> list[dict]:
                         " WHERE job = %s ORDER BY sid", (job,))
 
 
-def stamp(conn, job: int) -> None:
-    """Record that every packet of ``job``'s set was acknowledged by the topic."""
+def set_dataset(conn, job: int) -> str:
+    """The dataset of ``job``'s run: the messages' key."""
+    return _query(conn, "SELECT r.dataset FROM jobs j JOIN runs r ON r.id = j.run"
+                        " WHERE j.id = %s", (job,))[0]["dataset"]
+
+
+def stamp(conn, job: int, partition: int, first: int, last: int) -> None:
+    """Record that every packet of ``job``'s set was acknowledged, in ``partition`` from ``first`` to ``last``."""
     with conn.cursor() as cur:
-        cur.execute("UPDATE jobs SET kafka_published_at = now() WHERE id = %s", (job,))
+        cur.execute("UPDATE jobs SET kafka_published_at = now(), kafka_partition = %s,"
+                    " kafka_first_offset = %s, kafka_last_offset = %s WHERE id = %s",
+                    (partition, first, last, job))
     conn.commit()
 
 
-def messages(job: int, index: list[dict]) -> list[tuple[bytes, bytes]]:
-    """``(key, value)`` for every packet of a set, in the index's order."""
+def headers(job: int, sid: int) -> list[tuple[str, bytes]]:
+    """A packet message's identity headers."""
+    return [("rapid-set", str(job).encode()), ("rapid-sid", str(sid).encode())]
+
+
+def identity(message_headers) -> tuple[int, int] | None:
+    """``(set, sid)`` from a message's headers, or ``None`` when it carries no identity."""
+    found = dict(message_headers or ())
+    try:
+        return int(found["rapid-set"]), int(found["rapid-sid"])
+    except (KeyError, ValueError):
+        return None
+
+
+def messages(index: list[dict]) -> list[tuple[int, bytes]]:
+    """``(sid, value)`` for every packet of a set, in the index's order."""
     containers: dict[str, tuple[bytes, int]] = {}
     out = []
     for row in index:
@@ -99,55 +153,79 @@ def messages(job: int, index: list[dict]) -> list[tuple[bytes, bytes]]:
             containers[row["filename"]] = (data, next(fastavro.block_reader(io.BytesIO(data))).offset)
         data, header_end = containers[row["filename"]]
         start = row["byte_offset"]
-        out.append((f"{job}:{row['sid']}".encode(),
-                    data[:header_end] + data[start:start + row["byte_length"]]))
+        out.append((row["sid"], data[:header_end] + data[start:start + row["byte_length"]]))
     return out
 
 
+def deliver(conn, job: int, producer: Any, topic: str) -> dict[str, Any]:
+    """Send packet set ``job``, flush, read every acknowledgement and stamp the set.
+
+    Returns the set's ``packets``, ``bytes``, ``largest`` message,
+    ``partition``, ``first`` and ``last`` offsets. A flush that does not
+    finish raises :class:`FlushStalled`, and a failed acknowledgement its
+    own error, with nothing stamped.
+    """
+    dataset = set_dataset(conn, job).encode()
+    batch = messages(set_index(conn, job))
+    futures = [producer.send(topic, key=dataset, value=value, headers=headers(job, sid))
+               for sid, value in batch]
+    try:
+        producer.flush(timeout=ACK_TIMEOUT_S)
+    except Exception as error:  # noqa: BLE001 - whatever the client raised, it is not draining
+        raise FlushStalled(f"packet set {job}: the flush did not finish ({error})") from error
+    acks = [future.get(timeout=ACK_TIMEOUT_S) for future in futures]
+    partitions = {ack.partition for ack in acks}
+    if len(partitions) > 1:
+        raise RuntimeError(f"packet set {job}: acknowledged in partitions {sorted(partitions)}, not one")
+    sizes = [len(value) for _, value in batch]
+    result = {"job": job, "packets": len(batch), "bytes": sum(sizes), "largest": max(sizes, default=0),
+              "partition": next(iter(partitions), None),
+              "first": min((a.offset for a in acks), default=None),
+              "last": max((a.offset for a in acks), default=None)}
+    stamp(conn, job, result["partition"], result["first"], result["last"])
+    logger.info("packet set %d: %d packets, %d bytes acknowledged in partition %s offsets %s..%s; stamped",
+                job, result["packets"], result["bytes"], result["partition"], result["first"], result["last"])
+    return result
+
+
 def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> dict[str, Any]:
-    """Produce every unstamped official packet set of ``run`` to ``topic``, one set at a time, each
-    flushed and stamped when its every message was acknowledged.
+    """Send every unstamped official packet set of ``run`` to ``topic`` through :func:`deliver`,
+    one set at a time, except those inside their job's :data:`SETTLE_S`.
 
     ``connect()`` is a context manager yielding a connection, opened once for
-    the pass (the unstamped sets, every set's index and the stamps);
-    ``producer`` has kafka-python's ``send(topic, key=, value=)`` returning a
-    future and ``flush(timeout=)``. Returns the sets stamped, packets, bytes,
-    the largest message and the wall time. A set with a failed acknowledgement
-    is left unstamped and the next set is tried; a flush that times out leaves
-    its set and every later one unstamped; then :class:`PublishError` names
-    the sets that failed.
+    the pass; ``producer`` has kafka-python's ``send(topic, key=, value=,
+    headers=)`` returning a future and ``flush(timeout=)``. Returns the sets
+    stamped, packets, bytes, the largest message, the sets left ``waiting``
+    in their settle window and the wall time. A set with a failed
+    acknowledgement is left unstamped and the next set is tried; a flush
+    that times out leaves its set and every later one unstamped; then
+    :class:`PublishError` names the sets that failed.
     """
     started = time.monotonic()
     sets, failed, packets, total, largest = [], {}, 0, 0, 0
     with connect() as conn:
+        waiting = settling_sets(conn, run)
         for job in unpublished_sets(conn, run):
-            batch = messages(job, set_index(conn, job))
-            futures = [producer.send(topic, key=key, value=value) for key, value in batch]
             try:
-                producer.flush(timeout=ACK_TIMEOUT_S)
-            except Exception as error:  # noqa: BLE001 - the producer is no longer draining: stop the pass
+                sent = deliver(conn, job, producer, topic)
+            except FlushStalled as error:
                 failed[job] = error
-                logger.error("packet set %d: the flush did not finish (%s); the pass stops here", job, error)
+                logger.error("%s; the pass stops here", error)
                 break
-            try:
-                for future in futures:
-                    future.get(timeout=ACK_TIMEOUT_S)
             except Exception as error:  # noqa: BLE001 - any failed acknowledgement leaves the set unstamped
                 failed[job] = error
                 logger.error("packet set %d: an acknowledgement failed (%s); left unstamped", job, error)
                 continue
-            stamp(conn, job)
-            sizes = [len(value) for _, value in batch]
-            logger.info("packet set %d: %d packets, %d bytes produced and stamped", job, len(batch), sum(sizes))
             sets.append(job)
-            packets += len(batch)
-            total += sum(sizes)
-            largest = max([largest, *sizes])
+            packets += sent["packets"]
+            total += sent["bytes"]
+            largest = max(largest, sent["largest"])
     if failed:
         raise PublishError(f"run {run}: packet sets {sorted(failed)} left unstamped after a failed"
                            f" acknowledgement ({next(iter(failed.values()))}); stamped {sets}")
     return {"run": run, "topic": topic, "sets": sets, "packets": packets, "bytes": total,
-            "largest_message": largest, "seconds": round(time.monotonic() - started, 3)}
+            "largest_message": largest, "waiting": waiting,
+            "seconds": round(time.monotonic() - started, 3)}
 
 
 def endpoint(kafka_settings: dict, ssm: Any = None) -> dict[str, Any]:

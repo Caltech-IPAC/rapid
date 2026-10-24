@@ -78,7 +78,10 @@ One pass, in order:
   field's difference images and L2 rows in the forced window, the epoch's
   source set and the field's earlier packet sets.
 - ``kafka``: the caller's ``publish()`` over the run's unstamped official
-  packet sets.
+  packet sets: each packet job sends its own set as its last act, so this
+  is the recovery sweep for a set whose job died before its
+  acknowledgements, and a set still inside its job's send window is
+  reported under ``sets_waiting`` and keeps the selection from draining.
 """
 
 from __future__ import annotations
@@ -548,8 +551,9 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     produced = publish() if publish is not None else {"packets": 0, "sets": []}
     counts["packets_produced"] = produced["packets"]
     counts["sets_produced"] = produced["sets"]
+    counts["sets_waiting"] = produced.get("waiting", [])
     counts["drained"] = (counts["new"] == 0 and not submissions
-                         and not any(counts["pending"].values()))
+                         and not any(counts["pending"].values()) and not counts["sets_waiting"])
     if checked is not None:
         counts["batch"] = checked
     return {"run": run, "selection": selection.summary(), **counts}
