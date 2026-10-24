@@ -37,6 +37,10 @@ limmag_maxiters = 10
 # (commissioning #238's DQMASKBITS, pipeline/dqMaskSubs.py). 0 is dev's
 # behaviour: nothing masked, DQ written and never read.
 dq_mask_bits = 0
+# New, not dev's: pixels [dx, dy] added to CRPIX1 and CRPIX2 at intake, a
+# dataset's measured WCS translation (measured minus predicted star
+# position). [0.0, 0.0] is dev's behaviour: the file's WCS unchanged.
+crpix_shift = [0.0, 0.0]
 # Re-derive the gWCS from the file's meta.wcsinfo and its own distortion
 # reference (fetched by name from [psf] crds_server) before the SIP fit:
 # the GBTDS WCS fix (STScI roman_notebooks fix_gbtds_wcs.py). false is dev's

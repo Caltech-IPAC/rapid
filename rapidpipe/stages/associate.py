@@ -14,8 +14,11 @@ Scope: ``{"field": <tessellation id>}``. Recorded inputs:
 - ``input`` rows of product ``sources``: the epoch's source sets (the
   field's and its neighbours'; on the branch the neighbour pass read the
   same sets' sources in the neighbouring fields). Sources are accepted
-  with ``flags = [associate] source_flags`` and ``fluxfit / fluxerr >=
-  [associate] min_snr``. Pass 1 takes those in the field, pass 2 those in
+  with ``flags`` equal to ``[associate] source_flags`` once the
+  informational bits are cleared
+  (:data:`rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS`, the
+  bright footprint: a flagged source is associated) and ``fluxfit /
+  fluxerr >= [associate] min_snr``. Pass 1 takes those in the field, pass 2 those in
   its neighbours (:func:`rapidpipe.science.spatial.field_neighbours`);
 - at most one ``input`` row of product ``objects``: the predecessor object
   set (none for a field's first epoch), whose objects and sums this set
@@ -42,6 +45,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from rapidpipe.foundation.local import JobContext
+from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS
 from rapidpipe.science.crossmatch.catalog import field_inclusion_cone
 from rapidpipe.science.crossmatch.memory import Catalog, Source, associate
 from rapidpipe.science.spatial import field_neighbours
@@ -61,7 +65,7 @@ MATCHES_SCHEMA = pa.schema([("aid", pa.int64()), ("source_job", pa.int64()), ("s
 
 SOURCES_SQL = (
     "SELECT job, sid, expid, mjdobs, field, ra, dec, fluxfit FROM sources"
-    " WHERE job = ANY(%s) AND field = ANY(%s) AND flags = %s"
+    " WHERE job = ANY(%s) AND field = ANY(%s) AND flags & ~%s = %s"
     " AND fluxerr > 0 AND fluxfit / fluxerr >= %s")
 
 OBJECTS_SQL = (
@@ -101,7 +105,7 @@ def _read(job: JobContext, field: int, neighbours: list[int], source_sets: list[
     """Everything the job reads, in one short transaction."""
     settings = job.settings["associate"]
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute(SOURCES_SQL, (source_sets, [field, *neighbours],
+        cur.execute(SOURCES_SQL, (source_sets, [field, *neighbours], INFORMATIONAL_SOURCE_FLAGS,
                                   int(settings["source_flags"]), float(settings["min_snr"])))
         rows = cur.fetchall()
         sources = [Source(*r[:7]) for r in rows]

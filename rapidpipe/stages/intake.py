@@ -41,6 +41,16 @@ own NaN (``nan_input``), the masked pixels (``masked``) and the NaN written
 (``nan_output``, their union); ``metrics.masked_fraction`` is ``masked``
 over the image's pixels.
 
+``[intake] crpix_shift`` is a translation of the WCS, ``[dx, dy]`` pixels
+added to ``CRPIX1`` and ``CRPIX2`` of every HDU that carries them, before
+anything reads the header (``[0, 0]``, `dev`'s behaviour, moves nothing): a
+dataset whose WCS sits off its own stars by a constant measured offset
+carries the correction on its overlay. When the job names the dataset's
+Gaia ``catalogs`` product as an input (the loop does once one is official),
+``metrics`` records ``gaia_dx_px``, ``gaia_dy_px`` and ``n_gaia_stars``,
+the median offset of the frame's stars from the copy through the shifted
+WCS, measured minus predicted (:mod:`rapidpipe.science.astrometry`).
+
 ``[intake] rederive_wcs`` (false, `dev`'s behaviour: the file's gWCS) is
 the GBTDS WCS fix: the stage fetches the distortion reference the file
 names (``meta.ref_file.distortion``) by name from ``[psf] crds_server``
@@ -73,6 +83,7 @@ from astropy.wcs import WCS
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.science.astrometry import gaia_offset
 from rapidpipe.science.intake import asdf_to_fits, gzip_file
 from rapidpipe.science.limmag import limiting_magnitude
 from rapidpipe.science.spatial import (
@@ -147,12 +158,16 @@ def run(job: JobContext) -> None:
             created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             dq_mask_bits=int(settings["dq_mask_bits"]))
         lap("convert")
+        shift = [float(v) for v in settings["crpix_shift"]]
+        if any(shift):
+            _shift_crpix(fits_path, shift)
         gzip_file(fits_path, job.path / fits_name, int(settings["gzip_level"]))
         lap("gzip")
         with fits.open(fits_path) as hdul:
             primary, header = hdul[0].header.copy(), hdul[1].header.copy()
             n_pixels = int(hdul[1].data.size)
             nan_output = int(np.count_nonzero(np.isnan(hdul[1].data)))
+            gaia = _gaia_metrics(job, hdul[1].data, WCS(header))
         _check_key(stem, ids, header)
         fid = FIDS[header["FILTER"]]
         psf = _science_psf(job, fid, ids["sca"])
@@ -160,7 +175,7 @@ def run(job: JobContext) -> None:
         limmag = limiting_magnitude(fits_path, psf,
                                     settings["limmag_nsigma"], settings["limmag_clip_sigma"],
                                     settings["limmag_maxiters"])
-        lap("limmag")
+        lap("limmag" if gaia is None else "limmag_gaia")
         fits_bytes = fits_path.stat().st_size
 
     key = {"dataset": job.dataset, "expid": expid(ids), "sca": ids["sca"], "fid": fid}
@@ -191,7 +206,8 @@ def run(job: JobContext) -> None:
         provenance={**ids,
                     "romancal": primary.get("HIERARCH meta calibration_software_version"),
                     "wcs_fit_results": fit},
-        dq=dq, wcs=wcs, metrics=metrics,
+        dq=dq, wcs=wcs, metrics={**metrics, **(gaia or {})},
+        crpix_shift=shift,
         conversion={"hdus": conversion["hdus"], "asdf_bytes": asdf_path.stat().st_size,
                     "fits_bytes": fits_bytes, "fits_gz_bytes": (job.path / fits_name).stat().st_size,
                     "timings_s": timings})
@@ -239,6 +255,32 @@ def _check_epsf(stem: str, primary, psf: Path) -> None:
     if named is not None and own is not None and PurePosixPath(str(own)).name != named:
         raise ValueError(f"{stem}: the file names the ePSF reference {own}; its science PSF is "
                          f"from {named}")
+
+
+def _shift_crpix(path: Path, shift: list[float]) -> None:
+    """Add ``shift`` to ``CRPIX1`` and ``CRPIX2`` of every HDU of the FITS file that has them."""
+    with fits.open(path, mode="update") as hdul:
+        for hdu in hdul:
+            for axis, delta in enumerate(shift, start=1):
+                if f"CRPIX{axis}" in hdu.header:
+                    hdu.header[f"CRPIX{axis}"] += delta
+
+
+def _gaia_metrics(job: JobContext, image, wcs) -> dict | None:
+    """The Gaia offset metrics, when the job names a ``catalogs`` input; else ``None``."""
+    named = [i for i in job.inputs if i["kind"] == "input" and i["product"] == "catalogs"]
+    if not named:
+        return None
+    key = named[0]["key"]
+    with job.connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT location FROM catalogs WHERE job = %s AND dataset = %s AND name = %s"
+                    " AND version = %s", (named[0]["source_job"], key["dataset"], key["name"],
+                                          key["version"]))
+        row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"no catalogs row for {key} in job {named[0]['source_job']}")
+    gaia = pq.read_table(get(row[0]), columns=["ra", "dec"])
+    return gaia_offset(np.asarray(image, float), wcs, gaia["ra"].to_numpy(), gaia["dec"].to_numpy())
 
 
 def _science_psf(job: JobContext, fid: int, sca: int) -> Path:

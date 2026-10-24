@@ -111,3 +111,44 @@ def test_the_reference_metrics(tmp_path):
     assert (out["gmin"], out["gmax"]) == (-1.0, 99.0)
     assert "star_sigma_px" not in measure.quality_metrics(
         tmp_path / "image.fits", tmp_path / "cov.fits", [], m)
+
+
+def test_the_bright_footprint_grows_as_the_square_root_of_the_flux_above_its_floor():
+    zp = 25.0
+    flux_at_15 = 10 ** (0.4 * (zp - 15.0))
+    radii = metrics.footprint_radii(np.array([flux_at_15, 4 * flux_at_15, 1e-3, 0.0]), zp)
+    assert radii[0] == pytest.approx(metrics.FOOTPRINT_R15_PX)
+    assert radii[1] == pytest.approx(2 * metrics.FOOTPRINT_R15_PX)
+    assert radii[2] == radii[3] == metrics.FOOTPRINT_MIN_PX
+
+
+def test_a_source_inside_a_footprint_is_flagged_and_one_outside_is_not():
+    stars = np.array([[100.0, 100.0], [300.0, 300.0]])
+    radii = np.array([20.0, 4.0])
+    x = np.array([115.0, 125.0, 303.0, 306.0])
+    y = np.array([100.0, 100.0, 300.0, 300.0])
+    assert metrics.bright_footprint(x, y, stars, radii).tolist() == [True, False, True, False]
+
+
+def test_the_footprint_fraction_is_of_the_sources_above_snr_20():
+    inside = np.array([True, True, False, False])
+    out = metrics.footprint_counts(inside, np.array([300.0, 10.0, 300.0, 10.0]), np.ones(4))
+    assert out == {"n_in_bright_footprint": 2, "bright_footprint_fraction": 0.5}
+    assert "bright_footprint_fraction" not in metrics.footprint_counts(inside, np.ones(4), np.ones(4))
+
+
+def test_near_bright_counts_sources_within_6_px_of_a_pixel_above_1000():
+    reference = np.zeros((100, 100))
+    reference[50, 50] = 2000.0
+    reference[10, 10] = 999.0
+    x, y = np.array([55.0, 57.0, 10.0]), np.array([50.0, 50.0, 10.0])
+    assert metrics.near_bright_count(x, y, reference) == 1
+
+
+def test_the_ring_count_takes_bright_sources_6_to_20_px_from_a_top_star():
+    found = np.array([[100.0, 100.0, 5000.0], [400.0, 400.0, 1.0]])
+    x = np.array([110.0, 103.0, 125.0, 110.0])
+    y = np.array([100.0, 100.0, 100.0, 100.0])
+    flux = np.array([300.0, 300.0, 300.0, 10.0])
+    assert metrics.ring_count(x, y, flux, np.ones(4), found) == 1
+    assert metrics.ring_count(x, y, flux, np.ones(4), np.empty((0, 3))) is None

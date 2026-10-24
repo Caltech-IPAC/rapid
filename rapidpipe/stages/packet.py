@@ -12,8 +12,11 @@ Scope: ``{"expid", "sca", "fid"}``, the packet set's key without the
 dataset (the run's). Recorded inputs, every one an ``input`` row:
 
 - ``sources``: exactly one, the epoch's source set, whose key is the
-  packet set's key. Its ``flags = 0`` sources (`dev`'s ``ALERTABLE_FLAGS``)
-  that the object set holds are the triggers; `dev`'s 2,000-per-chip cap
+  packet set's key. Its sources with no rejecting flag (`dev`'s
+  ``ALERTABLE_FLAGS``, 0, once the informational bits of
+  :data:`rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS` are
+  cleared, so a source in a bright footprint is a trigger and its packet
+  carries the bit in ``psfFitFlags``) that the object set holds are the triggers; `dev`'s 2,000-per-chip cap
   is not ported (plan, Part 2).
 - ``objects``: exactly one, the object set; through it its predecessor
   chain and the chain's exclusions, as ``members_official`` follows them.
@@ -77,7 +80,9 @@ every row the packets carry, measured or reused, so the set is
 self-contained) and ``external`` (``external.parquet``, the Gaia matches).
 The manifest's ``metrics``: ``n_packets``, the set's packets, and
 ``n_packets_snr_gt20``, those whose source's fit flux over its error is
-above 20.
+above 20, and ``n_packets_bright_footprint``, those whose source carries
+the bright-footprint flag
+(:data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`).
 """
 
 from __future__ import annotations
@@ -97,6 +102,7 @@ from psycopg2.extras import RealDictCursor
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
     VERSION, AlertContainer, assemble_alert, load_schema, sync_marker_for)
@@ -182,7 +188,7 @@ class Read:
     key: dict
     source_job: int
     object_job: int
-    flags_zero: int                              # the set's flags = 0 sources
+    flags_zero: int                              # the set's sources with no rejecting flag
     triggers: list[Source]                       # those the object set holds
     aid_of: dict[int, int]                       # trigger sid -> aid
     objects: dict[int, tuple[float, float, Sums]]
@@ -224,8 +230,8 @@ def _read(job: JobContext) -> Read:
 
     with job.connect() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(f"SELECT {SOURCE_COLUMNS} FROM sources s{SOURCE_JOINS}"
-                    " WHERE s.job = %s AND s.flags = %s ORDER BY s.sid",
-                    (source_job, ALERTABLE_FLAGS))
+                    " WHERE s.job = %s AND s.flags & ~%s = %s ORDER BY s.sid",
+                    (source_job, INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS))
         alertable = [Source.from_row(r) for r in cur.fetchall()]
 
         cur.execute(CHAIN_SQL, (object_job,))
@@ -437,7 +443,8 @@ def run(job: JobContext) -> None:
     job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
                         ("external", "external.parquet")], packet=summary,
                        metrics={"n_packets": summary["packets"],
-                                "n_packets_snr_gt20": summary["packets_snr_gt20"]})
+                                "n_packets_snr_gt20": summary["packets_snr_gt20"],
+                                "n_packets_bright_footprint": summary["packets_bright_footprint"]})
 
 
 def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
@@ -545,6 +552,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
             "flags_zero": read.flags_zero, "packets": len(order),
             "packets_snr_gt20": sum(1 for source, _ in order
                                     if source.fluxerr and source.fluxfit / source.fluxerr > 20),
+            "packets_bright_footprint": sum(1 for source, _ in order
+                                            if source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
             "window_images": len(window), "forced_rows": len(forced_rows),
             "forced_measured": measured, "forced_reused": len(forced_rows) - measured,
             "gaia_matches": len(external),

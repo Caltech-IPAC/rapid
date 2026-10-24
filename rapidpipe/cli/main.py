@@ -36,7 +36,7 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   in the image (``rapidpipe.launch.submit``) asking for the run's
   ``[batch.memory_mib]`` memory for the stage, recording the Batch job id
   on the row (``job show`` prints it) and printing both ids;
-- ``loop --run --filters --scas --pointings --job-definition [--once]``
+- ``loop --run --filters --scas --pointings [--passes] --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
   summary line per pass, until a pass finds the selection drained (exit 0)
@@ -223,6 +223,8 @@ def _build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--scas", required=True, help="Comma-separated SCA numbers.")
     loop_parser.add_argument("--pointings", required=True,
                              help="Comma-separated VVV_EEEE (visit, exposure), or 'all'.")
+    loop_parser.add_argument("--passes", default="all",
+                             help="Comma-separated survey pass numbers, e.g. 1,2,3,4, or 'all' (default).")
     loop_parser.add_argument("--job-definition", required=True,
                              help="The Batch job definition the run's revision is registered as.")
     loop_parser.add_argument("--max-intake", type=int, default=100,
@@ -332,7 +334,8 @@ def _run_job(args: argparse.Namespace) -> int:
     else:
         job_id = args.job
         with connect_job() as conn:
-            stage_run = _stage_run(foundation.job_show(conn, job_id)["stage"])
+            stage = foundation.job_show(conn, job_id)["stage"]
+        stage_run = _stage_run(stage)
     if args.verb == "submit":
         try:
             with connect_job() as conn:
@@ -344,6 +347,8 @@ def _run_job(args: argparse.Namespace) -> int:
         _print_json({"job": job_id, "batch_job": batch_job})
         return int(ExitCode.SUCCESS)
     result = foundation.run_job(connect_job, job_id, root, stage_run)
+    if stage == "packet" and result["published"] and result["group"] is not None:
+        result["kafka"] = _send_own_set(connect_job, job_id)
     _print_json(result)
     if result["published"] and result["refusal"]:
         sys.stderr.write(f"rapidpipe job {args.verb}: job {job_id} published, binding refused: "
@@ -351,6 +356,30 @@ def _run_job(args: argparse.Namespace) -> int:
         if result["live"] is not False:
             return int(ExitCode.FAILURE)
     return int(ExitCode.SUCCESS)
+
+
+def _send_own_set(connect_job, job_id: int) -> dict:
+    """A packet job's last act: its own official set to the topic its run's ``[kafka]`` table names.
+
+    Returns :func:`~rapidpipe.foundation.publish_kafka.deliver`'s result, or
+    ``{"error": ...}``: a set this could not send stays unstamped for the
+    loop's publish sweep, and the job, published and bound, still exits 0.
+    """
+    logger = logging.getLogger("rapidpipe.cli")
+    logger.info("packet set %d published and bound; producing it to the topic", job_id)
+    try:
+        with connect_job() as conn:
+            settings = foundation.run_show(conn, foundation.job_show(conn, job_id)["run"])["settings"]
+            endpoint = publish_kafka.endpoint(settings["kafka"])
+            producer = publish_kafka.producer(endpoint["bootstrap_servers"], endpoint["max_request_bytes"])
+            try:
+                return publish_kafka.deliver(conn, job_id, producer, endpoint["topic"])
+            finally:
+                producer.close(timeout=publish_kafka.ACK_TIMEOUT_S)
+    except Exception as error:  # noqa: BLE001 - the sweep sends what this could not
+        logger.error("packet set %d: not produced (%s); left unstamped for the loop's publish sweep",
+                     job_id, error)
+        return {"error": str(error)}
 
 
 def _print_json(value: Any) -> None:
@@ -376,7 +405,7 @@ def _loop(args: argparse.Namespace) -> int:
     def connect_loop():
         return connect(application_name="rapidpipe-loop")
 
-    selection = loop.Selection.parse(args.filters, args.scas, args.pointings)
+    selection = loop.Selection.parse(args.filters, args.scas, args.pointings, args.passes)
     with connect_loop() as conn:
         settings = foundation.run_show(conn, args.run)["settings"]
     intake = settings["intake"]
@@ -393,7 +422,7 @@ def _loop(args: argparse.Namespace) -> int:
     def publish() -> dict:
         with connect_loop() as conn:
             if not publish_kafka.unpublished_sets(conn, args.run):
-                return {"packets": 0, "sets": []}
+                return {"packets": 0, "sets": [], "waiting": publish_kafka.settling_sets(conn, args.run)}
         endpoint = publish_kafka.endpoint(settings["kafka"])
         producer = publish_kafka.producer(endpoint["bootstrap_servers"], endpoint["max_request_bytes"])
         try:

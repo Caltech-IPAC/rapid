@@ -6,7 +6,8 @@ moves it; ``members_official`` returns both epochs' memberships through
 the chain; the second set carries the first's objects forward with sums
 grown by the second epoch's members; a job told at launch that a source
 set is excluded drops its members from the sums and the members view
-drops them, while their rows stay.
+drops them, while their rows stay. A source whose only flag is the
+informational bright footprint is accepted; any other bit rejects it.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import contextlib
 
 from rapidpipe.foundation import create_job, create_run, change, publish, run_job
+from rapidpipe.products.diffimage import SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.stages import associate
 from tests.db.foundation_helpers import write_attempt
 
@@ -80,14 +82,15 @@ def test_two_epochs_move_the_binding_and_an_exclusion_drops_members(connect, tmp
         source_row(1, 1, 100.0, 0.0, flux=1000.0),
         source_row(1, 2, 100.1, 0.0),
         source_row(1, 3, 100.2, 0.0, flags=4),          # flagged: not accepted
-        source_row(1, 4, 100.3, 0.0, flux=20.0)])       # S/N 2: not accepted
+        source_row(1, 4, 100.3, 0.0, flux=20.0),        # S/N 2: not accepted
+        source_row(1, 5, 100.4, 0.0, flags=4 | SOURCE_FLAG_BRIGHT_FOOTPRINT)])  # not accepted
     first = associate_job([epoch1])
     assert object_binding(conn)[1] == first
     assert query(conn, "SELECT count(*) FROM objects_official")[0][0] == 2
 
     epoch2 = source_set(conn, run, tmp_path, 2, [
         source_row(2, 1, 100.0 + 0.5 * R, 0.0, flux=1200.0),
-        source_row(2, 2, 101.0, 0.0)])
+        source_row(2, 2, 101.0, 0.0, flags=SOURCE_FLAG_BRIGHT_FOOTPRINT)])  # accepted
     second = associate_job([epoch2], predecessor=first)
     assert object_binding(conn)[1] == second
     members = query(conn, "SELECT job, source_job, sid FROM members_official ORDER BY source_job, sid")

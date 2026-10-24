@@ -18,11 +18,13 @@ masked) sets ``SCI``, ``ERR`` and ``VAR_*`` NaN where ``DQ`` has a masked
 bit, leaves ``DQ`` as it was, carries ``DQMASK`` and ``NDQMASK`` on each
 masked HDU and counts the file's own NaN, the masked pixels and their union
 in the manifest; the HLWAS overlay's bits are #238's names without
-SATURATED; ``[intake] rederive_wcs`` (default false, `dev`'s behaviour)
-fetches nothing and keeps the file's gWCS, and on fetches the distortion
-reference the file names and writes the SIP fit of the re-derived gWCS,
-the manifest naming the reference and the shift at the centre; the GBTDS
-overlay turns it on and HLWAS's does not.
+SATURATED; ``[intake] crpix_shift`` (default ``[0, 0]``) is added to
+``CRPIX1`` and ``CRPIX2`` and recorded in the manifest, and the HLWAS overlay
+carries the WCS ledger's measured translation; ``[intake] rederive_wcs``
+(default false, `dev`'s behaviour) fetches nothing and keeps the file's
+gWCS, and on fetches the distortion reference the file names and writes
+the SIP fit of the re-derived gWCS, the manifest naming the reference and
+the shift at the centre; the GBTDS overlay turns it on and HLWAS's does not.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ SETTINGS = {"intake": {"source_root": None, "unsigned": False, "sip_degree": 5,
                        "sip_max_pix_error": 0.1, "gzip_level": 1, "program_id": -1,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10,
                        "nominal_zptmag": {"F146": 27.5}, "dq_mask_bits": 0,
-                       "rederive_wcs": False},
+                       "crpix_shift": [0.0, 0.0], "rederive_wcs": False},
             "psf": {"crds_server": "https://crds.invalid"}}
 DISTORTION = "roman_wfi_distortion_0003.asdf"
 #: Pixels the synthetic file flags, each (y, x, DQ value); (1, 1) is also NaN in the file itself.
@@ -160,11 +162,13 @@ def source(tmp_path: Path) -> Path:
 
 def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                expects_exposure: bool = True, dq_mask_bits: int = 0,
+               crpix_shift: tuple[float, float] = (0.0, 0.0),
                rederive_wcs: bool = False) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
     settings = {**SETTINGS, "intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
-                                       "dq_mask_bits": dq_mask_bits, "rederive_wcs": rederive_wcs}}
+                                       "dq_mask_bits": dq_mask_bits, "crpix_shift": list(crpix_shift),
+                                       "rederive_wcs": rederive_wcs}}
     expects = [{"kind": "expects", "product": "l2files", "key": {}, "source_job": None,
                 "binding": None}]
     if expects_exposure:
@@ -326,6 +330,24 @@ def test_the_hlwas_mask_is_238s_named_bits_without_saturated():
     assert overlay["intake"]["dq_mask_bits"] == named
     assert named | int(pixel.SATURATED) == 0x2110C03  # #238's default, dqMaskSubs.py
     assert not named & int(pixel.SATURATED) and not named & int(pixel.JUMP_DET)
+
+
+def test_crpix_shift_defaults_to_nothing_and_translates_the_wcs_by_the_setting(tmp_path, source):
+    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
+    assert shipped["intake"]["crpix_shift"] == [0.0, 0.0]
+    still, _, _ = science_header(run_intake(tmp_path / "still", source))
+    prefix = run_intake(tmp_path / "moved", source, crpix_shift=(0.25, -0.5))
+    moved, _, _ = science_header(prefix)
+    assert moved["CRPIX1"] == pytest.approx(still["CRPIX1"] + 0.25)
+    assert moved["CRPIX2"] == pytest.approx(still["CRPIX2"] - 0.5)
+    world = WCS(still).all_pix2world([[10.0, 20.0]], 0)
+    assert WCS(moved).all_world2pix(world, 0)[0] == pytest.approx([10.25, 19.5], abs=1e-4)
+    assert json.loads((prefix / "manifest.json").read_text())["crpix_shift"] == [0.25, -0.5]
+
+
+def test_the_hlwas_overlay_carries_the_ledgers_translation():
+    overlay = tomllib.loads((REPO / "rapidpipe/settings/datasets/hlwas-r00342.toml").read_text())
+    assert overlay["intake"]["crpix_shift"] == [0.12, -0.99]
 
 
 #: The re-derived gWCS the faked romancal assigns: the file's moved this many pixels in declination.

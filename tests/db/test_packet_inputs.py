@@ -14,10 +14,12 @@ from datetime import datetime
 
 import fastavro
 import pyarrow as pa
+import pytest
 import pyarrow.parquet as pq
 
 from rapidpipe.foundation import change, create_job, create_run, publish, run_job
 from rapidpipe.foundation.local import local_path
+from rapidpipe.products.diffimage import SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS
 from rapidpipe.stages import packet
 from tests.db.foundation_helpers import write_attempt
@@ -75,7 +77,9 @@ def object_set(conn, run, root, aid, ra0, dec0, source_job, name):
     return job
 
 
-def test_a_packet_job_reads_the_object_set_it_names(connect, tmp_path):
+# A source in a bright footprint is a trigger like a flags = 0 one, its bit in psfFitFlags.
+@pytest.mark.parametrize("flags", [0, SOURCE_FLAG_BRIGHT_FOOTPRINT])
+def test_a_packet_job_reads_the_object_set_it_names(connect, tmp_path, flags):
     conn = connect()
     live = create_run(conn, "tester", "live", "abc123", {"packet": SETTINGS}, SURVEY, DATASET)
     other = create_run(conn, "tester", "a recipe that is not live", "def456",
@@ -94,6 +98,7 @@ def test_a_packet_job_reads_the_object_set_it_names(connect, tmp_path):
             ("psfs", {"dataset": DATASET, "fid": 8, "sca": 8, "kind": "science"}),
             ("catalogs", {"dataset": DATASET, "name": "gaia", "version": "DR3"}))])
     tables = image_rows(tmp_path / "e1")
+    tables["sources"][0]["flags"] = flags
     tables["psfs"] = [{"psfid": 701, "dataset": DATASET, "fid": 8, "sca": 8, "kind": "science",
                        "checksum": "0" * 32,
                        "filename": (tmp_path / "e1" / "diffpsf.fits").as_uri()}]
@@ -127,3 +132,4 @@ def test_a_packet_job_reads_the_object_set_it_names(connect, tmp_path):
     assert record["diaObject"]["diaObjectId"] == 200
     assert record["diaObject"]["ra0"] == ra + 1e-5
     assert {r[0] for r in query(conn, "SELECT aid FROM forced WHERE job = %s", (job,))} == {200}
+    assert record["diaSource"]["psfFitFlags"] == flags

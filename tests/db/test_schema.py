@@ -8,6 +8,7 @@ and the foundation schema never collect each other's tests.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -193,3 +194,40 @@ def test_job_metrics_exposes_each_numeric_metric_with_the_jobs_scope(conn):
         rows = cur.fetchall()
     assert rows == [(run, "difference", "D", 4040101, 8, 8, None, "core_fraction", 0.03),
                     (run, "difference", "D", 4040101, 8, 8, None, "n_sources", 500.0)]
+
+
+def _official_views(cur) -> dict[str, tuple[str, str]]:
+    """Each product table's official view: its bound product and its definition."""
+    views = {}
+    for table in PRODUCT_TABLES:
+        cur.execute("SELECT pg_get_viewdef(%s::regclass)", (f"{table}_official",))
+        definition = cur.fetchone()[0]
+        views[table] = (re.search(r"o\.product = '(\w+)'", definition).group(1), definition)
+    return views
+
+
+def _columns(cur, relation: str) -> dict[str, bool]:
+    """A table's or view's columns, each with whether it is NOT NULL."""
+    cur.execute("SELECT attname, attnotnull FROM pg_attribute"
+                " WHERE attrelid = %s::regclass AND attnum > 0 AND NOT attisdropped", (relation,))
+    return dict(cur.fetchall())
+
+
+def test_every_bound_product_carries_the_dataset_in_its_key_and_its_view(conn):
+    """Dataset is in every scientific key (plan Part 1): a table bound under
+    its own product name holds ``dataset`` NOT NULL, its view exposes it, and
+    a view that matches the binding's key builds the key with it. A set's
+    child rows (members, catalogs of a reference, forced and external rows of
+    a packet set) are bound through their set's job and carry no key."""
+    with conn.cursor() as cur:
+        views = _official_views(cur)
+        bound = {t: d for t, (product, d) in views.items() if product == t}
+        assert bound, "no product table is bound under its own name"
+        for table, definition in bound.items():
+            assert _columns(cur, table).get("dataset") is True, f"{table}.dataset NOT NULL"
+            assert "dataset" in _columns(cur, f"{table}_official"), f"{table}_official.dataset"
+            for key in re.findall(r"o\.key = jsonb_build_object\(([^)]*)\)", definition):
+                assert re.search(r"'dataset'(::text)?, t\.dataset", key), f"{table} key {key}"
+        for table, (product, _) in views.items():
+            if product != table:
+                assert product in bound, f"{table} is bound through {product}, not a bound product"

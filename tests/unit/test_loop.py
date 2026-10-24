@@ -6,7 +6,8 @@ is submitted only once its field has ``min_frames`` official L2 rows; each
 field's associate chain submits one epoch at a time in ``mjdobs`` order and
 waits while an earlier exposure of the field is upstream; two fields
 advance in the same pass; a pass with nothing new, pending or to submit is
-drained and the verb exits 0; the listing pages only the observations of
+drained and the verb exits 0, and a packet set still inside its job's
+send window keeps it from draining; the listing pages only the observations of
 the selected filters; the packet stage's Gaia input names the catalog by
 its whole key, dataset included. With ``before_mjd`` set: the reference
 names only rows before it and waits while a selected stem is unpublished;
@@ -18,7 +19,9 @@ failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone. PSFs: a new stem whose filter and
 SCA lack an official science PSF gets one ``psf`` job for the
 pair, expecting both keys, and no intake; an official pair admits intakes;
-a psf job of the run pending for the pair submits nothing more.
+a psf job of the run pending for the pair submits nothing more; an intake
+names the dataset's official Gaia catalog, and only the PSF without one.
+`--passes` selects the survey's passes in stems and rows alike, all by default.
 """
 
 from __future__ import annotations
@@ -230,12 +233,16 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
     monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf"]))
     monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
     monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
     monkeypatch.setattr(loop, "reconcile", lambda conn, run, client: {"retrying": []})
     code = cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
                      "--job-definition", "jd", "--interval", "0"])
     assert code == ExitCode.SUCCESS
     assert '"drained": true' in capsys.readouterr().out
+    summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [stem(1, 1, 1)], lambda item: None,
+                            lambda: {"packets": 0, "sets": [], "waiting": [90]})
+    assert summary["sets_waiting"] == [90] and not summary["drained"]
 
 
 class Batch:
@@ -386,3 +393,21 @@ def test_a_pending_psf_job_submits_nothing_more():
     pending = [{"id": 60, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": stem(1, 1, 1)}}]
     subs, counts = loop.plan(snap(psfs={}, jobs=pending), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
     assert subs == [] and counts["pending"]["psf"] == 1 and counts["new"] == 2
+
+
+def test_an_intake_names_the_datasets_gaia_catalog_once_it_is_official():
+    named, _ = loop.plan(snap(), [stem(1, 1, 1)], SEL)
+    assert [i for i in stages(named, "intake")[0]["inputs"] if i["product"] == "catalogs"] == [
+        {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "source_job": 12}]
+    alone, _ = loop.plan(snap(gaia=None), [stem(1, 1, 1)], SEL)
+    assert [i["product"] for i in stages(alone, "intake")[0]["inputs"]] == ["psfs"]
+
+
+def test_passes_select_the_surveys_passes_in_stems_and_rows_and_default_to_all():
+    sel = loop.Selection.parse("F146", "8", "all", "1,3")
+    assert [s for s in (stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)) if sel.admits_stem(s)] == [
+        stem(1, 1, 1), stem(3, 1, 1)]
+    assert [p for p in (1, 2, 3) if sel.admits_row(expid(p, 1, 1), 8, 8, {8})] == [1, 3]
+    subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)], sel)
+    assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(3, 1, 1)]
+    assert sel.summary()["passes"] == [1, 3] and SEL.passes is None and SEL.summary()["passes"] == "all"
