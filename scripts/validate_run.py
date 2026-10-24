@@ -16,8 +16,8 @@ jobs of ``--run``:
   rows of the job that it did not declare.
 - ``catalog``: the object catalog's contract (plan amendment 2026-10-24):
   every official source of the run that the association accepts (its
-  ``[associate]`` flags and S/N, in its image's field or a neighbour) has
-  a membership; every membership's source is within the match radius of
+  ``[associate]`` flags and S/N) in its image's field has a membership (a
+  neighbour's joins only an object within the radius); every membership's source is within the match radius of
   its object's founding position; no two objects of the run founded by
   different jobs are within the radius of each other (no duplicate
   founders); ``memberships_official`` holds no membership of a source set
@@ -90,7 +90,6 @@ from rapidpipe.foundation.prefix import get
 from rapidpipe.products import storage
 from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS
 from rapidpipe.products.spatial import within
-from rapidpipe.science.spatial import field_neighbours
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import read_packets as rpk  # noqa: E402 - a sibling script, not a package
@@ -226,13 +225,26 @@ def job_table_failures(j: dict) -> tuple[list[str], int, int]:
     """One published job's declared outputs against its manifest and its table rows."""
     bad, n_outputs, n_rows = [], 0, 0
     prefix = j["manifest"]["prefix"].rstrip("/") + "/"
-    per_table = Counter()
+    per_table, parquet = Counter(), {}
     for out in j["manifest"]["outputs"]:
         path = fetch(prefix + out["path"])
         per_table[out["table"]] += pq.read_metadata(path).num_rows
+        parquet[out["table"]] = path
         n_outputs += 1
         if out["checksum"] != "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest():
             bad.append(f"job {j['id']} {out['path']}: the checksum differs from the manifest's")
+    reconcile = j["manifest"].get("reconcile")
+    if reconcile and reconcile["reconciled"]:
+        # Founded objects the publisher attached elsewhere are not rows; their memberships moved.
+        stored = {r["aid"] for r in q("SELECT aid FROM objects WHERE job = %s", (j["id"],))}
+        gone = set(pq.read_table(parquet["objects"], columns=["aid"]).column("aid").to_pylist()) - stored
+        members = pq.read_table(parquet["memberships"], columns=["object_job", "aid"]).to_pylist()
+        moved = sum(1 for m in members if m["object_job"] == j["id"] and m["aid"] in gone)
+        if len(gone) != reconcile["reconciled"]:
+            bad.append(f"job {j['id']}: {len(gone)} founded objects not stored, reconcile says"
+                       f" {reconcile['reconciled']}")
+        per_table["objects"] -= len(gone)
+        per_table["memberships"] += reconcile["attached_memberships"] - moved
     for table in TABLES:
         (r,) = q(f"SELECT count(*) n FROM {table} WHERE job = %s", (j["id"],))
         if table in per_table and r["n"] != per_table[table]:
@@ -264,8 +276,7 @@ def check_catalog(run: int) -> bool:
                    AND s.fluxerr > 0 AND s.fluxfit / s.fluxerr >= %s
                    AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.job = s.job AND m.sid = s.sid)""",
                 (run, INFORMATIONAL_SOURCE_FLAGS, flags, snr))
-    unmatched = [r for r in sources if r["field"] == r["image_field"]
-                 or r["field"] in field_neighbours(r["image_field"])]
+    unmatched = [r for r in sources if r["field"] == r["image_field"]]
     bad += [f"source ({r['job']}, {r['sid']}) is accepted and a member of nothing" for r in unmatched[:5]]
     members = q("""SELECT m.job, m.sid, m.object_job, m.aid, s.ra, s.dec, o.ra0, o.dec0
                    FROM memberships m JOIN jobs j ON j.id = m.job AND j.run = %s
@@ -313,8 +324,9 @@ def check_catalog(run: int) -> bool:
             f" {x['n']}" for x in off[:5]]
     return report("catalog", bad, f"{len(objects)} objects in {len(by_field)} fields, {len(members)}"
                   f" memberships within the radius ({superseded} of source sets not official, out of the"
-                  f" view), {len(sources) - len(unmatched)} accepted sources outside the field and its"
-                  f" neighbours, every other a member; no duplicate founders; {len(sums)} official"
+                  f" view), every accepted source of an image's field a member ({len(sources) - len(unmatched)}"
+                  f" accepted outside it, neighbours' joining only within the radius); no duplicate"
+                  f" founders; {len(sums)} official"
                   " objects' sums = their members'", t0)
 
 
