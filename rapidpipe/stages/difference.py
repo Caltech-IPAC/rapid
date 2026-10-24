@@ -21,11 +21,12 @@ reference by the medians -> ZOGY -> coverage mask, NaN restore, negation
 -> difference uncertainty -> SExtractor and Photutils catalogs, positive
 and negative. SFFT and the naive subtraction follow ZOGY and run as `dev`
 runs them (``[sfft] run_sfft``, ``[naive_diffimage] naive_diffimage_flag``).
-SFFT is the published differencer, as on `dev` since b725007d (2026-04-20;
-its ``diff_flavor = sfft``): ``run_sfft = false`` fails the settings check
-and a nonzero SFFT exit fails the job as any tool's does
-(:class:`~rapidpipe.science.difference.tools.ToolFailed`), never a
-fallback to ZOGY.
+``[difference] diff_flavor`` names the published differencer, ``zogy``
+(the shipped default, with the measurement in the toml) or ``sfft`` (`dev`'s
+since b725007d, 2026-04-20); under ``sfft``, ``run_sfft = false`` fails the
+settings check. A nonzero exit of either tool fails the job as any tool's
+does (:class:`~rapidpipe.science.difference.tools.ToolFailed`), never a
+fallback to the other.
 
 Scope: ``{"expid", "sca", "fid"}``, the epoch's key without the dataset
 (the run's). Settings: the run's ``[difference]`` table, whose subtables
@@ -267,7 +268,10 @@ def check_settings(settings: dict[str, Any]) -> None:
         raise ValueError(
             "[difference.fake_sources] inject_fake_sources_flag = true is not supported: "
             "fake-source injection is not ported to the rebuild")
-    if not settings["sfft"]["run_sfft"]:
+    flavor = settings.get("diff_flavor", "zogy")
+    if flavor not in ("zogy", "sfft"):
+        raise ValueError(f"[difference] diff_flavor = {flavor!r}: zogy or sfft")
+    if flavor == "sfft" and not settings["sfft"]["run_sfft"]:
         raise ValueError(
             "[difference.sfft] run_sfft = false: SFFT is the published differencer, so the "
             "job would publish nothing; there is no fallback to ZOGY")
@@ -768,22 +772,30 @@ def run(job: JobContext) -> None:
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         infobits |= _run_naive(reference_psf=REFERENCE_PSF_NAME, **common)
 
-    # Rows: SFFT's image and positive PSF-fit catalog are the published ones (dev's diff_flavor).
-    published_image = sfft_names["diffimage"]
+    # Rows: the published differencer's image and positive PSF-fit catalog ([difference] diff_flavor).
+    flavor = settings.get("diff_flavor", "zogy")
+    if flavor == "sfft":
+        published_image, published_unc, published_psf = (
+            sfft_names["diffimage"], sfft_names["diffimage_unc"], sfft_names["diffpsf"])
+        published_catalogs = sfft_catalogs
+    else:
+        published_image, published_unc, published_psf = (
+            filename_diffimage_masked, filename_diffimage_unc_masked, filename_diffpsf)
+        published_catalogs = zogy_catalogs
     correlation = noise.noise_correlation(fits.getdata(w(published_image), 0))
     if correlation is not None:
         metrics["noise_correlation"] = correlation
     with fits.open(w(published_image)) as hdul:
         header = hdul[0].header.copy()
-    parquet = sfft_catalogs.parquet["positive"]
+    parquet = published_catalogs.parquet["positive"]
     if parquet is None:
-        logger.warning("no SFFT PSF-fit catalog: the source set is empty")
+        logger.warning("no %s PSF-fit catalog: the source set is empty", flavor.upper())
     catalog = pq.read_table(w(parquet)) if parquet else _EMPTY_CATALOG
 
     diagnostics = [p for c in (sfft_catalogs, zogy_catalogs) for p in c.parquet.values() if p]
     published = trim(work_dir, images=[
-        published_image, sfft_names["diffimage_unc"],
-        output_resampled_reference_cov_map, sfft_names["diffpsf"],
+        published_image, published_unc,
+        output_resampled_reference_cov_map, published_psf,
         filename_bkg_subbed_science_image,
         output_resampled_gainmatched_reference_image, REFERENCE_PSF_NAME],
         others=diagnostics)
@@ -839,11 +851,13 @@ def run(job: JobContext) -> None:
                                       "x_median": float(dxmedianfin),
                                       "y_median": float(dymedianfin)},
             "zogy_astrometric_sigma": zogy_astrometric_sigma,
-            "differencer": "sfft",
-            "source_counts": {"sextractor": sfft_catalogs.sextractor,
-                              "photutils": sfft_catalogs.photutils},
+            "differencer": flavor,
+            "source_counts": {"sextractor": published_catalogs.sextractor,
+                              "photutils": published_catalogs.photutils},
             "zogy_source_counts": {"sextractor": zogy_catalogs.sextractor,
                                    "photutils": zogy_catalogs.photutils},
+            "sfft_source_counts": {"sextractor": sfft_catalogs.sextractor,
+                                   "photutils": sfft_catalogs.photutils},
             "sources_before_cap": candidates, "sources_kept": sources.num_rows,
             "infobits_science_l2": inputs.infobits_science,
             "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},

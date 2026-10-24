@@ -77,6 +77,7 @@ def schema_columns(table: str) -> set[str]:
 
 def settings(**tables) -> dict:
     body = copy.deepcopy(THIN["difference"])
+    body["diff_flavor"] = "sfft"   # the SFFT-asserting tests below; the default is tested on its own
     body["paths"]["cfg_path"] = str(cdf_dir())
     body["statistics"]["clip_correction_seed"] = 1
     for table, values in tables.items():
@@ -295,6 +296,24 @@ def test_the_packet_stage_reads_resolve_to_sffts_files_beside_the_published_imag
     assert beside >= {"sfftdiffpsf.fits", "sfftdiffimage_uncert_masked.fits"}
     for name in beside:
         assert (prefix / "diff" / (name + ".gz")).is_file(), name
+
+
+def test_the_shipped_default_publishes_zogy(tmp_path, files, fakes):
+    body = settings(); body["difference"]["diff_flavor"] = THIN["difference"]["diff_flavor"]
+    assert THIN["difference"]["diff_flavor"] == "zogy"
+    prefix = run_difference(tmp_path, files, body=body)
+    m = manifest(prefix)["difference"]
+    assert m["differencer"] == "zogy"
+    work = prefix / "diff"
+    assert (work / "zogy_diffimage_masked.fits.gz").exists()
+    assert not (work / "sfftdiffimage_masked.fits.gz").exists()
+    assert (work / "sfftdiffimage_masked_psfcat.parquet").exists()   # SFFT still runs; its catalog is a diagnostic
+
+
+def test_an_unknown_diff_flavor_fails_the_settings_check(tmp_path, files, fakes):
+    body = settings(); body["difference"]["diff_flavor"] = "naive"
+    with pytest.raises(ValueError, match="diff_flavor"):
+        run_difference(tmp_path, files, body=body)
 
 
 def test_run_sfft_false_fails_the_settings_check(tmp_path, files, fakes):
