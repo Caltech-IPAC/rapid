@@ -1,12 +1,14 @@
 """``rapidpipe.launch``: a job submitted to Batch as ``job run``, or an old-contract stage run locally.
 
-The job environment stands for every SSM read a job would make (the
+A Spot submission names its queue and one attempt (nothing retries on
+Spot); a submission is recorded on the row's ``attempts``. The job environment stands for every SSM read a job would make (the
 database tree, the ``[kafka]`` endpoint), is read once per process, and is
 what the job's ``publish_kafka.endpoint`` then reads instead of SSM.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
@@ -63,11 +65,24 @@ class _Conn:
         self.committed = True
 
 
-def test_submit_records_the_batch_job_id_on_the_job_row(batch_env):
+def test_submit_records_the_batch_job_id_and_its_submission_on_the_job_row(batch_env):
     conn = _Conn()
     launch.submit(7, "difference", job_definition="definition", conn=conn, client=_Batch())
-    assert conn.statements == [("UPDATE jobs SET batch_job_id = %s WHERE id = %s", ("batch-1", 7))]
+    assert conn.statements[0] == ("UPDATE jobs SET batch_job_id = %s WHERE id = %s", ("batch-1", 7))
+    sql, params = conn.statements[1]
+    assert "attempts" in sql and params[0] == "batch-1" and params[-1] == 7
+    assert json.loads(params[2])["queue"] == "queue" and json.loads(params[2])["why"] == "first"
     assert conn.committed
+
+
+def test_a_spot_submission_names_its_queue_and_one_attempt_and_a_prompt_one_neither(batch_env):
+    batch = _Batch()
+    launch.submit(7, "intake", job_definition="definition", client=batch, queue="spot-q", one_attempt=True)
+    launch.submit(8, "intake", job_definition="definition", client=batch)
+    assert batch.submitted[0]["jobQueue"] == "spot-q" and batch.submitted[0]["retryStrategy"] == {"attempts": 1}
+    assert batch.submitted[1]["jobQueue"] == "queue" and "retryStrategy" not in batch.submitted[1]
+    assert launch.spot({"batch": {"spot": {"queue": "spot-q", "backlog": 2}}})["backlog"] == 2
+    assert launch.spot({"batch": {}}) is None and launch.spot({}) is None
 
 
 def test_submit_asks_for_the_stages_memory_and_the_definitions_stands_without_a_key(batch_env):

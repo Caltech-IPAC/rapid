@@ -31,6 +31,8 @@ from typing import Any, Sequence
 OPTIONAL_KEYS = frozenset({
     ("intake", "source_root"),
     ("reference", "selection", "before_mjd"),
+    ("batch", "spot"), ("batch", "spot", "queue"), ("batch", "spot", "backlog"),
+    ("batch", "spot", "hedge_factor"),
 })
 
 

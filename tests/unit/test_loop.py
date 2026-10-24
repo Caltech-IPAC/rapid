@@ -29,6 +29,13 @@ names the dataset's official Gaia catalog, and only the PSF without one.
 `job wait` returns once every named job is published or failed, holds a
 failed row under Batch's retry, gives up at its timeout and names a missing job.
 A pass reports the quality gate's held sets when given the query.
+Spot, with ``[batch.spot]``: a stage's submissions go to the Spot queue
+while more than ``backlog`` remain, the rest to the prompt queue, and none
+without the table; a Spot job that ended unpublished for any reason is
+rerun (a reclaim counted), the rerun never again; a Spot job past
+``hedge_factor`` times its stage's median since its start or submission is
+terminated and rerun, one inside it, a prompt one, or one with no median is
+not; a pass reports its submissions by queue.
 """
 
 from __future__ import annotations
@@ -200,7 +207,8 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
     monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
     monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
-    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client: {"retrying": []})
+    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client, *a: {"retrying": []})
+    monkeypatch.setattr(loop.attempts, "run_entries", lambda conn, run: [])
     code = cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
                      "--job-definition", "jd", "--interval", "0"])
     assert code == ExitCode.SUCCESS
@@ -211,16 +219,23 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
 
 
 class Batch:
-    """A fake Batch client: ``describe_jobs`` answers from ``{batch id: (status, reason[, job name])}``."""
+    """A fake Batch client: ``describe_jobs`` answers from ``{batch id: (status, reason[, job name[,
+    extra fields]])}``, the queue ``prompt-q`` unless the extra fields name one; ``terminate_job`` is
+    recorded."""
 
     def __init__(self, jobs: dict):
-        self.jobs, self.calls = jobs, []
+        self.jobs, self.calls, self.terminated = jobs, [], []
 
     def describe_jobs(self, jobs):
         self.calls.append(list(jobs))
         return {"jobs": [{"jobId": j, "status": self.jobs[j][0], "statusReason": self.jobs[j][1],
-                          "jobName": self.jobs[j][2] if len(self.jobs[j]) > 2 else f"rapid-x-{j}"}
+                          "jobName": self.jobs[j][2] if len(self.jobs[j]) > 2 else f"rapid-x-{j}",
+                          "jobQueue": "arn:aws:batch:r:1:job-queue/prompt-q",
+                          **(self.jobs[j][3] if len(self.jobs[j]) > 3 else {})}
                          for j in jobs if j in self.jobs]}
+
+    def terminate_job(self, jobId, reason):
+        self.terminated.append((jobId, reason))
 
 
 class Rows:
@@ -240,12 +255,13 @@ class Rows:
         return False
 
     def execute(self, sql, params):
+        self.sql = sql
         if sql.startswith("UPDATE"):
             self.updates.append(params)
             self.rowcount = 1
 
     def fetchall(self):
-        return self.rows
+        return [] if "attempts FROM jobs" in self.sql else self.rows
 
     def commit(self):
         pass
@@ -257,7 +273,8 @@ def test_a_container_that_ended_unrecorded_is_marked_failed_with_batchs_reason()
     checked = loop.reconcile(conn, 12, batch)
     assert checked["ended"] == [{"job": 70, "stage": "intake",
                                  "reason": "Batch FAILED: Terminated by the operator"}]
-    assert [u[-1] for u in conn.updates] == [70] and conn.updates[0][1].startswith("Batch FAILED")
+    failed = [u for u in conn.updates if len(u) == 3]
+    assert [u[-1] for u in failed] == [70] and failed[0][1].startswith("Batch FAILED")
     assert checked["retrying"] == []
 
 
@@ -435,7 +452,7 @@ def test_job_wait_returns_once_every_job_is_published_or_failed():
 
 
 def test_job_wait_holds_a_failed_row_under_batchs_retry_and_gives_up_at_the_timeout(monkeypatch):
-    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client: {"retrying": [3]})
+    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client, *a: {"retrying": [3]})
     conn = Polled([[(3, 12, "failed")]])
     ticks = iter([0.0, 0.0, 30.0, 61.0])
     result = loop.wait(lambda: contextlib.nullcontext(conn), [3], Batch({}), timeout=60, interval=30,
@@ -461,3 +478,50 @@ def test_a_pass_reports_the_gates_held_sets_when_given(monkeypatch):
     assert summary["held_sets"] == held
     assert "held_sets" not in loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [],
                                             lambda item: None, None)
+
+
+SPOT = {"queue": "spot-q", "backlog": 2, "hedge_factor": 3.0}
+ON_SPOT = {"jobQueue": "arn:aws:batch:r:1:job-queue/spot-q"}
+
+
+def test_a_stages_backlog_goes_to_spot_and_its_last_wave_to_the_prompt_queue():
+    stems = [stem(p, 1, 1) for p in range(1, 6)]
+    subs, _ = loop.plan(snap(settings={**SETTINGS, "batch": {"spot": SPOT}}), stems, SEL)
+    assert [s.get("queue") for s in stages(subs, "intake")] == ["spot-q", "spot-q", "spot-q", None, None]
+    subs, _ = loop.plan(snap(), stems, SEL)
+    assert not any("queue" in s for s in subs)
+
+
+def test_a_spot_job_that_ended_unpublished_for_any_reason_is_rerun_and_a_reclaim_counted():
+    conn = Rows([(84, "difference", "failed", "b-84", "reference PSF: 4 stars, fewer than 10"),
+                 (85, "intake", "running", "b-85", None)])
+    checked = loop.reconcile(conn, 12, Batch({
+        "b-84": ("FAILED", "Essential container in task exited", "rapid-difference-84", ON_SPOT),
+        "b-85": ("FAILED", "Host EC2 (instance i-1) terminated.", "rapid-intake-85", ON_SPOT)}), SPOT)
+    assert [r["job"] for r in checked["rerun"]] == [84, 85] and checked["reclaims"] == 1
+    # The rerun, on the prompt queue, is not rerun again whatever it dies of.
+    conn = Rows([(84, "difference", "failed", "b-86", "reference PSF: 4 stars, fewer than 10")])
+    checked = loop.reconcile(conn, 12, Batch({"b-86": ("FAILED", "x", "rapid-difference-84-rerun")}), SPOT)
+    assert checked["rerun"] == []
+
+
+def test_a_spot_straggler_past_the_factor_is_terminated_and_rerun_and_one_inside_it_is_not():
+    now = 10_000.0
+    conn = Rows([(87, "intake", "running", "b-87", None), (88, "intake", "launched", "b-88", None),
+                 (89, "intake", "running", "b-89", None)])
+    batch = Batch({"b-87": ("RUNNING", "", "rapid-intake-87", {**ON_SPOT, "startedAt": (now - 400) * 1000}),
+                   "b-88": ("RUNNABLE", "", "rapid-intake-88", {**ON_SPOT, "createdAt": (now - 100) * 1000}),
+                   "b-89": ("RUNNING", "", "rapid-intake-89", {"startedAt": (now - 400) * 1000})})
+    checked = loop.reconcile(conn, 12, batch, SPOT, {"intake": 100.0}, clock=lambda: now)
+    assert [t[0] for t in batch.terminated] == ["b-87"] and "hedge" in batch.terminated[0][1]
+    assert [h["job"] for h in checked["hedged"]] == [87] and [r["job"] for r in checked["rerun"]] == [87]
+    assert loop.reconcile(Rows([(87, "intake", "running", "b-87", None)]), 12, Batch({}), SPOT, None)["hedged"] == []
+
+
+def test_a_pass_reports_its_submissions_by_queue(monkeypatch):
+    one = {"queue": "spot-q", "backlog": 1}
+    monkeypatch.setattr(loop, "snapshot", lambda conn, run: snap(settings={**SETTINGS, "batch": {"spot": one}}))
+    ids = iter(range(500, 600))
+    summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [stem(p, 1, 1) for p in (1, 2, 3)],
+                            lambda item: next(ids), None)
+    assert summary["queues"] == {"spot-q": [500, 501], "prompt": [502]}

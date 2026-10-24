@@ -121,6 +121,15 @@ packet = 2048
 # New: the psf stage holds one 178.6 MB ePSF reference and its 42 MB array.
 psf = 2048
 
+# [batch.spot] (a table, absent by default): Spot as a probe, never
+# production (Ben, 2026-10-24). `queue` names the Spot job queue; a stage's
+# submission goes there while a pass has more than `backlog` (an integer) of
+# that stage's jobs still to submit, else to the prompt queue, one attempt
+# each; a Spot job that ends unpublished is rerun on the prompt queue, and
+# one past `hedge_factor` (a float) times its stage's median container time
+# is terminated and rerun there (rapidpipe.foundation.loop). Absent, every
+# submission goes to the prompt queue, as dev's.
+
 [gate]
 # New, not dev's: the quality gate (rapidpipe.foundation.gate) holds a packet
 # set when its difference job's n_sources_snr_gt20 is above this factor times
