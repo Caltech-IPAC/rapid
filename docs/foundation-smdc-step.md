@@ -7529,6 +7529,70 @@ Check, held: all six runs `check_run.sh` **CLEAN** (consumer 1,158, 1,393, 1,420
 
 Raw evidence is in the brief's `t1/`: `metrics.txt`, `c-103/`, `c-105/`, `c-107/` and their `.txt`, `gate-zogy.txt`, `gate-sfft.txt`, `?-inj/` and `?-null/`.
 
+### Step sfft-core: SFFT's bright-star core residual on HLWAS is the zeroed DQ cores in its fit; the HLWAS overlay carries dev's OpenUniverse block
+
+**The change (rapid PR 435, merged `a761ae23`; rapid_docs PR 116).**
+
+- **The overlay.** `hlwas-r00342.toml` gains `[difference.sfft]` with dev's complete OpenUniverse block:
+  - `crossconv_flag`, `sfft_use_segmentation` and `sfft_use_gainmatch_catalogs` are true;
+  - `sfft_bsmask_value` is `"50.0"` and `sfft_bsmask_radius` is `"100.0"`.
+- **When it applies.** It is read only under `diff_flavor = "sfft"`. The published differencer stays ZOGY, so no published row changes.
+- **Nothing else changes.** The cap, the prefilter and the gate are untouched. No code changed: the rebuild's command builder already builds dev's command for this block, and the module makes its own segmentation images.
+
+**The measurement.**
+
+- **The pair.** One epoch pair on the same bytes: expid 4040101 (`r00342-inj1` pass 4, `001_0001` SCA 8 F146) against run 81's `refimages` 22029 and `psfs` 22015.
+- **The runs.** Each configuration has its own dataset and live run (`r00342-sfft-core-{s,x,g}`, runs 108 to 110). Each was created at `14860f57` with run 81's layers and `--set difference.diff_flavor="sfft"`, plus `[difference.paths]` at a worktree.
+- **The jobs.** Import, psf, intake and the difference ran under `rp job local`. A wrapper kept each work directory for the diagnostics.
+
+```sh
+config.sh S                                                    # the brief's t1/scripts: run create, live, import, psf, intake, difference
+config.sh X difference.sfft.crossconv_flag=true difference.sfft.sfft_use_segmentation=true \
+  difference.sfft.sfft_use_gainmatch_catalogs=true 'difference.sfft.sfft_bsmask_value="50.0"' 'difference.sfft.sfft_bsmask_radius="100.0"'
+config.sh G difference.sfft.sfft_use_gainmatch_catalogs=true
+analyze.py <cfg> <run> work-<cfg> truth-sca8.parquet row-<cfg>.json stamps-<cfg>.png; probe_zeros.py work-S probe-zeros 23033 0 1 2 3
+```
+
+Check, held: the control S reproduces run 88 job 22804 to the digit: core +0.250664, ring +0.021170, 2,279 positive and 982 negative candidates.
+
+| | S: socsims block (108) | X: OpenUniverse block (109) | G: S + catalogs (110) | ZOGY (run 81) |
+|---|---|---|---|---|
+| core / ring fraction | +0.251 / +0.021 | **−0.000 / −0.009** | +0.251 / +0.021 | −0.001 / +0.002 |
+| S/N > 20 positive / negative | 771 / 300 | 184 / 12 | 771 / 300 | 156 / 31 |
+| of them within 3 px of a reference source above aperture S/N 100 | 408 / 1 | 1 / 1 | 408 / 1 | 5 / 4 |
+| injected matched in the PSF-fit catalog, of 200 | 130 | **179** | 130 | 183 |
+| pixels left to the kernel fit | 1.000 | 0.016 | 1.000 | — |
+| catalog sources selected, sci / ref | — | 85 / 62 | 0 / 0 | — |
+| decorrelation sigmas, sci / ref (segm background only) | — | 0.0536 / 0.0176 (0.0524 / 0.0158) | — | — |
+| difference s (SFFT s) | 168 (36) | 197 (56) | 188 (41) | 205 |
+
+- **X is the one acceptable configuration** by the brief's rule:
+  - core inside ±0.011 and ring inside ±0.015;
+  - none of dev's broken-input caveats holds: 62 reference sources are selected, and the sigmas come from pixels 96% segmentation background;
+  - its injected recovery is at least S's.
+- **G is S.** The 20000 threshold is above every FLUX_MAX (7,272 and 8,242), so the catalog path selects nothing.
+
+**The cause (a diagnostic, `probe-zeros.jsonl`).**
+
+- **The pixels.** The stage sets the science image's NaNs to 0.0 before SFFT. On this frame these are the DQ mask's 5,096 px in coverage, the brightest stars' cores among them.
+- **Their weight.** They are 0.03% of the frame and 31% of Σ(reference²), so in the unmasked socsims fit they pull the photometric ratio down. Core and ring together are a +0.27 flux excess.
+- **The probe.** SFFT's own `run_sfft_rapid` on S's inputs: with no mask it reproduces S's core; with only those pixels masked, core −0.014 and ring −0.013. Dilated by 1, 2 and 3 px: +0.070, +0.025 and +0.017.
+- **Why X works.** Its 100 px discs exclude the bright stars, so SFFT's kernel does absorb this field's PSF mismatch.
+- **Not built.** Excluding the zeroed pixels from SFFT's fit is recorded under PR 435's improvements.
+
+**The proof on SMDC.**
+
+- **The image and the run.** Image `rebuild-a761ae23…` (`sha256:b2304313…`), `rapid-rebuild:77`. Dataset `r00342-sfft-core-proof`, run **111**, at `a761ae23`: run 81's layers, the overlay now carrying the block, and `--set difference.diff_flavor="sfft"` only.
+- **The jobs.** Import, psf and intake ran locally. One difference job, 23050, was submitted on Batch against the same reference and PSF rows and waited on with `rp job wait`.
+
+```sh
+proof.sh a761ae2372db221326728ec39b9021ddc5d6814e     # the brief's t1/scripts: build, deploy, run create, live, import, psf, intake, rp job submit, rp job wait, check_run.sh
+```
+
+Check, held: job 23050 published on its first attempt (m6a.2xlarge, 209 s). Its core and ring are −0.000026 and −0.00922, against the local measurement's −0.000017 and −0.00931; its candidates are 453 against 457 (AMD against Intel, as PR 418 saw). `check_run.sh --run 111`: **CLEAN**, validate 6/6, no packet stage.
+
+Raw evidence is in the brief's `t1/`: `row-{S,X,G,ZOGY}.json`, `stamps-{S,X,G}.png`, `probe-zeros.jsonl`, `config-*.log`, `proof.log`, `check-proof.txt`, `inspect-proof/`.
+
 ## Results of part 13 so far (2026-10-24 22:35 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
