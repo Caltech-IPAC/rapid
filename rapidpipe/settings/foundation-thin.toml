@@ -370,6 +370,12 @@ max_sources = 500
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
 xy_fit_max_offset = 0.5
+# New, not dev's: the reference PSF ZOGY is given. "measured" (the rebuild's
+# ruled divergence, decisions.md 2026-10-24) measures it on the resampled
+# reference's stars; "science" hands ZOGY the science PSF for both images,
+# as run 17 did, for a field whose stars cannot be measured that way (a
+# confusion-limited one: the GBTDS overlay's comment).
+reference_psf = "measured"
 
 [difference.paths]
 # `dev`: rapid_sw = "/code", cfg_path = rapid_sw + "/cdf" (hard-coded in

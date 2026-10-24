@@ -26,3 +26,13 @@ rederive_wcs = true
 # pixels) and all 9 isolated pixels above 1000 DN/s carry one; SATURATED is
 # on 0.51%, the cores of the bulge's bright stars.
 dq_mask_bits = 0x2110C01
+
+[difference]
+# The bulge is confusion-limited: on run 62's six-epoch reference mosaic the
+# clipped deviation of the pixels is 14.8 DN/s, crowding not noise, so the
+# reference PSF's peak floor (400 of it, 5,901 DN/s) sits above its ceiling
+# (3,500) and no star of 81,239 detections passes; lowered to 20 to 200, the
+# stars pass but the ePSF builder cannot centre the crowded stamps (0.12 to
+# 0.40 px off after 10 shifts). Every difference failed "refpsf: 0 stars, 10
+# needed". ZOGY gets the science PSF for both images, as run 17 did.
+reference_psf = "science"

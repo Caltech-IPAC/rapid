@@ -45,7 +45,10 @@ after the reference background subtraction, on pixels finite and covered
 at ``post_zogy_keep_diffimg_lower_cov_map_thresh``) and writes it as
 ``refimage_psf.fits``. Too few stars fails the job with exit 65 and the
 reason (``refpsf: N stars, 10 needed``) on the job row; there is no
-fallback. `dev` uses a static offline-compiled reference PSF per detector
+fallback. ``[difference] reference_psf = "science"`` is a dataset's
+explicit choice instead (the GBTDS overlay's): no measurement, the science
+PSF written as ``refimage_psf.fits``, the manifest's ``refpsf`` saying so,
+and the metrics that need the reference's stars absent. `dev` uses a static offline-compiled reference PSF per detector
 instead, so this is a recorded divergence (rapid_docs ``decisions.md``,
 2026-10-24: the empirical PSF was 15% wider than the science ePSF the
 ``psf`` stage had handed ZOGY for both, run 17).
@@ -564,7 +567,7 @@ def run(job: JobContext) -> None:
     # The reference PSF, measured on the resampled, background-subtracted reference.
     refpsf_record, metrics, measured_psf = _measure_reference_psf(
         kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
-        w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME))
+        w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME), settings["reference_psf"])
     # Registration, before the subpixel offset corrects it; the science stars' own width beside
     # the ePSF's; the reference catalog's sky positions.
     science_pixels = fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float)
@@ -797,16 +800,31 @@ def run(job: JobContext) -> None:
 
 
 def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh: float,
-                           science_psf: Path, target: Path) -> tuple[dict, dict, refpsf.ReferencePsf]:
+                           science_psf: Path, target: Path, mode: str = "measured",
+                           ) -> tuple[dict, dict, refpsf.ReferencePsf]:
     """Measure the reference PSF into ``target``; return the manifest's record, metrics and the measurement.
 
     Too few stars stops the job with exit 65 and the measurement's reason.
+    ``mode`` ``"science"`` writes the science PSF instead, measuring nothing.
     """
     start = time.perf_counter()
-    image = fits.getdata(reference, 0)
-    usable = fits.getdata(coverage, 0) >= thresh
     science = fits.getdata(science_psf, 0).astype(float)
     sci = refpsf.moments(science / science.sum())
+    if mode == "science":
+        header = fits.Header()
+        header["PSFKIND"] = ("refimage_psf", "the science PSF, [difference] reference_psf")
+        header["OVERSAMP"] = (1, "detector pixels")
+        fits.PrimaryHDU((science / science.sum()).astype("float32"), header).writeto(target)
+        logger.info("reference PSF: the science PSF ([difference] reference_psf = science)")
+        none = refpsf.ReferencePsf(stamp=science / science.sum(), stars=0, detections=0,
+                                   passed_cuts=0, sigma_px=sci[2], centroid_px=(sci[0], sci[1]),
+                                   star_sigma_px=float("nan"))
+        return ({"mode": "science", "seconds": round(time.perf_counter() - start, 3)},
+                {"sci_psf_sigma_px": sci[2]}, none)
+    if mode != "measured":
+        raise ValueError(f"[difference] reference_psf is {mode!r}, not 'measured' or 'science'")
+    image = fits.getdata(reference, 0)
+    usable = fits.getdata(coverage, 0) >= thresh
     try:
         measured = kit.reference_psf(image, usable, science)
     except refpsf.TooFewStars as exc:
@@ -820,7 +838,7 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
     seconds = round(time.perf_counter() - start, 3)
     logger.info("reference PSF: %d stars of %d detections, sigma %.3f px (science %.3f), %.1f s",
                 measured.stars, measured.detections, measured.sigma_px, sci[2], seconds)
-    record = {"stars": measured.stars, "detections": measured.detections,
+    record = {"mode": "measured", "stars": measured.stars, "detections": measured.detections,
               "passed_cuts": measured.passed_cuts, "seconds": seconds,
               "centroid_px": list(measured.centroid_px), "science_centroid_px": [sci[0], sci[1]]}
     metrics = {"refpsf_sigma_px": measured.sigma_px, "refpsf_stars": measured.stars,

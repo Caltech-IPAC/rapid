@@ -13,7 +13,9 @@ zero point is the reference's ``MAGZP`` unless overridden; the reference
 PSF is measured on the resampled, background-subtracted reference over the
 covered pixels and is the one ZOGY and naive get, published and
 recorded in the manifest's ``metrics``; too few stars stops the job with
-exit 65 and the reason, before a manifest; a reference ``psfs`` input
+exit 65 and the reason, before a manifest; ``[difference] reference_psf =
+"science"`` measures nothing and gives ZOGY the science PSF for both
+images, the manifest saying so; a reference ``psfs`` input
 fails; SFFT and naive catalogs take their detection
 overrides and the SFFT image is coverage-masked; every bad input fails the
 job before a manifest is written; the shipped ``[difference]`` table is
@@ -377,3 +379,20 @@ def test_the_bright_footprint_flag_is_set_beside_the_fit_bits_and_drops_nothing(
     assert flagged.column("flags").to_pylist() == [
         SOURCE_FLAG_BRIGHT_FOOTPRINT, 4 | SOURCE_FLAG_BRIGHT_FOOTPRINT, 0]
     assert flagged.schema == sources.schema
+
+
+def test_reference_psf_science_measures_nothing_and_gives_zogy_the_science_psf_for_both(
+        tmp_path, files, fakes, refpsf):
+    body = settings()
+    body["difference"]["reference_psf"] = "science"
+    runner, _ = fakes
+    prefix = run_difference(tmp_path, files, body=body)
+    assert refpsf.calls == []
+    zogy = next(a for a in runner.calls if a[1].endswith("py_zogy.py"))
+    assert zogy[4:6] == ["sciimage_psf_f184_sca07_normalized.fits", "refimage_psf.fits"]
+    stamp = fits.getdata(prefix / "diff" / "refimage_psf.fits.gz")
+    science = fits.getdata(files["science_psf"]).astype(float)
+    assert stamp == pytest.approx(science / science.sum(), abs=1e-6)
+    recorded = manifest(prefix)
+    assert recorded["difference"]["refpsf"]["mode"] == "science"
+    assert not {"refpsf_stars", "refpsf_sigma_px", "ref_sci_sigma_ratio"} & set(recorded["metrics"])
