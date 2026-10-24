@@ -10,11 +10,12 @@ without waiting, and ends by producing the run's newly official packet sets
 to the Kafka topic. The verb repeats passes until one finds nothing new,
 nothing pending and nothing to submit (drained).
 
-The selection (filters, SCAs, pointings) is the operator's instruction for
+The selection (filters, SCAs, pointings, passes) is the operator's instruction for
 this invocation, recorded in every pass's summary; it is not part of the
 run's recipe and widening it changes nothing in the run's settings body.
 A pointing is ``VVV_EEEE``, a visit and exposure, the same in every pass
-of a filter.
+of a filter; a pass is the survey's (the stem's three digits after the
+plan), so a sampled proof of a few epochs is ``--passes 1,2,3,4``.
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported and never resubmitted: its key
@@ -104,18 +105,21 @@ STAGES = ("psf", "intake", "reference", "difference", "associate", "packet")
 
 @dataclasses.dataclass(frozen=True)
 class Selection:
-    """Filters (``F146``), SCAs and pointings (``(visit, exposure)``, or ``None`` for all)."""
+    """Filters (``F146``), SCAs, pointings (``(visit, exposure)``) and the survey's passes, ``None`` for
+    all pointings or all passes."""
 
     filters: frozenset[str]
     scas: frozenset[int]
     pointings: frozenset[tuple[int, int]] | None
+    passes: frozenset[int] | None = None
 
     @classmethod
-    def parse(cls, filters: str, scas: str, pointings: str) -> "Selection":
+    def parse(cls, filters: str, scas: str, pointings: str, passes: str = "all") -> "Selection":
         points = None if pointings == "all" else frozenset(
             (int(v), int(e)) for v, e in (p.split("_") for p in pointings.split(",")))
         return cls(frozenset(f.strip().upper() for f in filters.split(",")),
-                   frozenset(int(s) for s in scas.split(",")), points)
+                   frozenset(int(s) for s in scas.split(",")), points,
+                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")))
 
     def admits_stem(self, stem: str) -> dict | None:
         """The stem's SCA, filter and pointing when the selection admits it, else ``None``."""
@@ -128,19 +132,24 @@ class Selection:
             return None
         if self.pointings is not None and point not in self.pointings:
             return None
+        if self.passes is not None and int(m["pass"]) not in self.passes:
+            return None
         return {"sca": sca, "filter": band, "expid": stem_expid(stem)}
 
     def admits_row(self, expid: int, sca: int, fid: int, fids: set[int]) -> bool:
         """Whether an L2 key is selected, ``fids`` the selected filters' fids; ``expid``
-        packs ``visit * 100 + exposure`` in its last digits."""
+        packs ``pass * 10**6`` and ``visit * 100 + exposure`` in its last digits."""
         if sca not in self.scas or fid not in fids:
+            return False
+        if self.passes is not None and expid // 10**6 not in self.passes:
             return False
         return self.pointings is None or ((expid // 100) % 100, expid % 100) in self.pointings
 
     def summary(self) -> dict:
         return {"filters": sorted(self.filters), "scas": sorted(self.scas),
                 "pointings": "all" if self.pointings is None
-                else [f"{v:03d}_{e:04d}" for v, e in sorted(self.pointings)]}
+                else [f"{v:03d}_{e:04d}" for v, e in sorted(self.pointings)],
+                "passes": "all" if self.passes is None else sorted(self.passes)}
 
 
 def stem_expid(stem: str) -> int:

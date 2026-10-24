@@ -18,7 +18,8 @@ failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone. PSFs: a new stem whose filter and
 SCA lack an official science PSF gets one ``psf`` job for the
 pair, expecting both keys, and no intake; an official pair admits intakes;
-a psf job of the run pending for the pair submits nothing more.
+a psf job of the run pending for the pair submits nothing more. `--passes`
+selects the survey's passes in stems and rows alike, all by default.
 """
 
 from __future__ import annotations
@@ -386,3 +387,13 @@ def test_a_pending_psf_job_submits_nothing_more():
     pending = [{"id": 60, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": stem(1, 1, 1)}}]
     subs, counts = loop.plan(snap(psfs={}, jobs=pending), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
     assert subs == [] and counts["pending"]["psf"] == 1 and counts["new"] == 2
+
+
+def test_passes_select_the_surveys_passes_in_stems_and_rows_and_default_to_all():
+    sel = loop.Selection.parse("F146", "8", "all", "1,3")
+    assert [s for s in (stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)) if sel.admits_stem(s)] == [
+        stem(1, 1, 1), stem(3, 1, 1)]
+    assert [p for p in (1, 2, 3) if sel.admits_row(expid(p, 1, 1), 8, 8, {8})] == [1, 3]
+    subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)], sel)
+    assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(3, 1, 1)]
+    assert sel.summary()["passes"] == [1, 3] and SEL.passes is None and SEL.summary()["passes"] == "all"
