@@ -16,6 +16,10 @@ the stamp galsim.roman draws: no file is read and nothing is fetched, the
 row's fid and file name are the filter's, and the header and manifest name
 galsim; galsim's own stamp (when galsim imports) is ``size x size`` with
 unit sum. The draw is faked in the plumbing test.
+
+With ``[intake] reader = "rimtimsim"``, the reference ``[psf.epsf]`` names
+for the stem's filter is fetched and reduced, no file read, the row the
+stem's filter and SCA's; an empty name refuses.
 """
 
 from __future__ import annotations
@@ -183,3 +187,35 @@ def test_galsims_stamp_is_the_size_asked_with_unit_sum():
     stamp, recorded = psf.galsim_stamp("H158", 10, 15)
     assert stamp.shape == (15, 15) and stamp.sum() == pytest.approx(1.0, abs=1e-9)
     assert 0.5 < recorded["flux_held"] < 1.0 and recorded["wavelength_nm"] > 1000
+
+
+RTS_STEM = "rimtimsim_WFI_F213_SCA02_000000411_lite"
+
+
+def test_a_rimtimsim_stem_reduces_the_reference_psf_epsf_names_and_reads_no_file(tmp_path, monkeypatch):
+    src = tmp_path / "source"
+    src.mkdir()
+    write_reference(src / EPSF, detector="WFI02", optical_element="F213")
+    fetched = []
+
+    def fake_fetch(url: str, target: Path) -> Path:
+        fetched.append(url)
+        shutil.copyfile(src / url.rsplit("/", 1)[-1], target)
+        return target
+
+    monkeypatch.setattr(psf, "fetch", fake_fetch)
+    settings = {"intake": {"source_root": (tmp_path / "absent").as_uri() + "/", "unsigned": False,
+                           "reader": "rimtimsim"},
+                "psf": {"crds_server": "https://crds.example/", "size": 15, "epsf_cache": "",
+                        "epsf": {"F087": "", "F213": EPSF}}}
+    job = JobContext(job=1, run=1, stage="psf", scope={"dataset": "rts1", "file": RTS_STEM},
+                     survey="GBTDS", dataset="rts1", settings=settings, inputs=[], attempt=1,
+                     prefix=tmp_path.as_uri() + "/", connect=lambda: contextlib.nullcontext(None))
+    psf.run(job)
+    assert fetched == [f"https://crds.example/unchecked_get/references/roman/{EPSF}"]
+    (row,) = pq.read_table(tmp_path / "psfs.parquet").to_pylist()
+    assert (row["fid"], row["sca"], row["kind"]) == (psf.FIDS["K213"], 2, "science")
+    assert fits.getheader(tmp_path / "sciimage_psf_f213_sca02.fits")["EPSFREF"] == EPSF
+    job.settings["psf"]["epsf"]["F213"] = ""
+    with pytest.raises(ValueError, match="names no ePSF"):
+        psf.run(job)

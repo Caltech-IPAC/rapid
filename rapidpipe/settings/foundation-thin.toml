@@ -25,7 +25,8 @@ unsigned = false
 # The input format: "soc-l2", the SOC's L2 `<stem>_cal.asdf` read as a Roman
 # data model (dev's ingestL2Files.py, the only format dev reads), or
 # "openuniverse", OpenUniverse 2024's `<filter>/<pointing>/<stem>_simple.asdf`
-# (rapidpipe.science.intake_openuniverse).
+# (rapidpipe.science.intake_openuniverse), or "rimtimsim", RimTimSim's
+# `<stem>.fits.gz` as dev's converter made them (rapidpipe.science.intake_rimtimsim).
 reader = "soc-l2"
 # dev's ingestL2Files.py: SIPDISTORTIONDEGREE's default, to_fits_sip's
 # max_pix_error, L2GZIPLEVEL's default (PR 291).
@@ -76,6 +77,19 @@ size = 61
 # never here. Empty: CRDS alone. A 178.6 MB reference from CRDS took most of
 # a psf job's time.
 epsf_cache = ""
+
+[psf.epsf]
+# New: the CRDS ePSF reference the psf stage reduces for a file that names
+# none (a RimTimSim lite FITS, [intake] reader = "rimtimsim"), by filter;
+# a dataset's overlay names them. Empty: the file names its own (the SOC's).
+F062 = ""
+F087 = ""
+F106 = ""
+F129 = ""
+F146 = ""
+F158 = ""
+F184 = ""
+F213 = ""
 
 [associate]
 # Read by the difference job, which associates its sources with the field's
