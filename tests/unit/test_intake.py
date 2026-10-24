@@ -20,7 +20,11 @@ masked HDU and counts the file's own NaN, the masked pixels and their union
 in the manifest; the HLWAS overlay's bits are #238's names without
 SATURATED; ``[intake] crpix_shift`` (default ``[0, 0]``) is added to
 ``CRPIX1`` and ``CRPIX2`` and recorded in the manifest, and the HLWAS overlay
-carries the WCS ledger's measured translation.
+carries the WCS ledger's measured translation; ``[intake] rederive_wcs``
+(default false, `dev`'s behaviour) fetches nothing and keeps the file's
+gWCS, and on fetches the distortion reference the file names and writes
+the SIP fit of the re-derived gWCS, the manifest naming the reference and
+the shift at the centre; the GBTDS overlay turns it on and HLWAS's does not.
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ import contextlib
 import gzip
 import json
 import re
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -50,7 +56,9 @@ SETTINGS = {"intake": {"source_root": None, "unsigned": False, "reader": "soc-l2
                        "sip_max_pix_error": 0.1, "gzip_level": 1, "program_id": -1,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10,
                        "nominal_zptmag": {"F146": 27.5}, "dq_mask_bits": 0,
-                       "crpix_shift": [0.0, 0.0]}}
+                       "crpix_shift": [0.0, 0.0], "rederive_wcs": False},
+            "psf": {"crds_server": "https://crds.invalid"}}
+DISTORTION = "roman_wfi_distortion_0003.asdf"
 #: Pixels the synthetic file flags, each (y, x, DQ value); (1, 1) is also NaN in the file itself.
 FLAGGED = [(1, 1, 0x1), (2, 3, 0x2000000), (5, 7, 0x2 | 0x400), (9, 9, 0x2), (11, 4, 0x4)]
 NATIVE_NAN = [(1, 1), (20, 20)]
@@ -115,6 +123,7 @@ def write_asdf(path: Path, stem: str = STEM) -> None:
                             "rmse": 0.17, "mae": 0.13}
     meta.calibration_software_version = "0.23.0"
     meta.ref_file.epsf = f"crds://{EPSF}"
+    meta.ref_file.distortion = f"crds://{DISTORTION}"
     path.parent.mkdir(parents=True, exist_ok=True)
     model.save(path)
 
@@ -153,11 +162,13 @@ def source(tmp_path: Path) -> Path:
 
 def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                expects_exposure: bool = True, dq_mask_bits: int = 0,
-               crpix_shift: tuple[float, float] = (0.0, 0.0)) -> Path:
+               crpix_shift: tuple[float, float] = (0.0, 0.0),
+               rederive_wcs: bool = False) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
-    settings = {"intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
-                           "dq_mask_bits": dq_mask_bits, "crpix_shift": list(crpix_shift)}}
+    settings = {**SETTINGS, "intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
+                                       "dq_mask_bits": dq_mask_bits, "crpix_shift": list(crpix_shift),
+                                       "rederive_wcs": rederive_wcs}}
     expects = [{"kind": "expects", "product": "l2files", "key": {}, "source_job": None,
                 "binding": None}]
     if expects_exposure:
@@ -337,3 +348,66 @@ def test_crpix_shift_defaults_to_nothing_and_translates_the_wcs_by_the_setting(t
 def test_the_hlwas_overlay_carries_the_ledgers_translation():
     overlay = tomllib.loads((REPO / "rapidpipe/settings/datasets/hlwas-r00342.toml").read_text())
     assert overlay["intake"]["crpix_shift"] == [0.12, -0.99]
+
+
+#: The re-derived gWCS the faked romancal assigns: the file's moved this many pixels in declination.
+SHIFT_PX = 3.0
+
+
+@pytest.fixture()
+def fake_romancal(monkeypatch, tmp_path):
+    """romancal's ``load_wcs`` faked to assign a moved gWCS, and the CRDS fetch to a local file."""
+    calls = []
+
+    def load_wcs(model, reference_files):
+        calls.append(reference_files)
+        model.meta["wcs"] = distorted_gwcs(dec=-45.2 + SHIFT_PX * 0.11 / 3600)
+        return model
+
+    module = types.ModuleType("romancal.assign_wcs.assign_wcs")
+    module.load_wcs = load_wcs
+    for name in ("romancal", "romancal.assign_wcs"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "romancal.assign_wcs.assign_wcs", module)
+
+    def fetch_reference(server, name, directory):
+        calls.append((server, name))
+        (directory / name).write_bytes(b"distortion")
+        return directory / name
+
+    monkeypatch.setattr(intake, "fetch_reference", fetch_reference)
+    return calls
+
+
+def test_rederive_wcs_defaults_to_devs_behaviour_the_files_own_gwcs(tmp_path, source, fake_romancal):
+    prefix = run_intake(tmp_path, source)
+    assert fake_romancal == []
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["wcs"] == {"rederived": False}
+    assert "wcs_shift_dx_px" not in manifest["metrics"]
+
+
+def test_rederive_wcs_fits_the_gwcs_rederived_from_the_files_own_distortion_reference(
+        tmp_path, source, fake_romancal):
+    prefix = run_intake(tmp_path, source, rederive_wcs=True)
+    assert fake_romancal[0] == ("https://crds.invalid", DISTORTION)
+    assert Path(fake_romancal[1]["distortion"]).name == DISTORTION
+    header, _, _ = science_header(prefix)
+    moved = distorted_gwcs(dec=-45.2 + SHIFT_PX * 0.11 / 3600)
+    centre = (N - 1) / 2
+    ra_s, dec_s = WCS(header).all_pix2world([centre], [centre], 0)
+    ra_g, dec_g = moved(centre, centre)
+    assert np.hypot((ra_s[0] - ra_g) * np.cos(np.radians(dec_g)), dec_s[0] - dec_g) * 3600 / 0.11 \
+        < SETTINGS["intake"]["sip_max_pix_error"]
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["wcs"]["rederived"] and manifest["wcs"]["distortion"] == DISTORTION
+    shift = np.hypot(manifest["metrics"]["wcs_shift_dx_px"], manifest["metrics"]["wcs_shift_dy_px"])
+    assert shift == pytest.approx(SHIFT_PX, abs=0.05)
+
+
+def test_the_gbtds_overlay_rederives_the_wcs_and_hlwas_does_not():
+    overlays = REPO / "rapidpipe/settings/datasets"
+    gbtds = tomllib.loads((overlays / "gbtds-r00340.toml").read_text())
+    hlwas = tomllib.loads((overlays / "hlwas-r00342.toml").read_text())
+    assert gbtds["intake"]["rederive_wcs"] is True
+    assert "rederive_wcs" not in hlwas.get("intake", {})

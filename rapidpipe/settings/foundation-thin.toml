@@ -46,6 +46,11 @@ dq_mask_bits = 0
 # dataset's measured WCS translation (measured minus predicted star
 # position). [0.0, 0.0] is dev's behaviour: the file's WCS unchanged.
 crpix_shift = [0.0, 0.0]
+# Re-derive the gWCS from the file's meta.wcsinfo and its own distortion
+# reference (fetched by name from [psf] crds_server) before the SIP fit:
+# the GBTDS WCS fix (STScI roman_notebooks fix_gbtds_wcs.py). false is dev's
+# behaviour: the file's gWCS.
+rederive_wcs = false
 
 [intake.nominal_zptmag]
 # dev's nominal WFI AB zeropoints [mag], used only when the file carries no
@@ -87,6 +92,13 @@ gaia_max_matches = 3
 # Reference-catalog star and galaxy matches (dev providers.py), likewise.
 refcat_radius_arcsec = 5.0
 refcat_max_matches = 3
+
+[batch]
+# New, not dev's: the most jobs one loop pass submits, in stage order; the
+# rest wait for the next pass. The breadth night's 3,456 intakes submitted
+# at once throttled SSM and 1,448 failed (2026-10-23); 1,000 a pass at the
+# loop's 120 s interval is under that measured case.
+max_submissions_per_pass = 1000
 
 [batch.memory_mib]
 # New, not dev's: the memory each stage's Batch job asks for (a

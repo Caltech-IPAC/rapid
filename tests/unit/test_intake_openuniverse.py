@@ -42,7 +42,7 @@ SETTINGS = {"intake": {"source_root": None, "unsigned": False, "reader": "openun
                        "sip_degree": 5, "sip_max_pix_error": 0.1, "gzip_level": 1,
                        "program_id": -2, "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0,
                        "limmag_maxiters": 10, "nominal_zptmag": {"F158": 26.5113},
-                       "dq_mask_bits": 0,
+                       "dq_mask_bits": 0, "rederive_wcs": False,
                        "crpix_shift": tomllib.loads(OVERLAY.read_text())["intake"]["crpix_shift"]}}
 
 

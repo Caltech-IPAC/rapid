@@ -36,11 +36,20 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   in the image (``rapidpipe.launch.submit``) asking for the run's
   ``[batch.memory_mib]`` memory for the stage, recording the Batch job id
   on the row (``job show`` prints it) and printing both ids;
-- ``loop --run --filters --scas --pointings --job-definition [--once]``
+- ``job wait --job N [N ...] [--timeout S] [--interval S]`` blocks until
+  every named job is ``published`` or ``failed``, reconciling their runs
+  with Batch each check (``rapidpipe.foundation.loop.wait``), and prints the
+  states; exit 0, or 75 when the timeout passes first: one blocking waiter
+  for hand-submitted jobs;
+- ``loop --run --filters --scas --pointings [--passes] --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
   summary line per pass, until a pass finds the selection drained (exit 0)
-  or a job of the run has failed (exit 2 after that pass);
+  or a job of the run has failed (exit 2 after that pass); a job whose
+  container Batch ended without ``job run`` recording it is resubmitted
+  once (its Batch name ending ``-rerun``) and fails the loop only if the
+  rerun's container dies too, and a pass submits at most the run's
+  ``[batch] max_submissions_per_pass``;
 - ``publish --run [--settings FILE]`` produces the run's official packet
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
@@ -180,6 +189,16 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Run an existing job's next attempt in this process and publish it; "
                     "a published job stops before touching a file.")
     job_run.add_argument("--job", required=True, type=int)
+    job_wait = job_subparsers.add_parser(
+        "wait", help="Wait until every named job is published or failed.",
+        description="Block until every named job is published or failed (a container Batch ended "
+                    "without the row recording it counts as failed, Batch's own retry as not "
+                    "ended); print the states; exit 0, or 75 when --timeout passes first.")
+    job_wait.add_argument("--job", required=True, type=int, nargs="+", dest="jobs", metavar="N")
+    job_wait.add_argument("--timeout", type=float, default=7000.0,
+                          help="Seconds before giving up with exit 75 (default 7000).")
+    job_wait.add_argument("--interval", type=float, default=30.0,
+                          help="Seconds between checks (default 30).")
 
     official_parser = subparsers.add_parser(
         "official", help="Change official bindings, or undo a change.",
@@ -223,6 +242,8 @@ def _build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--scas", required=True, help="Comma-separated SCA numbers.")
     loop_parser.add_argument("--pointings", required=True,
                              help="Comma-separated VVV_EEEE (visit, exposure), or 'all'.")
+    loop_parser.add_argument("--passes", default="all",
+                             help="Comma-separated survey pass numbers, e.g. 1,2,3,4, or 'all' (default).")
     loop_parser.add_argument("--job-definition", required=True,
                              help="The Batch job definition the run's revision is registered as.")
     loop_parser.add_argument("--max-intake", type=int, default=100,
@@ -403,7 +424,7 @@ def _loop(args: argparse.Namespace) -> int:
     def connect_loop():
         return connect(application_name="rapidpipe-loop")
 
-    selection = loop.Selection.parse(args.filters, args.scas, args.pointings)
+    selection = loop.Selection.parse(args.filters, args.scas, args.pointings, args.passes)
     with connect_loop() as conn:
         settings = foundation.run_show(conn, args.run)["settings"]
     intake = settings["intake"]
@@ -416,6 +437,11 @@ def _loop(args: argparse.Namespace) -> int:
                                            item["inputs"], item["expects"])
             launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn,
                           memory_mib=launch.memory_mib(settings, item["stage"]))
+
+    def rerun(job_id: int, stage: str) -> None:
+        with connect_loop() as conn:
+            launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
+                          memory_mib=launch.memory_mib(settings, stage), name_suffix=loop.RERUN_SUFFIX)
 
     def publish() -> dict:
         with connect_loop() as conn:
@@ -432,7 +458,7 @@ def _loop(args: argparse.Namespace) -> int:
         started = time.monotonic()
         stems = loop.list_stems(s3, intake["source_root"], selection)
         summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
-                                args.max_intake, batch)
+                                args.max_intake, batch, rerun)
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)
@@ -460,6 +486,11 @@ def _foundation_command(args: argparse.Namespace) -> int:
             _print_json(foundation.run_show(conn, args.id))
     elif command in (("job", "local"), ("job", "run"), ("job", "submit")):
         return _run_job(args)
+    elif command == ("job", "wait"):
+        result = loop.wait(lambda: connect(application_name="rapidpipe-job-wait"), args.jobs,
+                           launch.batch_client(), args.timeout, args.interval)
+        _print_json(result)
+        return int(ExitCode.SUCCESS) if result["ended"] else int(ExitCode.TRANSIENT_FAILURE)
     elif command == ("job", "show"):
         with connect(application_name="rapidpipe-job-show") as conn:
             _print_json(foundation.job_show(conn, args.id))

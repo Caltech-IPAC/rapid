@@ -116,10 +116,14 @@ def model(tree: dict, stem: str) -> _Node:
     return dm
 
 
-def simple_model_to_fits(asdf_path, fits_path, **conversion) -> dict[str, Any]:
+def simple_model_to_fits(asdf_path, fits_path, *, distortion=None, **conversion) -> dict[str, Any]:
     """Convert one OpenUniverse file, named ``<stem>_simple.asdf``, into the intake's FITS file
-    (:func:`build_fits_file`)."""
+    (:func:`build_fits_file`); a ``distortion`` reference is refused (the file names none)."""
     import asdf
+
+    if distortion is not None:
+        raise ValueError("an OpenUniverse file names no distortion reference: [intake] rederive_wcs is"
+                         " the SOC reader's")
 
     stem = Path(asdf_path).name.removesuffix("_simple.asdf")
     with asdf.open(asdf_path, memmap=False, lazy_load=False) as af:

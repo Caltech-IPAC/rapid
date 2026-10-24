@@ -22,6 +22,13 @@ in ``SCI``, ``ERR`` and every ``VAR_*`` array, each of those HDUs carries
 ``DQMASK`` (the bits) and ``NDQMASK`` (the pixels), and ``DQ`` is written
 unchanged; ``dq_mask_bits = 0`` is `dev`'s conversion, nothing masked.
 
+The second is the GBTDS WCS fix (:func:`rederive_wcs`, STScI's
+``roman_notebooks`` ``ccs_simulations/fix_gbtds_wcs.py``): given a
+distortion reference, the gWCS is re-derived from the file's own
+``meta.wcsinfo`` by romancal's ``AssignWcsStep`` body before the SIP fit,
+replacing the one tweakreg left. Without one the file's gWCS is used, as
+`dev` does.
+
 `dev`'s hard-coded tuning is the caller's: the SIP degree and its maximum
 pixel error, the gzip level and the nominal zeropoints (used only when the
 file carries no photometric calibration). `dev`'s ``print`` lines are log
@@ -495,13 +502,40 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
             "sci_nan_input": sci_nan_input}
 
 
-def asdf_to_fits(asdf_path, fits_path, **conversion) -> dict[str, Any]:
-    """Convert one ASDF file, memory-mapped, into a multi-extension FITS file (:func:`build_fits_file`)."""
+def rederive_wcs(dm, distortion) -> tuple[float, float]:
+    """Replace the model's gWCS with one re-derived from its ``meta.wcsinfo`` and ``distortion``.
+
+    romancal's ``load_wcs``, the body of ``AssignWcsStep`` without the
+    step's CRDS lookup (the caller names the reference, the file's own).
+    The notebook's fix first copies ``ra_ref``, ``dec_ref`` and
+    ``roll_ref`` from the L1 file; r00340's L2 files carry the L1 values
+    unchanged (12 of 12 sampled equal), so the L1 file is not read.
+    Returns the pixel position, under the old gWCS, of the sky point the new
+    one puts at the image centre, minus the centre: the shift the fix made.
+    """
+    from romancal.assign_wcs.assign_wcs import load_wcs
+
+    ny, nx = dm.data.shape
+    centre = ((nx - 1) / 2, (ny - 1) / 2)
+    old = dm.meta.wcs
+    load_wcs(dm, {"distortion": str(distortion)})
+    x, y = old.invert(*dm.meta.wcs(*centre), with_bounding_box=False)
+    return float(x - centre[0]), float(y - centre[1])
+
+
+def asdf_to_fits(asdf_path, fits_path, *, distortion=None, **conversion) -> dict[str, Any]:
+    """Convert one ASDF file, memory-mapped, into a multi-extension FITS file (:func:`build_fits_file`).
+
+    With ``distortion`` (a reference file's path) the gWCS is re-derived
+    first (:func:`rederive_wcs`) and the result carries ``wcs_shift_px``.
+    """
     import roman_datamodels as rdm
 
     dm = rdm.open(asdf_path, memmap=True)
     try:
-        return build_fits_file(dm, asdf_path, fits_path, **conversion)
+        shift = None if distortion is None else rederive_wcs(dm, distortion)
+        result = build_fits_file(dm, asdf_path, fits_path, **conversion)
+        return result if shift is None else {**result, "wcs_shift_px": shift}
     finally:
         dm.close()
 
