@@ -81,7 +81,9 @@ row, the SFFT image, ``filename`` the ``.fits.gz``; ``pid`` is drawn from the
 table's identity sequence so the sources can carry it; ``infobitssci`` is
 `dev`'s catalog-outcome mask, ``infobitsref`` the reference's infobits)
 and ``sources`` (the SFFT positive PSF-fit catalog through
-:func:`rapidpipe.science.load.catalogs.source_set`, capped at ``max_sources``
+:func:`rapidpipe.science.load.catalogs.source_set`, under ``diff_flavor =
+"sfft"`` through `dev`'s database prefilter first
+(``[difference.database_prefilter]``), then capped at ``max_sources``
 as the import caps it; a source in a bright reference source's footprint
 carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
 in ``flags``, informational, nothing dropped: :func:`flag_bright_footprint`),
@@ -276,9 +278,23 @@ def check_settings(settings: dict[str, Any]) -> None:
             "[difference.sfft] run_sfft = false: SFFT is the published differencer, so the "
             "job would publish nothing; there is no fallback to ZOGY")
     _zero_point_override(settings)
+    _prefilter_threshold(settings)
     cap = settings.get("max_sources", 0)
     if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
         raise ValueError(f"[difference] max_sources must be a non-negative integer, got {cap!r}")
+
+
+def _prefilter_threshold(settings: dict[str, Any]) -> float | None:
+    """``[difference.database_prefilter] sumrat_prefilter_threshold``: empty
+    means no prefilter at all (`dev`: the section missing), otherwise the
+    number. Applied to SFFT's catalog only, the one that carries sumrat."""
+    value = settings.get("database_prefilter", {}).get("sumrat_prefilter_threshold", "")
+    if value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("[difference.database_prefilter] sumrat_prefilter_threshold must be "
+                         f"empty or a number, got {value!r}")
+    return float(value)
 
 
 def _seed(settings: dict[str, Any]) -> int | None:
@@ -817,7 +833,8 @@ def run(job: JobContext) -> None:
     sources, candidates = source_set(
         catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"],
         max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
-        xy_fit_max_offset=settings["xy_fit_max_offset"])
+        xy_fit_max_offset=settings["xy_fit_max_offset"],
+        sumrat_prefilter_threshold=_prefilter_threshold(settings) if flavor == "sfft" else None)
     reference_xy, reference_sky_rows = _reference_on_grid(reference_sky, header)
     sources, in_footprint = flag_bright_footprint(sources, reference_xy, reference_sky_rows,
                                                   zero_point)

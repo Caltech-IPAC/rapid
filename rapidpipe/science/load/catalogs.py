@@ -73,6 +73,12 @@ CATALOG_COLUMNS: tuple[tuple[str, str], ...] = (
 PIXEL_COLUMNS: tuple[tuple[str, Any], ...] = (
     ("sumrat", np.float64), ("nneg", np.int16), ("nbad", np.int16))
 
+#: `dev`'s edge margin of the database prefilter, in pixels (57559572,
+#: ``loadSECatIntoDBSourcesTable.py``): a source whose nearest pixel is
+#: within it of the image edge is rejected, its 5 x 5 sumrat stamp not
+#: fitting there.
+EDGE_MARGIN = 2
+
 
 def read_joined_catalog(catalog_path, finder_path) -> QTable:
     """`dev`'s read and inner join of a PSF-fit catalog and its finder catalog on ``id``."""
@@ -176,19 +182,47 @@ def write_joined_table_inner_to_csv_file(
     return nrows
 
 
+def prefilter(catalog, naxis1: int, naxis2: int, sumrat_prefilter_threshold: float) -> np.ndarray:
+    """`dev`'s database prefilter on a PSF-fit catalog: the rows it keeps.
+
+    ``sumrat > sumrat_prefilter_threshold`` (`dev` c931b001
+    ``prefilter_database_records``, called by
+    ``loadPSFCatIntoDBSourcesTable.py``), with a null or non-finite sumrat
+    rejected, and the nearest pixel ``floor(x + 0.5)`` of the zero-based fit
+    position at least :data:`EDGE_MARGIN` from every edge (57559572, `dev`'s
+    XSources loader). Both differ from `dev`'s PSF path, which passes a
+    missing sumrat and has no edge cut (decisions.md, dev-prefilter). `dev`'s
+    ``rb > 0`` applies only where a score exists; the rebuild has none.
+    """
+    n = catalog.num_rows
+    sumrat = (catalog.column("sumrat").to_numpy().astype(float)
+              if "sumrat" in catalog.column_names else np.full(n, np.nan))
+    x, y = (catalog.column(c).to_numpy().astype(float) for c in ("x_fit", "y_fit"))
+    with np.errstate(invalid="ignore"):
+        xnear, ynear = np.floor(x + 0.5), np.floor(y + 0.5)
+        return (np.isfinite(sumrat) & (sumrat > sumrat_prefilter_threshold)
+                & (xnear >= EDGE_MARGIN) & (xnear <= naxis1 - 1 - EDGE_MARGIN)
+                & (ynear >= EDGE_MARGIN) & (ynear <= naxis2 - 1 - EDGE_MARGIN))
+
+
 def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2: int, *,
                max_sources: int | None, xy_fit_min: float = XY_FIT_MIN,
-               xy_fit_max_offset: float = XY_FIT_MAX_OFFSET):
+               xy_fit_max_offset: float = XY_FIT_MAX_OFFSET,
+               sumrat_prefilter_threshold: float | None = None):
     """A foundation ``sources`` set from a joined PSF-fit catalog (a ``pyarrow.Table``).
 
-    `dev`'s fit-position bounds, then the brightest ``max_sources`` by
+    `dev`'s fit-position bounds, then `dev`'s database prefilter when
+    ``sumrat_prefilter_threshold`` is a number (``sumrat`` above it, finite,
+    and the nearest pixel at least :data:`EDGE_MARGIN` from the edge;
+    ``None`` applies none of it), then the brightest ``max_sources`` by
     ``flux_fit / flux_err`` (0 or ``None`` keeps every source), mapped as
     :data:`CATALOG_COLUMNS` maps them. ``key`` is the set's ``{dataset,
     expid, sca, fid}``; every source is positive (``isdiffpos``), as the
     positive catalog is the one read. Returns ``(table, candidates)``, the
-    candidates being the sources inside the bounds with a finite ratio,
-    before the cap. `dev`'s ``sumrat``, ``nneg`` and ``nbad`` are carried
-    from the catalog, null where it has no value or no such column.
+    candidates being the sources inside the bounds with a finite ratio that
+    pass the prefilter, before the cap. `dev`'s ``sumrat``, ``nneg`` and
+    ``nbad`` are carried from the catalog, null where it has no value or no
+    such column.
     """
     import pyarrow as pa
 
@@ -200,6 +234,8 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
         snr = np.where(err > 0, flux / err, np.nan)
     keep = ((x >= xy_fit_min) & (x <= naxis1 - xy_fit_max_offset) & (y >= xy_fit_min)
             & (y <= naxis2 - xy_fit_max_offset) & np.isfinite(snr))
+    if sumrat_prefilter_threshold is not None:
+        keep &= prefilter(catalog, naxis1, naxis2, sumrat_prefilter_threshold)
     candidates = np.flatnonzero(keep)
     chosen = candidates[np.argsort(-snr[candidates], kind="stable")][:max_sources or None]
 

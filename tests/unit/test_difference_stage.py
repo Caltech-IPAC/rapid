@@ -274,8 +274,10 @@ def test_the_published_source_set_is_sffts_positive_catalog(tmp_path, files, fak
     zogy_catalog = pq.read_table(work / "zogy_diffimage_masked_psfcat.parquet")
     (row,) = read(prefix, "diffimages")
     header = fits.getheader(work / "sfftdiffimage_masked.fits.gz")
-    expected, _ = source_set(sfft_catalog, KEY, PID, MJDOBS, header["NAXIS1"], header["NAXIS2"],
-                             max_sources=THIN["difference"]["max_sources"])
+    expected, _ = source_set(
+        sfft_catalog, KEY, PID, MJDOBS, header["NAXIS1"], header["NAXIS2"],
+        max_sources=THIN["difference"]["max_sources"],
+        sumrat_prefilter_threshold=THIN["difference"]["database_prefilter"]["sumrat_prefilter_threshold"])
     sources = read(prefix, "sources")
     assert [(s["sid"], s["xfit"], s["yfit"]) for s in sources] == [
         (s["sid"], s["xfit"], s["yfit"]) for s in expected.to_pylist()]
@@ -308,6 +310,31 @@ def test_the_shipped_default_publishes_zogy(tmp_path, files, fakes):
     assert (work / "zogy_diffimage_masked.fits.gz").exists()
     assert not (work / "sfftdiffimage_masked.fits.gz").exists()
     assert (work / "sfftdiffimage_masked_psfcat.parquet").exists()   # SFFT still runs; its catalog is a diagnostic
+
+
+def _unprefiltered(prefix: Path, catalog: str) -> list[int]:
+    """The source ids the code before dev-prefilter kept: bounds, finite ratio, the cap."""
+    header = fits.getheader(next((prefix / "diff").glob("*diffimage_masked.fits.gz")))
+    table, _ = source_set(pq.read_table(prefix / "diff" / catalog), KEY, PID, MJDOBS,
+                          header["NAXIS1"], header["NAXIS2"], max_sources=THIN["difference"]["max_sources"])
+    return table.column("sid").to_pylist()
+
+
+def test_under_zogy_the_source_set_is_not_prefiltered(tmp_path, files, fakes):
+    body = settings(); body["difference"]["diff_flavor"] = "zogy"   # the prefilter left at 0.4
+    prefix = run_difference(tmp_path, files, body=body)
+    expected = _unprefiltered(prefix, "zogy_diffimage_masked_psfcat.parquet")
+    assert expected and [s["sid"] for s in read(prefix, "sources")] == expected
+
+
+def test_sfft_with_the_prefilter_disabled_keeps_the_set_before_it(tmp_path, files, fakes,
+                                                                  monkeypatch):
+    """No sumrat on any source, so the prefilter would drop every one; "" bypasses all of it."""
+    monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
+    prefix = run_difference(tmp_path, files,
+                            body=settings(database_prefilter={"sumrat_prefilter_threshold": ""}))
+    expected = _unprefiltered(prefix, "sfftdiffimage_masked_psfcat.parquet")
+    assert expected and [s["sid"] for s in read(prefix, "sources")] == expected
 
 
 def test_an_unknown_diff_flavor_fails_the_settings_check(tmp_path, files, fakes):
@@ -432,9 +459,10 @@ def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, f
     published image's pixels; the SFFT catalogs and the source set gain sumrat, nneg and nbad."""
     (tmp_path / "with").mkdir()
     (tmp_path / "without").mkdir()
-    after = run_difference(tmp_path / "with", files)
+    unfiltered = settings(database_prefilter={"sumrat_prefilter_threshold": ""})  # no sumrat, no cut
+    after = run_difference(tmp_path / "with", files, body=unfiltered)
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
-    before = run_difference(tmp_path / "without", files)
+    before = run_difference(tmp_path / "without", files, body=unfiltered)
     new = ["sumrat", "nneg", "nbad"]
     old_sources, new_sources = (pq.read_table(p / "sources.parquet") for p in (before, after))
     assert new_sources.num_rows and new_sources.column("sid").equals(old_sources.column("sid"))
