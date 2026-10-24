@@ -4,7 +4,8 @@ One table per stage: a row per job labelled by its scope, a column per
 metric, a metric a job lacks left blank, the run's median and each row's
 deviation from it; the sample is the first and last epoch and every epoch
 above twice the median bright count; the thumbnail keeps each block's
-largest-magnitude pixel.
+largest-magnitude pixel; the cutouts are the residual stars, or without
+them the kept sources of highest S/N inside the image.
 """
 
 from __future__ import annotations
@@ -68,3 +69,12 @@ def test_a_cutouts_star_flux_is_its_aperture_sum_less_the_sky():
     cut = np.full((31, 31), 2.0)
     cut[15, 15] += 500.0
     assert inspect_run.star_flux(cut) == pytest.approx(500.0)
+
+
+def test_the_cutouts_are_the_residual_stars_else_the_kept_sources_of_highest_snr():
+    residual = [{"x": 100.0, "y": 200.0}]
+    assert inspect_run.cutout_stars(residual, [(50.0, 50.0, 900.0)], (400, 400)) == (residual, "residual stars")
+    kept = [(51.0, 61.0, 30.0), (3.0, 200.0, 999.0), (101.0, 101.0, 80.0)]   # one-based; the second at the edge
+    stars, chosen = inspect_run.cutout_stars([], kept, (400, 400))
+    assert [(s["x"], s["y"]) for s in stars] == [(100.0, 100.0), (50.0, 60.0)]
+    assert chosen.startswith("kept sources")
