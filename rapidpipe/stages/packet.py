@@ -33,10 +33,12 @@ manifest's ``reads``, which the publisher writes to ``job_inputs``:
 - the triggers' objects and their members: every membership of those
   objects whose source set is official (``memberships_official``), and the
   set's own; ``sources`` reads, one per source set read;
-- the forced-photometry window: every difference image of the trigger's
-  field and dataset whose difference is official, or the trigger's own,
-  whose L2 ``mjdobs`` is in ``[trigger - forced_window_days, trigger]``,
-  with its L2 row; ``diffimages`` and ``l2files`` reads;
+- the forced-photometry window: every difference image of the dataset
+  whose difference is official, or the trigger's own, whose L2 ``mjdobs``
+  is in ``[trigger - forced_window_days, trigger]`` and whose footprint
+  holds one of the triggers' objects, whichever field the image is centred
+  on (the field rule puts objects wherever a source falls, runbook part 12
+  step 1), with its L2 row; ``diffimages`` and ``l2files`` reads;
 - the official packet sets' ``forced`` rows measured on those images,
   reused, never re-measured; ``packets`` reads.
 
@@ -129,6 +131,9 @@ REFCAT_CATTYPE = 1
 #: `dev`'s upper edge of the forced window, so the trigger epoch is in it.
 TRIGGER_EPSILON_DAYS = 1e-6
 
+#: Slack on the window's reach for images a little larger than the trigger's (distortion).
+WINDOW_REACH_MARGIN = 1.05
+
 INDEX_SCHEMA = pa.schema([
     ("dataset", pa.string()), ("expid", pa.int32()), ("sca", pa.int16()), ("fid", pa.int16()),
     ("object_job", pa.int64()), ("aid", pa.int64()), ("source_job", pa.int64()),
@@ -175,13 +180,17 @@ MEMBERS_SQL = (
     " AND o.product = 'sources' AND o.job = m.job))"
     " ORDER BY m.aid, s.job, s.sid")
 
-#: The window's difference images: official, or the trigger's own, in its field, by L2 mjdobs.
+#: The window's candidate difference images: official, or the trigger's own, of the dataset, by L2
+#: mjdobs, centred within ``reach`` degrees of the trigger image's centre (two of its half-diagonals,
+#: so every image that can overlap it); :func:`_read` keeps those whose footprint holds an object.
 WINDOW_SQL = (
     "SELECT d.job, d.pid, d.rid, d.dataset, d.expid, d.sca, d.fid, d.filename,"
     " d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4, f.filter,"
     " l.mjdobs, l.job AS l2_job"
     " FROM diffimages d JOIN filters f ON f.fid = d.fid JOIN l2files l ON l.rid = d.rid"
-    " WHERE d.dataset = %(dataset)s AND d.field = %(field)s"
+    " WHERE d.dataset = %(dataset)s"
+    " AND 2 * asin(sqrt(power(sin(radians(d.dec0 - %(dec0)s) / 2), 2) + cos(radians(d.dec0))"
+    " * cos(radians(%(dec0)s)) * power(sin(radians(d.ra0 - %(ra0)s) / 2), 2))) <= radians(%(reach)s)"
     " AND l.mjdobs BETWEEN %(lo)s AND %(hi)s"
     " AND (d.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
     " AND o.product = 'diffimages' AND o.job = d.job))"
@@ -304,16 +313,18 @@ def _read(job: JobContext) -> Read:
                     (psf_in["source_job"], *_key_where(psf_in["key"], "psfs")[1]))
         sci_psf = get(cur.fetchone()["filename"])
 
-        cur.execute("SELECT d.field, l.mjdobs FROM diffimages d JOIN l2files l ON l.rid = d.rid"
+        cur.execute("SELECT d.ra0, d.dec0, d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4,"
+                    " l.mjdobs FROM diffimages d JOIN l2files l ON l.rid = d.rid"
                     " WHERE d.job = %s", (source_job,))
         own = cur.fetchone()
         if own is None:
             raise ValueError(f"job {job.job}: source set {source_job} has no difference image row")
-        cur.execute(WINDOW_SQL, {"dataset": key["dataset"], "field": own["field"], "own": source_job,
+        cur.execute(WINDOW_SQL, {"dataset": key["dataset"], "ra0": own["ra0"], "dec0": own["dec0"],
+                                 "reach": window_reach(own), "own": source_job,
                                  "lo": own["mjdobs"] - window_days,
                                  "hi": own["mjdobs"] + TRIGGER_EPSILON_DAYS})
         images = []
-        for d in cur.fetchall():
+        for d in covering(cur.fetchall(), [objects[a][:2] for a in aids], source_job):
             image_key = {"dataset": d["dataset"], "expid": d["expid"], "sca": d["sca"], "fid": d["fid"]}
             reads += [{"product": "diffimages", "key": image_key, "source_job": d["job"]},
                       {"product": "l2files", "key": image_key, "source_job": d["l2_job"]}]
@@ -364,6 +375,32 @@ def _read(job: JobContext) -> Read:
                 trigger_image=trigger_image[0], reuse=reuse,
                 gaia_job=gaia_in["source_job"], gaia_path=gaia_path,
                 refcat_path=get(ref["filename"]) if ref else None, reads=reads)
+
+
+def window_reach(image: dict) -> float:
+    """Degrees from ``image``'s centre within which another image's centre may put it in the window.
+
+    Two of its centre-to-corner separations, with :data:`WINDOW_REACH_MARGIN`:
+    an image of the same detector overlapping it is centred within that.
+    """
+    return 2 * max(_separation(image["ra0"], image["dec0"], image[f"ra{n}"], image[f"dec{n}"])
+                   for n in range(1, 5)) * WINDOW_REACH_MARGIN
+
+
+def covering(candidates: list[dict], positions: list[tuple[float, float]], own: int) -> list[dict]:
+    """The candidate window images whose footprint holds one of ``positions``, and the trigger's own (job ``own``)."""
+    corners = np.array([[d[c] for c in ("ra1", "dec1", "ra2", "dec2", "ra3", "dec3", "ra4", "dec4")]
+                        for d in candidates], dtype=float).reshape(-1, 8)
+    holds = (fp.contains_positions(corners, [p[0] for p in positions], [p[1] for p in positions])
+             if positions and len(candidates) else np.zeros((len(candidates), 0), dtype=bool))
+    return [d for d, row in zip(candidates, holds) if d["job"] == own or row.any()]
+
+
+def _separation(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
+    """Degrees between two positions, the haversine the window's query evaluates."""
+    r1, d1, r2, d2 = map(math.radians, (ra1, dec1, ra2, dec2))
+    h = math.sin((d2 - d1) / 2) ** 2 + math.cos(d1) * math.cos(d2) * math.sin((r2 - r1) / 2) ** 2
+    return math.degrees(2 * math.asin(math.sqrt(min(1.0, h))))
 
 
 def neighbour(name: str, diff: str) -> str:

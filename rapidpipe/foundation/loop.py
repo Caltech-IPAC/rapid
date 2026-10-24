@@ -28,8 +28,9 @@ mapped for the listing, a pointing is the survey's observing-sequence row
 passes.
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
-of the run in state ``failed`` is reported and not resubmitted: its key
-counts as taken until a person reruns it (``job run --job <id>``, or
+of the run in state ``failed`` is reported (``failed``, with its scope) and
+not resubmitted, and the work that does not depend on it goes on, so a
+selection drains around it: its key counts as taken until a person reruns it (``job run --job <id>``, or
 ``job submit --job <id>`` on Batch, which marks the row ``launched``). The one exception is a container
 that died for a reason not the code's (Batch ended it while its row was
 ``launched`` or ``running``: a host reclaimed, a task that failed to start,
@@ -114,6 +115,9 @@ One pass, in order:
   is the recovery sweep for a set whose job died before its
   acknowledgements, and a set still inside its job's send window is
   reported under ``sets_waiting`` and keeps the selection from draining.
+  ``sets_late`` counts the run's sets a sweep sent after that window, so
+  a failing container send shows in the pass line once the sweep has
+  sent its set (none in a healthy run whose gate held nothing).
 """
 
 from __future__ import annotations
@@ -627,7 +631,8 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     counts = {"listed": len(stems), "admitted": len(admitted), "new": len(new), "deferred": deferred,
               "submitted": {s: sum(1 for o in out if o["stage"] == s) for s in STAGES},
               "pending": {s: len(pending[s]) for s in STAGES},
-              "failed": [{"job": j["id"], "stage": j["stage"]} for j in failed], "held": held}
+              "failed": [{"job": j["id"], "stage": j["stage"], "scope": j["scope"]} for j in failed],
+              "held": held}
     return out, counts
 
 
@@ -668,6 +673,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     counts["packets_produced"] = produced["packets"]
     counts["sets_produced"] = produced["sets"]
     counts["sets_waiting"] = produced.get("waiting", [])
+    counts["sets_late"] = produced.get("late", 0)
     counts["drained"] = (counts["new"] == 0 and not submissions
                          and not any(counts["pending"].values()) and not counts["sets_waiting"])
     if held_sets is not None:

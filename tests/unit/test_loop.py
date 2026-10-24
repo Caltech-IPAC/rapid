@@ -46,6 +46,7 @@ selection with passes is refused; a missing PSF submits one psf job.
 from __future__ import annotations
 
 import contextlib
+import json
 
 import pytest
 
@@ -200,7 +201,7 @@ def test_failed_job_is_reported_and_its_key_not_resubmitted():
     failed = [{"id": 80, "stage": "difference", "state": "failed", "scope": {"expid": k1[0], "sca": 8, "fid": 8}}]
     subs, counts = loop.plan(snap(l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30}, jobs=failed), [], SEL)
     assert stages(subs, "difference") == []
-    assert counts["failed"] == [{"job": 80, "stage": "difference"}]
+    assert counts["failed"] == [{"job": 80, "stage": "difference", "scope": failed[0]["scope"]}]
 
 
 def test_drained_pass_exits_zero(monkeypatch, capsys):
@@ -213,16 +214,49 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf"]))
     monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
     monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "late_sets", lambda conn, run: 1)
     monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
     monkeypatch.setattr(loop, "reconcile", lambda conn, run, client, *a: {"retrying": []})
     monkeypatch.setattr(loop.attempts, "run_entries", lambda conn, run: [])
     code = cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
                      "--job-definition", "jd", "--interval", "0"])
     assert code == ExitCode.SUCCESS
-    assert '"drained": true' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert '"drained": true' in out and '"sets_late": 1' in out     # the run's late sets in the pass line
     summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [stem(1, 1, 1)], lambda item: None,
                             lambda: {"packets": 0, "sets": [], "waiting": [90]})
     assert summary["sets_waiting"] == [90] and not summary["drained"]
+
+
+def test_a_failed_chain_holds_only_its_own_work_and_the_loop_exits_2_once_the_rest_drains(monkeypatch, capsys):
+    k1, k2 = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8)
+    failed = {"id": 80, "stage": "difference", "state": "failed", "scope": {"expid": k1[0], "sca": 8, "fid": 8}}
+    rows = {"published_stems": {stem(1, 1, 1), stem(2, 1, 1)}, "l2": {k1: l2row(7, 1.0, 20), k2: l2row(7, 1.1, 21)},
+            "refs": {(7, 8): 30}, "diffs": {k2: 42}, "sources": {k2: 42}}
+    passes = iter([snap(jobs=[failed], **rows),                                     # k2's packet is due
+                   snap(jobs=[failed, {"id": 91, "stage": "packet", "state": "published",
+                                       "scope": {"expid": k2[0], "sca": 8, "fid": 8}}],
+                        packets={k2: 91}, **rows)])
+    submitted = []
+    monkeypatch.setattr(loop, "snapshot", lambda conn, run: next(passes))
+    monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
+    monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
+    monkeypatch.setattr(cli.foundation, "create_job", lambda conn, run, stage, *a: submitted.append(stage) or 91)
+    monkeypatch.setattr(cli.launch, "submit", lambda *a, **kw: "batch-91")
+    monkeypatch.setattr(cli.launch, "job_environment", lambda settings: {})
+    monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([]))
+    monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "late_sets", lambda conn, run: 0)
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
+    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client, *a: {"retrying": []})
+    monkeypatch.setattr(loop.attempts, "run_entries", lambda conn, run: [])
+    code = cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
+                     "--job-definition", "jd", "--interval", "0"])
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert submitted == ["packet"] and len(lines) == 2           # the other chain went on past the failure
+    assert lines[-1]["drained"] and lines[-1]["failed"][0]["job"] == 80
+    assert code == ExitCode.INCOMPLETE
 
 
 class Batch:
@@ -408,7 +442,7 @@ def test_a_container_that_died_unrecorded_is_rerun_once_and_held_pending(monkeyp
     summary = loop.run_pass(lambda: contextlib.nullcontext(conn), 12, SEL, [], lambda item: None, None,
                             batch=Batch({"b-82": ("FAILED", "Task failed to start", "rapid-difference-81-rerun")}),
                             rerun=lambda j, s: reruns.append((j, s)))
-    assert reruns == [] and summary["failed"] == [{"job": 81, "stage": "difference"}]
+    assert reruns == [] and [(f["job"], f["stage"]) for f in summary["failed"]] == [(81, "difference")]
 
 
 def test_a_job_the_code_failed_is_not_rerun():

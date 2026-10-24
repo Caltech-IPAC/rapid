@@ -125,15 +125,20 @@ def test_publication_racing_a_cutover_publishes_unbound(connect, tmp_path):
     assert [r[3] for r in open_bindings(a, product="objects")] == [replacement]
 
 
-def _difference_attempt(tmp_path, job, founded, memberships, reads, radius=1e-4):
-    """A difference job's catalog outputs, with its read and the catalog key in the manifest."""
+def _difference_attempt(tmp_path, job, founded, memberships, reads, radius=1e-4, fields=None):
+    """A difference job's catalog outputs, with its read and the catalog key in the manifest.
+
+    ``fields`` names the locked fields (the field rule's manifest); without it the manifest
+    names its one field as one written before the rule did.
+    """
     root = tmp_path / f"job-{job}" / "attempt-1"
-    write_attempt(root, {"objects": [{**o, "dataset": DATASET, "survey": SURVEY, "field": 1}
+    write_attempt(root, {"objects": [{"field": 1, **o, "dataset": DATASET, "survey": SURVEY}
                                      for o in founded],
                          "memberships": memberships})
     manifest = json.loads((root / "manifest.json").read_text())
     manifest["reads"] = reads
-    manifest["catalog"] = {**FIELD_KEY, "radius": radius}
+    manifest["catalog"] = ({**FIELD_KEY, "radius": radius} if fields is None else
+                           {"dataset": DATASET, "survey": SURVEY, "fields": fields, "radius": radius})
     (root / "manifest.json").write_text(json.dumps(manifest))
     return root.as_uri()
 
@@ -174,3 +179,37 @@ def test_reconcile_attaches_a_founder_to_one_founded_since_the_read_and_records_
     assert [(i["product"], i["source_job"]) for i in job_show(conn, c)["inputs"]
             if i["kind"] == "input"] == [("objects", a)]
     assert job_show(conn, c)["manifest"]["reconcile"]["reconciled"] == 0
+
+
+def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_end_as_one_object(
+        connect, tmp_path):
+    """The field rule: job A founds in field 1 and job B in field 2, 0.18 arcseconds apart, both
+    after an empty read, each locking both fields (each touched field and its neighbours). While
+    another transaction holds field 1's lock B's publication waits; once it is released B's
+    reconcile reads A's object in the neighbouring field and attaches to it."""
+    a_conn, b_conn = connect(), connect()
+    run = new_run(a_conn)
+    a, b = new_job(a_conn, run), new_job(a_conn, run)
+    publish(a_conn, a, 1, _difference_attempt(
+        tmp_path, a, [{"aid": 7, "field": 1, "ra0": 10.0, "dec0": -5.0}], [_member(a, a, 7, 1)], [],
+        fields=[1, 2]))
+    prefix = _difference_attempt(
+        tmp_path, b, [{"aid": 8, "field": 2, "ra0": 10.0 + 0.5e-4, "dec0": -5.0}],
+        [_member(b, b, 8, 1)], [], fields=[2, 1])
+    with a_conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s, 1)", (run,))
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(publish, b_conn, b, 1, prefix)
+        wait_until_blocked(connect(), b_conn.get_backend_pid())
+        a_conn.commit()
+        result = pending.result(timeout=10)
+
+    assert result["published"]
+    assert job_show(a_conn, b)["manifest"]["reconcile"]["reconciled"] == 1
+    with a_conn.cursor() as cur:
+        cur.execute("SELECT job, aid, field FROM objects ORDER BY job")
+        assert cur.fetchall() == [(a, 7, 1)]
+        cur.execute("SELECT object_job, aid FROM memberships WHERE job = %s", (b,))
+        assert cur.fetchall() == [(a, 7)]
+    a_conn.commit()
+

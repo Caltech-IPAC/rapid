@@ -5849,6 +5849,120 @@ from in brackets):
 Brief `day-2026-10-24` (plan v9 Part 7's pruned list): one step per task, numbered by task;
 a task's step lands when its task does, so the numbers can arrive out of order.
 
+2. **The producer idempotent again (PR 388).** PR 371 built the producer
+   with `enable_idempotence=False` because the scratch job role lacked
+   `kafka-cluster:WriteDataIdempotently` (part 11 step 5, run 57). The
+   grant is live since 14:14 UTC (rapid_systems PR 425, role and
+   boundary), so `publish_kafka.producer` asks for idempotence again,
+   named explicitly (kafka-python 3.0.11's default), `acks="all"` kept.
+
+   Proof, run **78** (`r00342-dy-producer`, `2d282a6b`, image
+   `sha256:27b11a9c…`, **`rapid-rebuild:61`**; F146, SCA 8, pointing
+   `001_0001`, passes 1 to 6; 14:52:53 to 15:02:59 UTC, 11 passes, exit 0):
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision 2d282a6baef27bac98de0aa10bcdfd1178a8647a \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --survey HLWAS --dataset r00342-dy-producer
+   rp official change --group live.json ...                 # run 78 live for HLWAS r00342-dy-producer
+   rp job local --run 78 --stage import ...                 # Gaia under the dataset's key, job 21955
+   rp loop --run 78 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4,5,6 --job-definition rapid-rebuild:61 --interval 60
+   python scripts/consume_packets.py --run 78
+   rp publish --run 78
+   scripts/check_run.sh --run 78 --inspect <dir>
+   ```
+
+   Check, held: 15 jobs, each published on its first attempt, nothing
+   failed or rerun; every pass's `sets_produced` and `sets_waiting` empty,
+   so each packet job sent its own set:
+
+   | set | ended | stamped | partition | offsets | packets |
+   |---|---|---|---|---|---|
+   | 21976 | 15:00:31 | 15:00:34 | 1 | 1887..1962 | 76 |
+   | 21977 | 15:00:38 | 15:00:42 | 1 | 1963..2067 | 105 |
+   | 21982 | 15:02:41 | 15:02:45 | 1 | 2068..2166 | 99 |
+
+   Each packet job's Batch log ends with its result's `kafka` field
+   (partition 1 and the offsets above) and holds no `InitProducerId` or
+   authorization error. `rp publish --run 78` afterwards sends nothing
+   (`sets []`). The consumer check: CLEAN, read 280, kept 280, packets
+   expected 280 seen 280, one set sampled (99 valid, 99 byte-equal), range
+   `p1 1887..2166`, 4.4 s. `check_run.sh --inspect`: CLEAN, validate 6/6,
+   reader 3/3, consumer 280/280.
+
+5. **F213's flux scale: the paired difference, the measured scale against
+   the zero points' ratio. The forced scale makes the stars' flux ratio
+   right and leaves the ring, so no setting is born.** The experiment, as
+   the brief set it, ran before any setting existed: one F213 epoch at
+   dev's measured scale (`gainmatch.py`'s median ratio of matched
+   isolated reference stars' `FLUX_APER_6`) and at the scale its fallback
+   uses, `10^(0.4 (MAGZP_ref − ZPTMAG_sci))`, forced by a module constant
+   on the unmerged branch `day/f213-scale-experiment` (`9a775144`). One
+   pair, no third variant. The baseline is part 10's run 54
+   (`r00342-fx-f213`), pass 4 difference job 20104, at `70c6bfaa`.
+
+   ```sh
+   rp run create ... --revision 998fb0ef6b85094744b0e69702eef5d68b2561f6 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61592.05053 \
+     --survey HLWAS --dataset r00342-dy-f213                       # run 76, live (group 20575)
+   rp job local --run 76 --stage import ...                       # Gaia under the dataset's key, job 21939
+   rp loop --run 76 --filters F213 --scas 8 --pointings 001_0001 --passes 1,2,3,4 \
+     --job-definition rapid-rebuild:60 --interval 60              # 14:45 to 14:58 UTC, exit 0
+   rp run create ... --revision 9a7751442e548568dc94450498397e638085d778 \
+     --overlay ... --set ... --set 'difference.paths.{rapid_sw,cfg_path,zogy_code}=<the worktree>' \
+     --survey HLWAS --dataset r00342-dy-f213z                      # run 77, live (group 20577)
+   rp job local --run 77 --stage import|psf|intake ...            # 21973; 21974; 21975, 21978, 21979, 21980
+   rp job submit --run 77 --stage reference --job-definition rapid-rebuild:60 ...   # 21983
+   rp job local --run 77 --stage difference --scope '{"expid": 4070101, "sca": 8, "fid": 4}' ...   # 21986
+   ```
+
+   The loop ran passes 1 to 4 of `001_0001` SCA 8 (three reference epochs,
+   one difference). The difference stage refuses an `l2files` input keyed
+   under another dataset (job 21972, exit 70, `is not the epoch`). So run
+   77 made its own inputs from the same files at the same code: local
+   import, psf and intakes, and the reference on Batch, because its
+   `cfg_path` is the image's `/code/cdf` (a local attempt failed in
+   SExtractor). Only the difference ran at the branch.
+
+   | F213 `001_0001` SCA 8 pass 4 | run 54, job 20104 (`70c6bfaa`) | **measured**, run 76, job 21965 (`:60`) | **forced**, run 77, job 21986 |
+   |---|---|---|---|
+   | `scalefacref` | 0.935 | 0.939 | **0.972** (the zero points' ratio, MAGZP 25.1449) |
+   | science / gain-matched reference flux, 30 residual stars, 6 px aperture, median | 1.043 | 1.036 | **1.002** |
+   | difference / reference flux, same aperture | +0.056 | +0.018 | −0.016 |
+   | core / ring | +0.037 / +0.023 | −0.021 / +0.046 | −0.045 / +0.036 |
+   | candidates / above S/N 20 | 313 / 23 | 366 / 63 | 355 / 50 |
+   | `n_sources_ring_snr_gt20` / `n_in_bright_footprint` | | 24 / 143 | 15 / 132 |
+   | packets | 91 | 91 (consumer check CLEAN 91/91) | not run |
+
+   Evidence: `t5/` in the brief's run directory: the three jobs' JSON,
+   `starratio.py` and its output, and the galleries `inspect-76/` and
+   `inspect-77/`.
+
+   **What it says.** The zero points are right for F213: at their ratio,
+   the bright isolated stars' science-to-reference flux is 1.002. The
+   measured scale sits 3.4% low (0.939 against 0.972), so the
+   catalog-flux bias exists and is about that size. It is not what leaves
+   the residual, though. At the measured scale the core is now negative
+   and the ring positive, where run 54's core was positive. Part 11's
+   `crpix_shift` and the secant-centred reference PSF came between the
+   two. A negative core with a positive ring is a width mismatch, not a
+   scale. Forcing the scale drives the core further negative (−0.045),
+   lowers the ring by a fifth (+0.036) and lowers the count (50 against
+   63 above S/N 20). It does not remove the positive ring, and the
+   galleries at ±0.001 show the same halo on every star both ways.
+
+   The brief's condition was that the forced scale remove the positive
+   core and ring without raising the count. It does not, so no
+   `[difference] scale` is born and nothing merges but this step. Open
+   causes, in order: F213's PSF width mismatch (the reference PSF, 1.387
+   px, against the science ePSF, 1.291 px, and the science stars' own
+   1.326 px). Then the catalog-flux bias of the measured scale (3.4%,
+   measured here), which matters only once the width is right. Run 76's
+   first numbers also differ from run 54's on the same file: a new
+   before for F213 at `:60`.
+
 6. **SCAs 7 and 9's low detection: area lost to masked pixels the
    finder cannot see past (read-only diagnosis; no code, no setting
    changed).** Part 11 step 9's 18-SCA table had SCAs 7 and 9 detecting

@@ -12,7 +12,8 @@ run's median row and, under it, each row's deviation from that median
 ``DIR/run-<id>-difference-<job>.png``: the full-frame difference
 thumbnail and, for up to eight of the job's residual stars
 (``difference.residual_stars`` in its manifest, the stars the core and
-ring fractions are measured on), science, reference and difference
+ring fractions are measured on; when the job measured no reference PSF and
+so lists none, the kept sources of highest S/N instead), science, reference and difference
 cutouts, the difference divided by its star's reference flux (5 px
 aperture less the 8 to 12 px annulus median, the core fraction's) and
 shown at ±:data:`FLUX_STRETCH` per pixel, so every star's residual
@@ -36,8 +37,9 @@ from pathlib import Path
 #: A gallery's residual-star cutouts, at most; their half width, px; the thumbnail's block, px.
 GALLERY_STARS, CUTOUT_HALF, THUMB_BLOCK = 8, 15, 8
 #: The difference cutout's stretch, a fraction of its star's flux per pixel: a +0.006 core
-#: fraction over the 2.5 px core's 20 pixels is 3e-4 per pixel.
-FLUX_STRETCH = 1e-3
+#: fraction over the 2.5 px core's 20 pixels is 3e-4 per pixel; ±1e-3 saturated the cores,
+#: ±3e-3 shows the core and the spikes at once (PR 373's gallery).
+FLUX_STRETCH = 3e-3
 #: Files beside a difference image that the gallery reads.
 SCIENCE, REFERENCE = "bkg_subbed_science_image.fits.gz", "awaicgen_output_mosaic_image_resampled_gainmatched.fits.gz"
 
@@ -128,6 +130,27 @@ def star_flux(cut) -> float:
     return float(np.nansum((cut - sky)[r < APERTURE_PX]))
 
 
+def cutout_stars(residual: list[dict] | None, kept: list[tuple[float, float, float]],
+                 shape: tuple[int, int]) -> tuple[list[dict], str]:
+    """The gallery's cutout positions (zero-based ``x``, ``y``) and what they are.
+
+    The job's residual stars when its manifest lists any; else the kept sources
+    (``kept``: the ``sources`` rows' one-based ``xfit``, ``yfit`` and S/N) of highest
+    S/N whose cutout lies inside the image, at most :data:`GALLERY_STARS`.
+    """
+    if residual:
+        return residual[:GALLERY_STARS], "residual stars"
+    ny, nx = shape
+    chosen = []
+    for x, y, snr in sorted(kept, key=lambda k: -k[2]):
+        x, y = x - 1, y - 1
+        if CUTOUT_HALF <= round(x) < nx - CUTOUT_HALF and CUTOUT_HALF <= round(y) < ny - CUTOUT_HALF:
+            chosen.append({"x": x, "y": y, "snr": snr})
+        if len(chosen) == GALLERY_STARS:
+            break
+    return chosen, "kept sources of highest S/N (no residual stars listed)"
+
+
 def gallery(cur, run: int, job: int, out: Path) -> Path:
     """Render one difference job's PNG; return its path."""
     import matplotlib
@@ -145,12 +168,18 @@ def gallery(cur, run: int, job: int, out: Path) -> Path:
     diff = fits.getdata(get(url), 0).astype(float)
     sci = fits.getdata(get(base + SCIENCE), 0).astype(float)
     ref = fits.getdata(get(base + REFERENCE), 0).astype(float)
-    stars = (stars or [])[:GALLERY_STARS]
+    kept = []
+    if not stars:
+        cur.execute("SELECT xfit, yfit, fluxfit / fluxerr FROM sources WHERE job = %s AND fluxerr > 0",
+                    (job,))
+        kept = cur.fetchall()
+    stars, chosen = cutout_stars(stars, kept, diff.shape)
     finite = diff[np.isfinite(diff)]
     sigma = 1.4826 * float(np.median(np.abs(finite - np.median(finite))))
     fig, axes = plt.subplots(1 + len(stars), 3, figsize=(9, 3 * (1 + len(stars))), squeeze=False)
     axes[0][0].imshow(thumbnail(diff), origin="lower", cmap="gray", vmin=-5 * sigma, vmax=5 * sigma)
-    axes[0][0].set_title(f"job {job} expid {expid}: difference, {THUMB_BLOCK}x peak, ±5σ", fontsize=8)
+    axes[0][0].set_title(f"job {job} expid {expid}: difference, {THUMB_BLOCK}x peak, ±5σ\n"
+                         f" circled: {chosen}", fontsize=8)
     for s in stars:
         axes[0][0].plot(s["x"] / THUMB_BLOCK, s["y"] / THUMB_BLOCK, "o", mfc="none", mec="r", ms=6)
     axes[0][1].axis("off")
