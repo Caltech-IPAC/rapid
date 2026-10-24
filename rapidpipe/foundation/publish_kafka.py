@@ -283,7 +283,15 @@ def client_config(bootstrap_servers: list[str]) -> dict[str, Any]:
 
 
 def producer(bootstrap_servers: list[str], max_request_bytes: int):
-    """A kafka-python producer that waits for every in-sync replica."""
+    """A kafka-python producer that waits for every in-sync replica, not idempotent.
+
+    kafka-python 3.0 is idempotent by default, and its producer-id request
+    needs ``kafka-cluster:WriteDataIdempotently``, which the Batch job role's
+    grant does not hold (2026-10-24, run 57: ``ClusterAuthorizationFailedError``
+    on ``InitProducerIdRequest`` in every packet job). Nothing here is
+    exactly-once, and a retried batch's duplicate is a replay consumers
+    already tolerate, so the producer asks for ``WriteData`` alone.
+    """
     from kafka import KafkaProducer
-    return KafkaProducer(acks="all", max_request_size=max_request_bytes,
+    return KafkaProducer(acks="all", enable_idempotence=False, max_request_size=max_request_bytes,
                          **client_config(bootstrap_servers))
