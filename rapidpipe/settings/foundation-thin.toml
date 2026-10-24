@@ -41,6 +41,11 @@ dq_mask_bits = 0
 # dataset's measured WCS translation (measured minus predicted star
 # position). [0.0, 0.0] is dev's behaviour: the file's WCS unchanged.
 crpix_shift = [0.0, 0.0]
+# Re-derive the gWCS from the file's meta.wcsinfo and its own distortion
+# reference (fetched by name from [psf] crds_server) before the SIP fit:
+# the GBTDS WCS fix (STScI roman_notebooks fix_gbtds_wcs.py). false is dev's
+# behaviour: the file's gWCS.
+rederive_wcs = false
 
 [intake.nominal_zptmag]
 # dev's nominal WFI AB zeropoints [mag], used only when the file carries no

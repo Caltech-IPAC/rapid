@@ -50,6 +50,17 @@ Gaia ``catalogs`` product as an input (the loop does once one is official),
 ``metrics`` records ``gaia_dx_px``, ``gaia_dy_px`` and ``n_gaia_stars``,
 the median offset of the frame's stars from the copy through the shifted
 WCS, measured minus predicted (:mod:`rapidpipe.science.astrometry`).
+
+``[intake] rederive_wcs`` (false, `dev`'s behaviour: the file's gWCS) is
+the GBTDS WCS fix: the stage fetches the distortion reference the file
+names (``meta.ref_file.distortion``) by name from ``[psf] crds_server``
+and the conversion re-derives the gWCS from it before the SIP fit
+(:func:`rapidpipe.science.intake.rederive_wcs`, romancal's
+``AssignWcsStep`` body). The file's own reference, not CRDS's current
+one: r00340 names ``roman_wfi_distortion_0003.asdf``, and the current
+context's ``0076`` puts the frame about 1,770 px away. The manifest's
+``wcs`` records the reference and the shift the fix made at the image
+centre (``metrics.wcs_shift_dx_px`` and ``_dy_px``).
 """
 
 from __future__ import annotations
@@ -59,9 +70,11 @@ import logging
 import re
 import tempfile
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+import asdf
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -132,8 +145,13 @@ def run(job: JobContext) -> None:
     fits_name = f"{stem}_cal.fits.gz"
     with tempfile.TemporaryDirectory(prefix="rapidpipe-intake-") as scratch:
         fits_path = Path(scratch) / f"{stem}_cal.fits"
+        distortion = None
+        if settings["rederive_wcs"]:
+            distortion = fetch_reference(job.settings["psf"]["crds_server"],
+                                         ref_file(asdf_path, "distortion"), Path(scratch))
+            lap("distortion")
         conversion = asdf_to_fits(
-            asdf_path, fits_path, sip_degree=int(settings["sip_degree"]),
+            asdf_path, fits_path, distortion=distortion, sip_degree=int(settings["sip_degree"]),
             sip_max_pix_error=float(settings["sip_max_pix_error"]),
             nominal_zptmag=settings["nominal_zptmag"], swname="rapidpipe intake",
             swvers=f"job {job.job}",  # the job names its run, the run its revision
@@ -177,17 +195,38 @@ def run(job: JobContext) -> None:
     masked = conversion["dq_masked"] or 0
     dq = {"mask_bits": hex(int(settings["dq_mask_bits"])), "masked": masked,
           "nan_input": conversion["sci_nan_input"], "nan_output": nan_output}
+    metrics = {"masked_fraction": masked / n_pixels}
+    wcs = {"rederived": distortion is not None}
+    if distortion is not None:
+        dx, dy = conversion["wcs_shift_px"]
+        wcs |= {"distortion": distortion.name, "shift_px": [round(dx, 4), round(dy, 4)]}
+        metrics |= {"wcs_shift_dx_px": dx, "wcs_shift_dy_px": dy}
     job.write_manifest(
         outputs, source=source,
         provenance={**ids,
                     "romancal": primary.get("HIERARCH meta calibration_software_version"),
                     "wcs_fit_results": fit},
-        dq=dq, metrics={"masked_fraction": masked / n_pixels, **(gaia or {})},
+        dq=dq, wcs=wcs, metrics={**metrics, **(gaia or {})},
         crpix_shift=shift,
         conversion={"hdus": conversion["hdus"], "asdf_bytes": asdf_path.stat().st_size,
                     "fits_bytes": fits_bytes, "fits_gz_bytes": (job.path / fits_name).stat().st_size,
                     "timings_s": timings})
     log.info("intake %s: %s", stem, timings)
+
+
+def ref_file(path: Path, reftype: str) -> str:
+    """The CRDS reference of ``reftype`` the L2 file names, without the ``crds://`` scheme."""
+    with asdf.open(path, lazy_load=True, memmap=False) as af:
+        return PurePosixPath(str(af["roman"]["meta"]["ref_file"][reftype])).name
+
+
+def fetch_reference(server: str, name: str, directory: Path) -> Path:
+    """The CRDS reference file ``name``, fetched by name from ``server`` into ``directory``."""
+    target = directory / name
+    url = server.rstrip("/") + "/unchecked_get/references/roman/" + name
+    with urllib.request.urlopen(url, timeout=60) as reply, target.open("wb") as stream:
+        stream.write(reply.read())
+    return target
 
 
 def primary_fit(primary) -> dict:

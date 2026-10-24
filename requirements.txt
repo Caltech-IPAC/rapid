@@ -44,5 +44,8 @@ aws-msk-iam-sasl-signer-python>=1.0
 # difference stage's modules/sip_tpv converts SIP to PV with sympy.
 asdf>=5.0
 roman_datamodels>=1.1
+# The intake's GBTDS WCS fix ([intake] rederive_wcs) re-derives the gWCS with
+# romancal's AssignWcsStep body, assign_wcs.load_wcs, imported lazily.
+romancal>=1.1
 gwcs>=1.0
 sympy>=1.12

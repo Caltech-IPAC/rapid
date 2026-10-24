@@ -1,0 +1,28 @@
+# The overlay for dataset family r00340 (STScI's SOC GBTDS simulation, L2
+# ASDF), given at `rapidpipe run create --overlay`. It holds only the keys
+# whose value differs from the shipped defaults (foundation-thin.toml, dev's
+# values) for this dataset, each with the measurement that earned it; a key
+# the base does not have is refused (rapidpipe.foundation.layers). Locations
+# and per-run values are not here: `intake.source_root` (the L2 prefix) and
+# `reference.selection.before_mjd` (the bound: GBTDS has no passes, so the
+# reference is a field's first epochs) come by `--set` at `run create`.
+# The measurements are runbook part 11 step 1's, file
+# r0034001002001001005_0001_wfi08_f146 (F146, SCA 8, the 268.54 -28.54
+# pointing, pass 2).
+
+[intake]
+# The SOC simulations sit in a public bucket, read anonymously (as HLWAS).
+unsigned = true
+# r00340's L2 gWCS is tweakreg's spurious match in a crowded field (54,059
+# "matches", rmse 0.49 px): its stars sit (-28.8, +21.6) px from where the
+# re-derived WCS puts them. Re-derived from the file's own wcsinfo and
+# distortion reference (roman_wfi_distortion_0003), the input catalog's
+# isolated stars brighter than F146 19 land (+0.03, -0.03) px from their
+# measured centroids (9,993 matched, scatter 0.05 px); through the L2 gWCS
+# they match at the chance rate of a 40 px shifted control.
+rederive_wcs = true
+# HLWAS's mask (#238's bits without SATURATED). The same flags populate this
+# frame (DO_NOT_USE, DEAD, NONLINEAR, NO_LIN_CORR, UNRELIABLE_FLAT; 0.077% of
+# pixels) and all 9 isolated pixels above 1000 DN/s carry one; SATURATED is
+# on 0.51%, the cores of the bulge's bright stars.
+dq_mask_bits = 0x2110C01
