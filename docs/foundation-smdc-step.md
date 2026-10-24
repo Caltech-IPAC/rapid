@@ -7768,7 +7768,7 @@ Check, held:
 
 **Applying the rule.**
 
-- **Where C′ loses.** Its 12 lost detections are all faint: AB 26.0 drops from 46 to 41 of 60 and AB 26.5 from 20 to 12 of 60. AB 25.5 gains one.
+- **Where C′ loses.** All its losses are faint: AB 26.0 drops from 46 to 41 of 60 and AB 26.5 from 20 to 12 of 60, 13 in all. AB 25.5 gains one, so the net loss is 12.
 - **The conditions.** Of dev-prefilter's rule, AB 24 to 25 (equal), false positives (mean and highest) and null packets hold. The planner's added condition holds too: core and ring are inside the gate bounds on all four differences. The total detected does not: 530 against 542.
 - **So the overlay stays ZOGY.**
 
