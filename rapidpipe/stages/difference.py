@@ -1103,8 +1103,9 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         science_image_filename, crossconv_flag,
         s["sfft_bsmask_value"], s["sfft_bsmask_radius"],
         bool(s["sfft_use_gainmatch_catalogs"]), bool(s["sfft_use_segmentation"]))
+    # The one unchecked tool: a failed SFFT leaves ZOGY's products, as in dev.
     exit_code = int(kit.runner.run_shell(
-        sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir))
+        sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir, check=False))
     if exit_code != 0:
         return exit_code, 0
 

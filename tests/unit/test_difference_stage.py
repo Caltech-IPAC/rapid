@@ -17,7 +17,8 @@ covered pixels and is the one ZOGY and naive get, published and
 recorded in the manifest's ``metrics``; too few stars stops the job with
 exit 65 and the reason, before a manifest; ``[difference] reference_psf =
 "science"`` measures nothing and gives ZOGY the science PSF for both
-images, the manifest saying so; a reference ``psfs`` input
+images, the manifest saying so; a failed SFFT is the one tool failure
+the job carries on past, with ZOGY's products; a reference ``psfs`` input
 fails; SFFT and naive catalogs take their detection
 overrides and the SFFT image is coverage-masked; every bad input fails the
 job before a manifest is written; the shipped ``[difference]`` table is
@@ -332,6 +333,14 @@ def test_the_sfft_image_is_masked_by_the_reference_coverage(tmp_path, files, fak
     run_difference(tmp_path, files)
     assert np.isnan(seen["masked"][:, :3]).all() and np.isfinite(seen["masked"][:, 10:-10]).any()
     assert seen["unmasked"]
+
+
+def test_a_failed_sfft_leaves_the_job_publishing_zogy(tmp_path, files, fakes):
+    runner, _ = fakes
+    runner.sfft_exit_code = 1
+    prefix = run_difference(tmp_path, files)
+    (row,) = read(prefix, "diffimages")
+    assert row["filename"].endswith("/diff/zogy_diffimage_masked.fits.gz")
 
 
 def test_max_sources_caps_the_source_set_and_records_the_count_before_it(tmp_path, files, fakes):
