@@ -129,3 +129,22 @@ class _Overshooting:
 def test_the_centring_converges_where_the_centroid_overshoots_the_shift():
     stamp = refpsf._evaluate_centred(_Overshooting(), 61)
     assert max(map(abs, refpsf.moments(stamp)[:2])) < refpsf.CENTRING_TOLERANCE_PX
+
+
+def test_the_search_centres_what_the_stepping_does_not():
+    # One shift is too few for the stepping (job 21029's ePSF stalled it over ten); the search finishes.
+    stamp = refpsf._evaluate_centred(_Overshooting(), 61, iterations=1)
+    assert max(map(abs, refpsf.moments(stamp)[:2])) < refpsf.CENTRING_TOLERANCE_PX
+
+
+class _Uncentrable:
+    """An ePSF whose centroid never comes within the tolerance of the centre."""
+
+    def evaluate(self, x, y, flux, x0, y0):
+        c = (x.shape[0] - 1) / 2
+        return flux * np.exp(-((x - c - 2.0) ** 2 + (y - c) ** 2) / (2 * 1.1 ** 2))
+
+
+def test_an_uncentrable_epsf_still_raises():
+    with pytest.raises(ValueError, match="at best over the search"):
+        refpsf._evaluate_centred(_Uncentrable(), 61)
