@@ -5286,6 +5286,107 @@ does, so the numbers can arrive out of order.
    grows as the square of its epochs inside one window; the packet job's
    time grows with it (21 s at depth 1, about 300 s at depth 12 to 14).
 
+7. **Association in the difference job, reconciled at publish; the set
+   chain retired (PRs 378 and 379, merged `556fef84` and `0baea0b2`;
+   rapid_docs 97).** The plan's amendment of 2026-10-24 as code. The
+   difference job reads its field's objects of its run as they stand,
+   records the founding jobs it saw as `objects` inputs, matches its
+   sources in memory and publishes `objects` (founded here) and
+   `memberships` (each with its source's offsets from the object's
+   origin and its flux) beside its sources; the publisher, under a
+   transaction-scoped lock on (run, field), attaches the job's founded
+   objects to any founded since its read, rebased. The packet job names
+   only its source set, PSF, Gaia and reference, and reads the objects,
+   official members, forced window and official forced rows as they
+   stand, recording the read. The loop has no associate step: a packet
+   per official source set, in any order. Retired: the associate stage,
+   `members_official`, the exclusions, `thin_proof.py`.
+
+   The granted statement, `database/2026-10-24-object-catalog.sql`,
+   applied once on SMDC as `postgres` by SSM on the database host before
+   PR 378 merged (one transaction, the file piped to `podman exec -i
+   rapid-postgres psql -U postgres -d rapid -v ON_ERROR_STOP=1`):
+
+   Check, held: `COMMIT` at 06:54:56 UTC; the chain's rows kept as
+   `objects_chain` 2,444,364 and `memberships_chain` 909,496 (the counts
+   of `objects` and `memberships` before); the new tables empty; the
+   pipeline role holds SELECT, INSERT, UPDATE, DELETE and MAINTAIN on
+   them by the default privileges; `members_official` gone.
+
+   Image `rebuild-556fef84…` (`sha256:aaf689fa…`): **`rapid-rebuild:58`**
+   (production `:49` with it, the template's design). Proof under
+   dataset `r00342-nt-assoc`, **run 69**, live; Gaia job 20246:
+
+   ```sh
+   rp run create ... --revision 556fef8420172779559a97699f124376e8248441 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --survey HLWAS --dataset r00342-nt-assoc
+   rp loop --run 69 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4,5 --job-definition rapid-rebuild:58 --interval 60
+   rp loop --run 69 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4,5,6 --job-definition rapid-rebuild:58 --interval 60
+   scripts/check_run.sh --run 69 --inspect DIR
+   ```
+
+   **Two epochs in flight at once.** Passes 4 and 5 were differenced from
+   one pass (07:03:15 UTC), jobs 20254 (07:03:26 to 07:06:30) and 20255
+   (07:05:05 to 07:08:13), 13 passes, drained 07:09:15, no failure. Each
+   job reads the catalog after its catalog step, seconds before it
+   publishes, so 20255 read 20254's 76 objects (`objects_read` 76, one
+   founding job recorded) and founded 72; the reconcile found nothing
+   founded since its read. Overlapping execution does not race the
+   read-to-publish window, which is seconds wide.
+
+   **The reconcile on SMDC, replayed** (`replay.py` in the brief
+   directory): job 20261 of run 69, a copy of 20255's source set
+   associated as if it had read the catalog before any epoch published
+   (an empty read), expecting no binding, published through `run_job` and
+   the publisher: 105 founded, 201 objects founded since its read, 105
+   reconciled, 0 inserted, 105 memberships attached to 2 founding jobs.
+   The attached memberships equal 20255's sequential ones, the same 105
+   (object, source) pairs, and their rebased offsets equal the direct
+   offsets of the sources from the surviving origins to 0.0 degrees.
+
+   **A late epoch.** Pass 6 (job 20259, 07:17:40 to 07:20:45, the second
+   loop, 13 passes, drained 07:21:59) read 148 objects of 2 founding jobs
+   and founded 53. Packet 20256 (pass 4) recorded reading 1 source set
+   besides its own input, 20257 (pass 5) 2, 20260 (pass 6) 3: pass 6's
+   memberships are in no packet issued before it arrived.
+
+   **A superseded set.** Pass 4 differenced again (job 20262, expecting
+   the open bindings 27689 and 27690): bound; it founded 0 and its 76
+   memberships are the same 76 (object, source) pairs as 20254's; 20254's
+   76 rows stay in `memberships` and are out of `memberships_official`;
+   the run holds 201 objects before and after.
+
+   Check, held: `check_run.sh --run 69 --inspect` CLEAN, validate 6/6
+   (`catalog`: 201 objects in 1 field, 462 memberships within the radius,
+   181 of source sets not official and out of the view, every accepted
+   source of an image's field a member, no duplicate founders, 201
+   official objects' sums equal to their members'), reader 3/3, consumer
+   280/280. The first `check_run.sh` found three checks still reading the
+   chain (PR 379 fixed them).
+
+   | | run 46, chained (SCA 8, 3 epochs) | run 69 (2 epochs, then 1) |
+   |---|---|---|
+   | last difference ended to last packet ended | 5.2 min (02:20:56 to 02:26:05) | 31 s (07:08:13 to 07:08:44) |
+   | associate jobs | 3 of 1.2 s each, chained | none |
+   | catalog read of the field's ~200 objects | 422 ms (`members_official`, the chain view) | 0.9 ms (`objects_official`) |
+
+   Run 46's chain read beside it (the diagnostic): fields 5387158,
+   5383350, 5383352, objects 158, 282, 275; members per object 1.37,
+   1.34, 1.31, at most 3, 5, 4. Run 69's field 5387158: 201 objects for
+   three epochs of SCA 8. No materialisation: the view reads the field in
+   under a millisecond.
+
+   What the next step must know: an image's sources outside its field and
+   the field's neighbours are never associated, and those in a
+   neighbouring field only join objects within the radius (`dev`'s pass
+   2); on run 69, 374 of the accepted sources lay outside the image's own
+   field, so a field nobody's image is centred on founds no object. That
+   was so under the chain too; it is the next association question.
+   Packets now read and record their window at execution, so an
+   injection or Spot run needs no change to the loop's order.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
