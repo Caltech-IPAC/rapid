@@ -36,6 +36,7 @@ from typing import Any, Sequence
 
 from rapidpipe.db.connection import parameter_tree_environment
 from rapidpipe.foundation import attempts, publish_kafka
+from rapidpipe.foundation.local import failure_reason
 from rapidpipe.stages.contract import STAGE_NAMES
 
 __all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "run_locally", "spot", "submit"]
@@ -76,6 +77,9 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     the job asks for that memory instead of the job definition's. ``name_suffix`` ends
     the Batch job's name (the loop's rerun marks its one automatic rerun so).
     ``environment_extra`` (:func:`job_environment`) is added to the job's environment.
+    When the Batch request itself raises, the row (with ``conn``) is marked
+    ``failed`` with the error as its ``refusal`` and the error propagates; a
+    failure recording the id after an accepted request is not caught here.
     """
     queue = queue or os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
     if not queue:
@@ -95,7 +99,16 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
                "jobDefinition": job_definition, "containerOverrides": overrides}
     if one_attempt:
         request["retryStrategy"] = {"attempts": 1}
-    response = (client or batch_client()).submit_job(**request)
+    try:
+        response = (client or batch_client()).submit_job(**request)
+    except Exception as exc:
+        if conn is not None:                # never left ``launched`` with nothing on Batch
+            conn.rollback()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE jobs SET state = 'failed', ended = now(), refusal = %s"
+                            " WHERE id = %s AND state <> 'published'", (failure_reason(exc), job_id))
+            conn.commit()
+        raise
     if conn is not None:
         with conn.cursor() as cur:
             cur.execute("UPDATE jobs SET batch_job_id = %s, state = CASE WHEN state = 'failed'"

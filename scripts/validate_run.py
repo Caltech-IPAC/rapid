@@ -11,9 +11,9 @@ jobs of ``--run``:
   recorded (those a stage recorded at its read included) and every binding naming them resolves to
   a published job's row of its key; every ``expects`` binding names its
   product and key.
-- ``tables``: every published job's declared Parquet outputs hold as many
-  rows as its table rows, match their manifest checksums, and no table holds
-  rows of the job that it did not declare.
+- ``tables``: the run has a published job; every published job's declared
+  Parquet outputs hold as many rows as its table rows, match their manifest
+  checksums, and no table holds rows of the job that it did not declare.
 - ``catalog``: the object catalog's contract (plan amendment 2026-10-24):
   every official source of the run that the association accepts (its
   ``[associate]`` flags and S/N), wherever on its image it falls, is a
@@ -42,9 +42,10 @@ jobs of ``--run``:
 - ``twice`` (only with ``--twice A,B``): two executions of one key are both
   published with equal source rows but for job and pid, and at most one is
   bound.
-- ``counts``: no job of the run is still launched or running; the jobs per
+- ``counts``: the run has jobs and none is failed or still launched or
+  running (a run that failed on purpose reads not clean too); the jobs per
   stage and state, the rows per table and the open bindings are printed.
-  With ``--scas``, a pending job whose scope names another SCA is a second
+  With ``--scas``, such a job whose scope names another SCA is a second
   loop's under the same run and is reported, not counted (two loops on one
   run raced this check, 2026-10-24); a job naming no SCA always counts.
 
@@ -267,6 +268,8 @@ def check_tables(run: int) -> bool:
         bad += b
         n_outputs += n_out
         n_rows += n_row
+    if not jobs:
+        bad.append(f"run {run} has no published jobs")
     return report("tables", bad, f"{len(jobs)} published jobs, {n_outputs} declared outputs and"
                   f" {n_rows} rows: counts equal, checksums match", t0)
 
@@ -517,17 +520,19 @@ def pending_outside(pending: list[dict], scas: set[int] | None) -> tuple[list[di
 def check_counts(run: int, scas: set[int] | None = None) -> bool:
     t0 = time.perf_counter()
     jobs = q("SELECT stage, state, count(*) n FROM jobs WHERE run = %s GROUP BY 1, 2 ORDER BY 1, 2", (run,))
-    pending, others = pending_outside(q("SELECT stage, state, scope FROM jobs WHERE run = %s"
-                                        " AND state IN ('launched', 'running')", (run,)), scas)
-    bad = [f"{n} {stage} jobs still {state}"
-           for (stage, state), n in sorted(Counter((j["stage"], j["state"]) for j in pending).items())]
+    unfinished, others = pending_outside(q("SELECT stage, state, scope FROM jobs WHERE run = %s"
+                                           " AND state IN ('launched', 'running', 'failed')", (run,)), scas)
+    bad = [f"{n} {stage} jobs {state}" if state == "failed" else f"{n} {stage} jobs still {state}"
+           for (stage, state), n in sorted(Counter((j["stage"], j["state"]) for j in unfinished).items())]
+    if not jobs:
+        bad.append(f"run {run} has no jobs")
     rows = {t: q(f"SELECT count(*) n FROM {t} x JOIN jobs j ON j.id = x.job WHERE j.run = %s", (run,))[0]["n"]
             for t in TABLES}
     (o,) = q("SELECT count(*) n FROM official o JOIN jobs j ON j.id = o.job WHERE j.run = %s"
              " AND o.closed_at IS NULL", (run,))
     detail = (f"jobs {json.dumps({f'{r['stage']} {r['state']}': r['n'] for r in jobs})}; rows"
               f" {json.dumps({t: n for t, n in rows.items() if n})}; {o['n']} open bindings"
-              + (f"; {len(others)} pending jobs of SCAs outside {sorted(scas)} not counted" if scas else ""))
+              + (f"; {len(others)} unfinished jobs of SCAs outside {sorted(scas)} not counted" if scas else ""))
     return report("counts", bad, detail, t0)
 
 

@@ -20,7 +20,7 @@
 #   scripts/check-public-safety.sh                # scan the tracked working tree
 #   scripts/check-public-safety.sh <sha-or-ref>    # scan the tree at a commit
 #
-# Exits non-zero on any unallowlisted hit.
+# Exits 1 on any unallowlisted hit, 2 when git grep itself fails.
 
 set -u
 
@@ -63,46 +63,31 @@ EOF
     return 1
 }
 
-# scan_sha <sha>: grep the tree at <sha> (or a git-grep-able ref), print
-# violations, return 1 if any.
-scan_sha() {
-    local sha=$1 bad=0 label allow regex file line match
+# scan [<sha>]: grep the tree at <sha> (a git-grep-able ref), or the
+# tracked working tree without one, print violations, return 1 if any and 2
+# if git grep itself failed (status above 1: a bad ref, no PCRE), so a
+# broken scan never reads as clean.
+scan() {
+    local sha=${1:-} bad=0 label allow regex entry file line match hits status
     while IFS='|' read -r label allow regex; do
-        while IFS=: read -r file line match; do
-            [ -n "$file" ] || continue
+        hits=$(git grep -nIoP -e "$regex" ${sha:+"$sha"} --)
+        status=$?
+        if [ "$status" -gt 1 ]; then
+            echo "check-public-safety: git grep failed (exit $status) for [$label]" >&2
+            return 2
+        fi
+        while IFS= read -r entry; do
+            [ -n "$entry" ] || continue
+            [ -z "$sha" ] || entry=${entry#"$sha:"}
+            IFS=: read -r file line match <<<"$entry"
             if [ "$allow" = "yes" ] && is_allowed "$file" "$match"; then
                 continue
             fi
             echo "check-public-safety: BLOCKED [$label] $file:$line: $match" >&2
             bad=1
-        done <<EOF
-$(git grep -nIoP -e "$regex" "$sha" -- 2>/dev/null | sed "s/^$sha://")
-EOF
-    done <<PATTERNS
-db-host|no|$DB_HOST
-ecr-alias|no|$ECR_ALIAS
-aws-account-12digit|yes|(?<![0-9.])[0-9]{12}(?![0-9])
-users-path|yes|/Users/[A-Za-z0-9_.-]+
-personal-notes-path|yes|~/(Vault|Claude)\b
-PATTERNS
-    return $bad
-}
-
-# scan_worktree: same checks against the tracked working tree (no commit
-# required), for a plain local or CI run.
-scan_worktree() {
-    local bad=0 label allow regex file line match
-    while IFS='|' read -r label allow regex; do
-        while IFS=: read -r file line match; do
-            [ -n "$file" ] || continue
-            if [ "$allow" = "yes" ] && is_allowed "$file" "$match"; then
-                continue
-            fi
-            echo "check-public-safety: BLOCKED [$label] $file:$line: $match" >&2
-            bad=1
-        done <<EOF
-$(git grep -nIoP -e "$regex" -- 2>/dev/null)
-EOF
+        done <<HITS
+$hits
+HITS
     done <<PATTERNS
 db-host|no|$DB_HOST
 ecr-alias|no|$ECR_ALIAS
@@ -114,18 +99,11 @@ PATTERNS
 }
 
 sha="${1:-}"
-if [ -n "$sha" ]; then
-    if scan_sha "$sha"; then
-        echo "check-public-safety: scan of $sha clean"
-        exit 0
-    fi
-    echo "check-public-safety: scan of $sha found violations" >&2
-    exit 1
-else
-    if scan_worktree; then
-        echo "check-public-safety: scan of working tree clean"
-        exit 0
-    fi
-    echo "check-public-safety: scan of working tree found violations" >&2
-    exit 1
-fi
+scan "$sha"
+status=$?
+what="${sha:-working tree}"
+case $status in
+    0) echo "check-public-safety: scan of $what clean"; exit 0 ;;
+    1) echo "check-public-safety: scan of $what found violations" >&2; exit 1 ;;
+    *) echo "check-public-safety: scan of $what could not run" >&2; exit 2 ;;
+esac

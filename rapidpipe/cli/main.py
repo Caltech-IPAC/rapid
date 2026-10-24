@@ -44,7 +44,9 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
 - ``loop --run --filters --scas --pointings [--passes] --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
-  summary line per pass, until a pass finds the selection drained: exit 0,
+  summary line per pass, until a pass finds the selection drained: exit 0
+  (64 when the first pass finds no stem of the selection under the source
+  root, a selection that matches nothing),
   or 1 when a job of the run has failed or was published with its binding
   refused, those jobs named in the pass's ``failed`` with their ``refusal``
   (such a job holds only the work that depends on it, and the rest drains
@@ -69,7 +71,11 @@ A refused change group, or a job published but refused its automatic
 binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr;
 a job published under a run that is not live exits 0 with the refusal on
 stderr and on its row, so Batch's status means "the job ran". A run, job
-or group that does not exist, or an unreadable file, exits 64. Data goes to stdout, everything else to stderr.
+or group that does not exist, or an unreadable file, exits 64. A transient
+failure (the database unavailable or failing mid-query, a storage or AWS
+call throttled, timed out or unreachable) exits 75, so Batch repeats the
+job; a failed job's row records the same code (:func:`exit_code`). Data
+goes to stdout, everything else to stderr.
 
 Stage modules are resolved by ``importlib.import_module`` at call time, so
 ``rapidpipe.cli`` stays the only place that decides which stage code loads.
@@ -88,6 +94,8 @@ import time
 import tomllib
 from pathlib import Path
 from typing import Any, Sequence
+
+import psycopg2
 
 from rapidpipe import __version__
 from rapidpipe import foundation, launch
@@ -387,7 +395,7 @@ def _run_job(args: argparse.Namespace) -> int:
             raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
         _print_json({"job": job_id, "batch_job": batch_job})
         return int(ExitCode.SUCCESS)
-    result = foundation.run_job(connect_job, job_id, root, stage_run)
+    result = foundation.run_job(connect_job, job_id, root, stage_run, exit_code=exit_code)
     if stage == "packet" and result["published"] and result["group"] is not None:
         result["kafka"] = _send_own_set(connect_job, job_id)
     _print_json(result)
@@ -493,6 +501,7 @@ def _loop(args: argparse.Namespace) -> int:
         return [{k: a[k] for k in ("job", "difference_job", "metric", "value", "bound", "reason")}
                 for a in answers if not a["send"]]
 
+    first = True
     while True:
         started = time.monotonic()
         stems = loop.list_stems(s3, intake["source_root"], selection)
@@ -501,6 +510,12 @@ def _loop(args: argparse.Namespace) -> int:
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)
+        if first and summary["admitted"] == 0:      # a later pass admitting nothing new is the drain
+            raise CommandExit(int(ExitCode.USAGE),
+                              f"the first pass found no stem under {intake['source_root']} for filters"
+                              f" {args.filters}, SCAs {args.scas}, pointings {args.pointings},"
+                              f" passes {args.passes}")
+        first = False
         if args.once or summary["drained"]:
             if summary["failed"]:
                 sys.stderr.write(f"rapidpipe loop: failed or refused jobs of run {args.run}: "
@@ -554,6 +569,27 @@ def _foundation_command(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def exit_code(exc: BaseException) -> int:
+    """The exit code of a failure, the one classification: the process's and a failed job row's.
+
+    A :class:`CommandExit`'s own code; a refused change 1; a missing run, job
+    or group (``LookupError``) and a database configuration error 64; a
+    transient failure 75, so Batch repeats the job: the database unavailable,
+    ``psycopg2.OperationalError`` mid-query, or a storage or AWS error
+    :func:`rapidpipe.products.storage.is_transient` names (a connection
+    error, a timeout, throttling, HTTP 503); anything else 70.
+    """
+    if isinstance(exc, CommandExit):
+        return exc.code
+    if isinstance(exc, foundation.Refused):
+        return int(ExitCode.FAILURE)
+    if isinstance(exc, (LookupError, ConnectionConfigError)):
+        return int(ExitCode.USAGE)
+    if isinstance(exc, (ConnectionUnavailable, psycopg2.OperationalError)) or storage.is_transient(exc):
+        return int(ExitCode.TRANSIENT_FAILURE)
+    return int(ExitCode.STAGE_ERROR)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     # Configures Python's root logger with the same UTC line shape a stage
     # invocation uses, before argparse sees argv, so an invalid
@@ -572,9 +608,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv_list)
     where = " ".join(filter(None, (args.command, getattr(args, "verb", None))))
 
-    # The unclassified-error boundary: an unexpected exception escaping a
-    # command is logged with its traceback and exits 70. SystemExit and
-    # KeyboardInterrupt are not Exception subclasses and pass through.
+    # The classified-error boundary (exit_code): a named stop prints its
+    # message; a transient or unexpected exception is logged with its
+    # traceback and exits 75 or 70. SystemExit and KeyboardInterrupt are not
+    # Exception subclasses and pass through.
     try:
         if args.command == "stage":
             return stagectl.dispatch(args, _run_stage_command)
@@ -582,24 +619,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_selftest_command(args)
         if args.command in ("run", "job", "official", "publish", "loop"):
             return _foundation_command(args)
-    except CommandExit as exc:
-        sys.stderr.write(f"rapidpipe {where}: {exc}\n")
-        return exc.code
-    except foundation.Refused as exc:
-        sys.stderr.write(f"rapidpipe {where}: refused: {exc}\n")
-        return int(ExitCode.FAILURE)
-    except LookupError as exc:
-        sys.stderr.write(f"rapidpipe {where}: {exc.args[0] if exc.args else exc}\n")
-        return int(ExitCode.USAGE)
-    except ConnectionConfigError as exc:
-        sys.stderr.write(f"rapidpipe {where}: database configuration error: {exc}\n")
-        return int(ExitCode.USAGE)
-    except ConnectionUnavailable as exc:
-        sys.stderr.write(f"rapidpipe {where}: database unavailable: {exc}\n")
-        return int(ExitCode.TRANSIENT_FAILURE)
-    except Exception:  # noqa: BLE001 - the unclassified-error boundary
-        logging.getLogger("rapidpipe.cli").exception("rapidpipe %s: unexpected error", where)
-        return int(ExitCode.STAGE_ERROR)
+    except Exception as exc:  # noqa: BLE001 - the classified-error boundary
+        code = exit_code(exc)
+        if isinstance(exc, CommandExit):
+            sys.stderr.write(f"rapidpipe {where}: {exc}\n")
+        elif isinstance(exc, foundation.Refused):
+            sys.stderr.write(f"rapidpipe {where}: refused: {exc}\n")
+        elif isinstance(exc, ConnectionConfigError):
+            sys.stderr.write(f"rapidpipe {where}: database configuration error: {exc}\n")
+        elif isinstance(exc, ConnectionUnavailable):
+            sys.stderr.write(f"rapidpipe {where}: database unavailable: {exc}\n")
+        elif isinstance(exc, LookupError):
+            sys.stderr.write(f"rapidpipe {where}: {exc.args[0] if exc.args else exc}\n")
+        else:
+            logging.getLogger("rapidpipe.cli").exception(
+                "rapidpipe %s: %s error", where, "transient" if code == ExitCode.TRANSIENT_FAILURE else "unexpected")
+        return code
 
     parser.print_help()
     return int(ExitCode.SUCCESS) if args.command is None else int(ExitCode.USAGE)
