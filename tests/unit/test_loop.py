@@ -213,13 +213,15 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf"]))
     monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
     monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "late_sets", lambda conn, run: 1)
     monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
     monkeypatch.setattr(loop, "reconcile", lambda conn, run, client, *a: {"retrying": []})
     monkeypatch.setattr(loop.attempts, "run_entries", lambda conn, run: [])
     code = cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
                      "--job-definition", "jd", "--interval", "0"])
     assert code == ExitCode.SUCCESS
-    assert '"drained": true' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert '"drained": true' in out and '"sets_late": 1' in out     # the run's late sets in the pass line
     summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [stem(1, 1, 1)], lambda item: None,
                             lambda: {"packets": 0, "sets": [], "waiting": [90]})
     assert summary["sets_waiting"] == [90] and not summary["drained"]
