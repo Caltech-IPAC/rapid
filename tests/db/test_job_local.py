@@ -103,7 +103,7 @@ def test_a_failed_job_submitted_again_is_launched_until_its_container_starts(con
 
 @pytest.mark.parametrize("raised, recorded", [
     (CommandExit(int(ExitCode.INPUT_REJECTED), "refpsf: 7 stars, 10 needed"),
-     (int(ExitCode.INPUT_REJECTED), "refpsf: 7 stars, 10 needed")),
+     (int(ExitCode.INPUT_REJECTED), "CommandExit: refpsf: 7 stars, 10 needed")),
     (RuntimeError("unexpected"), (int(ExitCode.STAGE_ERROR), "RuntimeError: unexpected")),
 ])
 def test_a_failed_job_row_records_its_reason_and_its_code(connect, tmp_path, raised, recorded):

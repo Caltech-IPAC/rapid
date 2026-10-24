@@ -643,3 +643,41 @@ def test_the_tree_read_outlasts_a_throttling_burst(monkeypatch):
     (service, config), = made
     assert service == "ssm"
     assert config.retries["mode"] == "standard" and config.retries["max_attempts"] >= 20
+
+
+class _ThrottledSSMClient:
+    """An SSM client whose read fails as ``exc``, raised the way botocore raises once its retries end."""
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    def get_parameters_by_path(self, **_):
+        raise self.exc
+
+
+class _ClientError(Exception):
+    def __init__(self, code):
+        super().__init__(f"An error occurred ({code}) when calling GetParametersByPath")
+        self.response = {"Error": {"Code": code}}
+
+
+def test_a_throttled_tree_read_is_unavailable_and_a_failed_one_a_configuration_error():
+    """Throttling (2026-10-23: 1,448 of 3,456 intakes) is worth Batch's retry; a refused read is not."""
+    with pytest.raises(conn_mod.ConnectionUnavailable, match="ThrottlingException"):
+        conn_mod._fetch_parameter_tree_db_values(_TREE_PATH, _ThrottledSSMClient(_ClientError("ThrottlingException")))
+    with pytest.raises(conn_mod.ConnectionConfigError, match="AccessDeniedException"):
+        conn_mod._fetch_parameter_tree_db_values(_TREE_PATH, _ThrottledSSMClient(_ClientError("AccessDeniedException")))
+    with pytest.raises(conn_mod.ConnectionConfigError, match="db/server"):
+        conn_mod._fetch_parameter_tree_db_values(_TREE_PATH, _FakeSSMClient({}, path=_TREE_PATH))
+
+
+def test_a_throttled_secret_read_is_unavailable(monkeypatch):
+    boto3 = pytest.importorskip("boto3")
+
+    class Secrets:
+        def get_secret_value(self, **_):
+            raise _ClientError("ThrottlingException")
+
+    monkeypatch.setattr(boto3, "client", lambda service, **_: Secrets())
+    with pytest.raises(conn_mod.ConnectionUnavailable, match="ThrottlingException"):
+        conn_mod.credentials_from_secret("tree-secret")

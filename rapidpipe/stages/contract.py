@@ -755,7 +755,8 @@ def run_stage(
             "stage=%s exit=%s error=%s elapsed_s=%s fetch_s=%s body_s=%s publish_s=%s",
             declaration.name, int(exc.exit_code), exc,
             _fmt_phase(total_elapsed), _fmt_phase(fetch_elapsed),
-            _fmt_phase(body_elapsed), _fmt_phase(publish_elapsed))
+            _fmt_phase(body_elapsed), _fmt_phase(publish_elapsed),
+            exc_info=True)
         if work_dir is not None:
             logger.info(
                 "stage=%s attempt failed; work directory kept at %s",

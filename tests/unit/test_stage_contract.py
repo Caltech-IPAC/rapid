@@ -772,7 +772,8 @@ def test_error_log_line_has_elapsed_fields_with_dashes_for_unreached_phases(
 
     log_path = outputs_dir / "log" / "admit.log"
     contents = log_path.read_text()
-    last_line = contents.strip().splitlines()[-1]
+    # the error line, its traceback after it
+    last_line = next(line for line in reversed(contents.splitlines()) if "exit=" in line)
     assert "error=boom" in last_line
     assert "elapsed_s=" in last_line and "fetch_s=" in last_line
     assert "body_s=" in last_line and "publish_s=-" in last_line  # never reached

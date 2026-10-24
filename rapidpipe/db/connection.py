@@ -58,6 +58,8 @@ from typing import Any, Iterator
 import psycopg2
 import psycopg2.extensions
 
+from rapidpipe.products.storage import is_transient
+
 logger = logging.getLogger(__name__)
 
 _REQUIRED_VARS = ("PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD")
@@ -98,7 +100,9 @@ class ConnectionConfigError(RuntimeError):
 
 
 class ConnectionUnavailable(RuntimeError):
-    """Connecting failed on every attempt within the retry budget."""
+    """Connecting failed on every attempt within the retry budget, or the
+    SSM or Secrets Manager read of its configuration was throttled or could
+    not connect (``rapidpipe.products.storage.is_transient``): worth a retry."""
 
 
 @dataclass(frozen=True)
@@ -188,7 +192,9 @@ def _fetch_parameter_tree_db_values(path: str, ssm_client: Any = None) -> dict[s
     that never falls back to the tree -- imports without boto3 installed.
 
     Raises :class:`ConnectionConfigError` naming ``path`` and every one of
-    :data:`_PARAMETER_TREE_DB_KEYS` that the tree does not carry.
+    :data:`_PARAMETER_TREE_DB_KEYS` that the tree does not carry, or when
+    the read fails; :class:`ConnectionUnavailable` when it was throttled or
+    could not connect.
     """
     if ssm_client is None:
         try:
@@ -222,7 +228,8 @@ def _fetch_parameter_tree_db_values(path: str, ssm_client: Any = None) -> dict[s
     except ConnectionConfigError:
         raise
     except Exception as exc:
-        raise ConnectionConfigError(
+        unreadable = ConnectionUnavailable if is_transient(exc) else ConnectionConfigError
+        raise unreadable(
             f"could not read the database parameters from the SSM "
             f"parameter tree at {path!r}: {exc}") from exc
 
@@ -292,7 +299,9 @@ def credentials_from_secret(secret_id: str) -> Credentials:
     function.
 
     Raises :class:`ConnectionConfigError` if boto3 is unavailable, the
-    secret cannot be fetched, or its JSON body is missing either key.
+    secret cannot be fetched, or its JSON body is missing either key;
+    :class:`ConnectionUnavailable` when the read was throttled or could not
+    connect.
     Never returns a partial credential and never prints or logs the
     password.
     """
@@ -312,7 +321,8 @@ def credentials_from_secret(secret_id: str) -> Credentials:
     except ConnectionConfigError:
         raise
     except Exception as exc:
-        raise ConnectionConfigError(
+        unreadable = ConnectionUnavailable if is_transient(exc) else ConnectionConfigError
+        raise unreadable(
             f"could not resolve database credentials from Secrets Manager "
             f"secret {secret_id!r}: {exc}") from exc
 
