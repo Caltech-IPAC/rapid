@@ -6745,6 +6745,97 @@ Check, held:
   already recorded. `check_run.sh --run 84`: **CLEAN**, validate 6/6,
   reader 1/1, consumer 180/180.
 
+### Step differencer: SFFT becomes the published differencer, proven on one epoch
+
+**The change (PR 408, merged `f49be4fe`; PR 410, merged `5729031a`;
+rapid_docs 103).** Ben ruled at 19:22 UTC: switch now, measure after.
+This matches `dev`'s choice since b725007d (2026-04-20; `diff_flavor =
+sfft`).
+
+- The difference job's `diffimages` row is the SFFT image, and its
+  `sources` is SFFT's positive PSF-fit catalog through the unchanged
+  `source_set`.
+- The packet stage reads the PSF and uncertainty beside
+  `diffimages.filename`. So with no packet code changed, its cutouts and
+  forced photometry use the SFFT image, `sfftdiffpsf.fits` and
+  `sfftdiffimage_uncert_masked.fits`.
+- The published image's metrics (core, ring, noise correlation, source
+  counts) are measured on the SFFT image.
+- ZOGY still runs. Its positive and negative PSF-fit catalogs and SFFT's
+  negative one stay under `diff/` as diagnostics, read by no stage.
+- `[difference.sfft] run_sfft = false` fails the settings check.
+- SFFT runs checked like every tool: a nonzero exit raises `ToolFailed`,
+  with no fallback to ZOGY. PR 410 reconciled this with err-tools' PR
+  407, which merged minutes before 408 with SFFT left unchecked and a
+  test for the fallback, so the tip briefly held both contracts.
+- The import reads SFFT's files.
+- `isdiffpos` stays `True`: SFFT's positive catalog detects and fits on
+  the positive image, as `dev`'s loader reads it.
+
+**The proof.** Image `rebuild-5729031a…` (digest `dfef56b3…`), job
+definition `rapid-rebuild:67`, which also carries PRs 406 (dev-takenow)
+and 407. Run **86** (`r00342-dy-sfft`), live, Gaia job 22768; HLWAS
+`001_0001`, SCA 8, F146, passes 1 to 4 (three reference frames, epoch
+4040101 differenced). Evidence is in the brief's `t1/`.
+
+```sh
+rp run create ... --revision 5729031a... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+  --survey HLWAS --dataset r00342-dy-sfft                                   # run 86
+rp official change --group live.json ...; rp job local --run 86 --stage import ...   # live; Gaia
+rp loop --run 86 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:67 --interval 60
+scripts/check_run.sh --run 86 --inspect DIR
+```
+
+Check, held:
+
+- **Execution.** Nine jobs (import, psf, four intakes, reference,
+  difference 22776, packet 22777), each published on its first attempt.
+  The loop exited 0 at 20:17:46 UTC after 12 minutes.
+  `check_run.sh --run 86`: **CLEAN**, validate 6/6, reader 1/1, consumer
+  471/471.
+- **The published products.** `diffimages.filename` is
+  `…/86/difference/22776/1/diff/sfftdiffimage_masked.fits.gz`. All 500
+  `sources` rows are SFFT's, `isdiffpos` true. The manifest records
+  `differencer: sfft`.
+- **The prefix.** It holds the SFFT image, its uncertainty, mask and
+  PSF, the science image, the template, the reference PSF, and the four
+  PSF-fit catalogs.
+- **The cutouts.** Three interior packets' `cutoutDifference` stamps
+  equal the SFFT image at the source pixel for pixel (16,641 of 16,641
+  each).
+
+Measured, same epoch 4040101, same instance type (m6a.2xlarge):
+
+| | ZOGY, run 46 job 19864 | ZOGY in job 22776 (diagnostic) | SFFT, run 86 job 22776 (published) |
+|---|---|---|---|
+| positive PSF-fit rows (candidates) | 752 | 779 | 2,173 (2,151 inside the bounds) |
+| of them S/N > 20 | 23 | 24 | 683 |
+| kept sources at S/N > 20 | 23 of 500 | — | 500 of 500 |
+| negative PSF-fit rows (S/N > 20) | — | 772 (37) | 987 (302) |
+| core fraction / ring fraction | +0.006 / −0.002 | — | **+0.251 / +0.021** |
+| noise correlation | 1.25 | — | 1.03 |
+| difference seconds | 179 | 188 (both differencers run) | |
+
+The ZOGY counts inside job 22776 differ from run 46's by about 4%. This
+fits PR 406's reference changes, which this image carries.
+
+**Seen, reported, not tuned.** SFFT's difference leaves about a quarter
+of each bright star's flux in its core: core fraction 0.25 against
+ZOGY's 0.006. The gallery (`t1/inspect-86/`) shows positive cores, not
+ZOGY's core-and-ring. So the 500-source cap fills with stars: 363 of
+the 500 kept sources are in a bright reference source's footprint.
+`dev`'s own SFFT numbers point the same way (61k spurious per SCA on
+250 GBTDS SCAs, its ini's completeness note). Two sources of the published set sit
+0.04 px apart, a duplicate detection in SFFT's catalog.
+
+**Consequence for operations.** The gate's `core_fraction_max_abs =
+0.025` was read on ZOGY. It will hold every SFFT packet set once a run
+has `min_epochs` (5) published differences. A loop of five or more
+epochs under the new default sends nothing to Kafka until the core
+residual or the bound changes. Task `differencer-measure` measures this
+on the injected and OpenUniverse samples. This brief does no tuning.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
