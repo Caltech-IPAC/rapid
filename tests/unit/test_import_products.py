@@ -7,7 +7,8 @@ source set is the ``max_sources`` brightest by flux over flux error inside
 the fit-position bounds; overlapping fields and sky indices are computed
 from the image's WCS; the manifest declares every table and the
 provenance line; a PSF imports under its declared kind, which `dev`'s
-``PSFKIND`` keyword must not contradict.
+``PSFKIND`` keyword must not contradict; an import supplies no identity
+column but the source system's ids the plan keeps.
 """
 
 from __future__ import annotations
@@ -225,3 +226,32 @@ def test_a_psf_whose_keyword_names_the_other_kind_fails_before_a_manifest(
     with pytest.raises(ValueError, match="PSFKIND"):
         run_import(tmp_path, source, {"psf": {"kind": kind, "path": "psf.fits"}}, kind)
     assert not (tmp_path / "outputs" / kind / "manifest.json").exists()
+
+
+#: The source system's ids an import keeps in identity columns (plan Part 1:
+#: they are the tables' primary keys, so a re-import gives new ids by hand).
+#: Every other identity column an import writes is drawn from its sequence,
+#: never supplied (PR 327: an explicit psfid ahead of the sequence failed a
+#: later drawn insert on the key).
+KEPT_SOURCE_IDS = {("l2files", "rid"), ("diffimages", "pid"), ("refimages", "rfid")}
+
+
+def identity_columns() -> set[tuple[str, str]]:
+    schema = (REPO / "database/schema.sql").read_text()
+    identities = set()
+    for table, body in re.findall(r"CREATE TABLE (\w+) \((.*?)\n\);", schema, re.S):
+        identities |= {(table, line.split()[0]) for line in body.splitlines()
+                       if "AS IDENTITY" in line}
+    return identities
+
+
+def test_an_import_supplies_no_identity_column_but_the_kept_source_ids(tmp_path, source):
+    prefix = run_import(tmp_path, source, {
+        "epochs": [EPOCHS[0]], "reference": {"rfid": 55, "dir": "ref"},
+        "psf": {"kind": "science", "path": "psf.fits"},
+        "gaia": {"name": "gaia", "version": "DR3", "path": "gaia.parquet"}}, "all")
+    tables = {o["table"] for o in json.loads((prefix / "manifest.json").read_text())["outputs"]}
+    supplied = {(table, column) for table, column in identity_columns() if table in tables
+                and column in pq.read_schema(prefix / f"{table}.parquet").names}
+    assert {table for table, _ in identity_columns()} & tables, "the import writes no identity table"
+    assert supplied <= KEPT_SOURCE_IDS

@@ -10,11 +10,12 @@ without waiting, and ends by producing the run's newly official packet sets
 to the Kafka topic. The verb repeats passes until one finds nothing new,
 nothing pending and nothing to submit (drained).
 
-The selection (filters, SCAs, pointings) is the operator's instruction for
+The selection (filters, SCAs, pointings, passes) is the operator's instruction for
 this invocation, recorded in every pass's summary; it is not part of the
 run's recipe and widening it changes nothing in the run's settings body.
 A pointing is ``VVV_EEEE``, a visit and exposure, the same in every pass
-of a filter.
+of a filter; a pass is the survey's (the stem's three digits after the
+plan), so a sampled proof of a few epochs is ``--passes 1,2,3,4``.
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported and never resubmitted: its key
@@ -44,7 +45,8 @@ One pass, in order:
   run exists, and whose filter and SCA have official PSFs, at most
   ``max_intake``; it names the science PSF of its filter and SCA, and
   expects the ``exposures`` key only when nothing holds or claims it (the
-  18 SCAs of an exposure share it).
+  18 SCAs of an exposure share it); with the dataset's Gaia ``catalogs``
+  official, it names that too, for the intake's WCS offset metric.
 - ``reference``: a job per (field, filter, SCA) with at least
   ``[reference.selection] min_frames`` official L2 rows, no official
   reference and none pending or failed, while no intake of the run is
@@ -77,7 +79,10 @@ One pass, in order:
   field's difference images and L2 rows in the forced window, the epoch's
   source set and the field's earlier packet sets.
 - ``kafka``: the caller's ``publish()`` over the run's unstamped official
-  packet sets.
+  packet sets: each packet job sends its own set as its last act, so this
+  is the recovery sweep for a set whose job died before its
+  acknowledgements, and a set still inside its job's send window is
+  reported under ``sets_waiting`` and keeps the selection from draining.
 """
 
 from __future__ import annotations
@@ -104,18 +109,21 @@ STAGES = ("psf", "intake", "reference", "difference", "associate", "packet")
 
 @dataclasses.dataclass(frozen=True)
 class Selection:
-    """Filters (``F146``), SCAs and pointings (``(visit, exposure)``, or ``None`` for all)."""
+    """Filters (``F146``), SCAs, pointings (``(visit, exposure)``) and the survey's passes, ``None`` for
+    all pointings or all passes."""
 
     filters: frozenset[str]
     scas: frozenset[int]
     pointings: frozenset[tuple[int, int]] | None
+    passes: frozenset[int] | None = None
 
     @classmethod
-    def parse(cls, filters: str, scas: str, pointings: str) -> "Selection":
+    def parse(cls, filters: str, scas: str, pointings: str, passes: str = "all") -> "Selection":
         points = None if pointings == "all" else frozenset(
             (int(v), int(e)) for v, e in (p.split("_") for p in pointings.split(",")))
         return cls(frozenset(f.strip().upper() for f in filters.split(",")),
-                   frozenset(int(s) for s in scas.split(",")), points)
+                   frozenset(int(s) for s in scas.split(",")), points,
+                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")))
 
     def admits_stem(self, stem: str) -> dict | None:
         """The stem's SCA, filter and pointing when the selection admits it, else ``None``."""
@@ -128,19 +136,24 @@ class Selection:
             return None
         if self.pointings is not None and point not in self.pointings:
             return None
+        if self.passes is not None and int(m["pass"]) not in self.passes:
+            return None
         return {"sca": sca, "filter": band, "expid": stem_expid(stem)}
 
     def admits_row(self, expid: int, sca: int, fid: int, fids: set[int]) -> bool:
         """Whether an L2 key is selected, ``fids`` the selected filters' fids; ``expid``
-        packs ``visit * 100 + exposure`` in its last digits."""
+        packs ``pass * 10**6`` and ``visit * 100 + exposure`` in its last digits."""
         if sca not in self.scas or fid not in fids:
+            return False
+        if self.passes is not None and expid // 10**6 not in self.passes:
             return False
         return self.pointings is None or ((expid // 100) % 100, expid % 100) in self.pointings
 
     def summary(self) -> dict:
         return {"filters": sorted(self.filters), "scas": sorted(self.scas),
                 "pointings": "all" if self.pointings is None
-                else [f"{v:03d}_{e:04d}" for v, e in sorted(self.pointings)]}
+                else [f"{v:03d}_{e:04d}" for v, e in sorted(self.pointings)],
+                "passes": "all" if self.passes is None else sorted(self.passes)}
 
 
 def stem_expid(stem: str) -> int:
@@ -402,8 +415,11 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
             expects.insert(0, {"product": "exposures", "key": {"dataset": d, "expid": expid},
                                "binding": None})
             claimed.add(expid)
+        inputs = [psf(fid, a["sca"], "science")]
+        if snap.gaia is not None:              # the intake measures the WCS against it
+            inputs.append({"product": "catalogs", "key": snap.gaia["key"], "source_job": snap.gaia["job"]})
         out.append({"stage": "intake", "scope": {"dataset": d, "file": stem},
-                    "inputs": [psf(fid, a["sca"], "science")], "expects": expects})
+                    "inputs": inputs, "expects": expects})
 
     selected = {k: v for k, v in snap.l2.items() if selection.admits_row(*k, set(fids.values()))}
     intake_pending = bool(pending["intake"])
@@ -544,8 +560,9 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     produced = publish() if publish is not None else {"packets": 0, "sets": []}
     counts["packets_produced"] = produced["packets"]
     counts["sets_produced"] = produced["sets"]
+    counts["sets_waiting"] = produced.get("waiting", [])
     counts["drained"] = (counts["new"] == 0 and not submissions
-                         and not any(counts["pending"].values()))
+                         and not any(counts["pending"].values()) and not counts["sets_waiting"])
     if checked is not None:
         counts["batch"] = checked
     return {"run": run, "selection": selection.summary(), **counts}

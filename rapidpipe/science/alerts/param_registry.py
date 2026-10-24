@@ -160,6 +160,10 @@ _PSF_FLAG_NONFINITE_FLUX = 1 << 10     # non-finite fitted flux
 # RAPID-defined semantics for the derived boolean flag params; keeps alert
 # consumers insulated from photutils bit-layout changes.
 #
+# RAPID's own bit, 1 << 14, the bright-reference-source footprint, rides in
+# psfFitFlags too; it is informational (rapidpipe.products.diffimage), so a
+# source with only that bit set is alerted and a broker filters on the bit.
+#
 # NOTE (2026-09-16): alerts are produced only for sources with flags == 0 --
 # the population the cross-match associates; see providers.ALERTABLE_FLAGS
 # and the comment block above it. Both derived booleans below are therefore

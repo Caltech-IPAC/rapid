@@ -116,6 +116,9 @@ CREATE TABLE jobs (
     ended timestamp with time zone,
     exit_code integer,
     kafka_published_at timestamp with time zone,      -- every packet of its set acknowledged by the topic
+    kafka_partition integer,                         -- the partition its set's acknowledgements named
+    kafka_first_offset bigint,                       -- the first and last offsets they gave; other sets interleave between
+    kafka_last_offset bigint,
     batch_job_id text,                               -- the Batch job of its latest submission; null for a local job
     CHECK ((state = 'published') = (published_attempt IS NOT NULL))
 );
@@ -360,7 +363,8 @@ CREATE TABLE sources (
     yerr real NOT NULL,
     fluxfit real NOT NULL,
     fluxerr real NOT NULL,
-    flags smallint NOT NULL,
+    flags smallint NOT NULL,                         -- photutils' fit bits (to 1 << 11); RAPID's 1 << 14 = 16384 the bright
+                                                     -- footprint, informational: eligible is flags & ~16384 = 0 (rapidpipe.products.diffimage)
     qfit real NOT NULL,
     cfit real NOT NULL,
     redchi real DEFAULT 0.0 NOT NULL,

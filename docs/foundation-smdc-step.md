@@ -4615,6 +4615,60 @@ and the breadth runs' official products for the others, read by lineage.)
   count now has an artefact floor of about 20 per epoch per SCA above S/N
   20 on SCA 8; and the second iteration's list in the plan.
 
+## Part 11: the second iteration (2026-10-24)
+
+Brief `night-2026-10-24` (plan v9 Part 7, the second iteration's list):
+one step per task, numbered by task; a task's step lands when its task
+does, so the numbers can arrive out of order.
+
+6. **The database guards and the `forced` read (PRs 355, 357).** Three
+   guards, no behaviour change, no schema statement on SMDC. A schema test
+   in `tests/db/test_schema.py` reads the catalog CI applies: every product
+   table bound under its own name holds `dataset` NOT NULL and its view
+   exposes it, every view matching the binding's key builds the key with
+   the dataset, and every child view (members, a reference's catalogs,
+   forced and external rows) is bound through one of those. An import unit
+   test asserts per table that an import supplies no identity column of
+   `schema.sql` but the three source-system ids the plan keeps
+   (`l2files.rid`, `diffimages.pid`, `refimages.rfid`, Part 1); PR 327's
+   `psfid` would fail it. Both read SMDC read-only first:
+
+   - one of 27,462 product bindings has a key without `dataset` (the
+     earliest Gaia `catalogs` binding, which `packet.py` reads on purpose);
+   - the three kept ids sit ahead of their sequences, from runs 1 and 9's
+     imports: `pid` 350,875 against `last_value` 3,886, `rid` 1,832,552
+     against 5,120, `rfid` 90,011 against 512; a drawn insert meets them
+     only after that many more jobs. One `setval` each as `postgres`, part
+     8 step 4's statement, removes it; not granted tonight.
+
+   `forced` growth from the breadth rows (F158, runs 38 and 50, every
+   published packet set; a recursive query over
+   `job_inputs` for the object set's chain depth, in its PR's body, 0.74 s
+   for 917 sets; the one field deeper than 14 is 5390959):
+
+   | depth | sets (run 38) | packets per set | `forced` rows per set | rows per packet | packet job s |
+   |---|---|---|---|---|---|
+   | 1 | 18 | 189 | 189 | 1.0 | 21 |
+   | 4 | 70 | 214 | 846 | 4.0 | 65 |
+   | 8 | 70 | 216 | 1,696 | 7.9 | 162 |
+   | 12 | 70 | 213 | 2,520 | 11.9 | 311 |
+   | 14 | 70 | 185 | 2,569 | 13.9 | 289 |
+   | 17 (field 5390959) | 1 | 298 | 891 | 3.0 | 41 |
+   | 28 (field 5390959) | 1 | 280 | 3,920 | 14.0 | 221 |
+
+   (Medians per depth. Run 50, one field to depth 14: 13.7 rows per packet
+   at depth 14, the same law.) A set's `forced` rows are its packets times
+   the window images on the trigger's SCA that hold the object, not the
+   chain depth: field 5390959's chain runs 14 SCA 8 epochs then 14 SCA 9
+   epochs, and at depth 15 the rows per packet fall back to 1. Every F158
+   epoch of a field falls inside the 30-day forced window (9.1 days span),
+   so here the window images equal the SCA's epochs so far. Run 38 holds
+   1.46 million `forced` rows for 184,163 packets; the table is 4.52
+   million rows and 954 MB. The growth is linear per set in the window's
+   images and bounded by `forced_window_days`, so a field's `forced` total
+   grows as the square of its epochs inside one window; the packet job's
+   time grows with it (21 s at depth 1, about 300 s at depth 12 to 14).
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
