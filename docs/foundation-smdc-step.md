@@ -4168,6 +4168,125 @@ would have caught the finding. One step per task.
      98 s reference befores are not part 9's figures; part 9's are the
      comparison above.
 
+3. **The reference PSF measured in the difference job (PRs 344 and 346,
+   merged `7daf99e5` and `379688d6`; rapid_docs #94 and #95).** The
+   difference job builds ZOGY's reference PSF from the resampled,
+   background-subtracted reference it has just made
+   (`rapidpipe.science.difference.refpsf`): DAOStarFinder at 8σ on the
+   covered pixels, peak 20 to 3,500 DN/s, no neighbour within 14 px, the
+   31 px stamp usable, and each star's own second-moment width between the
+   science PSF's and that plus 0.4 px; `EPSFBuilder` oversample 4 on the
+   brightest 100; evaluated on a 61 x 61 stamp re-centred to 0.01 px; the
+   measured core within 6 px tapered into the science PSF's wings by 10
+   px; unit sum. Fewer than ten stars stops the job with exit 65 and
+   `refpsf: N stars, 10 needed` in `jobs.refusal`. The manifest's
+   `metrics` hold `refpsf_sigma_px`, `refpsf_stars`, `sci_psf_sigma_px`
+   and `psf_centroid_offset_px`. The `psf` stage writes the science kind
+   only and the loop names only it.
+
+   Two cuts the fixes ledger did not have, each earned on this pointing's
+   data. **The width cut**: the ledger's sharpness and roundness values
+   were not recorded, and on run 17's pass 4 reference a sharpness cut
+   alone keeps defect pixels (own sigma 0.48 to 0.66 px) and galaxies
+   (1.55 to 1.84) beside the stars (1.06 to 1.14); the built stamp came
+   out at sigma 0.33 to 0.80. **The wings** (PR 346): PR 344's stamp held
+   nothing beyond the 31 px build's 15 px, where the science PSF holds
+   3.3% of its flux, and ZOGY left a ring 10 to 20 px out at every bright
+   star: run 42's pass 4 had 1,685 candidates and 449 sources above S/N
+   20, 190 of them 10 to 20 px from a top-100 reference star.
+
+   Image `rebuild-7daf99e5…` (`sha256:3ddcb3b7…`), **`rapid-rebuild:44`**;
+   then `rebuild-379688d6…` (`sha256:71f7d55a…`), **`rapid-rebuild:45`**,
+   both from `rapid_systems`' `containers/rapid-pipeline/build-rebuild.sh`
+   (the script is in `rapid_systems`, not this repository) and its
+   `deploy` hook. Dataset `r00342-fx-psf`, F146, `001_0001`, SCA 8,
+   **without** task 2's mask (the two tasks ran in parallel):
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision 7daf99e53ab2119342ba93889f8f8114da37ab90 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --set intake.dq_mask_bits=0 --survey HLWAS --dataset r00342-fx-psf     # run 42
+   rp official change --group live.json ...                                  # run 42 live, group 18439
+   rp job local --run 42 --stage import \
+     --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342-fx-psf", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "r00342-fx-psf", "name": "gaia-r00342-fx-psf", "version": "DR3"}, "binding": null}]'
+   rp loop --run 42 --filters F146 --scas 8 --pointings 001_0001 --job-definition rapid-rebuild:44 --interval 60
+   ```
+
+   The first Gaia import (job 19813) used part 7's key without the
+   dataset, and the loop stopped at the packet stage with "the run has no
+   official catalogs binding"; job 19829 imported it under part 9's key
+   and the restarted loop drained (exit 0). Job 19813's binding stays,
+   unread. Run 42: psf 19814, intakes 19815 to 19820, reference 19822,
+   differences 19823 to 19825, associates 19827 to 19832, packets 19830
+   to 19834 (606 packets, onto the topic).
+
+   Then the three differences again at `379688d6` under **run 43** (the
+   same dataset, the same body, **not live**: a downstream-only rerun),
+   by hand on run 42's inputs, published and unbound:
+
+   ```sh
+   rp job submit --run 43 --stage difference --job-definition rapid-rebuild:45 --scope '{"expid": 4040101, "sca": 8, "fid": 8}' \
+     --inputs '[<l2files from 19818>, <psfs science from 19814>, <refimages field 5387158 from 19822>]' \
+     --expects '[<diffimages and sources of the key, binding null>]'           # 19835; 5040101 19836, 6010101 19837
+   ```
+
+   Check, held: the psf job wrote **one** `psfs` row (kind `science`);
+   one reference from passes 1 to 3; each difference's manifest reports an
+   empirical PSF from **38 stars** with sigma **1.080, 1.071 and 1.081 px**
+   (passes 4, 5, 6; the ledger's 1.064 to 1.091; it differs per epoch
+   because each epoch resamples the reference onto its own grid), the
+   stamp's centroid within 0.007 px of its centre, the science stamp's
+   sigma 0.947 and the pair's relative centring (+0.029, +0.034) px (the
+   science stamp's own offset). Before and after, by the images ledger's
+   method re-implemented (it reproduces the ledger's run 17 figures):
+
+   | pass 4 (run 17 job 2455 → run 42 job 19823 → run 43 job 19835) | run 17 | PR 344 | **PR 346** |
+   |---|---|---|---|
+   | core / ring of star flux, median over the top 30's real stars | +0.0297 / -0.0272 | +0.0164 / +0.0013 | **+0.0026 / -0.00001** |
+   | photutils candidates before the cap | 1,035 | 1,685 | **974** |
+   | sources above S/N 20 | 80 | 449 | **93** |
+   | sources within 3 px of a reference star, all / S/N > 20 | 74.0% / 43.8% | 3.4% / 3.1% | **29.0% / 8.6%** |
+   | S/N > 20 sources 10 to 20 px from a top-100 star | 2 | 190 | **3** |
+   | S/N > 20 bad-pixel, spike, reference source, hole, unclassified | 30, 0, 25, 18, 7 | 75, 1, 123, 25, 225 | **28, 1, 14, 20, 30** |
+
+   | passes 5 and 6 (run 17 jobs 2456, 2457 → run 43 jobs 19836, 19837) | pass 5 before | **after** | pass 6 before | **after** |
+   |---|---|---|---|---|
+   | reference PSF sigma | (0.947 given) | **1.071** | (0.947 given) | **1.081** |
+   | core / ring | +0.0286 / -0.0277 | **+0.0029 / -0.0002** | +0.0276 / -0.0265 | **+0.0054 / -0.0002** |
+   | candidates | 1,065 | **860** | 1,030 | **1,111** |
+   | sources above S/N 20 | 79 | **83** | 75 | **119** |
+   | on reference stars, all / S/N > 20 | 68.6% / 39.2% | **24.6% / 1.2%** | 71.8% / 46.7% | **24.8% / 10.1%** |
+   | S/N > 20 bad-pixel, spike, reference source, hole, unclassified | 27, 0, 20, 19, 13 | **14, 0, 13, 22, 34** | 31, 0, 19, 22, 3 | **35, 0, 15, 45, 24** |
+
+   The core-and-ring residual is gone in every epoch: the PSF mismatch is
+   fixed. The bright end does not fall without task 2's mask: what is left
+   above S/N 20 is defect-type (bad-pixel and holes, 48 of 93, 36 of 83,
+   80 of 119) and an unclassified 24 to 34, which task 5 reads with both
+   fixes. Pass 6 (`6010101`) has more holes than its before (45 against
+   22) with the same reference; not explained here.
+
+   Measurements (from the job rows: launched to started is the queue wait,
+   started to ended the job; peak RSS from `job run`):
+
+   | job | stage | instance | queue wait s | job s | before |
+   |---|---|---|---|---|---|
+   | 19814 | psf | m6a.2xlarge | 10 | 11 | 2447: 9 s |
+   | 19815 to 19820 | intake | m6a.2xlarge | 11 to 12 | 20 to 35 | |
+   | 19822 | reference | m6a.2xlarge | 24 | 46 | 2454: 44 s |
+   | 19823 / 19824 / 19825 | difference, PR 344 | m6a / r6i / r6i | 46 / 228 / 228 | 221 / 254 / 256 | 2455 / 2456 / 2457: 196 / 231 / 231 s |
+   | 19835 / 19836 / 19837 | difference, PR 346 | r6i.2xlarge | 213 / 212 / 225 | 241 / 240 / 232 | the same |
+
+   - The measurement itself: 7.4 s (19823) and 8.2 to 8.5 s (19835 to
+     19837) on Batch, 4.6 s on this host; the ledger's 4.7 s.
+   - Peak RSS of the PR 346 differences: self 1,259,292 to 1,275,052 KiB,
+     children 15,242,600 to 15,243,108 KiB; job 2455: 1,258,688 and
+     15,247,280. Unchanged.
+   - The published `refimage_psf.fits.gz`: 14,087 bytes per job.
+   - Stars per SCA for task 5's re-count: 38 of 4,290 detections on SCA 8
+     in F146 pass the cuts; ten are needed.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
