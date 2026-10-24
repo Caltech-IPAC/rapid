@@ -44,7 +44,7 @@ packages.find = {include = ["rapidpipe*", "modules*", "database*"]}
 # which excludes tests/ at build time (containers/rapid-pipeline/build.sh).
 # rapidpipe/science/alerts/schema/ holds the alert schema's .avsc files
 # (dev's alerts/schema/<major>/<minor>/), read by rapidpipe.science.alerts.
-rapidpipe = ["settings/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml",
+rapidpipe = ["settings/*.toml", "settings/datasets/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml",
              "science/alerts/schema/*/*/*.avsc"]
 
 [tool.pytest.ini_options]

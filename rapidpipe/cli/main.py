@@ -9,9 +9,14 @@ runs one stage's packaged fixture (``rapidpipe.selftest``).
 The five foundation verbs (foundation plan v5, milestone 0) wrap
 ``rapidpipe.foundation``:
 
-- ``run create --who --why --revision --settings FILE --survey --dataset``
-  records a run and prints its id; ``FILE`` is the full settings body,
-  TOML, or JSON when its name ends in ``.json``;
+- ``run create --who --why --revision [--settings FILE] [--overlay FILE]
+  [--set TABLE.key=value ...] --survey --dataset`` records a run and prints
+  its id; the body it stores is resolved from three layers
+  (``rapidpipe.foundation.layers``): ``FILE``, the shipped
+  ``foundation-thin.toml`` by default (TOML, or JSON when its name ends in
+  ``.json``), the dataset's overlay, then each ``--set`` in order; the run
+  also stores the body's hash and each layer's name and SHA-256, which
+  ``run show`` prints as ``layers``;
 - ``official change --group FILE --who --why`` applies one change group
   and prints its id; ``FILE`` is a JSON list of items, each with
   ``close`` (a binding id) and/or ``open`` (``{"product", "key", "job"}``
@@ -70,7 +75,7 @@ from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
 from rapidpipe.cli import stagectl
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
-from rapidpipe.foundation import loop, publish_kafka
+from rapidpipe.foundation import layers, loop, publish_kafka
 from rapidpipe.products import storage
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
 from rapidpipe.selftest import run as run_selftest
@@ -125,8 +130,14 @@ def _build_parser() -> argparse.ArgumentParser:
     create.add_argument("--who", required=True)
     create.add_argument("--why", required=True)
     create.add_argument("--revision", required=True, help="The code revision the run is for.")
-    create.add_argument("--settings", required=True, type=Path, metavar="FILE",
-                        help="The full settings body: TOML, or JSON when FILE ends in .json.")
+    create.add_argument("--settings", type=Path, metavar="FILE", default=_SHIPPED_SETTINGS,
+                        help="The base settings body: TOML, or JSON when FILE ends in .json "
+                             "(default: the shipped foundation-thin.toml).")
+    create.add_argument("--overlay", type=Path, metavar="FILE",
+                        help="The dataset's overlay: a TOML holding only the keys that differ.")
+    create.add_argument("--set", action="append", default=[], dest="sets", metavar="TABLE.key=VALUE",
+                        help="One run's override, a TOML value (strings quoted); repeatable, "
+                             "applied in order after the overlay.")
     create.add_argument("--survey", required=True)
     create.add_argument("--dataset", required=True)
     run_show = run_subparsers.add_parser("show", help="Print one run as JSON.",
@@ -410,12 +421,13 @@ def _loop(args: argparse.Namespace) -> int:
 def _foundation_command(args: argparse.Namespace) -> int:
     command = (args.command, getattr(args, "verb", None))
     if command == ("run", "create"):
-        settings = _read(args.settings, "settings")
-        if not isinstance(settings, dict):
-            raise CommandExit(int(ExitCode.USAGE), f"the settings file {args.settings} is not a table")
+        try:
+            settings, record = layers.resolve(args.settings, args.overlay, args.sets)
+        except layers.LayerError as exc:
+            raise CommandExit(int(ExitCode.USAGE), str(exc)) from exc
         with connect(application_name="rapidpipe-run-create") as conn:
             print(foundation.create_run(conn, args.who, args.why, args.revision, settings,
-                                        args.survey, args.dataset))
+                                        args.survey, args.dataset, layers=record))
     elif command == ("run", "show"):
         with connect(application_name="rapidpipe-run-show") as conn:
             _print_json(foundation.run_show(conn, args.id))

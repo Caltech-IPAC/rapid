@@ -30,14 +30,19 @@ from psycopg2.extras import Json, RealDictCursor
 
 
 def create_run(conn, who: str, why: str, revision: str, settings: dict,
-               survey: str, dataset: str) -> int:
-    """Record a run and return its id."""
+               survey: str, dataset: str, layers: dict | None = None) -> int:
+    """Record a run and return its id.
+
+    ``layers`` is how ``settings`` was resolved (``rapidpipe.foundation.layers``),
+    stored beside it; ``None`` for a body given whole.
+    """
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO runs (who, why, revision, settings, survey, dataset)"
-                " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                (who, why, revision, Json(settings), survey, dataset))
+                "INSERT INTO runs (who, why, revision, settings, layers, survey, dataset)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (who, why, revision, Json(settings), None if layers is None else Json(layers),
+                 survey, dataset))
             run_id = cur.fetchone()[0]
         conn.commit()
     except BaseException:

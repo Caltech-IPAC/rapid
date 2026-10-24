@@ -91,7 +91,8 @@ CREATE TABLE runs (
     created timestamp with time zone DEFAULT now() NOT NULL,
     why text NOT NULL,
     revision text NOT NULL,                          -- code revision
-    settings jsonb NOT NULL,                         -- the full settings body
+    settings jsonb NOT NULL,                         -- the full settings body, resolved
+    layers jsonb,                                    -- its hash and the layers it was resolved from (rapidpipe.foundation.layers); null on earlier runs
     survey text NOT NULL,
     dataset text NOT NULL
 );
