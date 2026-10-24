@@ -9,7 +9,9 @@ acknowledgement leaves its set's stamp null, the other sets stamped, and
 ``publish`` exits non-zero; a flush that times out stops the pass, leaving
 that set and the later ones unstamped; a packet job that publishes and
 binds sends its own set, a failure to send it leaves the job exit 0 and the
-set unstamped, and a job that did not bind sends nothing.
+set unstamped, and a job that did not bind sends nothing; the producer
+waits for every replica and is not idempotent (the job role may write
+data, not write it idempotently).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import io
 import types
 
 import fastavro
+import kafka
 import pytest
 
 from rapidpipe.cli import main as cli
@@ -181,3 +184,11 @@ def test_a_packet_job_that_did_not_bind_sends_nothing(packet_job, outbox, monkey
     monkeypatch.setattr(publish_kafka, "producer", lambda servers, size: Producer(outbox))
     assert cli.main(["job", "run", "--job", "7"]) == ExitCode.SUCCESS
     assert outbox == []
+
+
+def test_the_producer_waits_for_every_replica_and_is_not_idempotent(monkeypatch):
+    built = {}
+    monkeypatch.setattr(kafka, "KafkaProducer", lambda **config: built.update(config))
+    monkeypatch.setattr(publish_kafka, "client_config", lambda servers: {})
+    publish_kafka.producer(["b:9098"], 1 << 20)
+    assert built["acks"] == "all" and built["enable_idempotence"] is False
