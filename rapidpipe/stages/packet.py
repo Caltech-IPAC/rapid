@@ -66,8 +66,9 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   fallback applies), merged one row per (object, image) as `dev`'s
   ``_run_forced`` merges them. An (object, image) pair whose
   ``forced_id`` an official packet set holds is copied from it. The difference
-  image measured is the window's (ZOGY here, with
-  ``diffpsf.fits``); `dev` fixes the SFFT image.
+  image measured is the window's published one (SFFT since the
+  differencer switch, with ``sfftdiffpsf.fits``, as `dev`'s ``diff_flavor =
+  sfft``; ZOGY's ``diffpsf.fits`` for a window image published before it).
 - ``gaiaMatches``: the Gaia product, propagated by proper motion from its
   ``ref_epoch`` to the trigger, within ``gaia_radius_arcsec``, at most
   ``gaia_max_matches``; ``refStarMatches``/``refGalaxyMatches`` from the
