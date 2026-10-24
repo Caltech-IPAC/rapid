@@ -21,7 +21,10 @@ program_id = -3
 # answers these for WFI02 at the field's start time (get_best_references,
 # 2026-10-24). On 60 isolated stars of the file the F213 stamp leaves a
 # residual 0.024 of the stack's peak inside 8 px (0.022 transposed: the
-# stamp is within 0.0017 of its own transpose).
+# stamp is within 0.0017 of its own transpose). dev transposes the science
+# PSF for RimTimSim (2025-05-30); measured on epoch 4571 against the same
+# reference (runs 99 and 101), ZOGY's core -0.0694 -> -0.0688, ring -0.0339
+# -> -0.0385: not taken, no setting.
 F087 = "roman_wfi_epsf_0266.asdf"
 F213 = "roman_wfi_epsf_0280.asdf"
 
