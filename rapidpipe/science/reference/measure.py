@@ -57,6 +57,7 @@ class MosaicMeasurements:
     cov5percent: float
     medncov: float
     medpixunc: float
+    npixsat: int
     npixnan: int
     clmean: float
     clstddev: float
@@ -95,6 +96,7 @@ def measure_mosaic(image: Path, coverage: Path, uncertainty: Path, *,
         cov5percent=float(cov5percent),
         medncov=float(medncov),
         medpixunc=float(medpixunc),
+        npixsat=int(stats_refimage["satcount"]),
         npixnan=int(stats_refimage["nancount"]),
         clmean=float(stats_refimage["clippedavg"]),
         clstddev=float(stats_refimage["clippedstd"]),

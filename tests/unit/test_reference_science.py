@@ -288,7 +288,7 @@ def test_measure_mosaic_reports_refimmeta_fields(tmp_path):
     assert m.cov5percent == pytest.approx(40.0)
     assert m.medncov == 2.0 and m.medpixunc == 0.5
     assert m.npixnan == 20 and m.gmedian == 3.0 and m.gmin == 3.0 and m.gmax == 3.0
-    assert set(m.to_dict()) == {"cov5percent", "medncov", "medpixunc", "npixnan", "clmean",
+    assert set(m.to_dict()) == {"cov5percent", "medncov", "medpixunc", "npixsat", "npixnan", "clmean",
                                 "clstddev", "clnoutliers", "gmedian", "datascale", "gmin",
                                 "gmax"}
 
@@ -303,7 +303,9 @@ def _values(n: int = 3) -> header.StampValues:
         field=4711398, exposure_filter="W146", cov5percent=33.75, nframes=n,
         refimage_input_filenames=tuple(f"frame{i}.fits.gz" for i in range(n)),
         jdstart=2461679.586, jdend=2461679.606, zprefimg=26.8630336165,
-        total_refimage_exptime=420.0, run=11, job=12, attempt=2)
+        total_refimage_exptime=420.0, run=11, job=12, attempt=2,
+        infobits=2**4 + 2**8, status=0,
+        infobit_cards=(("BIT04", 4, "pXX PCTILE..."), ("BIT08", 8, "NUMBER OF ...")))
 
 
 def test_infile_keywords_are_devs():
@@ -334,4 +336,7 @@ def test_stamp_writes_devs_keywords_without_fid_plus_the_foundations(tmp_path):
         ["frame0.fits.gz", "frame1.fits.gz", "frame2.fits.gz"]
     assert (hdr["RPRUN"], hdr["RPJOB"], hdr["RPATTMPT"], hdr["RPSTAGE"]) == \
         (11, 12, 2, "reference")
+    assert (hdr["INFOBITS"], hdr["STATUS"]) == (272, 0)
+    assert hdr.comments["INFOBITS"] == "infoBits string; bit(s) = 4, 8"
+    assert (hdr["BIT04"], hdr["BIT08"]) == (4, 8)
     assert "CHECKSUM" in hdr and "DATASUM" in hdr

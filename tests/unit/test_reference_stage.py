@@ -8,7 +8,7 @@ prefix and the header stamped with the job; frames past ``max_frames`` are
 not coadded and are named in the manifest; too few frames, a frame in
 another filter, an input outside the scope's filter and SCA, a refused
 setting and a tool that writes nothing each fail the job before a manifest
-is written; the run settings body's ``[reference]`` table is valid as it
+is written; the row and the header carry the reference's grade; the run settings body's ``[reference]`` table is valid as it
 ships.
 """
 
@@ -147,8 +147,14 @@ def test_a_job_writes_its_three_tables_with_one_rfid_and_its_files(tmp_path, fra
     assert [header[f"INFIL00{i}"] for i in (1, 2, 3)] == [f[1] for f in FRAMES]  # mjdobs order
     assert manifest["reference"]["rfid"] == RFID and manifest["reference"]["not_coadded"] == []
     assert manifest["reference"]["nsexcatsources"] == 4
+    # The fake catalog's four sources are under t08 = 10: bit 8, fatal, status 0, on the row
+    # and in the header alike.
+    assert ref["infobits"] & 2**8 and ref["status"] == 0
+    assert (header["INFOBITS"], header["STATUS"]) == (ref["infobits"], ref["status"])
+    assert header["BIT08"] == 8 and "BIT09" not in header
     metrics = manifest["metrics"]
-    assert {"gmin", "gmax", "coverage_lt1", "coverage_lt2", "coverage_lt3"} <= set(metrics)
+    assert {"gmin", "gmax", "coverage_lt1", "coverage_lt2", "coverage_lt3",
+            "awaicgen_seconds"} <= set(metrics)
     assert all(isinstance(v, (int, float)) for v in metrics.values())
     assert not any((tmp_path / "work").iterdir())
 
@@ -197,4 +203,5 @@ def test_awaicgen_writing_nothing_fails_the_job(tmp_path, frames, monkeypatch):
 
 def test_the_thin_settings_body_reference_table_is_valid():
     checked = reference.check_settings(THIN["reference"])
-    assert (checked.min_frames, checked.naxis1) == (2, 7000)
+    assert (checked.min_frames, checked.naxis1) == (2, 9100)
+    assert checked.infobits["fatalinfobits"] == [2, 5, 7, 8, 16]

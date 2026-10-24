@@ -12,9 +12,9 @@ parsed with ``parse_ascii_text_sextractor_catalog``, its ``FWHM_IMAGE``
 ``nanmin`` and ``nanmax`` recorded with the mode over point sources as
 ``fwhmmedpix`` (the difference side's ``catalog_fwhm_stats``, dev
 1822789e and fdc7fa79, reference half), ``fwhm_ref`` that mode in
-arcseconds (dev 095c45d8, 46fc651a), the source count the row count.
-The module's pin stays c740f3e3: fdc7fa79's reference-image quality bits
-are not ported.
+arcseconds (dev 095c45d8, 46fc651a), the source count the row count,
+and the percentile of the same sample the quality bits read (fdc7fa79;
+the bits themselves are ``infobits``).
 
 `dev` hard-codes ``/code/cdf/...`` for the three files; here they sit under
 the ``[paths] cfg_path`` setting (default ``/code/cdf``), as the
@@ -34,6 +34,7 @@ from rapidpipe.science.difference.fwhm import (
     POINT_SOURCE_CATALOG_PARAMS,
     ROMAN_WFI_PLATESCALE,
     catalog_fwhm_stats,
+    fwhm_percentile,
 )
 from rapidpipe.science.difference.sextractor import (
     build_sextractor_command_line_args,
@@ -89,9 +90,11 @@ class FwhmStatistics:
     fwhmmaxpix: float
     nsexcatsources: int
     fwhm_ref: float           # fwhmmedpix in arcsec with `dev`'s 2 px fallback; logged, not recorded
+    fwhmpctlpix: float        # the percentile of fwhmmedpix's sample, pixels (the quality bits')
 
 
-def fwhm_statistics(catalog_path: Path, params_path: str | Path) -> FwhmStatistics:
+def fwhm_statistics(catalog_path: Path, params_path: str | Path,
+                    percentile: float = 90.0) -> FwhmStatistics:
     """`dev`'s inline FWHM block over the reference catalog.
 
     An empty catalog raises :class:`ValueError`, as ``nanmin`` does in
@@ -117,4 +120,4 @@ def fwhm_statistics(catalog_path: Path, params_path: str | Path) -> FwhmStatisti
     return FwhmStatistics(
         fwhmmedpix=float(fwhm_ref_medpix), fwhmminpix=float(fwhm_ref_minpix),
         fwhmmaxpix=float(fwhm_ref_maxpix), nsexcatsources=int(nsexcatsources_refimage),
-        fwhm_ref=float(fwhm_ref))
+        fwhm_ref=float(fwhm_ref), fwhmpctlpix=fwhm_percentile(vals_refimage, percentile))
