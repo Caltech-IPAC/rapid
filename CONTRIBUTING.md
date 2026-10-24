@@ -19,7 +19,7 @@ Use the GitHub Issues tracker to report bugs or request features. Search existin
 
 Keep each pull request (PR) focused on one feature or fix.
 
-1. Fork the repository and create a feature branch from `main`.
+1. Fork the repository and create a feature branch from `rebuild`; pull requests target `rebuild`.
 2. Make your changes in the feature branch.
    - Follow the project's existing style and conventions, including PEP 8 for Python code.
    - Include docstrings for public functions, classes, and modules.

@@ -18,18 +18,13 @@ install the hook with `git config core.hooksPath .githooks`.
 
 ## Design authority
 
-**For the foundation** (the schema, runs, jobs, the publisher, official
-bindings and the verbs), the design authority is the foundation plan,
-PLAN.md v5 (2026-10-20), held outside this repository until its
-`rapid_docs` page lands after milestone 3; it supersedes the `runs.md`,
-`products.md`, `checks.md` and `releases.md` pages for the foundation.
-
-Otherwise, **design authority** is the readthedocs system pages
+**Design authority** is the readthedocs system pages
 (https://roman-rapid.readthedocs.io/en/latest/system/), sourced from
-the `rapid_docs` repository's `system/` directory: `specification.md`
-(requirements), `stage-contract.md` (package layout and per-stage
-contract), `runs.md` (runs/attempts/custody), `products.md`,
-`releases.md`, `tool.md`, `loop.md`, `checks.md`, `observability.md`
+the `rapid_docs` repository's `system/` directory: `foundation.md` (the
+schema, runs, jobs, the publisher, official bindings, the verbs and the
+thin chain), `specification.md` (requirements), `stage-contract.md`
+(package layout and per-stage contract), `tool.md` (the command-line
+tool), `loop.md`, `datasets.md`, `decisions.md`, `observability.md`
 (logging, monitoring, job timing), and per-stage pages; `operations.md`
 holds the direction pass's operations-readiness proposal (2026-09-26),
 not yet ruled.
