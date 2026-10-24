@@ -23,7 +23,9 @@ and negative. SFFT and the naive subtraction follow ZOGY and run as `dev`
 runs them (``[sfft] run_sfft``, ``[naive_diffimage] naive_diffimage_flag``).
 SFFT is the published differencer, as on `dev` since b725007d (2026-04-20;
 its ``diff_flavor = sfft``): ``run_sfft = false`` fails the settings check
-and a nonzero SFFT exit fails the job (exit 70), never a fallback to ZOGY.
+and a nonzero SFFT exit fails the job as any tool's does
+(:class:`~rapidpipe.science.difference.tools.ToolFailed`), never a
+fallback to ZOGY.
 
 Scope: ``{"expid", "sca", "fid"}``, the epoch's key without the dataset
 (the run's). Settings: the run's ``[difference]`` table, whose subtables
@@ -1094,8 +1096,8 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
               thresh) -> tuple[dict[str, str], _Catalogs]:
     """SFFT's command, then its masking, uncertainty and catalogs; ``(file names, catalogs)``.
 
-    A nonzero exit stops the job with exit 70 (`dev` logs it and goes on
-    with ZOGY; here SFFT is the published differencer).
+    A nonzero exit raises :class:`~rapidpipe.science.difference.tools.ToolFailed`
+    (`dev` logs it and goes on with ZOGY; here SFFT is the published differencer).
 
     Empty ``[sfft] python_cmd`` means the stage's own interpreter, the
     same convention ``[paths] python`` uses for ZOGY; empty
@@ -1115,12 +1117,8 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         science_image_filename, crossconv_flag,
         s["sfft_bsmask_value"], s["sfft_bsmask_radius"],
         bool(s["sfft_use_gainmatch_catalogs"]), bool(s["sfft_use_segmentation"]))
-    # The one unchecked tool: a failed SFFT leaves ZOGY's products, as in dev.
-    exit_code = int(kit.runner.run_shell(
-        sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir, check=False))
-    if exit_code != 0:
-        raise CommandExit(int(ExitCode.STAGE_ERROR),
-                          f"sfft exited {exit_code}: the published difference image was not made")
+    # Checked like every tool: SFFT is the published differencer, so no fallback to ZOGY.
+    kit.runner.run_shell(sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir)
 
     def w(name: str) -> Path:
         return work_dir / name

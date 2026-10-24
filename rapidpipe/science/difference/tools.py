@@ -8,8 +8,9 @@ return the return code; `dev`'s pipeline never checks it, so a tool that
 fails surfaces later as a missing or unreadable output file, or not at
 all when it left a partial one. The port diverges: :meth:`ToolRunner.run`
 and :meth:`ToolRunner.run_shell` raise :class:`ToolFailed` on a nonzero
-exit unless the caller passes ``check=False``, which only SFFT's caller
-does, as `dev` carries on with ZOGY when SFFT fails.
+exit unless the caller passes ``check=False``. No stage passes it: SFFT,
+the one tool `dev` carries on past (with ZOGY), is the published
+differencer since the differencer switch, so its failure fails the job.
 
 Tests pass a fake with the same two methods; nothing else in the science
 package touches subprocess.
