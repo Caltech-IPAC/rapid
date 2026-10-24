@@ -389,7 +389,7 @@ def run(job: JobContext) -> None:
         o(names["image"]), o(names["coverage"]),
         parse_ascii_text_sextractor_catalog(
             o(catalog_name), paths["cfg_path"] + "/" + catalog.PARAMS_FILE,
-            ["XWIN_IMAGE", "YWIN_IMAGE", "FLAGS", "CLASS_STAR", "FLUX_AUTO", "FLUXERR_AUTO"]),
+            ["XWIN_IMAGE", "YWIN_IMAGE", "FLAGS", "FLUX_AUTO", "FLUXERR_AUTO"]),
         measurements)
 
     stamp = header.StampValues(

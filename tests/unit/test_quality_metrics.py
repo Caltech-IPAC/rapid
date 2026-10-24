@@ -5,7 +5,7 @@ and a mismatched PSF leaves a positive core inside a negative ring; a
 known shift is the registration offset; a defect pixel is not a residual
 star; the usable fraction counts finite covered pixels; a source within 3
 px of a catalog position is on a reference star. The reference job's: the
-compact stars' width is their sigma; the coverage histogram is over the
+stars' width is theirs, the wider galaxies set aside; the coverage histogram is over the
 covered pixels; nothing is zero that could not be measured.
 """
 
@@ -94,14 +94,14 @@ def test_source_counts_and_the_share_on_reference_stars():
 
 
 def test_the_reference_metrics(tmp_path):
-    image = gaussians(STARS, 1.2)
+    image = gaussians(STARS, 1.2) + gaussians([(330.0, 330.0), (350.0, 60.0)], 2.0)
     cov = np.full((N, N), 3.0)
     cov[:100, :] = 1.5
     cov[:50, :] = 0.0
     fits.PrimaryHDU(image).writeto(tmp_path / "image.fits")
     fits.PrimaryHDU(cov).writeto(tmp_path / "cov.fits")
-    rows = [[str(x + 1), str(y + 1), "0", "0.98", "1000", "1"] for x, y in STARS]
-    rows.append(["301", "301", "0", "0.1", "1000", "1"])  # a galaxy by its class
+    rows = [[str(x + 1), str(y + 1), "0", "1000", "1"] for x, y in STARS]
+    rows += [["331", "331", "0", "1000", "1"], ["351", "61", "0", "1000", "1"]]  # galaxies, wider
     m = measure.MosaicMeasurements(*([0.0] * 9), gmin=-1.0, gmax=99.0)
     out = measure.quality_metrics(tmp_path / "image.fits", tmp_path / "cov.fits", rows, m)
     assert out["star_sigma_px"] == pytest.approx(1.2, abs=0.05)

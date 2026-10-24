@@ -106,9 +106,14 @@ def measure_mosaic(image: Path, coverage: Path, uncertainty: Path, *,
     )
 
 
-#: Compact stars of the mosaic catalog: SExtractor ``FLAGS`` 0, ``CLASS_STAR`` at least this,
-#: ``FLUX_AUTO`` over its error at least this, no other catalog source within this, px.
-STAR_CLASS_MIN, STAR_SNR_MIN, STAR_ISOLATION_PX = 0.9, 50.0, 14.0
+#: Sources measured for the stars' width: SExtractor ``FLAGS`` 0, ``FLUX_AUTO`` over its error at
+#: least this, no other catalog source within this, px.
+STAR_SNR_MIN, STAR_ISOLATION_PX = 50.0, 14.0
+#: The stars are the narrowest population: widths within this of the sources' 5th percentile, px.
+#: On run 46's F146 SCA 8 mosaic the stars sit at 0.95 to 1.05 px and the galaxies at 1.3 to 1.7
+#: with none between 1.1 and 1.2; SExtractor's CLASS_STAR does not separate them (median 0.69
+#: for the stars, 0.71 for the galaxies), and a CLASS_STAR cut gave 1.55 px (fixes task 5).
+STAR_LOCUS_PX = 0.15
 _STAMP_HALF = 15
 
 
@@ -117,12 +122,14 @@ def quality_metrics(image: Path, coverage: Path, catalog_rows: list[list[str]],
     """The reference job's ``metrics``: one flat dict of named numbers.
 
     ``catalog_rows`` are the mosaic catalog's ``XWIN_IMAGE``, ``YWIN_IMAGE``
-    (1-based), ``FLAGS``, ``CLASS_STAR``, ``FLUX_AUTO`` and ``FLUXERR_AUTO``.
+    (1-based), ``FLAGS``, ``FLUX_AUTO`` and ``FLUXERR_AUTO``.
 
     - ``star_sigma_px``: the median second-moment sigma within 4 px
-      (:func:`rapidpipe.science.difference.refpsf.moments`) of the compact
-      stars, on the mosaic less each stamp's 8 to 12 px annulus median,
-      mosaic px; ``n_sigma_stars`` beside it; both absent without a star.
+      (:func:`rapidpipe.science.difference.refpsf.moments`, on the mosaic
+      less each stamp's 8 to 12 px annulus median) of the stars: of the
+      isolated, unflagged sources at S/N 50 or more, those within
+      :data:`STAR_LOCUS_PX` of the 5th percentile of their widths; mosaic
+      px; ``n_sigma_stars`` beside it; both absent without a source.
     - ``coverage_lt1``, ``coverage_lt2``, ``coverage_lt3``: the share of the
       mosaic's covered pixels (coverage above 0) whose coverage is below 1,
       2 and 3 frames.
@@ -140,8 +147,7 @@ def quality_metrics(image: Path, coverage: Path, catalog_rows: list[list[str]],
         return metrics
     rows = np.array(catalog_rows, dtype=float)
     x, y = rows[:, 0] - 1, rows[:, 1] - 1
-    compact = ((rows[:, 2] == 0) & (rows[:, 3] >= STAR_CLASS_MIN)
-               & (rows[:, 4] >= STAR_SNR_MIN * rows[:, 5]))
+    compact = (rows[:, 2] == 0) & (rows[:, 3] >= STAR_SNR_MIN * rows[:, 4])
     from scipy.spatial import cKDTree
 
     pairs = cKDTree(np.column_stack([x, y])).query_pairs(STAR_ISOLATION_PX, output_type="ndarray")
@@ -158,8 +164,12 @@ def quality_metrics(image: Path, coverage: Path, catalog_rows: list[list[str]],
         stamp = data[yi - h:yi + h + 1, xi - h:xi + h + 1]
         if not np.isfinite(stamp).all():
             continue
-        sigmas.append(moments(stamp - np.median(stamp[annulus]))[2])
+        sigma = moments(stamp - np.median(stamp[annulus]))[2]
+        if np.isfinite(sigma):
+            sigmas.append(sigma)
     if sigmas:
-        metrics["star_sigma_px"] = float(np.median(sigmas))
-        metrics["n_sigma_stars"] = len(sigmas)
+        sigmas = np.asarray(sigmas)
+        stars = sigmas[sigmas <= np.percentile(sigmas, 5) + STAR_LOCUS_PX]
+        metrics["star_sigma_px"] = float(np.median(stars))
+        metrics["n_sigma_stars"] = len(stars)
     return metrics
