@@ -28,8 +28,9 @@ mapped for the listing, a pointing is the survey's observing-sequence row
 passes.
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
-of the run in state ``failed`` is reported and not resubmitted: its key
-counts as taken until a person reruns it (``job run --job <id>``, or
+of the run in state ``failed`` is reported (``failed``, with its scope) and
+not resubmitted, and the work that does not depend on it goes on, so a
+selection drains around it: its key counts as taken until a person reruns it (``job run --job <id>``, or
 ``job submit --job <id>`` on Batch, which marks the row ``launched``). The one exception is a container
 that died for a reason not the code's (Batch ended it while its row was
 ``launched`` or ``running``: a host reclaimed, a task that failed to start,
@@ -630,7 +631,8 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     counts = {"listed": len(stems), "admitted": len(admitted), "new": len(new), "deferred": deferred,
               "submitted": {s: sum(1 for o in out if o["stage"] == s) for s in STAGES},
               "pending": {s: len(pending[s]) for s in STAGES},
-              "failed": [{"job": j["id"], "stage": j["stage"]} for j in failed], "held": held}
+              "failed": [{"job": j["id"], "stage": j["stage"], "scope": j["scope"]} for j in failed],
+              "held": held}
     return out, counts
 
 

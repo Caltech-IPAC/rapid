@@ -44,8 +44,10 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
 - ``loop --run --filters --scas --pointings [--passes] --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
-  summary line per pass, until a pass finds the selection drained (exit 0)
-  or a job of the run has failed (exit 2 after that pass); a job whose
+  summary line per pass, until a pass finds the selection drained: exit 0,
+  or 2 when a job of the run has failed, the failed jobs named in the
+  pass's ``failed`` (a failed job holds only the work that depends on it,
+  and the rest drains first); a job whose
   container Batch ended without ``job run`` recording it is resubmitted
   once (its Batch name ending ``-rerun``) and fails the loop only if the
   rerun's container dies too, and a pass submits at most the run's
@@ -245,7 +247,8 @@ def _build_parser() -> argparse.ArgumentParser:
                     "and submit every ready job one stage forward on Batch, never waiting; end "
                     "each pass by producing the run's newly official packet sets to the topic. "
                     "Repeat every --interval seconds until a pass finds nothing new, pending or "
-                    "to submit (exit 0); a failed job of the run exits 2 after its pass.")
+                    "to submit: exit 0, or 2 when a job of the run has failed; the work that does "
+                    "not depend on a failed job drains first.")
     loop_parser.add_argument("--run", required=True, type=int)
     loop_parser.add_argument("--filters", required=True, help="Comma-separated, e.g. F146.")
     loop_parser.add_argument("--scas", required=True, help="Comma-separated SCA numbers.")
@@ -496,11 +499,11 @@ def _loop(args: argparse.Namespace) -> int:
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)
-        if summary["failed"]:
-            sys.stderr.write(f"rapidpipe loop: failed jobs of run {args.run}: "
-                             f"{', '.join(str(f['job']) for f in summary['failed'])}\n")
-            return int(ExitCode.INCOMPLETE)
         if args.once or summary["drained"]:
+            if summary["failed"]:
+                sys.stderr.write(f"rapidpipe loop: failed jobs of run {args.run}: "
+                                 f"{', '.join(str(f['job']) for f in summary['failed'])}\n")
+                return int(ExitCode.INCOMPLETE)
             return int(ExitCode.SUCCESS)
         time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
 
