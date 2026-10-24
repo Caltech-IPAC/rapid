@@ -4838,6 +4838,126 @@ does, so the numbers can arrive out of order.
    r6i.4xlarge; the local reproduction took 2 min up to the reference
    PSF.
 
+4. **The loop's operations (PRs 354, 356, 359, 364, 366, 367, 374).** Six
+   items, each its own PR, merged in turn; the proofs on `rapid-rebuild:51`
+   (`fe29467c`, items 1 and 2) and `rapid-rebuild:55` (`6a063773`, item 6).
+
+   1. **The HLWAS WCS translation and the Gaia-offset intake metric (PR
+      354, `4d011ab0`).** `[intake] crpix_shift` adds `[dx, dy]` px to
+      `CRPIX1`/`CRPIX2` of every HDU before the header is read; default
+      `[0, 0]`. The HLWAS overlay carries `[0.12, -0.99]`: the WCS ledger's
+      offset is measured minus predicted, and a TAN-SIP prediction is
+      `CRPIX + f(world)`, so the offset itself is the shift (the brief's
+      first guess had the opposite sign). When the intake names the
+      dataset's Gaia `catalogs` input (the loop does once one is official)
+      its `metrics` record `gaia_dx_px`, `gaia_dy_px`, `n_gaia_stars`: each
+      isolated Gaia star the WCS puts on the frame centroided from its
+      prediction, the median of measured minus predicted. The check, one
+      F146 intake of pass 4 (`r0034201004001004001_0001_wfi08_f146`) each
+      way, dataset `r00342-nt-wcs`:
+
+      ```sh
+      rp run create ... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+        --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+        --survey HLWAS --dataset r00342-nt-wcs                         # run 58, made live (group 18757)
+      rp job local --run 58 --stage import --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342-nt-wcs", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+        --expects '[{"product": "catalogs", "key": {"dataset": "r00342-nt-wcs", "name": "gaia-r00342-nt-wcs", "version": "DR3"}, "binding": null}]'   # job 20129
+      rp loop --run 58 --filters F146 --scas 8 --pointings 001_0001 --passes 4 --job-definition rapid-rebuild:51 --interval 60
+      rp run create ... --set "intake.crpix_shift=[0.0, 0.0]" --dataset r00342-nt-wcs   # run 63, never live
+      rp job submit --run 63 --stage intake --job-definition rapid-rebuild:51 \
+        --scope '{"dataset": "r00342-nt-wcs", "file": "r0034201004001004001_0001_wfi08_f146"}' \
+        --inputs '[<psfs job 20130, binding 27509>, <catalogs job 20129>]'               # job 20168, nothing bound
+      rp job wait --job 20168 --timeout 3000 --interval 20
+      ```
+
+      | | translation | `gaia_dx_px` | `gaia_dy_px` | `n_gaia_stars` | `CRPIX1`, `CRPIX2` |
+      |---|---|---|---|---|---|
+      | WCS ledger, catalog PSF through the gWCS | off | +0.116 | -0.989 | 30 | 2044.5, 2044.5 |
+      | job 20168 (run 63) | off | **+0.127** | **-0.986** | 34 | 2044.5, 2044.5 |
+      | job 20134 (run 58) | on, `[0.12, -0.99]` | **+0.007** | **+0.003** | 33 | 2044.62, 2043.51 |
+
+      Check, held: within 0.05 px of zero with the translation, the
+      ledger's offset without it. The loop drained in 6 min (05:24 to
+      05:30 UTC, psf 20130 then intake 20134; the field reported `held`,
+      no epoch before the bound in pass 4 alone, by design), exit 0.
+
+   2. **`rp loop --passes` (PR 356, `fe29467c`).** The survey's passes
+      beside `--pointings` and `--scas`, applied to stems and L2 rows
+      alike, recorded in each pass's `selection`; the breadth and fixes
+      briefs' `loop-passes.py` wrapper is retired. Check, held: run 58's
+      loop above with `--passes 4` listed 5,832 stems, admitted 1.
+
+   3. **`rp job wait` (PR 359, `206ffeaf`).** One blocking waiter on the
+      job rows, Batch reconciled each check; exit 0 when every named job is
+      published or failed, 75 at `--timeout`. Check, held: job 20168 above,
+      `{"ended": true, "seconds": 40.5, "states": {"20168": "published"}}`,
+      exit 0.
+
+   4. **Failure handling (PR 364, `25753e48`).** A container Batch ended
+      without `job run` recording it is resubmitted once (its Batch name
+      ending `-rerun`) and held pending; a rerun's death leaves it failed
+      and the loop exits 2. `[batch] max_submissions_per_pass = 1000` caps a
+      pass in stage order, the rest `deferred` (the breadth night's 3,456
+      simultaneous intakes throttled SSM, 1,448 failed). Two loops under one
+      run: the check scopes to the loop's SCAs, `check_run.sh --scas LIST`
+      (`validate_run.py --scas`), the counts check ignoring another SCA's
+      pending jobs; chosen over the second loop waiting for the first's
+      drain, which cannot see the other process and would still overlap the
+      first loop's check. Unit contracts only; no container died tonight
+      under task 4.
+
+   5. **The quality gate's query (PR 366, `e7c2a2e0`, its squash subject
+      "wip gate" by mistake: the branch's first commit's message, not the
+      PR title).** `rapidpipe.foundation.gate.decide(conn, packet_job,
+      settings)`: hold when the set's difference has `n_sources_snr_gt20`
+      above `snr_gt20_factor` (3.0) times the run's median, or
+      `|core_fraction| > 0.025`, or `|ring_fraction| > 0.015`, once the run
+      has `min_epochs` (5) published differences; the loop reports
+      `held_sets` each pass. Check, held: every official packet set of the
+      re-count's runs at the defaults, 0.4 s:
+
+      | run | 46 | 47 | 48 | 49 | 50 | 53 | 54 |
+      |---|---|---|---|---|---|---|---|
+      | sets, all sent | 9 | 2 | 13 | 13 | 14 | 2 | 2 |
+
+   6. **The caches (PR 367, `6a063773`; PR 374 the cut, `d1e8a9b7`).** Measured on
+      one sampled chain, dataset `r00342-nt-caches`, run 66 (F146, SCA 8,
+      `001_0001`, `--passes 1,2,3,4`, `rapid-rebuild:55`; its body resolved
+      at `bda41dd6`, one merge later, whose only change is a `[difference]`
+      key off by default), against run 41, the fixes' same sample on
+      `rapid-rebuild:43`. The ePSF copy first, once:
+
+      ```sh
+      python scripts/copy_epsf.py --to "$RAPIDPIPE_OUTPUTS_ROOT/refs/crds-epsf" \
+        $(curl -s https://roman-crds.stsci.edu/unchecked_get/mappings/roman/roman_wfi_epsf_0004.rmap \
+          | grep -o "roman_wfi_epsf_0[1-2][0-9][0-9]\.asdf" | sort -u | awk -F_ '{if (substr($4,1,4)+0 >= 145) print}')
+      rp run create ... --set "psf.epsf_cache=\"$RAPIDPIPE_OUTPUTS_ROOT/refs/crds-epsf\"" --dataset r00342-nt-caches   # run 66, live
+      rp loop --run 66 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:55 --interval 60
+      ```
+
+      The copy: 144 references (the `(WFIxx, Fnnn)` entries of
+      `roman_wfi_epsf_0004.rmap`, context `roman_0046.pmap`), 25.7 GB, 643
+      s, under the outputs root's prefix, not the inputs bucket the brief
+      named, whose writes the brief's boundaries forbid. The loop drained in
+      19 min (05:49 to 06:08 UTC, 21 passes), exit 0, nothing failed, no
+      rerun, nothing deferred, `held_sets` empty; psf 20204, intakes 20207
+      to 20210, reference 20214, difference 20216, associate 20226, packet
+      20228 (76 packets).
+
+      | item | run 41 (before) | run 66 (after) | kept |
+      |---|---|---|---|
+      | ePSF fetch in the psf job | 4.1 s from CRDS (job 19807; 3.1 s in job 20130) | **0.8 s** from the copy, `fetched_from` the copy | yes |
+      | SSM in a job | every job read the tree | **none**: `PGHOST`, `PGPORT`, `PGDATABASE`, `RAPID_DB_SECRET_ID` and `RAPIDPIPE_KAFKA_*` in all nine Batch jobs' environment; container start to the row's `started` 1.25 to 1.42 s (before 1.13 to 1.67; the gain is the throttle at thousands of jobs, not one job's second) | yes |
+      | intake intermediate | gzip 5.5 s, intakes 21 to 25 s | plain copy 4.7 to 9.5 s, intakes 17 to 28 s, difference 181 s (168) | **no**, cut by PR 374 |
+      | packet window images | job 20126's inputs read here: 85.1 s and 92.9 s | decompressed once: 97.9 s and 99.5 s (forced photometry 55 to 60 → 37 to 38 s, the read 26 to 29 → 56 to 58 s) | **no**, cut inside PR 367 |
+
+      The packet job's own send (task 5's) failed in run 66: `ClusterAuthorizationFailedError`
+      on `InitProducerIdRequest`, kafka-python's idempotent producer asking for
+      a cluster permission the scratch job role's grant (rapid_systems PR 420:
+      Connect, DescribeTopic, WriteData) lacks (cause unverified); the loop's
+      sweep sent the 76 packets and stamped the set. The endpoint came from the
+      job environment, so this is the grant or the producer's settings, task 5's.
+
 6. **The database guards and the `forced` read (PRs 355, 357).** Three
    guards, no behaviour change, no schema statement on SMDC. A schema test
    in `tests/db/test_schema.py` reads the catalog CI applies: every product
