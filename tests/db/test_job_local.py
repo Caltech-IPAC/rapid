@@ -19,6 +19,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from rapidpipe import launch
 from rapidpipe.cli import main as cli
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation import create_job, local, run_job
@@ -79,6 +80,25 @@ def test_job_run_publishes_attempt_two_once_after_an_unpublished_attempt_one(con
     assert (result["attempt"], result["published"]) == (2, True)
     assert exposures_rows(conn, job) == (1, ("published", 2))
     assert (tmp_path / str(run) / "trivial" / str(job) / "1" / "exposures.parquet").is_file()
+
+
+def test_a_failed_job_submitted_again_is_launched_until_its_container_starts(connect, tmp_path,
+                                                                              monkeypatch):
+    class Batch:
+        def submit_job(self, **request):
+            return {"jobId": "batch-2"}
+
+    conn = connect()
+    job = create_job(conn, new_run(conn, live=True), "trivial", {})
+    with pytest.raises(RuntimeError):
+        run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), failing_stage)
+    monkeypatch.setenv("RAPIDPIPE_BATCH_JOB_QUEUE", "queue")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://products/foundation")
+    launch.submit(job, "difference", job_definition="definition", conn=conn, client=Batch())
+    with conn.cursor() as cur:
+        cur.execute("SELECT state, batch_job_id FROM jobs WHERE id = %s", (job,))
+        assert cur.fetchone() == ("launched", "batch-2")
+    conn.commit()
 
 
 @pytest.mark.parametrize("raised, recorded", [
