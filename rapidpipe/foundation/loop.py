@@ -33,11 +33,12 @@ is the authority.
 
 One pass, in order:
 
-- ``psf``: a job per (filter, SCA) of the new stems whose science or
-  reference ``psfs`` key has no official row, scoped to the first new stem
-  of that SCA and expecting both keys unbound, unless a ``psf`` job of this
-  run already serves the pair (pending, failed or published). That SCA's
-  stems wait for intake until both rows are official.
+- ``psf``: a job per (filter, SCA) of the new stems whose science
+  ``psfs`` key has no official row, scoped to the first new stem of that
+  SCA and expecting the key unbound, unless a ``psf`` job of this run
+  already serves the pair (pending, failed or published). That SCA's stems
+  wait for intake until the row is official. (The reference PSF is the
+  difference job's own measurement, not a product.)
 - ``intake``: a job per listed ``_cal.asdf`` stem the selection admits for
   which no intake job of the dataset is published and no intake job of this
   run exists, and whose filter and SCA have official PSFs, at most
@@ -375,7 +376,7 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     claimed = set(snap.exposures) | {stem_expid(j["scope"]["file"]) for j in pending["intake"]
                                      if STEM.match(j["scope"]["file"])}
 
-    # PSF: per (filter, SCA) of the new stems without both official rows, one job; its stems wait.
+    # PSF: per (filter, SCA) of the new stems without an official science row, one job; its stems wait.
     served = set()
     for job in run_jobs["psf"]:
         m = STEM.match(job["scope"]["file"])
@@ -384,15 +385,14 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     for stem in new:
         a = admitted[stem]
         pair = (fids[a["filter"]], a["sca"])
-        if any((*pair, kind) not in snap.psfs for kind in ("science", "reference")):
+        if (*pair, "science") not in snap.psfs:
             unready.setdefault(pair, stem)
     for (fid, sca), stem in sorted(unready.items()):
         if (fid, sca) in served:
             continue
         out.append({"stage": "psf", "scope": {"dataset": d, "file": stem}, "inputs": [],
                     "expects": [{"product": "psfs", "key": {"dataset": d, "fid": fid, "sca": sca,
-                                                            "kind": kind}, "binding": None}
-                                for kind in ("science", "reference")]})
+                                                            "kind": "science"}, "binding": None}]})
     ready_stems = [s for s in new if (fids[admitted[s]["filter"]], admitted[s]["sca"]) not in unready]
     for stem in ready_stems[:max_intake]:
         a = admitted[stem]
@@ -448,7 +448,7 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
             continue
         out.append({"stage": "difference", "scope": {"expid": expid, "sca": sca, "fid": fid},
                     "inputs": [{"product": "l2files", "key": key(*k), "source_job": row["job"]},
-                               psf(fid, sca, "science"), psf(fid, sca, "reference"),
+                               psf(fid, sca, "science"),
                                {"product": "refimages", "key": {"dataset": d, "field": row["field"],
                                                                 "fid": fid}, "source_job": ref}],
                     "expects": [{"product": "diffimages", "key": key(*k), "binding": None},

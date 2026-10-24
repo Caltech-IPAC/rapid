@@ -110,7 +110,7 @@ CREATE TABLE jobs (
     settings_hash text,
     published_attempt integer,
     manifest jsonb,
-    refusal text,                                    -- why the automatic binding was refused, or why Batch ended it unrecorded
+    refusal text,                                    -- why the automatic binding was refused, why Batch ended it unrecorded, or a stage's named failure
     launched timestamp with time zone DEFAULT now() NOT NULL,
     started timestamp with time zone,
     ended timestamp with time zone,

@@ -25,7 +25,10 @@ fastavro>=1.9
 # import photutils lazily, inside the fitting functions, so importing the
 # stage never requires it; whatever environment runs difference with real
 # tools must carry it. The pipeline image's conda environment carries it.
-photutils>=2.0
+# The reference PSF (rapidpipe.science.difference.refpsf: DAOStarFinder,
+# EPSFBuilder) uses 3.0's names (sharpness_range, x_centroid); the image
+# carries 3.0.0.
+photutils>=3.0
 # rapidpipe.foundation.publish reads a job's declared Parquet outputs with
 # pyarrow at module scope; the foundation workflow's publisher tests import it.
 pyarrow>=14

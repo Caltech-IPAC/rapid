@@ -1,7 +1,7 @@
 """The difference stage under ``run(job)``, on a synthetic epoch with the fake tools.
 
-Contracts: a job naming one ``l2files``, one ``refimages`` and two ``psfs``
-rows writes ``diffimages`` (one row) and ``sources`` with exactly their
+Contracts: a job naming one ``l2files``, one ``refimages`` and one
+(science) ``psfs`` row writes ``diffimages`` (one row) and ``sources`` with exactly their
 tables' columns from ``database/schema.sql``, sharing the ``pid`` drawn for
 the job; the work subdirectory publishes exactly the kept set (the ZOGY
 image, its uncertainty, mask and PSF-fit catalog, and the neighbours the
@@ -9,8 +9,12 @@ packet stage reads), every FITS gzipped, and nothing else; the tools run in `dev
 order with the reference background subtracted by bkgest; ``max_sources``
 caps the source set (its choice is ``source_set``'s, tested with the load
 science); the reference
-zero point is the reference's ``MAGZP`` unless overridden; the two PSFs are
-told apart by their keys' kind, one of each; SFFT and naive catalogs take their detection
+zero point is the reference's ``MAGZP`` unless overridden; the reference
+PSF is measured on the resampled, background-subtracted reference over the
+covered pixels and is the one ZOGY and naive get, published and
+recorded in the manifest's ``metrics``; too few stars stops the job with
+exit 65 and the reason, before a manifest; a reference ``psfs`` input
+fails; SFFT and naive catalogs take their detection
 overrides and the SFFT image is coverage-masked; every bad input fails the
 job before a manifest is written; the shipped ``[difference]`` table is
 valid.
@@ -31,9 +35,11 @@ import pytest
 from astropy.io import fits
 
 import rapidpipe.stages.difference as difference
+from rapidpipe.exitcodes import CommandExit
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.selftest.support.fakedifftools import (
     FakePsfCatalog,
+    FakeReferencePsf,
     FakeToolRunner,
     cdf_dir,
     fake_sip_to_pv,
@@ -85,8 +91,7 @@ def fake_connect(files: dict[str, Path], queries: list):
             elif "FROM refimcatalogs" in statement:
                 self.row = (files["catalog"].as_uri(),)
             elif "FROM psfs" in statement:
-                self.row = ((files["science_psf"] if params[-1] == "science"
-                             else files["reference_psf"]).as_uri(),)
+                self.row = (files["science_psf"].as_uri(),)
             else:
                 assert "nextval" in statement
                 self.row = (PID,)
@@ -113,18 +118,21 @@ def named_inputs(**changes) -> list[dict]:
                       "binding": None},
         "psf": {"kind": "input", "product": "psfs", "source_job": 20, "binding": None,
                 "key": {"dataset": "D", "fid": 1, "sca": 7, "kind": "science"}},
-        "refpsf": {"kind": "input", "product": "psfs", "source_job": 21, "binding": None,
-                   "key": {"dataset": "D", "fid": 1, "sca": 7, "kind": "reference"}},
     }
     inputs.update(changes)
     return [i for i in inputs.values() if i is not None]
 
 
 @pytest.fixture()
-def fakes(monkeypatch):
+def refpsf():
+    return FakeReferencePsf()
+
+
+@pytest.fixture()
+def fakes(monkeypatch, refpsf):
     runner, catalog = FakeToolRunner(), FakePsfCatalog()
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
-        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog))
+        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog, reference_psf=refpsf))
     return runner, catalog
 
 
@@ -185,7 +193,8 @@ def test_the_job_publishes_the_kept_set_gzipped_and_nothing_else(tmp_path, files
               "awaicgen_output_mosaic_cov_map_resampled.fits",  # its mask
               "diffpsf.fits",                                # forced photometry
               "bkg_subbed_science_image.fits",               # forced photometry, science cutout
-              "awaicgen_output_mosaic_image_resampled_gainmatched.fits"}  # template cutout
+              "awaicgen_output_mosaic_image_resampled_gainmatched.fits",  # template cutout
+              "refimage_psf.fits"}                           # ZOGY's reference PSF
     assert {p.name for p in work.iterdir()} == (
         {name + ".gz" for name in images} | {"zogy_diffimage_masked_psfcat.parquet"})
     for name in images:
@@ -213,11 +222,32 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
         "awaicgen_output_mosaic_image_resampled_bkgest_input.fits")
 
 
-def test_zogy_gets_both_psfs_told_apart_by_key_kind_in_either_order(tmp_path, files, fakes):
-    runner, _ = fakes
-    run_difference(tmp_path, files, inputs=list(reversed(named_inputs())))
+def test_every_differencer_gets_the_reference_psf_measured_on_the_resampled_reference(
+        tmp_path, files, fakes, refpsf):
+    runner, catalog = fakes
+    prefix = run_difference(tmp_path, files)
     zogy = next(a for a in runner.calls if a[1].endswith("py_zogy.py"))
-    assert zogy[4:6] == ["sciimage_psf_f184_sca07_normalized.fits", "refimage_psf_f184_sca07.fits"]
+    assert zogy[4:6] == ["sciimage_psf_f184_sca07_normalized.fits", "refimage_psf.fits"]
+    naive = next(c for c in catalog.calls if c["label"] == "positive naive difference image")
+    assert naive["psf"].endswith("/refimage_psf.fits")
+    (call,) = refpsf.calls
+    # The 65 x 65 resampled reference less its uncovered 3-column strip (coverage 0).
+    assert call["shape"] == (65, 65) and call["usable"] == 65 * 62
+    stamp = fits.getdata(prefix / "diff" / "refimage_psf.fits.gz")
+    assert stamp.shape == (61, 61) and stamp.sum() == pytest.approx(1.0, abs=1e-5)
+
+
+def test_the_manifest_records_the_reference_psf_metrics(tmp_path, files, fakes, refpsf):
+    recorded = manifest(run_difference(tmp_path, files))
+    metrics = recorded["metrics"]
+    assert set(metrics) == {"refpsf_sigma_px", "refpsf_stars", "sci_psf_sigma_px",
+                            "psf_centroid_offset_px"}
+    assert (metrics["refpsf_sigma_px"], metrics["refpsf_stars"]) == (refpsf.sigma, refpsf.stars)
+    # The science PSF is the fixture's 9 x 9 Gaussian of sigma 1.2, centred.
+    assert metrics["sci_psf_sigma_px"] == pytest.approx(refpsf.calls[0]["science_sigma_px"])
+    assert 1.0 < metrics["sci_psf_sigma_px"] < 1.2
+    assert metrics["psf_centroid_offset_px"] == pytest.approx([0.0, 0.0], abs=1e-6)
+    assert recorded["difference"]["refpsf"]["stars"] == refpsf.stars
 
 
 def test_sfft_and_naive_catalogs_take_their_detection_overrides(tmp_path, files, fakes):
@@ -278,8 +308,20 @@ def test_a_reference_without_magzp_and_no_override_fails(tmp_path, fakes):
     assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
+def test_too_few_reference_stars_stop_the_job_with_exit_65_and_the_reason(tmp_path, files, fakes,
+                                                                         refpsf):
+    refpsf.stars = 7
+    with pytest.raises(CommandExit, match=r"^refpsf: 7 stars, 10 needed$") as stopped:
+        run_difference(tmp_path, files)
+    assert stopped.value.code == 65
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
 @pytest.mark.parametrize("inputs, message", [
-    (named_inputs(refpsf=None), "two psfs"),
+    (named_inputs(psf=None), "one psfs"),
+    (named_inputs(refpsf={"kind": "input", "product": "psfs", "source_job": 21, "binding": None,
+                          "key": {"dataset": "D", "fid": 1, "sca": 7, "kind": "reference"}}),
+     "one psfs"),
     (named_inputs(gaia={"kind": "input", "product": "catalogs", "key": {}, "source_job": 1,
                         "binding": None}), "not \\['catalogs'\\]"),
     (named_inputs(l2files={"kind": "input", "product": "l2files", "source_job": 2,
@@ -291,11 +333,11 @@ def test_inputs_the_stage_does_not_take_fail(tmp_path, files, fakes, inputs, mes
     assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
-def test_two_psfs_of_one_kind_fail(tmp_path, files, fakes):
+def test_two_science_psfs_fail(tmp_path, files, fakes):
     science_twice = named_inputs(refpsf={
         "kind": "input", "product": "psfs", "source_job": 21, "binding": None,
         "key": {"dataset": "D", "fid": 1, "sca": 7, "kind": "science"}})
-    with pytest.raises(ValueError, match="one of each key kind"):
+    with pytest.raises(ValueError, match="one psfs input"):
         run_difference(tmp_path, files, inputs=science_twice)
     assert not (tmp_path / "prefix" / "manifest.json").exists()
 
