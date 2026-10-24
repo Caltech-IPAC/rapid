@@ -10,7 +10,9 @@ edge where the measured ePSF ends; pixels outside ``usable`` are never
 read; a science PSF of another size is refused; fewer than ``MIN_STARS``
 stars raise ``TooFewStars`` with the named reason; the peak floor is in units
 of the noise, so a field of a hundredth of the count rate and noise keeps
-the same stars.
+the same stars; the crowded variant measures a field where every star has a
+neighbour within ``ISOLATION_PX``, and drops a star with a neighbour within
+``CROWDED_ISOLATION_PX`` above ``CROWDED_CONTRAST`` of its peak.
 """
 
 from __future__ import annotations
@@ -115,6 +117,42 @@ def test_the_peak_floor_follows_the_noise_not_the_count_rate():
     faint = refpsf.measure(image / 100, usable, science_psf=science_psf())
     assert faint.stars == bright.stars == 30
     assert faint.sigma_px == pytest.approx(bright.sigma_px, abs=1e-3)
+
+
+def crowded_field(seed: int = 5) -> tuple[np.ndarray, int, list[tuple[float, float]]]:
+    """Stars on a 40 px grid, each with a faint neighbour 9 px off; some with a bright one 4 px off.
+
+    Returns the image, its side and the positions of the stars with the bright close neighbour.
+    """
+    rng = np.random.default_rng(seed)
+    n = 640
+    image = rng.normal(0.0, 0.02, (n, n))
+    paired = []
+    for k, (x, y) in enumerate((x, y) for y in range(40, n - 40, 40) for x in range(40, n - 40, 40)):
+        x, y = x + rng.uniform(-.5, .5), y + rng.uniform(-.5, .5)
+        flux = 3000.0 if k % 5 == 0 else rng.uniform(300, 2000)
+        image += flux * _blob(n, x, y, SIGMA)
+        image += 0.05 * flux * _blob(n, x + 9, y + 0.3, SIGMA)
+        if k % 5 == 0:
+            image += 0.5 * flux * _blob(n, x - 0.2, y + 4, SIGMA)
+            paired.append((x, y))
+    return image, n, paired
+
+
+def test_the_crowded_variant_measures_stars_whose_neighbours_are_faint():
+    # Every star has a detection within ISOLATION_PX, so the default finds none isolated; the
+    # crowded variant keeps a star whose neighbours within 6 px stay under a tenth of its peak.
+    image, n, paired = crowded_field()
+    usable = np.ones((n, n), dtype=bool)
+    with pytest.raises(refpsf.TooFewStars):
+        refpsf.measure(image, usable, science_psf=science_psf())
+    measured = refpsf.measure(image, usable, science_psf=science_psf(), crowded=True)
+    truth = refpsf.moments(_blob(refpsf.SIZE, CENTRE, CENTRE, SIGMA))
+    assert measured.stars >= refpsf.MIN_STARS
+    assert measured.sigma_px == pytest.approx(truth[2], abs=0.02)
+    assert max(map(abs, measured.centroid_px)) < refpsf.CENTRING_TOLERANCE_PX
+    near = np.hypot(*(measured.stars_xy[:, None, :] - np.array(paired)[None, :, :]).transpose(2, 0, 1))
+    assert near.min() > 6                                 # a bright neighbour 4 px off excludes both
 
 
 class _Overshooting:
