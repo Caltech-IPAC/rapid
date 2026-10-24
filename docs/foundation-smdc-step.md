@@ -7259,6 +7259,54 @@ contracts (`tests/unit/test_job_failure.py`, `test_connection.py`,
 `test_launch.py`, `test_validate_counts.py`, `test_public_safety.py`).
 No transient failure was staged live.
 
+### Step mig-quickstart: the README runs one epoch locally, and the loop page starts a night, each followed verbatim
+
+**The change (PR 423, merged `3723b445`; rapid_docs PR 109, merged `9b802ea2`).**
+The README gains **Getting started**. It takes one HLWAS epoch (`001_0001`, SCA 8, F146) through import, psf, three intakes (passes 1, 2 and 4), a two-frame reference, the difference and the packet set. Each stage runs with `job local` inside the pipeline image, against a throwaway `postgres:18` in a podman pod. The section also gives the environment in one block, with the team's values commented as placeholders. The README's three-stages sentence, the difference-on-the-old-contract clause, `launch.submit`'s command and `RAPIDPIPE_BATCH_JOB_DEFINITION` are corrected or cut. `system/loop.md` gains **Starting a night**: run create with `--set` for the source root and the bound, the live binding's JSON, the Gaia import, the loop under `timeout`, `check_run.sh`, and a table of `loop`'s and `job local`'s exit codes.
+
+Two facts were checked before the text was written:
+
+- **The dated SQL files do not apply after a fresh `schema.sql`.** All five fail on `postgres:18`: "already exists" for four, and `members_official` does not exist for the object-catalog file. The README applies `schema.sql` alone.
+- **No setting turns off the packet job's send.** The local recipe points the existing `RAPIDPIPE_KAFKA_*` environment at `127.0.0.1:9`. The send fails (`KafkaTimeoutError: Unable to bootstrap`), and the job stays published and exits 0.
+
+**The proof, local.** The README's `sh` blocks were extracted from the file, with only `IMAGE` and `GAIA` filled. They ran in an `env -i` shell and logged every command's exit status:
+
+| walk-through | image | UTC | validate_run | read_packets | packets |
+|---|---|---|---|---|---|
+| a1 | `rebuild-6c7ef990…` | 21:18:03–21:22:31 | 6/6 PASS | 1 set CLEAN | 465 |
+| a2 | `rebuild-c87a2171…` (the final text, PR 420 merged in) | 21:23:24–21:27:54 | 6/6 PASS | 1 set CLEAN | 465 |
+
+No command exited nonzero except `pg_isready` inside its `until`. The difference kept 500 of 2,112 sources, and its children peaked at 15.2 GB. Nothing on S3 or SMDC was touched. The pod was removed after each walk-through.
+
+**The proof, SMDC.** The loop page's `sh` blocks were extracted the same way and run after the README's team environment block, uncommented and filled. They ran from a `rebuild` checkout at `3723b445`. The image was `rebuild-3723b445…` (digest `6e3911a3…`), job definition **`rapid-rebuild:73`**. Run **97** (`r00342-mq-night`, live, binding 32040) covered HLWAS `001_0001`, SCA 8, F146, passes 1 to 4 under the bound 61591.4056.
+
+```sh
+rp run create --who "$USER" --why "..." --revision 3723b445... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+  --survey HLWAS --dataset r00342-mq-night                                          # run 97
+rp official change --group live-r00342-mq-night.json ...; rp job local --run 97 --stage import ...   # live; Gaia, job 22897
+timeout 5400 $PY -m rapidpipe.cli.main loop --run 97 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 \
+  --job-definition rapid-rebuild:73 --interval 60
+scripts/check_run.sh --run 97
+```
+
+Check, held:
+
+- **The drain.** 16 passes, 21:34:39 to 21:49:39 UTC, exit 0, `failed` empty in every pass. Jobs: psf 22898, intakes 22899 to 22902, reference 22906, difference 22907, packet 22911. Each was published on attempt 1 with `refusal` null.
+- **`check_run.sh --run 97`: CLEAN**, validate 6/6, reader 1/1, consumer 471/471.
+
+The reference was pending for four passes (about five minutes) at the 9100 px mosaic. The page's drain range now reads 9 to 15 minutes.
+
+**Found by the walk-throughs and written into the text:** `timeout 5400 rp loop` cannot run a shell function, so the loop step runs the module. The fix came from reading the text before the SMDC run, which then ran the corrected text.
+
+**Seen, not built:**
+
+- The publisher binds an expected key that no loaded row holds. A dry-run typo expected `psfs` under fid 6, and the row was fid 8. `validate_run.py`'s lineage check catches it afterwards.
+- There is no off switch for the packet job's send.
+- `scripts/` is not in the image.
+
+Raw evidence is in the brief's `t1/`: `local-a{1,2}.*`, `night-a1.*`, `dated-files-check.txt`, `dry/`.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
