@@ -40,7 +40,11 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
   summary line per pass, until a pass finds the selection drained (exit 0)
-  or a job of the run has failed (exit 2 after that pass);
+  or a job of the run has failed (exit 2 after that pass); a job whose
+  container Batch ended without ``job run`` recording it is resubmitted
+  once (its Batch name ending ``-rerun``) and fails the loop only if the
+  rerun's container dies too, and a pass submits at most the run's
+  ``[batch] max_submissions_per_pass``;
 - ``publish --run [--settings FILE]`` produces the run's official packet
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
@@ -417,6 +421,11 @@ def _loop(args: argparse.Namespace) -> int:
             launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn,
                           memory_mib=launch.memory_mib(settings, item["stage"]))
 
+    def rerun(job_id: int, stage: str) -> None:
+        with connect_loop() as conn:
+            launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
+                          memory_mib=launch.memory_mib(settings, stage), name_suffix=loop.RERUN_SUFFIX)
+
     def publish() -> dict:
         with connect_loop() as conn:
             if not publish_kafka.unpublished_sets(conn, args.run):
@@ -432,7 +441,7 @@ def _loop(args: argparse.Namespace) -> int:
         started = time.monotonic()
         stems = loop.list_stems(s3, intake["source_root"], selection)
         summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
-                                args.max_intake, batch)
+                                args.max_intake, batch, rerun)
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)

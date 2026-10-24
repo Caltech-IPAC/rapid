@@ -35,6 +35,9 @@ jobs of ``--run``:
   bound.
 - ``counts``: no job of the run is still launched or running; the jobs per
   stage and state, the rows per table and the open bindings are printed.
+  With ``--scas``, a pending job whose scope names another SCA is a second
+  loop's under the same run and is reported, not counted (two loops on one
+  run raced this check, 2026-10-24); a job naming no SCA always counts.
 
 The night's checks 7 to 10 (one group makes a night official, a
 replacement, undo, two groups at once) are operations, checked as they
@@ -63,6 +66,7 @@ import contextlib
 import hashlib
 import io
 import json
+import re
 import sys
 import threading
 import time
@@ -503,17 +507,41 @@ def check_twice(a: int, b: int) -> bool:
                   f" {bound or 'neither'}", t0)
 
 
-def check_counts(run: int) -> bool:
+def job_sca(scope: dict) -> int | None:
+    """The SCA a job's scope names: its ``sca``, or its SOC stem's ``wfiNN``; ``None`` for a field's."""
+    if "sca" in scope:
+        return int(scope["sca"])
+    m = re.search(r"_wfi(\d{2})_", scope.get("file", ""))
+    return int(m[1]) if m else None
+
+
+def pending_outside(pending: list[dict], scas: set[int] | None) -> tuple[list[dict], list[dict]]:
+    """``pending`` jobs split into those the check counts and those of another loop's SCAs:
+    with ``scas``, a job whose scope names an SCA outside them is another loop's; a job
+    naming no SCA (a field's) is always counted."""
+    if scas is None:
+        return pending, []
+    mine, others = [], []
+    for job in pending:
+        sca = job_sca(job["scope"])
+        (others if sca is not None and sca not in scas else mine).append(job)
+    return mine, others
+
+
+def check_counts(run: int, scas: set[int] | None = None) -> bool:
     t0 = time.perf_counter()
     jobs = q("SELECT stage, state, count(*) n FROM jobs WHERE run = %s GROUP BY 1, 2 ORDER BY 1, 2", (run,))
-    pending = [r for r in jobs if r["state"] in ("launched", "running")]
-    bad = [f"{r['n']} {r['stage']} jobs still {r['state']}" for r in pending]
+    pending, others = pending_outside(q("SELECT stage, state, scope FROM jobs WHERE run = %s"
+                                        " AND state IN ('launched', 'running')", (run,)), scas)
+    bad = [f"{n} {stage} jobs still {state}"
+           for (stage, state), n in sorted(Counter((j["stage"], j["state"]) for j in pending).items())]
     rows = {t: q(f"SELECT count(*) n FROM {t} x JOIN jobs j ON j.id = x.job WHERE j.run = %s", (run,))[0]["n"]
             for t in TABLES}
     (o,) = q("SELECT count(*) n FROM official o JOIN jobs j ON j.id = o.job WHERE j.run = %s"
              " AND o.closed_at IS NULL", (run,))
     detail = (f"jobs {json.dumps({f'{r['stage']} {r['state']}': r['n'] for r in jobs})}; rows"
-              f" {json.dumps({t: n for t, n in rows.items() if n})}; {o['n']} open bindings")
+              f" {json.dumps({t: n for t, n in rows.items() if n})}; {o['n']} open bindings"
+              + (f"; {len(others)} pending jobs of SCAs outside {sorted(scas)} not counted" if scas else ""))
     return report("counts", bad, detail, t0)
 
 
@@ -524,10 +552,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only", help="comma-separated checks; default every one but twice")
     parser.add_argument("--twice", help="A,B: two executions of one key, for the twice check")
     parser.add_argument("--depth", type=int, help="the chain depth expected of the run's one bound (else final) object set")
+    parser.add_argument("--scas", help="comma-separated SCAs: the counts check ignores pending jobs of other"
+                                       " SCAs (a second loop's under the same run)")
     args = parser.parse_args(argv)
+    scas = {int(x) for x in args.scas.split(",")} if args.scas else None
     checks = {"lineage": lambda: check_lineage(args.run), "tables": lambda: check_tables(args.run),
               "chain": lambda: check_chain(args.run, args.depth), "packets": lambda: check_packets(args.run),
-              "forced": lambda: check_forced(args.run), "counts": lambda: check_counts(args.run)}
+              "forced": lambda: check_forced(args.run), "counts": lambda: check_counts(args.run, scas)}
     if args.twice:
         a, b = (int(x) for x in args.twice.split(","))
         checks["twice"] = lambda: check_twice(a, b)
