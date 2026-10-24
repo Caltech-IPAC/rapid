@@ -7481,7 +7481,8 @@ the loop and Batch read correctly. The reference converges on `dev`
 SFFT was published, measured worse than ZOGY on the same bytes, and the
 published differencer is now the setting `[difference] diff_flavor`,
 shipped `zogy`; `dev`'s pixel columns and its prefilter, the remedy Ben
-named, are ported under `sfft`. The gate holds on lost sky and
+named, are ported under `sfft` and measured: they do not bring SFFT to
+ZOGY on HLWAS, so `zogy` stays. The gate holds on lost sky and
 misregistration too. Every run below is CLEAN by `check_run.sh` except
 run 83, which failed on purpose.
 
@@ -7500,7 +7501,7 @@ run 83, which failed on purpose.
 | mig-quickstart | no local recipe; the loop page had no night from scratch | README Getting started, one HLWAS epoch in the image against a throwaway `postgres:18`, verbatim twice, 465 packets, validate 6/6; the loop page's Starting a night verbatim on SMDC, run 97 CLEAN 471 / 471 | PRs 423, 428; rapid_docs 109 |
 | gate-metrics | lost sky and misregistration invisible to the gate | holds at `usable_fraction` < 0.9 and offset > 0.25 px; replay of 4,627 sets holds run 72 SCA 9's three (usable 0.704) and nothing healthy; run 98 CLEAN as smoke | PRs 426, 430; rapid_docs 111 |
 | rimtimsim-reader (code only) | no FITS reader | `[intake] reader = "rimtimsim"`, overlay `rimtimsim-260622.toml`; one file: WCS (+0.052, +0.060) px from 588 Gaia stars, so no `crpix_shift`; the chain's runs are its step's | PR 429 |
-| dev-prefilter (code only) | SFFT's catalog capped raw | under `sfft`, sumrat > 0.4 and the 2 px edge before the cap, `""` none; no number yet, its step measures it | PR 431 |
+| dev-prefilter | SFFT's catalog capped raw | under `sfft`, sumrat > 0.4 and the 2 px edge before the cap, `""` none; same bytes, three arms: ZOGY detected 542 of 600, raw SFFT 256, SFFT with the cut 275 (AB 25 bin 57 / 0 / 0 of 57), false positives per epoch 214 / 385 / 388, null packets 182 / 471 / 478; the cut drops a third of SFFT's candidates but the bright-star residuals refill the cap, so `diff_flavor` stays `zogy` and the gate's core and ring bounds stay (arm A's sit inside them) | PRs 431, 432 |
 
 **The current procedure**, where these steps changed it:
 
@@ -7532,7 +7533,8 @@ The live runs the part made: 83 (`r00342-et-fail`), 84
 90 (`r00342-ei-inputs`), 91 to 94 (`r00342-dr-inj7000`,
 `r00342-dr-inj9100`, `r00342-dr-null7000`, `r00342-dr-null9100`), 95
 (`r00342-wk-errtrans`), 96 (`r00342-dc-cols-inj`), 97
-(`r00342-mq-night`), 98 (`r00342-gm-smoke`). Job definitions
+(`r00342-mq-night`), 98 (`r00342-gm-smoke`), 102 to 107
+(dev-prefilter's three arms, injected and null). Job definitions
 `rapid-rebuild:65` to `:76` were registered; `:75` is `479eb163` (PR
 429) and `:76`, the latest, `14860f57` (PR 431). The one schema statement was PR 422's `ALTER TABLE sources
 ADD COLUMN`. Flight program 1049's four F158 WFI02 epochs are in the
@@ -7541,16 +7543,19 @@ deleted.
 
 **What remains, and where it sits:**
 
-- **Whether `sfft` comes back**: the prefilter's measurement, and the
-  gate's core and ring bounds under the filtered catalog, read on ZOGY
-  (PR 431's step). sumrat alone keeps 0.90 of SFFT's bright-star
-  residuals on HLWAS (step dev-columns).
+- **Whether `sfft` comes back**: not through the catalog's selection.
+  sumrat keeps 0.90 of SFFT's point-like bright-star residuals on HLWAS,
+  so the route is SFFT's own configuration (queue item `sfft-core`).
+  Under SFFT `n_sources_snr_gt20` saturates at the cap, so the gate's
+  count check cannot see an SFFT epoch off-scale (PR 432).
 - **The false positives per epoch** under the field rule, a median 224
   on the injected footprint under ZOGY (part 12), unchanged by this part.
 - **The injected arms' 415 false positives per epoch** (runs 91, 92)
-  against run 88's 385 under SFFT: the arms rebuilt their reference
-  under PR 406's SExtractor values, run 88 used run 81's; the cause is
-  not read.
+  against run 88's 385 under SFFT: PR 432's raw arm reproduces 385 on
+  the tip's image against run 81's reference and PSF rows, so the shift
+  is in runs 91 and 92's own reference products (`refimages` 22868 and
+  22867); which part is unread, PR 406's reference catalog the
+  candidate.
 - **`sources_official` on SMDC** lacks the three columns, because the
   view's `t.*` was expanded at creation and re-creating it needs a
   `DROP VIEW` grant (step dev-columns).
