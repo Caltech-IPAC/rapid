@@ -69,16 +69,17 @@ from rapidpipe.science.spatial import (
 #: Recorded in the manifest: where the imported products came from.
 PROVENANCE = "imported from IMSS socsimsdb 20260821 run; producer unknown"
 
-#: The difference job's files the import copies, and its PSF-fit catalog.
-DIFFERENCE_IMAGE = "zogy_diffimage_masked.fits"
+#: The difference job's files the import copies, and its PSF-fit catalog: SFFT's,
+#: the differencer `dev` loads since b725007d (2026-04-20) and the difference stage publishes.
+DIFFERENCE_IMAGE = "sfftdiffimage_masked.fits"
 DIFFERENCE_FILES = (
     DIFFERENCE_IMAGE,
-    "zogy_diffimage_uncert_masked.fits",
-    "diffpsf.fits",
+    "sfftdiffimage_uncert_masked.fits",
+    "sfftdiffpsf.fits",
     "bkg_subbed_science_image.fits",
     "awaicgen_output_mosaic_image_resampled_gainmatched.fits",
 )
-DIFFERENCE_CATALOG = "zogy_diffimage_masked_psfcat.parquet"
+DIFFERENCE_CATALOG = "sfftdiffimage_masked_psfcat.parquet"
 
 #: The reference job's image, its coverage and uncertainty maps, and its
 #: mosaic SExtractor catalog (`refimcatalogs` cattype 1, as dev registers it).
