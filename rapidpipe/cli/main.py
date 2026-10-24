@@ -36,6 +36,11 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   in the image (``rapidpipe.launch.submit``) asking for the run's
   ``[batch.memory_mib]`` memory for the stage, recording the Batch job id
   on the row (``job show`` prints it) and printing both ids;
+- ``job wait --job N [N ...] [--timeout S] [--interval S]`` blocks until
+  every named job is ``published`` or ``failed``, reconciling their runs
+  with Batch each check (``rapidpipe.foundation.loop.wait``), and prints the
+  states; exit 0, or 75 when the timeout passes first: one blocking waiter
+  for hand-submitted jobs;
 - ``loop --run --filters --scas --pointings --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
@@ -180,6 +185,16 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Run an existing job's next attempt in this process and publish it; "
                     "a published job stops before touching a file.")
     job_run.add_argument("--job", required=True, type=int)
+    job_wait = job_subparsers.add_parser(
+        "wait", help="Wait until every named job is published or failed.",
+        description="Block until every named job is published or failed (a container Batch ended "
+                    "without the row recording it counts as failed, Batch's own retry as not "
+                    "ended); print the states; exit 0, or 75 when --timeout passes first.")
+    job_wait.add_argument("--job", required=True, type=int, nargs="+", dest="jobs", metavar="N")
+    job_wait.add_argument("--timeout", type=float, default=7000.0,
+                          help="Seconds before giving up with exit 75 (default 7000).")
+    job_wait.add_argument("--interval", type=float, default=30.0,
+                          help="Seconds between checks (default 30).")
 
     official_parser = subparsers.add_parser(
         "official", help="Change official bindings, or undo a change.",
@@ -433,6 +448,11 @@ def _foundation_command(args: argparse.Namespace) -> int:
             _print_json(foundation.run_show(conn, args.id))
     elif command in (("job", "local"), ("job", "run"), ("job", "submit")):
         return _run_job(args)
+    elif command == ("job", "wait"):
+        result = loop.wait(lambda: connect(application_name="rapidpipe-job-wait"), args.jobs,
+                           launch.batch_client(), args.timeout, args.interval)
+        _print_json(result)
+        return int(ExitCode.SUCCESS) if result["ended"] else int(ExitCode.TRANSIENT_FAILURE)
     elif command == ("job", "show"):
         with connect(application_name="rapidpipe-job-show") as conn:
             _print_json(foundation.job_show(conn, args.id))

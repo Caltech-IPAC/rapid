@@ -18,7 +18,9 @@ failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone. PSFs: a new stem whose filter and
 SCA lack an official science PSF gets one ``psf`` job for the
 pair, expecting both keys, and no intake; an official pair admits intakes;
-a psf job of the run pending for the pair submits nothing more.
+a psf job of the run pending for the pair submits nothing more. `job wait`
+returns once every named job is published or failed, holds a failed row
+under Batch's retry, gives up at its timeout and names a missing job.
 """
 
 from __future__ import annotations
@@ -386,3 +388,42 @@ def test_a_pending_psf_job_submits_nothing_more():
     pending = [{"id": 60, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": stem(1, 1, 1)}}]
     subs, counts = loop.plan(snap(psfs={}, jobs=pending), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
     assert subs == [] and counts["pending"]["psf"] == 1 and counts["new"] == 2
+
+
+class Polled(Rows):
+    """A fake connection whose jobs ``SELECT`` returns the next of ``snapshots`` each check."""
+
+    def __init__(self, snapshots):
+        super().__init__(snapshots[0])
+        self.snapshots, self.reads = snapshots, 0
+
+    def fetchall(self):
+        self.reads += 1
+        return self.snapshots[min(self.reads - 1, len(self.snapshots) - 1)]
+
+
+def test_job_wait_returns_once_every_job_is_published_or_failed():
+    conn = Polled([[(1, 12, "running"), (2, 12, "launched")], [(1, 12, "published"), (2, 12, "failed")]])
+    slept = []
+    result = loop.wait(lambda: contextlib.nullcontext(conn), [1, 2], None, timeout=600, interval=5,
+                       sleep=slept.append, clock=lambda: 0.0)
+    assert result["ended"] and result["states"] == {1: "published", 2: "failed"} and slept == [5]
+
+
+def test_job_wait_holds_a_failed_row_under_batchs_retry_and_gives_up_at_the_timeout(monkeypatch):
+    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client: {"retrying": [3]})
+    conn = Polled([[(3, 12, "failed")]])
+    ticks = iter([0.0, 0.0, 30.0, 61.0])
+    result = loop.wait(lambda: contextlib.nullcontext(conn), [3], Batch({}), timeout=60, interval=30,
+                       sleep=lambda s: None, clock=lambda: next(ticks))
+    assert not result["ended"] and result["states"] == {3: "failed"}
+
+
+def test_job_wait_names_a_job_that_does_not_exist():
+    conn = Polled([[(1, 12, "published")]])
+    try:
+        loop.wait(lambda: contextlib.nullcontext(conn), [1, 9], None, timeout=60)
+    except LookupError as exc:
+        assert "9" in str(exc)
+    else:
+        raise AssertionError("no LookupError")
