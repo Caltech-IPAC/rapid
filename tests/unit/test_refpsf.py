@@ -115,3 +115,17 @@ def test_the_peak_floor_follows_the_noise_not_the_count_rate():
     faint = refpsf.measure(image / 100, usable, science_psf=science_psf())
     assert faint.stars == bright.stars == 30
     assert faint.sigma_px == pytest.approx(bright.sigma_px, abs=1e-3)
+
+
+class _Overshooting:
+    """An ePSF whose evaluated centroid moves 1.8 times its shift, 0.15 px off at no shift (job 20184's)."""
+
+    def evaluate(self, x, y, flux, x0, y0):
+        c = (x.shape[0] - 1) / 2
+        cx, cy = c + 1.8 * (x0 - c) - 0.15, c + 1.8 * (y0 - c) - 0.12
+        return flux * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * 1.1 ** 2))
+
+
+def test_the_centring_converges_where_the_centroid_overshoots_the_shift():
+    stamp = refpsf._evaluate_centred(_Overshooting(), 61)
+    assert max(map(abs, refpsf.moments(stamp)[:2])) < refpsf.CENTRING_TOLERANCE_PX
