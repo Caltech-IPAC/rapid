@@ -101,6 +101,8 @@ MIN_STARS, MAX_STARS = 10, 100
 SIZE = 61
 #: The centroid's largest offset from the central pixel after re-centring, px.
 CENTRING_TOLERANCE_PX = 0.01
+#: The fallback search's half-width around the centre and its successive steps, px.
+SEARCH_SPAN_PX, SEARCH_STEPS_PX = 0.6, (0.05, 0.01, 0.002)
 #: The window of :func:`moments`, px.
 MOMENT_RADIUS_PX = 4.0
 #: Measured core within the first radius, the science PSF's wings beyond the second, px.
@@ -255,7 +257,12 @@ def _evaluate_centred(epsf, size: int, iterations: int = 10) -> np.ndarray:
     first, plain step: evaluated at pixel centres, an oversampled ePSF's
     centroid can move by more than the shift (by 1.8 times it on run 59's
     F146 SCA 5 pass 4, job 20184), and the plain step then oscillates and
-    shrinks only as 0.8 per shift, still 0.06 px off after ten.
+    shrinks only as 0.8 per shift, still 0.06 px off after ten. The two axes' centroids are coupled and,
+    over a stretch, move by much less than the shift (run 72's F146 SCA 8,
+    job 21029: 0.03 px per 0.1 px in y, x moving with it), where the secant
+    stalls; then a grid search over shifts within :data:`SEARCH_SPAN_PX`,
+    refined in :data:`SEARCH_STEPS_PX`, takes the shift whose larger axis
+    offset is least (0.001 px on job 21029's ePSF, under a second).
     """
     centre = (size - 1) / 2
     cols, rows = np.meshgrid(np.arange(size, dtype=float), np.arange(size, dtype=float))
@@ -273,5 +280,20 @@ def _evaluate_centred(epsf, size: int, iterations: int = 10) -> np.ndarray:
             step[secant] = offset[secant] * moved[secant] / change[secant]
         previous = (position.copy(), offset)
         position = position - step
+    best = (np.inf, position)
+    origin, span = np.array([centre, centre]), SEARCH_SPAN_PX
+    for grid in SEARCH_STEPS_PX:
+        steps = np.arange(-span, span + grid / 2, grid)
+        for dx in steps:
+            for dy in steps:
+                trial = origin + (dx, dy)
+                stamp = np.asarray(epsf.evaluate(cols, rows, 1.0, *trial), dtype=np.float64)
+                worst = float(np.max(np.abs(moments(stamp)[:2])))
+                if worst < best[0]:
+                    best = (worst, trial)
+        origin, span = best[1], 2 * grid
+    if best[0] < CENTRING_TOLERANCE_PX:
+        stamp = np.asarray(epsf.evaluate(cols, rows, 1.0, *best[1]), dtype=np.float64)
+        return stamp / stamp.sum()
     raise ValueError(f"refpsf: centroid still ({offset[0]:.4f}, {offset[1]:.4f}) px off centre after "
-                     f"{iterations} shifts")
+                     f"{iterations} shifts, and {best[0]:.4f} px at best over the search")
