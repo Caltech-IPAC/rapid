@@ -18,7 +18,8 @@ failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone. PSFs: a new stem whose filter and
 SCA lack an official science PSF gets one ``psf`` job for the
 pair, expecting both keys, and no intake; an official pair admits intakes;
-a psf job of the run pending for the pair submits nothing more.
+a psf job of the run pending for the pair submits nothing more; an intake
+names the dataset's official Gaia catalog, and only the PSF without one.
 """
 
 from __future__ import annotations
@@ -386,3 +387,11 @@ def test_a_pending_psf_job_submits_nothing_more():
     pending = [{"id": 60, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": stem(1, 1, 1)}}]
     subs, counts = loop.plan(snap(psfs={}, jobs=pending), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
     assert subs == [] and counts["pending"]["psf"] == 1 and counts["new"] == 2
+
+
+def test_an_intake_names_the_datasets_gaia_catalog_once_it_is_official():
+    named, _ = loop.plan(snap(), [stem(1, 1, 1)], SEL)
+    assert [i for i in stages(named, "intake")[0]["inputs"] if i["product"] == "catalogs"] == [
+        {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "source_job": 12}]
+    alone, _ = loop.plan(snap(gaia=None), [stem(1, 1, 1)], SEL)
+    assert [i["product"] for i in stages(alone, "intake")[0]["inputs"]] == ["psfs"]
