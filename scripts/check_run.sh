@@ -2,9 +2,11 @@
 #
 # check_run.sh: run one run's three checks and print one verdict line.
 #
-#   scripts/check_run.sh --run <id> [--settings F]
+#   scripts/check_run.sh --run <id> [--settings F] [--inspect DIR]
 #
-# validate_run.py --run <id>; read_packets.py over the run's bound packet
+# First inspect_run.py --run <id> --out DIR (default $TMPDIR/inspect-run-<id>),
+# so the run's quality numbers and gallery are read before the checks' minutes;
+# then validate_run.py --run <id>; read_packets.py over the run's bound packet
 # sets, eight processes at a time; consume_packets.py --run <id> (with
 # --settings F when given). Each one's output goes to stderr as it runs;
 # the last line on stdout is
@@ -17,18 +19,22 @@
 
 set -uo pipefail
 PY=${PY:-python3}
-RUN= SETTINGS=()
+RUN= SETTINGS=() INSPECT=
 while [ $# -gt 0 ]; do
   case $1 in
     --run) RUN=$2; shift 2 ;;
     --settings) SETTINGS=(--settings "$2"); shift 2 ;;
-    *) echo "usage: $0 --run <id> [--settings F]" >&2; exit 64 ;;
+    --inspect) INSPECT=$2; shift 2 ;;
+    *) echo "usage: $0 --run <id> [--settings F] [--inspect DIR]" >&2; exit 64 ;;
   esac
 done
-[ -n "$RUN" ] || { echo "usage: $0 --run <id> [--settings F]" >&2; exit 64; }
+[ -n "$RUN" ] || { echo "usage: $0 --run <id> [--settings F] [--inspect DIR]" >&2; exit 64; }
+INSPECT=${INSPECT:-${TMPDIR:-/tmp}/inspect-run-$RUN}
 cd "$(dirname "$0")/.." || exit 1
 export PYTHONPATH=$PWD${PYTHONPATH:+:$PYTHONPATH}
 fail=0
+
+"$PY" scripts/inspect_run.py --run "$RUN" --out "$INSPECT" >&2 || fail=1
 
 s=$SECONDS
 v=$("$PY" scripts/validate_run.py --run "$RUN" | tee -a /dev/stderr | tail -n 1) || fail=1

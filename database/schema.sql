@@ -601,6 +601,24 @@ WHERE NOT EXISTS (
     WHERE x.set_job = c.set_job AND e.source_job = m.source_job
 );
 
+-- The jobs' quality numbers, one row per job and metric (fixes-2026-10-23 task 5).
+CREATE VIEW job_metrics AS
+SELECT j.run, j.id AS job, j.stage, r.dataset, r.survey, j.state, j.scope,
+       (j.scope ->> 'expid')::integer AS expid,
+       (j.scope ->> 'sca')::smallint AS sca,
+       (j.scope ->> 'fid')::smallint AS fid,
+       (j.scope ->> 'field')::integer AS field,
+       j.scope ->> 'file' AS file,
+       m.key AS metric,
+       (m.value #>> '{}')::double precision AS value
+FROM jobs j
+JOIN runs r ON r.id = j.run
+CROSS JOIN LATERAL jsonb_each(j.manifest -> 'metrics') m
+WHERE jsonb_typeof(m.value) = 'number';
+
+COMMENT ON VIEW job_metrics IS
+    'One row per job and metric of its manifest''s metrics: the stage that computed it, its units and denominator are in that stage''s module docstring (intake: masked_fraction; reference: rapidpipe.science.reference.measure.quality_metrics; difference: rapidpipe.stages.difference and rapidpipe.science.difference.metrics; packet: rapidpipe.stages.packet). A metric a job could not compute is absent, never zero. The scope columns are null where the stage''s scope lacks the key.';
+
 --------------------------------------------------------------------------------
 -- Q3C: the extension and its indexes on image centres and object positions.
 -- A developer's container may lack q3c; then this block says so and the

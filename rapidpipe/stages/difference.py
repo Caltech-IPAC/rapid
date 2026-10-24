@@ -74,14 +74,20 @@ catalog measurements under ``difference``, the reference PSF's
 measurement under ``difference.refpsf``, and ``metrics``, one flat dict of
 named numbers (``refpsf_sigma_px`` and ``sci_psf_sigma_px``, the two
 stamps' second-moment sigma within 4 px, px; ``refpsf_stars``, the stars
-built from; ``psf_centroid_offset_px``, the reference stamp's centroid
-minus the science stamp's, x and y, px: their relative centring is what
-ZOGY sees; ``ref_sigma_px``, the median second-moment sigma of the stars
-the reference PSF was built from, on the resampled reference, px;
+built from; ``psf_centroid_offset_x_px`` and ``_y_px``, the reference
+stamp's centroid minus the science stamp's, px: their relative centring
+is what ZOGY sees; ``ref_sigma_px``, the median second-moment sigma of
+the stars the reference PSF was built from, on the resampled reference,
+px, and ``ref_sci_sigma_ratio``, it over ``sci_psf_sigma_px``;
 ``noise_correlation``, the masked ZOGY difference's 4 x 4 block-mean
 sigma times 4 over its pixel sigma, both clipped, 1 for white noise,
 absent when the image has too few full blocks,
-:func:`rapidpipe.science.difference.noise.noise_correlation`).
+:func:`rapidpipe.science.difference.noise.noise_correlation`; and
+:mod:`rapidpipe.science.difference.metrics`' registration offset, core
+and ring fractions, usable fraction and source counts, ``n_candidates``
+before the cap and ``n_sources`` after it, defined there). The
+residual stars' positions sit beside them as ``difference.residual_stars``
+for a reader's gallery. A metric the job cannot make is absent.
 
 Determinism: on identical inputs the stage writes identical pixels and
 rows (FITS ``DATE`` cards and the bkgest tables' time stamps aside) when
@@ -114,6 +120,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from astropy.io import fits
@@ -130,6 +137,7 @@ from rapidpipe.science.difference import (
     naive,
     noise,
     offsets,
+    metrics as quality,
     psf,
     psfcat,
     reformat,
@@ -541,9 +549,16 @@ def run(job: JobContext) -> None:
             output_resampled_reference_image, output_resampled_reference_cov_map, bkgest)
 
     # The reference PSF, measured on the resampled, background-subtracted reference.
-    refpsf_record, metrics = _measure_reference_psf(
+    refpsf_record, metrics, measured_psf = _measure_reference_psf(
         kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
         w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME))
+    # Registration, before the subpixel offset corrects it; the reference catalog's sky positions.
+    metrics.update(quality.registration(
+        fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float),
+        fits.getdata(w(output_resampled_reference_image), 0).astype(float), measured_psf.stars_xy))
+    reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
+        w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp",
+        ["ALPHAWIN_J2000", "DELTAWIN_J2000"])
 
     # Gain matching, with the reference zero point the reference was built on.
     zero_point, zero_point_source = _resolve_zero_point(settings, w(staged["reference"]))
@@ -730,6 +745,11 @@ def run(job: JobContext) -> None:
     pq.write_table(pa.Table.from_pylist([diffimage], schema=DIFFIMAGES_SCHEMA),
                    job.path / "diffimages.parquet")
     pq.write_table(sources, job.path / "sources.parquet")
+    residual_stars = _quality_metrics(
+        metrics, measured_psf, header=header, thresh=thresh, candidates=candidates, sources=sources,
+        gainmatched_reference=w(output_resampled_gainmatched_reference_image + ".gz"),
+        difference=w(filename_diffimage_published),
+        coverage=w(output_resampled_reference_cov_map + ".gz"), reference_sky=reference_sky)
     logger.info("difference: expid %s -> pid %s, %d of %d sources kept", key["expid"],
                 inputs.pid, sources.num_rows, candidates)
     job.write_manifest(
@@ -747,13 +767,13 @@ def run(job: JobContext) -> None:
                               "photutils": zogy_catalogs.photutils},
             "sources_before_cap": candidates, "sources_kept": sources.num_rows,
             "infobits_science_l2": inputs.infobits_science, "sfft": sfft_note,
-            "refpsf": refpsf_record, "published": published},
+            "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},
         metrics=metrics)
 
 
 def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh: float,
-                           science_psf: Path, target: Path) -> tuple[dict, dict]:
-    """Measure the reference PSF into ``target``; return the manifest's record and metrics.
+                           science_psf: Path, target: Path) -> tuple[dict, dict, refpsf.ReferencePsf]:
+    """Measure the reference PSF into ``target``; return the manifest's record, metrics and the measurement.
 
     Too few stars stops the job with exit 65 and the measurement's reason.
     """
@@ -780,9 +800,43 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
               "centroid_px": list(measured.centroid_px), "science_centroid_px": [sci[0], sci[1]]}
     metrics = {"refpsf_sigma_px": measured.sigma_px, "refpsf_stars": measured.stars,
                "ref_sigma_px": measured.star_sigma_px, "sci_psf_sigma_px": sci[2],
-               "psf_centroid_offset_px": [measured.centroid_px[0] - sci[0],
-                                          measured.centroid_px[1] - sci[1]]}
-    return record, metrics
+               "psf_centroid_offset_x_px": measured.centroid_px[0] - sci[0],
+               "psf_centroid_offset_y_px": measured.centroid_px[1] - sci[1]}
+    if sci[2] > 0:
+        metrics["ref_sci_sigma_ratio"] = measured.star_sigma_px / sci[2]
+    return record, metrics, measured
+
+
+def _quality_metrics(metrics: dict, measured: refpsf.ReferencePsf, *, header, thresh: float,
+                     candidates: int, sources: pa.Table, gainmatched_reference: Path,
+                     difference: Path, coverage: Path, reference_sky: list) -> list[dict]:
+    """Add :mod:`rapidpipe.science.difference.metrics`' numbers to ``metrics``.
+
+    Reads the job's own published files back from its work directory, all
+    on the science grid; ``reference_sky`` is the reference mosaic
+    catalog's (RA, Dec) rows, mapped onto the grid through ``header``. Returns the residual stars with their positions,
+    which the manifest records beside the metrics for a reader's gallery.
+    """
+    diff = fits.getdata(difference, 0).astype(float)
+    cov = fits.getdata(coverage, 0)
+    gainmatched = fits.getdata(gainmatched_reference, 0).astype(float)
+    metrics["usable_fraction"] = quality.usable_fraction(diff, cov, thresh)
+    metrics["n_candidates"] = int(candidates)
+    stars = quality.residual_stars(measured.found, diff.shape, gainmatched)
+    found = quality.residuals(gainmatched, diff, stars)
+    metrics.update(found)
+    catalog_xy = None
+    if reference_sky:
+        sky = np.array(reference_sky, dtype=float)
+        cx, cy = WCS(header).all_world2pix(sky[:, 0], sky[:, 1], 0)
+        inside = np.isfinite(cx) & np.isfinite(cy)
+        catalog_xy = np.column_stack([cx[inside], cy[inside]])
+    columns = sources.to_pydict()
+    metrics.update(quality.source_counts(
+        np.asarray(columns["xfit"], dtype=float), np.asarray(columns["yfit"], dtype=float),
+        np.asarray(columns["fluxfit"], dtype=float), np.asarray(columns["fluxerr"], dtype=float),
+        catalog_xy))
+    return [{"x": round(x, 2), "y": round(y, 2)} for x, y in stars]
 
 
 def trim(work_dir: Path, images: list[str], others: list[str]) -> dict[str, Any]:

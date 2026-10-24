@@ -64,7 +64,7 @@ This module may import ``rapidpipe.products`` and leaf modules only.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -119,6 +119,10 @@ class ReferencePsf:
     sigma_px: float
     centroid_px: tuple[float, float]
     star_sigma_px: float
+    #: The finder's detections inside the sharpness and roundness ranges, ``(x, y, flux)`` rows.
+    found: np.ndarray = field(default_factory=lambda: np.empty((0, 3)))
+    #: The chosen stars' positions, ``(x, y)`` rows.
+    stars_xy: np.ndarray = field(default_factory=lambda: np.empty((0, 2)))
 
 
 def moments(stamp: np.ndarray, radius: float = MOMENT_RADIUS_PX) -> tuple[float, float, float]:
@@ -173,9 +177,9 @@ def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> R
     round2 = np.asarray(found["roundness2"], dtype=float)
     flux = np.asarray(found["flux"], dtype=float)
 
-    keep = ((peak >= PEAK_RANGE[0]) & (peak <= PEAK_RANGE[1])
-            & (sharp >= SHARPNESS_RANGE[0]) & (sharp <= SHARPNESS_RANGE[1])
-            & (np.abs(round1) <= ROUNDNESS_MAX) & (np.abs(round2) <= ROUNDNESS_MAX))
+    shaped = ((sharp >= SHARPNESS_RANGE[0]) & (sharp <= SHARPNESS_RANGE[1])
+              & (np.abs(round1) <= ROUNDNESS_MAX) & (np.abs(round2) <= ROUNDNESS_MAX))
+    keep = (peak >= PEAK_RANGE[0]) & (peak <= PEAK_RANGE[1]) & shaped
     keep &= _isolated(x, y, ISOLATION_PX)
     keep &= _stamp_usable(usable, x, y, STAMP_PX)
     half = STAMP_PX // 2
@@ -196,7 +200,9 @@ def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> R
     dx, dy, sigma = moments(stamp)
     return ReferencePsf(stamp=stamp, stars=len(chosen), detections=len(found), passed_cuts=passed,
                         sigma_px=sigma, centroid_px=(dx, dy),
-                        star_sigma_px=float(np.median(width[chosen])))
+                        star_sigma_px=float(np.median(width[chosen])),
+                        found=np.column_stack([x, y, flux])[shaped],
+                        stars_xy=np.column_stack([x[chosen], y[chosen]]))
 
 
 def _with_wings(core: np.ndarray, science_psf: np.ndarray) -> np.ndarray:

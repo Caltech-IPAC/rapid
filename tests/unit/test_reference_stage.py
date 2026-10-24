@@ -147,6 +147,9 @@ def test_a_job_writes_its_three_tables_with_one_rfid_and_its_files(tmp_path, fra
     assert [header[f"INFIL00{i}"] for i in (1, 2, 3)] == [f[1] for f in FRAMES]  # mjdobs order
     assert manifest["reference"]["rfid"] == RFID and manifest["reference"]["not_coadded"] == []
     assert manifest["reference"]["nsexcatsources"] == 4
+    metrics = manifest["metrics"]
+    assert {"gmin", "gmax", "coverage_lt1", "coverage_lt2", "coverage_lt3"} <= set(metrics)
+    assert all(isinstance(v, (int, float)) for v in metrics.values())
     assert not any((tmp_path / "work").iterdir())
 
 

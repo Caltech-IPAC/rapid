@@ -240,15 +240,23 @@ def test_every_differencer_gets_the_reference_psf_measured_on_the_resampled_refe
 def test_the_manifest_records_the_reference_psf_metrics(tmp_path, files, fakes, refpsf):
     recorded = manifest(run_difference(tmp_path, files))
     metrics = recorded["metrics"]
-    assert set(metrics) == {"refpsf_sigma_px", "refpsf_stars", "sci_psf_sigma_px",
-                            "psf_centroid_offset_px", "ref_sigma_px", "noise_correlation"}
+    assert {"refpsf_sigma_px", "refpsf_stars", "sci_psf_sigma_px", "psf_centroid_offset_x_px",
+            "psf_centroid_offset_y_px", "ref_sigma_px", "ref_sci_sigma_ratio", "noise_correlation",
+            "usable_fraction", "n_candidates", "n_sources", "n_sources_snr_gt20"} <= set(metrics)
+    # Every metric is a number; one the job cannot make is absent (the fake finds no stars).
+    assert all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in metrics.values())
+    assert not {"core_fraction", "registration_dx_px"} & set(metrics)
+    assert metrics["n_sources"] == recorded["difference"]["sources_kept"]
+    assert metrics["n_candidates"] == recorded["difference"]["sources_before_cap"]
+    assert 0 < metrics["usable_fraction"] <= 1
     assert (metrics["refpsf_sigma_px"], metrics["refpsf_stars"]) == (refpsf.sigma, refpsf.stars)
     assert metrics["ref_sigma_px"] == refpsf.sigma
     assert metrics["noise_correlation"] > 0
     # The science PSF is the fixture's 9 x 9 Gaussian of sigma 1.2, centred.
     assert refpsf.calls[0]["science_psf_shape"] == (9, 9)
     assert 1.0 < metrics["sci_psf_sigma_px"] < 1.2
-    assert metrics["psf_centroid_offset_px"] == pytest.approx([0.0, 0.0], abs=1e-6)
+    assert (metrics["psf_centroid_offset_x_px"], metrics["psf_centroid_offset_y_px"]) == \
+        pytest.approx((0.0, 0.0), abs=1e-6)
     assert recorded["difference"]["refpsf"]["stars"] == refpsf.stars
 
 
